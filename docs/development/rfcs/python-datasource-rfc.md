@@ -275,55 +275,283 @@ The Python DataSource API strikes the optimal balance: **accessible for users, p
 
 ## Architecture
 
-### High-Level Design
+### Overview
+
+The Python DataSource architecture follows a **layered design** that integrates with DataFusion at three levels:
+
+1. **TableFormat**: Discovery and instantiation of datasources
+2. **TableProvider**: Logical planning with schema and filter pushdown
+3. **ExecutionPlan**: Physical execution with partition-level parallelism
+
+This separation enables:
+- **Composability**: Mix Python datasources with native formats (Parquet, Delta Lake)
+- **Optimization**: DataFusion can push down filters and projections
+- **Safety**: RAII cleanup ensures resources are freed even on errors
+
+The following diagrams show the **static component architecture** (what connects to what) and **dynamic execution flow** (what happens when a query runs).
+
+### Component Architecture
+
+This diagram shows the layered architecture with clear top-to-bottom flow:
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Sail Server (Rust)                        │
-│  ┌─────────────────┐  ┌──────────────────┐  ┌────────────────┐  │
-│  │ PythonTableFormat│  │ PythonDataSource │  │ DATASOURCE_    │  │
-│  │ (TableFormat)   │──▶│ (PyO3 Bridge)   │◀─│ REGISTRY       │  │
-│  └────────┬────────┘  └────────┬─────────┘  └───────▲────────┘  │
-│           │                    │                     │           │
-│           ▼                    ▼                     │           │
-│  ┌─────────────────┐  ┌──────────────────┐          │           │
-│  │ PythonTable     │  │ PythonDataSource │   discover_datasources│
-│  │ Provider        │  │ Exec (ExecutionPlan)        │           │
-│  └────────┬────────┘  └────────┬─────────┘          │           │
-│           │                    │                     │           │
-│           │                    ▼                     │           │
-│           │           ┌──────────────────┐          │           │
-│           │           │ PythonDataSource │          │           │
-│           │           │ Stream (RAII)    │          │           │
-│           │           └────────┬─────────┘          │           │
-└───────────│────────────────────│────────────────────│───────────┘
-            │                    │                     │
-            │         ┌──────────▼──────────┐         │
-            │         │  Python Thread      │         │
-            │         │  (GIL-bound)        │         │
-            │         └──────────┬──────────┘         │
-            │                    │                     │
-            │                    ▼                     │
-            │         ┌──────────────────────────────────────────┐
-            │         │           Python Runtime                  │
-            │         │  ┌────────────────┐  ┌────────────────┐  │
-            │         │  │ DataSource     │  │ DataSourceReader│  │
-            │         │  │ (User-defined) │──▶│ (User-defined) │  │
-            │         │  └────────────────┘  └───────┬────────┘  │
-            │         │                              │            │
-            │         │                   ┌──────────▼─────────┐ │
-            │         │                   │ InputPartition(s)  │ │
-            │         │                   │ (Pickled for dist) │ │
-            │         └───────────────────────────────────────────┘
-            │                    │
-            │         Zero-copy via Arrow C Data Interface
-            │                    │
-            ▼                    ▼
-     ┌──────────────────────────────────────┐
-     │        DataFusion Execution          │
-     │  (RecordBatch processing, filters)   │
-     └──────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                      Sail Server (Rust)                      │
+│                                                              │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │ Layer 1: Discovery & Registration                      │  │
+│  │  ┌──────────────────────────────────────────────────┐  │  │
+│  │  │ DATASOURCE_REGISTRY                              │  │  │
+│  │  │ - Entry points: sail.datasources                 │  │  │
+│  │  │ - @register decorator                            │  │  │
+│  │  └──────────────────────────────────────────────────┘  │  │
+│  └──────────────────────────┬─────────────────────────────┘  │
+│                             │                                │
+│                             ▼                                │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │ Layer 2: TableFormat                                   │  │
+│  │  ┌──────────────────────────────────────────────────┐  │  │
+│  │  │ PythonTableFormat                                │  │  │
+│  │  │ - Implements: TableFormat trait                  │  │  │
+│  │  │ - Creates: PythonTableProvider instances         │  │  │
+│  │  └──────────────────────────────────────────────────┘  │  │
+│  └──────────────────────────┬─────────────────────────────┘  │
+│                             │                                │
+│                             ▼                                │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │ Layer 3: TableProvider                                 │  │
+│  │  ┌──────────────────────────────────────────────────┐  │  │
+│  │  │ PythonTableProvider                              │  │  │
+│  │  │ - Implements: TableProvider trait                │  │  │
+│  │  │ - Handles: Schema, filter pushdown, planning     │  │  │
+│  │  └──────────────────────────────────────────────────┘  │  │
+│  └──────────────────────────┬─────────────────────────────┘  │
+│                             │                                │
+│                             ▼                                │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │ Layer 4: Execution Plan                                │  │
+│  │  ┌──────────────────────────────────────────────────┐  │  │
+│  │  │ PythonDataSourceExec                             │  │  │
+│  │  │ - Implements: ExecutionPlan trait                │  │  │
+│  │  │ - Manages: Partition-level parallelism           │  │  │
+│  │  └──────────────────────────────────────────────────┘  │  │
+│  └──────────────────────────┬─────────────────────────────┘  │
+│                             │                                │
+│                             ▼                                │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │ Layer 5: Stream                                        │  │
+│  │  ┌──────────────────────────────────────────────────┐  │  │
+│  │  │ PythonDataSourceStream                           │  │  │
+│  │  │ - Implements: RecordBatchStream trait            │  │  │
+│  │  │ - Manages: Python thread lifecycle (RAII)        │  │  │
+│  │  └──────────────────────────────────────────────────┘  │  │
+│  └──────────────────────────┬─────────────────────────────┘  │
+│                             │                                │
+│                             ▼                                │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │ Layer 6: FFI Bridge                                    │  │
+│  │  ┌──────────────────────────────────────────────────┐  │  │
+│  │  │ PyO3 Bridge (Rust ↔ Python)                      │  │  │
+│  │  │ - GIL acquisition                                │  │  │
+│  │  │ - Exception translation                          │  │  │
+│  │  │ - Zero-copy via Arrow C Data Interface           │  │  │
+│  │  └──────────────────────────────────────────────────┘  │  │
+│  └──────────────────────────┬─────────────────────────────┘  │
+└────────────────────────────┼─────────────────────────────────┘
+                             │
+                             │ Arrow C Data Interface
+                             │ (zero-copy pointer transfer)
+                             │
+                             ▼
+         ┌────────────────────────────────────────┐
+         │   Layer 7: Python Runtime (GIL)        │
+         │                                        │
+         │   ┌────────────────────────────────┐   │
+         │   │ DataSource                     │   │
+         │   │ (user-defined class)           │   │
+         │   │ - name(), schema(), reader()   │   │
+         │   └────────────┬───────────────────┘   │
+         │                │                       │
+         │                ▼                       │
+         │   ┌────────────────────────────────┐   │
+         │   │ DataSourceReader               │   │
+         │   │ (user-defined class)           │   │
+         │   │ - partitions(), read()         │   │
+         │   │ - pushFilters() [optional]     │   │
+         │   └────────────┬───────────────────┘   │
+         │                │                       │
+         │                ▼                       │
+         │   ┌────────────────────────────────┐   │
+         │   │ InputPartition(s)              │   │
+         │   │ (pickled for distribution)     │   │
+         │   └────────────────────────────────┘   │
+         │                                        │
+         └────────────────────────────────────────┘
 ```
+
+**Component Layers**:
+
+1. **Discovery & Registration**:
+   - `DATASOURCE_REGISTRY`: Global registry populated via entry points and `@register` decorator
+   - Discovers Python datasources at server startup
+
+2. **TableFormat Layer**:
+   - `PythonTableFormat`: Implements DataFusion's `TableFormat` trait
+   - Creates `PythonTableProvider` instances for registered datasources
+   - Acts as factory for Python-backed tables
+
+3. **TableProvider Layer**:
+   - `PythonTableProvider`: Implements DataFusion's `TableProvider` trait
+   - Handles schema discovery and filter pushdown negotiation
+   - Creates execution plans for queries
+
+4. **Execution Layer**:
+   - `PythonDataSourceExec`: Implements DataFusion's `ExecutionPlan` trait
+   - Manages partition-level parallelism
+   - Coordinates Python thread lifecycle
+
+5. **Stream Layer**:
+   - `PythonDataSourceStream`: Implements `RecordBatchStream` for async iteration
+   - Spawns Python thread and manages RAII cleanup
+   - Bridges synchronous Python iteration with async Rust streams
+
+6. **PyO3 Bridge**:
+   - FFI boundary between Rust and Python
+   - Zero-copy data transfer via Arrow C Data Interface
+   - Handles GIL acquisition and exception translation
+
+7. **Python Runtime**:
+   - User-defined `DataSource` and `DataSourceReader` classes
+   - 100% PySpark API compatible
+   - Yields `RecordBatch` or tuple data back to Rust
+
+### Query Execution Flow
+
+This diagram shows the temporal sequence of operations when executing a query:
+
+```
+User Query: spark.read.format("range").option("end", "1000").load()
+    │
+    ▼
+┌────────────────────────────────────────────────────────────┐
+│ 1. DISCOVERY (Session Startup, Once)                       │
+└────────────────────────────────────────────────────────────┘
+    DATASOURCE_REGISTRY.discover_datasources()
+         │
+         ├─▶ importlib.metadata.entry_points(group="sail.datasources")
+         └─▶ Collect @register decorated classes
+         │
+         ▼
+    Registry populated: {"range": RangeDataSource, ...}
+
+┌────────────────────────────────────────────────────────────┐
+│ 2. LOGICAL PLANNING (Query Parse)                          │
+└────────────────────────────────────────────────────────────┘
+    TableFormatRegistry.get("range")
+         │
+         ▼
+    PythonTableFormat.create_provider(options={"end": "1000"})
+         │
+         ├─▶ Unpickle RangeDataSource class
+         ├─▶ Instantiate: ds = RangeDataSource(options)
+         ├─▶ Call: schema = ds.schema()  [GIL acquired]
+         └─▶ Return: PythonTableProvider(schema, datasource)
+
+┌────────────────────────────────────────────────────────────┐
+│ 3. PHYSICAL PLANNING (Optimization)                        │
+└────────────────────────────────────────────────────────────┘
+    PythonTableProvider.scan(filters, projection, limit)
+         │
+         ├─▶ Convert DataFusion Expr to PythonFilter objects
+         ├─▶ reader = ds.reader(schema)  [GIL acquired]
+         ├─▶ reader.pushFilters(filters) [GIL acquired]
+         ├─▶ partitions = reader.partitions() [GIL acquired]
+         │       └─▶ Returns: [InputPartition(0), ..., InputPartition(3)]
+         │
+         ▼
+    PythonDataSourceExec::new(datasource, schema, partitions)
+
+┌────────────────────────────────────────────────────────────┐
+│ 4. EXECUTION (Parallel, Per-Partition)                     │
+└────────────────────────────────────────────────────────────┘
+    For each partition in [0, 1, 2, 3]:
+         │
+         PythonDataSourceExec.execute(partition_id)
+              │
+              ▼
+         PythonDataSourceStream::new()
+              │
+              ├─▶ Spawn Python thread (GIL-bound)
+              ├─▶ Create mpsc channel for RecordBatch transport
+              │
+              Python thread:
+              │    reader.read(partitions[partition_id])
+              │         │
+              │         └─▶ yield RecordBatch (or tuples)
+              │                  │
+              │                  ▼ [Arrow C Data Interface]
+              │             Zero-copy transfer to Rust
+              │                  │
+              │                  ▼
+              └────────────▶ mpsc::send(RecordBatch)
+                                 │
+                                 ▼
+              Stream yields to DataFusion
+                   │
+                   ▼
+┌────────────────────────────────────────────────────────────┐
+│ 5. CLEANUP (RAII, Automatic)                               │
+└────────────────────────────────────────────────────────────┘
+    Stream dropped
+         │
+         ├─▶ Send oneshot stop signal to Python thread
+         ├─▶ Join thread to ensure completion
+         └─▶ Release Python resources
+```
+
+**Execution Phases**:
+
+**Phase 1 - Discovery** (one-time at startup):
+- Scans `sail.datasources` entry points in installed packages
+- Collects `@register` decorated classes from imported modules
+- Populates global `DATASOURCE_REGISTRY` with pickled class definitions
+
+**Phase 2 - Logical Planning** (per query):
+- User calls `spark.read.format("range")` → triggers `TableFormatRegistry.get("range")`
+- `PythonTableFormat` unpickles the `RangeDataSource` class
+- Instantiates datasource with user options: `RangeDataSource({"end": "1000"})`
+- Calls `schema()` method to get Arrow schema (acquires GIL briefly)
+- Returns `PythonTableProvider` to DataFusion's logical planner
+
+**Phase 3 - Physical Planning** (optimization):
+- DataFusion calls `PythonTableProvider.scan()` with filters/projection
+- Rust converts DataFusion `Expr` to Python `Filter` objects (e.g., `GreaterThan`)
+- Creates `DataSourceReader` via `datasource.reader(schema)`
+- Pushes filters to reader: `reader.pushFilters([GreaterThan(col="id", value=10)])`
+- Gets partition list: `reader.partitions()` → `[InputPartition(0), ..., InputPartition(3)]`
+- Creates `PythonDataSourceExec` execution plan with partition info
+
+**Phase 4 - Execution** (parallel, per partition):
+- DataFusion executes plan: calls `execute(partition_id)` for each partition in parallel
+- Each partition spawns a dedicated Python thread (shares global GIL in MVP)
+- Python thread calls `reader.read(partition)` which yields data:
+  - **RecordBatch yield**: Zero-copy via Arrow C Data Interface (pointers passed, no serialization)
+  - **Tuple yield**: Batched into RecordBatch by `RowBatchCollector` (small overhead)
+- RecordBatches sent over `mpsc` channel to async Rust stream
+- DataFusion consumes stream for filters, projections, aggregations
+
+**Phase 5 - Cleanup** (automatic via RAII):
+- When stream is dropped (query complete or error):
+  - Send oneshot signal to Python thread to stop iteration
+  - Join thread to ensure graceful shutdown
+  - Python GIL released, resources freed
+- Prevents resource leaks even in error scenarios
+
+**Performance Notes**:
+- **Control plane** (schema, partitions): ~10-50ms per query (GIL acquired)
+- **Data plane** (RecordBatch transfer): Zero-copy, sub-microsecond overhead
+- **GIL contention**: Only during control plane calls; data transfer releases GIL
+- **Parallelism**: Limited by global GIL in MVP; subprocess isolation (Phase 3) provides N GILs
 
 ### DataFusion Integration
 
@@ -519,6 +747,84 @@ The complete filter pushdown flow from SQL to Python:
                            │ - Unsupported       │
                            └─────────────────────┘
 ```
+
+**What This Diagram Shows**:
+
+The Filter Pushdown Pipeline illustrates how SQL `WHERE` clause predicates are transformed and "pushed down" from DataFusion's query planner to the Python datasource implementation, enabling the datasource to filter data **at the source** rather than reading all data and filtering afterward.
+
+**Transformation Steps**:
+
+1. **SQL → DataFusion AST** (top row):
+   - User writes: `WHERE x > 10 AND y = 'foo'`
+   - DataFusion parser creates: `Expr::BinaryExpr` nodes representing the logical expression tree
+   - Example: `BinaryExpr { left: Col("x"), op: Gt, right: Lit(10) }`
+
+2. **DataFusion AST → Rust Filter Objects** (middle):
+   - `exprs_to_python_filters()` function converts DataFusion's internal representation to Rust `PythonFilter` enum variants
+   - This step handles type conversion and validates that the filter can be represented in Python
+   - Output: `Vec<PythonFilter>` - a list of filter objects like `PythonFilter::GreaterThan { column: "x", value: 10 }`
+
+3. **Rust Filters → Python Objects** (via PyO3):
+   - `to_python_objects()` uses PyO3 to create Python-side filter instances
+   - Rust `PythonFilter::GreaterThan { column: "x", value: 10 }` becomes Python `GreaterThan(column="x", value=10)`
+   - These are the same filter classes users work with in PySpark
+
+4. **Push to Python Reader**:
+   - Sail calls `reader.pushFilters([GreaterThan(...), EqualTo(...)])`
+   - The Python datasource reader **decides** which filters it can handle
+   - Returns unsupported filters back to Sail (filters the datasource cannot apply)
+
+5. **Classification** (bottom):
+   - **Exact**: Datasource fully handles the filter (e.g., database can execute `WHERE x > 10`). DataFusion skips re-checking.
+   - **Inexact**: Datasource partially handles filter (e.g., approximate bounds). DataFusion re-evaluates for correctness.
+   - **Unsupported**: Datasource cannot handle filter. DataFusion applies filter after reading data.
+
+**Why This Matters**:
+
+Filter pushdown is a **critical optimization**:
+
+| Without Pushdown | With Pushdown |
+|------------------|---------------|
+| Read 1M rows from API | Read 1K rows from API (filtered at source) |
+| Transfer 1M rows over network | Transfer 1K rows over network |
+| Filter in DataFusion: 1M → 1K | Filter already applied |
+| **Total time: ~10s** | **Total time: ~100ms** (100x faster) |
+
+**Example**:
+
+```python
+# User query
+df = spark.read.format("postgres").load().filter("age > 21")
+
+# Without pushdown:
+#   Python datasource: SELECT * FROM users  (returns 1M rows)
+#   DataFusion: filter 1M rows where age > 21 → 100K rows
+
+# With pushdown:
+#   Sail pushes GreaterThan("age", 21) to datasource
+#   Python datasource: SELECT * FROM users WHERE age > 21  (returns 100K rows)
+#   DataFusion: no additional filtering needed (or re-checks if "Inexact")
+```
+
+**Implementation Notes**:
+
+**MVP Status (Phase 1)**:
+- ⚠️ **Filter pushdown infrastructure is implemented but NOT ACTIVE in the MVP**
+- All filters return as `TableProviderFilterPushDown::Unsupported` (see `python_table_provider.rs:96-101`)
+- Filters are NOT sent to Python's `pushFilters()` method
+- DataFusion applies all filters post-read (safe, but no performance benefit)
+- The complete filter conversion pipeline exists in `filter.rs` (~456 lines) but is dormant
+
+**Why Infrastructure Exists Now**:
+- Demonstrates the full design for reviewers
+- Enables gradual activation in future phases
+- Validates PySpark API compatibility (filter classes defined, but not invoked)
+
+**Future Activation** (Phase 2+):
+- `supports_filters_pushdown()` will call `classify_filters()` and use `exprs_to_python_filters()`
+- Python `reader.pushFilters()` will receive filter objects
+- Classification will be based on reader's response (Exact/Inexact/Unsupported)
+- The PySpark-compatible filter API ensures existing PySpark datasources work without modification
 
 ### Component Details
 
