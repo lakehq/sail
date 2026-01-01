@@ -12,6 +12,192 @@ This RFC documents the implementation of Python DataSource support in Sail, enab
 
 This RFC represents **Phase 1 (PR #1)** of a broader implementation strategy with 6 planned phases focused on incremental capability delivery.
 
+## Installation
+
+### Prerequisites
+
+- Python 3.9, 3.10, 3.11, or 3.12
+- PyArrow library (`pip install pyarrow`)
+
+### Setting Up Python DataSources
+
+#### Method 1: Using the @register Decorator (Recommended for Development)
+
+Create a DataSource in a Python file with the `@register` decorator:
+
+```python
+# my_datasource.py
+from pysail.spark.datasource import DataSource, DataSourceReader, InputPartition, register
+import pyarrow as pa
+
+@register
+class MyDataSource(DataSource):
+    @classmethod
+    def name(cls) -> str:
+        return "mydatasource"
+
+    def schema(self):
+        return pa.schema([("id", pa.int64()), ("name", pa.string())])
+
+    def reader(self, schema):
+        return MyDataSourceReader(self.options)
+
+class MyDataSourceReader(DataSourceReader):
+    def partitions(self):
+        return [InputPartition(0)]
+
+    def read(self, partition):
+        yield (1, "Alice"), (2, "Bob")
+```
+
+Use in Sail:
+```python
+df = spark.read.format("mydatasource").load()
+```
+
+#### Method 2: Using Entry Points (Recommended for Packages)
+
+For distributable DataSource packages, register via entry points in `pyproject.toml`:
+
+```toml
+# pyproject.toml
+[project]
+name = "my-datasource-package"
+version = "1.0.0"
+dependencies = ["pyarrow"]
+
+[project.entry-points."sail.datasources"]
+mydatasource = "my_package.datasources:MyDataSource"
+```
+
+Install the package:
+```bash
+pip install .
+```
+
+The DataSource will be automatically discovered when Sail starts.
+
+### Installing Third-Party DataSources
+
+DataSource packages installed via pip are automatically discovered:
+
+```bash
+pip install custom-datasource
+```
+
+### Using PySpark DataSources
+
+Sail provides **100% API compatibility** with PySpark 3.5+/4.0+ DataSource API. At runtime, Sail handles DataSource classes interchangeably whether they extend `pyspark.sql.datasource.DataSource` or `pysail.spark.datasource.DataSource` - the namespace doesn't matter, only the API methods.
+
+**Compatible PySpark DataSources:**
+- Use only the public `DataSource`/`DataSourceReader` APIs
+- Don't depend on SparkSession, SparkContext, or JVM integration (py4j)
+- Use standard Python libraries (requests, pyarrow, pandas, etc.)
+- Implement data fetching logic in pure Python
+
+**Incompatible PySpark DataSources:**
+- Use Spark's internal JVM APIs (e.g., `spark._jvm`)
+- Depend on py4j for Java interop
+- Require SparkContext for distributed operations
+- Use Spark SQL's internal execution engine
+
+#### PySpark Compatibility Options
+
+When PySpark DataSources are unpickled on the Sail server, the base class (`pyspark.sql.datasource.DataSource`) must be available. Since Sail's environment includes `pysail` but not `pyspark`, we have several options for enabling compatibility:
+
+| Option | Description | Pros | Cons | Recommendation |
+|--------|-------------|------|------|----------------|
+| **A: sys.modules Shim** | Create `pyspark.sql.datasource` module that re-exports `pysail` classes at Sail startup | ✅ Zero-code-change for users, works with all registration methods, no additional dependencies | ⚠️ Must be initialized before unpickling, must keep shim in sync with API | **Recommended** |
+| **B: Require pysail Base** | Users import from `pysail.spark.datasource` instead of `pyspark.sql.datasource` | ✅ Simple and explicit, no magic/shims | ❌ Requires code changes, not drop-in compatible | Alternative for users who prefer explicit imports |
+| **C: Install PySpark** | Include full `pyspark` package in Sail dependencies | ✅ Native compatibility and no shims needed | ❌ Heavy dependency (~300MB), JVM overhead, version coupling | Not recommended |
+| **D: Hybrid/Configurable** | Shim enabled by default, users can opt-out via config | ✅ Default: zero-code-change, user control | ⚠️ More complex configuration, multiple code paths | Future enhancement if requested |
+
+**Selected Approach: Option A (sys.modules Shim)**
+
+This provides the best user experience - true zero-code-change PySpark compatibility with minimal implementation complexity.
+
+**How It Works:**
+
+When Sail starts, it creates a compatibility shim before processing any DataSource registrations:
+
+```python
+# In Sail's Python initialization (python/pysail/spark/datasource/compat.py)
+import sys
+from pysail.spark.datasource import (
+    DataSource, DataSourceReader, InputPartition,
+    EqualTo, EqualNullSafe, GreaterThan, GreaterThanOrEqual,
+    LessThan, LessThanOrEqual, In, IsNull, IsNotNull,
+    Not, And, Or, StringStartsWith, StringEndsWith, StringContains,
+    Filter, ColumnPath,
+)
+
+class PysparkDatasourceCompat:
+    """Compatibility shim that makes pysail classes available as pyspark classes."""
+
+# Re-export all pysail classes as if they were from pyspark.sql.datasource
+for name in dir():
+    obj = locals()[name]
+    if not name.startswith('_') and isinstance(obj, type):
+        setattr(PysparkDatasourceCompat, name, obj)
+
+# Inject into sys.modules so cloudpickle can find it when unpickling
+sys.modules['pyspark.sql.datasource'] = PysparkDatasourceCompat
+```
+
+**Why This Works:**
+
+When PySpark client pickles a DataSource class:
+1. Cloudpickle stores a reference to base class: `"pyspark.sql.datasource.DataSource"`
+2. When Sail unpickles, Python looks up this module in `sys.modules`
+3. Our shim returns `pysail.spark.datasource.DataSource`
+4. Unpickling succeeds with the Sail implementation
+
+**Registration Methods**
+
+**Method 1: Using pysail's @register Decorator (Current)**
+
+```python
+from pyspark.sql.datasource import DataSource, DataSourceReader
+from pysail.spark.datasource import register  # Import only register from pysail
+
+@register  # Register PySpark DataSource with Sail
+class MyDataSource(DataSource):
+    @classmethod
+    def name(cls) -> str:
+        return "mydatasource"
+    # ... rest of implementation
+```
+
+**Method 2: Using spark.dataSource.register() (Future - Not Yet Implemented)**
+
+Sail will support client-side registration via Spark Connect protocol:
+
+```python
+from pyspark.sql.datasource import DataSource, DataSourceReader
+
+class MyDataSource(DataSource):
+    @classmethod
+    def name(cls) -> str:
+        return "mydatasource"
+    # ... rest of implementation
+
+# Register with Sail (same as PySpark)
+spark.dataSource.register(MyDataSource)
+```
+
+This will enable **zero-code-change** usage of existing PySpark DataSources. The implementation requires handling the `RegisterDataSource` Spark Connect command (currently returns `unimplemented`).
+
+**Method 3: Entry Points (Package Distribution)**
+
+For distributable packages, register via entry points in `pyproject.toml`:
+
+```toml
+[project.entry-points."sail.datasources"]
+mydatasource = "my_package:MyDataSource"  # Can point to PySpark or Sail class
+```
+
+The DataSource class can extend either `pyspark.sql.datasource.DataSource` or `pysail.spark.datasource.DataSource` - both work identically at runtime.
+
 ## Motivation
 
 ### Problem Statement
@@ -1389,6 +1575,51 @@ fn is_free_threading_enabled() -> bool {
 - Exotic data types (Duration, Interval, Union, Dictionary)
 - Metrics/telemetry integration
 - Comprehensive documentation
+
+### Client-Side DataSource Registration (Spark Connect)
+
+Enable `spark.dataSource.register()` to match PySpark's API for zero-code-change migration:
+
+**Implementation Requirements:**
+- Handle `RegisterDataSource` Spark Connect command (currently returns `unimplemented`)
+- Accept pickled DataSource class from client via cloudpickle
+- Validate DataSource class structure (security consideration)
+- Register with session-local `DATASOURCE_REGISTRY`
+- Register with `TableFormatRegistry` for query use
+
+**Location:** `crates/sail-spark-connect/src/server.rs:134-136`
+
+**Current State:**
+```rust
+CommandType::RegisterDataSource(_) => {
+    return Err(Status::unimplemented("register data source command"));
+}
+```
+
+**Security Considerations:**
+Client-side registration introduces arbitrary code execution risk. Mitigation strategies:
+1. Validate DataSource class has required methods before unpickling
+2. Optional: Only allow registration from authenticated connections
+3. Optional: Allowlist of permitted DataSource base classes
+4. Document security model: datasources are trusted code (same as PySpark)
+
+**User Experience:**
+```python
+# Existing PySpark code works unchanged
+from pyspark.sql.datasource import DataSource, DataSourceReader
+
+class MyDataSource(DataSource):
+    @classmethod
+    def name(cls):
+        return "mydatasource"
+    # ... implementation
+
+# Register with Sail (same as PySpark)
+spark.dataSource.register(MyDataSource)
+
+# Use immediately
+df = spark.read.format("mydatasource").load()
+```
 
 ### Database Connectors via Python DataSources
 
