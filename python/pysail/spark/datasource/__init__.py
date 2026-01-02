@@ -1,5 +1,5 @@
 # Python DataSource API for Sail
-# 100% PySpark-compatible (PySpark 3.5+/4.0+)
+# 100% PySpark-compatible (PySpark 4.0+)
 
 from .base import (
     # Core classes

@@ -6,27 +6,49 @@
 **Authors:** Santosh
 **Date:** 2025-12-31
 
-## Summary
+## Executive Summary
 
-This RFC documents the implementation of Python DataSource support in Sail, enabling users to implement custom data sources in Python while leveraging Sail's distributed execution engine. The implementation provides 100% API compatibility with PySpark 3.5+/4.0+ DataSource API.
+This RFC documents Python DataSource support in Sail, enabling users to implement custom data sources in Python while leveraging Sail's distributed execution engine. The implementation provides **100% API compatibility** with the PySpark 4.0+ DataSource API, allowing existing PySpark DataSource implementations to work without modification.
 
-This RFC represents **Phase 1 (PR #1)** of a broader implementation strategy with 6 planned phases focused on incremental capability delivery.
+**Key Benefits:**
+- **Zero-friction PySpark migration**: Existing DataSource code works unchanged
+- **High performance**: Zero-copy data transfer via Arrow C Data Interface
+- **Distributed execution**: Parallel partition-based reading across workers
+- **Low barrier to entry**: Python developers can extend Sail without Rust knowledge
+- **Ecosystem leverage**: Access to 350,000+ PyPI packages
 
-## Installation
+**Phase 1 (MVP)** delivers read-only batch support with 5 additional phases planned for write, subprocess isolation, streaming, and performance optimization.
+
+---
+
+## Table of Contents
+
+1. [Quick Start](#quick-start)
+2. [Motivation](#motivation)
+3. [Design Decisions](#design-decisions)
+4. [Drawbacks](#drawbacks)
+5. [Unresolved Questions](#unresolved-questions)
+6. [Architecture](#architecture)
+7. [API Reference](#api-reference)
+8. [Implementation Details](#implementation-details)
+9. [PySpark Compatibility](#pyspark-compatibility)
+10. [Performance Considerations](#performance-considerations)
+11. [Future Work](#future-work)
+12. [FAQ](#faq) (22 questions)
+13. [Appendix](#appendix)
+
+---
+
+## Quick Start
 
 ### Prerequisites
 
-- Python 3.9, 3.10, 3.11, or 3.12
-- PyArrow library (`pip install pyarrow`)
+- Python 3.9-3.12
+- PyArrow library: `pip install pyarrow`
 
-### Setting Up Python DataSources
-
-#### Method 1: Using the @register Decorator (Recommended for Development)
-
-Create a DataSource in a Python file with the `@register` decorator:
+### Creating a DataSource
 
 ```python
-# my_datasource.py
 from pysail.spark.datasource import DataSource, DataSourceReader, InputPartition, register
 import pyarrow as pa
 
@@ -47,20 +69,22 @@ class MyDataSourceReader(DataSourceReader):
         return [InputPartition(0)]
 
     def read(self, partition):
+        # Yield tuples or pyarrow.RecordBatch
         yield (1, "Alice"), (2, "Bob")
 ```
 
-Use in Sail:
+### Using the DataSource
+
 ```python
 df = spark.read.format("mydatasource").load()
+df.show()
 ```
 
-#### Method 2: Using Entry Points (Recommended for Packages)
+### Distribution via Entry Points
 
-For distributable DataSource packages, register via entry points in `pyproject.toml`:
+For package distribution, register via `pyproject.toml`:
 
 ```toml
-# pyproject.toml
 [project]
 name = "my-datasource-package"
 version = "1.0.0"
@@ -70,281 +94,148 @@ dependencies = ["pyarrow"]
 mydatasource = "my_package.datasources:MyDataSource"
 ```
 
-Install the package:
-```bash
-pip install .
-```
+After `pip install -e .`, the DataSource is automatically discovered.
 
-The DataSource will be automatically discovered when Sail starts.
-
-### Installing Third-Party DataSources
-
-DataSource packages installed via pip are automatically discovered:
-
-```bash
-pip install custom-datasource
-```
-
-### Using PySpark DataSources
-
-Sail provides **100% API compatibility** with PySpark 3.5+/4.0+ DataSource API. At runtime, Sail handles DataSource classes interchangeably whether they extend `pyspark.sql.datasource.DataSource` or `pysail.spark.datasource.DataSource` - the namespace doesn't matter, only the API methods.
-
-**Compatible PySpark DataSources:**
-- Use only the public `DataSource`/`DataSourceReader` APIs
-- Don't depend on SparkSession, SparkContext, or JVM integration (py4j)
-- Use standard Python libraries (requests, pyarrow, pandas, etc.)
-- Implement data fetching logic in pure Python
-
-**Incompatible PySpark DataSources:**
-- Use Spark's internal JVM APIs (e.g., `spark._jvm`)
-- Depend on py4j for Java interop
-- Require SparkContext for distributed operations
-- Use Spark SQL's internal execution engine
-
-#### PySpark Compatibility Options
-
-When PySpark DataSources are unpickled on the Sail server, the base class (`pyspark.sql.datasource.DataSource`) must be available. Since Sail's environment includes `pysail` but not `pyspark`, we have several options for enabling compatibility:
-
-| Option | Description | Pros | Cons | Recommendation |
-|--------|-------------|------|------|----------------|
-| **A: sys.modules Shim** | Create `pyspark.sql.datasource` module that re-exports `pysail` classes at Sail startup | ✅ Zero-code-change for users, works with all registration methods, no additional dependencies | ⚠️ Must be initialized before unpickling, must keep shim in sync with API | **Recommended** |
-| **B: Require pysail Base** | Users import from `pysail.spark.datasource` instead of `pyspark.sql.datasource` | ✅ Simple and explicit, no magic/shims | ❌ Requires code changes, not drop-in compatible | Alternative for users who prefer explicit imports |
-| **C: Install PySpark** | Include full `pyspark` package in Sail dependencies | ✅ Native compatibility and no shims needed | ❌ Heavy dependency (~300MB), JVM overhead, version coupling | Not recommended |
-| **D: Hybrid/Configurable** | Shim enabled by default, users can opt-out via config | ✅ Default: zero-code-change, user control | ⚠️ More complex configuration, multiple code paths | Future enhancement if requested |
-
-**Selected Approach: Option A (sys.modules Shim)**
-
-This provides the best user experience - true zero-code-change PySpark compatibility with minimal implementation complexity.
-
-**How It Works:**
-
-When Sail starts, it creates a compatibility shim before processing any DataSource registrations:
-
-```python
-# In Sail's Python initialization (python/pysail/spark/datasource/compat.py)
-import sys
-from pysail.spark.datasource import (
-    DataSource, DataSourceReader, InputPartition,
-    EqualTo, EqualNullSafe, GreaterThan, GreaterThanOrEqual,
-    LessThan, LessThanOrEqual, In, IsNull, IsNotNull,
-    Not, And, Or, StringStartsWith, StringEndsWith, StringContains,
-    Filter, ColumnPath,
-)
-
-class PysparkDatasourceCompat:
-    """Compatibility shim that makes pysail classes available as pyspark classes."""
-
-# Re-export all pysail classes as if they were from pyspark.sql.datasource
-for name in dir():
-    obj = locals()[name]
-    if not name.startswith('_') and isinstance(obj, type):
-        setattr(PysparkDatasourceCompat, name, obj)
-
-# Inject into sys.modules so cloudpickle can find it when unpickling
-sys.modules['pyspark.sql.datasource'] = PysparkDatasourceCompat
-```
-
-**Why This Works:**
-
-When PySpark client pickles a DataSource class:
-1. Cloudpickle stores a reference to base class: `"pyspark.sql.datasource.DataSource"`
-2. When Sail unpickles, Python looks up this module in `sys.modules`
-3. Our shim returns `pysail.spark.datasource.DataSource`
-4. Unpickling succeeds with the Sail implementation
-
-**Registration Methods**
-
-**Method 1: Using pysail's @register Decorator (Current)**
-
-```python
-from pyspark.sql.datasource import DataSource, DataSourceReader
-from pysail.spark.datasource import register  # Import only register from pysail
-
-@register  # Register PySpark DataSource with Sail
-class MyDataSource(DataSource):
-    @classmethod
-    def name(cls) -> str:
-        return "mydatasource"
-    # ... rest of implementation
-```
-
-**Method 2: Using spark.dataSource.register() (Future - Not Yet Implemented)**
-
-Sail will support client-side registration via Spark Connect protocol:
-
-```python
-from pyspark.sql.datasource import DataSource, DataSourceReader
-
-class MyDataSource(DataSource):
-    @classmethod
-    def name(cls) -> str:
-        return "mydatasource"
-    # ... rest of implementation
-
-# Register with Sail (same as PySpark)
-spark.dataSource.register(MyDataSource)
-```
-
-This will enable **zero-code-change** usage of existing PySpark DataSources. The implementation requires handling the `RegisterDataSource` Spark Connect command (currently returns `unimplemented`).
-
-**Method 3: Entry Points (Package Distribution)**
-
-For distributable packages, register via entry points in `pyproject.toml`:
-
-```toml
-[project.entry-points."sail.datasources"]
-mydatasource = "my_package:MyDataSource"  # Can point to PySpark or Sail class
-```
-
-The DataSource class can extend either `pyspark.sql.datasource.DataSource` or `pysail.spark.datasource.DataSource` - both work identically at runtime.
+---
 
 ## Motivation
 
 ### Problem Statement
 
-Users need the ability to:
-1. Read data from custom sources not natively supported by Sail (APIs, proprietary formats, etc.)
-2. Leverage existing Python data processing code within Sail's distributed execution
-3. Maintain compatibility with PySpark DataSource implementations for easy migration
+Modern data systems face a tension between **extensibility** and **maintainability**:
 
-**Broader Ecosystem Challenge**: Modern data systems face a tension between **extensibility** and **maintainability**. Adding native support for every data source, API, or proprietary format directly into the core codebase leads to:
-- **Code bloat**: Core framework becomes harder to maintain and reason about
+- **Code bloat**: Adding every connector to the core makes the framework harder to maintain
 - **Release coupling**: New connectors tied to framework release cycles
-- **Security surface**: Every integration increases attack surface and dependency risk
-- **Barrier to contribution**: Contributors must navigate complex build systems and testing infrastructure
+- **Security surface**: Every integration increases attack surface
+- **Barrier to contribution**: Contributors must navigate complex build systems
 
-**The Plugin Model Solution**: By providing a **composable plugin architecture**, Sail enables:
-- **Decentralized innovation**: Community can build and distribute connectors independently
+### The Plugin Model Solution
+
+Python DataSource support provides a **composable plugin architecture** with PySpark compatibility as the primary driver:
+
+- **PySpark migration**: Reuse existing DataSource implementations with zero code changes
+- **Decentralized innovation**: Community builds and distributes connectors independently
 - **Risk isolation**: Third-party code runs in user space, not embedded in core
 - **Rapid iteration**: Connector updates don't require Sail releases
-- **Lower barrier to entry**: Python developers can extend Sail without Rust expertise
-
-### Goals
-
-- **100% PySpark API Compatibility**: Existing PySpark DataSource implementations work without modification
-- **High Performance**: Zero-copy data transfer via Arrow C Data Interface
-- **Distributed Execution**: Parallel partition-based reading across workers
-- **Filter Pushdown**: DataFusion expressions converted to Python filter objects
-- **Extensibility**: Trait-based design for future subprocess isolation (PR #3)
-- **Composability**: Enable users to mix-and-match datasources without core modifications
+- **Simplified FFI**: Avoids complex native FFI while providing extension capability
 
 ### Why Python?
 
-Python was chosen as the first (and currently only) extension language for several strategic reasons:
+See [FAQ: Why Python for DataSources?](#q15-why-python-for-datasources)
 
-**1. Ecosystem Dominance in Data**
-Python is the de facto language for data engineering and data science:
-- **PyArrow**: Industry-standard Arrow implementation with mature C Data Interface
-- **Database Connectors**: connector-x, DuckDB, psycopg3, turbodbc all have Python bindings
-- **Cloud SDKs**: boto3 (AWS), google-cloud-python (GCP), azure-sdk-for-python
-- **API Libraries**: requests, httpx, aiohttp for custom API integrations
+### Goals
 
-**2. PySpark Migration Path**
-Organizations migrating from PySpark can reuse existing DataSource implementations with zero code changes, drastically reducing migration friction.
+- 100% PySpark API compatibility
+- High performance via Arrow zero-copy
+- Distributed execution with partition parallelism
+- Filter pushdown infrastructure (activated in future phases)
+- Extensible design for subprocess isolation
 
-**3. Low Barrier to Entry**
-Python developers outnumber Rust developers ~50:1 in the data space. Enabling Python extensions means:
-- Data engineers can build connectors without learning Rust
-- Faster time-to-market for custom integrations
-- Broader community contribution potential
+### Non-Goals (Deferred)
 
-**4. Subprocess Isolation Feasibility**
-Python's GIL and interpreter architecture make subprocess isolation straightforward:
-- Clear process boundaries for crash isolation
-- Well-established IPC mechanisms (gRPC, shared memory)
-- PyO3 provides robust in-process FFI for MVP simplicity
+- Write support → Phase 2
+- Subprocess isolation → Phase 3
+- Streaming read/write → Phase 4-5
+- Exotic data types → Phase 6
 
-**Future Languages**: While Python is the current focus, the `PythonExecutor` trait design allows future support for other languages (Go, JavaScript via Node.js) following similar patterns.
+---
 
-### Non-Goals (Deferred to Later Phases)
+## Design Decisions
 
-- Write support (Phase 2)
-- Subprocess isolation for GIL parallelism (Phase 3)
-- Streaming read/write (Phase 4-5)
-- Exotic data types and performance polish (Phase 6)
+This section documents key design decisions, distinguishing between:
+- **True alternatives**: Mutually exclusive choices where we picked one
+- **Phased implementations**: Sequential steps where later phases build on earlier ones
+- **Requirements**: Constraints where the only choice is *how* to meet them
 
-## Alternatives Considered
+### 1. Python Execution Model (Phased)
 
-### 1. Python Execution Model
+Sail must execute Python datasource code. These are **phases**, not competing alternatives:
+
+| Phase | Approach | Description | Status |
+|-------|----------|-------------|--------|
+| **Phase 1** | PyO3 in-process | Python runs in Sail process; PyO3 manages GIL | MVP |
+| **Phase 3** | Subprocess workers | Python in separate processes; gRPC control + shared memory data | Planned |
+
+**Why in-process for MVP**:
+- Simpler deployment (no worker process management)
+- Zero-copy Arrow transfer (same process = direct pointer access)
+- Sufficient for trusted datasources
+
+**What changes in Phase 3**:
+- Control plane: gRPC for schema/partition requests
+- Data plane: Shared memory for Arrow buffers (still zero-copy)
+- Benefit: Crash isolation + N GILs for parallelism
+
+**Not competing**: Phase 3 builds on Phase 1's design. The `PythonExecutor` trait abstracts the difference, allowing seamless migration.
+
+### 2. PySpark Compatibility Strategy (Requirement)
+
+PySpark DataSource compatibility is a **requirement**, not a choice. When PySpark datasources are pickled, they reference `pyspark.sql.datasource.DataSource`. Sail includes `pysail` but not `pyspark`, so we must bridge this gap.
+
+We considered *how* to achieve this:
+
+| Approach | How It Works | Decision |
+|----------|--------------|----------|
+| **sys.modules shim** | Inject `pyspark.sql.datasource` module that re-exports pysail classes | Chosen |
+| **Require pysail imports** | Users change imports from `pyspark.sql.datasource` to `pysail.spark.datasource` | Rejected (breaks zero-code-change goal) |
+| **Install PySpark** | Include full `pyspark` as dependency | Rejected (too heavy: ~300MB, JVM overhead) |
+
+**Why the shim**: Enables existing PySpark DataSource code to work without modification. Users don't change imports or code—Sail handles the namespace translation.
+
+**Implementation**: Shim is initialized at Sail startup. When unpickling, Python looks up `pyspark.sql.datasource` in `sys.modules` and gets the pysail implementation.
+
+### 3. Data Transfer (Context-Dependent)
+
+| Mode | Transfer Method | When Used |
+|------|-----------------|-----------|
+| **In-process (Phase 1)** | Arrow C Data Interface | Direct pointer passing, zero-copy |
+| **Subprocess (Phase 3)** | Arrow IPC over shared memory | Zero-copy across process boundary |
+
+**Not competing**: Same goal (zero-copy), different mechanisms for different execution modes. Both use Arrow's zero-copy interfaces—C Data works within one process (pointer access), IPC works across processes (shared memory mmap).
+
+### 4. Serialization Format (True Alternative)
 
 | Alternative | Pros | Cons | Decision |
 |-------------|------|------|----------|
-| **PyO3 in-process (chosen)** | Zero-copy Arrow, simple deployment, low latency | Single GIL, crash takes down server | MVP choice for simplicity |
-| **Subprocess + gRPC** | GIL parallelism, crash isolation | Serialization overhead, complex lifecycle | Deferred to PR #3 |
-| **Subprocess + shared memory** | GIL parallelism + zero-copy | High complexity, platform-specific | Deferred to PR #3 |
-
-**Rationale**: PyO3 in-process provides the best developer experience for MVP. The `PythonExecutor` trait abstracts the execution model, enabling future migration to subprocess isolation without API changes.
-
-### 2. Serialization Format
-
-| Alternative | Pros | Cons | Decision |
-|-------------|------|------|----------|
-| **cloudpickle (chosen)** | Pickles lambdas/closures, PySpark compatible | Security considerations (same as Spark) | Chosen for PySpark compatibility |
+| **cloudpickle** | Pickles lambdas/closures, PySpark compatible | Security considerations (same as Spark) | Chosen |
 | **dill** | Similar to cloudpickle | Less maintained, PySpark uses cloudpickle | Rejected |
 | **pickle** | Standard library | Cannot pickle lambdas/closures | Rejected |
-| **JSON + class registry** | Safe, inspectable | Cannot serialize arbitrary Python objects | Rejected: limits flexibility |
+| **JSON + class registry** | Safe, inspectable | Cannot serialize arbitrary Python objects | Rejected |
 
 **Rationale**: PySpark uses cloudpickle; using the same ensures zero-friction migration. Security posture matches Spark—datasources are treated as trusted code.
 
-### 3. Filter Representation
+### 5. Filter Representation (True Alternative)
 
 | Alternative | Pros | Cons | Decision |
 |-------------|------|------|----------|
-| **Frozen dataclasses (chosen)** | Immutable, hashable, PySpark compatible | Requires Python 3.7+ | Chosen |
+| **Frozen dataclasses** | Immutable, hashable, PySpark compatible | Requires Python 3.7+ | Chosen |
 | **Named tuples** | Lightweight, immutable | Less extensible, no methods | Rejected |
 | **Protobuf messages** | Language-neutral, schema evolution | Adds dependency, overkill for Python-only | Rejected |
 | **Raw dictionaries** | Flexible | No type safety, error-prone | Rejected |
 
-### 4. Data Transfer
+### 6. Extension Mechanism: Python vs Pure FFI (True Alternative)
 
 | Alternative | Pros | Cons | Decision |
 |-------------|------|------|----------|
-| **Arrow C Data Interface (chosen)** | Zero-copy, standard | Requires PyArrow | Chosen |
-| **Arrow IPC** | Works across processes | Serialization overhead | Used for subprocess mode |
-| **Pickle** | Simple | Slow, copies data | Rejected for data plane |
-
-### 5. Extension Mechanism: Python vs Pure FFI
-
-| Alternative | Pros | Cons | Decision |
-|-------------|------|------|----------|
-| **Python DataSource API (chosen)** | Low barrier to entry, huge ecosystem, PySpark compatibility | GIL limitations (mitigated by subprocess), runtime overhead | Chosen for extensibility |
-| **Pure C FFI (dlopen + function pointers)** | Maximum performance, no runtime dependency | High barrier to entry, unsafe, no ecosystem leverage | Rejected for user-facing extensions |
+| **Python DataSource API** | Low barrier to entry, huge ecosystem, PySpark compatibility | GIL limitations (mitigated by subprocess), runtime overhead | Chosen |
+| **Pure C FFI (dlopen)** | Maximum performance, no runtime dependency | High barrier to entry, unsafe, no ecosystem leverage | Rejected for user-facing |
 | **WebAssembly (WASM)** | Sandboxing, multi-language | Immature data ecosystem, limited Arrow support | Future consideration |
 
-**Rationale for Rejecting Pure FFI:**
+**Why we rejected Pure FFI for user-facing extensions:**
 
-While pure C FFI (e.g., `dlopen` with function pointers) offers maximum performance, it creates an **unreasonably high barrier to entry** for data engineers:
+Pure C FFI creates an **unreasonably high barrier to entry** for data engineers:
 
-**Technical Complexity**:
-- Developers must manage memory safety manually (alloc/free across FFI boundary)
-- ABI compatibility issues across compilers and platforms
-- No type safety—mistakes manifest as segfaults, not compile errors
-- Requires understanding Rust's `#[repr(C)]`, lifetime semantics, and unsafe code
+- **Technical Complexity**: Manual memory management, ABI compatibility issues, no type safety (mistakes = segfaults)
+- **Toolchain Burden**: Requires C/C++/Rust compiler, platform-specific builds, cross-compilation testing
+- **Ecosystem Fragmentation**: No standard HTTP/JSON/cloud libraries in C, security vulnerabilities in hand-rolled code
 
-**Toolchain Burden**:
-- Every datasource requires a C/C++/Rust compiler
-- Platform-specific builds (Linux/macOS/Windows, x86/ARM)
-- Dependency management for native libraries
-- Testing infrastructure for cross-compilation
+**Historical Evidence**: Systems that relied on pure FFI for extensibility (e.g., Postgres prior to PL/Python, early databases with C UDFs) saw limited community adoption compared to higher-level language bindings.
 
-**Ecosystem Fragmentation**:
-- No standard library for HTTP, JSON, cloud APIs in C
-- Developers reinvent wheels (HTTP clients, JSON parsers)
-- Security vulnerabilities in hand-rolled code
+**When Pure FFI Makes Sense**: For **performance-critical native connectors** (PostgreSQL, Parquet, Arrow Flight), Sail provides direct Rust `TableFormat` implementations. Pure FFI is reserved for internal use, not user-facing extensions.
 
-**Historical Evidence**:
-Systems that relied on pure FFI for extensibility (e.g., Postgres prior to PL/Python, early databases with C UDFs) saw limited community adoption compared to higher-level language bindings. The cognitive overhead and crash risk discourage experimentation.
+**Python's balance**: Accessible for users, performant via Arrow zero-copy, safe via subprocess isolation.
 
-**Python's Advantages**:
-- **Safety**: Memory-safe by default; errors are exceptions, not segfaults
-- **Ecosystem**: Leverage 350,000+ PyPI packages without reinventing
-- **Iteration Speed**: Edit-run cycle measured in seconds, not compile-test-deploy cycles
-- **Debugging**: Standard tools (`pdb`, logging) vs debugging C crashes in production
-
-**When Pure FFI Makes Sense**:
-For **performance-critical native connectors** (PostgreSQL, Parquet, Arrow Flight), Sail provides direct Rust `TableFormat` implementations. Pure FFI is reserved for internal use, not user-facing extensions.
-
-The Python DataSource API strikes the optimal balance: **accessible for users, performant via Arrow zero-copy, and safe via subprocess isolation**.
+---
 
 ## Drawbacks
 
@@ -356,7 +247,7 @@ The Python DataSource API strikes the optimal balance: **accessible for users, p
 
 **Mitigation**:
 - Most data operations use Arrow/NumPy which release the GIL
-- Subprocess isolation (PR #3) eliminates this limitation
+- Subprocess isolation (Phase 3) eliminates this limitation
 - Recommend libraries like connector-x/DuckDB that release GIL during I/O
 
 ### 2. Python Version Coupling
@@ -384,642 +275,308 @@ The Python DataSource API strikes the optimal balance: **accessible for users, p
 - Preserve Python traceback in debug logs
 - Test error message parity against PySpark for common failure modes
 
+---
+
 ## Unresolved Questions
 
 ### Open for Discussion
 
-1. **Filter pushdown feedback**: Should we provide a way for Python to report *why* a filter was rejected? Currently, readers just return unsupported filters without explanation.
+1. **Schema evolution**: How should we handle schema changes between datasource versions? PySpark fails fast on schema mismatch. Current approach: same behavior.
 
-2. **Partition affinity**: Should partitions carry location hints (e.g., "prefer node X")? This could improve data locality but adds complexity.
-
-3. **Schema evolution**: How should we handle schema changes between datasource versions? Current approach: fail fast. Alternative: allow compatible changes.
-
-4. **Metrics API**: What metrics should datasources expose? Options:
+2. **Metrics API**: What metrics should datasources expose?
+   - GIL hold/wait time (starvation indicators)
+   - Rust↔Python boundary overhead
    - Counters: rows_read, bytes_read, errors
-   - Timers: read_time, filter_time
-   - Gauges: active_connections
 
-5. **Resource limits**: Should we enforce memory/CPU limits per datasource? How would this interact with subprocess isolation?
+3. **Resource limits**: Should we enforce memory/CPU limits per datasource? How would this interact with subprocess isolation?
 
-6. **Async Python support**: Should readers support `async def read()`? This could improve I/O-bound datasources but complicates the execution model.
+4. **Async Python support**: Should readers support `async def read()`? This could improve I/O-bound datasources but complicates the execution model. PySpark 4.0 does not support async readers.
 
-7. **Process reuse strategy**: When subprocess isolation is implemented (PR #3), how should worker processes be managed?
+5. **Process reuse strategy**: When subprocess isolation is implemented (Phase 3), how should worker processes be managed? This also affects UDF execution scope.
    - Fresh process per query (safe, slow startup)
    - Pooled processes (fast, state leakage risk)
    - Hybrid (fresh for untrusted, pooled for trusted)
 
-8. **Free-threading mode (PEP 703)**: How should Sail adapt to Python's free-threading (no-GIL) mode introduced in Python 3.13?
-   - **Detect and adapt**: If free threading detected, use `InProcessExecutor` without GIL concerns
-   - **Keep subprocess isolation**: Still valuable for crash/memory/version isolation even without GIL
-   - **Configurable**: Let users choose via `SAIL_PYTHON_ISOLATION_MODE` environment variable
-   - **Timeline**: Free threading is experimental in 3.13 and not production-ready. Ecosystem (PyO3, NumPy, PyArrow) support is still evolving. We anticipate this becoming relevant in 2026+.
-   - **Tracking**: See [PEP 703 – Making the Global Interpreter Lock Optional](https://peps.python.org/pep-0703/)
+6. **Free-threading mode (PEP 703)**: Python 3.13 introduces experimental free-threading. The implementation can detect free-threading at runtime and adapt execution strategy. Feature flags will enable controlled rollout and rollback.
 
 ### Resolved During Implementation
 
-1. ~~**Entry point group name**~~: Using `sail.datasources` (consistent with sail2)
-2. ~~**Default batch size**~~: 8192 rows (matches Arrow defaults)
+1. ~~**Entry point group name**~~: Using `sail.datasources`
+2. ~~**Default batch size**~~: 8192 rows (configurable)
 3. ~~**Thread cleanup strategy**~~: RAII with oneshot shutdown signal
 
-## Risks and Mitigations
-
-| Risk | Likelihood | Impact | Mitigation |
-|------|------------|--------|------------|
-| **GIL becomes bottleneck** | Medium | High | Subprocess isolation (PR #3); use connector-x/DuckDB for heavy I/O |
-| **Python crash takes down Sail** | Low | Critical | Subprocess isolation (PR #3) provides crash isolation |
-| **Memory leak at Python/Rust boundary** | Low | Medium | RAII cleanup in Drop, integration tests for lifecycle |
-| **Arrow version mismatch** | Medium | Medium | Pin arrow-pyarrow version, validate at load time |
-| **PySpark API divergence** | Low | High | Track PySpark releases, maintain compatibility tests |
-| **Free threading makes subprocess obsolete** | Low | Medium | Subprocess isolation provides crash/memory/version isolation independent of GIL; `PythonExecutor` trait allows runtime executor selection |
-
-## Implementation Status
-
-### What's Implemented (PR #1 - MVP Read-Only)
-
-| Component | Status | Location |
-|-----------|--------|----------|
-| Core Infrastructure | **Complete** | `crates/sail-data-source/src/python_datasource/` |
-| Discovery & Registry | **Complete** | `discovery.rs` |
-| Filter Pushdown | **Complete** | `filter.rs` |
-| Arrow Utilities | **Complete** | `arrow_utils.rs` |
-| Execution Plan | **Complete** | `exec.rs` |
-| Stream with RAII | **Complete** | `stream.rs` |
-| TableProvider | **Complete** | `python_table_provider.rs` |
-| TableFormat | **Complete** | `table_format.rs` |
-| Python API | **Complete** | `python/pysail/spark/datasource/base.py` |
-| Example DataSources | **Complete** | `python/pysail/spark/datasource/examples.py` |
-
-### What's Planned (Future PRs)
-
-| Feature | PR | Status |
-|---------|-----|--------|
-| Batch Write Support | PR #2 | Planned |
-| Subprocess Isolation | PR #3 | Planned |
-| Streaming Read | PR #4 | Planned |
-| Streaming Write | PR #5 | Planned |
-| Performance & Polish | PR #6 | Planned |
+---
 
 ## Architecture
 
-### Overview
+### System Overview
 
-The Python DataSource architecture follows a **layered design** that integrates with DataFusion at three levels:
+The Python DataSource architecture integrates with DataFusion at three levels:
 
-1. **TableFormat**: Discovery and instantiation of datasources
+1. **TableFormat**: Discovery and instantiation
 2. **TableProvider**: Logical planning with schema and filter pushdown
 3. **ExecutionPlan**: Physical execution with partition-level parallelism
 
-This separation enables:
-- **Composability**: Mix Python datasources with native formats (Parquet, Delta Lake)
-- **Optimization**: DataFusion can push down filters and projections
-- **Safety**: RAII cleanup ensures resources are freed even on errors
-
-The following diagrams show the **static component architecture** (what connects to what) and **dynamic execution flow** (what happens when a query runs).
-
 ### Component Architecture
-
-This diagram shows the layered architecture with clear top-to-bottom flow:
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                      Sail Server (Rust)                      │
+│                      Sail Worker (Rust)                      │
+│              (Runs on each executor node)                    │
 │                                                              │
 │  ┌────────────────────────────────────────────────────────┐  │
 │  │ Layer 1: Discovery & Registration                      │  │
-│  │  ┌──────────────────────────────────────────────────┐  │  │
-│  │  │ DATASOURCE_REGISTRY                              │  │  │
-│  │  │ - Entry points: sail.datasources                 │  │  │
-│  │  │ - @register decorator                            │  │  │
-│  │  └──────────────────────────────────────────────────┘  │  │
-│  └──────────────────────────┬─────────────────────────────┘  │
-│                             │                                │
-│                             ▼                                │
+│  │  • DATASOURCE_REGISTRY                                 │  │
+│  │  • Entry points: sail.datasources                      │  │
+│  │  • @register decorator                                 │  │
+│  └──────────────────────┬─────────────────────────────────┘  │
+│                         ▼                                    │
 │  ┌────────────────────────────────────────────────────────┐  │
-│  │ Layer 2: TableFormat                                   │  │
-│  │  ┌──────────────────────────────────────────────────┐  │  │
-│  │  │ PythonTableFormat                                │  │  │
-│  │  │ - Implements: TableFormat trait                  │  │  │
-│  │  │ - Creates: PythonTableProvider instances         │  │  │
-│  │  └──────────────────────────────────────────────────┘  │  │
-│  └──────────────────────────┬─────────────────────────────┘  │
-│                             │                                │
-│                             ▼                                │
+│  │ Layer 2: TableFormat → PythonTableFormat               │  │
+│  └──────────────────────┬─────────────────────────────────┘  │
+│                         ▼                                    │
 │  ┌────────────────────────────────────────────────────────┐  │
-│  │ Layer 3: TableProvider                                 │  │
-│  │  ┌──────────────────────────────────────────────────┐  │  │
-│  │  │ PythonTableProvider                              │  │  │
-│  │  │ - Implements: TableProvider trait                │  │  │
-│  │  │ - Handles: Schema, filter pushdown, planning     │  │  │
-│  │  └──────────────────────────────────────────────────┘  │  │
-│  └──────────────────────────┬─────────────────────────────┘  │
-│                             │                                │
-│                             ▼                                │
+│  │ Layer 3: TableProvider → PythonTableProvider           │  │
+│  │  • Schema, filter pushdown, planning                   │  │
+│  └──────────────────────┬─────────────────────────────────┘  │
+│                         ▼                                    │
 │  ┌────────────────────────────────────────────────────────┐  │
-│  │ Layer 4: Execution Plan                                │  │
-│  │  ┌──────────────────────────────────────────────────┐  │  │
-│  │  │ PythonDataSourceExec                             │  │  │
-│  │  │ - Implements: ExecutionPlan trait                │  │  │
-│  │  │ - Manages: Partition-level parallelism           │  │  │
-│  │  └──────────────────────────────────────────────────┘  │  │
-│  └──────────────────────────┬─────────────────────────────┘  │
-│                             │                                │
-│                             ▼                                │
+│  │ Layer 4: ExecutionPlan → PythonDataSourceExec          │  │
+│  │  • Partition-level parallelism                         │  │
+│  └──────────────────────┬─────────────────────────────────┘  │
+│                         ▼                                    │
 │  ┌────────────────────────────────────────────────────────┐  │
-│  │ Layer 5: Stream                                        │  │
-│  │  ┌──────────────────────────────────────────────────┐  │  │
-│  │  │ PythonDataSourceStream                           │  │  │
-│  │  │ - Implements: RecordBatchStream trait            │  │  │
-│  │  │ - Manages: Python thread lifecycle (RAII)        │  │  │
-│  │  └──────────────────────────────────────────────────┘  │  │
-│  └──────────────────────────┬─────────────────────────────┘  │
-│                             │                                │
-│                             ▼                                │
+│  │ Layer 5: Stream → PythonDataSourceStream               │  │
+│  │  • Python thread lifecycle (RAII)                      │  │
+│  └──────────────────────┬─────────────────────────────────┘  │
+│                         ▼                                    │
 │  ┌────────────────────────────────────────────────────────┐  │
-│  │ Layer 6: FFI Bridge                                    │  │
-│  │  ┌──────────────────────────────────────────────────┐  │  │
-│  │  │ PyO3 Bridge (Rust ↔ Python)                      │  │  │
-│  │  │ - GIL acquisition                                │  │  │
-│  │  │ - Exception translation                          │  │  │
-│  │  │ - Zero-copy via Arrow C Data Interface           │  │  │
-│  │  └──────────────────────────────────────────────────┘  │  │
-│  └──────────────────────────┬─────────────────────────────┘  │
-└────────────────────────────┼─────────────────────────────────┘
-                             │
-                             │ Arrow C Data Interface
-                             │ (zero-copy pointer transfer)
-                             │
-                             ▼
+│  │ Layer 6: PyO3 Bridge                                   │  │
+│  │  • Zero-copy via Arrow C Data Interface                │  │
+│  └──────────────────────┬─────────────────────────────────┘  │
+└────────────────────────┼─────────────────────────────────────┘
+                         ▼
          ┌────────────────────────────────────────┐
-         │   Layer 7: Python Runtime (GIL)        │
-         │                                        │
-         │   ┌────────────────────────────────┐   │
-         │   │ DataSource                     │   │
-         │   │ (user-defined class)           │   │
-         │   │ - name(), schema(), reader()   │   │
-         │   └────────────┬───────────────────┘   │
-         │                │                       │
-         │                ▼                       │
-         │   ┌────────────────────────────────┐   │
-         │   │ DataSourceReader               │   │
-         │   │ (user-defined class)           │   │
-         │   │ - partitions(), read()         │   │
-         │   │ - pushFilters() [optional]     │   │
-         │   └────────────┬───────────────────┘   │
-         │                │                       │
-         │                ▼                       │
-         │   ┌────────────────────────────────┐   │
-         │   │ InputPartition(s)              │   │
-         │   │ (pickled for distribution)     │   │
-         │   └────────────────────────────────┘   │
-         │                                        │
+         │   Layer 7: Python Runtime              │
+         │   • DataSource (user-defined)          │
+         │   • DataSourceReader (user-defined)    │
+         │   • InputPartition(s)                  │
          └────────────────────────────────────────┘
 ```
 
-**Component Layers**:
-
-1. **Discovery & Registration**:
-   - `DATASOURCE_REGISTRY`: Global registry populated via entry points and `@register` decorator
-   - Discovers Python datasources at server startup
-
-2. **TableFormat Layer**:
-   - `PythonTableFormat`: Implements DataFusion's `TableFormat` trait
-   - Creates `PythonTableProvider` instances for registered datasources
-   - Acts as factory for Python-backed tables
-
-3. **TableProvider Layer**:
-   - `PythonTableProvider`: Implements DataFusion's `TableProvider` trait
-   - Handles schema discovery and filter pushdown negotiation
-   - Creates execution plans for queries
-
-4. **Execution Layer**:
-   - `PythonDataSourceExec`: Implements DataFusion's `ExecutionPlan` trait
-   - Manages partition-level parallelism
-   - Coordinates Python thread lifecycle
-
-5. **Stream Layer**:
-   - `PythonDataSourceStream`: Implements `RecordBatchStream` for async iteration
-   - Spawns Python thread and manages RAII cleanup
-   - Bridges synchronous Python iteration with async Rust streams
-
-6. **PyO3 Bridge**:
-   - FFI boundary between Rust and Python
-   - Zero-copy data transfer via Arrow C Data Interface
-   - Handles GIL acquisition and exception translation
-
-7. **Python Runtime**:
-   - User-defined `DataSource` and `DataSourceReader` classes
-   - 100% PySpark API compatible
-   - Yields `RecordBatch` or tuple data back to Rust
+**Execution Context:**
+- **Driver**: Coordinates query planning, receives results
+- **Workers**: Execute Python DataSource code (schema, partitions, read)
+- **Python Runtime**: Embedded in each worker via PyO3
 
 ### Query Execution Flow
 
-This diagram shows the temporal sequence of operations when executing a query:
+```
+User: spark.read.format("range").option("end", "1000").load()
+
+┌──────────────────────────────────────────────────────────────┐
+│ 1. DISCOVERY (Session Startup, Once)                         │
+│  → DATASOURCE_REGISTRY.discover_datasources()                │
+│  → importlib.metadata.entry_points("sail.datasources")       │
+│  → Collect @register decorated classes                       │
+│  → Registry: {"range": RangeDataSource, ...}                 │
+└──────────────────────────────────────────────────────────────┘
+                         ▼
+┌──────────────────────────────────────────────────────────────┐
+│ 2. LOGICAL PLANNING                                          │
+│  → PythonTableFormat.create_provider(options={"end": "1000"})│
+│  → Unpickle RangeDataSource class                           │
+│  → ds = RangeDataSource(options) [GIL acquired]             │
+│  → schema = ds.schema() [GIL acquired]                      │
+│  → Return PythonTableProvider(schema, datasource)           │
+└──────────────────────────────────────────────────────────────┘
+                         ▼
+┌──────────────────────────────────────────────────────────────┐
+│ 3. PHYSICAL PLANNING                                         │
+│  → PythonTableProvider.scan(filters, projection, limit)      │
+│  → Convert DataFusion Expr to PythonFilter objects          │
+│  → reader = ds.reader(schema) [GIL acquired]                │
+│  → partitions = reader.partitions() [GIL acquired]          │
+│  → Create PythonDataSourceExec(datasource, schema, parts)   │
+└──────────────────────────────────────────────────────────────┘
+                         ▼
+┌──────────────────────────────────────────────────────────────┐
+│ 4. EXECUTION (Parallel, Per-Partition)                       │
+│  For each partition:                                         │
+│    → PythonDataSourceStream::new()                          │
+│    → Spawn Python thread (GIL-bound)                        │
+│    → reader.read(partition) yields RecordBatch              │
+│    → Zero-copy transfer via Arrow C Data Interface          │
+│    → mpsc::send(RecordBatch) to Rust stream                │
+│    → DataFusion consumes stream                             │
+└──────────────────────────────────────────────────────────────┘
+                         ▼
+┌──────────────────────────────────────────────────────────────┐
+│ 5. CLEANUP (RAII, Automatic)                                 │
+│  → Stream dropped → Send stop signal                         │
+│  → Join Python thread                                        │
+│  → Release Python resources                                  │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Performance Characteristics:**
+- **Control plane**: Schema and partition discovery incur Python interop overhead, amortized across query execution
+- **Data plane**: Zero-copy via Arrow C Data Interface (see [specification](https://arrow.apache.org/docs/format/CDataInterface.html))
+- **GIL contention**: Only during control plane; data transfer releases GIL
+- **Parallelism**: Limited by global GIL in MVP; Phase 3 subprocess isolation addresses this
+
+> **Note**: For GIL-sensitive workloads, use libraries that minimize GIL usage (connector-x, DuckDB) or enable subprocess-based Python workers (Phase 3).
+
+### Filter Pushdown Pipeline
 
 ```
-User Query: spark.read.format("range").option("end", "1000").load()
-    │
-    ▼
-┌────────────────────────────────────────────────────────────┐
-│ 1. DISCOVERY (Session Startup, Once)                       │
-└────────────────────────────────────────────────────────────┘
-    DATASOURCE_REGISTRY.discover_datasources()
-         │
-         ├─▶ importlib.metadata.entry_points(group="sail.datasources")
-         └─▶ Collect @register decorated classes
-         │
+SQL: WHERE x > 10 AND y = 'foo'
          ▼
-    Registry populated: {"range": RangeDataSource, ...}
-
-┌────────────────────────────────────────────────────────────┐
-│ 2. LOGICAL PLANNING (Query Parse)                          │
-└────────────────────────────────────────────────────────────┘
-    TableFormatRegistry.get("range")
-         │
+DataFusion Expr::BinaryExpr {Col, Gt, Lit}
          ▼
-    PythonTableFormat.create_provider(options={"end": "1000"})
-         │
-         ├─▶ Unpickle RangeDataSource class
-         ├─▶ Instantiate: ds = RangeDataSource(options)
-         ├─▶ Call: schema = ds.schema()  [GIL acquired]
-         └─▶ Return: PythonTableProvider(schema, datasource)
-
-┌────────────────────────────────────────────────────────────┐
-│ 3. PHYSICAL PLANNING (Optimization)                        │
-└────────────────────────────────────────────────────────────┘
-    PythonTableProvider.scan(filters, projection, limit)
-         │
-         ├─▶ Convert DataFusion Expr to PythonFilter objects
-         ├─▶ reader = ds.reader(schema)  [GIL acquired]
-         ├─▶ reader.pushFilters(filters) [GIL acquired]
-         ├─▶ partitions = reader.partitions() [GIL acquired]
-         │       └─▶ Returns: [InputPartition(0), ..., InputPartition(3)]
-         │
+exprs_to_python_filters()
          ▼
-    PythonDataSourceExec::new(datasource, schema, partitions)
-
-┌────────────────────────────────────────────────────────────┐
-│ 4. EXECUTION (Parallel, Per-Partition)                     │
-└────────────────────────────────────────────────────────────┘
-    For each partition in [0, 1, 2, 3]:
-         │
-         PythonDataSourceExec.execute(partition_id)
-              │
-              ▼
-         PythonDataSourceStream::new()
-              │
-              ├─▶ Spawn Python thread (GIL-bound)
-              ├─▶ Create mpsc channel for RecordBatch transport
-              │
-              Python thread:
-              │    reader.read(partitions[partition_id])
-              │         │
-              │         └─▶ yield RecordBatch (or tuples)
-              │                  │
-              │                  ▼ [Arrow C Data Interface]
-              │             Zero-copy transfer to Rust
-              │                  │
-              │                  ▼
-              └────────────▶ mpsc::send(RecordBatch)
-                                 │
-                                 ▼
-              Stream yields to DataFusion
-                   │
-                   ▼
-┌────────────────────────────────────────────────────────────┐
-│ 5. CLEANUP (RAII, Automatic)                               │
-└────────────────────────────────────────────────────────────┘
-    Stream dropped
-         │
-         ├─▶ Send oneshot stop signal to Python thread
-         ├─▶ Join thread to ensure completion
-         └─▶ Release Python resources
+Vec<PythonFilter> [GreaterThan(x, 10), EqualTo(y, "foo")]
+         ▼
+to_python_objects() [PyO3]
+         ▼
+reader.pushFilters([...])
+         ▼
+Returns unsupported filters
+         ▼
+Classification: Exact/Inexact/Unsupported
 ```
 
-**Execution Phases**:
+**Filter Classification:**
+- **Exact**: DataSource fully handles the filter; DataFusion skips re-evaluation
+- **Inexact**: DataSource partially handles (e.g., bloom filter); DataFusion re-evaluates
+- **Unsupported**: DataSource cannot handle; DataFusion applies post-read filtering
 
-**Phase 1 - Discovery** (one-time at startup):
-- Scans `sail.datasources` entry points in installed packages
-- Collects `@register` decorated classes from imported modules
-- Populates global `DATASOURCE_REGISTRY` with pickled class definitions
+**MVP Status**: Filter infrastructure implemented but NOT ACTIVE. All filters marked `Unsupported` (DataFusion applies post-read). Activation planned for Phase 2+.
 
-**Phase 2 - Logical Planning** (per query):
-- User calls `spark.read.format("range")` → triggers `TableFormatRegistry.get("range")`
-- `PythonTableFormat` unpickles the `RangeDataSource` class
-- Instantiates datasource with user options: `RangeDataSource({"end": "1000"})`
-- Calls `schema()` method to get Arrow schema (acquires GIL briefly)
-- Returns `PythonTableProvider` to DataFusion's logical planner
+---
 
-**Phase 3 - Physical Planning** (optimization):
-- DataFusion calls `PythonTableProvider.scan()` with filters/projection
-- Rust converts DataFusion `Expr` to Python `Filter` objects (e.g., `GreaterThan`)
-- Creates `DataSourceReader` via `datasource.reader(schema)`
-- Pushes filters to reader: `reader.pushFilters([GreaterThan(col="id", value=10)])`
-- Gets partition list: `reader.partitions()` → `[InputPartition(0), ..., InputPartition(3)]`
-- Creates `PythonDataSourceExec` execution plan with partition info
+## API Reference
 
-**Phase 4 - Execution** (parallel, per partition):
-- DataFusion executes plan: calls `execute(partition_id)` for each partition in parallel
-- Each partition spawns a dedicated Python thread (shares global GIL in MVP)
-- Python thread calls `reader.read(partition)` which yields data:
-  - **RecordBatch yield**: Zero-copy via Arrow C Data Interface (pointers passed, no serialization)
-  - **Tuple yield**: Batched into RecordBatch by `RowBatchCollector` (small overhead)
-- RecordBatches sent over `mpsc` channel to async Rust stream
-- DataFusion consumes stream for filters, projections, aggregations
-
-**Phase 5 - Cleanup** (automatic via RAII):
-- When stream is dropped (query complete or error):
-  - Send oneshot signal to Python thread to stop iteration
-  - Join thread to ensure graceful shutdown
-  - Python GIL released, resources freed
-- Prevents resource leaks even in error scenarios
-
-**Performance Notes**:
-- **Control plane** (schema, partitions): ~10-50ms per query (GIL acquired)
-- **Data plane** (RecordBatch transfer): Zero-copy, sub-microsecond overhead
-- **GIL contention**: Only during control plane calls; data transfer releases GIL
-- **Parallelism**: Limited by global GIL in MVP; subprocess isolation (Phase 3) provides N GILs
-
-### DataFusion Integration
-
-Python DataSources integrate with DataFusion through three key traits. This section provides implementation details for developers extending or debugging the system.
-
-#### TableProvider Integration
-
-`PythonTableProvider` implements DataFusion's `TableProvider` trait, enabling Python datasources to participate in query planning:
-
-```rust
-use datafusion::catalog::TableProvider;
-use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
-
-#[async_trait]
-impl TableProvider for PythonTableProvider {
-    fn as_any(&self) -> &dyn Any { self }
-
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()  // Cached from Python DataSource.schema()
-    }
-
-    fn table_type(&self) -> TableType {
-        TableType::Base  // User-defined table
-    }
-
-    async fn scan(
-        &self,
-        _state: &dyn datafusion::catalog::Session,
-        projection: Option<&Vec<usize>>,  // Column indices to read
-        filters: &[Expr],                  // WHERE clause predicates
-        limit: Option<usize>,              // LIMIT clause
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        // 1. Convert DataFusion Expr to PythonFilter objects
-        let (python_filters, _unsupported) = exprs_to_python_filters(filters);
-
-        // 2. Push filters to Python reader via pushFilters()
-        // 3. Get partitions from reader.partitions()
-        // 4. Create execution plan with partition info
-
-        Ok(Arc::new(PythonDataSourceExec::new(
-            self.datasource.command().to_vec(),
-            self.schema.clone(),
-            partitions,
-        )?))
-    }
-
-    fn supports_filters_pushdown(
-        &self,
-        filters: &[&Expr]
-    ) -> Result<Vec<TableProviderFilterPushDown>> {
-        // MVP: All filters marked as Unsupported (applied by DataFusion post-read)
-        // Future: Classify based on Python reader's pushFilters() response
-        Ok(vec![TableProviderFilterPushDown::Unsupported; filters.len()])
-    }
-}
-```
-
-**Filter Pushdown Classification:**
-- `Exact`: Filter fully handled by datasource, DataFusion skips re-evaluation
-- `Inexact`: Datasource partially handles, DataFusion re-evaluates for correctness
-- `Unsupported`: Datasource cannot handle, DataFusion applies filter post-read
-
-#### ExecutionPlan Integration
-
-`PythonDataSourceExec` implements DataFusion's `ExecutionPlan` trait for physical execution:
-
-```rust
-use datafusion::physical_plan::{ExecutionPlan, PlanProperties, DisplayAs};
-use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
-use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
-
-impl ExecutionPlan for PythonDataSourceExec {
-    fn name(&self) -> &'static str { "PythonDataSourceExec" }
-
-    fn as_any(&self) -> &dyn Any { self }
-
-    fn properties(&self) -> &PlanProperties {
-        &self.properties  // Pre-computed plan metadata
-    }
-
-    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![]  // Source node - no children
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(self)  // No children to replace
-    }
-
-    fn execute(
-        &self,
-        partition: usize,
-        _context: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream> {
-        // Create stream for this partition
-        let stream = PythonDataSourceStream::new(
-            self.command.clone(),
-            self.partitions[partition].clone(),
-            self.schema.clone(),
-        )?;
-        Ok(Box::pin(stream))
-    }
-}
-
-impl DisplayAs for PythonDataSourceExec {
-    fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "PythonDataSourceExec: partitions={}", self.partitions.len())
-    }
-}
-```
-
-**PlanProperties Configuration:**
-```rust
-let properties = PlanProperties::new(
-    EquivalenceProperties::new(schema.clone()),
-    Partitioning::UnknownPartitioning(partition_count),  // N parallel partitions
-    EmissionType::Incremental,   // Yields batches as available
-    Boundedness::Bounded,        // Finite data (batch read)
-);
-```
-
-#### RecordBatchStream Integration
-
-`PythonDataSourceStream` bridges Python iteration with DataFusion's async streaming:
-
-```rust
-use datafusion::physical_plan::RecordBatchStream;
-use futures::Stream;
-
-impl Stream for PythonDataSourceStream {
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>
-    ) -> Poll<Option<Self::Item>> {
-        match &mut self.state {
-            StreamState::Running { rx, .. } => {
-                // Poll the channel receiving batches from Python thread
-                Pin::new(rx).poll_recv(cx)
-            }
-            StreamState::Stopped => Poll::Ready(None),
-        }
-    }
-}
-
-impl RecordBatchStream for PythonDataSourceStream {
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
-}
-```
-
-#### Filter Pushdown Pipeline
-
-The complete filter pushdown flow from SQL to Python:
-
-```
-┌────────────────────┐     ┌─────────────────────┐     ┌──────────────────┐
-│   SQL Query        │     │   DataFusion        │     │   Python         │
-│   WHERE x > 10     │────▶│   Expr::BinaryExpr  │────▶│   GreaterThan    │
-│   AND y = 'foo'    │     │   {Col, Gt, Lit}    │     │   (x, 10)        │
-└────────────────────┘     └─────────────────────┘     └──────────────────┘
-                                    │
-                           exprs_to_python_filters()
-                                    │
-                                    ▼
-                           ┌─────────────────────┐
-                           │ Vec<PythonFilter>   │
-                           │ - GreaterThan(x,10) │
-                           │ - EqualTo(y,"foo")  │
-                           └─────────────────────┘
-                                    │
-                           to_python_objects()
-                                    │
-                                    ▼
-                           ┌─────────────────────┐
-                           │ reader.pushFilters( │
-                           │   [GreaterThan(...),│
-                           │    EqualTo(...)]    │
-                           │ )                   │
-                           └─────────────────────┘
-                                    │
-                           returns unsupported
-                                    │
-                                    ▼
-                           ┌─────────────────────┐
-                           │ TableProvider       │
-                           │ FilterPushDown:     │
-                           │ - Exact/Inexact     │
-                           │ - Unsupported       │
-                           └─────────────────────┘
-```
-
-**What This Diagram Shows**:
-
-The Filter Pushdown Pipeline illustrates how SQL `WHERE` clause predicates are transformed and "pushed down" from DataFusion's query planner to the Python datasource implementation, enabling the datasource to filter data **at the source** rather than reading all data and filtering afterward.
-
-**Transformation Steps**:
-
-1. **SQL → DataFusion AST** (top row):
-   - User writes: `WHERE x > 10 AND y = 'foo'`
-   - DataFusion parser creates: `Expr::BinaryExpr` nodes representing the logical expression tree
-   - Example: `BinaryExpr { left: Col("x"), op: Gt, right: Lit(10) }`
-
-2. **DataFusion AST → Rust Filter Objects** (middle):
-   - `exprs_to_python_filters()` function converts DataFusion's internal representation to Rust `PythonFilter` enum variants
-   - This step handles type conversion and validates that the filter can be represented in Python
-   - Output: `Vec<PythonFilter>` - a list of filter objects like `PythonFilter::GreaterThan { column: "x", value: 10 }`
-
-3. **Rust Filters → Python Objects** (via PyO3):
-   - `to_python_objects()` uses PyO3 to create Python-side filter instances
-   - Rust `PythonFilter::GreaterThan { column: "x", value: 10 }` becomes Python `GreaterThan(column="x", value=10)`
-   - These are the same filter classes users work with in PySpark
-
-4. **Push to Python Reader**:
-   - Sail calls `reader.pushFilters([GreaterThan(...), EqualTo(...)])`
-   - The Python datasource reader **decides** which filters it can handle
-   - Returns unsupported filters back to Sail (filters the datasource cannot apply)
-
-5. **Classification** (bottom):
-   - **Exact**: Datasource fully handles the filter (e.g., database can execute `WHERE x > 10`). DataFusion skips re-checking.
-   - **Inexact**: Datasource partially handles filter (e.g., approximate bounds). DataFusion re-evaluates for correctness.
-   - **Unsupported**: Datasource cannot handle filter. DataFusion applies filter after reading data.
-
-**Why This Matters**:
-
-Filter pushdown is a **critical optimization**:
-
-| Without Pushdown | With Pushdown |
-|------------------|---------------|
-| Read 1M rows from API | Read 1K rows from API (filtered at source) |
-| Transfer 1M rows over network | Transfer 1K rows over network |
-| Filter in DataFusion: 1M → 1K | Filter already applied |
-| **Total time: ~10s** | **Total time: ~100ms** (100x faster) |
-
-**Example**:
+### Core Classes
 
 ```python
-# User query
-df = spark.read.format("postgres").load().filter("age > 21")
+from abc import ABC, abstractmethod
+from typing import Dict, List, Iterator, Union, Any
+import pyarrow as pa
 
-# Without pushdown:
-#   Python datasource: SELECT * FROM users  (returns 1M rows)
-#   DataFusion: filter 1M rows where age > 21 → 100K rows
+class DataSource(ABC):
+    """Base class for custom data sources."""
 
-# With pushdown:
-#   Sail pushes GreaterThan("age", 21) to datasource
-#   Python datasource: SELECT * FROM users WHERE age > 21  (returns 100K rows)
-#   DataFusion: no additional filtering needed (or re-checks if "Inexact")
+    def __init__(self, options: Dict[str, str]):
+        self.options = options
+
+    @classmethod
+    @abstractmethod
+    def name(cls) -> str:
+        """Unique identifier for this data source."""
+        pass
+
+    @abstractmethod
+    def schema(self) -> Union[str, pa.Schema]:
+        """Return DDL string or PyArrow Schema."""
+        pass
+
+    @abstractmethod
+    def reader(self, schema) -> "DataSourceReader":
+        """Create a reader for this data source."""
+        pass
+
+class DataSourceReader(ABC):
+    """Handles reading data from partitions."""
+
+    def pushFilters(self, filters: List["Filter"]) -> Iterator["Filter"]:
+        """
+        Accept filters, return unsupported ones.
+        Default: all filters unsupported.
+        """
+        return iter(filters)
+
+    def partitions(self) -> List["InputPartition"]:
+        """Return list of partitions for parallel reading."""
+        return [InputPartition(0)]
+
+    @abstractmethod
+    def read(self, partition: "InputPartition") -> Iterator[Union[tuple, pa.RecordBatch]]:
+        """
+        Yield rows as tuples or RecordBatches.
+        Tuples: slower, batched automatically
+        RecordBatch: zero-copy, high performance
+        """
+        pass
+
+class InputPartition:
+    """Represents a partition of data."""
+    def __init__(self, value: Any = 0):
+        self.value = value
 ```
 
-**Implementation Notes**:
+### Filter Classes
 
-**MVP Status (Phase 1)**:
-- ⚠️ **Filter pushdown infrastructure is implemented but NOT ACTIVE in the MVP**
-- All filters return as `TableProviderFilterPushDown::Unsupported` (see `python_table_provider.rs:96-101`)
-- Filters are NOT sent to Python's `pushFilters()` method
-- DataFusion applies all filters post-read (safe, but no performance benefit)
-- The complete filter conversion pipeline exists in `filter.rs` (~456 lines) but is dormant
+```python
+from dataclasses import dataclass
+from typing import Any, List
 
-**Why Infrastructure Exists Now**:
-- Demonstrates the full design for reviewers
-- Enables gradual activation in future phases
-- Validates PySpark API compatibility (filter classes defined, but not invoked)
+@dataclass(frozen=True)
+class EqualTo:
+    column: str
+    value: Any
 
-**Future Activation** (Phase 2+):
-- `supports_filters_pushdown()` will call `classify_filters()` and use `exprs_to_python_filters()`
-- Python `reader.pushFilters()` will receive filter objects
-- Classification will be based on reader's response (Exact/Inexact/Unsupported)
-- The PySpark-compatible filter API ensures existing PySpark datasources work without modification
+@dataclass(frozen=True)
+class GreaterThan:
+    column: str
+    value: Any
 
-### Component Details
+@dataclass(frozen=True)
+class LessThan:
+    column: str
+    value: Any
 
-#### 1. Discovery System (`discovery.rs`)
+@dataclass(frozen=True)
+class IsNull:
+    column: str
 
-Discovers Python datasources via two mechanisms:
+@dataclass(frozen=True)
+class Not:
+    child: "Filter"
 
-1. **Entry Points**: `sail.datasources` group via `importlib.metadata.entry_points()`
+@dataclass(frozen=True)
+class And:
+    left: "Filter"
+    right: "Filter"
+
+# ... (additional filter classes)
+```
+
+### Registration
+
+```python
+from pysail.spark.datasource import register
+
+@register
+class MyDataSource(DataSource):
+    """Decorator automatically registers the DataSource."""
+    pass
+```
+
+---
+
+## Implementation Details
+
+### Component Breakdown
+
+#### 1. Discovery System ([discovery.rs](../../../crates/sail-data-source/src/python_datasource/discovery.rs))
+
+Discovers DataSources via three mechanisms:
+
+1. **Entry Points**: `sail.datasources` group via `importlib.metadata`
 2. **Python Registry**: `@register` decorator populates `_REGISTERED_DATASOURCES`
+3. **Runtime Registration**: `spark.dataSource.register()` call (PySpark compatible)
 
 ```rust
 pub static DATASOURCE_REGISTRY: Lazy<PythonDataSourceRegistry> =
@@ -1032,119 +589,57 @@ pub struct DataSourceEntry {
 }
 ```
 
-**Security Note**: Cloudpickle can execute arbitrary code. Only load datasources from trusted packages.
+**Security**: Cloudpickle can execute arbitrary code. Only load from trusted packages.
 
-#### 2. PythonExecutor Trait (`executor.rs`)
+#### 2. PythonExecutor Trait ([executor.rs](../../../crates/sail-data-source/src/python_datasource/executor.rs))
 
-Abstract trait enabling future subprocess isolation:
+Abstracts execution model for future subprocess isolation:
 
 ```rust
 #[async_trait]
 pub trait PythonExecutor: Send + Sync {
     async fn get_schema(&self, command: &[u8]) -> Result<SchemaRef>;
     async fn get_partitions(&self, command: &[u8]) -> Result<Vec<InputPartition>>;
-    async fn execute_read(
-        &self,
-        command: &[u8],
-        partition: &InputPartition,
-        schema: SchemaRef,
-    ) -> Result<BoxStream<'static, Result<RecordBatch>>>;
+    async fn execute_read(...) -> Result<BoxStream<'static, Result<RecordBatch>>>;
 }
 
 // MVP: In-process via PyO3
 pub struct InProcessExecutor { python_ver: String }
 
-// Future (PR #3): Subprocess isolation via gRPC
+// Future (PR #3): Subprocess isolation
 // pub struct RemoteExecutor { grpc_client: PythonWorkerClient }
 ```
 
-#### 3. Filter Pushdown (`filter.rs`)
-
-Converts DataFusion expressions to Python filter objects:
-
-```rust
-pub enum PythonFilter {
-    // Comparison
-    EqualTo { column: ColumnPath, value: FilterValue },
-    GreaterThan { column: ColumnPath, value: FilterValue },
-    LessThan { column: ColumnPath, value: FilterValue },
-    // ... more filters
-    
-    // Null checks
-    IsNull { column: ColumnPath },
-    IsNotNull { column: ColumnPath },
-    
-    // Logical
-    Not { child: Box<PythonFilter> },
-    And { left: Box<PythonFilter>, right: Box<PythonFilter> },
-    Or { left: Box<PythonFilter>, right: Box<PythonFilter> },
-    
-    // String patterns
-    StringStartsWith { column: ColumnPath, value: String },
-    StringEndsWith { column: ColumnPath, value: String },
-    StringContains { column: ColumnPath, value: String },
-}
-```
-
-#### 4. Arrow Utilities (`arrow_utils.rs`)
+#### 3. Arrow Utilities ([arrow_utils.rs](../../../crates/sail-data-source/src/python_datasource/arrow_utils.rs))
 
 Zero-copy conversions via Arrow C Data Interface:
 
 ```rust
-// Python RecordBatch -> Rust RecordBatch (zero-copy)
-pub fn py_record_batch_to_rust(py: Python<'_>, py_batch: &Bound<'_, PyAny>) -> Result<RecordBatch>;
+// Python RecordBatch → Rust RecordBatch (zero-copy)
+pub fn py_record_batch_to_rust(py: Python<'_>, py_batch: &Bound<'_, PyAny>)
+    -> Result<RecordBatch>;
 
-// Rust Schema -> Python Schema
-pub fn rust_schema_to_py(py: Python<'_>, schema: &SchemaRef) -> Result<Py<PyAny>>;
+// Rust Schema → Python Schema
+pub fn rust_schema_to_py(py: Python<'_>, schema: &SchemaRef)
+    -> Result<Py<PyAny>>;
 
 // Row-based batch conversion (for tuple yields)
-pub fn convert_rows_to_batch(schema: &SchemaRef, pickled_rows: &[Vec<u8>]) -> Result<RecordBatch>;
+pub fn convert_rows_to_batch(schema: &SchemaRef, pickled_rows: &[Vec<u8>])
+    -> Result<RecordBatch>;
 ```
 
-**MVP Data Types:**
-- Numeric: Int32, Int64, Float32, Float64
-- String: Utf8
-- Boolean
-- Temporal: Date32, Timestamp(Microsecond, None)
-- Null
+**MVP Data Types**: Int32, Int64, Float32, Float64, Utf8, Boolean, Date32, Timestamp, Null
 
-#### 5. Execution Plan (`exec.rs`)
+#### 4. Stream with RAII ([stream.rs](../../../crates/sail-data-source/src/python_datasource/stream.rs))
 
-DataFusion `ExecutionPlan` implementation:
-
-```rust
-#[derive(Debug)]
-pub struct PythonDataSourceExec {
-    command: Vec<u8>,         // Pickled DataSource instance
-    schema: SchemaRef,        // Output schema
-    partitions: Vec<InputPartition>,  // Parallel partitions
-    properties: PlanProperties,
-}
-
-impl ExecutionPlan for PythonDataSourceExec {
-    fn execute(&self, partition: usize, _context: Arc<TaskContext>) 
-        -> Result<SendableRecordBatchStream> 
-    {
-        let stream = PythonDataSourceStream::new(
-            self.command.clone(),
-            self.partitions[partition].clone(),
-            self.schema.clone(),
-        )?;
-        Ok(Box::pin(stream))
-    }
-}
-```
-
-#### 6. Stream with RAII Cleanup (`stream.rs`)
-
-Proper resource management for Python threads:
+Ensures proper Python thread cleanup:
 
 ```rust
 enum StreamState {
     Running {
-        stop_signal: Option<oneshot::Sender<()>>,  // Graceful shutdown
-        python_thread: Option<std::thread::JoinHandle<()>>,  // Thread handle
-        rx: mpsc::Receiver<Result<RecordBatch>>,   // Batch channel
+        stop_signal: Option<oneshot::Sender<()>>,
+        python_thread: Option<std::thread::JoinHandle<()>>,
+        rx: mpsc::Receiver<Result<RecordBatch>>,
     },
     Stopped,
 }
@@ -1153,140 +648,134 @@ impl Drop for PythonDataSourceStream {
     fn drop(&mut self) {
         // 1. Send stop signal
         // 2. Join thread to ensure cleanup
-        // Prevents resource leaks - critical for production
+        // Prevents resource leaks
     }
 }
 ```
 
-### Python API (`base.py`)
+**Rust** (`crates/sail-data-source/src/python_datasource/`):
+- `mod.rs` - Module exports
+- `discovery.rs` - Registry & discovery
+- `filter.rs` - Filter pushdown
+- `arrow_utils.rs` - Arrow conversions
+- `executor.rs` - PythonExecutor trait
+- `python_datasource.rs` - Core PyO3 bridge
+- `python_table_provider.rs` - TableProvider impl
+- `table_format.rs` - TableFormat impl
+- `exec.rs` - ExecutionPlan
+- `stream.rs` - RecordBatch stream
+- `error.rs` - Error types
 
-100% PySpark-compatible API:
+**Python** (`python/pysail/spark/datasource/`):
+- `base.py` - Core API classes
+- `examples.py` - Example datasources
 
-```python
-# Core Classes
-class DataSource(ABC):
-    def __init__(self, options: Dict[str, str]): ...
-    @classmethod
-    @abstractmethod
-    def name(cls) -> str: ...
-    @abstractmethod
-    def schema(self) -> str: ...  # DDL string or PyArrow Schema
-    @abstractmethod
-    def reader(self, schema) -> DataSourceReader: ...
+---
 
-class DataSourceReader(ABC):
-    def pushFilters(self, filters: List[Filter]) -> Iterator[Filter]: ...
-    def partitions(self) -> List[InputPartition]: ...
-    @abstractmethod
-    def read(self, partition: InputPartition) -> Iterator[Union[Tuple, pa.RecordBatch]]: ...
+## PySpark Compatibility
 
-class InputPartition:
-    def __init__(self, partition_id: int = 0): ...
+### Zero-Code-Change Migration
 
-# Filter Classes (frozen dataclasses)
-@dataclass(frozen=True)
-class EqualTo:
-    column: ColumnPath
-    value: Any
-
-# ... EqualNullSafe, GreaterThan, LessThan, In, IsNull, Not, And, Or, etc.
-```
-
-### Example DataSources
+Sail provides **100% API compatibility** with the PySpark 4.0+ DataSource API. Existing PySpark DataSources work without modification:
 
 ```python
-@register
-class RangeDataSource(DataSource):
-    """Generates sequential integers with filter pushdown support."""
-    
+# Works identically in PySpark and Sail
+from pysail.spark.datasource import DataSource, DataSourceReader, InputPartition
+
+class MyDataSource(DataSource):
     @classmethod
-    def name(cls) -> str:
-        return "range"
-    
+    def name(cls):
+        return "myformat"
+
     def schema(self):
-        return pa.schema([("id", pa.int64())])
-    
-    def reader(self, schema) -> DataSourceReader:
-        start = int(self.options.get("start", "0"))
-        end = int(self.options.get("end", "10"))
-        return RangeDataSourceReader(start, end, num_partitions=4)
+        return "id INT, name STRING"
 
-# Usage:
-df = spark.read.format("range").option("end", "1000").load()
+    def reader(self, schema):
+        return MyReader(self.options)
 ```
 
-## Data Flow
+### Compatibility Strategy: sys.modules Shim
 
-### Read Path
+When PySpark DataSources are unpickled, the base class (`pyspark.sql.datasource.DataSource`) must be available. Since Sail includes `pysail` but not `pyspark`, we use a **sys.modules shim**:
 
-1. **Discovery** (Session Startup):
-   ```
-   discover_datasources() -> DATASOURCE_REGISTRY
-   PythonTableFormat.register_all(registry)
-   ```
+```python
+# In Sail's Python initialization (pysail/spark/datasource/compat.py)
+import sys
+from pysail.spark.datasource import (
+    DataSource, DataSourceReader, InputPartition, # ... all classes
+)
 
-2. **Query Planning**:
-   ```
-   spark.read.format("range").load()
-       -> TableFormatRegistry.get("range")
-       -> PythonTableFormat.create_provider()
-           -> Instantiate DataSource with options
-           -> Get schema from Python
-           -> Return PythonTableProvider
-   ```
+class PysparkDatasourceCompat:
+    """Compatibility shim for pyspark.sql.datasource."""
+    pass
 
-3. **Physical Planning**:
-   ```
-   PythonTableProvider.scan()
-       -> Get partitions from Python reader
-       -> Create PythonDataSourceExec
-   ```
+# Re-export all pysail classes as pyspark classes
+for name in dir():
+    obj = locals()[name]
+    if not name.startswith('_') and isinstance(obj, type):
+        setattr(PysparkDatasourceCompat, name, obj)
 
-4. **Execution**:
-   ```
-   PythonDataSourceExec.execute(partition_id)
-       -> Create PythonDataSourceStream
-           -> Spawn Python thread
-           -> Python: reader.read(partition) yields RecordBatches
-           -> Zero-copy transfer via mpsc channel
-       -> DataFusion consumes RecordBatchStream
-   ```
+# Inject into sys.modules
+sys.modules['pyspark.sql.datasource'] = PysparkDatasourceCompat
+```
 
-5. **Cleanup**:
-   ```
-   Stream dropped
-       -> Send stop signal
-       -> Join Python thread
-       -> Resources released
-   ```
+**How it works:**
+1. PySpark client pickles DataSource → references `pyspark.sql.datasource.DataSource`
+2. Sail unpickles → Python looks up module in `sys.modules`
+3. Shim returns `pysail.spark.datasource.DataSource`
+4. Unpickling succeeds with Sail implementation
 
-## Testing
+### Registration Methods
 
-### Unit Tests
+**Method 1: @register Decorator (Current)**
 
-| Component | Test Coverage |
-|-----------|--------------|
-| Registry operations | `discovery.rs` |
-| Filter conversion | `filter.rs` |
-| Schema validation | `arrow_utils.rs` |
-| Execution plan properties | `exec.rs` |
-| Stream lifecycle | `stream.rs` |
+The `@register` decorator requires the module containing the decorated class to be imported. Typically this happens via `import` in your application or via entry points:
 
-### Integration Tests
+```python
+# my_datasources.py
+from pyspark.sql.datasource import DataSource, DataSourceReader
+from pysail.spark.datasource import register
 
-Location: `python/pysail/tests/spark/datasource/`
+@register
+class MyDataSource(DataSource):
+    # PySpark base class, Sail registration
+    pass
+```
 
-- `test_rate.py` - Rate source streaming
-- `test_socket.py` - Socket source streaming
-- `test_datasources.py` - Custom datasource testing
+```python
+# main.py - must import the module to trigger registration
+import my_datasources
 
-### Example DataSources
+df = spark.read.format("mydatasource").load()
+```
 
-| DataSource | Purpose | Features |
-|------------|---------|----------|
-| `RangeDataSource` | Synthetic integers | Partitioning, filter pushdown |
-| `ConstantDataSource` | Fixed values | Basic schema handling |
-| `FlappyBirdDataSource` | Fun demo | Multiple columns, types |
+**Method 2: spark.dataSource.register() (Future)**
+
+```python
+from pyspark.sql.datasource import DataSource
+
+class MyDataSource(DataSource):
+    pass
+
+# Will work after RegisterDataSource command implemented
+spark.dataSource.register(MyDataSource)
+```
+
+**Implementation location**: [crates/sail-spark-connect/src/server.rs:134-136](../../../crates/sail-spark-connect/src/server.rs#L134-L136)
+
+**Method 3: Entry Points (Package Distribution)**
+
+```toml
+[project.entry-points."sail.datasources"]
+mydatasource = "my_package:MyDataSource"  # Works with PySpark or Sail base class
+```
+
+### Supported Versions
+
+- **PySpark**: 4.0+ (Python DataSource API introduced in Spark 4.0)
+- **Python**: 3.9, 3.10, 3.11, 3.12
+
+---
 
 ## Performance Considerations
 
@@ -1299,329 +788,30 @@ Location: `python/pysail/tests/spark/datasource/`
 
 **Future (PR #3)**: Subprocess isolation
 - 1 Python subprocess per worker thread
-- Full GIL parallelism
+- Full GIL parallelism (N workers = N GILs)
 - Shared memory for data plane
 
-### Batch Size
+### Performance Characteristics
 
-Default: `DEFAULT_BATCH_SIZE = 8192`
+Control plane operations (schema discovery, partition enumeration) incur Python interop overhead that is amortized across query execution. For typical analytical queries (thousands of batches over seconds to minutes), this represents <1% of total execution time.
 
-Configurable per-datasource for optimal throughput.
+**Library Recommendations:**
 
-## Security Considerations
+| Use Case | Library | Why |
+|----------|---------|-----|
+| PostgreSQL/MySQL | [connector-x](https://github.com/sfu-db/connector-x) | Native Arrow, GIL-free |
+| Analytical transforms | [DuckDB](https://duckdb.org/) | Native Arrow, GIL-free |
 
-### Cloudpickle Trust Model
+### Yield Types Comparison
 
-- **Warning**: Cloudpickle can execute arbitrary code during deserialization
-- Only load datasources from trusted packages
-- Entry points provide implicit trust (installed packages)
-- `@register` decorator requires explicit code execution
+| Yield Type | Performance | Memory | Use Case |
+|------------|-------------|--------|----------|
+| **Tuples** | Additional conversion overhead | Batched in `RowBatchCollector` | Simple implementations |
+| **RecordBatch** | Zero-copy | Direct Arrow transfer | High-performance |
 
-### Validation
+**Recommendation**: Use RecordBatch for large datasets; tuples for prototyping.
 
-```rust
-pub fn validate_datasource_class(py: Python<'_>, cls: &Bound<'_, PyAny>) -> Result<()> {
-    // Check required methods: name, schema, reader
-    // Verify it's callable (is a class, not instance)
-}
-```
-
-## Migration Guide
-
-### From PySpark
-
-**Zero changes required.** PySpark DataSource implementations work as-is:
-
-```python
-# Works identically in PySpark and Sail
-from pysail.spark.datasource import DataSource, DataSourceReader, InputPartition
-
-class MyDataSource(DataSource):
-    @classmethod
-    def name(cls):
-        return "myformat"
-    
-    def schema(self):
-        return "id INT, name STRING"
-    
-    def reader(self, schema):
-        return MyReader(self.options)
-```
-
-### Registration Methods
-
-1. **Decorator** (recommended):
-   ```python
-   @register
-   class MyDataSource(DataSource): ...
-   ```
-
-2. **Entry Points** (`pyproject.toml`):
-   ```toml
-   [project.entry-points."sail.datasources"]
-   myformat = "mypackage:MyDataSource"
-   ```
-
-## Future Work
-
-### PR #2: Batch Write Support (~550 LOC)
-
-- `PythonDataSourceWriteExec` execution plan
-- `PythonDataSourceWriteStream` for row-by-row writes
-- `PythonDataSourceCommitExec` for two-phase commit
-- Python: `DataSourceWriter`, `WriterCommitMessage`
-
-### PR #3: Subprocess Isolation (~800 LOC)
-
-- `RemoteExecutor` implementing `PythonExecutor` trait
-- `PythonWorkerPool` for process management
-- Shared memory data plane (mmap)
-- gRPC control plane
-
-#### Protobuf Architecture
-
-Sail already uses Protocol Buffers for distributed execution. The subprocess isolation will leverage this existing infrastructure:
-
-**Existing Proto Files:**
-- `sail-execution/proto/sail/driver/service.proto` - Driver↔Worker coordination
-- `sail-execution/proto/sail/worker/service.proto` - Task execution
-- `sail-common-datafusion/proto/sail/streaming/marker.proto` - Flow markers (Watermark, Checkpoint)
-
-**Proposed Python Worker Service:**
-
-```protobuf
-syntax = "proto3";
-package sail.python;
-
-import "google/protobuf/empty.proto";
-
-// Service for Python worker subprocess management
-service PythonWorkerService {
-  // Control plane (low bandwidth, high frequency)
-  rpc GetSchema(GetSchemaRequest) returns (GetSchemaResponse);
-  rpc GetPartitions(GetPartitionsRequest) returns (GetPartitionsResponse);
-  rpc PushFilters(PushFiltersRequest) returns (PushFiltersResponse);
-
-  // Data plane coordination (actual data via shared memory)
-  rpc ReadPartition(ReadPartitionRequest) returns (stream DataReadyNotification);
-  rpc WritePartition(WritePartitionRequest) returns (WritePartitionResponse);
-
-  // Lifecycle management
-  rpc HealthCheck(google.protobuf.Empty) returns (HealthCheckResponse);
-  rpc Shutdown(ShutdownRequest) returns (google.protobuf.Empty);
-}
-
-message GetSchemaRequest {
-  bytes pickled_datasource = 1;  // Cloudpickle'd DataSource instance
-}
-
-message GetSchemaResponse {
-  bytes arrow_schema_ipc = 1;    // Arrow IPC format schema
-}
-
-message ReadPartitionRequest {
-  bytes pickled_datasource = 1;
-  bytes pickled_partition = 2;   // InputPartition
-  uint64 batch_size = 3;
-}
-
-// Zero-copy notification: data is in shared memory
-message DataReadyNotification {
-  uint64 shared_memory_offset = 1;  // Offset in mmap'd region
-  uint64 length = 2;                // Bytes written
-  bool is_last = 3;                 // End of partition
-}
-
-message HealthCheckResponse {
-  bool healthy = 1;
-  string python_version = 2;
-  uint64 memory_usage_bytes = 3;
-}
-```
-
-**Shared Memory Data Plane:**
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                          CONTROL PLANE (gRPC)                           │
-│  Low bandwidth, high frequency - commands, metadata, coordination       │
-│                                                                         │
-│  ┌─────────────────┐     Protobuf/gRPC      ┌─────────────────────┐    │
-│  │   Sail (Rust)   │◀──────────────────────▶│   Python Worker     │    │
-│  │   RemoteExecutor│   "Read partition 5"   │   (subprocess)      │    │
-│  └─────────────────┘   "Data at offset 500" └─────────────────────┘    │
-└─────────────────────────────────────────────────────────────────────────┘
-                              │
-                              │ offset/length references
-                              ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                          DATA PLANE (Shared Memory)                     │
-│  High bandwidth, zero-copy - Arrow RecordBatch buffers                  │
-│                                                                         │
-│  ┌─────────────────┐                        ┌─────────────────────┐    │
-│  │   Arrow Reader  │◀─────── mmap ─────────▶│   Arrow Writer      │    │
-│  │   (Rust)        │   /dev/shm/sail_py_*   │   (Python)          │    │
-│  └─────────────────┘                        └─────────────────────┘    │
-│                                                                         │
-│  Buffer Layout:                                                         │
-│  ┌──────────────────────────────────────────────────────────────────┐  │
-│  │ Offset 0    │ Offset 4096  │ Offset 8192  │ ...                  │  │
-│  │ RecordBatch │ RecordBatch  │ RecordBatch  │                      │  │
-│  │ (Arrow IPC) │ (Arrow IPC)  │ (Arrow IPC)  │                      │  │
-│  └──────────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-**Why This Architecture:**
-
-| Aspect | In-Process (MVP) | Subprocess (PR #3) |
-|--------|------------------|-------------------|
-| **Parallelism** | 1 GIL total | N GILs (1 per worker) |
-| **Crash Isolation** | Python crash = Sail crash | Worker crash only |
-| **Data Transfer** | Zero-copy (same RAM) | Zero-copy (mmap) |
-| **Control Messages** | FFI (nanoseconds) | gRPC (~microseconds) |
-| **Complexity** | Simple | Higher |
-
-**Configuration:**
-```bash
-SAIL_PYTHON_ISOLATION_MODE=subprocess  # or "in_process" (default)
-SAIL_PYTHON_WORKER_COUNT=auto          # defaults to CPU count
-SAIL_SHARED_MEMORY_SIZE=8GB            # mmap pool size
-```
-
-#### Multi-Faceted Benefits of Subprocess Isolation
-
-Subprocess isolation provides value beyond just GIL parallelism:
-
-| Benefit | Description | Remains Valuable With Free Threading? |
-|---------|-------------|--------------------------------------|
-| **GIL Parallelism** | N workers = N GILs, true concurrent Python execution | ❌ No (free threading eliminates GIL) |
-| **Crash Isolation** | Python segfault only kills worker, not Sail server | ✅ Yes - critical for production |
-| **Memory Isolation** | Per-worker memory limits via `RLIMIT_AS` | ✅ Yes - prevents OOM cascades |
-| **Version Isolation** | Different workers can use different Python versions/deps | ✅ Yes - legacy datasource support |
-| **Security Sandboxing** | Untrusted datasources run in isolated process | ✅ Yes - limits attack surface |
-| **Resource Limits** | CPU/time limits per worker via `rlimit` | ✅ Yes - fair resource allocation |
-
-**Key Insight**: Even when Python's free-threading mode (PEP 703) becomes stable, subprocess isolation remains valuable for production deployments where crash isolation and resource limits are requirements.
-
-#### Free Threading (PEP 703) Considerations
-
-**Current Status (2025)**:
-- Python 3.13+ includes experimental `--disable-gil` build flag
-- Free threading is **not production-ready**
-- Ecosystem support is evolving (PyO3, NumPy, PyArrow)
-
-**Projected Timeline**:
-```
-2024-2025: Experimental, ecosystem catching up
-2026: Likely stable in Python, ecosystem maturing
-2027+: Ecosystem mature (PyO3, NumPy, PyArrow stable)
-```
-
-**Adaptive Executor Selection**:
-
-The `PythonExecutor` trait enables runtime adaptation to free threading:
-
-```rust
-pub fn create_executor(config: &Config) -> Result<Arc<dyn PythonExecutor>> {
-    match config.isolation_mode {
-        IsolationMode::InProcess => {
-            // Detect free threading at runtime
-            if is_free_threading_enabled() {
-                log::info!("Free threading detected - InProcessExecutor with full parallelism");
-            } else {
-                log::info!("GIL detected - InProcessExecutor has single-GIL limitation");
-            }
-            Arc::new(InProcessExecutor::new(config.python_version.clone()))
-        }
-        IsolationMode::Subprocess => {
-            // Always use subprocess (crash/memory isolation benefits)
-            log::info!("Subprocess isolation enabled - crash and memory isolation active");
-            Arc::new(RemoteExecutor::new(config)?)
-        }
-    }
-}
-
-fn is_free_threading_enabled() -> bool {
-    #[cfg(feature = "python")]
-    {
-        pyo3::Python::with_gil(|py| {
-            // Check sys._is_gil_enabled() (available in Python 3.13+)
-            if let Ok(sys) = py.import("sys") {
-                if let Ok(is_gil_enabled) = sys.getattr("_is_gil_enabled") {
-                    if let Ok(false) = is_gil_enabled.call0()?.extract() {
-                        return true;
-                    }
-                }
-            }
-            false
-        })
-    }
-    #[cfg(not(feature = "python"))]
-    { false }
-}
-```
-
-**Recommendation**: Subprocess isolation should be the default for production workloads even after free threading stabilizes, with in-process mode available for development/trusted environments.
-
-### PR #4-5: Streaming Support (~1,250 LOC)
-
-- `PythonDataSourceStreamExec` for streaming reads
-- `DataSourceStreamReader` with offset management
-- Microbatch writes with BatchId coordination
-
-### PR #6: Performance & Polish (~250 LOC)
-
-- Exotic data types (Duration, Interval, Union, Dictionary)
-- Metrics/telemetry integration
-- Comprehensive documentation
-
-### Client-Side DataSource Registration (Spark Connect)
-
-Enable `spark.dataSource.register()` to match PySpark's API for zero-code-change migration:
-
-**Implementation Requirements:**
-- Handle `RegisterDataSource` Spark Connect command (currently returns `unimplemented`)
-- Accept pickled DataSource class from client via cloudpickle
-- Validate DataSource class structure (security consideration)
-- Register with session-local `DATASOURCE_REGISTRY`
-- Register with `TableFormatRegistry` for query use
-
-**Location:** `crates/sail-spark-connect/src/server.rs:134-136`
-
-**Current State:**
-```rust
-CommandType::RegisterDataSource(_) => {
-    return Err(Status::unimplemented("register data source command"));
-}
-```
-
-**Security Considerations:**
-Client-side registration introduces arbitrary code execution risk. Mitigation strategies:
-1. Validate DataSource class has required methods before unpickling
-2. Optional: Only allow registration from authenticated connections
-3. Optional: Allowlist of permitted DataSource base classes
-4. Document security model: datasources are trusted code (same as PySpark)
-
-**User Experience:**
-```python
-# Existing PySpark code works unchanged
-from pyspark.sql.datasource import DataSource, DataSourceReader
-
-class MyDataSource(DataSource):
-    @classmethod
-    def name(cls):
-        return "mydatasource"
-    # ... implementation
-
-# Register with Sail (same as PySpark)
-spark.dataSource.register(MyDataSource)
-
-# Use immediately
-df = spark.read.format("mydatasource").load()
-```
-
-### Database Connectors via Python DataSources
+### Case Study: Database Connectors
 
 Python libraries like [connector-x](https://github.com/sfu-db/connector-x) and [DuckDB](https://duckdb.org/) provide excellent database connectivity with minimal GIL overhead. Their Rust/C++ backends release the GIL during I/O and compute, making them ideal for Python DataSource implementations.
 
@@ -1635,7 +825,7 @@ Python libraries like [connector-x](https://github.com/sfu-db/connector-x) and [
 | **psycopg3** | C | Releases GIL during I/O | Via PyArrow conversion | PostgreSQL |
 
 **Key Insight**: These libraries spend most execution time in native code with GIL released. The Python DataSource wrapper adds minimal overhead since:
-- Schema discovery: One-time GIL acquisition (~10ms)
+- Schema discovery: One-time GIL acquisition, amortized across query
 - Data transfer: Native code releases GIL, returns Arrow directly
 - No JVM: Unlike Spark JDBC, zero JVM overhead
 
@@ -1733,6 +923,10 @@ class DuckDBDataSource(DataSource):
         )
 
 class DuckDBReader(DataSourceReader):
+    def __init__(self, database, query):
+        self.database = database
+        self.query = query
+
     def read(self, partition):
         import duckdb
         conn = duckdb.connect(self.database, read_only=True)
@@ -1750,66 +944,118 @@ class DuckDBReader(DataSourceReader):
 
 #### Performance Characteristics
 
-| Operation | Pure Python | connector-x/DuckDB | Notes |
-|-----------|-------------|-------------------|-------|
-| 1M rows fetch | ~5s (GIL-bound) | ~0.5s (GIL-free) | 10x faster |
-| Arrow conversion | Required | Not needed | Zero-copy |
-| Memory overhead | 2x (Python + Arrow) | 1x (Arrow only) | Half memory |
-| Parallel partitions | GIL contention | Minimal contention | Native parallelism |
+Libraries with native backends (Rust, C++) that release the GIL provide significantly better performance than pure Python:
 
-#### Future: Native Rust Integration
+| Characteristic | Pure Python | Native Backend Libraries |
+|----------------|-------------|-------------------------|
+| Arrow conversion | Required | Not needed (zero-copy) |
+| Parallel partitions | GIL contention | Minimal contention |
 
-For maximum performance, native Rust database connectors can be added directly to Sail's execution engine, bypassing Python entirely:
+#### Future: connector-x Python DataSource
+
+The connector-x DataSource demonstrates the recommended pattern for high-performance database access:
 
 | Phase | Approach | Status |
 |-------|----------|--------|
 | **MVP** | Python DataSources with connector-x/DuckDB | Complete |
-| **Future** | Native Rust `TableFormat` for PostgreSQL, MySQL | Planned |
-| **Future** | Arrow Flight integration | Planned |
+| **Future** | connector-x Python DataSource as reference impl | Planned |
 
-## Frequently Asked Questions
+---
+
+## Future Work
+
+### Roadmap
+
+| Phase | Focus | Scope | Status |
+|-------|-------|-------|--------|
+| **Phase 1** | MVP Batch Read | Discovery, execution, filter infra | ✅ Complete |
+| **Phase 2** | Batch Write | Write exec, commit protocol | Planned |
+| **Phase 3** | Subprocess Isolation | gRPC, shared memory, crash isolation | Planned |
+| **Phase 4** | Streaming Read | Offset management | Planned |
+| **Phase 5** | Streaming Write | BatchId protocol | Planned |
+| **Phase 6** | Performance & Polish | Exotic types, metrics | Planned |
+
+### Phase 3: Subprocess Isolation (Detailed)
+
+**Multi-Faceted Benefits**:
+
+| Benefit | Description | Valuable with Free Threading? |
+|---------|-------------|------------------------------|
+| **GIL Parallelism** | N workers = N GILs | ❌ No (free threading eliminates GIL) |
+| **Crash Isolation** | Worker crash doesn't kill Sail | ✅ Yes - production-critical |
+| **Memory Isolation** | Per-worker memory limits | ✅ Yes - prevents OOM |
+| **Version Isolation** | Different Python versions/deps | ✅ Yes - legacy support |
+| **Security Sandboxing** | Untrusted code isolated | ✅ Yes - limits attack surface |
+
+**Architecture**: gRPC control plane + shared memory data plane
+
+```
+┌──────────────────────────────────────────────┐
+│        CONTROL PLANE (gRPC/Protobuf)         │
+│  Sail (Rust) ←→ Python Worker (subprocess)   │
+│  "Read partition 5" → "Data at offset 500"   │
+└──────────────────────────────────────────────┘
+                    ▼
+┌──────────────────────────────────────────────┐
+│        DATA PLANE (Shared Memory)            │
+│  Arrow Reader ←─ mmap ─→ Arrow Writer        │
+│  /dev/shm/sail_py_* (zero-copy buffers)      │
+└──────────────────────────────────────────────┘
+```
+
+**Configuration**:
+```bash
+SAIL_PYTHON_ISOLATION_MODE=subprocess  # or "in_process" (default)
+SAIL_PYTHON_WORKER_COUNT=auto          # defaults to CPU count
+# Shared memory uses /dev/shm by default; file-based alternative available
+```
+
+### Free Threading (PEP 703) Considerations
+
+**Status**: Experimental in Python 3.13+, production-ready 2026+
+
+**Adaptive Executor Selection**:
+```rust
+pub fn create_executor(config: &Config) -> Result<Arc<dyn PythonExecutor>> {
+    if config.isolation_mode == IsolationMode::Subprocess {
+        // Always use subprocess (crash/memory isolation)
+        Arc::new(RemoteExecutor::new(config)?)
+    } else if is_free_threading_enabled() {
+        // InProcess with full parallelism
+        Arc::new(InProcessExecutor::new(config.python_version.clone()))
+    } else {
+        // InProcess with GIL limitation
+        Arc::new(InProcessExecutor::new(config.python_version.clone()))
+    }
+}
+```
+
+**Recommendation**: Subprocess isolation remains default for production even after free threading stabilizes (crash isolation, resource limits).
+
+---
+
+## FAQ
 
 ### Architecture & Performance
 
 **Q1: Why use in-process PyO3 instead of subprocess isolation?**
 
-The MVP uses in-process execution for simplicity and zero-copy performance. PyO3 allows direct memory sharing between Rust and Python via the Arrow C Data Interface. Subprocess isolation (PR #3) adds complexity but enables true GIL parallelism. The `PythonExecutor` trait abstracts this choice, allowing seamless switching via configuration.
+The MVP uses in-process execution for simplicity and zero-copy performance. PyO3 allows direct memory sharing between Rust and Python via the Arrow C Data Interface. Subprocess isolation (Phase 3) adds complexity but enables true GIL parallelism. The `PythonExecutor` trait abstracts this choice, allowing seamless switching via configuration.
 
 **Q2: How does the GIL affect parallel partition reads?**
 
 In the MVP, all Python code shares a single GIL. However, this is mitigated by:
-- **Arrow/NumPy releasing GIL**: Most compute-heavy operations release the GIL
+- **GIL-releasing libraries**: Libraries like connector-x, DuckDB, NumPy release the GIL during compute
 - **Thread-per-partition model**: Each partition runs on a dedicated OS thread
 - **Minimal Python in hot path**: Control plane (schema, partitions) is cached; data plane uses zero-copy Arrow
 
-With subprocess isolation (PR #3), each worker has its own GIL, enabling true parallelism.
+With subprocess isolation (Phase 3), each worker has its own GIL, enabling true parallelism.
 
 **Q3: What's the overhead of Python DataSources vs native formats?**
 
-| Operation | Native (Parquet) | Python DataSource |
-|-----------|------------------|-------------------|
-| Schema discovery | ~1ms | ~10-50ms (GIL acquisition) |
-| Partition enumeration | ~1ms | ~10-50ms |
-| Batch read (Arrow) | Zero-copy | Zero-copy |
-| Batch read (tuples) | N/A | ~100μs per 8K rows |
+Control plane operations (schema, partitions) incur Python interop overhead that is amortized across query execution. For typical analytical queries (thousands of batches over seconds to minutes), this represents <1% of total execution time. Data transfer is zero-copy when using Arrow RecordBatches.
 
-The overhead is primarily in the control plane. Data transfer is zero-copy when using Arrow RecordBatches.
-
-**Q4: When should I use Python DataSources vs native Rust connectors?**
-
-Use **Python DataSources** when:
-- Rapid prototyping or one-off integrations
-- Leveraging existing Python libraries (requests, boto3, etc.)
-- Complex business logic that's easier in Python
-- Migrating from PySpark with existing DataSource implementations
-
-Use **Native Rust connectors** when:
-- Maximum performance is critical
-- Database connectors (PostgreSQL, MySQL, DuckDB)
-- High-throughput production workloads
-- GIL contention is a bottleneck
-
-**Q5: How does zero-copy Arrow transfer work?**
+**Q4: How does zero-copy Arrow transfer work?**
 
 When Python yields a `pyarrow.RecordBatch`:
 1. Python allocates Arrow buffers in its memory space
@@ -1871,7 +1117,7 @@ df = spark.read.format("myapi").option("endpoint", "https://api.example.com").lo
 
 | Yield Type | Performance | Memory | Use Case |
 |------------|-------------|--------|----------|
-| **Tuples** | ~100μs/8K rows overhead | Batched in `RowBatchCollector` | Simple implementations |
+| **Tuples** | Additional conversion overhead | Batched in `RowBatchCollector` | Simple implementations |
 | **RecordBatch** | Zero-copy | Direct Arrow transfer | High-performance, PyArrow-native |
 
 Prefer `RecordBatch` for large datasets; use tuples for prototyping or when data comes row-by-row.
@@ -1925,7 +1171,7 @@ def pushFilters(self, filters):
 
 **Q12: How do I add metrics/telemetry to my DataSource?**
 
-Currently, metrics are captured at the DataFusion level. In PR #6, we'll add:
+Currently, metrics are captured at the DataFusion level. In Phase 6, we'll add:
 ```python
 class MyReader(DataSourceReader):
     def read(self, partition):
@@ -1939,7 +1185,7 @@ class MyReader(DataSourceReader):
 
 **Q13: Can I use existing PySpark DataSource code without changes?**
 
-Yes. Sail provides 100% API compatibility with PySpark 3.5+/4.0+ DataSource API. Simply change the import:
+Yes, for the PySpark 4.0+ DataSource API. Simply change the import:
 
 ```python
 # PySpark
@@ -1949,22 +1195,49 @@ from pyspark.sql.datasource import DataSource, DataSourceReader
 from pysail.spark.datasource import DataSource, DataSourceReader
 ```
 
+**Compatibility notes:**
+- The Python DataSource API was introduced in PySpark 4.0; earlier versions don't have this API
+- Sail-specific features (e.g., `@register` decorator) require `pysail` imports
+
 **Q14: What PySpark API version is supported?**
 
-- **PySpark 3.5+**: Full batch read/write support
-- **PySpark 4.0+**: Streaming DataSource API (coming in PR #4-5)
+- **PySpark 4.0+**: Full batch read/write support
+- **PySpark 4.0+**: Streaming DataSource API (coming in Phase 4-5)
 - **Python**: 3.9, 3.10, 3.11, 3.12
 
-**Q15: What data types are supported in MVP vs future PRs?**
+**Q15: Why Python for DataSources?**
 
-| PR | Types Added |
-|----|-------------|
-| **#1 (MVP)** | Int32, Int64, Float32, Float64, Utf8, Boolean, Date32, Timestamp, Null |
-| **#2 (Write)** | Binary, Decimal128, Int8, Int16 |
-| **#4 (Stream)** | List<T>, Struct, Map<K,V>, LargeUtf8 |
-| **#6 (Polish)** | Duration, Interval, FixedSizeBinary, Union, Dictionary |
+Python was chosen for DataSource extensibility because:
+- **PySpark compatibility**: Enables zero-code-change migration from PySpark 4.0+ DataSources
+- **Ecosystem access**: Libraries for databases, cloud services, and data formats
+- **Subprocess isolation**: Python's architecture enables straightforward crash isolation (Phase 3)
 
-**Q16: How do I migrate from Spark's JDBC connector?**
+**Q16: Can I use Python DataSources from SQL?**
+
+Yes. Python DataSources support SQL access via `CREATE TABLE ... USING`:
+
+```sql
+CREATE TABLE api_users
+USING mydatasource
+OPTIONS (endpoint = 'https://api.example.com');
+
+SELECT * FROM api_users WHERE status = 'active';
+```
+
+The table metadata (format name + options) is stored in the catalog. On query, Sail resolves the format via `TableFormatRegistry`, creates the `PythonTableProvider`, and executes. Filter pushdown applies automatically if your DataSource implements `pushFilters()`.
+
+**PySpark compatibility note**: This SQL syntax is identical to PySpark. In PySpark, you must first call `spark.dataSource.register(MyDataSource)`. In Sail, DataSources discovered via entry points or `@register` are available immediately. Sail's planned `spark.dataSource.register()` support (see Registration Methods) will provide full API parity.
+
+**Q17: What data types are supported in MVP vs future phases?**
+
+| Phase | Types Added |
+|-------|-------------|
+| **Phase 1 (MVP)** | Int32, Int64, Float32, Float64, Utf8, Boolean, Date32, Timestamp, Null |
+| **Phase 2 (Write)** | Binary, Decimal128, Int8, Int16 |
+| **Phase 4 (Stream)** | List<T>, Struct, Map<K,V>, LargeUtf8 |
+| **Phase 6 (Polish)** | Duration, Interval, FixedSizeBinary, Union, Dictionary |
+
+**Q18: How do I migrate from Spark's JDBC connector?**
 
 Option 1: Use Python DataSource with connector-x:
 ```python
@@ -1979,7 +1252,7 @@ Option 2: Wait for native Rust connectors (see Database Connectors section).
 
 ### Security & Operations
 
-**Q17: Is cloudpickle safe? What's the trust model?**
+**Q19: Is cloudpickle safe? What's the trust model?**
 
 **Warning**: Cloudpickle can execute arbitrary code during deserialization.
 
@@ -1990,20 +1263,20 @@ Trust model:
 
 Only load datasources from trusted packages. Never unpickle datasources from untrusted sources.
 
-**Q18: What happens if Python code crashes during read?**
+**Q20: What happens if Python code crashes during read?**
 
 In **MVP (in-process)**:
 - Python exception → `DataFusionError::External`
 - Query fails gracefully with error message
 - Python segfault → Sail process crashes (use subprocess isolation for safety)
 
-With **subprocess isolation (PR #3)**:
+With **subprocess isolation (Phase 3)**:
 - Worker crash → Worker restarted, partition retried
 - No impact on main Sail process
 
-**Q19: When will subprocess isolation be available?**
+**Q21: When will subprocess isolation be available?**
 
-Subprocess isolation is planned for **PR #3** (Phase 3 in the implementation plan). It provides multiple benefits beyond just GIL parallelism:
+Subprocess isolation is planned for **Phase 3** in the implementation plan. It provides multiple benefits beyond just GIL parallelism:
 
 | Benefit | Description |
 |---------|-------------|
@@ -2015,7 +1288,7 @@ Subprocess isolation is planned for **PR #3** (Phase 3 in the implementation pla
 
 **Note on Free Threading**: Even when Python's free-threading mode (PEP 703) becomes stable (expected 2026+), subprocess isolation remains valuable for crash isolation, memory limits, and security. The `PythonExecutor` trait allows runtime adaptation—Sail will detect free threading and can use `InProcessExecutor` when appropriate, while still offering subprocess mode for production safety.
 
-**Q20: How do I configure batch size and other tuning parameters?**
+**Q22: How do I configure batch size and other tuning parameters?**
 
 ```python
 class MyReader(DataSourceReader):
@@ -2037,65 +1310,45 @@ SAIL_PYTHON_BATCH_SIZE=16384           # Rows per batch
 SAIL_PYTHON_CHANNEL_BUFFER=4           # Batches buffered in channel
 ```
 
+---
+
 ## Appendix
 
-### File Inventory
+### Design Decisions
 
-#### Rust (`crates/sail-data-source/src/python_datasource/`)
+#### Execution Model
 
-| File | Lines | Purpose |
-|------|-------|---------|
-| `mod.rs` | 55 | Module exports |
-| `discovery.rs` | 331 | Registry & discovery |
-| `filter.rs` | 457 | Filter pushdown |
-| `arrow_utils.rs` | 342 | Arrow conversions |
-| `executor.rs` | 191 | PythonExecutor trait |
-| `python_datasource.rs` | 384 | Core PyO3 bridge |
-| `python_table_provider.rs` | 115 | TableProvider impl |
-| `table_format.rs` | 213 | TableFormat impl |
-| `exec.rs` | 197 | ExecutionPlan |
-| `stream.rs` | 289 | RecordBatch stream |
-| `error.rs` | 52 | Error types |
-| **Total** | **~2,626** | |
+| Alternative | Pros | Cons | Decision |
+|-------------|------|------|----------|
+| **PyO3 in-process** | Zero-copy, simple deployment | Single GIL, crash risk | MVP choice |
+| **Subprocess + gRPC** | GIL parallelism, crash isolation | Serialization overhead | Phase 3 |
+| **Subprocess + shared memory** | GIL parallelism + zero-copy | High complexity | Phase 3 |
 
-#### Python (`python/pysail/spark/datasource/`)
+#### Serialization Format
 
-| File | Lines | Purpose |
-|------|-------|---------|
-| `base.py` | 444 | Core API classes |
-| `examples.py` | 379 | Example datasources |
-| `__init__.py` | ~20 | Module exports |
-| **Total** | **~843** | |
+| Alternative | Pros | Cons | Decision |
+|-------------|------|------|----------|
+| **cloudpickle** | Pickles lambdas, PySpark compatible | Security considerations | Chosen |
+| **dill** | Similar to cloudpickle | Less maintained | Rejected |
+| **JSON + registry** | Safe, inspectable | Cannot serialize arbitrary objects | Rejected |
 
-### Commit History
+#### Data Transfer
 
-```
-456fb6dc fix: add Python 3.9 compatibility for entry_points discovery
-4754828c fix: Python DataSource discovery and reader fixes
-37ae75fc fix: Python DataSource discovery and reader fixes
-519e2d9d feat: Python Datasource MVP (PR #1)
-```
+| Alternative | Pros | Cons | Decision |
+|-------------|------|------|----------|
+| **Arrow C Data Interface** | Zero-copy, standard | Requires PyArrow | Chosen (in-process) |
+| **Arrow IPC over shared memory** | Zero-copy across processes | Requires mmap setup | Chosen (subprocess) |
+| **Pickle** | Simple | Slow, copies data | Rejected |
 
-## Implementation Phases
+### References
 
-This RFC describes **Phase 1** of a 6-phase rollout strategy:
+- [PySpark DataSource API](https://github.com/apache/spark/blob/master/python/pyspark/sql/datasource.py)
+- [Arrow C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html)
+- [PyO3 Guide](https://pyo3.rs/)
+- [PEP 703 – Free Threading](https://peps.python.org/pep-0703/)
+- [Connector-X](https://github.com/sfu-db/connector-x)
+- [DuckDB Python API](https://duckdb.org/docs/api/python/overview)
 
-| Phase | Focus | Scope | Status |
-|-------|-------|-------|--------|
-| **Phase 1 (This RFC)** | MVP Batch Read | Discovery, filter pushdown, execution, ~2,626 LOC Rust + 843 LOC Python | ✅ Complete |
-| **Phase 2** | Batch Write | Write execution plan, commit protocol, ~550 LOC | Planned |
-| **Phase 3** | Subprocess Isolation | GRPC executor, shared memory, crash isolation, ~800 LOC | Planned |
-| **Phase 4** | Streaming Read | Offset management, microbatch coordination, ~650 LOC | Planned |
-| **Phase 5** | Streaming Write | Streaming write exec, BatchId protocol, ~600 LOC | Planned |
-| **Phase 6** | Performance & Polish | Exotic types, metrics, documentation, ~250 LOC | Planned |
+---
 
-**Total Estimated Scope**: ~5,476 lines of code across 6 incremental deliveries.
-
-## References
-
-- [PySpark DataSource API](https://github.com/apache/spark/blob/master/python/pyspark/sql/datasource.py) - Reference implementation for 100% compatibility
-- [Arrow C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html) - Zero-copy specification
-- [PyO3 Guide](https://pyo3.rs/) - Rust-Python interop
-- [PEP 703 – Making the Global Interpreter Lock Optional](https://peps.python.org/pep-0703/) - Free threading considerations for future Sail versions
-- [Connector-X](https://github.com/sfu-db/connector-x) - High-performance database connector example
-- [DuckDB Python API](https://duckdb.org/docs/api/python/overview) - Embedded analytics integration example
+**End of RFC**

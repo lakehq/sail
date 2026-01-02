@@ -2,7 +2,7 @@
 Python DataSource API for Sail.
 
 This module provides the DataSource base class and related types for implementing
-custom data sources in Python. The API is 100% compatible with PySpark 3.5+/4.0+.
+custom data sources in Python. The API is 100% compatible with PySpark 4.0+.
 
 Example usage:
 
