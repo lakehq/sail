@@ -43,6 +43,7 @@ pub struct Stage {
     pub placement: TaskPlacement,
 }
 
+#[derive(Clone, Copy)]
 pub enum TaskPlacement {
     Driver,
     Worker,
@@ -57,6 +58,7 @@ impl fmt::Display for TaskPlacement {
     }
 }
 
+#[derive(Clone, Copy)]
 pub enum OutputMode {
     Pipelined,
     Blocking,
@@ -71,6 +73,7 @@ impl fmt::Display for OutputMode {
     }
 }
 
+#[derive(Clone)]
 pub enum OutputDistribution {
     Broadcast {
         replicas: usize,

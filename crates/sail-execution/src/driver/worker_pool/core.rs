@@ -10,10 +10,8 @@ use sail_server::actor::ActorContext;
 use sail_telemetry::common::SpanAttribute;
 use tokio::time::Instant;
 
-use crate::driver::worker_pool::state::{TaskSlot, WorkerState};
-use crate::driver::worker_pool::{
-    WorkerDescriptor, WorkerIdle, WorkerLost, WorkerPool, WorkerPoolOptions, WorkerTimeout,
-};
+use crate::driver::worker_pool::state::WorkerState;
+use crate::driver::worker_pool::{WorkerDescriptor, WorkerPool, WorkerPoolOptions};
 use crate::driver::{DriverActor, DriverEvent, TaskStatus};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskKeyDisplay, WorkerId};
@@ -24,7 +22,10 @@ use crate::worker_manager::WorkerLaunchOptions;
 
 impl WorkerPool {
     pub async fn close(mut self, ctx: &mut ActorContext<DriverActor>) -> ExecutionResult<()> {
-        self.stop_all_workers(ctx);
+        let worker_ids = self.workers.keys().cloned().collect::<Vec<_>>();
+        for worker_id in worker_ids.into_iter() {
+            self.stop_worker(ctx, worker_id, Some("closing worker pool".to_string()));
+        }
         // TODO: support timeout for worker manager stop
         self.worker_manager.stop().await?;
         Ok(())
@@ -36,7 +37,7 @@ impl WorkerPool {
 
     pub fn start_worker(&mut self, ctx: &mut ActorContext<DriverActor>) {
         let Ok(worker_id) = self.worker_id_generator.next() else {
-            error!("failed to generate worker IDs");
+            error!("failed to generate worker ID");
             ctx.send(DriverEvent::Shutdown);
             return;
         };
@@ -102,8 +103,6 @@ impl WorkerPool {
                 worker.state = WorkerState::Running {
                     host,
                     port,
-                    slots: vec![TaskSlot::default(); self.options.worker_task_slots],
-                    streams: vec![],
                     updated_at: Instant::now(),
                     heartbeat_at: Instant::now(),
                     client: None,
@@ -145,7 +144,7 @@ impl WorkerPool {
                 let client = match Self::get_worker_client_set(worker_id, worker, &self.options) {
                     Ok(x) => x.core,
                     Err(e) => {
-                        warn!("failed to stop worker {worker_id}: {e}");
+                        error!("failed to stop worker {worker_id}: {e}");
                         return;
                     }
                 };
@@ -158,14 +157,6 @@ impl WorkerPool {
                 worker.messages.extend(reason);
             }
             WorkerState::Stopped | WorkerState::Failed => {}
-        }
-    }
-
-    fn stop_all_workers(&mut self, ctx: &mut ActorContext<DriverActor>) {
-        let worker_ids = self.workers.keys().cloned().collect::<Vec<_>>();
-        let reason = "stopping all workers".to_string();
-        for worker_id in worker_ids.into_iter() {
-            self.stop_worker(ctx, worker_id, Some(reason.clone()));
         }
     }
 
@@ -186,38 +177,22 @@ impl WorkerPool {
             .collect()
     }
 
-    pub fn count_active_workers(&self) -> usize {
-        self.workers
-            .values()
-            .filter(|worker| {
-                matches!(
-                    worker.state,
-                    WorkerState::Pending | WorkerState::Running { .. }
-                )
-            })
-            .count()
+    pub fn track_worker_activity(
+        &mut self,
+        ctx: &mut ActorContext<DriverActor>,
+        worker_id: WorkerId,
+    ) {
+        let Some(worker) = self.workers.get_mut(&worker_id) else {
+            warn!("worker {worker_id} not found");
+            return;
+        };
+        if let WorkerState::Running { updated_at, .. } = &mut worker.state {
+            *updated_at = Instant::now();
+            Self::schedule_idle_worker_probe(ctx, worker_id, worker, &self.options);
+        }
     }
 
-    pub fn find_idle_task_slots(&self) -> Vec<(WorkerId, usize)> {
-        self.workers
-            .iter()
-            .filter_map(|(id, worker)| {
-                let count = match &worker.state {
-                    WorkerState::Running { slots, .. } => {
-                        slots.iter().filter(|s| s.is_vacant()).count()
-                    }
-                    _ => 0,
-                };
-                if count > 0 {
-                    Some((*id, count))
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
-    }
-
-    pub fn record_worker_heartbeat(
+    pub fn update_worker_heartbeat(
         &mut self,
         ctx: &mut ActorContext<DriverActor>,
         worker_id: WorkerId,
@@ -232,7 +207,7 @@ impl WorkerPool {
         }
     }
 
-    pub fn record_worker_known_peers(
+    pub fn update_worker_known_peers(
         &mut self,
         worker_id: WorkerId,
         peer_worker_ids: Vec<WorkerId>,
@@ -244,65 +219,41 @@ impl WorkerPool {
         worker.peers.extend(peer_worker_ids);
     }
 
-    pub fn probe_pending_worker(&mut self, worker_id: WorkerId) -> WorkerTimeout {
+    pub fn fail_worker_if_pending(&mut self, worker_id: WorkerId) -> bool {
         let Some(worker) = self.workers.get_mut(&worker_id) else {
             warn!("worker {worker_id} not found");
-            return WorkerTimeout::No;
+            return false;
         };
         if matches!(&worker.state, WorkerState::Pending) {
             warn!("worker {worker_id} registration timeout");
             let message = "worker registration timeout".to_string();
             worker.state = WorkerState::Failed;
             worker.messages.push(message);
-            WorkerTimeout::Yes
+            true
         } else {
-            WorkerTimeout::No
+            false
         }
     }
 
-    pub fn probe_idle_worker(&mut self, worker_id: WorkerId, instant: Instant) -> WorkerIdle {
+    pub fn get_worker_last_update(&mut self, worker_id: WorkerId) -> Option<Instant> {
         let Some(worker) = self.workers.get_mut(&worker_id) else {
             warn!("worker {worker_id} not found");
-            return WorkerIdle::No;
-        };
-        if let WorkerState::Running {
-            slots,
-            streams,
-            updated_at,
-            ..
-        } = &worker.state
-        {
-            if slots.iter().all(|s| s.is_vacant()) && streams.is_empty() && *updated_at <= instant {
-                return WorkerIdle::Yes;
-            }
-        }
-        WorkerIdle::No
-    }
-
-    pub fn probe_lost_worker(&mut self, worker_id: WorkerId, instant: Instant) -> WorkerLost {
-        let Some(worker) = self.workers.get_mut(&worker_id) else {
-            warn!("worker {worker_id} not found");
-            return WorkerLost::No;
-        };
-        if let WorkerState::Running { heartbeat_at, .. } = &worker.state {
-            if *heartbeat_at <= instant {
-                return WorkerLost::Yes;
-            }
-        }
-        WorkerLost::No
-    }
-
-    pub fn find_tasks_for_worker(&self, worker_id: WorkerId) -> Vec<TaskKey> {
-        let Some(worker) = self.workers.get(&worker_id) else {
-            warn!("worker {worker_id} not found");
-            return vec![];
+            return None;
         };
         match &worker.state {
-            WorkerState::Running { slots, .. } => slots
-                .iter()
-                .flat_map(|x| x.iter().cloned().collect::<Vec<_>>())
-                .collect(),
-            _ => vec![],
+            WorkerState::Running { updated_at, .. } => Some(*updated_at),
+            _ => None,
+        }
+    }
+
+    pub fn get_worker_last_heartbeat(&mut self, worker_id: WorkerId) -> Option<Instant> {
+        let Some(worker) = self.workers.get_mut(&worker_id) else {
+            warn!("worker {worker_id} not found");
+            return None;
+        };
+        match &worker.state {
+            WorkerState::Running { heartbeat_at, .. } => Some(*heartbeat_at),
+            _ => None,
         }
     }
 
@@ -313,7 +264,7 @@ impl WorkerPool {
         key: TaskKey,
         definition: TaskDefinition,
     ) {
-        let running_worker_locations = self.list_running_workers();
+        let running_workers = self.list_running_workers();
         let Some(worker) = self.workers.get_mut(&worker_id) else {
             let message = format!("worker {} not found", worker_id);
             ctx.send(DriverEvent::UpdateTask {
@@ -341,15 +292,7 @@ impl WorkerPool {
             }
         };
         match &mut worker.state {
-            WorkerState::Running {
-                slots,
-                streams,
-                updated_at,
-                ..
-            } => {
-                todo!();
-                *updated_at = Instant::now();
-            }
+            WorkerState::Running { .. } => {}
             _ => {
                 let message = format!(
                     "cannot assign {} to worker {} that is not running",
@@ -366,7 +309,7 @@ impl WorkerPool {
                 return;
             }
         }
-        let peers = running_worker_locations
+        let peers = running_workers
             .into_iter()
             .filter(|x| !worker.peers.contains(&x.worker_id))
             .collect();
@@ -386,10 +329,12 @@ impl WorkerPool {
         });
     }
 
-    pub fn cancel_task(&mut self, ctx: &mut ActorContext<DriverActor>, key: &TaskKey) {
-        let Some(worker_id) = self.detach_task(ctx, key) else {
-            return;
-        };
+    pub fn stop_task(
+        &mut self,
+        ctx: &mut ActorContext<DriverActor>,
+        worker_id: WorkerId,
+        key: &TaskKey,
+    ) {
         let Some(worker) = self.workers.get_mut(&worker_id) else {
             warn!("worker {worker_id} not found");
             return;
@@ -397,8 +342,8 @@ impl WorkerPool {
         let client = match Self::get_worker_client_set(worker_id, worker, &self.options) {
             Ok(x) => x.core,
             Err(e) => {
-                warn!(
-                    "failed to cancel {} in worker {worker_id}: {e}",
+                error!(
+                    "failed to stop {} in worker {worker_id}: {e}",
                     TaskKeyDisplay(key)
                 );
                 return;
@@ -407,40 +352,9 @@ impl WorkerPool {
         let key = key.clone();
         ctx.spawn(async move {
             if let Err(e) = client.stop_task(key.clone()).await {
-                warn!("failed to stop {}: {e}", TaskKeyDisplay(&key));
+                error!("failed to stop {}: {e}", TaskKeyDisplay(&key));
             }
         });
-    }
-
-    pub fn detach_task(
-        &mut self,
-        ctx: &mut ActorContext<DriverActor>,
-        key: &TaskKey,
-    ) -> Option<WorkerId> {
-        for (&worker_id, worker) in self.workers.iter_mut() {
-            if let WorkerState::Running {
-                slots, updated_at, ..
-            } = &mut worker.state
-            {
-                if slots.iter_mut().any(|x| x.remove(key)) {
-                    *updated_at = Instant::now();
-                    Self::schedule_idle_worker_probe(ctx, worker_id, worker, &self.options);
-                    return Some(worker_id);
-                }
-            }
-        }
-        None
-    }
-
-    pub fn detach_job(&mut self, ctx: &mut ActorContext<DriverActor>, job_id: JobId) {
-        for (&worker_id, worker) in self.workers.iter_mut() {
-            if let WorkerState::Running { updated_at, .. } = &mut worker.state {
-                todo!();
-                *updated_at = Instant::now();
-                Self::schedule_idle_worker_probe(ctx, worker_id, worker, &self.options);
-                Self::remove_worker_streams(ctx, job_id, worker_id, worker, &self.options);
-            }
-        }
     }
 
     fn get_worker_client_set(
@@ -471,6 +385,7 @@ impl WorkerPool {
     fn remove_worker_streams(
         ctx: &mut ActorContext<DriverActor>,
         job_id: JobId,
+        stage: Option<usize>,
         worker_id: WorkerId,
         worker: &mut WorkerDescriptor,
         options: &WorkerPoolOptions,
@@ -478,12 +393,12 @@ impl WorkerPool {
         let client = match Self::get_worker_client_set(worker_id, worker, options) {
             Ok(x) => x.core,
             Err(e) => {
-                warn!("failed to remove streams in worker {worker_id}: {e}");
+                error!("failed to remove streams in worker {worker_id}: {e}");
                 return;
             }
         };
         ctx.spawn(async move {
-            if let Err(e) = client.remove_stream(job_id, None).await {
+            if let Err(e) = client.remove_stream(job_id, stage).await {
                 error!("failed to remove streams in worker {worker_id}: {e}");
             }
         });

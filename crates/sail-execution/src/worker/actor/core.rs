@@ -30,8 +30,8 @@ impl Actor for WorkerActor {
             host: options.driver_host.clone(),
             port: options.driver_port,
         });
-        let peer_tracker = PeerTracker::new(PeerTrackerOptions::new(&options));
-        let stream_manager = StreamManager::new(StreamManagerOptions::new_for_worker(&options));
+        let peer_tracker = PeerTracker::new(PeerTrackerOptions::from(&options));
+        let stream_manager = StreamManager::new(StreamManagerOptions::from(&options));
         Self {
             options,
             server: ServerMonitor::new(),

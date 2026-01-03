@@ -9,8 +9,8 @@ pub struct JobSchedulerOptions {
     pub task_launch_timeout: Duration,
 }
 
-impl JobSchedulerOptions {
-    pub fn new(options: &DriverOptions) -> Self {
+impl From<&DriverOptions> for JobSchedulerOptions {
+    fn from(options: &DriverOptions) -> Self {
         Self {
             task_launch_timeout: options.task_launch_timeout,
         }

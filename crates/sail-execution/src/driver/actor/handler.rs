@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::mem;
 use std::sync::Arc;
 
@@ -6,13 +7,15 @@ use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::ExecutionPlan;
 use log::{error, info, warn};
 use sail_common_datafusion::error::CommonErrorCause;
+use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use crate::driver::actor::DriverActor;
-use crate::driver::worker_pool::{WorkerIdle, WorkerLost, WorkerTimeout};
-use crate::driver::TaskStatus;
+use crate::driver::job_scheduler::TaskState;
+use crate::driver::task::TaskAssignment;
+use crate::driver::{DriverEvent, TaskStatus};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey, WorkerId};
 use crate::stream::reader::TaskStreamSource;
@@ -51,7 +54,8 @@ impl DriverActor {
         info!("worker {worker_id} is available at {host}:{port}");
         let out = self.worker_pool.register_worker(ctx, worker_id, host, port);
         if out.is_ok() {
-            self.schedule_tasks(ctx);
+            self.task_assigner.activate_worker(worker_id);
+            self.run_tasks(ctx);
         }
         if result.send(out).is_err() {
             warn!("failed to send worker registration result");
@@ -64,7 +68,7 @@ impl DriverActor {
         ctx: &mut ActorContext<Self>,
         worker_id: WorkerId,
     ) -> ActorAction {
-        self.worker_pool.record_worker_heartbeat(ctx, worker_id);
+        self.worker_pool.update_worker_heartbeat(ctx, worker_id);
         ActorAction::Continue
     }
 
@@ -75,7 +79,7 @@ impl DriverActor {
         peer_worker_ids: Vec<WorkerId>,
     ) -> ActorAction {
         self.worker_pool
-            .record_worker_known_peers(worker_id, peer_worker_ids);
+            .update_worker_known_peers(worker_id, peer_worker_ids);
         ActorAction::Continue
     }
 
@@ -84,12 +88,9 @@ impl DriverActor {
         ctx: &mut ActorContext<Self>,
         worker_id: WorkerId,
     ) -> ActorAction {
-        match self.worker_pool.probe_pending_worker(worker_id) {
-            WorkerTimeout::Yes => {
-                // start a new worker to compensate the failed one
-                self.worker_pool.start_worker(ctx);
-            }
-            WorkerTimeout::No => {}
+        if self.worker_pool.fail_worker_if_pending(worker_id) {
+            // start a new worker to compensate the failed one
+            self.worker_pool.start_worker(ctx);
         }
         ActorAction::Continue
     }
@@ -100,12 +101,18 @@ impl DriverActor {
         worker_id: WorkerId,
         instant: Instant,
     ) -> ActorAction {
-        match self.worker_pool.probe_idle_worker(worker_id, instant) {
-            WorkerIdle::Yes => {
-                let reason = "worker has been idle for too long".to_string();
-                self.worker_pool.stop_worker(ctx, worker_id, Some(reason));
-            }
-            WorkerIdle::No => {}
+        if self.task_assigner.is_worker_idle(worker_id)
+            && self
+                .worker_pool
+                .get_worker_last_update(worker_id)
+                .is_some_and(|x| x <= instant)
+        {
+            self.worker_pool.stop_worker(
+                ctx,
+                worker_id,
+                Some("worker has been idle for too long".to_string()),
+            );
+            self.task_assigner.deactivate_worker(worker_id);
         }
         ActorAction::Continue
     }
@@ -116,14 +123,31 @@ impl DriverActor {
         worker_id: WorkerId,
         instant: Instant,
     ) -> ActorAction {
-        match self.worker_pool.probe_lost_worker(worker_id, instant) {
-            WorkerLost::Yes => {
-                let reason = "worker heartbeat timeout".to_string();
-                self.worker_pool
-                    .stop_worker(ctx, worker_id, Some(reason.clone()));
-                self.fail_tasks_for_worker(ctx, worker_id, reason);
+        if self
+            .worker_pool
+            .get_worker_last_heartbeat(worker_id)
+            .is_some_and(|x| x <= instant)
+        {
+            self.worker_pool.stop_worker(
+                ctx,
+                worker_id,
+                Some("worker heartbeat timeout".to_string()),
+            );
+
+            let keys = self.task_assigner.find_worker_tasks(worker_id);
+            self.task_assigner.deactivate_worker(worker_id);
+            for key in keys.iter() {
+                self.job_scheduler.update_task(
+                    key,
+                    TaskState::Failed,
+                    Some("task failed for lost worker".to_string()),
+                );
             }
-            WorkerLost::No => {}
+
+            let job_ids = keys.iter().map(|k| k.job_id).collect::<HashSet<_>>();
+            for job_id in job_ids {
+                self.schedule_job(ctx, job_id);
+            }
         }
         ActorAction::Continue
     }
@@ -135,20 +159,19 @@ impl DriverActor {
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     ) -> ActorAction {
         let out = self.job_scheduler.accept_job(plan);
-        if out.is_ok() {
-            self.schedule_tasks(ctx);
+        if let Ok((job_id, _)) = &out {
+            self.schedule_job(ctx, *job_id);
         }
-        let _ = result.send(out);
+        let _ = result.send(out.map(|(_, stream)| stream));
         ActorAction::Continue
     }
 
-    // FIXME: clean up job
     pub(super) fn handle_clean_up_job(
         &mut self,
         ctx: &mut ActorContext<Self>,
         job_id: JobId,
     ) -> ActorAction {
-        self.worker_pool.detach_job(ctx, job_id);
+        todo!();
         ActorAction::Continue
     }
 
@@ -175,28 +198,30 @@ impl DriverActor {
         }
         match status {
             TaskStatus::Running => {
-                if let Some(cause) = cause {
-                    warn!(
-                        "cause ignored for running task {}: {cause:?}",
-                        TaskKeyDisplay(&key)
-                    );
-                }
-                self.update_running_task(ctx, key, message);
+                self.job_scheduler
+                    .update_task(&key, TaskState::Running, message);
+                self.update_job_output(ctx, key.job_id);
             }
             TaskStatus::Succeeded => {
-                if let Some(cause) = cause {
-                    warn!(
-                        "cause ignored for succeeded task {}: {cause:?}",
-                        TaskKeyDisplay(&key)
-                    );
-                }
-                self.update_succeeded_task(ctx, key, message);
+                self.job_scheduler
+                    .update_task(&key, TaskState::Succeeded, message);
+                self.task_assigner.unassign_task(&key);
+                self.update_job_output(ctx, key.job_id);
+                self.schedule_job(ctx, key.job_id);
+                self.run_tasks(ctx);
             }
             TaskStatus::Failed => {
-                self.update_failed_task(ctx, key, message, cause);
+                // Some canceled tasks may report failed status due to closed streams,
+                // but it is fine to handle them as failed tasks again.
+                self.job_scheduler
+                    .update_task(&key, TaskState::Failed, message);
+                self.task_assigner.unassign_task(&key);
+                self.schedule_job(ctx, key.job_id);
+                self.run_tasks(ctx);
             }
             TaskStatus::Canceled => {
-                self.update_canceled_task(ctx, key, message, cause);
+                // Task cancellation must have been initiated by the driver itself,
+                // so it is a no-op to handle canceled tasks here.
             }
         }
         ActorAction::Continue
@@ -207,9 +232,19 @@ impl DriverActor {
         ctx: &mut ActorContext<Self>,
         key: TaskKey,
     ) -> ActorAction {
-        if self.job_scheduler.is_pending_task(&key) {
+        if self
+            .job_scheduler
+            .get_task_state(&key)
+            .is_some_and(|x| matches!(x, TaskState::Pending))
+        {
             let message = "task scheduling timeout".to_string();
-            self.update_failed_task(ctx, key, Some(message), None);
+            ctx.send(DriverEvent::UpdateTask {
+                key,
+                status: TaskStatus::Failed,
+                message: Some(message.clone()),
+                cause: None,
+                sequence: None,
+            })
         }
         ActorAction::Continue
     }
@@ -250,108 +285,52 @@ impl DriverActor {
         ActorAction::Continue
     }
 
-    pub fn update_running_task(
-        &mut self,
-        ctx: &mut ActorContext<Self>,
-        key: TaskKey,
-        message: Option<String>,
-    ) {
-        self.job_scheduler.record_running_task(&key, message);
-        self.update_job_output(ctx, &key);
-        self.schedule_tasks(ctx);
-    }
-
-    pub fn update_succeeded_task(
-        &mut self,
-        ctx: &mut ActorContext<Self>,
-        key: TaskKey,
-        message: Option<String>,
-    ) {
-        self.job_scheduler.record_succeeded_task(&key, message);
-        self.worker_pool.detach_task(ctx, &key);
-        self.schedule_tasks(ctx);
-        self.update_job_output(ctx, &key);
-    }
-
-    pub fn update_failed_task(
-        &mut self,
-        ctx: &mut ActorContext<Self>,
-        key: TaskKey,
-        message: Option<String>,
-        cause: Option<CommonErrorCause>,
-    ) {
-        let cause = cause.unwrap_or_else(|| {
-            CommonErrorCause::Internal(format!(
-                "{} failed: {}",
-                TaskKeyDisplay(&key),
-                message.as_deref().unwrap_or("unknown reason")
-            ))
-        });
-        self.job_scheduler.record_failed_task(&key, message);
-        self.worker_pool.detach_task(ctx, &key);
-        self.schedule_tasks(ctx);
-    }
-
-    pub fn update_canceled_task(
-        &mut self,
-        ctx: &mut ActorContext<Self>,
-        key: TaskKey,
-        message: Option<String>,
-        cause: Option<CommonErrorCause>,
-    ) {
-        let cause = cause.unwrap_or_else(|| {
-            CommonErrorCause::Internal(format!(
-                "{} canceled: {}",
-                TaskKeyDisplay(&key),
-                message.as_deref().unwrap_or("unknown reason")
-            ))
-        });
-        self.job_scheduler.record_canceled_task(&key, message);
-        self.schedule_tasks(ctx);
-    }
-
-    fn schedule_tasks(&mut self, ctx: &mut ActorContext<Self>) {
-        let _actions = self.job_scheduler.next();
+    fn schedule_job(&mut self, ctx: &mut ActorContext<Self>, job_id: JobId) {
+        let actions = self.job_scheduler.schedule_job(job_id);
         // update worker pool for canceled tasks
         // count required task slots and scale up workers if needed
         todo!()
     }
 
     fn run_tasks(&mut self, ctx: &mut ActorContext<Self>) {
-        let slots = self.worker_pool.find_idle_task_slots();
-        let schedules = self.job_scheduler.run_tasks(ctx, slots);
-        for (worker_id, key, definition) in schedules.into_iter() {
-            self.worker_pool.run_task(ctx, worker_id, key, definition);
+        let assignments = self.task_assigner.assign_tasks();
+        for assignment in assignments {
+            match assignment.assignment {
+                TaskAssignment::Driver => {
+                    todo!()
+                }
+                TaskAssignment::Worker { worker_id, slot: _ } => {
+                    for entry in assignment.set.entries {
+                        let definition = match self
+                            .job_scheduler
+                            .get_task_definition(&entry.key, &self.task_assigner)
+                        {
+                            Ok(x) => x,
+                            Err(e) => {
+                                // The task failure will be handled as a separate event
+                                // after processing the current assignments.
+                                ctx.send(DriverEvent::UpdateTask {
+                                    key: entry.key,
+                                    status: TaskStatus::Failed,
+                                    message: Some(e.to_string()),
+                                    cause: Some(CommonErrorCause::new::<PyErrExtractor>(&e)),
+                                    sequence: None,
+                                });
+                                continue;
+                            }
+                        };
+                        self.worker_pool
+                            .run_task(ctx, worker_id, entry.key, definition);
+                    }
+                }
+            }
         }
     }
 
-    fn update_job_output(&mut self, _ctx: &mut ActorContext<Self>, _key: &TaskKey) {
+    fn update_job_output(&mut self, _ctx: &mut ActorContext<Self>, _job_id: JobId) {
         // determine the task streams via the job scheduler
         // fetch task streams via the worker pool
         // add task streams via the job scheduler
         todo!()
-    }
-
-    fn cancel_job(&mut self, ctx: &mut ActorContext<Self>, job_id: JobId, cause: CommonErrorCause) {
-        let tasks = self.job_scheduler.cancel_job(job_id);
-        for task in tasks {
-            self.worker_pool.cancel_task(ctx, &task);
-        }
-    }
-
-    fn fail_tasks_for_worker(
-        &mut self,
-        ctx: &mut ActorContext<Self>,
-        worker_id: WorkerId,
-        reason: String,
-    ) {
-        let keys = self.worker_pool.find_tasks_for_worker(worker_id);
-        for key in keys {
-            let reason = format!(
-                "{} failed for worker {worker_id}: {reason}",
-                TaskKeyDisplay(&key)
-            );
-            self.update_failed_task(ctx, key, Some(reason), None);
-        }
     }
 }

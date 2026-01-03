@@ -6,14 +6,16 @@ pub struct StreamManagerOptions {
     pub worker_stream_buffer: usize,
 }
 
-impl StreamManagerOptions {
-    pub fn new_for_driver(options: &DriverOptions) -> Self {
+impl From<&DriverOptions> for StreamManagerOptions {
+    fn from(options: &DriverOptions) -> Self {
         Self {
             worker_stream_buffer: options.worker_stream_buffer,
         }
     }
+}
 
-    pub fn new_for_worker(options: &WorkerOptions) -> Self {
+impl From<&WorkerOptions> for StreamManagerOptions {
+    fn from(options: &WorkerOptions) -> Self {
         Self {
             worker_stream_buffer: options.worker_stream_buffer,
         }

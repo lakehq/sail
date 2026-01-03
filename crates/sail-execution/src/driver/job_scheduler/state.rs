@@ -2,7 +2,6 @@ use datafusion::physical_plan::ExecutionPlanProperties;
 
 use crate::driver::output::JobOutputHandle;
 use crate::error::ExecutionResult;
-use crate::id::WorkerId;
 use crate::job_graph::JobGraph;
 
 pub struct JobDescriptor {
@@ -46,27 +45,18 @@ pub struct TaskAttemptDescriptor {
     pub messages: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum TaskState {
     /// The task has been created, but may not be eligible for scheduling.
     Created,
     /// The task is eligible for scheduling, but is not assigned to any worker.
     Pending,
     /// The task is scheduled to a worker, but its status is unknown.
-    Scheduled {
-        /// The worker ID to schedule the current task attempt.
-        worker_id: WorkerId,
-    },
+    Scheduled,
     /// The task is running on a worker.
-    Running {
-        /// The worker ID for running the current task attempt.
-        worker_id: WorkerId,
-    },
+    Running,
     /// The task has succeeded.
-    Succeeded {
-        /// The worker ID for the task output.
-        worker_id: WorkerId,
-    },
+    Succeeded,
     /// The task has failed.
     Failed,
     /// The task has been canceled.
@@ -74,55 +64,19 @@ pub enum TaskState {
 }
 
 impl TaskState {
-    pub fn pending(&self) -> Option<TaskState> {
-        match self {
-            TaskState::Created => Some(TaskState::Pending),
-            TaskState::Pending => Some(TaskState::Pending),
-            TaskState::Scheduled { .. } => None,
-            TaskState::Running { .. } => None,
-            TaskState::Succeeded { .. } => None,
-            TaskState::Failed => None,
-            TaskState::Canceled => None,
-        }
-    }
-
-    pub fn run(&self) -> Option<TaskState> {
-        match self {
-            TaskState::Created => None,
-            TaskState::Pending => None,
-            TaskState::Scheduled { worker_id } => Some(TaskState::Running {
-                worker_id: *worker_id,
-            }),
-            TaskState::Running { .. } => Some(self.clone()),
-            TaskState::Succeeded { .. } => None,
-            TaskState::Failed => None,
-            TaskState::Canceled => None,
-        }
-    }
-
-    pub fn succeed(&self) -> Option<TaskState> {
-        match self {
-            TaskState::Created => None,
-            TaskState::Pending => None,
-            TaskState::Scheduled { worker_id } | TaskState::Running { worker_id } => {
-                Some(TaskState::Succeeded {
-                    worker_id: *worker_id,
-                })
-            }
-            TaskState::Succeeded { .. } => Some(self.clone()),
-            TaskState::Failed => None,
-            TaskState::Canceled => None,
-        }
-    }
-}
-
-impl TaskState {
-    pub fn worker_id(&self) -> Option<WorkerId> {
-        match self {
-            TaskState::Scheduled { worker_id }
-            | TaskState::Running { worker_id }
-            | TaskState::Succeeded { worker_id } => Some(*worker_id),
-            _ => None,
+    pub fn consolidate(&self, next: Self) -> Self {
+        match (self, next) {
+            (TaskState::Created, x) => x,
+            (TaskState::Pending, TaskState::Created) => *self,
+            (TaskState::Pending, x) => x,
+            (TaskState::Scheduled, TaskState::Created | TaskState::Pending) => *self,
+            (TaskState::Scheduled, x) => x,
+            (
+                TaskState::Running,
+                TaskState::Created | TaskState::Pending | TaskState::Scheduled,
+            ) => *self,
+            (TaskState::Running, x) => x,
+            (TaskState::Succeeded | TaskState::Failed | TaskState::Canceled, _) => *self,
         }
     }
 }

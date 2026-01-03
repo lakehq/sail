@@ -5,6 +5,8 @@ pub(super) mod job_scheduler;
 mod options;
 pub(super) mod output;
 mod server;
+mod task;
+mod task_assigner;
 pub(super) mod worker_pool;
 
 #[allow(clippy::all)]

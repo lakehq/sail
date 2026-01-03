@@ -11,8 +11,8 @@ pub struct PeerTrackerOptions {
     pub enable_tls: bool,
 }
 
-impl PeerTrackerOptions {
-    pub fn new(options: &WorkerOptions) -> Self {
+impl From<&WorkerOptions> for PeerTrackerOptions {
+    fn from(options: &WorkerOptions) -> Self {
         Self {
             enable_tls: options.enable_tls,
         }

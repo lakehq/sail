@@ -85,6 +85,35 @@ where
 }
 
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
+pub struct StageKey {
+    pub job_id: JobId,
+    pub stage: usize,
+}
+
+impl StageKey {
+    pub fn matches(&self, key: &TaskKey) -> bool {
+        self.job_id == key.job_id && self.stage == key.stage
+    }
+}
+
+impl From<&TaskKey> for StageKey {
+    fn from(key: &TaskKey) -> Self {
+        Self {
+            job_id: key.job_id,
+            stage: key.stage,
+        }
+    }
+}
+
+pub struct StageKeyDisplay<'a>(pub &'a StageKey);
+
+impl fmt::Display for StageKeyDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "job {} stage {}", self.0.job_id, self.0.stage)
+    }
+}
+
+#[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub struct TaskKey {
     pub job_id: JobId,
     pub stage: usize,

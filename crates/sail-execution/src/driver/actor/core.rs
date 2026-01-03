@@ -7,6 +7,7 @@ use log::{error, info};
 use sail_server::actor::{Actor, ActorAction, ActorContext};
 
 use crate::driver::job_scheduler::{JobScheduler, JobSchedulerOptions};
+use crate::driver::task_assigner::{TaskAssigner, TaskAssignerOptions};
 use crate::driver::worker_pool::{WorkerPool, WorkerPoolOptions};
 use crate::driver::{DriverActor, DriverEvent, DriverOptions};
 use crate::rpc::ServerMonitor;
@@ -24,15 +25,17 @@ impl Actor for DriverActor {
     fn new(options: DriverOptions) -> Self {
         let worker_pool = WorkerPool::new(
             options.worker_manager.clone(),
-            WorkerPoolOptions::new(&options),
+            WorkerPoolOptions::from(&options),
         );
-        let job_scheduler = JobScheduler::new(JobSchedulerOptions::new(&options));
-        let stream_manager = StreamManager::new(StreamManagerOptions::new_for_driver(&options));
+        let job_scheduler = JobScheduler::new(JobSchedulerOptions::from(&options));
+        let task_assigner = TaskAssigner::new(TaskAssignerOptions::from(&options));
+        let stream_manager = StreamManager::new(StreamManagerOptions::from(&options));
         Self {
             options,
             server: ServerMonitor::new(),
             worker_pool,
             job_scheduler,
+            task_assigner,
             stream_manager,
             task_sequences: HashMap::new(),
         }

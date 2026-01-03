@@ -2,21 +2,21 @@ mod core;
 mod options;
 mod state;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 pub use options::JobSchedulerOptions;
+pub use state::TaskState;
 
 use crate::codec::RemoteExecutionCodec;
 use crate::driver::job_scheduler::state::JobDescriptor;
-use crate::id::{IdGenerator, JobId, TaskKey};
+use crate::driver::task::TaskRegion;
+use crate::id::{IdGenerator, JobId, StageKey, TaskKey};
 
 pub struct JobScheduler {
     options: JobSchedulerOptions,
     jobs: HashMap<JobId, JobDescriptor>,
     job_id_generator: IdGenerator<JobId>,
-    /// The queue of jobs that need to be scheduled.
-    job_queue: VecDeque<JobId>,
     physical_plan_codec: Box<dyn PhysicalExtensionCodec>,
 }
 
@@ -26,14 +26,14 @@ impl JobScheduler {
             options,
             jobs: HashMap::new(),
             job_id_generator: IdGenerator::new(),
-            job_queue: VecDeque::new(),
             physical_plan_codec: Box::new(RemoteExecutionCodec),
         }
     }
 }
 
 pub enum JobSchedulerAction {
-    ScheduleTasks { tasks: Vec<Vec<TaskKey>> },
+    ScheduleTasks { region: TaskRegion },
     CancelTasks { tasks: Vec<TaskKey> },
+    RemoveLocalStreams { stage: StageKey },
     FailJob { job_id: JobId },
 }

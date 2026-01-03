@@ -5,6 +5,7 @@ mod rpc;
 use std::collections::HashMap;
 
 use crate::driver::job_scheduler::JobScheduler;
+use crate::driver::task_assigner::TaskAssigner;
 use crate::id::TaskKey;
 use crate::rpc::ServerMonitor;
 use crate::stream_manager::StreamManager;
@@ -14,6 +15,7 @@ pub struct DriverActor {
     server: ServerMonitor,
     worker_pool: super::worker_pool::WorkerPool,
     job_scheduler: JobScheduler,
+    task_assigner: TaskAssigner,
     stream_manager: StreamManager,
     /// The sequence number corresponding to the last task status update from the worker.
     /// A different sequence number is tracked for each attempt.
