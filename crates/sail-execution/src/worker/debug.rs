@@ -2,27 +2,40 @@ use std::fmt::{Debug, Formatter};
 
 use sail_common::debug::DebugBinary;
 
-use crate::worker::gen::RunTaskRequest;
+use crate::worker::gen::{TaskDefinition, TaskOutputHashDistribution};
 
-impl Debug for RunTaskRequest {
+impl Debug for TaskDefinition {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let RunTaskRequest {
-            job_id,
-            task_id,
-            attempt,
+        let TaskDefinition {
             plan,
-            partition,
-            channel,
-            peers,
+            inputs,
+            output,
         } = self;
-        f.debug_struct("RunTaskRequest")
-            .field("job_id", job_id)
-            .field("task_id", task_id)
-            .field("attempt", attempt)
+        f.debug_struct("TaskDefinition")
             .field("plan", &DebugBinary::from(plan))
-            .field("partition", partition)
-            .field("channel", channel)
-            .field("peers", peers)
+            .field("inputs", inputs)
+            .field("output", output)
+            .finish()
+    }
+}
+
+impl Debug for TaskOutputHashDistribution {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let TaskOutputHashDistribution {
+            keys,
+            channels,
+            replicas,
+        } = self;
+        f.debug_struct("TaskOutputHashDistribution")
+            .field(
+                "keys",
+                &keys
+                    .iter()
+                    .map(|k| DebugBinary::from(k))
+                    .collect::<Vec<_>>(),
+            )
+            .field("channels", channels)
+            .field("replicas", replicas)
             .finish()
     }
 }

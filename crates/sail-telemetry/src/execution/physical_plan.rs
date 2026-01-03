@@ -35,8 +35,8 @@ use crate::metrics::{MetricAttribute, MetricRegistry};
 pub struct TracingExecOptions {
     pub metric_registry: Option<Arc<MetricRegistry>>,
     pub job_id: Option<u64>,
-    pub task_id: Option<u64>,
-    pub task_attempt: Option<usize>,
+    pub stage: Option<usize>,
+    pub attempt: Option<usize>,
     pub operator_id: Option<u64>,
 }
 
@@ -264,22 +264,25 @@ impl TracingExec {
     fn build_metric_attributes(&self) -> Vec<KeyValue> {
         let mut attributes = vec![];
         if let Some(job_id) = self.options.job_id {
-            attributes.push((MetricAttribute::JOB_ID, job_id.to_string().into()));
+            attributes.push((MetricAttribute::EXECUTION_JOB_ID, job_id.to_string().into()));
         }
-        if let Some(task_id) = self.options.task_id {
-            attributes.push((MetricAttribute::TASK_ID, task_id.to_string().into()));
+        if let Some(stage) = self.options.stage {
+            attributes.push((MetricAttribute::EXECUTION_STAGE, stage.to_string().into()));
         }
-        if let Some(task_attempt) = self.options.task_attempt {
+        if let Some(attempt) = self.options.attempt {
             attributes.push((
-                MetricAttribute::TASK_ATTEMPT,
-                task_attempt.to_string().into(),
+                MetricAttribute::EXECUTION_ATTEMPT,
+                attempt.to_string().into(),
             ));
         }
         if let Some(operator_id) = self.options.operator_id {
-            attributes.push((MetricAttribute::OPERATOR_ID, operator_id.to_string().into()));
+            attributes.push((
+                MetricAttribute::EXECUTION_OPERATOR_ID,
+                operator_id.to_string().into(),
+            ));
         }
         attributes.push((
-            MetricAttribute::OPERATOR_NAME,
+            MetricAttribute::EXECUTION_OPERATOR_NAME,
             self.inner.name().to_string().into(),
         ));
         attributes

@@ -1,11 +1,9 @@
-use std::fmt::Display;
 use std::sync::Arc;
 
 use datafusion::common::plan_datafusion_err;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::physical_expr::Partitioning;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, PiecewiseMergeJoinExec,
 };
@@ -17,22 +15,8 @@ use datafusion::physical_plan::{
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{ExecutionError, ExecutionResult};
+use crate::job_graph::{JobGraph, Stage};
 use crate::plan::{ShuffleConsumption, ShuffleReadExec, ShuffleWriteExec};
-
-pub struct JobGraph {
-    stages: Vec<Arc<dyn ExecutionPlan>>,
-}
-
-impl Display for JobGraph {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        for (i, stage) in self.stages.iter().enumerate() {
-            let displayable = DisplayableExecutionPlan::new(stage.as_ref());
-            writeln!(f, "=== stage {i} ===")?;
-            writeln!(f, "{}", displayable.indent(true))?;
-        }
-        Ok(())
-    }
-}
 
 impl JobGraph {
     pub fn try_new(plan: Arc<dyn ExecutionPlan>) -> ExecutionResult<Self> {
@@ -41,10 +25,6 @@ impl JobGraph {
         let last = build_job_graph(plan, PartitionUsage::Once, &mut graph)?;
         graph.stages.push(last);
         Ok(graph)
-    }
-
-    pub fn stages(&self) -> &[Arc<dyn ExecutionPlan>] {
-        &self.stages
     }
 }
 
@@ -106,10 +86,10 @@ fn build_job_graph(
     plan: Arc<dyn ExecutionPlan>,
     usage: PartitionUsage,
     graph: &mut JobGraph,
-) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+) -> ExecutionResult<Stage> {
     // Recursively build the job graph for the children first
     // and propagate partition usage information.
-    let children = if let Some(join) = plan.as_any().downcast_ref::<HashJoinExec>() {
+    let _children = if let Some(join) = plan.as_any().downcast_ref::<HashJoinExec>() {
         let (left, right) = join.children().two()?;
         match join.mode {
             PartitionMode::Partitioned => {
@@ -151,13 +131,13 @@ fn build_job_graph(
             .map(|x| build_job_graph(x.clone(), usage, graph))
             .collect::<ExecutionResult<Vec<_>>>()?
     };
-    let plan = with_new_children_if_necessary(plan, children)?;
+    let plan = with_new_children_if_necessary(plan, vec![])?;
 
     let consumption = match usage {
         PartitionUsage::Once => ShuffleConsumption::Single,
         PartitionUsage::Shared => ShuffleConsumption::Multiple,
     };
-    let plan = if let Some(repartition) = plan.as_any().downcast_ref::<RepartitionExec>() {
+    let _plan = if let Some(repartition) = plan.as_any().downcast_ref::<RepartitionExec>() {
         let child = plan.children().one()?;
         match repartition.partitioning() {
             Partitioning::UnknownPartitioning(n) => {
@@ -181,28 +161,14 @@ fn build_job_graph(
     } else {
         plan
     };
-    Ok(plan)
+    todo!()
 }
 
 fn create_shuffle(
-    plan: &Arc<dyn ExecutionPlan>,
-    graph: &mut JobGraph,
-    partitioning: Partitioning,
-    consumption: ShuffleConsumption,
+    _plan: &Arc<dyn ExecutionPlan>,
+    _graph: &mut JobGraph,
+    _partitioning: Partitioning,
+    _consumption: ShuffleConsumption,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
-    let stage = graph.stages.len();
-
-    let writer = Arc::new(ShuffleWriteExec::new(
-        stage,
-        plan.clone(),
-        partitioning.clone(),
-        consumption,
-    ));
-    graph.stages.push(writer);
-
-    Ok(Arc::new(ShuffleReadExec::new(
-        stage,
-        plan.schema(),
-        partitioning,
-    )))
+    todo!()
 }

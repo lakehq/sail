@@ -4,7 +4,7 @@ use sail_server::actor::ActorContext;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::WorkerId;
 use crate::rpc::ClientOptions;
-use crate::worker::{WorkerActor, WorkerClient, WorkerEvent, WorkerLocation, WorkerOptions};
+use crate::worker::{WorkerActor, WorkerClientSet, WorkerEvent, WorkerLocation, WorkerOptions};
 
 #[readonly::make]
 pub struct PeerTrackerOptions {
@@ -51,19 +51,19 @@ impl PeerTracker {
         ctx.send(WorkerEvent::ReportKnownPeers { peer_worker_ids });
     }
 
-    pub fn get_client(&mut self, worker_id: WorkerId) -> ExecutionResult<WorkerClient> {
+    pub fn get_client_set(&mut self, worker_id: WorkerId) -> ExecutionResult<WorkerClientSet> {
         let Some(peer) = self.peers.get_mut(&worker_id) else {
             return Err(ExecutionError::InvalidArgument(format!(
                 "unknown peer worker: {worker_id}"
             )));
         };
-        let client = peer.client.get_or_insert_with(|| {
+        let client = peer.client_set.get_or_insert_with(|| {
             let options = ClientOptions {
                 enable_tls: self.options.enable_tls,
                 host: peer.host.clone(),
                 port: peer.port,
             };
-            WorkerClient::new(options)
+            WorkerClientSet::new(options)
         });
         Ok(client.clone())
     }
@@ -72,7 +72,7 @@ impl PeerTracker {
 struct Peer {
     host: String,
     port: u16,
-    client: Option<WorkerClient>,
+    client_set: Option<WorkerClientSet>,
 }
 
 impl Peer {
@@ -80,7 +80,7 @@ impl Peer {
         Self {
             host,
             port,
-            client: None,
+            client_set: None,
         }
     }
 }
