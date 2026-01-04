@@ -23,6 +23,7 @@ pub struct DriverOptions {
     pub worker_launch_timeout: Duration,
     pub worker_stream_buffer: usize,
     pub task_launch_timeout: Duration,
+    pub task_stream_creation_timeout: Duration,
     pub job_output_buffer: usize,
     pub rpc_retry_strategy: RetryStrategy,
     pub runtime: RuntimeHandle,
@@ -55,6 +56,9 @@ impl DriverOptions {
             rpc_retry_strategy: (&config.cluster.rpc_retry_strategy).into(),
             worker_stream_buffer: config.cluster.worker_stream_buffer,
             task_launch_timeout: Duration::from_secs(config.cluster.task_launch_timeout_secs),
+            task_stream_creation_timeout: Duration::from_secs(
+                config.cluster.task_stream_creation_timeout_secs,
+            ),
             job_output_buffer: config.cluster.job_output_buffer,
             runtime,
             worker_manager,

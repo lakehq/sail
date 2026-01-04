@@ -17,7 +17,7 @@ pub struct JobScheduler {
     options: JobSchedulerOptions,
     jobs: HashMap<JobId, JobDescriptor>,
     job_id_generator: IdGenerator<JobId>,
-    physical_plan_codec: Box<dyn PhysicalExtensionCodec>,
+    codec: Box<dyn PhysicalExtensionCodec>,
 }
 
 impl JobScheduler {
@@ -26,7 +26,7 @@ impl JobScheduler {
             options,
             jobs: HashMap::new(),
             job_id_generator: IdGenerator::new(),
-            physical_plan_codec: Box::new(RemoteExecutionCodec),
+            codec: Box::new(RemoteExecutionCodec),
         }
     }
 }

@@ -12,6 +12,7 @@ use crate::id::TaskStreamKey;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream_service::{TaskStreamFetcher, TaskStreamFlightServer};
 use crate::worker::actor::WorkerActor;
+use crate::worker::event::WorkerStreamOwner;
 use crate::worker::gen::worker_service_server::WorkerServiceServer;
 use crate::worker::server::WorkerServer;
 use crate::worker::WorkerEvent;
@@ -27,7 +28,8 @@ impl TaskStreamFetcher for WorkerTaskStreamFetcher {
         key: TaskStreamKey,
         sender: Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ExecutionResult<()> {
-        let event = WorkerEvent::FetchThisWorkerStream {
+        let event = WorkerEvent::FetchWorkerStream {
+            owner: WorkerStreamOwner::This,
             key,
             result: sender,
         };

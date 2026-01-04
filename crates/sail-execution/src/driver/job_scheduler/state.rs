@@ -1,3 +1,6 @@
+use std::sync::Arc;
+
+use datafusion::execution::TaskContext;
 use datafusion::physical_plan::ExecutionPlanProperties;
 
 use crate::driver::output::JobOutputHandle;
@@ -8,10 +11,15 @@ pub struct JobDescriptor {
     pub graph: JobGraph,
     pub stages: Vec<StageDescriptor>,
     pub output: JobOutputHandle,
+    pub context: Arc<TaskContext>,
 }
 
 impl JobDescriptor {
-    pub fn try_new(graph: JobGraph, output: JobOutputHandle) -> ExecutionResult<Self> {
+    pub fn try_new(
+        graph: JobGraph,
+        output: JobOutputHandle,
+        context: Arc<TaskContext>,
+    ) -> ExecutionResult<Self> {
         let mut stages = vec![];
         for (_, stage) in graph.stages().iter().enumerate() {
             let mut descriptor = StageDescriptor { tasks: vec![] };
@@ -24,6 +32,7 @@ impl JobDescriptor {
             graph,
             stages,
             output,
+            context,
         })
     }
 }

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::execution::SendableRecordBatchStream;
+use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_proto::physical_plan::AsExecutionPlan;
@@ -26,6 +26,7 @@ impl JobScheduler {
     pub fn accept_job(
         &mut self,
         plan: Arc<dyn ExecutionPlan>,
+        context: Arc<TaskContext>,
     ) -> ExecutionResult<(JobId, SendableRecordBatchStream)> {
         let job_id = self.next_job_id()?;
         debug!(
@@ -36,7 +37,7 @@ impl JobScheduler {
         let graph = JobGraph::try_new(plan)?;
         debug!("job {job_id} job graph \n{graph}");
         let (handle, stream) = JobOutputHandle::create(schema);
-        let job = JobDescriptor::try_new(graph, handle)?;
+        let job = JobDescriptor::try_new(graph, handle, context)?;
         self.jobs.insert(job_id, job);
         Ok((job_id, Box::pin(stream)))
     }
@@ -100,13 +101,12 @@ impl JobScheduler {
         &self,
         key: &TaskKey,
         assignments: &dyn TaskAssignmentGetter,
-    ) -> ExecutionResult<TaskDefinition> {
+    ) -> ExecutionResult<(TaskDefinition, Arc<TaskContext>)> {
         todo!()
     }
 
     fn encode_plan(&self, plan: Arc<dyn ExecutionPlan>) -> ExecutionResult<Vec<u8>> {
-        let plan =
-            PhysicalPlanNode::try_from_physical_plan(plan, self.physical_plan_codec.as_ref())?;
+        let plan = PhysicalPlanNode::try_from_physical_plan(plan, self.codec.as_ref())?;
         let mut buffer = BytesMut::new();
         plan.encode(&mut buffer)?;
         Ok(buffer.freeze().into())

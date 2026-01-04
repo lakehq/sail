@@ -4,29 +4,8 @@ use sail_server::actor::ActorContext;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::WorkerId;
 use crate::rpc::ClientOptions;
-use crate::worker::{WorkerActor, WorkerClientSet, WorkerEvent, WorkerLocation, WorkerOptions};
-
-#[readonly::make]
-pub struct PeerTrackerOptions {
-    pub enable_tls: bool,
-}
-
-impl From<&WorkerOptions> for PeerTrackerOptions {
-    fn from(options: &WorkerOptions) -> Self {
-        Self {
-            enable_tls: options.enable_tls,
-        }
-    }
-}
-
-/// A utility to track peer workers and manage gRPC clients to them.
-/// This does not remove peers when they are gone.
-/// It is the responsibility of the driver to ensure that the worker
-/// only contacts active peers when running tasks.
-pub struct PeerTracker {
-    options: PeerTrackerOptions,
-    peers: HashMap<WorkerId, Peer>,
-}
+use crate::worker::peer_tracker::{Peer, PeerTracker, PeerTrackerOptions};
+use crate::worker::{WorkerActor, WorkerClientSet, WorkerEvent, WorkerLocation};
 
 impl PeerTracker {
     pub fn new(options: PeerTrackerOptions) -> Self {
@@ -52,6 +31,13 @@ impl PeerTracker {
     }
 
     pub fn get_client_set(&mut self, worker_id: WorkerId) -> ExecutionResult<WorkerClientSet> {
+        if worker_id == self.options.worker_id {
+            // Trying to connect to the worker itself via gRPC indicates a bug,
+            // so we fail fast here.
+            return Err(ExecutionError::InvalidArgument(
+                "getting client for the worker itself is not allowed".to_string(),
+            ));
+        }
         let Some(peer) = self.peers.get_mut(&worker_id) else {
             return Err(ExecutionError::InvalidArgument(format!(
                 "unknown peer worker: {worker_id}"
@@ -66,21 +52,5 @@ impl PeerTracker {
             WorkerClientSet::new(options)
         });
         Ok(client.clone())
-    }
-}
-
-struct Peer {
-    host: String,
-    port: u16,
-    client_set: Option<WorkerClientSet>,
-}
-
-impl Peer {
-    fn new(host: String, port: u16) -> Self {
-        Self {
-            host,
-            port,
-            client_set: None,
-        }
     }
 }

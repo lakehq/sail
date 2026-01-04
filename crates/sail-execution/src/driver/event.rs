@@ -4,7 +4,7 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::execution::SendableRecordBatchStream;
+use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_telemetry::common::{SpanAssociation, SpanAttribute};
@@ -15,6 +15,7 @@ use crate::driver::gen;
 use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
 use crate::stream::reader::TaskStreamSource;
+use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
 
 pub enum DriverEvent {
     ServerReady {
@@ -49,9 +50,10 @@ pub enum DriverEvent {
     },
     ExecuteJob {
         plan: Arc<dyn ExecutionPlan>,
+        context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     },
-    CleanUpJob {
+    LostJobOutput {
         job_id: JobId,
     },
     UpdateTask {
@@ -65,6 +67,21 @@ pub enum DriverEvent {
     },
     ProbePendingTask {
         key: TaskKey,
+    },
+    ProbePendingLocalStream {
+        key: TaskStreamKey,
+    },
+    CreateLocalStream {
+        key: TaskStreamKey,
+        storage: LocalStreamStorage,
+        schema: SchemaRef,
+        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
+    },
+    CreateRemoteStream {
+        uri: String,
+        key: TaskStreamKey,
+        schema: SchemaRef,
+        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     },
     FetchDriverStream {
         key: TaskStreamKey,
@@ -137,9 +154,12 @@ impl SpanAssociation for DriverEvent {
             DriverEvent::ProbeIdleWorker { .. } => "ProbeIdleWorker",
             DriverEvent::ProbeLostWorker { .. } => "ProbeLostWorker",
             DriverEvent::ExecuteJob { .. } => "ExecuteJob",
-            DriverEvent::CleanUpJob { .. } => "CleanUpJob",
+            DriverEvent::LostJobOutput { .. } => "LostJobOutput",
             DriverEvent::UpdateTask { .. } => "UpdateTask",
             DriverEvent::ProbePendingTask { .. } => "ProbePendingTask",
+            DriverEvent::ProbePendingLocalStream { .. } => "ProbePendingLocalStream",
+            DriverEvent::CreateLocalStream { .. } => "CreateLocalStream",
+            DriverEvent::CreateRemoteStream { .. } => "CreateRemoteStream",
             DriverEvent::FetchDriverStream { .. } => "FetchDriverStream",
             DriverEvent::FetchWorkerStream { .. } => "FetchWorkerStream",
             DriverEvent::FetchRemoteStream { .. } => "FetchRemoteStream",
@@ -180,8 +200,12 @@ impl SpanAssociation for DriverEvent {
             } => {
                 p.push((SpanAttribute::CLUSTER_WORKER_ID, worker_id.to_string()));
             }
-            DriverEvent::ExecuteJob { plan: _, result: _ } => {}
-            DriverEvent::CleanUpJob { job_id } => {
+            DriverEvent::ExecuteJob {
+                plan: _,
+                context: _,
+                result: _,
+            } => {}
+            DriverEvent::LostJobOutput { job_id } => {
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
             }
             DriverEvent::UpdateTask {
@@ -225,6 +249,65 @@ impl SpanAssociation for DriverEvent {
                 p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
                 p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
+            }
+            DriverEvent::ProbePendingLocalStream {
+                key:
+                    TaskStreamKey {
+                        job_id,
+                        stage,
+                        partition,
+                        attempt,
+                        channel,
+                    },
+            } => {
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
+                p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
+                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
+                p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
+            }
+            DriverEvent::CreateLocalStream {
+                key:
+                    TaskStreamKey {
+                        job_id,
+                        stage,
+                        partition,
+                        attempt,
+                        channel,
+                    },
+                storage,
+                schema: _,
+                result: _,
+            } => {
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
+                p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
+                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
+                p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
+                p.push((
+                    SpanAttribute::EXECUTION_STREAM_LOCAL_STORAGE,
+                    storage.to_string(),
+                ));
+            }
+            DriverEvent::CreateRemoteStream {
+                uri,
+                key:
+                    TaskStreamKey {
+                        job_id,
+                        stage,
+                        partition,
+                        attempt,
+                        channel,
+                    },
+                schema: _,
+                result: _,
+            } => {
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
+                p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
+                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
+                p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
+                p.push((SpanAttribute::EXECUTION_STREAM_REMOTE_URI, uri.clone()));
             }
             DriverEvent::FetchDriverStream {
                 key:

@@ -3,7 +3,7 @@ use std::mem;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::execution::SendableRecordBatchStream;
+use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::ExecutionPlan;
 use log::{error, info, warn};
 use sail_common_datafusion::error::CommonErrorCause;
@@ -19,6 +19,8 @@ use crate::driver::{DriverEvent, TaskStatus};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey, WorkerId};
 use crate::stream::reader::TaskStreamSource;
+use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
+use crate::worker::task::TaskDefinition;
 
 impl DriverActor {
     pub(super) fn handle_server_ready(
@@ -156,9 +158,10 @@ impl DriverActor {
         &mut self,
         ctx: &mut ActorContext<Self>,
         plan: Arc<dyn ExecutionPlan>,
+        context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     ) -> ActorAction {
-        let out = self.job_scheduler.accept_job(plan);
+        let out = self.job_scheduler.accept_job(plan, context);
         if let Ok((job_id, _)) = &out {
             self.schedule_job(ctx, *job_id);
         }
@@ -166,12 +169,12 @@ impl DriverActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_clean_up_job(
+    pub(super) fn handle_lost_job_output(
         &mut self,
         ctx: &mut ActorContext<Self>,
         job_id: JobId,
     ) -> ActorAction {
-        todo!();
+        self.cancel_job(ctx, job_id);
         ActorAction::Continue
     }
 
@@ -249,13 +252,49 @@ impl DriverActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_fetch_driver_stream(
+    pub(super) fn handle_probe_pending_local_stream(
         &mut self,
         _ctx: &mut ActorContext<Self>,
         key: TaskStreamKey,
+    ) -> ActorAction {
+        self.stream_manager.fail_local_stream_if_pending(&key);
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_create_local_stream(
+        &mut self,
+        _ctx: &mut ActorContext<Self>,
+        key: TaskStreamKey,
+        storage: LocalStreamStorage,
+        schema: SchemaRef,
+        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
+    ) -> ActorAction {
+        let _ = result.send(
+            self.stream_manager
+                .create_local_stream(key, storage, schema),
+        );
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_create_remote_stream(
+        &mut self,
+        _ctx: &mut ActorContext<Self>,
+        uri: String,
+        key: TaskStreamKey,
+        schema: SchemaRef,
+        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
+    ) -> ActorAction {
+        let _ = result.send(self.stream_manager.create_remote_stream(uri, key, schema));
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_fetch_driver_stream(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        key: TaskStreamKey,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
-        let _ = result.send(self.stream_manager.fetch_local_stream(&key));
+        let _ = result.send(self.stream_manager.fetch_local_stream(ctx, &key));
         ActorAction::Continue
     }
 
@@ -275,13 +314,16 @@ impl DriverActor {
 
     pub(super) fn handle_fetch_remote_stream(
         &mut self,
-        _ctx: &mut ActorContext<Self>,
+        ctx: &mut ActorContext<Self>,
         uri: String,
         key: TaskStreamKey,
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
-        let _ = result.send(self.stream_manager.fetch_remote_stream(uri, &key, schema));
+        let _ = result.send(
+            self.stream_manager
+                .fetch_remote_stream(ctx, uri, &key, schema),
+        );
         ActorAction::Continue
     }
 
@@ -292,36 +334,39 @@ impl DriverActor {
         todo!()
     }
 
+    fn cancel_job(&mut self, ctx: &mut ActorContext<Self>, job_id: JobId) {
+        todo!()
+    }
+
     fn run_tasks(&mut self, ctx: &mut ActorContext<Self>) {
         let assignments = self.task_assigner.assign_tasks();
         for assignment in assignments {
-            match assignment.assignment {
-                TaskAssignment::Driver => {
-                    todo!()
-                }
-                TaskAssignment::Worker { worker_id, slot: _ } => {
-                    for entry in assignment.set.entries {
-                        let definition = match self
-                            .job_scheduler
-                            .get_task_definition(&entry.key, &self.task_assigner)
-                        {
-                            Ok(x) => x,
-                            Err(e) => {
-                                // The task failure will be handled as a separate event
-                                // after processing the current assignments.
-                                ctx.send(DriverEvent::UpdateTask {
-                                    key: entry.key,
-                                    status: TaskStatus::Failed,
-                                    message: Some(e.to_string()),
-                                    cause: Some(CommonErrorCause::new::<PyErrExtractor>(&e)),
-                                    sequence: None,
-                                });
-                                continue;
-                            }
-                        };
-                        self.worker_pool
-                            .run_task(ctx, worker_id, entry.key, definition);
+            for entry in assignment.set.entries {
+                let (definition, context) = match self
+                    .job_scheduler
+                    .get_task_definition(&entry.key, &self.task_assigner)
+                {
+                    Ok(x) => x,
+                    Err(e) => {
+                        // The task failure will be handled as a separate event
+                        // after processing the current assignments.
+                        ctx.send(DriverEvent::UpdateTask {
+                            key: entry.key,
+                            status: TaskStatus::Failed,
+                            message: Some(e.to_string()),
+                            cause: Some(CommonErrorCause::new::<PyErrExtractor>(&e)),
+                            sequence: None,
+                        });
+                        continue;
                     }
+                };
+                match assignment.assignment {
+                    TaskAssignment::Driver => self
+                        .task_runner
+                        .run_task(ctx, entry.key, definition, context),
+                    TaskAssignment::Worker { worker_id, slot: _ } => self
+                        .worker_pool
+                        .run_task(ctx, worker_id, entry.key, definition),
                 }
             }
         }

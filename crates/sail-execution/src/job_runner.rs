@@ -75,13 +75,16 @@ impl ClusterJobRunner {
 impl JobRunner for ClusterJobRunner {
     async fn execute(
         &self,
-        // TODO: propagate session context from the driver to the worker
-        _ctx: &SessionContext,
+        ctx: &SessionContext,
         plan: Arc<dyn ExecutionPlan>,
     ) -> Result<SendableRecordBatchStream> {
         let (tx, rx) = oneshot::channel();
         self.driver
-            .send(DriverEvent::ExecuteJob { plan, result: tx })
+            .send(DriverEvent::ExecuteJob {
+                plan,
+                context: ctx.task_ctx(),
+                result: tx,
+            })
             .await
             .map_err(|e| internal_datafusion_err!("{e}"))?;
         rx.await

@@ -1,36 +1,24 @@
 use std::mem;
-use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
-use datafusion::datasource::source::DataSourceExec;
-use datafusion::execution::SendableRecordBatchStream;
-use datafusion::physical_plan::display::DisplayableExecutionPlan;
-use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
-use datafusion_proto::physical_plan::AsExecutionPlan;
-use datafusion_proto::protobuf::PhysicalPlanNode;
-use log::{debug, error, info, warn};
-use prost::Message;
+use datafusion::common::tree_node::{TransformedResult, TreeNode};
+use datafusion::datasource::physical_plan::ParquetSource;
+use datafusion::physical_plan::ExecutionPlanProperties;
+use log::{error, info, warn};
 use sail_common_datafusion::error::CommonErrorCause;
-use sail_common_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
-use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::{ActorAction, ActorContext};
-use sail_telemetry::telemetry::global_metric_registry;
-use sail_telemetry::{trace_execution_plan, TracingExecOptions};
+use sail_telemetry::TracingExecOptions;
 use tokio::sync::oneshot;
 
 use crate::driver::TaskStatus;
-use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey, WorkerId};
-use crate::plan::{ShuffleReadExec, ShuffleWriteExec};
+use crate::error::ExecutionResult;
+use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
+use crate::plan::ShuffleWriteExec;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
-use crate::worker::actor::stream_accessor::WorkerStreamAccessor;
-use crate::worker::actor::task_monitor::TaskMonitor;
 use crate::worker::actor::WorkerActor;
-use crate::worker::event::WorkerLocation;
-use crate::worker::task::{TaskDefinition, TaskInput, TaskOutput};
+use crate::worker::event::{WorkerLocation, WorkerStreamOwner};
+use crate::worker::task::TaskDefinition;
 use crate::worker::WorkerEvent;
 
 impl WorkerActor {
@@ -122,24 +110,8 @@ impl WorkerActor {
         peers: Vec<WorkerLocation>,
     ) -> ActorAction {
         self.peer_tracker.track(ctx, peers);
-        let stream = match self.execute_plan(ctx, &key, definition) {
-            Ok(x) => x,
-            Err(e) => {
-                let event = WorkerEvent::ReportTaskStatus {
-                    key,
-                    status: TaskStatus::Failed,
-                    message: Some(format!("failed to execute plan: {e}")),
-                    cause: Some(CommonErrorCause::new::<PyErrExtractor>(&e)),
-                };
-                ctx.send(event);
-                return ActorAction::Continue;
-            }
-        };
-        let handle = ctx.handle().clone();
-        let (tx, rx) = oneshot::channel();
-        self.task_signals.insert(key.clone(), tx);
-        let monitor = TaskMonitor::new(handle, key, stream, rx);
-        ctx.spawn(monitor.run());
+        self.task_runner
+            .run_task(ctx, key, definition, self.options.session.task_ctx());
         ActorAction::Continue
     }
 
@@ -148,9 +120,7 @@ impl WorkerActor {
         _ctx: &mut ActorContext<Self>,
         key: TaskKey,
     ) -> ActorAction {
-        if let Some(signal) = self.task_signals.remove(&key) {
-            let _ = signal.send(());
-        }
+        self.task_runner.stop_task(&key);
         ActorAction::Continue
     }
 
@@ -199,6 +169,15 @@ impl WorkerActor {
         ActorAction::Continue
     }
 
+    pub(super) fn handle_probe_pending_local_stream(
+        &mut self,
+        _ctx: &mut ActorContext<Self>,
+        key: TaskStreamKey,
+    ) -> ActorAction {
+        self.stream_manager.fail_local_stream_if_pending(&key);
+        ActorAction::Continue
+    }
+
     pub(super) fn handle_create_local_stream(
         &mut self,
         _ctx: &mut ActorContext<Self>,
@@ -241,47 +220,52 @@ impl WorkerActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_fetch_this_worker_stream(
-        &mut self,
-        _ctx: &mut ActorContext<Self>,
-        key: TaskStreamKey,
-        result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
-    ) -> ActorAction {
-        let _ = result.send(self.stream_manager.fetch_local_stream(&key));
-        ActorAction::Continue
-    }
-
-    pub(super) fn handle_fetch_other_worker_stream(
+    pub(super) fn handle_fetch_worker_stream(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        worker_id: WorkerId,
+        owner: WorkerStreamOwner,
         key: TaskStreamKey,
-        schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
-        let client = match self.peer_tracker.get_client_set(worker_id) {
-            Ok(x) => x.flight,
-            Err(e) => {
-                let _ = result.send(Err(e));
-                return ActorAction::Continue;
+        match owner {
+            WorkerStreamOwner::This => {
+                let _ = result.send(self.stream_manager.fetch_local_stream(ctx, &key));
             }
-        };
-        ctx.spawn(async move {
-            let out = client.fetch_task_stream(key, schema).await;
-            let _ = result.send(out);
-        });
+            WorkerStreamOwner::Worker {
+                worker_id,
+                schema: _,
+            } if worker_id == self.options.worker_id => {
+                let _ = result.send(self.stream_manager.fetch_local_stream(ctx, &key));
+            }
+            WorkerStreamOwner::Worker { worker_id, schema } => {
+                let client = match self.peer_tracker.get_client_set(worker_id) {
+                    Ok(x) => x.flight,
+                    Err(e) => {
+                        let _ = result.send(Err(e));
+                        return ActorAction::Continue;
+                    }
+                };
+                ctx.spawn(async move {
+                    let out = client.fetch_task_stream(key, schema).await;
+                    let _ = result.send(out);
+                });
+            }
+        }
         ActorAction::Continue
     }
 
     pub(super) fn handle_fetch_remote_stream(
         &mut self,
-        _ctx: &mut ActorContext<Self>,
+        ctx: &mut ActorContext<Self>,
         uri: String,
         key: TaskStreamKey,
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
-        let _ = result.send(self.stream_manager.fetch_remote_stream(uri, &key, schema));
+        let _ = result.send(
+            self.stream_manager
+                .fetch_remote_stream(ctx, uri, &key, schema),
+        );
         ActorAction::Continue
     }
 
@@ -293,104 +277,5 @@ impl WorkerActor {
     ) -> ActorAction {
         self.stream_manager.remove_local_stream(job_id, stage);
         ActorAction::Continue
-    }
-
-    fn execute_plan(
-        &mut self,
-        ctx: &mut ActorContext<Self>,
-        key: &TaskKey,
-        definition: TaskDefinition,
-    ) -> ExecutionResult<SendableRecordBatchStream> {
-        let task_ctx = self.options.session.task_ctx();
-        let plan = PhysicalPlanNode::decode(definition.plan.as_ref())?;
-        let plan = plan.try_into_physical_plan(&task_ctx, self.physical_plan_codec.as_ref())?;
-        let plan = self.rewrite_parquet_adapters(plan)?;
-        let plan = self.rewrite_shuffle(ctx, key, &definition.inputs, &definition.output, plan)?;
-        debug!(
-            "{} execution plan\n{}",
-            TaskKeyDisplay(key),
-            DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
-        );
-        let options = TracingExecOptions {
-            metric_registry: global_metric_registry(),
-            job_id: Some(key.job_id.into()),
-            stage: Some(key.stage.into()),
-            attempt: Some(key.attempt),
-            operator_id: None,
-        };
-        let plan = trace_execution_plan(plan, options)?;
-        let stream = plan.execute(key.partition, task_ctx)?;
-        Ok(stream)
-    }
-
-    fn rewrite_parquet_adapters(
-        &mut self,
-        plan: Arc<dyn ExecutionPlan>,
-    ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
-        let result = plan.transform(|node| {
-            if let Some(ds) = node.as_any().downcast_ref::<DataSourceExec>() {
-                if let Some((base_config, _parquet)) = ds.downcast_to_file_source::<ParquetSource>()
-                {
-                    let builder = FileScanConfigBuilder::from(base_config.clone());
-                    let new_source = base_config
-                        .file_source()
-                        .with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory))?;
-                    let new_exec =
-                        DataSourceExec::from_data_source(builder.with_source(new_source).build());
-                    return Ok(Transformed::yes(new_exec as Arc<dyn ExecutionPlan>));
-                }
-            }
-            Ok(Transformed::no(node))
-        });
-        Ok(result.data()?)
-    }
-
-    fn rewrite_shuffle(
-        &mut self,
-        ctx: &mut ActorContext<Self>,
-        key: &TaskKey,
-        inputs: &[TaskInput],
-        output: &TaskOutput,
-        plan: Arc<dyn ExecutionPlan>,
-    ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
-        let worker_id = self.options.worker_id;
-        let handle = ctx.handle();
-        let result = plan.transform(move |node| {
-            if let Some(placeholder) = node.as_any().downcast_ref::<ShuffleReadExec>() {
-                let partitioning = placeholder.properties().output_partitioning().clone();
-                let mut locations = vec![vec![]; partitioning.partition_count()];
-                // FIXME
-                let accessor = WorkerStreamAccessor::new(worker_id, handle.clone());
-                let shuffle = ShuffleReadExec::new(
-                    locations,
-                    Arc::new(accessor),
-                    placeholder.schema(),
-                    partitioning,
-                );
-                Ok(Transformed::yes(Arc::new(shuffle)))
-            } else {
-                Ok(Transformed::no(node))
-            }
-        });
-        let plan = result.data()?;
-        let schema = plan.schema();
-        let accessor = WorkerStreamAccessor::new(worker_id, handle.clone());
-        let mut locations = vec![vec![]; plan.output_partitioning().partition_count()];
-        match locations.get_mut(key.partition) {
-            Some(x) => x.extend(output.locations(key)),
-            None => {
-                return Err(ExecutionError::InternalError(format!(
-                    "invalid partition: {}",
-                    TaskKeyDisplay(key)
-                )));
-            }
-        };
-        let partitioning = output.partitioning(
-            &self.options.session.task_ctx(),
-            &schema,
-            self.physical_plan_codec.as_ref(),
-        )?;
-        let shuffle = ShuffleWriteExec::new(plan, locations, Arc::new(accessor), partitioning);
-        Ok(Arc::new(shuffle))
     }
 }

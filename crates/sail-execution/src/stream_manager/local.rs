@@ -21,22 +21,26 @@ pub trait LocalStream: Send {
 /// Since [`Arc`] is used inside the record batch, it is relatively cheap
 /// to clone the data in multiple replicas.
 pub(crate) struct MemoryStream {
-    replicas: usize,
     sender: Option<MemoryStreamReplicaSender>,
     receivers: Vec<mpsc::Receiver<TaskStreamResult<RecordBatch>>>,
 }
 
 impl MemoryStream {
-    pub fn new(buffer: usize, replicas: usize) -> Self {
-        let mut senders = Vec::with_capacity(replicas);
-        let mut receivers = Vec::with_capacity(replicas);
-        for _ in 0..replicas {
+    pub fn new(
+        buffer: usize,
+        replicas: usize,
+        mut senders: Vec<mpsc::Sender<TaskStreamResult<RecordBatch>>>,
+    ) -> Self {
+        let replicas = replicas.max(senders.len());
+        let diff = replicas - senders.len();
+        senders.reserve(diff);
+        let mut receivers = Vec::with_capacity(diff);
+        for _ in 0..diff {
             let (tx, rx) = mpsc::channel(buffer);
             senders.push(tx);
             receivers.push(rx);
         }
         Self {
-            replicas,
             sender: Some(MemoryStreamReplicaSender { senders }),
             receivers,
         }
@@ -53,10 +57,7 @@ impl LocalStream for MemoryStream {
 
     fn subscribe(&mut self) -> ExecutionResult<TaskStreamSource> {
         let rx = self.receivers.pop().ok_or_else(|| {
-            ExecutionError::InternalError(format!(
-                "memory stream has exhausted all {} replica(s)",
-                self.replicas
-            ))
+            ExecutionError::InternalError("memory stream has exhausted all replica(s)".to_string())
         })?;
         Ok(Box::pin(ReceiverStream::new(rx)))
     }

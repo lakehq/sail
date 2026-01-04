@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::mem;
 
 use fastrace::future::FutureExt;
@@ -6,13 +5,13 @@ use fastrace::Span;
 use log::info;
 use sail_server::actor::{Actor, ActorAction, ActorContext};
 
-use crate::codec::RemoteExecutionCodec;
 use crate::driver::DriverClientSet;
 use crate::rpc::{ClientOptions, ServerMonitor};
 use crate::stream_manager::{StreamManager, StreamManagerOptions};
-use crate::worker::actor::peer_tracker::{PeerTracker, PeerTrackerOptions};
+use crate::task_runner::TaskRunner;
 use crate::worker::event::WorkerEvent;
 use crate::worker::options::WorkerOptions;
+use crate::worker::peer_tracker::{PeerTracker, PeerTrackerOptions};
 use crate::worker::WorkerActor;
 
 #[tonic::async_trait]
@@ -37,9 +36,8 @@ impl Actor for WorkerActor {
             server: ServerMonitor::new(),
             driver_client_set,
             peer_tracker,
-            task_signals: HashMap::new(),
+            task_runner: TaskRunner::new(),
             stream_manager,
-            physical_plan_codec: Box::new(RemoteExecutionCodec),
             sequence: 42,
         }
     }
@@ -77,6 +75,9 @@ impl Actor for WorkerActor {
                 message,
                 cause,
             } => self.handle_report_task_status(ctx, key, status, message, cause),
+            WorkerEvent::ProbePendingLocalStream { key } => {
+                self.handle_probe_pending_local_stream(ctx, key)
+            }
             WorkerEvent::CreateLocalStream {
                 key,
                 storage,
@@ -94,15 +95,9 @@ impl Actor for WorkerActor {
                 schema,
                 result,
             } => self.handle_fetch_driver_stream(ctx, key, schema, result),
-            WorkerEvent::FetchThisWorkerStream { key, result } => {
-                self.handle_fetch_this_worker_stream(ctx, key, result)
+            WorkerEvent::FetchWorkerStream { owner, key, result } => {
+                self.handle_fetch_worker_stream(ctx, owner, key, result)
             }
-            WorkerEvent::FetchOtherWorkerStream {
-                worker_id,
-                key,
-                schema,
-                result,
-            } => self.handle_fetch_other_worker_stream(ctx, worker_id, key, schema, result),
             WorkerEvent::FetchRemoteStream {
                 uri,
                 key,

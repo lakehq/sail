@@ -15,6 +15,7 @@ pub struct WorkerPoolOptions {
     pub worker_heartbeat_timeout: Duration,
     pub worker_stream_buffer: usize,
     pub worker_launch_timeout: Duration,
+    pub task_stream_creation_timeout: Duration,
     pub rpc_retry_strategy: RetryStrategy,
 }
 
@@ -29,6 +30,7 @@ impl From<&DriverOptions> for WorkerPoolOptions {
             worker_heartbeat_timeout: options.worker_heartbeat_timeout,
             worker_stream_buffer: options.worker_stream_buffer,
             worker_launch_timeout: options.worker_launch_timeout,
+            task_stream_creation_timeout: options.task_stream_creation_timeout,
             rpc_retry_strategy: options.rpc_retry_strategy.clone(),
         }
     }

@@ -4,6 +4,7 @@ mod debug;
 pub(crate) mod entrypoint;
 mod event;
 mod options;
+mod peer_tracker;
 mod server;
 pub mod task;
 
@@ -16,7 +17,7 @@ mod gen {
 }
 
 pub(crate) use actor::WorkerActor;
-pub(crate) use client::{WorkerClient, WorkerClientSet};
-pub(crate) use event::{WorkerEvent, WorkerLocation};
+pub(crate) use client::WorkerClientSet;
+pub(crate) use event::{WorkerEvent, WorkerLocation, WorkerStreamOwner};
 pub(crate) use gen::worker_service_client::WorkerServiceClient;
 pub(crate) use options::WorkerOptions;

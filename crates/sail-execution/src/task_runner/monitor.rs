@@ -2,23 +2,23 @@ use datafusion::execution::SendableRecordBatchStream;
 use futures::StreamExt;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
-use sail_server::actor::ActorHandle;
+use sail_server::actor::{Actor, ActorHandle};
 use tokio::sync::oneshot;
 
 use crate::driver::TaskStatus;
 use crate::id::{TaskKey, TaskKeyDisplay};
-use crate::worker::{WorkerActor, WorkerEvent};
+use crate::task_runner::TaskRunnerMessage;
 
-pub(super) struct TaskMonitor {
-    handle: ActorHandle<WorkerActor>,
+pub struct TaskMonitor<T: Actor> {
+    handle: ActorHandle<T>,
     key: TaskKey,
     stream: SendableRecordBatchStream,
     signal: oneshot::Receiver<()>,
 }
 
-impl TaskMonitor {
+impl<T: Actor> TaskMonitor<T> {
     pub fn new(
-        handle: ActorHandle<WorkerActor>,
+        handle: ActorHandle<T>,
         key: TaskKey,
         stream: SendableRecordBatchStream,
         signal: oneshot::Receiver<()>,
@@ -30,7 +30,12 @@ impl TaskMonitor {
             signal,
         }
     }
+}
 
+impl<T: Actor> TaskMonitor<T>
+where
+    T::Message: TaskRunnerMessage,
+{
     pub async fn run(self) {
         let Self {
             handle,
@@ -47,34 +52,29 @@ impl TaskMonitor {
         let _ = handle.send(event).await;
     }
 
-    fn running(key: TaskKey) -> WorkerEvent {
-        WorkerEvent::ReportTaskStatus {
-            key,
-            status: TaskStatus::Running,
-            message: None,
-            cause: None,
-        }
+    fn running(key: TaskKey) -> T::Message {
+        T::Message::report_task_status(key, TaskStatus::Running, None, None)
     }
 
-    async fn cancel(key: TaskKey, signal: oneshot::Receiver<()>) -> WorkerEvent {
+    async fn cancel(key: TaskKey, signal: oneshot::Receiver<()>) -> T::Message {
         let _ = signal.await;
-        WorkerEvent::ReportTaskStatus {
-            key: key.clone(),
-            status: TaskStatus::Canceled,
-            message: Some(format!("{} canceled", TaskKeyDisplay(&key))),
-            cause: None,
-        }
+        T::Message::report_task_status(
+            key.clone(),
+            TaskStatus::Canceled,
+            Some(format!("{} canceled", TaskKeyDisplay(&key))),
+            None,
+        )
     }
 
-    async fn execute(key: TaskKey, mut stream: SendableRecordBatchStream) -> WorkerEvent {
+    async fn execute(key: TaskKey, mut stream: SendableRecordBatchStream) -> T::Message {
         let event = loop {
             let Some(batch) = stream.next().await else {
-                break WorkerEvent::ReportTaskStatus {
-                    key: key.clone(),
-                    status: TaskStatus::Succeeded,
-                    message: None,
-                    cause: None,
-                };
+                break T::Message::report_task_status(
+                    key.clone(),
+                    TaskStatus::Succeeded,
+                    None,
+                    None,
+                );
             };
             let error = match &batch {
                 Ok(_) => None,
@@ -84,12 +84,12 @@ impl TaskMonitor {
                 )),
             };
             if let Some((message, cause)) = error {
-                break WorkerEvent::ReportTaskStatus {
-                    key: key.clone(),
-                    status: TaskStatus::Failed,
-                    message: Some(message),
-                    cause: Some(cause),
-                };
+                break T::Message::report_task_status(
+                    key.clone(),
+                    TaskStatus::Failed,
+                    Some(message),
+                    Some(cause),
+                );
             }
         };
         event
