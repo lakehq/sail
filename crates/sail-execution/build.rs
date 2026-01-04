@@ -73,14 +73,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=build.rs");
     ProtoBuilder::new("plan", &["physical.proto"]).build()?;
     ProtoBuilder::new("stream", &["common.proto"]).build()?;
+    ProtoBuilder::new("task", &["common.proto"]).build()?;
     ProtoBuilder::new("driver", &["service.proto"])
         .with_service()
         .build()?;
     ProtoBuilder::new("worker", &["service.proto"])
-        .skip_debug(&[
-            "sail.worker.TaskDefinition",
-            "sail.worker.TaskOutputHashDistribution",
-        ])
+        .skip_debug(&["sail.worker.RunTaskRequest"])
         .with_service()
         .build()?;
     Ok(())

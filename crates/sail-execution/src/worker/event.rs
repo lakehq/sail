@@ -10,8 +10,8 @@ use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
+use crate::task::definition::TaskDefinition;
 use crate::worker::gen;
-use crate::worker::task::TaskDefinition;
 
 pub enum WorkerEvent {
     ServerReady {

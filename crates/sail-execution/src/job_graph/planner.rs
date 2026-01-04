@@ -21,7 +21,10 @@ use crate::plan::{ShuffleConsumption, ShuffleReadExec, ShuffleWriteExec};
 impl JobGraph {
     pub fn try_new(plan: Arc<dyn ExecutionPlan>) -> ExecutionResult<Self> {
         let plan = ensure_single_partition_for_fetch(plan)?;
-        let mut graph = Self { stages: vec![] };
+        let mut graph = Self {
+            stages: vec![],
+            schema: plan.schema(),
+        };
         let last = build_job_graph(plan, PartitionUsage::Once, &mut graph)?;
         graph.stages.push(last);
         Ok(graph)

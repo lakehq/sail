@@ -12,7 +12,7 @@ use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
 use crate::stream::reader::TaskReadLocation;
 use crate::stream::writer::{LocalStreamStorage, TaskWriteLocation};
-use crate::worker::gen;
+use crate::task::gen;
 
 pub struct TaskDefinition {
     pub plan: Arc<[u8]>,
@@ -493,7 +493,7 @@ impl TaskInput {
 impl TaskOutput {
     pub fn channels(&self) -> usize {
         match self.distribution {
-            TaskOutputDistribution::Broadcast { replicas } => 1,
+            TaskOutputDistribution::Broadcast { .. } => 1,
             TaskOutputDistribution::Hash { channels, .. } => channels,
             TaskOutputDistribution::RoundRobin { channels, .. } => channels,
         }

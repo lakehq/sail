@@ -7,8 +7,8 @@ use prost::Message;
 use crate::error::ExecutionResult;
 use crate::id::TaskStreamKey;
 use crate::rpc::{ClientHandle, ClientOptions, ClientService};
+use crate::stream::gen::TaskStreamTicket;
 use crate::stream::reader::TaskStreamSource;
-use crate::stream::TaskStreamTicket;
 
 #[derive(Clone)]
 pub struct TaskStreamFlightClient {

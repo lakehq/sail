@@ -5,18 +5,21 @@ use std::task::{Context, Poll};
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result};
-use datafusion::execution::RecordBatchStream;
+use datafusion::execution::SendableRecordBatchStream;
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use futures::stream::SelectAll;
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use sail_common_datafusion::error::CommonErrorCause;
+use sail_server::actor::ActorContext;
 use tokio::sync::mpsc;
+use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 
-use crate::id::{TaskStreamKey, TaskStreamKeyDisplay};
+use crate::driver::{DriverActor, DriverEvent};
+use crate::id::{JobId, TaskStreamKey, TaskStreamKeyDisplay};
 use crate::stream::error::{TaskStreamError, TaskStreamResult};
 use crate::stream::reader::TaskStreamSource;
-const JOB_OUTPUT_ACTION_CHANNEL_SIZE: usize = 32;
 
-pub enum JobOutputAction {
+pub enum JobOutputCommand {
     Fail {
         cause: CommonErrorCause,
     },
@@ -26,18 +29,55 @@ pub enum JobOutputAction {
     },
 }
 
-pub struct JobOutputHandle {
-    sender: mpsc::Sender<JobOutputAction>,
+impl JobOutputCommand {
+    pub const CHANNEL_SIZE: usize = 32;
 }
 
-pub struct JobOutputStream {
-    schema: SchemaRef,
+struct JobOutputStream {
     state: JobOutputState,
+}
+
+impl JobOutputStream {
+    fn new(receiver: mpsc::Receiver<JobOutputCommand>) -> Self {
+        Self {
+            state: JobOutputState::Active {
+                receiver,
+                inner: Box::pin(SelectAll::new()),
+            },
+        }
+    }
+}
+
+pub fn build_job_output(
+    ctx: &mut ActorContext<DriverActor>,
+    job_id: JobId,
+    schema: SchemaRef,
+) -> (mpsc::Sender<JobOutputCommand>, SendableRecordBatchStream) {
+    let (sender, receiver) = mpsc::channel(JobOutputCommand::CHANNEL_SIZE);
+    let (tx, rx) = mpsc::channel(1);
+    let stream = JobOutputStream::new(receiver);
+    let handle = ctx.handle().clone();
+    ctx.spawn(async move {
+        let mut stream = stream;
+        while let Some(batch) = stream.next().await {
+            if tx.send(batch).await.is_err() {
+                let _ = handle.send(DriverEvent::LostJobOutput { job_id }).await;
+                break;
+            }
+        }
+    });
+    (
+        sender,
+        Box::pin(RecordBatchStreamAdapter::new(
+            schema,
+            ReceiverStream::new(rx),
+        )),
+    )
 }
 
 enum JobOutputState {
     Active {
-        receiver: mpsc::Receiver<JobOutputAction>,
+        receiver: mpsc::Receiver<JobOutputCommand>,
         inner: Pin<Box<SelectAll<TaskStreamWrapper>>>,
     },
     Draining {
@@ -46,21 +86,6 @@ enum JobOutputState {
     Modifying,
     Completed,
     Failed,
-}
-
-impl JobOutputHandle {
-    pub fn create(schema: SchemaRef) -> (Self, JobOutputStream) {
-        let (tx, rx) = mpsc::channel(JOB_OUTPUT_ACTION_CHANNEL_SIZE);
-        let handle = Self { sender: tx };
-        let stream = JobOutputStream {
-            schema,
-            state: JobOutputState::Active {
-                receiver: rx,
-                inner: Box::pin(SelectAll::new()),
-            },
-        };
-        (handle, stream)
-    }
 }
 
 // If the task fails, the consumer of the job output will receive an error
@@ -82,13 +107,13 @@ impl Stream for JobOutputStream {
                 Poll::Pending => {
                     self.state = JobOutputState::Active { receiver, inner };
                 }
-                Poll::Ready(Some(JobOutputAction::Fail { cause })) => {
+                Poll::Ready(Some(JobOutputCommand::Fail { cause })) => {
                     self.state = JobOutputState::Failed;
                     return Poll::Ready(Some(Err(DataFusionError::External(Box::new(
                         TaskStreamError::from(cause),
                     )))));
                 }
-                Poll::Ready(Some(JobOutputAction::AddStream { key, stream })) => {
+                Poll::Ready(Some(JobOutputCommand::AddStream { key, stream })) => {
                     if inner.iter().any(|s| s.conflicts_with(&key)) {
                         self.state = JobOutputState::Failed;
                         return Poll::Ready(Some(Err(DataFusionError::External(Box::new(
@@ -137,12 +162,6 @@ impl Stream for JobOutputStream {
             },
             JobOutputState::Completed | JobOutputState::Failed => Poll::Ready(None),
         }
-    }
-}
-
-impl RecordBatchStream for JobOutputStream {
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
     }
 }
 

@@ -6,7 +6,6 @@ mod event;
 mod options;
 mod peer_tracker;
 mod server;
-pub mod task;
 
 #[allow(clippy::all)]
 mod gen {

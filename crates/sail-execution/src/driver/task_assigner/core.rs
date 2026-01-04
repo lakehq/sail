@@ -1,14 +1,61 @@
 use indexmap::IndexSet;
 use log::{error, warn};
 
-use crate::driver::task::{TaskAssignment, TaskAssignmentGetter, TaskSetAssignment};
 use crate::driver::task_assigner::state::{TaskSlot, WorkerResource};
 use crate::driver::task_assigner::{TaskAssigner, TaskRegion};
 use crate::id::{StageKey, TaskKey, TaskKeyDisplay, WorkerId};
 use crate::job_graph::TaskPlacement;
+use crate::task::scheduling::{
+    TaskAssignment, TaskAssignmentGetter, TaskSetAssignment, TaskStreamAssignment,
+};
 
 impl TaskAssigner {
+    pub fn request_workers(&mut self) -> usize {
+        let enqueued_slots = self
+            .task_queue
+            .iter()
+            .map(|region| {
+                region
+                    .tasks
+                    .iter()
+                    .filter(|(placement, _)| matches!(placement, TaskPlacement::Worker))
+                    .count()
+            })
+            .sum::<usize>();
+        let vacant_slots = self
+            .workers
+            .values()
+            .map(|worker| match worker {
+                WorkerResource::Active { task_slots, .. } => {
+                    task_slots.iter().filter(|x| x.is_vacant()).count()
+                }
+                WorkerResource::Inactive => 0,
+            })
+            .sum::<usize>();
+        let required_slots = enqueued_slots.saturating_sub(vacant_slots);
+        let active_workers = self
+            .workers
+            .values()
+            .filter(|worker| matches!(worker, WorkerResource::Active { .. }))
+            .count();
+        let allowed_workers = self
+            .options
+            .worker_max_count
+            .saturating_sub(self.requested_worker_count)
+            .saturating_sub(active_workers);
+        let required_workers = required_slots
+            .div_ceil(self.options.worker_task_slots)
+            .min(allowed_workers);
+        self.requested_worker_count = self.requested_worker_count.saturating_add(required_workers);
+        required_workers
+    }
+
+    pub fn track_worker_failed_to_start(&mut self) {
+        self.requested_worker_count = self.requested_worker_count.saturating_sub(1);
+    }
+
     pub fn activate_worker(&mut self, worker_id: WorkerId) {
+        self.requested_worker_count = self.requested_worker_count.saturating_sub(1);
         if self.workers.contains_key(&worker_id) {
             warn!("worker {worker_id} is already active");
             return;
@@ -41,8 +88,8 @@ impl TaskAssigner {
         self.task_queue.push_back(region);
     }
 
-    pub fn exclude_task(&mut self, key: TaskKey) {
-        self.task_queue.retain(|x| !x.contains(&key));
+    pub fn exclude_task(&mut self, key: &TaskKey) {
+        self.task_queue.retain(|x| !x.contains(key));
     }
 
     pub fn assign_tasks(&mut self) -> Vec<TaskSetAssignment> {
@@ -102,13 +149,21 @@ impl TaskAssigner {
         Some(assignment.clone())
     }
 
-    pub fn unassign_streams_by_stage(&mut self, stage: &StageKey) {
-        self.driver.remove_streams_by_stage(stage);
-        for worker in self.workers.values_mut() {
+    pub fn unassign_streams_by_stage(&mut self, stage: &StageKey) -> Vec<TaskStreamAssignment> {
+        let mut assignments = vec![];
+        if self.driver.remove_streams_by_stage(stage) {
+            assignments.push(TaskStreamAssignment::Driver);
+        }
+        for (worker_id, worker) in self.workers.iter_mut() {
             if matches!(worker, WorkerResource::Active { .. }) {
-                worker.remove_streams_by_stage(stage);
+                if worker.remove_streams_by_stage(stage) {
+                    assignments.push(TaskStreamAssignment::Worker {
+                        worker_id: *worker_id,
+                    });
+                }
             }
         }
+        assignments
     }
 
     pub fn is_worker_idle(&self, worker_id: WorkerId) -> bool {

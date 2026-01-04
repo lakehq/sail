@@ -16,8 +16,8 @@ use tonic::{async_trait, Request, Response, Status, Streaming};
 
 use crate::error::ExecutionResult;
 use crate::id::TaskStreamKey;
+use crate::stream::gen::TaskStreamTicket;
 use crate::stream::reader::TaskStreamSource;
-use crate::stream::TaskStreamTicket;
 
 #[async_trait]
 pub trait TaskStreamFetcher: Send + Sync {

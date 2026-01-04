@@ -5,6 +5,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::ExecutionPlan;
+use futures::TryStreamExt;
 use log::{error, info, warn};
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
@@ -13,14 +14,14 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use crate::driver::actor::DriverActor;
-use crate::driver::job_scheduler::TaskState;
-use crate::driver::task::TaskAssignment;
+use crate::driver::job_scheduler::{JobAction, TaskState};
 use crate::driver::{DriverEvent, TaskStatus};
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey, WorkerId};
+use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey, TaskStreamKeyDisplay, WorkerId};
+use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
-use crate::worker::task::TaskDefinition;
+use crate::task::scheduling::{TaskAssignment, TaskAssignmentGetter, TaskStreamAssignment};
 
 impl DriverActor {
     pub(super) fn handle_server_ready(
@@ -91,8 +92,8 @@ impl DriverActor {
         worker_id: WorkerId,
     ) -> ActorAction {
         if self.worker_pool.fail_worker_if_pending(worker_id) {
-            // start a new worker to compensate the failed one
-            self.worker_pool.start_worker(ctx);
+            self.task_assigner.track_worker_failed_to_start();
+            self.scale_up_workers(ctx);
         }
         ActorAction::Continue
     }
@@ -148,7 +149,7 @@ impl DriverActor {
 
             let job_ids = keys.iter().map(|k| k.job_id).collect::<HashSet<_>>();
             for job_id in job_ids {
-                self.schedule_job(ctx, job_id);
+                self.refresh_job(ctx, job_id);
             }
         }
         ActorAction::Continue
@@ -161,9 +162,9 @@ impl DriverActor {
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     ) -> ActorAction {
-        let out = self.job_scheduler.accept_job(plan, context);
+        let out = self.job_scheduler.accept_job(ctx, plan, context);
         if let Ok((job_id, _)) = &out {
-            self.schedule_job(ctx, *job_id);
+            self.refresh_job(ctx, *job_id);
         }
         let _ = result.send(out.map(|(_, stream)| stream));
         ActorAction::Continue
@@ -203,15 +204,15 @@ impl DriverActor {
             TaskStatus::Running => {
                 self.job_scheduler
                     .update_task(&key, TaskState::Running, message);
-                self.update_job_output(ctx, key.job_id);
+                self.refresh_job(ctx, key.job_id);
             }
             TaskStatus::Succeeded => {
                 self.job_scheduler
                     .update_task(&key, TaskState::Succeeded, message);
                 self.task_assigner.unassign_task(&key);
-                self.update_job_output(ctx, key.job_id);
-                self.schedule_job(ctx, key.job_id);
+                self.refresh_job(ctx, key.job_id);
                 self.run_tasks(ctx);
+                self.scale_up_workers(ctx);
             }
             TaskStatus::Failed => {
                 // Some canceled tasks may report failed status due to closed streams,
@@ -219,8 +220,9 @@ impl DriverActor {
                 self.job_scheduler
                     .update_task(&key, TaskState::Failed, message);
                 self.task_assigner.unassign_task(&key);
-                self.schedule_job(ctx, key.job_id);
+                self.refresh_job(ctx, key.job_id);
                 self.run_tasks(ctx);
+                self.scale_up_workers(ctx);
             }
             TaskStatus::Canceled => {
                 // Task cancellation must have been initiated by the driver itself,
@@ -327,15 +329,78 @@ impl DriverActor {
         ActorAction::Continue
     }
 
-    fn schedule_job(&mut self, ctx: &mut ActorContext<Self>, job_id: JobId) {
-        let actions = self.job_scheduler.schedule_job(job_id);
-        // update worker pool for canceled tasks
-        // count required task slots and scale up workers if needed
-        todo!()
+    fn refresh_job(&mut self, ctx: &mut ActorContext<Self>, job_id: JobId) {
+        for action in self.job_scheduler.refresh_job(job_id) {
+            self.run_job_action(ctx, action);
+        }
     }
 
     fn cancel_job(&mut self, ctx: &mut ActorContext<Self>, job_id: JobId) {
-        todo!()
+        for action in self.job_scheduler.cancel_job(job_id) {
+            self.run_job_action(ctx, action);
+        }
+    }
+
+    fn run_job_action(&mut self, ctx: &mut ActorContext<Self>, action: JobAction) {
+        match action {
+            JobAction::ScheduleTasks { region } => {
+                self.task_assigner.enqueue_tasks(region);
+            }
+            JobAction::CancelTasks { keys } => {
+                for key in keys {
+                    self.task_assigner.exclude_task(&key);
+                    if let Some(assignment) = self.task_assigner.unassign_task(&key) {
+                        match assignment {
+                            TaskAssignment::Driver => self.task_runner.stop_task(&key),
+                            TaskAssignment::Worker { worker_id, slot: _ } => {
+                                self.worker_pool.stop_task(ctx, worker_id, &key)
+                            }
+                        }
+                    }
+                }
+            }
+            JobAction::FetchJobOutputStreams { keys, schema } => {
+                for key in keys {
+                    let assignment =
+                        TaskAssignmentGetter::get(&self.task_assigner, &TaskKey::from(key.clone()));
+                    let stream = match assignment {
+                        None => {
+                            warn!(
+                                "cannot fetch unassigned stream {}",
+                                TaskStreamKeyDisplay(&key)
+                            );
+                            continue;
+                        }
+                        Some(TaskAssignment::Driver) => {
+                            self.stream_manager.fetch_local_stream(ctx, &key)
+                        }
+                        Some(TaskAssignment::Worker { worker_id, slot: _ }) => self
+                            .worker_pool
+                            .fetch_worker_stream(ctx, *worker_id, &key, schema.clone()),
+                    };
+                    let stream = futures::stream::once(async move {
+                        stream.map_err(|e| TaskStreamError::External(Arc::new(e)))
+                    })
+                    .try_flatten();
+                    self.job_scheduler
+                        .add_job_output_stream(ctx, key, Box::pin(stream))
+                }
+            }
+            JobAction::RemoveStreams { key } => {
+                let assignments = self.task_assigner.unassign_streams_by_stage(&key);
+                for assignment in assignments {
+                    match assignment {
+                        TaskStreamAssignment::Driver => {
+                            self.stream_manager
+                                .remove_local_stream(key.job_id, Some(key.stage));
+                        }
+                        TaskStreamAssignment::Worker { worker_id } => self
+                            .worker_pool
+                            .remove_worker_streams(ctx, worker_id, key.job_id, Some(key.stage)),
+                    }
+                }
+            }
+        }
     }
 
     fn run_tasks(&mut self, ctx: &mut ActorContext<Self>) {
@@ -372,10 +437,9 @@ impl DriverActor {
         }
     }
 
-    fn update_job_output(&mut self, _ctx: &mut ActorContext<Self>, _job_id: JobId) {
-        // determine the task streams via the job scheduler
-        // fetch task streams via the worker pool
-        // add task streams via the job scheduler
-        todo!()
+    fn scale_up_workers(&mut self, ctx: &mut ActorContext<Self>) {
+        for _ in 0..self.task_assigner.request_workers() {
+            self.worker_pool.start_worker(ctx);
+        }
     }
 }

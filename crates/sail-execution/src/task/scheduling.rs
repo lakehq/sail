@@ -61,3 +61,8 @@ pub enum TaskAssignment {
 pub trait TaskAssignmentGetter {
     fn get(&self, key: &TaskKey) -> Option<&TaskAssignment>;
 }
+
+pub enum TaskStreamAssignment {
+    Driver,
+    Worker { worker_id: WorkerId },
+}

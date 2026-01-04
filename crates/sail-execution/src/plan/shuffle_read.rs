@@ -12,7 +12,7 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 use futures::future::try_join_all;
 use futures::TryStreamExt;
-use log::{error, warn};
+use log::warn;
 
 use crate::plan::ListListDisplay;
 use crate::stream::merge::MergedRecordBatchStream;

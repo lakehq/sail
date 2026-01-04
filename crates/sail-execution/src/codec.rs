@@ -52,7 +52,6 @@ use datafusion_spark::function::math::width_bucket::SparkWidthBucket;
 use datafusion_spark::function::string::elt::SparkElt;
 use datafusion_spark::function::string::format_string::FormatStringFunc;
 use datafusion_spark::function::string::luhn_check::SparkLuhnCheck;
-use prost::bytes::BytesMut;
 use prost::Message;
 use sail_common_datafusion::array::record_batch::{read_record_batches, write_record_batches};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
@@ -2207,10 +2206,7 @@ impl RemoteExecutionCodec {
 
     fn try_encode_plan(&self, plan: Arc<dyn ExecutionPlan>) -> Result<Vec<u8>> {
         let plan = PhysicalPlanNode::try_from_physical_plan(plan, self)?;
-        let mut buffer = BytesMut::new();
-        plan.encode(&mut buffer)
-            .map_err(|e| plan_datafusion_err!("failed to encode plan: {e}"))?;
-        Ok(buffer.freeze().into())
+        Ok(plan.encode_to_vec())
     }
 
     fn try_decode_data_type(&self, buf: &[u8]) -> Result<DataType> {
@@ -2244,10 +2240,6 @@ impl RemoteExecutionCodec {
     where
         M: Message,
     {
-        let mut buffer = BytesMut::new();
-        message
-            .encode(&mut buffer)
-            .map_err(|e| plan_datafusion_err!("failed to encode message: {e}"))?;
-        Ok(buffer.freeze().into())
+        Ok(message.encode_to_vec())
     }
 }

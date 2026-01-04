@@ -90,7 +90,7 @@ impl StreamAccessorMessage for DriverEvent {
 
     fn fetch_driver_stream(
         key: TaskStreamKey,
-        schema: SchemaRef,
+        _schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> Self {
         DriverEvent::FetchDriverStream { key, result }

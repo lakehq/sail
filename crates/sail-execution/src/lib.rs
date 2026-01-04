@@ -10,6 +10,7 @@ mod stream;
 mod stream_accessor;
 mod stream_manager;
 mod stream_service;
+mod task;
 mod task_runner;
 mod worker;
 pub mod worker_manager;

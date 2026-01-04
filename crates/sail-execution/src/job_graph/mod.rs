@@ -1,6 +1,7 @@
 use std::fmt;
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, PhysicalExpr};
 
@@ -8,11 +9,16 @@ mod planner;
 
 pub struct JobGraph {
     stages: Vec<Stage>,
+    schema: SchemaRef,
 }
 
 impl JobGraph {
     pub fn stages(&self) -> &[Stage] {
         &self.stages
+    }
+
+    pub fn schema(&self) -> &SchemaRef {
+        &self.schema
     }
 }
 

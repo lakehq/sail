@@ -25,9 +25,9 @@ use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{TaskKey, TaskKeyDisplay};
 use crate::plan::{ShuffleReadExec, ShuffleWriteExec};
 use crate::stream_accessor::{StreamAccessor, StreamAccessorMessage};
+use crate::task::definition::{TaskDefinition, TaskInput, TaskOutput};
 use crate::task_runner::monitor::TaskMonitor;
 use crate::task_runner::{TaskRunner, TaskRunnerMessage};
-use crate::worker::task::{TaskDefinition, TaskInput, TaskOutput};
 
 impl TaskRunner {
     pub fn new() -> Self {
@@ -149,7 +149,7 @@ impl TaskRunner {
             if let Some(placeholder) = node.as_any().downcast_ref::<ShuffleReadExec>() {
                 let partitioning = placeholder.properties().output_partitioning().clone();
                 let mut locations = vec![vec![]; partitioning.partition_count()];
-                // FIXME
+                todo!();
                 let accessor = StreamAccessor::new(handle.clone());
                 let shuffle = ShuffleReadExec::new(
                     locations,

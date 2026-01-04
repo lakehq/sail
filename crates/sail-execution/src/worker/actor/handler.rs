@@ -1,24 +1,19 @@
 use std::mem;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::common::tree_node::{TransformedResult, TreeNode};
-use datafusion::datasource::physical_plan::ParquetSource;
-use datafusion::physical_plan::ExecutionPlanProperties;
 use log::{error, info, warn};
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_server::actor::{ActorAction, ActorContext};
-use sail_telemetry::TracingExecOptions;
 use tokio::sync::oneshot;
 
 use crate::driver::TaskStatus;
 use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
-use crate::plan::ShuffleWriteExec;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
+use crate::task::definition::TaskDefinition;
 use crate::worker::actor::WorkerActor;
 use crate::worker::event::{WorkerLocation, WorkerStreamOwner};
-use crate::worker::task::TaskDefinition;
 use crate::worker::WorkerEvent;
 
 impl WorkerActor {

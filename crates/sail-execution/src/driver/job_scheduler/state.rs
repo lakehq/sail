@@ -2,24 +2,29 @@ use std::sync::Arc;
 
 use datafusion::execution::TaskContext;
 use datafusion::physical_plan::ExecutionPlanProperties;
+use tokio::sync::mpsc;
 
-use crate::driver::output::JobOutputHandle;
-use crate::error::ExecutionResult;
+use crate::driver::output::JobOutputCommand;
 use crate::job_graph::JobGraph;
 
 pub struct JobDescriptor {
     pub graph: JobGraph,
     pub stages: Vec<StageDescriptor>,
-    pub output: JobOutputHandle,
-    pub context: Arc<TaskContext>,
+    pub state: JobState,
+}
+
+pub enum JobState {
+    Running {
+        output: mpsc::Sender<JobOutputCommand>,
+        context: Arc<TaskContext>,
+    },
+    Succeeded,
+    Failed,
+    Canceled,
 }
 
 impl JobDescriptor {
-    pub fn try_new(
-        graph: JobGraph,
-        output: JobOutputHandle,
-        context: Arc<TaskContext>,
-    ) -> ExecutionResult<Self> {
+    pub fn new(graph: JobGraph, state: JobState) -> Self {
         let mut stages = vec![];
         for (_, stage) in graph.stages().iter().enumerate() {
             let mut descriptor = StageDescriptor { tasks: vec![] };
@@ -28,12 +33,11 @@ impl JobDescriptor {
             }
             stages.push(descriptor);
         }
-        Ok(Self {
+        Self {
             graph,
             stages,
-            output,
-            context,
-        })
+            state,
+        }
     }
 }
 

@@ -1,8 +1,8 @@
 use indexmap::IndexSet;
 use log::warn;
 
-use crate::driver::task::TaskSet;
 use crate::id::{StageKey, TaskKey};
+use crate::task::scheduling::TaskSet;
 
 #[derive(Default)]
 pub struct DriverResource {
@@ -27,16 +27,19 @@ impl DriverResource {
         self.task_slots.push(slot);
     }
 
-    pub fn remove_task(&mut self, key: &TaskKey) {
+    pub fn remove_task(&mut self, key: &TaskKey) -> bool {
         for slot in &mut self.task_slots {
             if slot.remove_task(key) {
-                return;
+                return true;
             }
         }
+        false
     }
 
-    pub fn remove_streams_by_stage(&mut self, stage: &StageKey) {
-        self.local_streams.retain(|x| !stage.matches(x))
+    pub fn remove_streams_by_stage(&mut self, stage: &StageKey) -> bool {
+        let count = self.local_streams.len();
+        self.local_streams.retain(|x| !stage.matches(x));
+        count != self.local_streams.len()
     }
 }
 
@@ -82,28 +85,33 @@ impl WorkerResource {
         }
     }
 
-    pub fn remove_task(&mut self, key: &TaskKey, slot: usize) {
+    pub fn remove_task(&mut self, key: &TaskKey, slot: usize) -> bool {
         match self {
             WorkerResource::Active { task_slots, .. } => {
                 if let Some(slot) = task_slots.get_mut(slot) {
-                    slot.remove_task(key);
+                    slot.remove_task(key)
                 } else {
                     warn!("invalid task slot {slot} on worker");
+                    false
                 }
             }
             WorkerResource::Inactive => {
                 warn!("cannot remove tasks from inactive worker");
+                false
             }
         }
     }
 
-    pub fn remove_streams_by_stage(&mut self, stage: &StageKey) {
+    pub fn remove_streams_by_stage(&mut self, stage: &StageKey) -> bool {
         match self {
             WorkerResource::Active { local_streams, .. } => {
-                local_streams.retain(|x| !stage.matches(x))
+                let count = local_streams.len();
+                local_streams.retain(|x| !stage.matches(x));
+                count != local_streams.len()
             }
             WorkerResource::Inactive => {
                 warn!("cannot remove streams from inactive worker");
+                false
             }
         }
     }

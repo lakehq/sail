@@ -1,8 +1,10 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::SchemaRef;
 use fastrace::collector::SpanContext;
 use fastrace::Span;
+use futures::TryStreamExt;
 use log::{error, info, warn};
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
@@ -14,9 +16,11 @@ use crate::driver::worker_pool::state::WorkerState;
 use crate::driver::worker_pool::{WorkerDescriptor, WorkerPool, WorkerPoolOptions};
 use crate::driver::{DriverActor, DriverEvent, TaskStatus};
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{JobId, TaskKey, TaskKeyDisplay, WorkerId};
+use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey, WorkerId};
 use crate::rpc::ClientOptions;
-use crate::worker::task::TaskDefinition;
+use crate::stream::error::TaskStreamError;
+use crate::stream::reader::TaskStreamSource;
+use crate::task::definition::TaskDefinition;
 use crate::worker::{WorkerClientSet, WorkerLocation};
 use crate::worker_manager::WorkerLaunchOptions;
 
@@ -142,7 +146,7 @@ impl WorkerPool {
             }
             WorkerState::Running { .. } => {
                 info!("stopping worker {worker_id}");
-                let client = match Self::get_worker_client_set(worker_id, worker, &self.options) {
+                let client = match Self::get_client_set(worker_id, worker, &self.options) {
                     Ok(x) => x.core,
                     Err(e) => {
                         error!("failed to stop worker {worker_id}: {e}");
@@ -277,7 +281,7 @@ impl WorkerPool {
             });
             return;
         };
-        let client = match Self::get_worker_client_set(worker_id, worker, &self.options) {
+        let client = match Self::get_client_set(worker_id, worker, &self.options) {
             Ok(client) => client.core,
             Err(e) => {
                 let message = format!("failed to get worker {} client: {e}", worker_id);
@@ -340,7 +344,7 @@ impl WorkerPool {
             warn!("worker {worker_id} not found");
             return;
         };
-        let client = match Self::get_worker_client_set(worker_id, worker, &self.options) {
+        let client = match Self::get_client_set(worker_id, worker, &self.options) {
             Ok(x) => x.core,
             Err(e) => {
                 error!(
@@ -358,7 +362,52 @@ impl WorkerPool {
         });
     }
 
-    fn get_worker_client_set(
+    pub fn fetch_worker_stream(
+        &mut self,
+        _ctx: &mut ActorContext<DriverActor>,
+        worker_id: WorkerId,
+        key: &TaskStreamKey,
+        schema: SchemaRef,
+    ) -> ExecutionResult<TaskStreamSource> {
+        let Some(worker) = self.workers.get_mut(&worker_id) else {
+            return Err(ExecutionError::InvalidArgument(format!(
+                "worker {worker_id} not found"
+            )));
+        };
+        let client = match Self::get_client_set(worker_id, worker, &self.options) {
+            Ok(x) => x.flight,
+            Err(e) => {
+                return Err(ExecutionError::InternalError(format!(
+                    "failed to get client for worker {worker_id}: {e}"
+                )));
+            }
+        };
+        let key = key.clone();
+        let stream = futures::stream::once(async move {
+            client
+                .fetch_task_stream(key, schema.clone())
+                .await
+                .map_err(|e| TaskStreamError::External(Arc::new(e)))
+        })
+        .try_flatten();
+        Ok(Box::pin(stream))
+    }
+
+    pub fn remove_worker_streams(
+        &mut self,
+        ctx: &mut ActorContext<DriverActor>,
+        worker_id: WorkerId,
+        job_id: JobId,
+        stage: Option<usize>,
+    ) {
+        let Some(worker) = self.workers.get_mut(&worker_id) else {
+            warn!("worker {worker_id} not found");
+            return;
+        };
+        Self::remove_streams(ctx, job_id, stage, worker_id, worker, &self.options);
+    }
+
+    fn get_client_set(
         worker_id: WorkerId,
         worker: &mut WorkerDescriptor,
         options: &WorkerPoolOptions,
@@ -383,7 +432,7 @@ impl WorkerPool {
         }
     }
 
-    fn remove_worker_streams(
+    fn remove_streams(
         ctx: &mut ActorContext<DriverActor>,
         job_id: JobId,
         stage: Option<usize>,
@@ -391,7 +440,7 @@ impl WorkerPool {
         worker: &mut WorkerDescriptor,
         options: &WorkerPoolOptions,
     ) {
-        let client = match Self::get_worker_client_set(worker_id, worker, options) {
+        let client = match Self::get_client_set(worker_id, worker, options) {
             Ok(x) => x.core,
             Err(e) => {
                 error!("failed to remove streams in worker {worker_id}: {e}");

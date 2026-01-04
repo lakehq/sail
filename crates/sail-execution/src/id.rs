@@ -165,3 +165,14 @@ impl fmt::Display for TaskStreamKeyDenseDisplay<'_> {
         )
     }
 }
+
+impl From<TaskStreamKey> for TaskKey {
+    fn from(key: TaskStreamKey) -> Self {
+        Self {
+            job_id: key.job_id,
+            stage: key.stage,
+            partition: key.partition,
+            attempt: key.attempt,
+        }
+    }
+}

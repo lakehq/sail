@@ -1,14 +1,16 @@
+use prost::Message;
+
 use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskKey};
 use crate::rpc::{ClientHandle, ClientOptions, ClientService};
 use crate::stream_service::TaskStreamFlightClient;
+use crate::task::definition::TaskDefinition;
 use crate::worker::event::WorkerLocation;
 use crate::worker::gen::worker_service_client::WorkerServiceClient;
 use crate::worker::gen::{
     RemoveStreamRequest, RemoveStreamResponse, RunTaskRequest, RunTaskResponse, StopTaskRequest,
     StopTaskResponse, StopWorkerRequest, StopWorkerResponse,
 };
-use crate::worker::task::TaskDefinition;
 
 #[derive(Clone)]
 pub struct WorkerClientSet {
@@ -45,12 +47,13 @@ impl WorkerClient {
         definition: TaskDefinition,
         peers: Vec<WorkerLocation>,
     ) -> ExecutionResult<()> {
+        let definition = crate::task::gen::TaskDefinition::from(definition).encode_to_vec();
         let request = RunTaskRequest {
             job_id: key.job_id.into(),
             stage: key.stage as u64,
             attempt: key.attempt as u64,
             partition: key.partition as u64,
-            definition: Some(definition.into()),
+            definition,
             peers: peers.into_iter().map(|x| x.into()).collect(),
         };
         let response = self.inner.get().await?.run_task(request).await?;

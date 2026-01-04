@@ -4,14 +4,15 @@ mod state;
 
 use std::collections::HashMap;
 
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 pub use options::JobSchedulerOptions;
 pub use state::TaskState;
 
 use crate::codec::RemoteExecutionCodec;
 use crate::driver::job_scheduler::state::JobDescriptor;
-use crate::driver::task::TaskRegion;
-use crate::id::{IdGenerator, JobId, StageKey, TaskKey};
+use crate::id::{IdGenerator, JobId, StageKey, TaskKey, TaskStreamKey};
+use crate::task::scheduling::TaskRegion;
 
 pub struct JobScheduler {
     options: JobSchedulerOptions,
@@ -31,9 +32,18 @@ impl JobScheduler {
     }
 }
 
-pub enum JobSchedulerAction {
-    ScheduleTasks { region: TaskRegion },
-    CancelTasks { tasks: Vec<TaskKey> },
-    RemoveLocalStreams { stage: StageKey },
-    FailJob { job_id: JobId },
+pub enum JobAction {
+    ScheduleTasks {
+        region: TaskRegion,
+    },
+    CancelTasks {
+        keys: Vec<TaskKey>,
+    },
+    FetchJobOutputStreams {
+        keys: Vec<TaskStreamKey>,
+        schema: SchemaRef,
+    },
+    RemoveStreams {
+        key: StageKey,
+    },
 }
