@@ -1,0 +1,17 @@
+[package]
+name = "datafusion-functions-json"
+version = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+datafusion = { workspace = true }
+jiter = { workspace = true }
+log = { workspace = true }
+paste = { workspace = true }
+
+[dev-dependencies]
+datafusion = { workspace = true, features = ["nested_expressions"] }
+tokio = { workspace = true }
+
+[lints]
+workspace = true
