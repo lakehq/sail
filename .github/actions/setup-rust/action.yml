@@ -3,10 +3,10 @@ description: Prepare Rust build environment and build cache
 inputs:
   cache-key:
     description: Cache key prefix (e.g., 'setup-rust' or 'rust-lint')
-    default: 'setup-rust'
+    default: "setup-rust"
   install-coverage-tools:
     description: Whether to install coverage tools (grcov, nextest, llvm-tools-preview)
-    default: 'true'
+    default: "true"
 runs:
   using: composite
   steps:
