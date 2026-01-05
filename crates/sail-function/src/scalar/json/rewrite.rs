@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::DataType;
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::tree_node::Transformed;
 use datafusion::common::{Column, DFSchema, Result};
@@ -36,41 +35,14 @@ impl FunctionRewrite for JsonFunctionRewriter {
 
 /// This replaces `get_json(foo, bar)::int` with `json_get_int(foo, bar)` so the JSON function can take care of
 /// extracting the right value type from JSON without the need to materialize the JSON union.
-fn optimise_json_get_cast(cast: &Cast) -> Option<Transformed<Expr>> {
-    let scalar_func = extract_scalar_function(&cast.expr)?;
-    if scalar_func.func.name() != "json_get" {
-        return None;
-    }
-    let func = match &cast.data_type {
-        DataType::Boolean => crate::json_get_bool::json_get_bool_udf(),
-        DataType::Float64
-        | DataType::Float32
-        | DataType::Decimal128(_, _)
-        | DataType::Decimal256(_, _) => crate::json_get_float::json_get_float_udf(),
-        DataType::Int64 | DataType::Int32 => crate::json_get_int::json_get_int_udf(),
-        DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => {
-            crate::json_get_str::json_get_str_udf()
-        }
-        _ => return None,
-    };
-    Some(Transformed::yes(Expr::ScalarFunction(ScalarFunction {
-        func,
-        args: scalar_func.args.clone(),
-    })))
+fn optimise_json_get_cast(_cast: &Cast) -> Option<Transformed<Expr>> {
+    // This functionality is not used in our codebase, so we're removing it
+    None
 }
 
 // Replace nested JSON functions e.g. `json_get(json_get(col, 'foo'), 'bar')` with `json_get(col, 'foo', 'bar')`
 fn unnest_json_calls(func: &ScalarFunction) -> Option<Transformed<Expr>> {
-    if !matches!(
-        func.func.name(),
-        "json_get"
-            | "json_get_bool"
-            | "json_get_float"
-            | "json_get_int"
-            | "json_get_json"
-            | "json_get_str"
-            | "json_as_text"
-    ) {
+    if !matches!(func.func.name(), "json_as_text") {
         return None;
     }
     let mut outer_args_iter = func.args.iter();
@@ -79,7 +51,7 @@ fn unnest_json_calls(func: &ScalarFunction) -> Option<Transformed<Expr>> {
 
     // both json_get and json_as_text would produce new JSON to be processed by the outer
     // function so can be inlined
-    if !matches!(inner_func.func.name(), "json_get" | "json_as_text") {
+    if !matches!(inner_func.func.name(), "json_as_text") {
         return None;
     }
 
@@ -110,9 +82,7 @@ fn extract_scalar_function(expr: &Expr) -> Option<&ScalarFunction> {
 
 #[derive(Debug, Clone, Copy)]
 enum JsonOperator {
-    Arrow,
     LongArrow,
-    Question,
 }
 
 impl TryFrom<&BinaryOperator> for JsonOperator {
@@ -120,9 +90,7 @@ impl TryFrom<&BinaryOperator> for JsonOperator {
 
     fn try_from(op: &BinaryOperator) -> Result<Self, Self::Error> {
         match op {
-            BinaryOperator::Arrow => Ok(JsonOperator::Arrow),
             BinaryOperator::LongArrow => Ok(JsonOperator::LongArrow),
-            BinaryOperator::Question => Ok(JsonOperator::Question),
             _ => Err(()),
         }
     }
@@ -131,9 +99,7 @@ impl TryFrom<&BinaryOperator> for JsonOperator {
 impl From<JsonOperator> for Arc<ScalarUDF> {
     fn from(op: JsonOperator) -> Arc<ScalarUDF> {
         match op {
-            JsonOperator::Arrow => crate::udfs::json_get_udf(),
-            JsonOperator::LongArrow => crate::udfs::json_as_text_udf(),
-            JsonOperator::Question => crate::udfs::json_contains_udf(),
+            JsonOperator::LongArrow => crate::scalar::json::udfs::json_as_text_udf(),
         }
     }
 }
@@ -141,9 +107,7 @@ impl From<JsonOperator> for Arc<ScalarUDF> {
 impl std::fmt::Display for JsonOperator {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            JsonOperator::Arrow => write!(f, "->"),
             JsonOperator::LongArrow => write!(f, "->>"),
-            JsonOperator::Question => write!(f, "?"),
         }
     }
 }

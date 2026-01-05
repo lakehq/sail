@@ -2112,17 +2112,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "datafusion-functions-json"
-version = "0.4.5"
-dependencies = [
- "datafusion",
- "jiter",
- "log",
- "paste",
- "tokio",
-]
-
-[[package]]
 name = "datafusion-functions-nested"
 version = "51.0.0"
 source = "git+https://github.com/apache/datafusion?rev=418f62a#418f62ae3bed96e8d2dc86d5085580eb1b8c5b3c"
@@ -5907,7 +5896,6 @@ version = "0.4.5"
 dependencies = [
  "arrow-flight",
  "datafusion",
- "datafusion-functions-json",
  "datafusion-proto",
  "datafusion-spark",
  "fastrace",
@@ -5958,8 +5946,11 @@ dependencies = [
  "datafusion-functions",
  "datafusion-functions-nested",
  "half",
+ "jiter",
  "lazy_static",
+ "log",
  "num",
+ "paste",
  "percent-encoding",
  "rand 0.9.2",
  "rand_chacha 0.9.0",
@@ -6102,7 +6093,6 @@ dependencies = [
  "datafusion-expr",
  "datafusion-expr-common",
  "datafusion-functions",
- "datafusion-functions-json",
  "datafusion-functions-nested",
  "datafusion-physical-expr",
  "datafusion-spark",

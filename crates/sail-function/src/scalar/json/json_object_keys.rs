@@ -9,10 +9,10 @@ use datafusion::logical_expr::{
 };
 use jiter::Peek;
 
-use crate::common::{
+use crate::scalar::json::common::{
     get_err, invoke, jiter_json_find, return_type_check, GetError, InvokeResult, JsonPath,
 };
-use crate::common_macros::make_udf_function;
+use crate::scalar::json::common_macros::make_udf_function;
 
 make_udf_function!(
     JsonObjectKeys,

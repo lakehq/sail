@@ -12,7 +12,7 @@ use datafusion::common::{exec_err, plan_err, Result as DataFusionResult, ScalarV
 use datafusion::logical_expr::ColumnarValue;
 use jiter::{Jiter, JiterError, Peek};
 
-use crate::common_union::{
+use crate::scalar::json::common_union::{
     is_json_union, json_from_union_scalar, nested_json_array, nested_json_array_ref, TYPE_ID_NULL,
 };
 
