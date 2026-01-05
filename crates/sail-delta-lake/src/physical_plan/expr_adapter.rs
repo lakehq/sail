@@ -14,11 +14,10 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    ArrayRef, FixedSizeListArray, LargeListArray, ListArray, MapArray, StructArray,
-    new_null_array,
+    new_null_array, Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray, MapArray,
+    StructArray,
 };
-use datafusion::arrow::array::Array;
-use datafusion::arrow::compute::{CastOptions, can_cast_types, cast_with_options};
+use datafusion::arrow::compute::{can_cast_types, cast_with_options, CastOptions};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -303,7 +302,6 @@ impl<'a> DeltaPhysicalExprRewriter<'a> {
             None,
         ))))
     }
-
 }
 
 fn can_cast_types_with_schema_evolution(from_type: &DataType, to_type: &DataType) -> Result<bool> {
@@ -331,16 +329,15 @@ fn can_cast_types_with_schema_evolution(from_type: &DataType, to_type: &DataType
             }
             can_cast_types_with_schema_evolution(from_elem.data_type(), to_elem.data_type())
         }
-        (DataType::Map(from_entries, _), DataType::Map(to_entries, _)) => match (
-            from_entries.data_type(),
-            to_entries.data_type(),
-        ) {
-            (DataType::Struct(from_fields), DataType::Struct(to_fields)) => {
-                validate_struct_compatibility(from_fields, to_fields)?;
-                Ok(true)
+        (DataType::Map(from_entries, _), DataType::Map(to_entries, _)) => {
+            match (from_entries.data_type(), to_entries.data_type()) {
+                (DataType::Struct(from_fields), DataType::Struct(to_fields)) => {
+                    validate_struct_compatibility(from_fields, to_fields)?;
+                    Ok(true)
+                }
+                _ => Ok(false),
             }
-            _ => Ok(false),
-        },
+        }
         _ => Ok(can_cast_types(from_type, to_type)),
     }
 }
@@ -373,7 +370,12 @@ impl std::hash::Hash for DeltaCastColumnExpr {
 
 impl std::fmt::Display for DeltaCastColumnExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "DELTA_CAST_COLUMN({} AS {:?})", self.expr, self.target_field.data_type())
+        write!(
+            f,
+            "DELTA_CAST_COLUMN({} AS {:?})",
+            self.expr,
+            self.target_field.data_type()
+        )
     }
 }
 
@@ -409,13 +411,13 @@ impl PhysicalExpr for DeltaCastColumnExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let value = self.expr.evaluate(batch)?;
         match value {
-            ColumnarValue::Array(array) => Ok(ColumnarValue::Array(
-                cast_array_with_schema_evolution(
+            ColumnarValue::Array(array) => {
+                Ok(ColumnarValue::Array(cast_array_with_schema_evolution(
                     &array,
                     self.target_field.as_ref(),
                     &self.cast_options,
-                )?,
-            )),
+                )?))
+            }
             ColumnarValue::Scalar(scalar) => {
                 let as_array = scalar.to_array_of_size(1)?;
                 let casted = cast_array_with_schema_evolution(
@@ -602,6 +604,10 @@ fn cast_array_with_schema_evolution(
                 *ordered,
             )?))
         }
-        _ => Ok(cast_with_options(source, target_field.data_type(), cast_options)?),
+        _ => Ok(cast_with_options(
+            source,
+            target_field.data_type(),
+            cast_options,
+        )?),
     }
 }

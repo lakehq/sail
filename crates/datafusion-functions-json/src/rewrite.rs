@@ -3,9 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::tree_node::Transformed;
-use datafusion::common::Column;
-use datafusion::common::DFSchema;
-use datafusion::common::Result;
+use datafusion::common::{Column, DFSchema, Result};
 use datafusion::logical_expr::expr::{Alias, Cast, Expr, ScalarFunction};
 use datafusion::logical_expr::expr_rewriter::FunctionRewrite;
 use datafusion::logical_expr::planner::{ExprPlanner, PlannerResult, RawBinaryExpr};
@@ -21,7 +19,12 @@ impl FunctionRewrite for JsonFunctionRewriter {
         "JsonFunctionRewriter"
     }
 
-    fn rewrite(&self, expr: Expr, _schema: &DFSchema, _config: &ConfigOptions) -> Result<Transformed<Expr>> {
+    fn rewrite(
+        &self,
+        expr: Expr,
+        _schema: &DFSchema,
+        _config: &ConfigOptions,
+    ) -> Result<Transformed<Expr>> {
         let transform = match &expr {
             Expr::Cast(cast) => optimise_json_get_cast(cast),
             Expr::ScalarFunction(func) => unnest_json_calls(func),
@@ -40,11 +43,14 @@ fn optimise_json_get_cast(cast: &Cast) -> Option<Transformed<Expr>> {
     }
     let func = match &cast.data_type {
         DataType::Boolean => crate::json_get_bool::json_get_bool_udf(),
-        DataType::Float64 | DataType::Float32 | DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => {
-            crate::json_get_float::json_get_float_udf()
-        }
+        DataType::Float64
+        | DataType::Float32
+        | DataType::Decimal128(_, _)
+        | DataType::Decimal256(_, _) => crate::json_get_float::json_get_float_udf(),
         DataType::Int64 | DataType::Int32 => crate::json_get_int::json_get_int_udf(),
-        DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => crate::json_get_str::json_get_str_udf(),
+        DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => {
+            crate::json_get_str::json_get_str_udf()
+        }
         _ => return None,
     };
     Some(Transformed::yes(Expr::ScalarFunction(ScalarFunction {
@@ -80,7 +86,11 @@ fn unnest_json_calls(func: &ScalarFunction) -> Option<Transformed<Expr>> {
     let mut args = inner_func.args.clone();
     args.extend(outer_args_iter.cloned());
     // See #23, unnest only when all lookup arguments are literals
-    if args.iter().skip(1).all(|arg| matches!(arg, Expr::Literal(_, _))) {
+    if args
+        .iter()
+        .skip(1)
+        .all(|arg| matches!(arg, Expr::Literal(_, _)))
+    {
         Some(Transformed::yes(Expr::ScalarFunction(ScalarFunction {
             func: func.func.clone(),
             args,
@@ -150,7 +160,9 @@ fn expr_to_sql_repr(expr: &Expr) -> String {
             .map_or_else(|| name.clone(), |r| format!("{r}.{name}")),
         Expr::Alias(alias) => alias.name.clone(),
         Expr::Literal(scalar, _) => match scalar {
-            ScalarValue::Utf8(Some(v)) | ScalarValue::Utf8View(Some(v)) | ScalarValue::LargeUtf8(Some(v)) => {
+            ScalarValue::Utf8(Some(v))
+            | ScalarValue::Utf8View(Some(v))
+            | ScalarValue::LargeUtf8(Some(v)) => {
                 format!("'{v}'")
             }
             ScalarValue::UInt8(Some(v)) => v.to_string(),
@@ -173,7 +185,11 @@ fn expr_to_sql_repr(expr: &Expr) -> String {
 pub struct JsonExprPlanner;
 
 impl ExprPlanner for JsonExprPlanner {
-    fn plan_binary_op(&self, expr: RawBinaryExpr, _schema: &DFSchema) -> Result<PlannerResult<RawBinaryExpr>> {
+    fn plan_binary_op(
+        &self,
+        expr: RawBinaryExpr,
+        _schema: &DFSchema,
+    ) -> Result<PlannerResult<RawBinaryExpr>> {
         let Ok(op) = JsonOperator::try_from(&expr.op) else {
             return Ok(PlannerResult::Original(expr));
         };

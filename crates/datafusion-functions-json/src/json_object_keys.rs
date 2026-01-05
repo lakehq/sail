@@ -4,10 +4,14 @@ use std::sync::Arc;
 use datafusion::arrow::array::{ArrayRef, ListBuilder, StringBuilder};
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion::common::{Result as DataFusionResult, ScalarValue};
-use datafusion::logical_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion::logical_expr::{
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use jiter::Peek;
 
-use crate::common::{get_err, invoke, jiter_json_find, return_type_check, GetError, InvokeResult, JsonPath};
+use crate::common::{
+    get_err, invoke, jiter_json_find, return_type_check, GetError, InvokeResult, JsonPath,
+};
 use crate::common_macros::make_udf_function;
 
 make_udf_function!(
@@ -106,7 +110,10 @@ fn keys_to_scalar(opt_keys: Option<Vec<String>>) -> ScalarValue {
     ScalarValue::List(Arc::new(array))
 }
 
-fn jiter_json_object_keys(opt_json: Option<&str>, path: &[JsonPath]) -> Result<Vec<String>, GetError> {
+fn jiter_json_object_keys(
+    opt_json: Option<&str>,
+    path: &[JsonPath],
+) -> Result<Vec<String>, GetError> {
     if let Some((mut jiter, peek)) = jiter_json_find(opt_json, path) {
         match peek {
             Peek::Object => {

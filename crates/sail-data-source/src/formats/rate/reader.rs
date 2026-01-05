@@ -14,6 +14,7 @@ use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
 use datafusion_common::{arrow_datafusion_err, plan_err, Result};
 use futures::{Stream, StreamExt};
+use log::debug;
 use sail_common_datafusion::streaming::event::encoding::EncodedFlowEventStream;
 use sail_common_datafusion::streaming::event::schema::to_flow_event_schema;
 use sail_common_datafusion::streaming::event::stream::FlowEventStreamAdapter;
@@ -205,35 +206,46 @@ impl ExecutionPlan for RateSourceExec {
         }
         // TODO: consider token bucket algorithm for data generation with a more stable rate
         // TODO: make the data generation algorithm configurable
-        let output: Pin<Box<dyn Stream<Item = Result<RecordBatch>> + Send>> =
-            if self.options.rows_per_second == 0 {
-                let output = futures::stream::unfold((), |()| async move {
-                    tokio::time::sleep(Duration::MAX).await;
-                    None
-                });
-                Box::pin(output)
-            } else {
-                let rows_per_second =
-                    (self.options.rows_per_second / self.options.num_partitions).max(1);
-                // We generate at most 1000 batches per second
-                // since the sleep function only has millisecond accuracy.
-                let batches_per_second = rows_per_second.min(1_000);
-                let batch_size = rows_per_second / batches_per_second;
-                let interval = Duration::from_secs(1) / (batches_per_second as u32);
-                let generator = BatchGenerator::try_new(
-                    Arc::clone(&self.time_zone),
-                    &self.projection,
-                    self.projected_schema.clone(),
-                )?;
-                let output = futures::stream::unfold(generator, move |mut generator| async move {
-                    // The interval does not take into account the time it takes to generate data,
-                    // but the sleep itself is inaccurate anyway.
-                    tokio::time::sleep(interval).await;
-                    let result = generator.generate(batch_size);
-                    Some((result, generator))
-                });
-                Box::pin(output)
-            };
+        let output: Pin<Box<dyn Stream<Item = Result<RecordBatch>> + Send>> = if self
+            .options
+            .rows_per_second
+            == 0
+        {
+            let output = futures::stream::unfold((), |()| async move {
+                tokio::time::sleep(Duration::MAX).await;
+                None
+            });
+            Box::pin(output)
+        } else {
+            let rows_per_second =
+                (self.options.rows_per_second / self.options.num_partitions).max(1);
+            // We generate at most 1000 batches per second
+            // since the sleep function only has millisecond accuracy.
+            let batches_per_second = rows_per_second.min(1_000);
+            let batch_size = rows_per_second / batches_per_second;
+            let interval = Duration::from_secs(1) / (batches_per_second as u32);
+            debug!(
+                    "RateSourceExec partition={partition}: rows_per_second_total={}, num_partitions={}, rows_per_second_partition={}, batches_per_second={}, batch_size={}, interval={interval:?}",
+                    self.options.rows_per_second,
+                    self.options.num_partitions,
+                    rows_per_second,
+                    batches_per_second,
+                    batch_size
+                );
+            let generator = BatchGenerator::try_new(
+                Arc::clone(&self.time_zone),
+                &self.projection,
+                self.projected_schema.clone(),
+            )?;
+            let output = futures::stream::unfold(generator, move |mut generator| async move {
+                // The interval does not take into account the time it takes to generate data,
+                // but the sleep itself is inaccurate anyway.
+                tokio::time::sleep(interval).await;
+                let result = generator.generate(batch_size);
+                Some((result, generator))
+            });
+            Box::pin(output)
+        };
         let output = output.map(|x| Ok(FlowEvent::append_only_data(x?)));
         let stream = Box::pin(FlowEventStreamAdapter::new(
             self.projected_schema.clone(),

@@ -55,10 +55,8 @@ impl BinaryFileReader {
                     };
                     let arr = modification_time_array.get_or_insert_with(|| {
                         Arc::new(
-                            TimestampMicrosecondArray::from(vec![
-                                self.metadata.modification_time
-                            ])
-                            .with_timezone(tz),
+                            TimestampMicrosecondArray::from(vec![self.metadata.modification_time])
+                                .with_timezone(tz),
                         ) as _
                     });
                     columns.push(Arc::clone(arr));
@@ -74,10 +72,7 @@ impl BinaryFileReader {
                         let content = content_bytes.take().unwrap_or_default();
                         // create a binary array without copying the content
                         let size = i32::try_from(content.len()).map_err(|e| {
-                            ArrowError::ComputeError(format!(
-                                "file content size too large: {}",
-                                e
-                            ))
+                            ArrowError::ComputeError(format!("file content size too large: {}", e))
                         })?;
                         let array_data = ArrayData::builder(DataType::Binary)
                             .len(1)

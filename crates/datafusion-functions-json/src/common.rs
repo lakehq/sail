@@ -2,8 +2,8 @@ use std::str::Utf8Error;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    downcast_array, AnyDictionaryArray, Array, ArrayAccessor, ArrayRef, AsArray, DictionaryArray, LargeStringArray,
-    PrimitiveArray, PrimitiveBuilder, RunArray, StringArray, StringViewArray,
+    downcast_array, AnyDictionaryArray, Array, ArrayAccessor, ArrayRef, AsArray, DictionaryArray,
+    LargeStringArray, PrimitiveArray, PrimitiveBuilder, RunArray, StringArray, StringViewArray,
 };
 use datafusion::arrow::compute::kernels::cast;
 use datafusion::arrow::compute::take;
@@ -24,7 +24,11 @@ use crate::common_union::{
 /// * `fn_name` - The name of the function
 /// * `value_type` - The general return type of the function, might be wrapped in a dictionary depending
 ///   on the first argument
-pub fn return_type_check(args: &[DataType], fn_name: &str, value_type: DataType) -> DataFusionResult<DataType> {
+pub fn return_type_check(
+    args: &[DataType],
+    fn_name: &str,
+    value_type: DataType,
+) -> DataFusionResult<DataType> {
     let Some(first) = args.first() else {
         return plan_err!("The '{fn_name}' function requires one or more arguments.");
     };
@@ -44,7 +48,10 @@ pub fn return_type_check(args: &[DataType], fn_name: &str, value_type: DataType)
         }
     })?;
     if first_dict_key_type.is_some() && !value_type.is_primitive() {
-        Ok(DataType::Dictionary(Box::new(DataType::Int64), Box::new(value_type)))
+        Ok(DataType::Dictionary(
+            Box::new(DataType::Int64),
+            Box::new(value_type),
+        ))
     } else {
         Ok(value_type)
     }
@@ -225,7 +232,11 @@ fn invoke_array_array<R: InvokeResult>(
                 is_object_lookup_array(path_array.data_type()),
             ) {
                 invoke_array_array::<R>(
-                    &(Arc::new(json_array.as_any_dictionary().with_values(child_array.clone())) as _),
+                    &(Arc::new(
+                        json_array
+                            .as_any_dictionary()
+                            .with_values(child_array.clone()),
+                    ) as _),
                     path_array,
                     jiter_find,
                 )
@@ -234,10 +245,14 @@ fn invoke_array_array<R: InvokeResult>(
             }
         }
         DataType::Utf8 => zip_apply::<R>(json_array.as_string::<i32>(), path_array, jiter_find),
-        DataType::LargeUtf8 => zip_apply::<R>(json_array.as_string::<i64>(), path_array, jiter_find),
+        DataType::LargeUtf8 => {
+            zip_apply::<R>(json_array.as_string::<i64>(), path_array, jiter_find)
+        }
         DataType::Utf8View => zip_apply::<R>(json_array.as_string_view(), path_array, jiter_find),
         other => {
-            if let Some(string_array) = nested_json_array(json_array, is_object_lookup_array(path_array.data_type())) {
+            if let Some(string_array) =
+                nested_json_array(json_array, is_object_lookup_array(path_array.data_type()))
+            {
                 zip_apply::<R>(string_array, path_array, jiter_find)
             } else {
                 exec_err!("unexpected json array type {:?}", other)
@@ -254,7 +269,10 @@ fn invoke_array_array<R: InvokeResult>(
 /// Arrow / `DataFusion` assumes that dictionary values do not contain nulls, nulls are encoded by the keys.
 /// Not following this invariant causes invalid dictionary arrays to be built later on inside of `DataFusion`
 /// when arrays are concacted and such.
-fn remap_dictionary_key_nulls(keys: PrimitiveArray<Int64Type>, values: ArrayRef) -> DictionaryArray<Int64Type> {
+fn remap_dictionary_key_nulls(
+    keys: PrimitiveArray<Int64Type>,
+    values: ArrayRef,
+) -> DictionaryArray<Int64Type> {
     // fast path: no nulls in values
     if values.null_count() == 0 {
         return DictionaryArray::new(keys, values);
@@ -304,7 +322,8 @@ fn invoke_array_scalars<R: InvokeResult>(
             let values = invoke_array_scalars::<R>(json_array.values(), path, jiter_find)?;
             return if R::ACCEPT_DICT_RETURN {
                 // make the keys into i64 to avoid generic bloat here
-                let mut keys: PrimitiveArray<Int64Type> = downcast_array(&cast(json_array.keys(), &DataType::Int64)?);
+                let mut keys: PrimitiveArray<Int64Type> =
+                    downcast_array(&cast(json_array.keys(), &DataType::Int64)?);
                 if is_json_union(values.data_type()) {
                     // JSON union: post-process the array to set keys to null where the union member is null
                     let type_ids = values.as_union().type_ids();
@@ -335,14 +354,19 @@ fn invoke_scalar_array<R: InvokeResult>(
     jiter_find: impl Fn(Option<&str>, &[JsonPath]) -> Result<R::Item, GetError>,
 ) -> DataFusionResult<ColumnarValue> {
     let s = extract_json_scalar(scalar)?;
-    let arr = s.map_or_else(|| StringArray::new_null(1), |s| StringArray::new_scalar(s).into_inner());
+    let arr = s.map_or_else(
+        || StringArray::new_null(1),
+        |s| StringArray::new_scalar(s).into_inner(),
+    );
 
     // TODO: possible optimization here if path_array is a dictionary; can apply against the
     // dictionary values directly for less work
     zip_apply::<R>(
         RunArray::try_new(
-            &PrimitiveArray::<Int64Type>::new_scalar(i64::try_from(path_array.len()).expect("len out of i64 range"))
-                .into_inner(),
+            &PrimitiveArray::<Int64Type>::new_scalar(
+                i64::try_from(path_array.len()).expect("len out of i64 range"),
+            )
+            .into_inner(),
             &arr,
         )?
         .downcast::<StringArray>()
@@ -382,7 +406,11 @@ fn zip_apply<'a, R: InvokeResult>(
             p.value(index).into()
         };
 
-        let json = if j.is_null(index) { None } else { Some(j.value(index)) };
+        let json = if j.is_null(index) {
+            None
+        } else {
+            Some(j.value(index))
+        };
 
         Some((json, path))
     }
@@ -433,22 +461,34 @@ fn zip_apply<'a, R: InvokeResult>(
         }
         // for integer dictionaries, cast them directly to the inner type because it basically costs
         // the same as building a new key array anyway
-        DataType::Dictionary(_, value_type) if value_type.as_ref() == &DataType::Int64 => inner::<_, R>(
-            json_array,
-            cast(path_array, &DataType::Int64)?.as_primitive::<Int64Type>(),
-            jiter_find,
-        ),
-        DataType::Dictionary(_, value_type) if value_type.as_ref() == &DataType::UInt64 => inner::<_, R>(
-            json_array,
-            cast(path_array, &DataType::UInt64)?.as_primitive::<UInt64Type>(),
-            jiter_find,
-        ),
+        DataType::Dictionary(_, value_type) if value_type.as_ref() == &DataType::Int64 => {
+            inner::<_, R>(
+                json_array,
+                cast(path_array, &DataType::Int64)?.as_primitive::<Int64Type>(),
+                jiter_find,
+            )
+        }
+        DataType::Dictionary(_, value_type) if value_type.as_ref() == &DataType::UInt64 => {
+            inner::<_, R>(
+                json_array,
+                cast(path_array, &DataType::UInt64)?.as_primitive::<UInt64Type>(),
+                jiter_find,
+            )
+        }
         // for basic types, just consume directly
         DataType::Utf8 => inner::<_, R>(json_array, path_array.as_string::<i32>(), jiter_find),
         DataType::LargeUtf8 => inner::<_, R>(json_array, path_array.as_string::<i64>(), jiter_find),
         DataType::Utf8View => inner::<_, R>(json_array, path_array.as_string_view(), jiter_find),
-        DataType::Int64 => inner::<_, R>(json_array, path_array.as_primitive::<Int64Type>(), jiter_find),
-        DataType::UInt64 => inner::<_, R>(json_array, path_array.as_primitive::<UInt64Type>(), jiter_find),
+        DataType::Int64 => inner::<_, R>(
+            json_array,
+            path_array.as_primitive::<Int64Type>(),
+            jiter_find,
+        ),
+        DataType::UInt64 => inner::<_, R>(
+            json_array,
+            path_array.as_primitive::<UInt64Type>(),
+            jiter_find,
+        ),
         other => {
             exec_err!(
                 "unexpected second argument type, expected string or int array, got {:?}",
@@ -461,7 +501,9 @@ fn zip_apply<'a, R: InvokeResult>(
 fn extract_json_scalar(scalar: &ScalarValue) -> DataFusionResult<Option<&str>> {
     match scalar {
         ScalarValue::Dictionary(_, b) => extract_json_scalar(b.as_ref()),
-        ScalarValue::Utf8(s) | ScalarValue::Utf8View(s) | ScalarValue::LargeUtf8(s) => Ok(s.as_deref()),
+        ScalarValue::Utf8(s) | ScalarValue::Utf8View(s) | ScalarValue::LargeUtf8(s) => {
+            Ok(s.as_deref())
+        }
         ScalarValue::Union(type_id_value, union_fields, _) => {
             Ok(json_from_union_scalar(type_id_value.as_ref(), union_fields))
         }
@@ -494,16 +536,29 @@ fn is_object_lookup_array(data_type: &DataType) -> bool {
 /// support unsigned integers.
 ///
 /// So we'll just use i64 as the largest signed integer type.
-fn cast_to_large_dictionary(dict_array: &dyn AnyDictionaryArray) -> DataFusionResult<DictionaryArray<Int64Type>> {
+fn cast_to_large_dictionary(
+    dict_array: &dyn AnyDictionaryArray,
+) -> DataFusionResult<DictionaryArray<Int64Type>> {
     let keys = downcast_array(&cast(dict_array.keys(), &DataType::Int64)?);
-    Ok(DictionaryArray::<Int64Type>::new(keys, dict_array.values().clone()))
+    Ok(DictionaryArray::<Int64Type>::new(
+        keys,
+        dict_array.values().clone(),
+    ))
 }
 
 /// Wrap an array as a dictionary with i64 indices.
-fn wrap_as_large_dictionary(original: &dyn AnyDictionaryArray, new_values: ArrayRef) -> DictionaryArray<Int64Type> {
+fn wrap_as_large_dictionary(
+    original: &dyn AnyDictionaryArray,
+    new_values: ArrayRef,
+) -> DictionaryArray<Int64Type> {
     assert_eq!(original.keys().len(), new_values.len());
-    let mut keys =
-        PrimitiveArray::from_iter_values(0i64..original.keys().len().try_into().expect("keys out of i64 range"));
+    let mut keys = PrimitiveArray::from_iter_values(
+        0i64..original
+            .keys()
+            .len()
+            .try_into()
+            .expect("keys out of i64 range"),
+    );
     if is_json_union(new_values.data_type()) {
         // JSON union: post-process the array to set keys to null where the union member is null
         let type_ids = new_values.as_union().type_ids();
@@ -512,7 +567,10 @@ fn wrap_as_large_dictionary(original: &dyn AnyDictionaryArray, new_values: Array
     DictionaryArray::new(keys, new_values)
 }
 
-pub fn jiter_json_find<'j>(opt_json: Option<&'j str>, path: &[JsonPath]) -> Option<(Jiter<'j>, Peek)> {
+pub fn jiter_json_find<'j>(
+    opt_json: Option<&'j str>,
+    path: &[JsonPath],
+) -> Option<(Jiter<'j>, Peek)> {
     let json_str = opt_json?;
     let mut jiter = Jiter::new(json_str.as_bytes());
     let mut peek = jiter.peek().ok()?;
@@ -574,7 +632,10 @@ impl From<Utf8Error> for GetError {
 ///
 /// That said, doing this might also be an optimization for cases like null-checking without needing
 /// to check the value union array.
-fn mask_dictionary_keys(keys: &PrimitiveArray<Int64Type>, type_ids: &[i8]) -> PrimitiveArray<Int64Type> {
+fn mask_dictionary_keys(
+    keys: &PrimitiveArray<Int64Type>,
+    type_ids: &[i8],
+) -> PrimitiveArray<Int64Type> {
     let mut null_mask = vec![true; keys.len()];
     for (i, k) in keys.iter().enumerate() {
         match k {

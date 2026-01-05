@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, OnceLock};
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, AsArray, BooleanArray, Float64Array, Int64Array, NullArray, StringArray, UnionArray,
+    Array, ArrayRef, AsArray, BooleanArray, Float64Array, Int64Array, NullArray, StringArray,
+    UnionArray,
 };
 use datafusion::arrow::buffer::{Buffer, ScalarBuffer};
 use datafusion::arrow::datatypes::{DataType, Field, UnionFields, UnionMode};
@@ -28,7 +29,11 @@ pub(crate) fn nested_json_array(array: &ArrayRef, object_lookup: bool) -> Option
 
 pub(crate) fn nested_json_array_ref(array: &ArrayRef, object_lookup: bool) -> Option<&ArrayRef> {
     let union_array: &UnionArray = array.as_any().downcast_ref::<UnionArray>()?;
-    let type_id = if object_lookup { TYPE_ID_OBJECT } else { TYPE_ID_ARRAY };
+    let type_id = if object_lookup {
+        TYPE_ID_OBJECT
+    } else {
+        TYPE_ID_ARRAY
+    };
     Some(union_array.child(type_id))
 }
 
@@ -40,7 +45,9 @@ pub(crate) fn json_from_union_scalar<'a>(
     if let Some((type_id, value)) = type_id_value {
         // we only want to take the ScalarValue string if the type_id indicates the value represents nested JSON
         if fields == &union_fields() && (*type_id == TYPE_ID_ARRAY || *type_id == TYPE_ID_OBJECT) {
-            if let ScalarValue::Utf8(s) | ScalarValue::Utf8View(s) | ScalarValue::LargeUtf8(s) = value.as_ref() {
+            if let ScalarValue::Utf8(s) | ScalarValue::Utf8View(s) | ScalarValue::LargeUtf8(s) =
+                value.as_ref()
+            {
                 return s.as_deref();
             }
         }
@@ -134,7 +141,12 @@ impl TryFrom<JsonUnion> for UnionArray {
             Arc::new(StringArray::from(value.arrays)),
             Arc::new(StringArray::from(value.objects)),
         ];
-        UnionArray::try_new(union_fields(), Buffer::from_vec(value.type_ids).into(), None, children)
+        UnionArray::try_new(
+            union_fields(),
+            Buffer::from_vec(value.type_ids).into(),
+            None,
+            children,
+        )
     }
 }
 
@@ -164,18 +176,39 @@ fn union_fields() -> UnionFields {
             let json_metadata: HashMap<String, String> =
                 HashMap::from_iter(vec![("is_json".to_string(), "true".to_string())]);
             UnionFields::from_iter([
-                (TYPE_ID_NULL, Arc::new(Field::new("null", DataType::Null, true))),
-                (TYPE_ID_BOOL, Arc::new(Field::new("bool", DataType::Boolean, false))),
-                (TYPE_ID_INT, Arc::new(Field::new("int", DataType::Int64, false))),
-                (TYPE_ID_FLOAT, Arc::new(Field::new("float", DataType::Float64, false))),
-                (TYPE_ID_STR, Arc::new(Field::new("str", DataType::Utf8, false))),
+                (
+                    TYPE_ID_NULL,
+                    Arc::new(Field::new("null", DataType::Null, true)),
+                ),
+                (
+                    TYPE_ID_BOOL,
+                    Arc::new(Field::new("bool", DataType::Boolean, false)),
+                ),
+                (
+                    TYPE_ID_INT,
+                    Arc::new(Field::new("int", DataType::Int64, false)),
+                ),
+                (
+                    TYPE_ID_FLOAT,
+                    Arc::new(Field::new("float", DataType::Float64, false)),
+                ),
+                (
+                    TYPE_ID_STR,
+                    Arc::new(Field::new("str", DataType::Utf8, false)),
+                ),
                 (
                     TYPE_ID_ARRAY,
-                    Arc::new(Field::new("array", DataType::Utf8, false).with_metadata(json_metadata.clone())),
+                    Arc::new(
+                        Field::new("array", DataType::Utf8, false)
+                            .with_metadata(json_metadata.clone()),
+                    ),
                 ),
                 (
                     TYPE_ID_OBJECT,
-                    Arc::new(Field::new("object", DataType::Utf8, false).with_metadata(json_metadata.clone())),
+                    Arc::new(
+                        Field::new("object", DataType::Utf8, false)
+                            .with_metadata(json_metadata.clone()),
+                    ),
                 ),
             ])
         })
@@ -211,7 +244,9 @@ impl From<JsonUnionField> for ScalarValue {
             JsonUnionField::Bool(b) => Self::Boolean(Some(b)),
             JsonUnionField::Int(i) => Self::Int64(Some(i)),
             JsonUnionField::Float(f) => Self::Float64(Some(f)),
-            JsonUnionField::Str(s) | JsonUnionField::Array(s) | JsonUnionField::Object(s) => Self::Utf8(Some(s)),
+            JsonUnionField::Str(s) | JsonUnionField::Array(s) | JsonUnionField::Object(s) => {
+                Self::Utf8(Some(s))
+            }
         }
     }
 }
@@ -304,7 +339,9 @@ mod test {
         let union_array = UnionArray::try_from(json_union).unwrap();
         let encoder = JsonUnionEncoder::from_union(union_array).unwrap();
 
-        let values_after: Vec<_> = (0..encoder.len()).map(|idx| encoder.get_value(idx)).collect();
+        let values_after: Vec<_> = (0..encoder.len())
+            .map(|idx| encoder.get_value(idx))
+            .collect();
         assert_eq!(
             values_after,
             vec![

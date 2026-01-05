@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use datafusion::execution::cache::CacheAccessor;
 use datafusion::execution::cache::cache_manager::ListFilesCache;
+use datafusion::execution::cache::CacheAccessor;
 use log::debug;
 use moka::sync::Cache;
 use object_store::path::Path;

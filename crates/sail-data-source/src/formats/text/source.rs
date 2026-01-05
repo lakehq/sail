@@ -6,6 +6,7 @@ use std::task::Poll;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::error::ArrowError;
+use datafusion::physical_expr::projection::ProjectionExprs;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::DisplayFormatType;
 use datafusion_common::{DataFusionError, Result};
@@ -16,7 +17,6 @@ use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
 use datafusion_datasource::{calculate_range, PartitionedFile, RangeCalculation, TableSchema};
-use datafusion::physical_expr::projection::ProjectionExprs;
 use futures::{StreamExt, TryStreamExt};
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
 
@@ -145,8 +145,7 @@ impl FileSource for TextSource {
     ) -> Result<Option<Arc<dyn FileSource>>> {
         let mut source = self.clone();
         let new_projection = self.projection.source.try_merge(projection)?;
-        source.projection =
-            SplitProjection::new(self.table_schema.file_schema(), &new_projection);
+        source.projection = SplitProjection::new(self.table_schema.file_schema(), &new_projection);
         Ok(Some(Arc::new(source)))
     }
 

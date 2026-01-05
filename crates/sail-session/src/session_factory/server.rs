@@ -2,8 +2,8 @@ use std::ops::DerefMut;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
-use datafusion::common::{internal_datafusion_err, Result};
 use datafusion::common::parquet_config::DFParquetWriterVersion;
+use datafusion::common::{internal_datafusion_err, Result};
 use datafusion::execution::cache::cache_manager::{
     CacheManagerConfig, FileMetadataCache, FileStatisticsCache, ListFilesCache,
 };
@@ -115,10 +115,8 @@ impl<I> ServerSessionFactory<I> {
             }
             CacheType::Session => {
                 debug!("Using session file statistics cache");
-                Some(
-                    Arc::new(MokaFileStatisticsCache::new(ttl, max_entries))
-                        as Arc<dyn FileStatisticsCache>,
-                )
+                Some(Arc::new(MokaFileStatisticsCache::new(ttl, max_entries))
+                    as Arc<dyn FileStatisticsCache>)
             }
         }
     }
@@ -144,10 +142,8 @@ impl<I> ServerSessionFactory<I> {
             }
             CacheType::Session => {
                 debug!("Using session file listing cache");
-                Some(
-                    Arc::new(MokaFileListingCache::new(ttl, max_entries))
-                        as Arc<dyn ListFilesCache>,
-                )
+                Some(Arc::new(MokaFileListingCache::new(ttl, max_entries))
+                    as Arc<dyn ListFilesCache>)
             }
         }
     }
@@ -293,10 +289,9 @@ impl<I> ServerSessionFactory<I> {
         parquet.coerce_int96 = Some("us".to_string());
         parquet.data_pagesize_limit = self.config.parquet.data_page_size_limit;
         parquet.write_batch_size = self.config.parquet.write_batch_size;
-        parquet.writer_version = DFParquetWriterVersion::from_str(
-            self.config.parquet.writer_version.as_str(),
-        )
-        .unwrap_or_default();
+        parquet.writer_version =
+            DFParquetWriterVersion::from_str(self.config.parquet.writer_version.as_str())
+                .unwrap_or_default();
         parquet.skip_arrow_metadata = self.config.parquet.skip_arrow_metadata;
         parquet.compression = Some(self.config.parquet.compression.clone());
         parquet.dictionary_enabled = Some(self.config.parquet.dictionary_enabled);

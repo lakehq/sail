@@ -1,16 +1,18 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::arrow::array::ArrayRef;
-use datafusion::arrow::array::UnionArray;
+use datafusion::arrow::array::{ArrayRef, UnionArray};
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::Result as DataFusionResult;
-use datafusion::logical_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion::logical_expr::{
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion::scalar::ScalarValue;
 use jiter::{Jiter, NumberAny, NumberInt, Peek};
 
-use crate::common::InvokeResult;
-use crate::common::{get_err, invoke, jiter_json_find, return_type_check, GetError, JsonPath};
+use crate::common::{
+    get_err, invoke, jiter_json_find, return_type_check, GetError, InvokeResult, JsonPath,
+};
 use crate::common_macros::make_udf_function;
 use crate::common_union::{JsonUnion, JsonUnionField};
 
@@ -93,7 +95,10 @@ impl InvokeResult for JsonUnion {
     }
 }
 
-fn jiter_json_get_union(opt_json: Option<&str>, path: &[JsonPath]) -> Result<JsonUnionField, GetError> {
+fn jiter_json_get_union(
+    opt_json: Option<&str>,
+    path: &[JsonPath],
+) -> Result<JsonUnionField, GetError> {
     if let Some((mut jiter, peek)) = jiter_json_find(opt_json, path) {
         build_union(&mut jiter, peek)
     } else {

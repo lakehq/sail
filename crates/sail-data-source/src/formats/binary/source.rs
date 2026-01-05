@@ -2,6 +2,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{RecordBatch, RecordBatchOptions};
+use datafusion::physical_expr::projection::ProjectionExprs;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::file::FileSource;
@@ -9,7 +10,6 @@ use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
 use datafusion_datasource::{PartitionedFile, TableSchema};
-use datafusion::physical_expr::projection::ProjectionExprs;
 use futures::StreamExt;
 use object_store::ObjectStore;
 
@@ -95,8 +95,7 @@ impl FileSource for BinarySource {
     ) -> Result<Option<Arc<dyn FileSource>>> {
         let mut source = self.clone();
         let new_projection = self.projection.source.try_merge(projection)?;
-        source.projection =
-            SplitProjection::new(self.table_schema.file_schema(), &new_projection);
+        source.projection = SplitProjection::new(self.table_schema.file_schema(), &new_projection);
         Ok(Some(Arc::new(source)))
     }
 

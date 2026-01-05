@@ -498,9 +498,7 @@ impl PlanResolver<'_> {
     fn resolve_expression_types(exprs: &[Expr], schema: &DFSchema) -> PlanResult<Vec<DataType>> {
         exprs
             .iter()
-            .map(|arg| {
-                Ok(arg.to_field(schema)?.1.data_type().clone())
-            })
+            .map(|arg| Ok(arg.to_field(schema)?.1.data_type().clone()))
             .collect::<PlanResult<Vec<_>>>()
     }
 }

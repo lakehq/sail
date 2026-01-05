@@ -18,6 +18,7 @@ use sail_logical_plan::file_write::FileWriteNode;
 use sail_logical_plan::range::RangeNode;
 use sail_logical_plan::show_string::ShowStringNode;
 use sail_logical_plan::streaming::collector::StreamCollectorNode;
+use sail_logical_plan::streaming::filter::StreamFilterNode;
 use sail_logical_plan::streaming::limit::StreamLimitNode;
 use sail_logical_plan::streaming::source_adapter::StreamSourceAdapterNode;
 use sail_logical_plan::streaming::source_wrapper::StreamSourceWrapperNode;
@@ -73,9 +74,9 @@ impl TreeNodeRewriter for StreamingRewriter {
                     predicate, input, ..
                 } = filter;
                 let predicate = or(predicate, col(MARKER_FIELD_NAME).is_not_null());
-                Ok(Transformed::yes(LogicalPlan::Filter(Filter::try_new(
-                    predicate, input,
-                )?)))
+                Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                    node: Arc::new(StreamFilterNode::new(input, predicate)),
+                })))
             }
             LogicalPlan::Window(_) => {
                 not_impl_err!("streaming window: {plan:?}")

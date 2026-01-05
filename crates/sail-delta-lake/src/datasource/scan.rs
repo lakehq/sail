@@ -23,8 +23,8 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, SchemaRef};
 use datafusion::catalog::Session;
-use datafusion::common::{DataFusionError, Result};
 use datafusion::common::stats::ColumnStatistics;
+use datafusion::common::{DataFusionError, Result};
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{
@@ -170,19 +170,22 @@ pub fn build_file_scan_config(
     // `Statistics::column_statistics` expects the same length as the table
     // schema (file schema + partition columns). If this vector is shorter, projection statistics
     // can panic when encountering a `Column` referring to a partition column.
-    let mut stats = snapshot.datafusion_table_statistics(params.pruning_mask).unwrap_or_else(|| {
-        datafusion::common::stats::Statistics::new_unknown(table_schema.table_schema().as_ref())
-    });
+    let mut stats = snapshot
+        .datafusion_table_statistics(params.pruning_mask)
+        .unwrap_or_else(|| {
+            datafusion::common::stats::Statistics::new_unknown(table_schema.table_schema().as_ref())
+        });
     let expected_cols = table_schema.table_schema().fields().len();
     if stats.column_statistics.len() < expected_cols {
-        stats.column_statistics
-            .extend((0..(expected_cols - stats.column_statistics.len())).map(|_| {
-                ColumnStatistics::new_unknown()
-            }));
+        stats.column_statistics.extend(
+            (0..(expected_cols - stats.column_statistics.len()))
+                .map(|_| ColumnStatistics::new_unknown()),
+        );
     } else if stats.column_statistics.len() > expected_cols {
         stats.column_statistics.truncate(expected_cols);
     }
-    let mut parquet_source = ParquetSource::new(table_schema).with_table_parquet_options(parquet_options);
+    let mut parquet_source =
+        ParquetSource::new(table_schema).with_table_parquet_options(parquet_options);
 
     if let Some(predicate) = params.pushdown_filter {
         if config.enable_parquet_pushdown {

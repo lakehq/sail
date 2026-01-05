@@ -1,16 +1,14 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use datafusion::common::Statistics;
+use datafusion::execution::cache::cache_manager::{FileStatisticsCache, FileStatisticsCacheEntry};
 use datafusion::execution::cache::CacheAccessor;
-use datafusion::execution::cache::cache_manager::{
-    FileStatisticsCache, FileStatisticsCacheEntry,
-};
 use log::{debug, error};
 use moka::sync::Cache;
 use object_store::path::Path;
 use object_store::ObjectMeta;
-use std::collections::HashMap;
 
 pub struct MokaFileStatisticsCache {
     statistics: Cache<Path, (ObjectMeta, Arc<Statistics>)>,

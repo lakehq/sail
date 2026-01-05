@@ -8,7 +8,6 @@ use datafusion::physical_expr_common::sort_expr::LexRequirement;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{not_impl_err, GetExt, Result, Statistics};
-use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_format::FileFormat;
@@ -16,6 +15,7 @@ use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuil
 use datafusion_datasource::file_sink_config::FileSinkConfig;
 use datafusion_datasource::sink::DataSinkExec;
 use datafusion_datasource::source::DataSourceExec;
+use datafusion_datasource::TableSchema;
 use datafusion_session::Session;
 use object_store::{ObjectMeta, ObjectStore};
 

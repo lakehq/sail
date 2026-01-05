@@ -5,7 +5,9 @@ use datafusion::arrow::array::BooleanBuilder;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::arrow::array::{ArrayRef, BooleanArray};
 use datafusion::common::{plan_err, Result, ScalarValue};
-use datafusion::logical_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion::logical_expr::{
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 use crate::common::{invoke, jiter_json_find, return_type_check, GetError, InvokeResult, JsonPath};
 use crate::common_macros::make_udf_function;

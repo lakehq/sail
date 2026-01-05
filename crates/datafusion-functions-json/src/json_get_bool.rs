@@ -3,7 +3,9 @@ use std::any::Any;
 use datafusion::arrow::array::BooleanArray;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::Result as DataFusionResult;
-use datafusion::logical_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion::logical_expr::{
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use jiter::Peek;
 
 use crate::common::{get_err, invoke, jiter_json_find, return_type_check, GetError, JsonPath};
