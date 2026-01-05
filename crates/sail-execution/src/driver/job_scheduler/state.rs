@@ -60,19 +60,19 @@ pub struct TaskAttemptDescriptor {
 
 #[derive(Debug, Clone, Copy)]
 pub enum TaskState {
-    /// The task has been created, but may not be eligible for scheduling.
+    /// The task attempt has been created, but may not be eligible for scheduling.
     Created,
-    /// The task is eligible for scheduling, but is not assigned to any worker.
+    /// The task attempt is eligible for scheduling, but is not assigned to any worker.
     Pending,
-    /// The task is scheduled to a worker, but its status is unknown.
+    /// The task attempt is scheduled to a worker, but its status is unknown.
     Scheduled,
-    /// The task is running on a worker.
+    /// The task attempt is running on a worker.
     Running,
-    /// The task has succeeded.
+    /// The task attempt has succeeded.
     Succeeded,
-    /// The task has failed.
+    /// The task attempt has failed.
     Failed,
-    /// The task has been canceled.
+    /// The task attempt has been canceled.
     Canceled,
 }
 

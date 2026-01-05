@@ -21,7 +21,6 @@ pub struct TaskDefinition {
 }
 
 pub struct TaskInput {
-    pub edge: usize,
     pub locator: TaskInputLocator,
 }
 
@@ -53,22 +52,17 @@ pub struct TaskOutput {
 }
 
 pub enum TaskOutputDistribution {
-    Broadcast {
-        replicas: usize,
-    },
     Hash {
         keys: Vec<Arc<[u8]>>,
         channels: usize,
-        replicas: usize,
     },
     RoundRobin {
         channels: usize,
-        replicas: usize,
     },
 }
 
 pub enum TaskOutputLocator {
-    Local,
+    Local { replicas: usize },
     Remote { uri: String },
 }
 
@@ -114,9 +108,8 @@ impl TryFrom<gen::TaskDefinition> for TaskDefinition {
 
 impl From<TaskInput> for gen::TaskInput {
     fn from(value: TaskInput) -> Self {
-        let TaskInput { edge, locator } = value;
+        let TaskInput { locator } = value;
         gen::TaskInput {
-            edge: edge as u64,
             locator: Some(locator.into()),
         }
     }
@@ -134,10 +127,7 @@ impl TryFrom<gen::TaskInput> for TaskInput {
                 ))
             }
         };
-        Ok(TaskInput {
-            edge: value.edge as usize,
-            locator,
-        })
+        Ok(TaskInput { locator })
     }
 }
 
@@ -352,27 +342,16 @@ impl TryFrom<gen::TaskOutput> for TaskOutput {
 impl From<TaskOutputDistribution> for gen::TaskOutputDistribution {
     fn from(value: TaskOutputDistribution) -> Self {
         let kind = match value {
-            TaskOutputDistribution::Broadcast { replicas } => {
-                gen::task_output_distribution::Kind::Broadcast(
-                    gen::TaskOutputBroadcastDistribution {
-                        replicas: replicas as u64,
-                    },
-                )
+            TaskOutputDistribution::Hash { keys, channels } => {
+                gen::task_output_distribution::Kind::Hash(gen::TaskOutputHashDistribution {
+                    keys: keys.into_iter().map(|k| k.to_vec()).collect(),
+                    channels: channels as u64,
+                })
             }
-            TaskOutputDistribution::Hash {
-                keys,
-                channels,
-                replicas,
-            } => gen::task_output_distribution::Kind::Hash(gen::TaskOutputHashDistribution {
-                keys: keys.into_iter().map(|k| k.to_vec()).collect(),
-                channels: channels as u64,
-                replicas: replicas as u64,
-            }),
-            TaskOutputDistribution::RoundRobin { channels, replicas } => {
+            TaskOutputDistribution::RoundRobin { channels } => {
                 gen::task_output_distribution::Kind::RoundRobin(
                     gen::TaskOutputRoundRobinDistribution {
                         channels: channels as u64,
-                        replicas: replicas as u64,
                     },
                 )
             }
@@ -386,25 +365,17 @@ impl TryFrom<gen::TaskOutputDistribution> for TaskOutputDistribution {
 
     fn try_from(value: gen::TaskOutputDistribution) -> Result<Self, Self::Error> {
         match value.kind {
-            Some(gen::task_output_distribution::Kind::Broadcast(
-                gen::TaskOutputBroadcastDistribution { replicas },
-            )) => Ok(TaskOutputDistribution::Broadcast {
-                replicas: replicas as usize,
-            }),
             Some(gen::task_output_distribution::Kind::Hash(gen::TaskOutputHashDistribution {
                 keys,
                 channels,
-                replicas,
             })) => Ok(TaskOutputDistribution::Hash {
                 keys: keys.into_iter().map(|k| Arc::from(k)).collect(),
                 channels: channels as usize,
-                replicas: replicas as usize,
             }),
             Some(gen::task_output_distribution::Kind::RoundRobin(
-                gen::TaskOutputRoundRobinDistribution { channels, replicas },
+                gen::TaskOutputRoundRobinDistribution { channels },
             )) => Ok(TaskOutputDistribution::RoundRobin {
                 channels: channels as usize,
-                replicas: replicas as usize,
             }),
             None => Err(ExecutionError::InvalidArgument(
                 "cannot decode empty task output distribution".to_string(),
@@ -416,8 +387,10 @@ impl TryFrom<gen::TaskOutputDistribution> for TaskOutputDistribution {
 impl From<TaskOutputLocator> for gen::TaskOutputLocator {
     fn from(value: TaskOutputLocator) -> Self {
         let kind = match value {
-            TaskOutputLocator::Local => {
-                gen::task_output_locator::Kind::Local(gen::TaskOutputLocalLocator {})
+            TaskOutputLocator::Local { replicas } => {
+                gen::task_output_locator::Kind::Local(gen::TaskOutputLocalLocator {
+                    replicas: replicas as u64,
+                })
             }
             TaskOutputLocator::Remote { uri } => {
                 gen::task_output_locator::Kind::Remote(gen::TaskOutputRemoteLocator { uri })
@@ -432,9 +405,11 @@ impl TryFrom<gen::TaskOutputLocator> for TaskOutputLocator {
 
     fn try_from(value: gen::TaskOutputLocator) -> Result<Self, Self::Error> {
         match value.kind {
-            Some(gen::task_output_locator::Kind::Local(gen::TaskOutputLocalLocator {})) => {
-                Ok(TaskOutputLocator::Local)
-            }
+            Some(gen::task_output_locator::Kind::Local(gen::TaskOutputLocalLocator {
+                replicas,
+            })) => Ok(TaskOutputLocator::Local {
+                replicas: replicas as usize,
+            }),
             Some(gen::task_output_locator::Kind::Remote(gen::TaskOutputRemoteLocator { uri })) => {
                 Ok(TaskOutputLocator::Remote { uri })
             }
@@ -493,27 +468,19 @@ impl TaskInput {
 impl TaskOutput {
     pub fn channels(&self) -> usize {
         match self.distribution {
-            TaskOutputDistribution::Broadcast { .. } => 1,
             TaskOutputDistribution::Hash { channels, .. } => channels,
             TaskOutputDistribution::RoundRobin { channels, .. } => channels,
         }
     }
 
-    pub fn replicas(&self) -> usize {
-        match self.distribution {
-            TaskOutputDistribution::Broadcast { replicas } => replicas,
-            TaskOutputDistribution::Hash { replicas, .. } => replicas,
-            TaskOutputDistribution::RoundRobin { replicas, .. } => replicas,
-        }
-    }
-
     pub fn locations(&self, key: &TaskKey) -> Vec<TaskWriteLocation> {
         let channels = self.channels();
-        let replicas = self.replicas();
         match &self.locator {
-            TaskOutputLocator::Local => (0..channels)
+            TaskOutputLocator::Local { replicas } => (0..channels)
                 .map(|channel| TaskWriteLocation::Local {
-                    storage: LocalStreamStorage::Memory { replicas },
+                    storage: LocalStreamStorage::Memory {
+                        replicas: *replicas,
+                    },
                     key: TaskStreamKey {
                         job_id: key.job_id,
                         stage: key.stage,
@@ -545,14 +512,7 @@ impl TaskOutput {
         codec: &dyn PhysicalExtensionCodec,
     ) -> ExecutionResult<Partitioning> {
         match &self.distribution {
-            TaskOutputDistribution::Broadcast { replicas: _ } => {
-                Ok(Partitioning::RoundRobinBatch(1))
-            }
-            TaskOutputDistribution::Hash {
-                keys,
-                channels,
-                replicas: _,
-            } => {
+            TaskOutputDistribution::Hash { keys, channels } => {
                 let keys = keys
                     .iter()
                     .map(|k| {
@@ -567,10 +527,9 @@ impl TaskOutput {
                     .collect::<ExecutionResult<Vec<_>>>()?;
                 Ok(Partitioning::Hash(keys, *channels))
             }
-            TaskOutputDistribution::RoundRobin {
-                channels,
-                replicas: _,
-            } => Ok(Partitioning::RoundRobinBatch(*channels)),
+            TaskOutputDistribution::RoundRobin { channels } => {
+                Ok(Partitioning::RoundRobinBatch(*channels))
+            }
         }
     }
 }

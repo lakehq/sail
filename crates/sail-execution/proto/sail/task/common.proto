@@ -9,8 +9,7 @@ message TaskDefinition {
 }
 
 message TaskInput {
-  uint64 edge = 1;
-  TaskInputLocator locator = 2;
+  TaskInputLocator locator = 1;
 }
 
 message TaskInputLocator {
@@ -63,25 +62,18 @@ message TaskOutput {
 
 message TaskOutputDistribution {
   oneof Kind {
-    TaskOutputBroadcastDistribution broadcast = 2;
     TaskOutputHashDistribution hash = 1;
-    TaskOutputRoundRobinDistribution round_robin = 3;
+    TaskOutputRoundRobinDistribution round_robin = 2;
   }
-}
-
-message TaskOutputBroadcastDistribution {
-  uint64 replicas = 1;
 }
 
 message TaskOutputHashDistribution {
   repeated bytes keys = 1;
   uint64 channels = 2;
-  uint64 replicas = 3;
 }
 
 message TaskOutputRoundRobinDistribution {
   uint64 channels = 1;
-  uint64 replicas = 2;
 }
 
 message TaskOutputLocator {
@@ -91,7 +83,9 @@ message TaskOutputLocator {
   }
 }
 
-message TaskOutputLocalLocator {}
+message TaskOutputLocalLocator {
+  uint64 replicas = 1;
+}
 
 message TaskOutputRemoteLocator {
   string uri = 1;
