@@ -17,9 +17,10 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema, Schem
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::{exec_err, Result, ScalarValue};
 use datafusion::functions::core::getfield::GetFieldFunc;
-use datafusion::physical_expr::expressions::{self, Column, Literal};
+use datafusion::physical_expr::expressions::{self, CastColumnExpr, Column, Literal};
 use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use datafusion::physical_expr_adapter::{PhysicalExprAdapter, PhysicalExprAdapterFactory};
+use datafusion_common::nested_struct::validate_struct_compatibility;
 
 #[derive(Debug)]
 pub struct IcebergPhysicalExprAdapterFactory {}
@@ -274,19 +275,27 @@ impl<'a> IcebergPhysicalExprRewriter<'a> {
         logical_field: &Field,
         physical_field: &Field,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-        if !can_cast_types(physical_field.data_type(), logical_field.data_type()) {
-            return exec_err!(
-                "Cannot cast column '{}' from '{}' (physical) to '{}' (logical)",
-                logical_field.name(),
-                physical_field.data_type(),
-                logical_field.data_type()
-            );
+        match (physical_field.data_type(), logical_field.data_type()) {
+            (DataType::Struct(physical_fields), DataType::Struct(logical_fields)) => {
+                validate_struct_compatibility(physical_fields, logical_fields)?;
+            }
+            _ => {
+                if !can_cast_types(physical_field.data_type(), logical_field.data_type()) {
+                    return exec_err!(
+                        "Cannot cast column '{}' from '{}' (physical) to '{}' (logical)",
+                        logical_field.name(),
+                        physical_field.data_type(),
+                        logical_field.data_type()
+                    );
+                }
+            }
         }
-        let cast_expr = datafusion::physical_expr::expressions::CastExpr::new(
+
+        Ok(Transformed::yes(Arc::new(CastColumnExpr::new(
             column_expr,
-            logical_field.data_type().clone(),
+            Arc::new(physical_field.clone()),
+            Arc::new(logical_field.clone()),
             None,
-        );
-        Ok(Transformed::yes(Arc::new(cast_expr)))
+        ))))
     }
 }
