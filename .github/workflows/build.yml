@@ -173,7 +173,6 @@ jobs:
       spark_version: ${{ matrix.spark-version }}
     needs:
       - setup
-      - rust-unit-tests
       - build-wheels
 
   ibis-tests:
@@ -184,7 +183,6 @@ jobs:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     needs:
       - setup
-      - rust-unit-tests
       - build-wheels
 
   python-build:
@@ -195,7 +193,6 @@ jobs:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     needs:
       - setup
-      - rust-unit-tests
       - build-wheels
 
   codecov-notify:
