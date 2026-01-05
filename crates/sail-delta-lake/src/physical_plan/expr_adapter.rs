@@ -21,7 +21,7 @@ use datafusion::arrow::compute::{can_cast_types, cast_with_options, CastOptions}
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion::common::{exec_err, Result, ScalarValue};
+use datafusion::common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion::functions::core::getfield::GetFieldFunc;
 use datafusion::physical_expr::expressions::{self, Column, Literal};
 use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
@@ -446,7 +446,9 @@ impl PhysicalExpr for DeltaCastColumnExpr {
         mut children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         assert_eq!(children.len(), 1);
-        let child = children.pop().expect("DeltaCastColumnExpr child");
+        let child = children.pop().ok_or_else(|| {
+            DataFusionError::Plan("DeltaCastColumnExpr requires a child".to_string())
+        })?;
         Ok(Arc::new(Self::new(
             child,
             Arc::clone(&self.input_field),

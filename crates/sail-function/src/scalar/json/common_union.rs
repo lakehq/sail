@@ -168,6 +168,7 @@ impl TryFrom<JsonUnion> for UnionArray {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub(crate) enum JsonUnionField {
     JsonNull,
     Bool(bool),
@@ -245,6 +246,7 @@ impl JsonUnionField {
         }
     }
 
+    #[allow(dead_code)]
     pub fn scalar_value(f: Option<Self>) -> ScalarValue {
         ScalarValue::Union(
             f.map(|f| (f.type_id(), Box::new(f.into()))),
@@ -319,7 +321,7 @@ impl JsonUnionEncoder {
             TYPE_ID_STR => JsonUnionValue::Str(self.string.value(idx)),
             TYPE_ID_ARRAY => JsonUnionValue::Array(self.array.value(idx)),
             TYPE_ID_OBJECT => JsonUnionValue::Object(self.object.value(idx)),
-            _ => panic!("Invalid type_id: {type_id}, not a valid JSON type"),
+            _ => unreachable!("Invalid type_id: {type_id}, not a valid JSON type"),
         }
     }
 }
@@ -336,6 +338,7 @@ pub enum JsonUnionValue<'a> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod test {
     use super::*;
 

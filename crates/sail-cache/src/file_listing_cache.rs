@@ -56,9 +56,7 @@ impl CacheAccessor<Path, Arc<Vec<ObjectMeta>>> for MokaFileListingCache {
 
                 let base = k.to_string();
                 let prefix_str = prefix.to_string();
-                let full_prefix = if prefix_str.starts_with(&base) {
-                    prefix_str
-                } else if base.is_empty() {
+                let full_prefix = if prefix_str.starts_with(&base) || base.is_empty() {
                     prefix_str
                 } else {
                     format!("{base}/{}", prefix_str.trim_start_matches('/'))

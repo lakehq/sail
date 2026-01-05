@@ -247,7 +247,10 @@ pub fn resolve_parquet_write_options(
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use datafusion::prelude::SessionContext;
+    use datafusion_common::parquet_config::DFParquetWriterVersion;
 
     use crate::formats::parquet::options::{
         resolve_parquet_read_options, resolve_parquet_write_options,
@@ -358,7 +361,10 @@ mod tests {
         let options = resolve_parquet_write_options(&state, vec![kv.clone()])?;
         assert_eq!(options.global.data_pagesize_limit, 1024);
         assert_eq!(options.global.write_batch_size, 1000);
-        assert_eq!(options.global.writer_version, "2.0");
+        assert_eq!(
+            options.global.writer_version,
+            DFParquetWriterVersion::from_str("2.0")?
+        );
         assert!(options.global.skip_arrow_metadata);
         assert_eq!(options.global.compression, Some("snappy".to_string()));
         assert_eq!(options.global.dictionary_enabled, Some(true));

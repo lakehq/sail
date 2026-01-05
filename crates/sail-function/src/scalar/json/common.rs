@@ -25,7 +25,9 @@ use datafusion::arrow::array::{
 use datafusion::arrow::compute::kernels::cast;
 use datafusion::arrow::compute::take;
 use datafusion::arrow::datatypes::{ArrowNativeType, DataType, Int64Type, UInt64Type};
-use datafusion::common::{exec_err, plan_err, Result as DataFusionResult, ScalarValue};
+use datafusion::common::{
+    exec_err, plan_err, DataFusionError, Result as DataFusionResult, ScalarValue,
+};
 use datafusion::logical_expr::ColumnarValue;
 use jiter::{Jiter, JiterError, Peek};
 
@@ -107,7 +109,10 @@ impl<'a> From<&'a str> for JsonPath<'a> {
 
 impl From<u64> for JsonPath<'_> {
     fn from(index: u64) -> Self {
-        JsonPath::Index(usize::try_from(index).unwrap())
+        match usize::try_from(index) {
+            Ok(i) => Self::Index(i),
+            Err(_) => Self::None,
+        }
     }
 }
 
@@ -215,13 +220,17 @@ fn invoke_array_array<R: InvokeResult>(
         DataType::Dictionary(_, value_type) if value_type.as_ref() == &DataType::Utf8 => {
             let json_array = cast_to_large_dictionary(json_array.as_any_dictionary())?;
             let output = zip_apply::<R>(
-                json_array.downcast_dict::<StringArray>().unwrap(),
+                json_array.downcast_dict::<StringArray>().ok_or_else(|| {
+                    DataFusionError::Internal(
+                        "dictionary value type should be StringArray".to_string(),
+                    )
+                })?,
                 path_array,
                 jiter_find,
             )?;
             if R::ACCEPT_DICT_RETURN {
                 // ensure return is a dictionary to satisfy the declaration above in return_type_check
-                Ok(Arc::new(wrap_as_large_dictionary(&json_array, output)))
+                Ok(Arc::new(wrap_as_large_dictionary(&json_array, output)?))
             } else {
                 Ok(output)
             }
@@ -229,13 +238,19 @@ fn invoke_array_array<R: InvokeResult>(
         DataType::Dictionary(_, value_type) if value_type.as_ref() == &DataType::LargeUtf8 => {
             let json_array = cast_to_large_dictionary(json_array.as_any_dictionary())?;
             let output = zip_apply::<R>(
-                json_array.downcast_dict::<LargeStringArray>().unwrap(),
+                json_array
+                    .downcast_dict::<LargeStringArray>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "dictionary value type should be LargeStringArray".to_string(),
+                        )
+                    })?,
                 path_array,
                 jiter_find,
             )?;
             if R::ACCEPT_DICT_RETURN {
                 // ensure return is a dictionary to satisfy the declaration above in return_type_check
-                Ok(Arc::new(wrap_as_large_dictionary(&json_array, output)))
+                Ok(Arc::new(wrap_as_large_dictionary(&json_array, output)?))
             } else {
                 Ok(output)
             }
@@ -380,14 +395,16 @@ fn invoke_scalar_array<R: InvokeResult>(
     // dictionary values directly for less work
     zip_apply::<R>(
         RunArray::try_new(
-            &PrimitiveArray::<Int64Type>::new_scalar(
-                i64::try_from(path_array.len()).expect("len out of i64 range"),
-            )
+            &PrimitiveArray::<Int64Type>::new_scalar(i64::try_from(path_array.len()).map_err(
+                |_| DataFusionError::Internal("path_array length out of i64 range".to_string()),
+            )?)
             .into_inner(),
             &arr,
         )?
         .downcast::<StringArray>()
-        .expect("type known"),
+        .ok_or_else(|| {
+            DataFusionError::Internal("RunArray should contain StringArray".to_string())
+        })?,
         path_array,
         jiter_find,
     )
@@ -456,7 +473,11 @@ fn zip_apply<'a, R: InvokeResult>(
             let path_array = cast_to_large_dictionary(path_array.as_any_dictionary())?;
             inner::<_, R>(
                 json_array,
-                path_array.downcast_dict::<StringArray>().unwrap(),
+                path_array.downcast_dict::<StringArray>().ok_or_else(|| {
+                    DataFusionError::Internal(
+                        "dictionary value type should be StringArray".to_string(),
+                    )
+                })?,
                 jiter_find,
             )
         }
@@ -464,7 +485,13 @@ fn zip_apply<'a, R: InvokeResult>(
             let path_array = cast_to_large_dictionary(path_array.as_any_dictionary())?;
             inner::<_, R>(
                 json_array,
-                path_array.downcast_dict::<LargeStringArray>().unwrap(),
+                path_array
+                    .downcast_dict::<LargeStringArray>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "dictionary value type should be LargeStringArray".to_string(),
+                        )
+                    })?,
                 jiter_find,
             )
         }
@@ -472,7 +499,13 @@ fn zip_apply<'a, R: InvokeResult>(
             let path_array = cast_to_large_dictionary(path_array.as_any_dictionary())?;
             inner::<_, R>(
                 json_array,
-                path_array.downcast_dict::<StringViewArray>().unwrap(),
+                path_array
+                    .downcast_dict::<StringViewArray>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "dictionary value type should be StringViewArray".to_string(),
+                        )
+                    })?,
                 jiter_find,
             )
         }
@@ -567,21 +600,19 @@ fn cast_to_large_dictionary(
 fn wrap_as_large_dictionary(
     original: &dyn AnyDictionaryArray,
     new_values: ArrayRef,
-) -> DictionaryArray<Int64Type> {
+) -> DataFusionResult<DictionaryArray<Int64Type>> {
     assert_eq!(original.keys().len(), new_values.len());
     let mut keys = PrimitiveArray::from_iter_values(
-        0i64..original
-            .keys()
-            .len()
-            .try_into()
-            .expect("keys out of i64 range"),
+        0i64..original.keys().len().try_into().map_err(|_| {
+            DataFusionError::Internal("dictionary keys length should fit in i64 range".to_string())
+        })?,
     );
     if is_json_union(new_values.data_type()) {
         // JSON union: post-process the array to set keys to null where the union member is null
         let type_ids = new_values.as_union().type_ids();
         keys = mask_dictionary_keys(&keys, type_ids);
     }
-    DictionaryArray::new(keys, new_values)
+    Ok(DictionaryArray::new(keys, new_values))
 }
 
 pub fn jiter_json_find<'j>(

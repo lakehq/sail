@@ -75,12 +75,10 @@ impl ExecutionPlan for StreamFilterExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        // Preserve the input partitioning and avoid optimizer-inserted repartitions.
         vec![Distribution::UnspecifiedDistribution]
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
-        // Do not encourage DataFusion to repartition below this operator.
         vec![false]
     }
 
@@ -96,7 +94,11 @@ impl ExecutionPlan for StreamFilterExec {
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let child = children.pop().expect("StreamFilterExec child");
+        let child = children.pop().ok_or_else(|| {
+            datafusion::common::DataFusionError::Plan(
+                "StreamFilterExec requires a child".to_string(),
+            )
+        })?;
         Ok(Arc::new(Self::try_new(child, Arc::clone(&self.predicate))?))
     }
 
@@ -110,7 +112,7 @@ impl ExecutionPlan for StreamFilterExec {
         let stream = self.input.execute(partition, context)?;
         let stream = stream.map(move |batch| {
             let batch = batch?;
-            Ok(batch_filter(&batch, &predicate)?)
+            batch_filter(&batch, &predicate)
         });
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(

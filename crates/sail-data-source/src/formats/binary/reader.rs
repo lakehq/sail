@@ -81,7 +81,16 @@ impl BinaryFileReader {
                             .build()?;
                         content_array = Some(Arc::new(BinaryArray::from(array_data)) as _);
                     }
-                    columns.push(Arc::clone(content_array.as_ref().unwrap()));
+                    columns.push(
+                        content_array
+                            .as_ref()
+                            .ok_or_else(|| {
+                                ArrowError::ComputeError(
+                                    "content_array should be initialized before use".to_string(),
+                                )
+                            })?
+                            .clone(),
+                    );
                 }
                 other => {
                     return Err(ArrowError::ParseError(format!(
