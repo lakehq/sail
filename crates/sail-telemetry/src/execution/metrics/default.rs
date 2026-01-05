@@ -79,7 +79,8 @@ impl MetricEmitter for DefaultMetricEmitter {
             | MetricValue::Time { .. }
             | MetricValue::PruningMetrics { .. }
             | MetricValue::Ratio { .. }
-            | MetricValue::Custom { .. } => {
+            | MetricValue::Custom { .. }
+            | MetricValue::OutputBatches(_) => {
                 #[cfg(debug_assertions)]
                 registry.execution_unknown_metric_count.adder(1u64).emit();
             }

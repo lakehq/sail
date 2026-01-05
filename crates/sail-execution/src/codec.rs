@@ -28,7 +28,7 @@ use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
 use datafusion_proto::physical_plan::from_proto::{
     parse_physical_expr, parse_physical_sort_exprs, parse_protobuf_file_scan_config,
-    parse_protobuf_partitioning,
+    parse_protobuf_file_scan_schema, parse_protobuf_partitioning,
 };
 use datafusion_proto::physical_plan::to_proto::{
     serialize_file_scan_config, serialize_partitioning, serialize_physical_expr,
@@ -327,11 +327,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }) => {
                 let file_compression_type: FileCompressionType =
                     self.try_decode_file_compression_type(file_compression_type)?;
+                let proto = self.try_decode_message(&base_config)?;
+                let table_schema = parse_protobuf_file_scan_schema(&proto)?;
                 let source = parse_protobuf_file_scan_config(
-                    &self.try_decode_message(&base_config)?,
+                    &proto,
                     ctx,
                     self,
-                    Arc::new(JsonSource::new()), // TODO: Look into configuring this if needed
+                    Arc::new(JsonSource::new(table_schema)),
                 )?;
                 let source = FileScanConfigBuilder::from(source)
                     .with_file_compression_type(file_compression_type)
@@ -339,11 +341,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
             }
             NodeKind::Arrow(gen::ArrowExecNode { base_config }) => {
+                let proto = self.try_decode_message(&base_config)?;
+                let table_schema = parse_protobuf_file_scan_schema(&proto)?;
                 let source = parse_protobuf_file_scan_config(
-                    &self.try_decode_message(&base_config)?,
+                    &proto,
                     ctx,
                     self,
-                    Arc::new(ArrowSource::default()), // TODO: Look into configuring this if needed
+                    Arc::new(ArrowSource::new_file_source(table_schema)),
                 )?;
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
             }
@@ -365,11 +369,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         );
                     }
                 };
+                let proto = self.try_decode_message(&base_config)?;
+                let table_schema = parse_protobuf_file_scan_schema(&proto)?;
                 let source = parse_protobuf_file_scan_config(
-                    &self.try_decode_message(&base_config)?,
+                    &proto,
                     ctx,
                     self,
-                    Arc::new(TextSource::new(whole_text, line_sep)),
+                    Arc::new(TextSource::new(table_schema, whole_text, line_sep)),
                 )?;
                 let source = FileScanConfigBuilder::from(source)
                     .with_file_compression_type(file_compression_type)
@@ -380,27 +386,31 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 base_config,
                 path_glob_filter,
             }) => {
+                let proto = self.try_decode_message(&base_config)?;
+                let table_schema = parse_protobuf_file_scan_schema(&proto)?;
                 let source = parse_protobuf_file_scan_config(
-                    &self.try_decode_message(&base_config)?,
+                    &proto,
                     ctx,
                     self,
-                    Arc::new(BinarySource::new(path_glob_filter)),
+                    Arc::new(BinarySource::new(table_schema, path_glob_filter)),
                 )?;
                 let source = FileScanConfigBuilder::from(source).build();
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
             }
             NodeKind::Avro(gen::AvroExecNode { base_config }) => {
+                let proto = self.try_decode_message(&base_config)?;
+                let table_schema = parse_protobuf_file_scan_schema(&proto)?;
                 let source = parse_protobuf_file_scan_config(
-                    &self.try_decode_message(&base_config)?,
+                    &proto,
                     ctx,
                     self,
-                    Arc::new(AvroSource::new()),
+                    Arc::new(AvroSource::new(table_schema)),
                 )?;
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
             }
             NodeKind::WorkTable(gen::WorkTableExecNode { name, schema }) => {
                 let schema = self.try_decode_schema(&schema)?;
-                Ok(Arc::new(WorkTableExec::new(name, Arc::new(schema))))
+                Ok(Arc::new(WorkTableExec::new(name, Arc::new(schema), None)?))
             }
             NodeKind::RecursiveQuery(gen::RecursiveQueryExecNode {
                 name,

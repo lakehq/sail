@@ -499,8 +499,7 @@ impl PlanResolver<'_> {
         exprs
             .iter()
             .map(|arg| {
-                let (data_type, _) = arg.data_type_and_nullable(schema)?;
-                Ok(data_type)
+                Ok(arg.to_field(schema)?.1.data_type().clone())
             })
             .collect::<PlanResult<Vec<_>>>()
     }

@@ -3,8 +3,6 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
-use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::ExecutionPlan;
@@ -13,7 +11,6 @@ use datafusion_proto::protobuf::PhysicalPlanNode;
 use log::{debug, error, info, warn};
 use prost::Message;
 use sail_common_datafusion::error::CommonErrorCause;
-use sail_common_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::{ActorAction, ActorContext};
 use sail_telemetry::telemetry::global_metric_registry;
@@ -347,7 +344,6 @@ impl WorkerActor {
         let task_ctx = self.options.session.task_ctx();
         let plan = PhysicalPlanNode::decode(plan.as_slice())?;
         let plan = plan.try_into_physical_plan(&task_ctx, self.physical_plan_codec.as_ref())?;
-        let plan = self.rewrite_parquet_adapters(plan)?;
         let plan = self.rewrite_shuffle(ctx, plan)?;
         debug!(
             "job {} task {} attempt {} execution plan\n{}",
@@ -366,28 +362,6 @@ impl WorkerActor {
         let plan = trace_execution_plan(plan, options)?;
         let stream = plan.execute(partition, task_ctx)?;
         Ok(stream)
-    }
-
-    fn rewrite_parquet_adapters(
-        &mut self,
-        plan: Arc<dyn ExecutionPlan>,
-    ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
-        let result = plan.transform(|node| {
-            if let Some(ds) = node.as_any().downcast_ref::<DataSourceExec>() {
-                if let Some((base_config, _parquet)) = ds.downcast_to_file_source::<ParquetSource>()
-                {
-                    let builder = FileScanConfigBuilder::from(base_config.clone());
-                    let new_source = base_config
-                        .file_source()
-                        .with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory))?;
-                    let new_exec =
-                        DataSourceExec::from_data_source(builder.with_source(new_source).build());
-                    return Ok(Transformed::yes(new_exec as Arc<dyn ExecutionPlan>));
-                }
-            }
-            Ok(Transformed::no(node))
-        });
-        Ok(result.data()?)
     }
 
     fn rewrite_shuffle(

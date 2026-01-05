@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use datafusion::physical_optimizer::aggregate_statistics::AggregateStatistics;
-use datafusion::physical_optimizer::coalesce_async_exec_input::CoalesceAsyncExecInput;
 use datafusion::physical_optimizer::coalesce_batches::CoalesceBatches;
 use datafusion::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
 use datafusion::physical_optimizer::enforce_distribution::EnforceDistribution;
@@ -61,7 +60,6 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(OptimizeAggregateOrder::new()));
     rules.push(Arc::new(ProjectionPushdown::new()));
     rules.push(Arc::new(CoalesceBatches::new()));
-    rules.push(Arc::new(CoalesceAsyncExecInput::new()));
     rules.push(Arc::new(OutputRequirements::new_remove_mode()));
     rules.push(Arc::new(TopKAggregation::new()));
     rules.push(limit_push_past_windows());
