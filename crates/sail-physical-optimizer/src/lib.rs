@@ -13,6 +13,7 @@ use datafusion::physical_optimizer::limited_distinct_aggregation::LimitedDistinc
 use datafusion::physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion::physical_optimizer::output_requirements::OutputRequirements;
 use datafusion::physical_optimizer::projection_pushdown::ProjectionPushdown;
+use datafusion::physical_optimizer::pushdown_sort::PushdownSort;
 use datafusion::physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion::physical_optimizer::topk_aggregation::TopKAggregation;
 use datafusion::physical_optimizer::update_aggr_exprs::OptimizeAggregateOrder;
@@ -65,6 +66,7 @@ pub fn get_physical_optimizers(
     rules.push(limit_push_past_windows());
     rules.push(Arc::new(LimitPushdown::new()));
     rules.push(Arc::new(ProjectionPushdown::new()));
+    rules.push(Arc::new(PushdownSort::new()));
     rules.push(Arc::new(EnsureCooperative::new()));
     rules.push(Arc::new(FilterPushdown::new_post_optimization()));
     rules.push(Arc::new(RewriteExplicitRepartition::new()));

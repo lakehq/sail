@@ -196,6 +196,9 @@ SAME TEXT AS ABOVE
 physical_plan after ProjectionPushdown:
 SAME TEXT AS ABOVE
 
+physical_plan after PushdownSort:
+SAME TEXT AS ABOVE
+
 physical_plan after EnsureCooperative:
 DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
   CoalescePartitionsExec

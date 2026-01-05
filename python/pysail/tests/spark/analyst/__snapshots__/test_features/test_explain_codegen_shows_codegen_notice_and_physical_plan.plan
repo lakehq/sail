@@ -258,6 +258,9 @@ SAME TEXT AS ABOVE
 physical_plan after ProjectionPushdown:
 SAME TEXT AS ABOVE
 
+physical_plan after PushdownSort:
+SAME TEXT AS ABOVE
+
 physical_plan after EnsureCooperative:
 SAME TEXT AS ABOVE
 
