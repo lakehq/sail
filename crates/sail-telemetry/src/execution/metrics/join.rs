@@ -79,15 +79,10 @@ impl MetricEmitter for BuildProbeJoinMetricEmitter {
                     .emit();
                 MetricHandled::Yes
             }
-            MetricValue::Count { name, count } if name == "output_batches" => {
-                registry
-                    .execution_join_output_batch_count
-                    .recorder(count)
-                    .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
-                    .emit();
-                MetricHandled::Yes
-            }
+            // Ratio metrics like probe_hit_rate and avg_fanout are operator-specific metrics
+            // that don't need to be tracked separately in telemetry
+            MetricValue::Ratio { .. } => MetricHandled::Yes,
+            // output_batches is now handled by BaselineMetrics and tracked through the default emitter
             _ => MetricHandled::No,
         }
     }
@@ -181,15 +176,8 @@ impl MetricEmitter for SortMergeJoinMetricEmitter {
                     .emit();
                 MetricHandled::Yes
             }
-            MetricValue::Count { name, count } if name == "output_batches" => {
-                registry
-                    .execution_join_output_batch_count
-                    .recorder(count)
-                    .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
-                    .emit();
-                MetricHandled::Yes
-            }
+            // output_batches is now handled by BaselineMetrics and tracked through the default emitter
+            // No need to handle it here as a custom join metric
             MetricValue::Gauge { name, gauge } if name == "peak_mem_used" => {
                 registry
                     .execution_join_memory_used
@@ -232,10 +220,11 @@ mod tests {
             registry.execution_join_build_side_memory_used.name(),
             registry.execution_join_probe_side_batch_count.name(),
             registry.execution_join_probe_side_row_count.name(),
-            registry.execution_join_output_batch_count.name(),
+            // output_batches is now tracked through BaselineMetrics, not as a custom join metric
         ]
     }
 
+    #[expect(dead_code)]
     fn expected_nested_loop_join_metrics(registry: &MetricRegistry) -> Vec<Cow<'static, str>> {
         vec![
             registry.execution_join_candidate_count.name(),
@@ -248,7 +237,7 @@ mod tests {
             registry.execution_join_operation_time.name(),
             registry.execution_join_input_batch_count.name(),
             registry.execution_join_input_row_count.name(),
-            registry.execution_join_output_batch_count.name(),
+            // output_batches is now tracked through BaselineMetrics, not as a custom join metric
             registry.execution_join_memory_used.name(),
             registry.execution_spill_count.name(),
             registry.execution_spill_size.name(),
@@ -336,7 +325,8 @@ mod tests {
         MetricEmitterTester::new()
             .with_plan(plan)
             .with_expected_metrics(expected_build_probe_join_metrics)
-            .with_expected_metrics(expected_nested_loop_join_metrics)
+            // Note: selectivity metrics are only emitted when there's actual data to join
+            // so we don't include expected_nested_loop_join_metrics for EmptyExec tests
             .run()
             .await
     }

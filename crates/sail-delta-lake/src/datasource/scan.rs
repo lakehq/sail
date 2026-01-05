@@ -23,16 +23,17 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, SchemaRef};
 use datafusion::catalog::Session;
+use datafusion::common::stats::ColumnStatistics;
 use datafusion::common::{DataFusionError, Result};
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileGroup, FileScanConfig,
-    FileScanConfigBuilder, FileSource as _, ParquetSource,
+    FileScanConfigBuilder, ParquetSource,
 };
+use datafusion::datasource::table_schema::TableSchema;
 use datafusion::physical_expr::PhysicalExpr;
 use object_store::path::Path;
-use sail_common_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 
 use crate::datasource::{
     create_object_store_url, partitioned_file_from_action, DataFusionMixins, DeltaScanConfig,
@@ -140,7 +141,7 @@ pub fn build_file_scan_config(
         } else {
             field.data_type().clone()
         };
-        table_partition_cols_schema.push(Field::new(col.clone(), corrected, true));
+        table_partition_cols_schema.push(Arc::new(Field::new(col.clone(), corrected, true)));
     }
 
     // Add file column to partition schema if configured
@@ -150,17 +151,12 @@ pub fn build_file_scan_config(
         } else {
             ArrowDataType::Utf8
         };
-        table_partition_cols_schema.push(Field::new(
+        table_partition_cols_schema.push(Arc::new(Field::new(
             file_column_name.clone(),
             field_name_datatype,
             true,
-        ));
+        )));
     }
-
-    // Calculate table statistics
-    let stats = snapshot
-        .datafusion_table_statistics(params.pruning_mask)
-        .unwrap_or_else(|| datafusion::common::stats::Statistics::new_unknown(&file_schema));
 
     // Configure Parquet source with pushdown filter
     let parquet_options = TableParquetOptions {
@@ -168,7 +164,28 @@ pub fn build_file_scan_config(
         ..Default::default()
     };
 
-    let mut parquet_source = ParquetSource::new(parquet_options);
+    let table_schema = TableSchema::new(Arc::clone(&file_schema), table_partition_cols_schema);
+    // Calculate table statistics
+    //
+    // `Statistics::column_statistics` expects the same length as the table
+    // schema (file schema + partition columns). If this vector is shorter, projection statistics
+    // can panic when encountering a `Column` referring to a partition column.
+    let mut stats = snapshot
+        .datafusion_table_statistics(params.pruning_mask)
+        .unwrap_or_else(|| {
+            datafusion::common::stats::Statistics::new_unknown(table_schema.table_schema().as_ref())
+        });
+    let expected_cols = table_schema.table_schema().fields().len();
+    if stats.column_statistics.len() < expected_cols {
+        stats.column_statistics.extend(
+            (0..(expected_cols - stats.column_statistics.len()))
+                .map(|_| ColumnStatistics::new_unknown()),
+        );
+    } else if stats.column_statistics.len() > expected_cols {
+        stats.column_statistics.truncate(expected_cols);
+    }
+    let mut parquet_source =
+        ParquetSource::new(table_schema).with_table_parquet_options(parquet_options);
 
     if let Some(predicate) = params.pushdown_filter {
         if config.enable_parquet_pushdown {
@@ -177,12 +194,12 @@ pub fn build_file_scan_config(
     }
 
     let file_source: Arc<dyn datafusion::datasource::physical_plan::FileSource> =
-        parquet_source.with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory))?;
+        Arc::new(parquet_source);
 
     // Build the final FileScanConfig
     let object_store_url = create_object_store_url(&log_store.config().location)?;
 
-    let file_scan_config = FileScanConfigBuilder::new(object_store_url, file_schema, file_source)
+    let file_scan_config = FileScanConfigBuilder::new(object_store_url, file_source)
         .with_file_groups(
             // If all files were filtered out, we still need to emit at least one partition
             // to pass datafusion sanity checks.
@@ -194,9 +211,8 @@ pub fn build_file_scan_config(
             },
         )
         .with_statistics(stats)
-        .with_projection_indices(params.projection.cloned())
+        .with_projection_indices(params.projection.cloned())?
         .with_limit(params.limit)
-        .with_table_partition_cols(table_partition_cols_schema)
         .with_expr_adapter(Some(Arc::new(DeltaPhysicalExprAdapterFactory {})))
         .build();
 

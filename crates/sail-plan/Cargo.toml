@@ -25,7 +25,6 @@ datafusion-functions = { workspace = true }
 datafusion-functions-nested = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-spark = { workspace = true }
-datafusion-functions-json = { workspace = true }
 thiserror = { workspace = true }
 tonic = { workspace = true }
 async-trait = { workspace = true }

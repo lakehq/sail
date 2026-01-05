@@ -3,8 +3,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::catalog::Session;
-use datafusion::physical_expr::LexRequirement;
+use datafusion::physical_expr_common::sort_expr::LexRequirement;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{not_impl_err, DataFusionError, Result, Statistics};
@@ -14,6 +13,8 @@ use datafusion_datasource::file_format::FileFormat;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::file_sink_config::FileSinkConfig;
 use datafusion_datasource::source::DataSourceExec;
+use datafusion_datasource::TableSchema;
+use datafusion_session::Session;
 use object_store::{ObjectMeta, ObjectStore};
 
 use crate::formats::binary::source::BinarySource;
@@ -96,10 +97,7 @@ impl FileFormat for BinaryFileFormat {
         _state: &dyn Session,
         conf: FileScanConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let source = Arc::new(BinarySource::new(self.options.path_glob_filter.clone()));
-        let conf = FileScanConfigBuilder::from(conf)
-            .with_source(source)
-            .build();
+        let conf = FileScanConfigBuilder::from(conf).build();
         Ok(DataSourceExec::from_data_source(conf))
     }
 
@@ -113,7 +111,10 @@ impl FileFormat for BinaryFileFormat {
         not_impl_err!("Binary file format does not support writing")
     }
 
-    fn file_source(&self) -> Arc<dyn FileSource> {
-        Arc::new(BinarySource::default())
+    fn file_source(&self, table_schema: TableSchema) -> Arc<dyn FileSource> {
+        Arc::new(BinarySource::new(
+            table_schema,
+            self.options.path_glob_filter.clone(),
+        ))
     }
 }

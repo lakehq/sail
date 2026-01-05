@@ -2,7 +2,7 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::{cast, expr, lit, when};
 use datafusion_functions::unicode::expr_fn as unicode_fn;
-use datafusion_functions_json::udfs;
+use sail_function::scalar::json::udfs;
 
 use crate::error::PlanResult;
 use crate::function::common::ScalarFunction;

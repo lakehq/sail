@@ -5,6 +5,7 @@ pub mod datetime;
 pub mod drop_struct_field;
 pub mod explode;
 pub mod hash;
+pub mod json;
 pub mod map;
 pub mod math;
 pub mod misc;

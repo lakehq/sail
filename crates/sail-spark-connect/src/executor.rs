@@ -13,6 +13,7 @@ use fastrace::future::FutureExt;
 use fastrace::Span;
 use futures::stream::{StreamExt, TryStreamExt};
 use futures::Stream;
+use log::trace;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
@@ -140,8 +141,20 @@ impl ExecutorTaskContext {
     async fn next(&mut self) -> SparkResult<Option<RecordBatch>> {
         let span = Span::enter_with_local_parent("ExecutorTaskContext::next");
         tokio::select! {
-            batch = self.stream.next().in_span(span) => Ok(batch.transpose()?),
+            batch = self.stream.next().in_span(span) => {
+                let batch = batch.transpose()?;
+                if let Some(batch) = &batch {
+                    trace!("ExecutorTaskContext::next: got batch rows={}", batch.num_rows());
+                } else {
+                    trace!("ExecutorTaskContext::next: stream completed");
+                }
+                Ok(batch)
+            },
             _ = tokio::time::sleep(self.heartbeat_interval) => {
+                trace!(
+                    "ExecutorTaskContext::next: emitting heartbeat after {:?}",
+                    self.heartbeat_interval
+                );
                 Ok(Some(RecordBatch::new_empty(self.stream.schema())))
             }
         }

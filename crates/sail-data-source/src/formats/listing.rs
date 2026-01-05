@@ -172,6 +172,11 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             format!("{path}{}", object_store::path::DELIMITER)
         };
         let table_paths = crate::url::resolve_listing_urls(ctx, vec![path.clone()]).await?;
+        if let Some(lfc) = ctx.runtime_env().cache_manager.get_list_files_cache() {
+            for table_path in &table_paths {
+                let _ = lfc.remove(table_path.prefix());
+            }
+        }
         let object_store_url = if let Some(path) = table_paths.first() {
             path.object_store()
         } else {
