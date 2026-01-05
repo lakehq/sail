@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import platform
 import doctest
 import os
 import time
@@ -102,13 +103,15 @@ def session_timezone(spark, request):
 def local_timezone(request):
     tz = os.environ.get("TZ")
     os.environ["TZ"] = request.param
-    time.tzset()
+    if platform.system() != "Windows":
+        time.tzset()
     yield
     if tz is None:
         os.environ.pop("TZ")
     else:
         os.environ["TZ"] = tz
-    time.tzset()
+    if platform.system() != "Windows":
+        time.tzset()
 
 
 def pytest_collection_modifyitems(session, config, items):  # noqa: ARG001
