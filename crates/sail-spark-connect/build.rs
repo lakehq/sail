@@ -1,4 +1,4 @@
-//! Build script that generate Rust from the .proto files.
+//! Build script that generates Rust from the .proto files.
 //! and also converts json to Rust constants.
 
 use std::path::PathBuf;
