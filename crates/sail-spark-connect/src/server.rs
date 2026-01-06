@@ -148,8 +148,7 @@ impl SparkConnectService for SparkConnectServer {
                 command_type: command,
             }) => {
                 let command = command.required("command")?;
-                handle_command(&ctx, command, metadata)
-                    .await?
+                handle_command(&ctx, command, metadata).await?
             }
             plan::OpType::CompressedOperation(_) => {
                 return Err(Status::unimplemented("compressed operation plan"));
