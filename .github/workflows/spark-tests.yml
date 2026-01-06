@@ -14,7 +14,7 @@ on:
 jobs:
   setup:
     name: Setup
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     outputs:
       run_tests: ${{ ((github.event_name == 'pull_request' && (github.event.action == 'opened' || steps.match.outputs.result == 'true' || steps.label.outputs.has_label == 'true')) || github.event_name == 'push') && 'true' || 'false' }}
     steps:
@@ -36,7 +36,7 @@ jobs:
   test:
     name: Test
     if: needs.setup.outputs.run_tests == 'true'
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     needs:
       - setup
     env:
@@ -172,7 +172,7 @@ jobs:
 
   analyze:
     name: Analyze
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     needs:
       - test
     steps:

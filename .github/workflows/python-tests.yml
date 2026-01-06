@@ -9,7 +9,7 @@ on:
 jobs:
   python-build:
     name: Python Build
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     strategy:
       matrix:
         spark-version: ["3.5.7", "4.0.1", "4.1.0"]

@@ -37,6 +37,13 @@ runs:
       if: ${{ inputs.install-testing-tools == 'true' }}
       uses: taiki-e/install-action@nextest
 
+    # Configure sccache for Depot runners (Depot provides SCCACHE_BUCKET automatically)
+    - name: Configure sccache for Depot
+      if: ${{ contains(runner.name, 'depot') }}
+      run: |
+        echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+      shell: bash
+
     - name: Show versions
       id: versions
       run: |
@@ -44,6 +51,9 @@ runs:
         protoc --version
         python -V
         rustc -vV
+        if command -v sccache &> /dev/null; then
+          sccache --version
+        fi
         set +x
         rust_release="$(rustc -vV | sed -ne 's/^release: *//p')"
         echo "rust_release=${rust_release}" >> "$GITHUB_OUTPUT"
@@ -69,8 +79,9 @@ runs:
         echo "hash=${{ hashFiles('**/Cargo.toml', 'Cargo.lock') }}" >> "$GITHUB_OUTPUT"
       shell: bash
 
+    # Skip cargo caching on Depot runners since they provide sccache
     - uses: actions/cache@v4
-      if: ${{ github.event_name == 'push' }}
+      if: ${{ github.event_name == 'push' && !contains(runner.name, 'depot') }}
       with:
         path: ${{ steps.config.outputs.path }}
         key: ${{ inputs.cache-key }}-${{ steps.config.outputs.label }}-${{ steps.config.outputs.hash }}
@@ -79,8 +90,9 @@ runs:
     # for the default branch and cache eviction is less likely to happen.
     # We always use caches of the default branch for pull requests. The cache is still useful
     # if the dependencies do not differ too much between the default branch and the feature branch.
+    # Skip cargo caching on Depot runners since they provide sccache
     - uses: actions/cache/restore@v4
-      if: ${{ github.event_name != 'push' }}
+      if: ${{ github.event_name != 'push' && !contains(runner.name, 'depot') }}
       with:
         path: ${{ steps.config.outputs.path }}
         key: ${{ inputs.cache-key }}-${{ steps.config.outputs.label }}-${{ steps.config.outputs.hash }}

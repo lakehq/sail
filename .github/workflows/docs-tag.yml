@@ -9,7 +9,7 @@ on:
 jobs:
   setup:
     name: Setup
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     outputs:
       version: ${{ steps.info.outputs.version }}
     steps:
@@ -40,7 +40,7 @@ jobs:
 
   build:
     name: Build
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     needs:
       - setup
     steps:

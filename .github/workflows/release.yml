@@ -16,7 +16,7 @@ on:
 jobs:
   setup:
     name: Setup
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     permissions:
       # This is required for calling the GitHub API to generate release notes.
       contents: write
@@ -108,7 +108,7 @@ jobs:
 
   build-sdist:
     name: Build sdist
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     needs:
       - setup
     steps:
@@ -139,11 +139,11 @@ jobs:
     strategy:
       matrix:
         platform:
-          - runner: ubuntu-24.04-x64-8-core
+          - runner: depot-ubuntu-24.04-8
             target: x86_64
             os: linux
           # The x64 runner is used here since Maturin performs cross-compilation.
-          - runner: ubuntu-24.04-x64-8-core
+          - runner: depot-ubuntu-24.04-8
             target: aarch64
             os: linux
           - runner: macos-15-intel
@@ -241,8 +241,8 @@ jobs:
     strategy:
       matrix:
         platform:
-          - runner: ubuntu-24.04-x64-8-core
-          - runner: ubuntu-24.04-arm-8-core
+          - runner: depot-ubuntu-24.04-8
+          - runner: depot-ubuntu-24.04-arm-8
           - runner: macos-15-intel
           - runner: macos-14
           - runner: windows-2022
@@ -301,8 +301,8 @@ jobs:
     strategy:
       matrix:
         platform:
-          - runner: ubuntu-24.04
-          - runner: ubuntu-24.04-arm
+          - runner: depot-ubuntu-24.04
+          - runner: depot-ubuntu-24.04-arm
           - runner: macos-15-intel
           - runner: macos-14
           - runner: windows-2022
@@ -337,7 +337,7 @@ jobs:
 
   review:
     name: Review
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     needs:
       - test-sdist
       - test-wheel
@@ -359,7 +359,7 @@ jobs:
   release-pypi:
     name: Release to PyPI
     if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true') }}
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     environment: release
     permissions:
       id-token: write
@@ -388,7 +388,7 @@ jobs:
   release-github:
     name: Release to GitHub
     if: ${{ github.event_name == 'push' }}
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     permissions:
       contents: write
       discussions: write

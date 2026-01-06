@@ -14,7 +14,7 @@ on:
 jobs:
   setup:
     name: Setup
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     outputs:
       build_package: ${{ github.event_name == 'push' || steps.filter.outputs.package == 'true' || steps.baseline-workflow.outputs.workflow_run_id == '' }}
       baseline_run_id: ${{ steps.baseline-workflow.outputs.workflow_run_id }}
@@ -49,7 +49,7 @@ jobs:
   rust-tests:
     name: Rust Tests
     if: ${{ needs.setup.outputs.build_package == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     needs:
       - setup
     env:
@@ -134,7 +134,7 @@ jobs:
   python-build:
     name: Python Build
     if: ${{ needs.setup.outputs.build_package == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     needs:
       - setup
     env:
@@ -203,7 +203,7 @@ jobs:
   codecov-notify:
     name: Codecov Finalize
     if: ${{ always() && github.actor != 'dependabot[bot]' }}
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     needs:
       - rust-tests
       - python-tests
