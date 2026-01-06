@@ -43,7 +43,7 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           cache-key: rust-build
-          install-coverage-tools: false
+          install-testing-tools: false
 
       - uses: pnpm/action-setup@v4
 

@@ -153,7 +153,7 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           cache-key: rust-build
-          install-coverage-tools: false
+          install-testing-tools: false
 
       - name: Build Python Package
         uses: PyO3/maturin-action@v1

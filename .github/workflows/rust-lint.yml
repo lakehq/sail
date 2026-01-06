@@ -23,7 +23,7 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           cache-key: rust-lint
-          install-coverage-tools: false
+          install-testing-tools: false
 
       - name: Run Format Check
         run: cargo +nightly fmt -- --check

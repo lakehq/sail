@@ -36,8 +36,8 @@ jobs:
 
       - uses: ./.github/actions/setup-rust
         with:
-          cache-key: rust-build
-          install-coverage-tools: false
+          cache-key: rust-tests
+          install-testing-tools: true
 
       - name: Bootstrap Gold Data
         run: |
