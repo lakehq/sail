@@ -67,7 +67,7 @@ use sail_data_source::formats::socket::{SocketSourceExec, TableSocketOptions};
 use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
 use sail_delta_lake::physical_plan::{
-    DeltaCommitExec, DeltaFindFilesExec, DeltaLogScanExec, DeltaRemoveActionsExec,
+    DeltaCommitExec, DeltaDiscoveryExec, DeltaLogScanExec, DeltaRemoveActionsExec,
     DeltaScanByAddsExec, DeltaWriterExec,
 };
 use sail_function::aggregate::kurtosis::KurtosisFunction;
@@ -585,7 +585,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     table_schema,
                 )))
             }
-            NodeKind::DeltaFindFiles(gen::DeltaFindFilesExecNode {
+            NodeKind::DeltaDiscovery(gen::DeltaDiscoveryExecNode {
                 table_url,
                 predicate,
                 table_schema,
@@ -614,9 +614,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     None
                 };
                 let input = input
-                    .ok_or_else(|| plan_datafusion_err!("Missing input for DeltaFindFilesExec"))?;
+                    .ok_or_else(|| plan_datafusion_err!("Missing input for DeltaDiscoveryExec"))?;
                 let input = self.try_decode_plan(&input, ctx)?;
-                Ok(Arc::new(DeltaFindFilesExec::with_input(
+                Ok(Arc::new(DeltaDiscoveryExec::with_input(
                     input,
                     table_url,
                     predicate,
@@ -1093,29 +1093,29 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_url: delta_scan_by_adds_exec.table_url().to_string(),
                 table_schema,
             })
-        } else if let Some(delta_find_files_exec) =
-            node.as_any().downcast_ref::<DeltaFindFilesExec>()
+        } else if let Some(delta_discovery_exec) =
+            node.as_any().downcast_ref::<DeltaDiscoveryExec>()
         {
-            let input = Some(self.try_encode_plan(delta_find_files_exec.input())?);
-            let predicate = if let Some(pred) = delta_find_files_exec.predicate() {
+            let input = Some(self.try_encode_plan(delta_discovery_exec.input())?);
+            let predicate = if let Some(pred) = delta_discovery_exec.predicate() {
                 let predicate_node = serialize_physical_expr(&pred.clone(), self)?;
                 Some(self.try_encode_message(predicate_node)?)
             } else {
                 None
             };
-            let table_schema = if let Some(schema) = delta_find_files_exec.table_schema() {
+            let table_schema = if let Some(schema) = delta_discovery_exec.table_schema() {
                 Some(self.try_encode_schema(schema)?)
             } else {
                 None
             };
-            NodeKind::DeltaFindFiles(gen::DeltaFindFilesExecNode {
-                table_url: delta_find_files_exec.table_url().to_string(),
+            NodeKind::DeltaDiscovery(gen::DeltaDiscoveryExecNode {
+                table_url: delta_discovery_exec.table_url().to_string(),
                 predicate,
                 table_schema,
-                version: delta_find_files_exec.version(),
+                version: delta_discovery_exec.version(),
                 input,
-                input_partition_columns: delta_find_files_exec.input_partition_columns().to_vec(),
-                input_partition_scan: delta_find_files_exec.input_partition_scan(),
+                input_partition_columns: delta_discovery_exec.input_partition_columns().to_vec(),
+                input_partition_scan: delta_discovery_exec.input_partition_scan(),
             })
         } else if let Some(delta_remove_actions_exec) =
             node.as_any().downcast_ref::<DeltaRemoveActionsExec>()

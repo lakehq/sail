@@ -1,15 +1,3 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 //! A "meta table" scan for Delta log-derived file metadata.
 //!
 //! This node consumes an upstream plan that reads raw `_delta_log` actions (typically a
@@ -19,9 +7,6 @@
 //! - `size_bytes` (Int64)
 //! - `modification_time` (Int64)
 //! - one Utf8 column per table partition column
-//!
-//! This makes the metadata read visible in physical plans (EXPLAIN) while keeping downstream
-//! nodes (`DeltaFindFilesExec`) insulated from log format details.
 
 use std::any::Any;
 use std::fmt;

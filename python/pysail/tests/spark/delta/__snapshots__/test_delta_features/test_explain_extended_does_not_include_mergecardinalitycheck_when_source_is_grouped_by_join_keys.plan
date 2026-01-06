@@ -125,7 +125,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_cardinality_skip/)
                                           ProjectionExec: expr=[column1@<i> as #2, column2@<i> as #3]
                                             DataSourceExec: partitions=1, partition_sizes=[<sizes>]
       DeltaRemoveActionsExec
-        DeltaFindFilesExec(table_path=file://<tmp>/merge_cardinality_skip/)
+        DeltaDiscoveryExec(table_path=file://<tmp>/merge_cardinality_skip/)
           CoalescePartitionsExec
             CoalesceBatchesExec: target_batch_size=8192
               HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@<i>, __sail_file_path@<i>)], projection=[__sail_file_path@<i>, size_bytes@<i>, modification_time@<i>]

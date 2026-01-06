@@ -71,7 +71,7 @@ DeltaCommitExec(table_path=file://<tmp>/logscan_parallel/)
                                           ProjectionExec: expr=[id@<i> as id, value@<i> as value, __sail_file_path@<i> as __sail_file_path, uuid() as __sail_merge_target_row_id]
                                             DataSourceExec: file_groups={3 groups: [[<tmp>/logscan_parallel/part-<id>.snappy.parquet], [<tmp>/logscan_parallel/part-<id>.snappy.parquet], [<tmp>/logscan_parallel/part-<id>.snappy.parquet]]}, projection=[id, value, __sail_file_path], file_type=parquet
       DeltaRemoveActionsExec
-        DeltaFindFilesExec(table_path=file://<tmp>/logscan_parallel/)
+        DeltaDiscoveryExec(table_path=file://<tmp>/logscan_parallel/)
           CoalescePartitionsExec
             CoalesceBatchesExec: target_batch_size=8192
               HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@<i>, __sail_file_path@<i>)], projection=[__sail_file_path@<i>, size_bytes@<i>, modification_time@<i>]

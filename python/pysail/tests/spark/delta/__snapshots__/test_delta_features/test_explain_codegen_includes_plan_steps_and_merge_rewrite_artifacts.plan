@@ -485,7 +485,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                                             FilterExec: column3@<i> + 1 > 10 AND (column1@<i> = 1 OR column1@<i> = 2 OR column1@<i> = 4)
                                               DataSourceExec: partitions=1, partition_sizes=[<sizes>]
     DeltaRemoveActionsExec
-      DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/)
+      DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
         ProjectionExec: expr=[__sail_file_path@<i> as __sail_file_path, size_bytes@<i> as size_bytes, modification_time@<i> as modification_time]
           HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@<i>, __sail_file_path@<i>)]
             ProjectionExec: expr=[__sail_file_path@<i> as __sail_file_path]
@@ -591,7 +591,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/), statistics=[Row
                                             FilterExec: column3@<i> + 1 > 10 AND (column1@<i> = 1 OR column1@<i> = 2 OR column1@<i> = 4), statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(0)),(Col[1]: Null=Inexact(0)),(Col[2]: Null=Inexact(0)),(Col[3]: Null=Inexact(0))]]
                                               DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(3), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(0))]]
     DeltaRemoveActionsExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
-      DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+      DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
         ProjectionExec: expr=[__sail_file_path@<i> as __sail_file_path, size_bytes@<i> as size_bytes, modification_time@<i> as modification_time], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:)]]
           HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@<i>, __sail_file_path@<i>)], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:)]]
             ProjectionExec: expr=[__sail_file_path@<i> as __sail_file_path], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
@@ -697,7 +697,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/), schema=[count:U
                                             FilterExec: column3@<i> + 1 > 10 AND (column1@<i> = 1 OR column1@<i> = 2 OR column1@<i> = 4), schema=[column1:Int32;N, column2:Utf8;N, column3:Int32;N, column4:Utf8;N]
                                               DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[column1:Int32;N, column2:Utf8;N, column3:Int32;N, column4:Utf8;N]
     DeltaRemoveActionsExec, schema=[action:Union([(0, Field { name: "add", data_type: Struct([Field { name: "path", data_type: Utf8 }, Field { name: "partition_values", data_type: Map(Field { name: "entries", data_type: Struct([Field { name: "keys", data_type: Utf8 }, Field { name: "values", data_type: Utf8, nullable: true }]) }, false) }, Field { name: "size", data_type: Int64 }, Field { name: "modification_time", data_type: Int64 }, Field { name: "data_change", data_type: Boolean }, Field { name: "stats_json", data_type: Utf8, nullable: true }]) }), (1, Field { name: "remove", data_type: Struct([Field { name: "path", data_type: Utf8 }, Field { name: "data_change", data_type: Boolean }, Field { name: "deletion_timestamp", data_type: Int64, nullable: true }, Field { name: "extended_file_metadata", data_type: Boolean, nullable: true }, Field { name: "partition_values", data_type: Map(Field { name: "entries", data_type: Struct([Field { name: "keys", data_type: Utf8 }, Field { name: "values", data_type: Utf8, nullable: true }]) }, false) }, Field { name: "size", data_type: Int64, nullable: true }]) }), (2, Field { name: "protocol", data_type: Utf8 }), (3, Field { name: "metadata", data_type: Utf8 }), (4, Field { name: "commit_meta", data_type: Struct([Field { name: "commit_row_count", data_type: UInt64 }, Field { name: "operation_json", data_type: Utf8, nullable: true }, Field { name: "operation_metrics_json", data_type: Utf8 }]) })], Dense)]
-      DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/), schema=[action:Union([(0, Field { name: "add", data_type: Struct([Field { name: "path", data_type: Utf8 }, Field { name: "partition_values", data_type: Map(Field { name: "entries", data_type: Struct([Field { name: "keys", data_type: Utf8 }, Field { name: "values", data_type: Utf8, nullable: true }]) }, false) }, Field { name: "size", data_type: Int64 }, Field { name: "modification_time", data_type: Int64 }, Field { name: "data_change", data_type: Boolean }, Field { name: "stats_json", data_type: Utf8, nullable: true }]) }), (1, Field { name: "remove", data_type: Struct([Field { name: "path", data_type: Utf8 }, Field { name: "data_change", data_type: Boolean }, Field { name: "deletion_timestamp", data_type: Int64, nullable: true }, Field { name: "extended_file_metadata", data_type: Boolean, nullable: true }, Field { name: "partition_values", data_type: Map(Field { name: "entries", data_type: Struct([Field { name: "keys", data_type: Utf8 }, Field { name: "values", data_type: Utf8, nullable: true }]) }, false) }, Field { name: "size", data_type: Int64, nullable: true }]) }), (2, Field { name: "protocol", data_type: Utf8 }), (3, Field { name: "metadata", data_type: Utf8 }), (4, Field { name: "commit_meta", data_type: Struct([Field { name: "commit_row_count", data_type: UInt64 }, Field { name: "operation_json", data_type: Utf8, nullable: true }, Field { name: "operation_metrics_json", data_type: Utf8 }]) })], Dense), partition_scan:Boolean]
+      DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/), schema=[action:Union([(0, Field { name: "add", data_type: Struct([Field { name: "path", data_type: Utf8 }, Field { name: "partition_values", data_type: Map(Field { name: "entries", data_type: Struct([Field { name: "keys", data_type: Utf8 }, Field { name: "values", data_type: Utf8, nullable: true }]) }, false) }, Field { name: "size", data_type: Int64 }, Field { name: "modification_time", data_type: Int64 }, Field { name: "data_change", data_type: Boolean }, Field { name: "stats_json", data_type: Utf8, nullable: true }]) }), (1, Field { name: "remove", data_type: Struct([Field { name: "path", data_type: Utf8 }, Field { name: "data_change", data_type: Boolean }, Field { name: "deletion_timestamp", data_type: Int64, nullable: true }, Field { name: "extended_file_metadata", data_type: Boolean, nullable: true }, Field { name: "partition_values", data_type: Map(Field { name: "entries", data_type: Struct([Field { name: "keys", data_type: Utf8 }, Field { name: "values", data_type: Utf8, nullable: true }]) }, false) }, Field { name: "size", data_type: Int64, nullable: true }]) }), (2, Field { name: "protocol", data_type: Utf8 }), (3, Field { name: "metadata", data_type: Utf8 }), (4, Field { name: "commit_meta", data_type: Struct([Field { name: "commit_row_count", data_type: UInt64 }, Field { name: "operation_json", data_type: Utf8, nullable: true }, Field { name: "operation_metrics_json", data_type: Utf8 }]) })], Dense), partition_scan:Boolean]
         ProjectionExec: expr=[__sail_file_path@<i> as __sail_file_path, size_bytes@<i> as size_bytes, modification_time@<i> as modification_time], schema=[__sail_file_path:Utf8, size_bytes:Int64, modification_time:Int64]
           HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@<i>, __sail_file_path@<i>)], schema=[__sail_file_path:Utf8;N, __sail_file_path:Utf8, size_bytes:Int64, modification_time:Int64]
             ProjectionExec: expr=[__sail_file_path@<i> as __sail_file_path], schema=[__sail_file_path:Utf8;N]
@@ -804,7 +804,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                               FilterExec: column3@<i> + 1 > 10 AND (column1@<i> = 1 OR column1@<i> = 2 OR column1@<i> = 4)
                                                 DataSourceExec: partitions=1, partition_sizes=[<sizes>]
       DeltaRemoveActionsExec
-        DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/)
+        DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
           ProjectionExec: expr=[__sail_file_path@<i> as __sail_file_path, size_bytes@<i> as size_bytes, modification_time@<i> as modification_time]
             HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@<i>, __sail_file_path@<i>)]
               ProjectionExec: expr=[__sail_file_path@<i> as __sail_file_path]
@@ -917,7 +917,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                         ProjectionExec: expr=[id@<i> as id, category@<i> as category, amount@<i> as amount, note@<i> as note, __sail_file_path@<i> as __sail_file_path]
                                           DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
       DeltaRemoveActionsExec
-        DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/)
+        DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
           ProjectionExec: expr=[__sail_file_path@<i> as __sail_file_path, size_bytes@<i> as size_bytes, modification_time@<i> as modification_time]
             HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@<i>, __sail_file_path@<i>)]
               ProjectionExec: expr=[__sail_file_path@<i> as __sail_file_path]
@@ -1034,7 +1034,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                           ProjectionExec: expr=[id@<i> as id, category@<i> as category, amount@<i> as amount, note@<i> as note, __sail_file_path@<i> as __sail_file_path]
                                             DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
       DeltaRemoveActionsExec
-        DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/)
+        DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
           ProjectionExec: expr=[__sail_file_path@<i> as __sail_file_path, size_bytes@<i> as size_bytes, modification_time@<i> as modification_time]
             HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@<i>, __sail_file_path@<i>)]
               ProjectionExec: expr=[__sail_file_path@<i> as __sail_file_path]
@@ -1155,7 +1155,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                           ProjectionExec: expr=[id@<i> as id, category@<i> as category, amount@<i> as amount, note@<i> as note, __sail_file_path@<i> as __sail_file_path]
                                             DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
       DeltaRemoveActionsExec
-        DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/)
+        DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
           ProjectionExec: expr=[__sail_file_path@<i> as __sail_file_path, size_bytes@<i> as size_bytes, modification_time@<i> as modification_time]
             HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@<i>, __sail_file_path@<i>)]
               ProjectionExec: expr=[__sail_file_path@<i> as __sail_file_path]
@@ -1285,7 +1285,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                                 ProjectionExec: expr=[id@<i> as id, category@<i> as category, amount@<i> as amount, note@<i> as note, __sail_file_path@<i> as __sail_file_path]
                                                   DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
         DeltaRemoveActionsExec
-          DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/)
+          DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
             CoalescePartitionsExec
               ProjectionExec: expr=[__sail_file_path@<i> as __sail_file_path, size_bytes@<i> as size_bytes, modification_time@<i> as modification_time]
                 HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@<i>, __sail_file_path@<i>)]
@@ -1404,7 +1404,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                         ProjectionExec: expr=[id@<i> as id, category@<i> as category, amount@<i> as amount, note@<i> as note, __sail_file_path@<i> as __sail_file_path]
                                           DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
         DeltaRemoveActionsExec
-          DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/)
+          DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
             CoalescePartitionsExec
               HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@<i>, __sail_file_path@<i>)], projection=[__sail_file_path@<i>, size_bytes@<i>, modification_time@<i>]
                 CoalescePartitionsExec
@@ -1521,7 +1521,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                                 ProjectionExec: expr=[id@<i> as id, category@<i> as category, amount@<i> as amount, note@<i> as note, __sail_file_path@<i> as __sail_file_path]
                                                   DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
         DeltaRemoveActionsExec
-          DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/)
+          DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
             CoalescePartitionsExec
               CoalesceBatchesExec: target_batch_size=8192
                 HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@<i>, __sail_file_path@<i>)], projection=[__sail_file_path@<i>, size_bytes@<i>, modification_time@<i>]
@@ -1647,7 +1647,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                                               ProjectionExec: expr=[id@<i> as id, category@<i> as category, amount@<i> as amount, note@<i> as note, __sail_file_path@<i> as __sail_file_path]
                                                 DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
       DeltaRemoveActionsExec
-        DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/)
+        DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
           CoalescePartitionsExec
             CoalesceBatchesExec: target_batch_size=8192
               HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@<i>, __sail_file_path@<i>)], projection=[__sail_file_path@<i>, size_bytes@<i>, modification_time@<i>]
@@ -1776,7 +1776,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                                             ProjectionExec: expr=[id@<i> as id, category@<i> as category, amount@<i> as amount, note@<i> as note, __sail_file_path@<i> as __sail_file_path, uuid() as __sail_merge_target_row_id]
                                               DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
       DeltaRemoveActionsExec
-        DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/)
+        DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
           CoalescePartitionsExec
             CoalesceBatchesExec: target_batch_size=8192
               HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@<i>, __sail_file_path@<i>)], projection=[__sail_file_path@<i>, size_bytes@<i>, modification_time@<i>]
@@ -1907,7 +1907,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                                             ProjectionExec: expr=[id@<i> as id, category@<i> as category, amount@<i> as amount, note@<i> as note, __sail_file_path@<i> as __sail_file_path, uuid() as __sail_merge_target_row_id]
                                               DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
       DeltaRemoveActionsExec
-        DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/)
+        DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
           CoalescePartitionsExec
             CoalesceBatchesExec: target_batch_size=8192
               HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@<i>, __sail_file_path@<i>)], projection=[__sail_file_path@<i>, size_bytes@<i>, modification_time@<i>]
@@ -2026,7 +2026,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                                             ProjectionExec: expr=[id@<i> as id, category@<i> as category, amount@<i> as amount, note@<i> as note, __sail_file_path@<i> as __sail_file_path, uuid() as __sail_merge_target_row_id]
                                               DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
       DeltaRemoveActionsExec
-        DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/)
+        DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
           CoalescePartitionsExec
             CoalesceBatchesExec: target_batch_size=8192
               HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@<i>, __sail_file_path@<i>)], projection=[__sail_file_path@<i>, size_bytes@<i>, modification_time@<i>]

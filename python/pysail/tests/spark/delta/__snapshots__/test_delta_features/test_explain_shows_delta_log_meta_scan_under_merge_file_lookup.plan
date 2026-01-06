@@ -71,7 +71,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_partition_pushdown/)
                                           ProjectionExec: expr=[id@<i> as id, value@<i> as value, year@<i> as year, __sail_file_path@<i> as __sail_file_path, uuid() as __sail_merge_target_row_id]
                                             DataSourceExec: file_groups={2 groups: [[<tmp>/merge_explain_partition_pushdown/year=2023/part-<id>.snappy.parquet], [<tmp>/merge_explain_partition_pushdown/year=2024/part-<id>.snappy.parquet]]}, projection=[id, value, year, __sail_file_path], file_type=parquet
       DeltaRemoveActionsExec
-        DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_partition_pushdown/)
+        DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_partition_pushdown/)
           CoalescePartitionsExec
             CoalesceBatchesExec: target_batch_size=8192
               HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@<i>, __sail_file_path@<i>)], projection=[__sail_file_path@<i>, size_bytes@<i>, modification_time@<i>, year@<i>]

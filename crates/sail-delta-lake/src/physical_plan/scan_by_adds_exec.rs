@@ -28,18 +28,20 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
-use futures::stream::{self, StreamExt, TryStreamExt};
+use futures::stream::{self, TryStreamExt};
 use url::Url;
 
 use crate::datasource::scan::FileScanParams;
 use crate::datasource::{build_file_scan_config, DeltaScanConfigBuilder};
-use crate::kernel::models::Add;
 use crate::physical_plan::{decode_adds_from_batch, COL_ACTION};
 use crate::storage::StorageConfig;
 use crate::table::open_table_with_object_store;
 
-/// An ExecutionPlan that scans Delta files based on a stream of Add actions from its input.
-/// This node acts as a bridge, consuming metadata (file list) and producing data.
+/// Physical execution node that scans Delta data files based on Add actions from upstream.
+///
+/// This node bridges the metadata layer (Add actions) with the data layer (Parquet scans).
+/// It consumes a stream of encoded Add actions and produces a stream of data records by
+/// scanning the referenced files.
 #[derive(Debug, Clone)]
 pub struct DeltaScanByAddsExec {
     input: Arc<dyn ExecutionPlan>,
@@ -78,72 +80,6 @@ impl DeltaScanByAddsExec {
             EmissionType::Final,
             Boundedness::Bounded,
         )
-    }
-
-    async fn create_scan_stream(
-        &self,
-        context: Arc<TaskContext>,
-        candidate_adds: Vec<Add>,
-    ) -> Result<SendableRecordBatchStream> {
-        let object_store = context
-            .runtime_env()
-            .object_store_registry
-            .get_store(&self.table_url)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        let table =
-            open_table_with_object_store(self.table_url.clone(), object_store, StorageConfig)
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        let snapshot = table
-            .snapshot()
-            .map_err(|e| DataFusionError::External(Box::new(e)))?
-            .clone();
-
-        let scan_config = DeltaScanConfigBuilder::new()
-            .with_schema(self.table_schema.clone())
-            .build(&snapshot)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        // FIXME: avoid creating a new session state
-        //   We should probably refactor this into a general physical node
-        //   that scans Parquet files.
-        let session_state = SessionStateBuilder::new()
-            .with_runtime_env(context.runtime_env().clone())
-            .build();
-
-        // Build file schema (non-partition columns)
-        let table_partition_cols = snapshot.metadata().partition_columns();
-        let file_schema = Arc::new(datafusion::arrow::datatypes::Schema::new(
-            self.table_schema
-                .fields()
-                .iter()
-                .filter(|f| !table_partition_cols.contains(f.name()))
-                .cloned()
-                .collect::<Vec<_>>(),
-        ));
-
-        let log_store = table.log_store();
-        let file_scan_config = build_file_scan_config(
-            &snapshot,
-            &log_store,
-            &candidate_adds,
-            &scan_config,
-            FileScanParams {
-                pruning_mask: None,
-                projection: None,
-                limit: None,
-                pushdown_filter: None,
-            },
-            &session_state,
-            file_schema,
-        )
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        let scan_exec =
-            datafusion::datasource::source::DataSourceExec::from_data_source(file_scan_config);
-        scan_exec.execute(0, context)
     }
 }
 
@@ -192,24 +128,25 @@ impl ExecutionPlan for DeltaScanByAddsExec {
             return internal_err!("DeltaScanByAddsExec only supports a single partition");
         }
 
-        let mut input_stream = self.input.execute(0, context.clone())?;
-        let schema = self.schema();
-        let schema_clone = schema.clone();
-        let self_clone = self.clone();
+        let input = Arc::clone(&self.input);
+        let table_url = self.table_url.clone();
+        let table_schema = self.table_schema.clone();
+        let output_schema = self.schema();
+        let output_schema_clone = output_schema.clone();
 
         let stream_fut = async move {
-            let mut candidate_adds = vec![];
-            let mut partition_scan = true;
+            let mut input_stream = input.execute(0, context.clone())?;
+            let mut candidate_adds = Vec::new();
+            let mut is_partition_scan = true;
 
-            while let Some(batch_result) = input_stream.next().await {
-                let batch = batch_result?;
+            while let Some(batch) = input_stream.try_next().await? {
                 if batch.num_rows() == 0 {
                     continue;
                 }
 
-                // partition_scan is optional (planner can decide); default to false when absent.
+                // Check if this is a partition-only scan (no data scan needed)
                 if let Some(scan_col) = batch.column_by_name("partition_scan") {
-                    let scan_col = scan_col
+                    let scan_array = scan_col
                         .as_any()
                         .downcast_ref::<datafusion::arrow::array::BooleanArray>()
                         .ok_or_else(|| {
@@ -217,34 +154,91 @@ impl ExecutionPlan for DeltaScanByAddsExec {
                                 "partition_scan column is not a BooleanArray".to_string(),
                             )
                         })?;
-                    partition_scan = scan_col.value(0);
+                    is_partition_scan = scan_array.value(0);
                 } else {
-                    partition_scan = false;
+                    is_partition_scan = false;
                 }
 
-                // Arrow-native action rows only.
+                // Decode Add actions from the action column
                 if batch.column_by_name(COL_ACTION).is_some() {
                     candidate_adds.extend(decode_adds_from_batch(&batch)?);
                 } else {
                     return Err(DataFusionError::Plan(
-                        "DeltaScanByAddsExec input must be delta action rows ('action')"
-                            .to_string(),
+                        "DeltaScanByAddsExec input must contain 'action' column".to_string(),
                     ));
                 }
             }
 
-            if partition_scan || candidate_adds.is_empty() {
-                let empty_batch = RecordBatch::new_empty(schema_clone.clone());
+            if is_partition_scan || candidate_adds.is_empty() {
+                let empty_batch = RecordBatch::new_empty(output_schema_clone.clone());
                 let stream = stream::once(async { Ok(empty_batch) });
-                let adapter = RecordBatchStreamAdapter::new(schema_clone, stream);
-                return Ok(Box::pin(adapter) as SendableRecordBatchStream);
+                return Ok(
+                    Box::pin(RecordBatchStreamAdapter::new(output_schema_clone, stream))
+                        as SendableRecordBatchStream,
+                );
             }
 
-            self_clone.create_scan_stream(context, candidate_adds).await
+            let object_store = context
+                .runtime_env()
+                .object_store_registry
+                .get_store(&table_url)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+            let table = open_table_with_object_store(table_url, object_store, StorageConfig)
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+            let snapshot = table
+                .snapshot()
+                .map_err(|e| DataFusionError::External(Box::new(e)))?
+                .clone();
+
+            let scan_config = DeltaScanConfigBuilder::new()
+                .with_schema(table_schema.clone())
+                .build(&snapshot)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+            let session_state = SessionStateBuilder::new()
+                .with_runtime_env(context.runtime_env().clone())
+                .build();
+
+            let table_partition_cols = snapshot.metadata().partition_columns();
+            let file_schema = Arc::new(datafusion::arrow::datatypes::Schema::new(
+                table_schema
+                    .fields()
+                    .iter()
+                    .filter(|f| !table_partition_cols.contains(f.name()))
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            ));
+
+            let log_store = table.log_store();
+            let file_scan_config = build_file_scan_config(
+                &snapshot,
+                &log_store,
+                &candidate_adds,
+                &scan_config,
+                FileScanParams {
+                    pruning_mask: None,
+                    projection: None,
+                    limit: None,
+                    pushdown_filter: None,
+                },
+                &session_state,
+                file_schema,
+            )
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+            let scan_exec =
+                datafusion::datasource::source::DataSourceExec::from_data_source(file_scan_config);
+            scan_exec.execute(0, context)
         };
 
-        let stream = futures::stream::once(stream_fut).try_flatten();
-        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
+        let stream = stream::once(stream_fut).try_flatten();
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            output_schema,
+            stream,
+        )))
     }
 }
 

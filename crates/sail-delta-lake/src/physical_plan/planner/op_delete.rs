@@ -27,7 +27,7 @@ use crate::datasource::schema::DataFusionMixins;
 use crate::datasource::PredicateProperties;
 use crate::kernel::DeltaOperation;
 use crate::physical_plan::{
-    DeltaCommitExec, DeltaFindFilesExec, DeltaLogScanExec, DeltaRemoveActionsExec,
+    DeltaCommitExec, DeltaDiscoveryExec, DeltaLogScanExec, DeltaRemoveActionsExec,
     DeltaScanByAddsExec, DeltaWriterExec,
 };
 
@@ -91,8 +91,8 @@ pub async fn build_delete_plan(
         meta_scan
     };
 
-    // Always wrap with DeltaFindFilesExec so EXPLAIN shows the metadata pipeline.
-    let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaFindFilesExec::with_input(
+    // Always wrap with DeltaDiscoveryExec so EXPLAIN shows the metadata pipeline.
+    let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
         meta_scan,
         ctx.table_url().clone(),
         Some(condition.expr.clone()),

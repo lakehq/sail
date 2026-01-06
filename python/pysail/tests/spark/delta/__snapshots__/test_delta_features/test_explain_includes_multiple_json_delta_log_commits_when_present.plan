@@ -8,7 +8,7 @@ DeltaCommitExec(table_path=file://<tmp>/x/)
             FilterExec: NOT year@<i> = 2024 AND value@<i> > 650
               RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                 DeltaScanByAddsExec(table_path=file://<tmp>/x/)
-                  DeltaFindFilesExec(table_path=file://<tmp>/x/)
+                  DeltaDiscoveryExec(table_path=file://<tmp>/x/)
                     CoalescePartitionsExec
                       DeltaLogScanExec(table_path=file://<tmp>/x/, version=2)
                         RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
@@ -16,7 +16,7 @@ DeltaCommitExec(table_path=file://<tmp>/x/)
                             DataSourceExec: file_groups={1 group: [[<tmp>/x/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
                             DataSourceExec: file_groups={2 groups: [[<tmp>/x/_delta_log/00000000000000000001.json], [<tmp>/x/_delta_log/00000000000000000002.json]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=json
       DeltaRemoveActionsExec
-        DeltaFindFilesExec(table_path=file://<tmp>/x/)
+        DeltaDiscoveryExec(table_path=file://<tmp>/x/)
           CoalescePartitionsExec
             DeltaLogScanExec(table_path=file://<tmp>/x/, version=2)
               RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>

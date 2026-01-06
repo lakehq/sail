@@ -32,7 +32,7 @@ use crate::datasource::{DataFusionMixins, PATH_COLUMN};
 use crate::kernel::{DeltaOperation, MergePredicate};
 use crate::options::TableDeltaOptions;
 use crate::physical_plan::{
-    DeltaCommitExec, DeltaFindFilesExec, DeltaLogScanExec, DeltaRemoveActionsExec, DeltaWriterExec,
+    DeltaCommitExec, DeltaDiscoveryExec, DeltaLogScanExec, DeltaRemoveActionsExec, DeltaWriterExec,
 };
 
 /// Entry point for MERGE execution. Expects the logical MERGE to be fully
@@ -257,7 +257,7 @@ async fn finalize_merge(
 
     if let Some(touched_plan) = &touched_plan_opt {
         // Build a log-side stream of Add rows using a visible log scan pipeline:
-        // Union(DataSourceExec parquet/json) -> DeltaLogScanExec -> ... -> DeltaFindFilesExec.
+        // Union(DataSourceExec parquet/json) -> DeltaLogScanExec -> ... -> DeltaDiscoveryExec.
         let (raw_scan, checkpoint_files, commit_files) =
             build_delta_log_datasource_union(ctx, checkpoint_files, commit_files).await?;
         let meta_scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaLogScanExec::new(
@@ -310,7 +310,7 @@ async fn finalize_merge(
         let touched_meta: Arc<dyn ExecutionPlan> =
             Arc::new(ProjectionExec::try_new(proj_exprs, join)?);
 
-        let touched_adds: Arc<dyn ExecutionPlan> = Arc::new(DeltaFindFilesExec::from_log_scan(
+        let touched_adds: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::from_log_scan(
             touched_meta,
             table_url.clone(),
             version,

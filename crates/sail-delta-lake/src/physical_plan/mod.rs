@@ -28,12 +28,11 @@ use datafusion_physical_expr::expressions::{lit, Column as PhysicalColumn};
 
 mod action_schema;
 mod commit_exec;
+pub mod discovery_exec;
 mod expr_adapter;
-pub mod find_files_exec;
 mod log_scan_exec;
 mod remove_actions_exec;
 mod scan_by_adds_exec;
-mod utils;
 mod writer_exec;
 
 pub use action_schema::{
@@ -42,8 +41,8 @@ pub use action_schema::{
     encode_remove_actions, CommitMeta, COL_ACTION,
 };
 pub use commit_exec::DeltaCommitExec;
+pub use discovery_exec::DeltaDiscoveryExec;
 pub use expr_adapter::DeltaPhysicalExprAdapterFactory;
-pub use find_files_exec::DeltaFindFilesExec;
 pub use log_scan_exec::DeltaLogScanExec;
 pub mod planner;
 pub use planner::{
@@ -51,7 +50,6 @@ pub use planner::{
 };
 pub use remove_actions_exec::DeltaRemoveActionsExec;
 pub use scan_by_adds_exec::DeltaScanByAddsExec;
-pub(crate) use utils::join_batches_with_add_actions;
 pub use writer_exec::DeltaWriterExec;
 
 /// Create a `ProjectionExec` instance that reorders columns so that partition columns

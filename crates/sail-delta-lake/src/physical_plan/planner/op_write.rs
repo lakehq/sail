@@ -29,7 +29,7 @@ use super::utils::{align_schemas_for_union, build_standard_write_layers};
 use crate::datasource::schema::DataFusionMixins;
 use crate::datasource::PredicateProperties;
 use crate::physical_plan::{
-    create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaFindFilesExec,
+    create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaDiscoveryExec,
     DeltaLogScanExec, DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
 };
 
@@ -139,7 +139,7 @@ async fn build_overwrite_if_plan(
         meta_scan
     };
 
-    let find_files_plan: Arc<dyn ExecutionPlan> = Arc::new(DeltaFindFilesExec::with_input(
+    let find_files_plan: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
         meta_scan,
         ctx.table_url().clone(),
         Some(condition.expr.clone()),
@@ -214,7 +214,7 @@ async fn build_old_data_plan(
         meta_scan
     };
 
-    let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaFindFilesExec::with_input(
+    let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
         meta_scan,
         ctx.table_url().clone(),
         Some(condition.clone()),
