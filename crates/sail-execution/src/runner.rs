@@ -74,14 +74,6 @@ impl ClusterJobRunner {
 #[tonic::async_trait]
 impl JobRunner for ClusterJobRunner {
     /// Executes a plan on the cluster. This is where the cool stuff happens.
-    ///
-    /// # Arguments
-    ///
-    /// * `ctx` - The session context.
-    /// * `plan` - The plan to execute.
-    ///
-    /// # Returns
-    /// A stream of record batches containing the results of the plan execution.
     async fn execute(
         &self,
         // TODO: propagate session context from the driver to the worker

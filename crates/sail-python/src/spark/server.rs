@@ -96,16 +96,6 @@ impl SparkConnectServer {
 
     /// Actually starts the server. Sets some config then calls 'run' (not available in the Python API)
     /// If background is False, will not return until the server finishes.
-    ///
-    /// # Arguments
-    ///
-    /// * `background` - if true, returns immediately; if false, blocks until the server stops.
-    ///
-    /// # Errors
-    ///
-    /// Returns a `PyRuntimeError` if:
-    /// - The server is already started.
-    /// - The IP address is invalid.
     #[pyo3(signature = (*, background))]
     fn start(&mut self, py: Python<'_>, background: bool) -> PyResult<()> {
         if self.state.is_some() {
@@ -184,15 +174,6 @@ impl SparkConnectServer {
     }
 
     /// Starts the server, not available in the Python API.
-    ///
-    /// # Arguments
-    ///
-    /// * `listener` - The listener to use for the server.
-    ///
-    /// # Errors
-    ///
-    /// Returns a `PyRuntimeError` if:
-    /// - The server fails to start.
     fn run(&self, listener: TcpListener) -> PyResult<SparkConnectServerState> {
         let runtime = self.runtime.handle();
         // Get the actual listener address.

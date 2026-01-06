@@ -50,15 +50,6 @@ fn is_reattachable(
 
 /// Utility function to handle execution of a command by routing it to the appropriate handler.
 /// Still has some CommandTypes that are not implemented.
-///
-/// # Arguments
-///
-/// * `ctx` - The session context.
-/// * `command` - The command to execute.
-/// * `metadata` - The metadata for the command.
-///
-/// # Returns
-/// A stream of responses containing the results of the command execution.
 async fn handle_command(
     ctx: &SessionContext,
     command: crate::spark::connect::command::CommandType,
@@ -125,19 +116,6 @@ async fn handle_command(
 impl SparkConnectService for SparkConnectServer {
     type ExecutePlanStream = ExecutePlanResponseStream;
 
-    /// Executes a plan sent by the client.
-    ///
-    /// # Arguments
-    ///
-    /// * `request` - The request containing the plan to execute.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Status::unimplemented` if the plan contains a `CompressedOperation`.
-    ///
-    /// # Returns
-    ///
-    /// A stream of responses containing the results of the plan execution.
     async fn execute_plan(
         &self,
         request: Request<ExecutePlanRequest>,
@@ -171,8 +149,7 @@ impl SparkConnectService for SparkConnectServer {
             }) => {
                 let command = command.required("command")?;
                 handle_command(&ctx, command, metadata)
-                    .await
-                    .map_err(Status::from)?
+                    .await?
             }
             plan::OpType::CompressedOperation(_) => {
                 return Err(Status::unimplemented("compressed operation plan"));

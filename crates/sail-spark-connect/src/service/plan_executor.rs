@@ -211,13 +211,6 @@ pub(crate) async fn handle_execute_write_operation_v2(
 
 /// Handles execution of a SQL command.
 /// If a string is sent over we convert it to a relation then convert it to a plan, then execute it.
-///
-/// # Arguments
-///
-/// * `ctx` - The session context.
-/// * `sql` - The SQL command to execute.
-/// * `metadata` - The metadata for the command.
-///
 pub(crate) async fn handle_execute_sql_command(
     ctx: &SessionContext,
     sql: SqlCommand,
