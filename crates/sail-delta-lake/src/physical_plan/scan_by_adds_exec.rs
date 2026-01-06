@@ -24,8 +24,7 @@ use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
-    PlanProperties,
-    SendableRecordBatchStream,
+    PlanProperties, SendableRecordBatchStream,
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
@@ -241,7 +240,9 @@ impl ExecutionPlan for DeltaScanByAddsExec {
                     .flat_map(|group| group.into_inner())
                     .collect::<Vec<_>>();
                 file_scan_config.file_groups =
-                    vec![datafusion::datasource::physical_plan::FileGroup::new(merged)];
+                    vec![datafusion::datasource::physical_plan::FileGroup::new(
+                        merged,
+                    )];
             }
 
             let scan_exec =
