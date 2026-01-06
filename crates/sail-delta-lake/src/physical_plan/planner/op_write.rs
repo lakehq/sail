@@ -18,8 +18,9 @@ use datafusion::physical_expr::expressions::NotExpr;
 use datafusion::physical_expr::{LexRequirement, PhysicalExpr};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::filter::FilterExec;
+use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::union::UnionExec;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::physical_expr::PhysicalExprWithSource;
 
@@ -222,6 +223,13 @@ async fn build_old_data_plan(
         version,
         ctx.partition_columns().to_vec(),
         expr_props.partition_only,
+    )?);
+
+    // Spread Add actions across partitions so `DeltaScanByAddsExec` can scan files in parallel.
+    let target_partitions = ctx.session().config().target_partitions().max(1);
+    let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+        find_files_exec,
+        Partitioning::RoundRobinBatch(target_partitions),
     )?);
 
     let scan_exec = Arc::new(DeltaScanByAddsExec::new(

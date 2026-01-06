@@ -23,7 +23,8 @@ use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
+    PlanProperties,
     SendableRecordBatchStream,
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
@@ -52,7 +53,10 @@ pub struct DeltaScanByAddsExec {
 
 impl DeltaScanByAddsExec {
     pub fn new(input: Arc<dyn ExecutionPlan>, table_url: Url, table_schema: SchemaRef) -> Self {
-        let cache = Self::compute_properties(table_schema.clone());
+        let cache = Self::compute_properties(
+            table_schema.clone(),
+            input.output_partitioning().partition_count(),
+        );
         Self {
             input,
             table_url,
@@ -73,10 +77,10 @@ impl DeltaScanByAddsExec {
         &self.table_schema
     }
 
-    fn compute_properties(schema: SchemaRef) -> PlanProperties {
+    fn compute_properties(schema: SchemaRef, partition_count: usize) -> PlanProperties {
         PlanProperties::new(
             EquivalenceProperties::new(schema),
-            Partitioning::UnknownPartitioning(1),
+            Partitioning::UnknownPartitioning(partition_count.max(1)),
             EmissionType::Final,
             Boundedness::Bounded,
         )
@@ -98,7 +102,7 @@ impl ExecutionPlan for DeltaScanByAddsExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::SinglePartition]
+        vec![Distribution::UnspecifiedDistribution]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -124,10 +128,6 @@ impl ExecutionPlan for DeltaScanByAddsExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if partition != 0 {
-            return internal_err!("DeltaScanByAddsExec only supports a single partition");
-        }
-
         let input = Arc::clone(&self.input);
         let table_url = self.table_url.clone();
         let table_schema = self.table_schema.clone();
@@ -135,7 +135,7 @@ impl ExecutionPlan for DeltaScanByAddsExec {
         let output_schema_clone = output_schema.clone();
 
         let stream_fut = async move {
-            let mut input_stream = input.execute(0, context.clone())?;
+            let mut input_stream = input.execute(partition, context.clone())?;
             let mut candidate_adds = Vec::new();
             let mut is_partition_scan = true;
 
@@ -228,6 +228,21 @@ impl ExecutionPlan for DeltaScanByAddsExec {
                 file_schema,
             )
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+            // `build_file_scan_config` groups files by partition values which can yield multiple
+            // `file_groups` (i.e. scan partitions). This exec is driven by upstream partitioning,
+            // so coalesce the inner scan into a single partition to avoid dropping data when
+            // executing `partition=0` below.
+            let mut file_scan_config = file_scan_config;
+            if file_scan_config.file_groups.len() > 1 {
+                let merged = file_scan_config
+                    .file_groups
+                    .into_iter()
+                    .flat_map(|group| group.into_inner())
+                    .collect::<Vec<_>>();
+                file_scan_config.file_groups =
+                    vec![datafusion::datasource::physical_plan::FileGroup::new(merged)];
+            }
 
             let scan_exec =
                 datafusion::datasource::source::DataSourceExec::from_data_source(file_scan_config);

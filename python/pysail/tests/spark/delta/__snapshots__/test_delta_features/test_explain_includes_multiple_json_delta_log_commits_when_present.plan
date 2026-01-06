@@ -6,8 +6,8 @@ DeltaCommitExec(table_path=file://<tmp>/x/)
         CoalescePartitionsExec
           CoalesceBatchesExec: target_batch_size=8192
             FilterExec: NOT year@<i> = 2024 AND value@<i> > 650
-              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-                DeltaScanByAddsExec(table_path=file://<tmp>/x/)
+              DeltaScanByAddsExec(table_path=file://<tmp>/x/)
+                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                   DeltaDiscoveryExec(table_path=file://<tmp>/x/)
                     CoalescePartitionsExec
                       DeltaLogScanExec(table_path=file://<tmp>/x/, version=2)
