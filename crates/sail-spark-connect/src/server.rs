@@ -1,11 +1,10 @@
 use async_stream;
+use datafusion::prelude::SessionContext;
 use log::debug;
 use sail_session::session_manager::SessionManager;
 use tonic::codegen::tokio_stream::StreamExt;
 use tonic::{Request, Response, Status, Streaming};
 use uuid::Uuid;
-
-use datafusion::prelude::SessionContext;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::executor::ExecutorMetadata;
@@ -50,6 +49,7 @@ fn is_reattachable(
 }
 
 /// Utility function to handle execution of a command by routing it to the appropriate handler.
+/// Still has some CommandTypes that are not implemented.
 ///
 /// # Arguments
 ///
@@ -101,9 +101,7 @@ async fn handle_command(
             service::handle_execute_streaming_query_listener_bus_command(ctx, command, metadata)
                 .await
         }
-        CommandType::RegisterDataSource(_) => {
-            Err(SparkError::todo("register data source command"))
-        }
+        CommandType::RegisterDataSource(_) => Err(SparkError::todo("register data source command")),
         CommandType::CreateResourceProfileCommand(_) => {
             Err(SparkError::todo("create resource profile command"))
         }
@@ -113,13 +111,9 @@ async fn handle_command(
         CommandType::RemoveCachedRemoteRelationCommand(_) => {
             Err(SparkError::todo("remove cached remote relation command"))
         }
-        CommandType::MergeIntoTableCommand(_) => {
-            Err(SparkError::todo("merge into table command"))
-        }
+        CommandType::MergeIntoTableCommand(_) => Err(SparkError::todo("merge into table command")),
         CommandType::MlCommand(_) => Err(SparkError::todo("ml command")),
-        CommandType::ExecuteExternalCommand(_) => {
-            Err(SparkError::todo("execute external command"))
-        }
+        CommandType::ExecuteExternalCommand(_) => Err(SparkError::todo("execute external command")),
         CommandType::PipelineCommand(_) => Err(SparkError::todo("pipeline command")),
         CommandType::Extension(_) => Err(SparkError::todo("command extension")),
     }
