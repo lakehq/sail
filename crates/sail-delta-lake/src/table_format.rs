@@ -32,7 +32,7 @@ pub struct DeltaTableFormat;
 impl DeltaTableFormat {
     pub fn register(registry: &TableFormatRegistry) -> Result<()> {
         registry.register(Arc::new(Self))?;
-        
+
         crate::init_delta_types();
         Ok(())
     }

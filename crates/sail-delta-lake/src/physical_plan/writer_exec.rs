@@ -55,9 +55,7 @@ use crate::kernel::models::{contains_timestampntz, Action, Metadata, Protocol};
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::options::{ColumnMappingModeOption, TableDeltaOptions};
-use crate::physical_plan::{
-    delta_action_schema, encode_actions, CommitMeta, ExecAction,
-};
+use crate::physical_plan::{delta_action_schema, encode_actions, CommitMeta, ExecAction};
 use crate::schema::{
     annotate_for_column_mapping, compute_max_column_id, evolve_schema, get_physical_schema,
     normalize_delta_schema,
@@ -698,11 +696,14 @@ impl ExecutionPlan for DeltaWriterExec {
                 }
             }
 
-            exec_actions.push(CommitMeta {
-                row_count: total_rows,
-                operation,
-                operation_metrics,
-            }.try_into()?);
+            exec_actions.push(
+                CommitMeta {
+                    row_count: total_rows,
+                    operation,
+                    operation_metrics,
+                }
+                .try_into()?,
+            );
 
             encode_actions(exec_actions)
         };
