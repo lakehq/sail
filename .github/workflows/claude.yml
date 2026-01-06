@@ -41,6 +41,9 @@ jobs:
       - uses: pypa/hatch@install
 
       - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: rust-build
+          install-testing-tools: false
 
       - uses: pnpm/action-setup@v4
 

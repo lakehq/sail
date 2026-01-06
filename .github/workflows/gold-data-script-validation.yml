@@ -35,6 +35,9 @@ jobs:
           java-version: "17"
 
       - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: rust-tests
+          install-testing-tools: true
 
       - name: Bootstrap Gold Data
         run: |
