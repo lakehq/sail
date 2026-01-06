@@ -346,15 +346,13 @@ impl DriverActor {
             JobAction::ScheduleTasks { region } => {
                 self.task_assigner.enqueue_tasks(region);
             }
-            JobAction::CancelTasks { keys } => {
-                for key in keys {
-                    self.task_assigner.exclude_task(&key);
-                    if let Some(assignment) = self.task_assigner.unassign_task(&key) {
-                        match assignment {
-                            TaskAssignment::Driver => self.task_runner.stop_task(&key),
-                            TaskAssignment::Worker { worker_id, slot: _ } => {
-                                self.worker_pool.stop_task(ctx, worker_id, &key)
-                            }
+            JobAction::CancelTask { key } => {
+                self.task_assigner.exclude_task(&key);
+                if let Some(assignment) = self.task_assigner.unassign_task(&key) {
+                    match assignment {
+                        TaskAssignment::Driver => self.task_runner.stop_task(&key),
+                        TaskAssignment::Worker { worker_id, slot: _ } => {
+                            self.worker_pool.stop_task(ctx, worker_id, &key)
                         }
                     }
                 }
@@ -386,17 +384,16 @@ impl DriverActor {
                         .add_job_output_stream(ctx, key, Box::pin(stream))
                 }
             }
-            JobAction::RemoveStreams { key } => {
-                let assignments = self.task_assigner.unassign_streams_by_stage(&key);
+            JobAction::RemoveStreams { job_id, stage } => {
+                let assignments = self.task_assigner.unassign_streams(job_id, stage);
                 for assignment in assignments {
                     match assignment {
                         TaskStreamAssignment::Driver => {
-                            self.stream_manager
-                                .remove_local_stream(key.job_id, Some(key.stage));
+                            self.stream_manager.remove_local_stream(job_id, stage);
                         }
                         TaskStreamAssignment::Worker { worker_id } => self
                             .worker_pool
-                            .remove_worker_streams(ctx, worker_id, key.job_id, Some(key.stage)),
+                            .remove_worker_streams(ctx, worker_id, job_id, stage),
                     }
                 }
             }

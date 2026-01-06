@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::catalog::memory::DataSourceExec;
+use datafusion::common::internal_err;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -23,7 +24,7 @@ use crate::codec::RemoteExecutionCodec;
 use crate::driver::TaskStatus;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{TaskKey, TaskKeyDisplay};
-use crate::plan::{ShuffleReadExec, ShuffleWriteExec};
+use crate::plan::{ShuffleReadExec, ShuffleWriteExec, StageInputExec};
 use crate::stream_accessor::{StreamAccessor, StreamAccessorMessage};
 use crate::task::definition::{TaskDefinition, TaskInput, TaskOutput};
 use crate::task_runner::monitor::TaskMonitor;
@@ -146,10 +147,22 @@ impl TaskRunner {
     {
         let handle = ctx.handle();
         let result = plan.transform(move |node| {
-            if let Some(placeholder) = node.as_any().downcast_ref::<ShuffleReadExec>() {
+            if let Some(placeholder) = node.as_any().downcast_ref::<StageInputExec<usize>>() {
+                let Some(input) = inputs.get(*placeholder.input()) else {
+                    return internal_err!(
+                        "stage input index {} out of bounds for {}",
+                        placeholder.input(),
+                        TaskKeyDisplay(key)
+                    );
+                };
                 let partitioning = placeholder.properties().output_partitioning().clone();
                 let mut locations = vec![vec![]; partitioning.partition_count()];
-                todo!();
+                match locations.get_mut(key.partition) {
+                    Some(x) => x.extend(input.locations(key.job_id)),
+                    None => {
+                        return internal_err!("invalid partition for {}", TaskKeyDisplay(key));
+                    }
+                };
                 let accessor = StreamAccessor::new(handle.clone());
                 let shuffle = ShuffleReadExec::new(
                     locations,

@@ -1,7 +1,7 @@
 use indexmap::IndexSet;
 use log::warn;
 
-use crate::id::{StageKey, TaskKey};
+use crate::id::{JobId, TaskKey};
 use crate::task::scheduling::TaskSet;
 
 #[derive(Default)]
@@ -36,9 +36,14 @@ impl DriverResource {
         false
     }
 
-    pub fn remove_streams_by_stage(&mut self, stage: &StageKey) -> bool {
+    pub fn remove_streams(&mut self, job_id: JobId, stage: Option<usize>) -> bool {
         let count = self.local_streams.len();
-        self.local_streams.retain(|x| !stage.matches(x));
+        if let Some(stage) = stage {
+            self.local_streams
+                .retain(|x| x.job_id != job_id || x.stage != stage);
+        } else {
+            self.local_streams.retain(|x| x.job_id != job_id);
+        }
         count != self.local_streams.len()
     }
 }
@@ -102,11 +107,15 @@ impl WorkerResource {
         }
     }
 
-    pub fn remove_streams_by_stage(&mut self, stage: &StageKey) -> bool {
+    pub fn remove_streams(&mut self, job_id: JobId, stage: Option<usize>) -> bool {
         match self {
             WorkerResource::Active { local_streams, .. } => {
                 let count = local_streams.len();
-                local_streams.retain(|x| !stage.matches(x));
+                if let Some(stage) = stage {
+                    local_streams.retain(|x| x.job_id != job_id || x.stage != stage);
+                } else {
+                    local_streams.retain(|x| x.job_id != job_id);
+                }
                 count != local_streams.len()
             }
             WorkerResource::Inactive => {

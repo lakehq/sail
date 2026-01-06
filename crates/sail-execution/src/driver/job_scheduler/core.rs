@@ -91,21 +91,64 @@ impl JobScheduler {
         self.get_task_attempt(key).map(|x| x.state.clone())
     }
 
+    /// Determine the actions needed in the driver for the job whose
+    /// task states may have changed.
+    ///
+    /// The method first determines the task regions and then decides
+    /// the actions to take.
+    ///   1. For each task region, if any task attempt fails, all existing task attempts
+    ///      in the region are canceled if not already.
+    ///   2. If any task exceeds the maximum allowed attempts, the job is marked as failed.
+    ///   3. If all the tasks in the final stage have succeeded, the job is marked as succeeded.
+    ///   4. If any task in the final stage is running or has succeeded, all its channels are
+    ///      added as job output streams.
+    ///   5. For each task region, schedule the tasks of the region if all the dependency
+    ///      regions have succeeded.
+    ///   6. For each stage, if all the stages that depends on it have succeeded, remove
+    ///      the output streams of the stage.
     pub fn refresh_job(&mut self, job_id: JobId) -> Vec<JobAction> {
         let Some(job) = self.jobs.get_mut(&job_id) else {
             warn!("job {job_id} not found");
             return vec![];
         };
-        todo!()
+        if job.state.is_terminal() {
+            return vec![];
+        }
+        const MAX_ATTEMPTS: usize = 3;
+        // TODO
+        vec![]
     }
 
+    /// Determine the actions needed in the driver to cancel the job.
+    /// The method cancels all the task attempts that are not in terminal states
+    /// and removes all the job output streams.
     pub fn cancel_job(&mut self, job_id: JobId) -> Vec<JobAction> {
         let Some(job) = self.jobs.get_mut(&job_id) else {
             warn!("job {job_id} not found");
             return vec![];
         };
-        let reason = format!("task canceled for job {job_id}");
-        todo!()
+        let mut actions = vec![];
+        for (s, stage) in job.stages.iter().enumerate() {
+            for (t, task) in stage.tasks.iter().enumerate() {
+                for (a, attempt) in task.attempts.iter().enumerate() {
+                    if !attempt.state.is_terminal() {}
+                    actions.push(JobAction::CancelTask {
+                        key: TaskKey {
+                            job_id,
+                            stage: s,
+                            partition: t,
+                            attempt: a,
+                        },
+                    });
+                }
+            }
+        }
+        actions.push(JobAction::RemoveStreams {
+            job_id,
+            stage: None,
+        });
+        job.state = JobState::Canceled;
+        actions
     }
 
     pub fn get_task_definition(

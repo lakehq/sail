@@ -23,6 +23,15 @@ pub enum JobState {
     Canceled,
 }
 
+impl JobState {
+    pub fn is_terminal(&self) -> bool {
+        match self {
+            JobState::Running { .. } => false,
+            JobState::Succeeded | JobState::Failed | JobState::Canceled => true,
+        }
+    }
+}
+
 impl JobDescriptor {
     pub fn new(graph: JobGraph, state: JobState) -> Self {
         let mut stages = vec![];
@@ -90,6 +99,15 @@ impl TaskState {
             ) => *self,
             (TaskState::Running, x) => x,
             (TaskState::Succeeded | TaskState::Failed | TaskState::Canceled, _) => *self,
+        }
+    }
+
+    pub fn is_terminal(&self) -> bool {
+        match self {
+            TaskState::Succeeded | TaskState::Failed | TaskState::Canceled => true,
+            TaskState::Pending | TaskState::Created | TaskState::Scheduled | TaskState::Running => {
+                false
+            }
         }
     }
 }

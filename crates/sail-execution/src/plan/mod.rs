@@ -1,10 +1,12 @@
 mod shuffle_read;
 mod shuffle_write;
+mod stage_input;
 
 use std::fmt::Display;
 
 pub(crate) use shuffle_read::ShuffleReadExec;
 pub(crate) use shuffle_write::ShuffleWriteExec;
+pub(crate) use stage_input::StageInputExec;
 
 #[allow(clippy::all)]
 pub(crate) mod gen {

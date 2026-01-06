@@ -3,7 +3,7 @@ use log::{error, warn};
 
 use crate::driver::task_assigner::state::{TaskSlot, WorkerResource};
 use crate::driver::task_assigner::{TaskAssigner, TaskRegion};
-use crate::id::{StageKey, TaskKey, TaskKeyDisplay, WorkerId};
+use crate::id::{JobId, TaskKey, TaskKeyDisplay, WorkerId};
 use crate::job_graph::TaskPlacement;
 use crate::task::scheduling::{
     TaskAssignment, TaskAssignmentGetter, TaskSetAssignment, TaskStreamAssignment,
@@ -149,14 +149,18 @@ impl TaskAssigner {
         Some(assignment.clone())
     }
 
-    pub fn unassign_streams_by_stage(&mut self, stage: &StageKey) -> Vec<TaskStreamAssignment> {
+    pub fn unassign_streams(
+        &mut self,
+        job_id: JobId,
+        stage: Option<usize>,
+    ) -> Vec<TaskStreamAssignment> {
         let mut assignments = vec![];
-        if self.driver.remove_streams_by_stage(stage) {
+        if self.driver.remove_streams(job_id, stage) {
             assignments.push(TaskStreamAssignment::Driver);
         }
         for (worker_id, worker) in self.workers.iter_mut() {
             if matches!(worker, WorkerResource::Active { .. }) {
-                if worker.remove_streams_by_stage(stage) {
+                if worker.remove_streams(job_id, stage) {
                     assignments.push(TaskStreamAssignment::Worker {
                         worker_id: *worker_id,
                     });

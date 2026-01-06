@@ -15,8 +15,10 @@ use datafusion::physical_plan::{
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::job_graph::{JobGraph, Stage};
-use crate::plan::{ShuffleConsumption, ShuffleReadExec, ShuffleWriteExec};
+use crate::job_graph::{
+    InputMode, JobGraph, OutputDistribution, OutputMode, Stage, StageInput, TaskPlacement,
+};
+use crate::plan::{ShuffleConsumption, StageInputExec};
 
 impl JobGraph {
     pub fn try_new(plan: Arc<dyn ExecutionPlan>) -> ExecutionResult<Self> {
@@ -26,7 +28,15 @@ impl JobGraph {
             schema: plan.schema(),
         };
         let last = build_job_graph(plan, PartitionUsage::Once, &mut graph)?;
-        graph.stages.push(last);
+        let (last, inputs) = rewrite_inputs(last)?;
+        graph.stages.push(Stage {
+            inputs,
+            plan: last,
+            group: String::new(),
+            mode: OutputMode::Pipelined,
+            distribution: OutputDistribution::RoundRobin { channels: 1 },
+            placement: TaskPlacement::Worker,
+        });
         Ok(graph)
     }
 }
@@ -89,10 +99,10 @@ fn build_job_graph(
     plan: Arc<dyn ExecutionPlan>,
     usage: PartitionUsage,
     graph: &mut JobGraph,
-) -> ExecutionResult<Stage> {
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
     // Recursively build the job graph for the children first
     // and propagate partition usage information.
-    let _children = if let Some(join) = plan.as_any().downcast_ref::<HashJoinExec>() {
+    let children = if let Some(join) = plan.as_any().downcast_ref::<HashJoinExec>() {
         let (left, right) = join.children().two()?;
         match join.mode {
             PartitionMode::Partitioned => {
@@ -134,13 +144,13 @@ fn build_job_graph(
             .map(|x| build_job_graph(x.clone(), usage, graph))
             .collect::<ExecutionResult<Vec<_>>>()?
     };
-    let plan = with_new_children_if_necessary(plan, vec![])?;
+    let plan = with_new_children_if_necessary(plan, children)?;
 
     let consumption = match usage {
         PartitionUsage::Once => ShuffleConsumption::Single,
         PartitionUsage::Shared => ShuffleConsumption::Multiple,
     };
-    let _plan = if let Some(repartition) = plan.as_any().downcast_ref::<RepartitionExec>() {
+    let plan = if let Some(repartition) = plan.as_any().downcast_ref::<RepartitionExec>() {
         let child = plan.children().one()?;
         match repartition.partitioning() {
             Partitioning::UnknownPartitioning(n) => {
@@ -164,14 +174,61 @@ fn build_job_graph(
     } else {
         plan
     };
-    todo!()
+    Ok(plan)
 }
 
 fn create_shuffle(
-    _plan: &Arc<dyn ExecutionPlan>,
-    _graph: &mut JobGraph,
-    _partitioning: Partitioning,
-    _consumption: ShuffleConsumption,
+    plan: &Arc<dyn ExecutionPlan>,
+    graph: &mut JobGraph,
+    partitioning: Partitioning,
+    consumption: ShuffleConsumption,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
-    todo!()
+    let distribution = match partitioning.clone() {
+        Partitioning::RoundRobinBatch(channels) | Partitioning::UnknownPartitioning(channels) => {
+            OutputDistribution::RoundRobin { channels }
+        }
+        Partitioning::Hash(keys, channels) => OutputDistribution::Hash { keys, channels },
+    };
+    let schema = plan.schema();
+    let (plan, inputs) = rewrite_inputs(plan.clone())?;
+    let stage = Stage {
+        inputs,
+        plan,
+        group: String::new(),
+        mode: OutputMode::Pipelined,
+        distribution,
+        placement: TaskPlacement::Worker,
+    };
+    let s = graph.stages.len();
+    graph.stages.push(stage);
+    let mode = match consumption {
+        ShuffleConsumption::Single => InputMode::Shuffle,
+        ShuffleConsumption::Multiple => InputMode::Broadcast,
+    };
+    Ok(Arc::new(StageInputExec::new(
+        StageInput { stage: s, mode },
+        schema,
+        partitioning.clone(),
+    )))
+}
+
+fn rewrite_inputs(
+    plan: Arc<dyn ExecutionPlan>,
+) -> ExecutionResult<(Arc<dyn ExecutionPlan>, Vec<StageInput>)> {
+    let mut inputs = vec![];
+    let result = plan.transform(|node| {
+        if let Some(placeholder) = node.as_any().downcast_ref::<StageInputExec<StageInput>>() {
+            let index = inputs.len();
+            inputs.push(placeholder.input().clone());
+            let placeholder = StageInputExec::new(
+                index,
+                placeholder.schema(),
+                placeholder.properties().output_partitioning().clone(),
+            );
+            Ok(Transformed::yes(Arc::new(placeholder)))
+        } else {
+            Ok(Transformed::no(node))
+        }
+    });
+    Ok((result.data()?, inputs))
 }

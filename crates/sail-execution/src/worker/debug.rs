@@ -14,7 +14,7 @@ impl Debug for RunTaskRequest {
             definition,
             peers,
         } = self;
-        f.debug_struct("TaskDefinition")
+        f.debug_struct("RunTaskRequest")
             .field("job_id", job_id)
             .field("stage", stage)
             .field("partition", partition)

@@ -1,11 +1,30 @@
 use crate::id::{TaskKey, WorkerId};
 use crate::job_graph::TaskPlacement;
 
+/// A task region represents multiple task sets that should be scheduled together.
+/// Each task set can be placed either on the driver or on the workers.
+/// Failure of any tasks in the region should trigger a rescheduling of the entire region.
+///
+/// A task region is formed under either of the following ways:
+///   1. The tasks of all partitions of stages that satisfy the following:
+///      1. The inputs of the initial stages, if any, are blocking.
+///      2. The outputs of the final stages are either blocking or the job output.
+///      3. The outputs among stages are pipelined.
+///   2. The task of a single partition of stages that satisfy the following:
+///      1. The inputs of the initial stages, if any, are blocking.
+///      2. The output of the final stages are either blocking or the job output.
+///      3. The outputs among stages are pipelined with forward input mode,
+///         if there are more than one stage involved.
 #[derive(Clone)]
 pub struct TaskRegion {
     pub tasks: Vec<(TaskPlacement, TaskSet)>,
 }
 
+/// A task set represents a collection of tasks that are assigned to
+/// a single task slot on the driver or a worker.
+/// The tasks must come from different stages of the same "slot sharing group".
+/// The tasks of different partitions of the same stage must be assigned to
+/// different task sets.
 #[derive(Clone)]
 pub struct TaskSet {
     pub entries: Vec<TaskSetEntry>,

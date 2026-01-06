@@ -18,7 +18,7 @@ use datafusion::functions::core::greatest::GreatestFunc;
 use datafusion::functions::core::least::LeastFunc;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl};
-use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalSortExpr};
+use datafusion::physical_expr::{LexOrdering, LexRequirement, Partitioning, PhysicalSortExpr};
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::SortMergeJoinExec;
 use datafusion::physical_plan::recursive_query::RecursiveQueryExec;
@@ -28,9 +28,11 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
 use datafusion_proto::physical_plan::from_proto::{
     parse_physical_expr, parse_physical_sort_exprs, parse_protobuf_file_scan_config,
+    parse_protobuf_partitioning,
 };
 use datafusion_proto::physical_plan::to_proto::{
-    serialize_file_scan_config, serialize_physical_expr, serialize_physical_sort_exprs,
+    serialize_file_scan_config, serialize_partitioning, serialize_physical_expr,
+    serialize_physical_sort_exprs,
 };
 use datafusion_proto::physical_plan::{AsExecutionPlan, PhysicalExtensionCodec};
 use datafusion_proto::protobuf::{
@@ -162,7 +164,6 @@ use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
 use sail_python_udf::udf::pyspark_udtf::{PySparkUDTF, PySparkUdtfKind};
 use url::Url;
 
-use crate::plan::gen;
 use crate::plan::gen::extended_aggregate_udf::UdafKind;
 use crate::plan::gen::extended_physical_plan_node::NodeKind;
 use crate::plan::gen::extended_scalar_udf::UdfKind;
@@ -170,6 +171,7 @@ use crate::plan::gen::extended_stream_udf::StreamUdfKind;
 use crate::plan::gen::{
     ExtendedAggregateUdf, ExtendedPhysicalPlanNode, ExtendedScalarUdf, ExtendedStreamUdf,
 };
+use crate::plan::{gen, StageInputExec};
 
 pub struct RemoteExecutionCodec;
 
@@ -227,6 +229,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     ),
                     Arc::new(schema),
                 )))
+            }
+            NodeKind::StageInput(gen::StageInputExecNode {
+                input,
+                schema,
+                partitioning,
+            }) => {
+                let schema = self.try_decode_schema(&schema)?;
+                let partitioning = self.try_decode_partitioning(&partitioning, &schema, ctx)?;
+                let node = StageInputExec::new(input as usize, Arc::new(schema), partitioning);
+                Ok(Arc::new(node))
             }
             NodeKind::SchemaPivot(gen::SchemaPivotExecNode {
                 input,
@@ -789,6 +801,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 style: self.try_encode_show_string_style(show_string.format().style())?,
                 truncate: show_string.format().truncate() as u64,
                 schema,
+            })
+        } else if let Some(stage_input) = node.as_any().downcast_ref::<StageInputExec<usize>>() {
+            let schema = self.try_encode_schema(stage_input.schema().as_ref())?;
+            let partitioning =
+                self.try_encode_partitioning(stage_input.properties().output_partitioning())?;
+            NodeKind::StageInput(gen::StageInputExecNode {
+                input: *stage_input.input() as u64,
+                schema,
+                partitioning,
             })
         } else if let Some(schema_pivot) = node.as_any().downcast_ref::<SchemaPivotExec>() {
             let schema = self.try_encode_schema(schema_pivot.schema().as_ref())?;
@@ -2207,6 +2228,22 @@ impl RemoteExecutionCodec {
     fn try_encode_plan(&self, plan: Arc<dyn ExecutionPlan>) -> Result<Vec<u8>> {
         let plan = PhysicalPlanNode::try_from_physical_plan(plan, self)?;
         Ok(plan.encode_to_vec())
+    }
+
+    fn try_decode_partitioning(
+        &self,
+        buf: &[u8],
+        schema: &Schema,
+        ctx: &TaskContext,
+    ) -> Result<Partitioning> {
+        let partitioning = self.try_decode_message(buf)?;
+        parse_protobuf_partitioning(Some(&partitioning), ctx, schema, self)?
+            .ok_or_else(|| plan_datafusion_err!("no partitioning found"))
+    }
+
+    fn try_encode_partitioning(&self, partitioning: &Partitioning) -> Result<Vec<u8>> {
+        let partitioning = serialize_partitioning(partitioning, self)?;
+        self.try_encode_message(partitioning)
     }
 
     fn try_decode_data_type(&self, buf: &[u8]) -> Result<DataType> {

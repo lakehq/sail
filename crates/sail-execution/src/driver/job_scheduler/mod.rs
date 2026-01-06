@@ -11,7 +11,7 @@ pub use state::TaskState;
 
 use crate::codec::RemoteExecutionCodec;
 use crate::driver::job_scheduler::state::JobDescriptor;
-use crate::id::{IdGenerator, JobId, StageKey, TaskKey, TaskStreamKey};
+use crate::id::{IdGenerator, JobId, TaskKey, TaskStreamKey};
 use crate::task::scheduling::TaskRegion;
 
 pub struct JobScheduler {
@@ -36,14 +36,15 @@ pub enum JobAction {
     ScheduleTasks {
         region: TaskRegion,
     },
-    CancelTasks {
-        keys: Vec<TaskKey>,
+    CancelTask {
+        key: TaskKey,
     },
     FetchJobOutputStreams {
         keys: Vec<TaskStreamKey>,
         schema: SchemaRef,
     },
     RemoveStreams {
-        key: StageKey,
+        job_id: JobId,
+        stage: Option<usize>,
     },
 }

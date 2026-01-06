@@ -1,3 +1,5 @@
+mod planner;
+
 use std::fmt;
 use std::sync::Arc;
 
@@ -5,10 +7,12 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties, PhysicalExpr};
 
-mod planner;
-
 pub struct JobGraph {
+    /// A list of stages sorted in topological order.
+    /// For any stage, all its input stages are guaranteed to
+    /// appear before it in the list.
     stages: Vec<Stage>,
+    /// The output schema of the job.
     schema: SchemaRef,
 }
 
@@ -76,6 +80,7 @@ pub struct Stage {
 
 #[derive(Clone, Copy)]
 pub enum TaskPlacement {
+    #[expect(unused)]
     Driver,
     Worker,
 }
@@ -89,7 +94,7 @@ impl fmt::Display for TaskPlacement {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct StageInput {
     pub stage: usize,
     pub mode: InputMode,
@@ -101,10 +106,11 @@ impl fmt::Display for StageInput {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum InputMode {
     /// For each partition in the current stage, read all channels from the
     /// same partition in the input stage.
+    #[expect(unused)]
     Forward,
     /// For each partition in the current stage, read data from the corresponding
     /// channel of all partitions in the input stage.
@@ -127,6 +133,7 @@ impl fmt::Display for InputMode {
 #[derive(Clone, Copy)]
 pub enum OutputMode {
     Pipelined,
+    #[expect(unused)]
     Blocking,
 }
 
