@@ -10,6 +10,7 @@ use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use sail_physical_plan::{contains_format_tag, FormatTag};
 
 /// Rewrite `HashJoinExec(mode=CollectLeft)` into a distributed-safe form for join types that
 /// require global coordination across probe partitions.
@@ -27,11 +28,8 @@ impl Default for RewriteDeltaCollectLeft {
     }
 }
 
-fn is_delta_plan(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    if plan.name().starts_with("Delta") {
-        return true;
-    }
-    plan.children().into_iter().any(is_delta_plan)
+fn contains_delta_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<bool> {
+    contains_format_tag(plan, FormatTag::Delta)
 }
 
 fn collect_left_requires_global_build_state(join_type: JoinType) -> bool {
@@ -51,7 +49,7 @@ impl PhysicalOptimizerRule for RewriteDeltaCollectLeft {
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if !is_delta_plan(&plan) {
+        if !contains_delta_plan(&plan)? {
             return Ok(plan);
         }
 
