@@ -27,6 +27,11 @@ if TYPE_CHECKING:
 
 @pytest.fixture(scope="session")
 def remote():
+    """Creates a Spark Connect server if there is not one already running
+    whose address is set in the `SPARK_REMOTE` environment variable.
+
+    :yields: The remote address of the Spark Connect server to connect to.
+    """
     if r := os.environ.get("SPARK_REMOTE"):
         yield r
     else:
@@ -41,6 +46,12 @@ def remote():
 
 @pytest.fixture(scope="module")
 def spark(remote):
+    """Create and configure a Spark Session to be used in the tests.
+    After the tests are finished, the Spark Session is stopped.
+
+    :param remote: The remote address of the Spark Connect server to connect to.
+    :yields: A Spark Session configured for the tests.
+    """
     spark = SparkSession.builder.remote(remote).getOrCreate()
     configure_spark_session(spark)
     patch_spark_connect_session(spark)

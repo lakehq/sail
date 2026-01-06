@@ -37,6 +37,7 @@ impl SparkConnectServerState {
     }
 }
 
+/// The Spark connect server struct.
 #[pyclass]
 pub(super) struct SparkConnectServer {
     #[pyo3(get)]
@@ -50,6 +51,18 @@ pub(super) struct SparkConnectServer {
 
 #[pymethods]
 impl SparkConnectServer {
+    /// Creates a new SparkConnectServer instance.
+    ///
+    /// # Arguments
+    ///
+    /// * `ip` - The IP address to bind the server to.
+    /// * `port` - The port to bind the server to.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PyRuntimeError` if:
+    /// - The application config fails to load.
+    /// - The runtime manager fails to initialize.
     #[new]
     #[pyo3(signature = (ip, port, /))]
     fn new(ip: &str, port: u16) -> PyResult<Self> {
