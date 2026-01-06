@@ -1,3 +1,6 @@
+//! Build script that generate Rust from the .proto files.
+//! and also converts json to Rust constants.
+
 use std::path::PathBuf;
 
 use prost_build::Config;
