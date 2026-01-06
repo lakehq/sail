@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import time
+from pathlib import Path
 
 from pyspark.sql import SparkSession
 
@@ -33,6 +34,11 @@ class TpchBenchmark:
             if self.format == "delta":
                 path = f"{self.data_path}/{table}"
                 df = spark.read.format("delta").load(path)
+            elif self.format == "iceberg":
+                # Iceberg requires file:// URL for local paths (especially with Sail)
+                table_path = Path(self.data_path) / "tpch" / table
+                path = table_path.resolve().as_uri() + "/"
+                df = spark.read.format("iceberg").load(path)
             else:
                 path = f"{self.data_path}/{table}.parquet"
                 df = spark.read.parquet(path)
@@ -105,7 +111,7 @@ def main():
     parser.add_argument("--data-path", type=str, required=True)
     parser.add_argument("--query-path", type=str, required=True)
     parser.add_argument("--num-runs", type=int, default=1)
-    parser.add_argument("--format", type=str, default="parquet", choices=["parquet", "delta"])
+    parser.add_argument("--format", type=str, default="parquet", choices=["parquet", "delta", "iceberg"])
     parser.add_argument(
         "--include-load-time",
         action="store_true",
