@@ -50,7 +50,7 @@ fn partition_values_type() -> DataType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct AddAction {
+pub struct AddAction {
     path: String,
     partition_values: BTreeMap<String, Option<String>>,
     size: i64,
@@ -60,7 +60,7 @@ struct AddAction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct RemoveAction {
+pub struct RemoveAction {
     path: String,
     data_change: bool,
     deletion_timestamp: Option<i64>,
@@ -71,14 +71,14 @@ struct RemoveAction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct CommitMetaAction {
+pub struct CommitMetaAction {
     commit_row_count: u64,
     operation_json: Option<String>,
     operation_metrics_json: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-enum ExecAction {
+pub enum ExecAction {
     #[serde(rename = "add")]
     Add(AddAction),
     #[serde(rename = "remove")]
@@ -147,92 +147,90 @@ pub fn delta_action_schema() -> Result<SchemaRef> {
     }
 }
 
-pub fn encode_add_actions(adds: Vec<Add>) -> Result<RecordBatch> {
-    if adds.is_empty() {
+pub fn encode_actions(actions: Vec<ExecAction>) -> Result<RecordBatch> {
+    if actions.is_empty() {
         return Ok(RecordBatch::new_empty(delta_action_schema()?));
     }
 
-    let rows: Vec<ActionRow> = adds
+    let rows: Vec<ActionRow> = actions
         .into_iter()
-        .map(|a| ActionRow {
-            action: ExecAction::Add(AddAction {
-                path: a.path,
-                partition_values: a.partition_values.into_iter().collect(),
-                size: a.size,
-                modification_time: a.modification_time,
-                data_change: a.data_change,
-                stats_json: a.stats,
-            }),
-        })
+        .map(|action| ActionRow { action })
         .collect();
 
     serde_arrow::to_record_batch(delta_action_fields()?, &rows)
         .map_err(|e| DataFusionError::External(Box::new(e)))
 }
 
-pub fn encode_remove_actions(removes: Vec<Remove>) -> Result<RecordBatch> {
-    if removes.is_empty() {
-        return Ok(RecordBatch::new_empty(delta_action_schema()?));
-    }
-
-    let rows: Vec<ActionRow> = removes
-        .into_iter()
-        .map(|r| ActionRow {
-            action: ExecAction::Remove(RemoveAction {
-                path: r.path,
-                data_change: r.data_change,
-                deletion_timestamp: r.deletion_timestamp,
-                extended_file_metadata: r.extended_file_metadata,
-                partition_values: r.partition_values.unwrap_or_default().into_iter().collect(),
-                size: r.size,
-            }),
+impl From<Add> for ExecAction {
+    fn from(add: Add) -> Self {
+        ExecAction::Add(AddAction {
+            path: add.path,
+            partition_values: add.partition_values.into_iter().collect(),
+            size: add.size,
+            modification_time: add.modification_time,
+            data_change: add.data_change,
+            stats_json: add.stats,
         })
-        .collect();
-
-    serde_arrow::to_record_batch(delta_action_fields()?, &rows)
-        .map_err(|e| DataFusionError::External(Box::new(e)))
+    }
 }
 
-pub fn encode_protocol_action(protocol: Protocol) -> Result<RecordBatch> {
-    let protocol_json =
-        serde_json::to_string(&protocol).map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let rows = vec![ActionRow {
-        action: ExecAction::Protocol(protocol_json),
-    }];
-    serde_arrow::to_record_batch(delta_action_fields()?, &rows)
-        .map_err(|e| DataFusionError::External(Box::new(e)))
+impl From<Remove> for ExecAction {
+    fn from(remove: Remove) -> Self {
+        ExecAction::Remove(RemoveAction {
+            path: remove.path,
+            data_change: remove.data_change,
+            deletion_timestamp: remove.deletion_timestamp,
+            extended_file_metadata: remove.extended_file_metadata,
+            partition_values: remove
+                .partition_values
+                .unwrap_or_default()
+                .into_iter()
+                .collect(),
+            size: remove.size,
+        })
+    }
 }
 
-pub fn encode_metadata_action(metadata: Metadata) -> Result<RecordBatch> {
-    let metadata_json =
-        serde_json::to_string(&metadata).map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let rows = vec![ActionRow {
-        action: ExecAction::Metadata(metadata_json),
-    }];
-    serde_arrow::to_record_batch(delta_action_fields()?, &rows)
-        .map_err(|e| DataFusionError::External(Box::new(e)))
+impl TryFrom<Protocol> for ExecAction {
+    type Error = DataFusionError;
+
+    fn try_from(protocol: Protocol) -> Result<Self> {
+        let protocol_json =
+            serde_json::to_string(&protocol).map_err(|e| DataFusionError::External(Box::new(e)))?;
+        Ok(ExecAction::Protocol(protocol_json))
+    }
 }
 
-pub fn encode_commit_meta(meta: CommitMeta) -> Result<RecordBatch> {
-    let operation_json = meta
-        .operation
-        .as_ref()
-        .map(serde_json::to_string)
-        .transpose()
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+impl TryFrom<Metadata> for ExecAction {
+    type Error = DataFusionError;
 
-    let operation_metrics_json = serde_json::to_string(&meta.operation_metrics)
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    fn try_from(metadata: Metadata) -> Result<Self> {
+        let metadata_json =
+            serde_json::to_string(&metadata).map_err(|e| DataFusionError::External(Box::new(e)))?;
+        Ok(ExecAction::Metadata(metadata_json))
+    }
+}
 
-    let rows = vec![ActionRow {
-        action: ExecAction::CommitMeta(CommitMetaAction {
+impl TryFrom<CommitMeta> for ExecAction {
+    type Error = DataFusionError;
+
+    fn try_from(meta: CommitMeta) -> Result<Self> {
+        let operation_json = meta
+            .operation
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let operation_metrics_json = serde_json::to_string(&meta.operation_metrics)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        Ok(ExecAction::CommitMeta(CommitMetaAction {
             commit_row_count: meta.row_count,
             operation_json,
             operation_metrics_json,
-        }),
-    }];
-    serde_arrow::to_record_batch(delta_action_fields()?, &rows)
-        .map_err(|e| DataFusionError::External(Box::new(e)))
+        }))
+    }
 }
 
 pub fn decode_adds_from_batch(batch: &RecordBatch) -> Result<Vec<Add>> {
@@ -320,13 +318,10 @@ pub fn decode_actions_and_meta_from_batch(
 
 #[cfg(test)]
 mod tests {
-    use datafusion::arrow::compute::concat_batches;
-    use datafusion::arrow::record_batch::RecordBatch;
-
     use super::*;
 
     #[test]
-    fn encode_add_actions_produces_action_column() -> Result<()> {
+    fn encode_actions_produces_action_column() -> Result<()> {
         let adds = vec![Add {
             path: "a.parquet".to_string(),
             partition_values: HashMap::from([("p".to_string(), Some("1".to_string()))]),
@@ -341,7 +336,8 @@ mod tests {
             clustering_provider: None,
         }];
 
-        let rb = encode_add_actions(adds)?;
+        let exec_actions: Vec<ExecAction> = adds.into_iter().map(|add| add.into()).collect();
+        let rb = encode_actions(exec_actions)?;
         assert_eq!(rb.schema(), delta_action_schema()?);
         assert_eq!(rb.num_rows(), 1);
         assert!(rb.column_by_name(COL_ACTION).is_some());
@@ -381,14 +377,16 @@ mod tests {
             operation_metrics: HashMap::new(),
         };
 
-        let schema = delta_action_schema()?;
-        let out_batches: Vec<RecordBatch> = vec![
-            encode_add_actions(adds)?,
-            encode_remove_actions(removes)?,
-            encode_commit_meta(meta)?,
-        ];
-        let batch = concat_batches(&schema, &out_batches)
-            .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+        let mut exec_actions: Vec<ExecAction> = Vec::new();
+        for add in adds {
+            exec_actions.push(add.into());
+        }
+        for remove in removes {
+            exec_actions.push(remove.into());
+        }
+        exec_actions.push(meta.try_into()?);
+
+        let batch = encode_actions(exec_actions)?;
 
         let (actions, decoded_meta) = decode_actions_and_meta_from_batch(&batch)?;
         assert_eq!(actions.len(), 2);

@@ -17,7 +17,6 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use async_trait::async_trait;
-use datafusion::arrow::compute::concat_batches;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
@@ -33,8 +32,8 @@ use serde_json::Value;
 
 use crate::kernel::models::{Add, Remove, RemoveOptions};
 use crate::physical_plan::{
-    current_timestamp_millis, decode_adds_from_batch, delta_action_schema, encode_commit_meta,
-    encode_remove_actions, CommitMeta, COL_ACTION,
+    current_timestamp_millis, decode_adds_from_batch, delta_action_schema, encode_actions,
+    CommitMeta, ExecAction, COL_ACTION,
 };
 
 /// Physical execution node to convert Add actions (from FindFiles) into Remove actions
@@ -139,7 +138,6 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
         }
 
         let mut stream = self.input.execute(0, context)?;
-        let schema = self.schema();
 
         let output_rows = MetricBuilder::new(&self.metrics).output_rows(partition);
         let output_bytes = MetricBuilder::new(&self.metrics).output_bytes(partition);
@@ -191,14 +189,22 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
                 Value::from(exec_start.elapsed().as_millis() as u64),
             );
 
-            let removes_batch = encode_remove_actions(remove_actions)?;
-            let meta_batch = encode_commit_meta(CommitMeta {
-                row_count: 0,
-                operation: None,
-                operation_metrics,
-            })?;
-            concat_batches(&schema, &[removes_batch, meta_batch])
-                .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
+            let mut exec_actions: Vec<ExecAction> = Vec::new();
+
+            for remove in remove_actions {
+                exec_actions.push(remove.into());
+            }
+
+            exec_actions.push(
+                CommitMeta {
+                    row_count: 0,
+                    operation: None,
+                    operation_metrics,
+                }
+                .try_into()?,
+            );
+
+            encode_actions(exec_actions)
         };
 
         let stream = stream::once(future);

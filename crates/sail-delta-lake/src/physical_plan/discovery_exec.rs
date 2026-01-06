@@ -27,7 +27,7 @@ use crate::datasource::{
     collect_physical_columns, DeltaScanConfigBuilder, DeltaTableProvider, PATH_COLUMN,
 };
 use crate::kernel::models::Add;
-use crate::physical_plan::{encode_add_actions, DeltaPhysicalExprAdapterFactory};
+use crate::physical_plan::{encode_actions, DeltaPhysicalExprAdapterFactory, ExecAction};
 use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::open_table_with_object_store;
 
@@ -436,7 +436,9 @@ impl ExecutionPlan for DeltaDiscoveryExec {
                 return Ok(RecordBatch::new_empty(schema));
             }
 
-            let action_batch = encode_add_actions(final_adds)?;
+            let exec_actions: Vec<ExecAction> =
+                final_adds.into_iter().map(|add| add.into()).collect();
+            let action_batch = encode_actions(exec_actions)?;
             let scan_array = Arc::new(datafusion::arrow::array::BooleanArray::from(
                 vec![is_partition_scan; action_batch.num_rows()],
             ));

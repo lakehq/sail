@@ -26,7 +26,6 @@ use std::time::Instant;
 use async_trait::async_trait;
 use chrono::Utc;
 use datafusion::arrow::array::{ArrayRef, PrimitiveArray};
-use datafusion::arrow::compute::concat_batches;
 use datafusion::arrow::datatypes::{
     ArrowTimestampType, DataType, Field, Schema, SchemaRef, TimeUnit, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
@@ -57,8 +56,7 @@ use crate::kernel::{DeltaOperation, SaveMode};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::options::{ColumnMappingModeOption, TableDeltaOptions};
 use crate::physical_plan::{
-    delta_action_schema, encode_add_actions, encode_commit_meta, encode_metadata_action,
-    encode_protocol_action, CommitMeta,
+    delta_action_schema, encode_actions, CommitMeta, ExecAction,
 };
 use crate::schema::{
     annotate_for_column_mapping, compute_max_column_id, evolve_schema, get_physical_schema,
@@ -259,7 +257,6 @@ impl ExecutionPlan for DeltaWriterExec {
             .time_zone
             .clone();
 
-        let schema = self.schema();
         let future = async move {
             let _elapsed_compute_timer = elapsed_compute.timer();
             let exec_start = Instant::now();
@@ -338,7 +335,7 @@ impl ExecutionPlan for DeltaWriterExec {
                         // Still update execution metrics so callers see a completed node.
                         output_rows.add(0);
                         output_bytes.add(0);
-                        return encode_commit_meta(CommitMeta::default());
+                        return encode_actions(vec![CommitMeta::default().try_into()?]);
                     }
                 }
                 PhysicalSinkMode::OverwritePartitions => {
@@ -677,43 +674,37 @@ impl ExecutionPlan for DeltaWriterExec {
             // - schema evolution actions (metadata)
             // - Add actions (one row per file)
             // - CommitMeta row (row_count + operation + metrics)
-            let mut out_batches: Vec<RecordBatch> = Vec::new();
+            let mut exec_actions: Vec<ExecAction> = Vec::new();
 
             for ia in &initial_actions {
                 match ia {
-                    Action::Protocol(p) => out_batches.push(encode_protocol_action(p.clone())?),
-                    Action::Metadata(m) => out_batches.push(encode_metadata_action(m.clone())?),
+                    Action::Protocol(p) => exec_actions.push(p.clone().try_into()?),
+                    Action::Metadata(m) => exec_actions.push(m.clone().try_into()?),
                     _ => {}
                 }
             }
+
             for sa in &actions {
                 match sa {
-                    Action::Metadata(m) => out_batches.push(encode_metadata_action(m.clone())?),
-                    Action::Protocol(p) => out_batches.push(encode_protocol_action(p.clone())?),
+                    Action::Metadata(m) => exec_actions.push(m.clone().try_into()?),
+                    Action::Protocol(p) => exec_actions.push(p.clone().try_into()?),
                     _ => {}
                 }
             }
 
-            // Add actions
-            out_batches.push(encode_add_actions(
-                actions
-                    .into_iter()
-                    .filter_map(|a| match a {
-                        Action::Add(add) => Some(add),
-                        _ => None,
-                    })
-                    .collect(),
-            )?);
+            for action in actions {
+                if let Action::Add(add) = action {
+                    exec_actions.push(add.into());
+                }
+            }
 
-            out_batches.push(encode_commit_meta(CommitMeta {
+            exec_actions.push(CommitMeta {
                 row_count: total_rows,
                 operation,
                 operation_metrics,
-            })?);
+            }.try_into()?);
 
-            let batch = concat_batches(&schema, &out_batches)
-                .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
-            Ok(batch)
+            encode_actions(exec_actions)
         };
 
         let stream = once(future);
