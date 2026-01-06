@@ -46,8 +46,8 @@ jobs:
           workflow_name: Build
           artifact_name: python-package
 
-  build:
-    name: Build
+  rust-tests:
+    name: Rust Tests
     if: ${{ needs.setup.outputs.build_package == 'true' }}
     runs-on: ubuntu-latest
     needs:
@@ -68,17 +68,13 @@ jobs:
           python-version: "3.11"
 
       - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: rust-tests
 
       - name: Prepare coverage directories
         run: |
           mkdir -p target/llvm-profiles/rust-unit
           mkdir -p target/llvm-profiles/rust-slow
-
-      - name: Run Format Check
-        run: cargo +nightly fmt -- --check
-
-      - name: Run Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Run Cargo Test
         run: cargo nextest run
@@ -91,13 +87,6 @@ jobs:
             --llvm-path "$LLVM_PATH" \
             -t lcov --branch --ignore-not-existing \
             -o coverage-rust-unit.info
-
-      - name: Upload rust unit coverage artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: rust-unit-coverage-report
-          path: coverage-rust-unit.info
-          retention-days: 1
 
       - name: Upload Rust unit coverage to Codecov
         # Dependabot does not operate from a fork of the repository, so a token
@@ -131,14 +120,6 @@ jobs:
             -t lcov --branch --ignore-not-existing \
             -o coverage-rust-slow.info
 
-      - name: Upload rust slow coverage artifact
-        if: ${{ github.event_name == 'push' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: rust-slow-coverage-report
-          path: coverage-rust-slow.info
-          retention-days: 1
-
       - name: Upload Rust slow coverage to Codecov
         if: ${{ github.event_name == 'push' && github.actor != 'dependabot[bot]' }}
         uses: codecov/codecov-action@v5
@@ -149,6 +130,30 @@ jobs:
           name: rust-slow-tests
           fail_ci_if_error: true
           env_vars: OS
+
+  python-build:
+    name: Python Build
+    if: ${{ needs.setup.outputs.build_package == 'true' }}
+    runs-on: ubuntu-latest
+    needs:
+      - setup
+    env:
+      RUSTC_WORKSPACE_WRAPPER: ${{ github.workspace }}/.github/scripts/rustc-workspace-wrapper.sh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/adjust-swap-space
+
+      - uses: ./.github/actions/mount-target-directory
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: rust-build
+          install-testing-tools: false
 
       - name: Build Python Package
         uses: PyO3/maturin-action@v1
@@ -173,7 +178,7 @@ jobs:
       spark_version: ${{ matrix.spark-version }}
     needs:
       - setup
-      - build
+      - python-build
 
   ibis-tests:
     name: Ibis Tests
@@ -183,25 +188,25 @@ jobs:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     needs:
       - setup
-      - build
+      - python-build
 
-  python-build:
-    name: Python Build
+  python-tests:
+    name: Python Tests
     if: ${{ needs.setup.outputs.build_package == 'true' }}
-    uses: ./.github/workflows/python-build.yml
+    uses: ./.github/workflows/python-tests.yml
     secrets:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     needs:
       - setup
-      - build
+      - python-build
 
   codecov-notify:
     name: Codecov Finalize
     if: ${{ always() && github.actor != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
     needs:
-      - build
-      - python-build
+      - rust-tests
+      - python-tests
       - spark-tests
       - ibis-tests
     env:
@@ -223,7 +228,8 @@ jobs:
     uses: ./.github/workflows/docs-build.yml
     needs:
       - setup
-      - build
+      - rust-tests
+      - python-build
     strategy:
       matrix:
         stage: ${{ fromJSON(github.event_name == 'push' && '["dev", "prod"]' || '["test"]') }}
