@@ -18,7 +18,10 @@ pub enum JobState {
         output: mpsc::Sender<JobOutputCommand>,
         context: Arc<TaskContext>,
     },
-    Succeeded,
+    Succeeded {
+        output: Option<mpsc::Sender<JobOutputCommand>>,
+        context: Arc<TaskContext>,
+    },
     Failed,
     Canceled,
 }
@@ -27,7 +30,7 @@ impl JobState {
     pub fn is_terminal(&self) -> bool {
         match self {
             JobState::Running { .. } => false,
-            JobState::Succeeded | JobState::Failed | JobState::Canceled => true,
+            JobState::Succeeded { .. } | JobState::Failed | JobState::Canceled => true,
         }
     }
 }
@@ -65,6 +68,7 @@ pub struct TaskDescriptor {
 pub struct TaskAttemptDescriptor {
     pub state: TaskState,
     pub messages: Vec<String>,
+    pub stream_started: bool,
 }
 
 #[derive(Debug, Clone, Copy)]

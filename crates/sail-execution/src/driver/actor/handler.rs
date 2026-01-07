@@ -150,6 +150,8 @@ impl DriverActor {
             let job_ids = keys.iter().map(|k| k.job_id).collect::<HashSet<_>>();
             for job_id in job_ids {
                 self.refresh_job(ctx, job_id);
+                self.run_tasks(ctx);
+                self.scale_up_workers(ctx);
             }
         }
         ActorAction::Continue
@@ -165,6 +167,8 @@ impl DriverActor {
         let out = self.job_scheduler.accept_job(ctx, plan, context);
         if let Ok((job_id, _)) = &out {
             self.refresh_job(ctx, *job_id);
+            self.run_tasks(ctx);
+            self.scale_up_workers(ctx);
         }
         let _ = result.send(out.map(|(_, stream)| stream));
         ActorAction::Continue
@@ -342,6 +346,7 @@ impl DriverActor {
     }
 
     fn run_job_action(&mut self, ctx: &mut ActorContext<Self>, action: JobAction) {
+        dbg!(&action);
         match action {
             JobAction::ScheduleTasks { region } => {
                 self.task_assigner.enqueue_tasks(region);
@@ -396,6 +401,9 @@ impl DriverActor {
                             .remove_worker_streams(ctx, worker_id, job_id, stage),
                     }
                 }
+            }
+            JobAction::CompleteJobOutput { job_id } => {
+                self.job_scheduler.complete_job_output(job_id);
             }
         }
     }

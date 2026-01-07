@@ -32,6 +32,7 @@ impl JobScheduler {
     }
 }
 
+#[derive(Debug)]
 pub enum JobAction {
     ScheduleTasks {
         region: TaskRegion,
@@ -46,5 +47,8 @@ pub enum JobAction {
     RemoveStreams {
         job_id: JobId,
         stage: Option<usize>,
+    },
+    CompleteJobOutput {
+        job_id: JobId,
     },
 }

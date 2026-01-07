@@ -15,7 +15,7 @@ use crate::job_graph::TaskPlacement;
 ///      2. The output of the final stages are either blocking or the job output.
 ///      3. The outputs among stages are pipelined with forward input mode,
 ///         if there are more than one stage involved.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct TaskRegion {
     pub tasks: Vec<(TaskPlacement, TaskSet)>,
 }
@@ -25,18 +25,18 @@ pub struct TaskRegion {
 /// The tasks must come from different stages of the same "slot sharing group".
 /// The tasks of different partitions of the same stage must be assigned to
 /// different task sets.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct TaskSet {
     pub entries: Vec<TaskSetEntry>,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct TaskSetEntry {
     pub key: TaskKey,
     pub output: TaskOutputKind,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum TaskOutputKind {
     Local,
     Remote,

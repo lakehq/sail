@@ -30,7 +30,7 @@ pub trait IdType: Sized {
 
 macro_rules! define_id_type {
     ($name:ident, $value_type:ty) => {
-        #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+        #[derive(Copy, Clone, Eq, PartialEq, Hash)]
         pub struct $name($value_type);
 
         impl IdType for $name {
@@ -46,6 +46,12 @@ macro_rules! define_id_type {
         impl From<$name> for $value_type {
             fn from(id: $name) -> Self {
                 id.0
+            }
+        }
+
+        impl std::fmt::Debug for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}({})", stringify!($name), self.0)
             }
         }
 

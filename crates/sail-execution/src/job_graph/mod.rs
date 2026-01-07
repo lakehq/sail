@@ -7,6 +7,7 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties, PhysicalExpr};
 
+#[derive(Debug)]
 pub struct JobGraph {
     /// A list of stages sorted in topological order.
     /// For any stage, all its input stages are guaranteed to
@@ -27,6 +28,9 @@ impl JobGraph {
 
     /// Get the required number of output replicas for the given stage.
     pub fn replicas(&self, stage: usize) -> usize {
+        if stage == self.stages.len() - 1 {
+            return 1;
+        }
         self.stages
             .iter()
             .flat_map(|x| {
@@ -69,6 +73,7 @@ impl fmt::Display for JobGraph {
     }
 }
 
+#[derive(Debug)]
 pub struct Stage {
     pub inputs: Vec<StageInput>,
     pub plan: Arc<dyn ExecutionPlan>,
@@ -78,7 +83,7 @@ pub struct Stage {
     pub placement: TaskPlacement,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum TaskPlacement {
     #[expect(unused)]
     Driver,
@@ -130,7 +135,7 @@ impl fmt::Display for InputMode {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum OutputMode {
     Pipelined,
     #[expect(unused)]
@@ -146,7 +151,7 @@ impl fmt::Display for OutputMode {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum OutputDistribution {
     Hash {
         keys: Vec<Arc<dyn PhysicalExpr>>,

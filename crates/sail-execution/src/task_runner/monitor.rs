@@ -79,7 +79,7 @@ where
             let error = match &batch {
                 Ok(_) => None,
                 Err(e) => Some((
-                    format!("failed to read batch: {e}"),
+                    format!("task error: {e}"),
                     CommonErrorCause::new::<PyErrExtractor>(e),
                 )),
             };

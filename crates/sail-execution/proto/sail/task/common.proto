@@ -22,7 +22,7 @@ message TaskInputLocator {
 
 message TaskInputDriverLocator {
   uint64 stage = 1;
-  repeated TaskInputDriverKey keys = 2;
+  repeated TaskInputDriverKeyList keys = 2;
 }
 
 message TaskInputDriverKey {
@@ -31,9 +31,13 @@ message TaskInputDriverKey {
   uint64 channel = 4;
 }
 
+message TaskInputDriverKeyList {
+  repeated TaskInputDriverKey keys = 1;
+}
+
 message TaskInputWorkerLocator {
   uint64 stage = 1;
-  repeated TaskInputWorkerKey keys = 2;
+  repeated TaskInputWorkerKeyList keys = 2;
 }
 
 message TaskInputWorkerKey {
@@ -43,16 +47,24 @@ message TaskInputWorkerKey {
   uint64 channel = 4;
 }
 
+message TaskInputWorkerKeyList {
+  repeated TaskInputWorkerKey keys = 1;
+}
+
 message TaskInputRemoteLocator {
   string uri = 1;
   uint64 stage = 2;
-  repeated TaskInputRemoteKey keys = 3;
+  repeated TaskInputRemoteKeyList keys = 3;
 }
 
 message TaskInputRemoteKey {
   uint64 partition = 1;
   uint64 attempt = 2;
   uint64 channel = 3;
+}
+
+message TaskInputRemoteKeyList {
+  repeated TaskInputRemoteKey keys = 1;
 }
 
 message TaskOutput {

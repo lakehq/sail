@@ -156,13 +156,7 @@ impl TaskRunner {
                     );
                 };
                 let partitioning = placeholder.properties().output_partitioning().clone();
-                let mut locations = vec![vec![]; partitioning.partition_count()];
-                match locations.get_mut(key.partition) {
-                    Some(x) => x.extend(input.locations(key.job_id)),
-                    None => {
-                        return internal_err!("invalid partition for {}", TaskKeyDisplay(key));
-                    }
-                };
+                let locations = input.locations(key.job_id);
                 let accessor = StreamAccessor::new(handle.clone());
                 let shuffle = ShuffleReadExec::new(
                     locations,

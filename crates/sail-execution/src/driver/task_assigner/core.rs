@@ -105,7 +105,11 @@ impl TaskAssigner {
                     // Put the region back to the queue and try again later.
                     // We must put the region back to the front of the queue to
                     // avoid starvation.
+                    // This does result in head-of-line blocking, but we would
+                    // like the regions to be assigned in the same order as they
+                    // are enqueued.
                     self.task_queue.push_front(region);
+                    break;
                 }
             }
         }
@@ -115,10 +119,18 @@ impl TaskAssigner {
             match assignment.assignment {
                 TaskAssignment::Driver => {
                     self.driver.add_task_set(assignment.set.clone());
+                    for key in assignment.set.tasks() {
+                        self.task_assignments
+                            .insert(key.clone(), TaskAssignment::Driver);
+                    }
                 }
                 TaskAssignment::Worker { worker_id, slot } => {
                     if let Some(worker) = self.workers.get_mut(&worker_id) {
                         worker.add_task_set(slot, assignment.set.clone());
+                        for key in assignment.set.tasks() {
+                            self.task_assignments
+                                .insert(key.clone(), TaskAssignment::Worker { worker_id, slot });
+                        }
                     } else {
                         error!("worker {worker_id} not found");
                     }
@@ -131,7 +143,7 @@ impl TaskAssigner {
 
     pub fn unassign_task(&mut self, key: &TaskKey) -> Option<TaskAssignment> {
         let Some(assignment) = self.task_assignments.get(key) else {
-            warn!("task {} not found in task assignments", TaskKeyDisplay(key));
+            warn!("{} not found in task assignments", TaskKeyDisplay(key));
             return None;
         };
         match assignment {

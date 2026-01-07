@@ -1,6 +1,6 @@
 use datafusion::arrow::array::RecordBatch;
 use datafusion::common::Result;
-use datafusion::error::DataFusionError;
+use log::warn;
 use tokio::sync::mpsc;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 
@@ -29,15 +29,16 @@ impl MemoryStream {
     pub fn new(
         buffer: usize,
         replicas: usize,
-        mut senders: Vec<mpsc::Sender<TaskStreamResult<RecordBatch>>>,
+        senders: Vec<mpsc::Sender<TaskStreamResult<RecordBatch>>>,
     ) -> Self {
         let replicas = replicas.max(senders.len());
         let diff = replicas - senders.len();
+        let mut senders = senders.into_iter().map(Some).collect::<Vec<_>>();
         senders.reserve(diff);
         let mut receivers = Vec::with_capacity(diff);
         for _ in 0..diff {
             let (tx, rx) = mpsc::channel(buffer);
-            senders.push(tx);
+            senders.push(Some(tx));
             receivers.push(rx);
         }
         Self {
@@ -64,16 +65,19 @@ impl LocalStream for MemoryStream {
 }
 
 struct MemoryStreamReplicaSender {
-    senders: Vec<mpsc::Sender<TaskStreamResult<RecordBatch>>>,
+    senders: Vec<Option<mpsc::Sender<TaskStreamResult<RecordBatch>>>>,
 }
 
 #[tonic::async_trait]
 impl TaskStreamSink for MemoryStreamReplicaSender {
     async fn write(&mut self, batch: TaskStreamResult<RecordBatch>) -> Result<()> {
-        for tx in self.senders.iter_mut() {
-            tx.send(batch.clone())
-                .await
-                .map_err(|e| DataFusionError::Internal(e.to_string()))?;
+        for sender in self.senders.iter_mut() {
+            if let Some(s) = sender {
+                if s.send(batch.clone()).await.is_err() {
+                    warn!("memory stream replica receiver has been dropped");
+                    *sender = None;
+                }
+            }
         }
         Ok(())
     }

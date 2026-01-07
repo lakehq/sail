@@ -27,16 +27,16 @@ pub struct TaskInput {
 pub enum TaskInputLocator {
     Driver {
         stage: usize,
-        keys: Vec<TaskInputKey>,
+        keys: Vec<Vec<TaskInputKey>>,
     },
     Worker {
         stage: usize,
-        keys: Vec<(WorkerId, TaskInputKey)>,
+        keys: Vec<Vec<(WorkerId, TaskInputKey)>>,
     },
     Remote {
         uri: String,
         stage: usize,
-        keys: Vec<TaskInputKey>,
+        keys: Vec<Vec<TaskInputKey>>,
     },
 }
 
@@ -238,6 +238,26 @@ impl TryFrom<gen::TaskInputDriverKey> for TaskInputKey {
     }
 }
 
+impl From<Vec<TaskInputKey>> for gen::TaskInputDriverKeyList {
+    fn from(value: Vec<TaskInputKey>) -> Self {
+        gen::TaskInputDriverKeyList {
+            keys: value.into_iter().map(|x| x.into()).collect(),
+        }
+    }
+}
+
+impl TryFrom<gen::TaskInputDriverKeyList> for Vec<TaskInputKey> {
+    type Error = ExecutionError;
+
+    fn try_from(value: gen::TaskInputDriverKeyList) -> Result<Self, Self::Error> {
+        value
+            .keys
+            .into_iter()
+            .map(|x| x.try_into())
+            .collect::<ExecutionResult<Vec<_>>>()
+    }
+}
+
 impl From<(WorkerId, TaskInputKey)> for gen::TaskInputWorkerKey {
     fn from(value: (WorkerId, TaskInputKey)) -> Self {
         let (
@@ -272,6 +292,26 @@ impl TryFrom<gen::TaskInputWorkerKey> for (WorkerId, TaskInputKey) {
     }
 }
 
+impl From<Vec<(WorkerId, TaskInputKey)>> for gen::TaskInputWorkerKeyList {
+    fn from(value: Vec<(WorkerId, TaskInputKey)>) -> Self {
+        gen::TaskInputWorkerKeyList {
+            keys: value.into_iter().map(|x| x.into()).collect(),
+        }
+    }
+}
+
+impl TryFrom<gen::TaskInputWorkerKeyList> for Vec<(WorkerId, TaskInputKey)> {
+    type Error = ExecutionError;
+
+    fn try_from(value: gen::TaskInputWorkerKeyList) -> Result<Self, Self::Error> {
+        value
+            .keys
+            .into_iter()
+            .map(|x| x.try_into())
+            .collect::<ExecutionResult<Vec<_>>>()
+    }
+}
+
 impl From<TaskInputKey> for gen::TaskInputRemoteKey {
     fn from(value: TaskInputKey) -> Self {
         let TaskInputKey {
@@ -296,6 +336,26 @@ impl TryFrom<gen::TaskInputRemoteKey> for TaskInputKey {
             attempt: value.attempt as usize,
             channel: value.channel as usize,
         })
+    }
+}
+
+impl From<Vec<TaskInputKey>> for gen::TaskInputRemoteKeyList {
+    fn from(value: Vec<TaskInputKey>) -> Self {
+        gen::TaskInputRemoteKeyList {
+            keys: value.into_iter().map(|x| x.into()).collect(),
+        }
+    }
+}
+
+impl TryFrom<gen::TaskInputRemoteKeyList> for Vec<TaskInputKey> {
+    type Error = ExecutionError;
+
+    fn try_from(value: gen::TaskInputRemoteKeyList) -> Result<Self, Self::Error> {
+        value
+            .keys
+            .into_iter()
+            .map(|x| x.try_into())
+            .collect::<ExecutionResult<Vec<_>>>()
     }
 }
 
@@ -421,44 +481,56 @@ impl TryFrom<gen::TaskOutputLocator> for TaskOutputLocator {
 }
 
 impl TaskInput {
-    pub fn locations(&self, job_id: JobId) -> Vec<TaskReadLocation> {
+    pub fn locations(&self, job_id: JobId) -> Vec<Vec<TaskReadLocation>> {
         match &self.locator {
             TaskInputLocator::Driver { stage, keys } => keys
                 .iter()
-                .map(|key| TaskReadLocation::Driver {
-                    key: TaskStreamKey {
-                        job_id,
-                        stage: *stage,
-                        partition: key.partition,
-                        attempt: key.attempt,
-                        channel: key.channel,
-                    },
+                .map(|keys| {
+                    keys.iter()
+                        .map(|key| TaskReadLocation::Driver {
+                            key: TaskStreamKey {
+                                job_id,
+                                stage: *stage,
+                                partition: key.partition,
+                                attempt: key.attempt,
+                                channel: key.channel,
+                            },
+                        })
+                        .collect()
                 })
                 .collect(),
             TaskInputLocator::Worker { stage, keys } => keys
                 .iter()
-                .map(|(worker_id, key)| TaskReadLocation::Worker {
-                    worker_id: *worker_id,
-                    key: TaskStreamKey {
-                        job_id,
-                        stage: *stage,
-                        partition: key.partition,
-                        attempt: key.attempt,
-                        channel: key.channel,
-                    },
+                .map(|keys| {
+                    keys.iter()
+                        .map(|(worker_id, key)| TaskReadLocation::Worker {
+                            worker_id: *worker_id,
+                            key: TaskStreamKey {
+                                job_id,
+                                stage: *stage,
+                                partition: key.partition,
+                                attempt: key.attempt,
+                                channel: key.channel,
+                            },
+                        })
+                        .collect()
                 })
                 .collect(),
             TaskInputLocator::Remote { uri, stage, keys } => keys
                 .iter()
-                .map(|key| TaskReadLocation::Remote {
-                    uri: uri.clone(),
-                    key: TaskStreamKey {
-                        job_id,
-                        stage: *stage,
-                        partition: key.partition,
-                        attempt: key.attempt,
-                        channel: key.channel,
-                    },
+                .map(|keys| {
+                    keys.iter()
+                        .map(|key| TaskReadLocation::Remote {
+                            uri: uri.clone(),
+                            key: TaskStreamKey {
+                                job_id,
+                                stage: *stage,
+                                partition: key.partition,
+                                attempt: key.attempt,
+                                channel: key.channel,
+                            },
+                        })
+                        .collect()
                 })
                 .collect(),
         }
