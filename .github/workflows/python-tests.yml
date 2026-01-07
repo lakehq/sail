@@ -2,6 +2,9 @@ name: Python Build
 
 on:
   workflow_call:
+    secrets:
+      CODECOV_TOKEN:
+        required: false
 
 jobs:
   python-build:
@@ -34,9 +37,6 @@ jobs:
 
       - name: Install grcov
         uses: taiki-e/install-action@grcov
-
-      - name: Format Check
-        run: hatch fmt --check
 
       - name: Download Python Package
         uses: actions/download-artifact@v4
@@ -75,9 +75,13 @@ jobs:
             -t lcov --branch --ignore-not-existing \
             -o coverage-python-${{ matrix.spark-version }}.info
 
-      - name: Upload python coverage artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload Python coverage to Codecov
+        if: ${{ github.actor != 'dependabot[bot]' }}
+        uses: codecov/codecov-action@v5
         with:
-          name: python-coverage-report-${{ matrix.spark-version }}
-          path: coverage-python-${{ matrix.spark-version }}.info
-          retention-days: 1
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage-python-${{ matrix.spark-version }}.info
+          flags: python-unit-tests
+          name: python-unit-tests
+          fail_ci_if_error: true
+          env_vars: OS

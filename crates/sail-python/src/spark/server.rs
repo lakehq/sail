@@ -37,6 +37,7 @@ impl SparkConnectServerState {
     }
 }
 
+/// The Spark connect server struct.
 #[pyclass]
 pub(super) struct SparkConnectServer {
     #[pyo3(get)]
@@ -50,6 +51,18 @@ pub(super) struct SparkConnectServer {
 
 #[pymethods]
 impl SparkConnectServer {
+    /// Creates a new SparkConnectServer instance.
+    ///
+    /// # Arguments
+    ///
+    /// * `ip` - The IP address to bind the server to.
+    /// * `port` - The port to bind the server to.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PyRuntimeError` if:
+    /// - The application config fails to load.
+    /// - The runtime manager fails to initialize.
     #[new]
     #[pyo3(signature = (ip, port, /))]
     fn new(ip: &str, port: u16) -> PyResult<Self> {
@@ -81,6 +94,8 @@ impl SparkConnectServer {
         }
     }
 
+    /// Actually starts the server. Sets some config then calls 'run' (not available in the Python API)
+    /// If background is False, will not return until the server finishes.
     #[pyo3(signature = (*, background))]
     fn start(&mut self, py: Python<'_>, background: bool) -> PyResult<()> {
         if self.state.is_some() {
@@ -140,6 +155,7 @@ impl SparkConnectServer {
         info!("Shutting down the Spark Connect server...");
     }
 
+    /// Thin wrapper on block_on
     fn run_blocking(
         handle: Handle,
         config: Arc<AppConfig>,
@@ -157,6 +173,7 @@ impl SparkConnectServer {
         Ok(())
     }
 
+    /// Starts the server, not available in the Python API.
     fn run(&self, listener: TcpListener) -> PyResult<SparkConnectServerState> {
         let runtime = self.runtime.handle();
         // Get the actual listener address.
