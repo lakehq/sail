@@ -21,7 +21,6 @@ use datafusion::arrow::array::UInt64Array;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
-use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -429,23 +428,11 @@ impl ExecutionPlan for DeltaCommitExec {
             };
             let reference = snapshot.as_ref().map(|s| *s as &dyn TableReference);
 
-            // FIXME: avoid creating a new session state
-            //   This session state is used to parse predicates in the commit info
-            //   back to physical expressions. But the predicate string is not always available
-            //   (e.g., for DML operations constructed from the DataFrame API). Should we
-            //   store the physical expression directly when creating `DeltaCommitExec`?
-            //   The physical expression should be known at planning time so it does not
-            //   need to be sent back from the writer.
-            let session_state = SessionStateBuilder::new()
-                .with_runtime_env(context.runtime_env().clone())
-                .with_config(context.session_config().clone())
-                .build();
-
             let finalized_commit = CommitBuilder::from(
                 CommitProperties::default().with_operation_metrics(operation_metrics),
             )
             .with_actions(final_actions)
-            .build(reference, table.log_store(), operation, &session_state)
+            .build(reference, table.log_store(), operation)
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 

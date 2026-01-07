@@ -29,6 +29,7 @@ use super::log_scan::build_delta_log_datasource_union;
 use super::utils::{align_schemas_for_union, build_standard_write_layers};
 use crate::datasource::schema::DataFusionMixins;
 use crate::datasource::PredicateProperties;
+use crate::kernel::{DeltaOperation, SaveMode};
 use crate::physical_plan::{
     create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaDiscoveryExec,
     DeltaLogScanExec, DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
@@ -87,6 +88,15 @@ async fn build_overwrite_if_plan(
     let union_plan = UnionExec::try_new(vec![aligned_new, aligned_old])?;
 
     let input_schema = input.schema();
+    let operation_override = Some(DeltaOperation::Write {
+        mode: SaveMode::Overwrite,
+        partition_by: if ctx.partition_columns().is_empty() {
+            None
+        } else {
+            Some(ctx.partition_columns().to_vec())
+        },
+        predicate: condition.source.clone(),
+    });
     let writer = Arc::new(DeltaWriterExec::new(
         Arc::clone(&union_plan),
         ctx.table_url().clone(),
@@ -97,7 +107,7 @@ async fn build_overwrite_if_plan(
         },
         ctx.table_exists(),
         union_plan.schema(),
-        None,
+        operation_override,
     )?);
 
     let mut expr_props = PredicateProperties::new(partition_columns.clone());

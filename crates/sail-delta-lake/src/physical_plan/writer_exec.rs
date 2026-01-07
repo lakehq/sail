@@ -51,7 +51,6 @@ use url::Url;
 
 use crate::conversion::DeltaTypeConverter;
 use crate::kernel::models::{contains_timestampntz, Action, Metadata, Protocol};
-// TODO: Follow upstream for `MetadataExt`.
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::options::{ColumnMappingModeOption, TableDeltaOptions};
