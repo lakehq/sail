@@ -184,131 +184,150 @@ fn parse_operation(s: &str) -> Result<Operation> {
     }
 }
 
-fn partition_value_from_primitive(p: PrimitiveLiteral) -> PartitionValue {
-    match p {
-        PrimitiveLiteral::Boolean(v) => PartitionValue::Boolean(v),
-        PrimitiveLiteral::Int(v) => PartitionValue::Int(v),
-        PrimitiveLiteral::Long(v) => PartitionValue::Long(v),
-        PrimitiveLiteral::Float(v) => PartitionValue::Float(v.0),
-        PrimitiveLiteral::Double(v) => PartitionValue::Double(v.0),
-        PrimitiveLiteral::String(v) => PartitionValue::String(v),
-        PrimitiveLiteral::Int128(v) => PartitionValue::Int128(v.to_string()),
-        PrimitiveLiteral::UInt128(v) => PartitionValue::UInt128(v.to_string()),
-        PrimitiveLiteral::Binary(v) => PartitionValue::Binary(v),
+impl From<PrimitiveLiteral> for PartitionValue {
+    fn from(p: PrimitiveLiteral) -> Self {
+        match p {
+            PrimitiveLiteral::Boolean(v) => PartitionValue::Boolean(v),
+            PrimitiveLiteral::Int(v) => PartitionValue::Int(v),
+            PrimitiveLiteral::Long(v) => PartitionValue::Long(v),
+            PrimitiveLiteral::Float(v) => PartitionValue::Float(v.0),
+            PrimitiveLiteral::Double(v) => PartitionValue::Double(v.0),
+            PrimitiveLiteral::String(v) => PartitionValue::String(v),
+            PrimitiveLiteral::Int128(v) => PartitionValue::Int128(v.to_string()),
+            PrimitiveLiteral::UInt128(v) => PartitionValue::UInt128(v.to_string()),
+            PrimitiveLiteral::Binary(v) => PartitionValue::Binary(v),
+        }
     }
 }
 
-fn primitive_from_partition_value(v: PartitionValue) -> Result<PrimitiveLiteral> {
-    match v {
-        PartitionValue::Boolean(x) => Ok(PrimitiveLiteral::Boolean(x)),
-        PartitionValue::Int(x) => Ok(PrimitiveLiteral::Int(x)),
-        PartitionValue::Long(x) => Ok(PrimitiveLiteral::Long(x)),
-        PartitionValue::Float(x) => Ok(PrimitiveLiteral::Float(ordered_float::OrderedFloat(x))),
-        PartitionValue::Double(x) => Ok(PrimitiveLiteral::Double(ordered_float::OrderedFloat(x))),
-        PartitionValue::String(x) => Ok(PrimitiveLiteral::String(x)),
-        PartitionValue::Int128(s) => s
-            .parse::<i128>()
-            .map(PrimitiveLiteral::Int128)
-            .map_err(|e| {
-                DataFusionError::Plan(format!("failed to parse i128 partition literal: {e}"))
-            }),
-        PartitionValue::UInt128(s) => {
-            s.parse::<u128>()
-                .map(PrimitiveLiteral::UInt128)
-                .map_err(|e| {
-                    DataFusionError::Plan(format!("failed to parse u128 partition literal: {e}"))
-                })
+impl TryFrom<PartitionValue> for PrimitiveLiteral {
+    type Error = DataFusionError;
+
+    fn try_from(v: PartitionValue) -> Result<Self> {
+        match v {
+            PartitionValue::Boolean(x) => Ok(PrimitiveLiteral::Boolean(x)),
+            PartitionValue::Int(x) => Ok(PrimitiveLiteral::Int(x)),
+            PartitionValue::Long(x) => Ok(PrimitiveLiteral::Long(x)),
+            PartitionValue::Float(x) => Ok(PrimitiveLiteral::Float(ordered_float::OrderedFloat(x))),
+            PartitionValue::Double(x) => {
+                Ok(PrimitiveLiteral::Double(ordered_float::OrderedFloat(x)))
+            }
+            PartitionValue::String(x) => Ok(PrimitiveLiteral::String(x)),
+            PartitionValue::Int128(s) => {
+                s.parse::<i128>()
+                    .map(PrimitiveLiteral::Int128)
+                    .map_err(|e| {
+                        DataFusionError::Plan(format!(
+                            "failed to parse i128 partition literal: {e}"
+                        ))
+                    })
+            }
+            PartitionValue::UInt128(s) => {
+                s.parse::<u128>()
+                    .map(PrimitiveLiteral::UInt128)
+                    .map_err(|e| {
+                        DataFusionError::Plan(format!(
+                            "failed to parse u128 partition literal: {e}"
+                        ))
+                    })
+            }
+            PartitionValue::Binary(x) => Ok(PrimitiveLiteral::Binary(x)),
         }
-        PartitionValue::Binary(x) => Ok(PrimitiveLiteral::Binary(x)),
     }
 }
 
-fn add_action_from_data_file(df: DataFile) -> Result<AddFileAction> {
-    let partition = df
-        .partition
-        .into_iter()
-        .map(|opt| match opt {
-            None => Ok(None),
-            Some(Literal::Primitive(p)) => Ok(Some(partition_value_from_primitive(p))),
-            Some(other) => Err(DataFusionError::Internal(format!(
-                "unsupported non-primitive partition literal in DataFile: {other:?}"
-            ))),
-        })
-        .collect::<Result<Vec<_>>>()?;
+impl TryFrom<DataFile> for AddFileAction {
+    type Error = DataFusionError;
 
-    Ok(AddFileAction {
-        content: format!("{:?}", df.content),
-        file_path: df.file_path,
-        file_format: format!("{:?}", df.file_format),
-        partition,
-        record_count: df.record_count,
-        file_size_in_bytes: df.file_size_in_bytes,
-        column_sizes: df.column_sizes.into_iter().collect(),
-        value_counts: df.value_counts.into_iter().collect(),
-        null_value_counts: df.null_value_counts.into_iter().collect(),
-        split_offsets: df.split_offsets,
-        partition_spec_id: df.partition_spec_id,
-    })
+    fn try_from(df: DataFile) -> Result<Self> {
+        let partition = df
+            .partition
+            .into_iter()
+            .map(|opt| match opt {
+                None => Ok(None),
+                Some(Literal::Primitive(p)) => Ok(Some(p.into())),
+                Some(other) => Err(DataFusionError::Internal(format!(
+                    "unsupported non-primitive partition literal in DataFile: {other:?}"
+                ))),
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(AddFileAction {
+            content: format!("{:?}", df.content),
+            file_path: df.file_path,
+            file_format: format!("{:?}", df.file_format),
+            partition,
+            record_count: df.record_count,
+            file_size_in_bytes: df.file_size_in_bytes,
+            column_sizes: df.column_sizes.into_iter().collect(),
+            value_counts: df.value_counts.into_iter().collect(),
+            null_value_counts: df.null_value_counts.into_iter().collect(),
+            split_offsets: df.split_offsets,
+            partition_spec_id: df.partition_spec_id,
+        })
+    }
 }
 
-fn data_file_from_add_action(a: AddFileAction) -> Result<DataFile> {
-    let content = match a.content.as_str() {
-        "Data" => DataContentType::Data,
-        "PositionDeletes" => DataContentType::PositionDeletes,
-        "EqualityDeletes" => DataContentType::EqualityDeletes,
-        other => {
-            return Err(DataFusionError::Plan(format!(
-                "unknown DataContentType string '{other}'"
-            )))
-        }
-    };
-    let file_format = match a.file_format.as_str() {
-        "Avro" => DataFileFormat::Avro,
-        "Orc" => DataFileFormat::Orc,
-        "Parquet" => DataFileFormat::Parquet,
-        "Puffin" => DataFileFormat::Puffin,
-        other => {
-            return Err(DataFusionError::Plan(format!(
-                "unknown DataFileFormat string '{other}'"
-            )))
-        }
-    };
+impl TryFrom<AddFileAction> for DataFile {
+    type Error = DataFusionError;
 
-    let partition = a
-        .partition
-        .into_iter()
-        .map(|opt| match opt {
-            None => Ok(None),
-            Some(pv) => Ok(Some(Literal::Primitive(primitive_from_partition_value(
-                pv,
-            )?))),
+    fn try_from(a: AddFileAction) -> Result<Self> {
+        let content = match a.content.as_str() {
+            "Data" => DataContentType::Data,
+            "PositionDeletes" => DataContentType::PositionDeletes,
+            "EqualityDeletes" => DataContentType::EqualityDeletes,
+            other => {
+                return Err(DataFusionError::Plan(format!(
+                    "unknown DataContentType string '{other}'"
+                )))
+            }
+        };
+        let file_format = match a.file_format.as_str() {
+            "Avro" => DataFileFormat::Avro,
+            "Orc" => DataFileFormat::Orc,
+            "Parquet" => DataFileFormat::Parquet,
+            "Puffin" => DataFileFormat::Puffin,
+            other => {
+                return Err(DataFusionError::Plan(format!(
+                    "unknown DataFileFormat string '{other}'"
+                )))
+            }
+        };
+
+        let partition = a
+            .partition
+            .into_iter()
+            .map(|opt| match opt {
+                None => Ok(None),
+                Some(pv) => Ok(Some(Literal::Primitive(pv.try_into()?))),
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(DataFile {
+            content,
+            file_path: a.file_path,
+            file_format,
+            partition,
+            record_count: a.record_count,
+            file_size_in_bytes: a.file_size_in_bytes,
+            column_sizes: a.column_sizes.into_iter().collect(),
+            value_counts: a.value_counts.into_iter().collect(),
+            null_value_counts: a.null_value_counts.into_iter().collect(),
+            nan_value_counts: Default::default(),
+            lower_bounds: Default::default(),
+            upper_bounds: Default::default(),
+            block_size_in_bytes: None,
+            key_metadata: None,
+            split_offsets: a.split_offsets,
+            equality_ids: Vec::new(),
+            sort_order_id: None,
+            first_row_id: None,
+            partition_spec_id: a.partition_spec_id,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
         })
-        .collect::<Result<Vec<_>>>()?;
-
-    Ok(DataFile {
-        content,
-        file_path: a.file_path,
-        file_format,
-        partition,
-        record_count: a.record_count,
-        file_size_in_bytes: a.file_size_in_bytes,
-        column_sizes: a.column_sizes.into_iter().collect(),
-        value_counts: a.value_counts.into_iter().collect(),
-        null_value_counts: a.null_value_counts.into_iter().collect(),
-        nan_value_counts: Default::default(),
-        lower_bounds: Default::default(),
-        upper_bounds: Default::default(),
-        block_size_in_bytes: None,
-        key_metadata: None,
-        split_offsets: a.split_offsets,
-        equality_ids: Vec::new(),
-        sort_order_id: None,
-        first_row_id: None,
-        partition_spec_id: a.partition_spec_id,
-        referenced_data_file: None,
-        content_offset: None,
-        content_size_in_bytes: None,
-    })
+    }
 }
 
 pub fn encode_actions(rows: Vec<ActionRow>) -> Result<RecordBatch> {
@@ -327,7 +346,7 @@ pub fn encode_add_data_files(data_files: Vec<DataFile>) -> Result<RecordBatch> {
         .into_iter()
         .map(|df| {
             Ok(ActionRow {
-                action: ExecAction::Add(add_action_from_data_file(df)?),
+                action: ExecAction::Add(df.try_into()?),
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -375,7 +394,7 @@ pub fn decode_actions_and_meta_from_batch(
 
     for row in rows {
         match row.action {
-            ExecAction::Add(a) => adds.push(data_file_from_add_action(a)?),
+            ExecAction::Add(a) => adds.push(a.try_into()?),
             ExecAction::Delete(_d) => {
                 // Delete files are not implemented in local commits yet; plumb through later.
                 return Err(DataFusionError::NotImplemented(
