@@ -1,11 +1,12 @@
 use async_stream;
+use datafusion::prelude::SessionContext;
 use log::debug;
 use sail_session::session_manager::SessionManager;
 use tonic::codegen::tokio_stream::StreamExt;
 use tonic::{Request, Response, Status, Streaming};
 use uuid::Uuid;
 
-use crate::error::{ProtoFieldExt, SparkError};
+use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::executor::ExecutorMetadata;
 use crate::service;
 use crate::service::ExecutePlanResponseStream;
@@ -47,6 +48,68 @@ fn is_reattachable(
     false
 }
 
+/// Utility function to handle execution of a command by routing it to the appropriate handler.
+/// Still has some CommandTypes that are not implemented.
+async fn handle_command(
+    ctx: &SessionContext,
+    command: crate::spark::connect::command::CommandType,
+    metadata: ExecutorMetadata,
+) -> SparkResult<ExecutePlanResponseStream> {
+    use crate::spark::connect::command::CommandType;
+
+    match command {
+        CommandType::RegisterFunction(udf) => {
+            service::handle_execute_register_function(ctx, udf, metadata).await
+        }
+        CommandType::WriteOperation(write) => {
+            service::handle_execute_write_operation(ctx, write, metadata).await
+        }
+        CommandType::CreateDataframeView(view) => {
+            service::handle_execute_create_dataframe_view(ctx, view, metadata).await
+        }
+        CommandType::WriteOperationV2(write) => {
+            service::handle_execute_write_operation_v2(ctx, write, metadata).await
+        }
+        CommandType::SqlCommand(sql) => {
+            service::handle_execute_sql_command(ctx, sql, metadata).await
+        }
+        CommandType::WriteStreamOperationStart(start) => {
+            service::handle_execute_write_stream_operation_start(ctx, start, metadata).await
+        }
+        CommandType::StreamingQueryCommand(stream) => {
+            service::handle_execute_streaming_query_command(ctx, stream, metadata).await
+        }
+        CommandType::GetResourcesCommand(resource) => {
+            service::handle_execute_get_resources_command(ctx, resource, metadata).await
+        }
+        CommandType::StreamingQueryManagerCommand(command) => {
+            service::handle_execute_streaming_query_manager_command(ctx, command, metadata).await
+        }
+        CommandType::RegisterTableFunction(udtf) => {
+            service::handle_execute_register_table_function(ctx, udtf, metadata).await
+        }
+        CommandType::StreamingQueryListenerBusCommand(command) => {
+            service::handle_execute_streaming_query_listener_bus_command(ctx, command, metadata)
+                .await
+        }
+        CommandType::RegisterDataSource(_) => Err(SparkError::todo("register data source command")),
+        CommandType::CreateResourceProfileCommand(_) => {
+            Err(SparkError::todo("create resource profile command"))
+        }
+        CommandType::CheckpointCommand(checkpoint) => {
+            service::handle_execute_checkpoint_command(ctx, checkpoint, metadata).await
+        }
+        CommandType::RemoveCachedRemoteRelationCommand(_) => {
+            Err(SparkError::todo("remove cached remote relation command"))
+        }
+        CommandType::MergeIntoTableCommand(_) => Err(SparkError::todo("merge into table command")),
+        CommandType::MlCommand(_) => Err(SparkError::todo("ml command")),
+        CommandType::ExecuteExternalCommand(_) => Err(SparkError::todo("execute external command")),
+        CommandType::PipelineCommand(_) => Err(SparkError::todo("pipeline command")),
+        CommandType::Extension(_) => Err(SparkError::todo("command extension")),
+    }
+}
+
 // TODO: make sure that `server_side_session_id` is set properly
 
 #[tonic::async_trait]
@@ -57,8 +120,6 @@ impl SparkConnectService for SparkConnectServer {
         &self,
         request: Request<ExecutePlanRequest>,
     ) -> Result<Response<Self::ExecutePlanStream>, Status> {
-        use crate::spark::connect::command::CommandType;
-
         let request = request.into_inner();
         debug!("{request:?}");
         let session_key = SparkSessionKey {
@@ -87,81 +148,7 @@ impl SparkConnectService for SparkConnectServer {
                 command_type: command,
             }) => {
                 let command = command.required("command")?;
-                match command {
-                    CommandType::RegisterFunction(udf) => {
-                        service::handle_execute_register_function(&ctx, udf, metadata).await?
-                    }
-                    CommandType::WriteOperation(write) => {
-                        service::handle_execute_write_operation(&ctx, write, metadata).await?
-                    }
-                    CommandType::CreateDataframeView(view) => {
-                        service::handle_execute_create_dataframe_view(&ctx, view, metadata).await?
-                    }
-                    CommandType::WriteOperationV2(write) => {
-                        service::handle_execute_write_operation_v2(&ctx, write, metadata).await?
-                    }
-                    CommandType::SqlCommand(sql) => {
-                        service::handle_execute_sql_command(&ctx, sql, metadata).await?
-                    }
-                    CommandType::WriteStreamOperationStart(start) => {
-                        service::handle_execute_write_stream_operation_start(&ctx, start, metadata)
-                            .await?
-                    }
-                    CommandType::StreamingQueryCommand(stream) => {
-                        service::handle_execute_streaming_query_command(&ctx, stream, metadata)
-                            .await?
-                    }
-                    CommandType::GetResourcesCommand(resource) => {
-                        service::handle_execute_get_resources_command(&ctx, resource, metadata)
-                            .await?
-                    }
-                    CommandType::StreamingQueryManagerCommand(command) => {
-                        service::handle_execute_streaming_query_manager_command(
-                            &ctx, command, metadata,
-                        )
-                        .await?
-                    }
-                    CommandType::RegisterTableFunction(udtf) => {
-                        service::handle_execute_register_table_function(&ctx, udtf, metadata)
-                            .await?
-                    }
-                    CommandType::StreamingQueryListenerBusCommand(command) => {
-                        service::handle_execute_streaming_query_listener_bus_command(
-                            &ctx, command, metadata,
-                        )
-                        .await?
-                    }
-                    CommandType::RegisterDataSource(_) => {
-                        return Err(Status::unimplemented("register data source command"));
-                    }
-                    CommandType::CreateResourceProfileCommand(_) => {
-                        return Err(Status::unimplemented("create resource profile command"));
-                    }
-                    CommandType::CheckpointCommand(checkpoint) => {
-                        service::handle_execute_checkpoint_command(&ctx, checkpoint, metadata)
-                            .await?
-                    }
-                    CommandType::RemoveCachedRemoteRelationCommand(_) => {
-                        return Err(Status::unimplemented(
-                            "remove cached remote relation command",
-                        ));
-                    }
-                    CommandType::MergeIntoTableCommand(_) => {
-                        return Err(Status::unimplemented("merge into table command"));
-                    }
-                    CommandType::MlCommand(_) => {
-                        return Err(Status::unimplemented("ml command"));
-                    }
-                    CommandType::ExecuteExternalCommand(_) => {
-                        return Err(Status::unimplemented("execute external command"));
-                    }
-                    CommandType::PipelineCommand(_) => {
-                        return Err(Status::unimplemented("pipeline command"));
-                    }
-                    CommandType::Extension(_) => {
-                        return Err(Status::unimplemented("command extension"));
-                    }
-                }
+                handle_command(&ctx, command, metadata).await?
             }
             plan::OpType::CompressedOperation(_) => {
                 return Err(Status::unimplemented("compressed operation plan"));
