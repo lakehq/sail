@@ -1,0 +1,4 @@
+== Physical Plan ==
+ProjectionExec: expr=[#3@0 as id, #4@1 as value, #5@2 as category]
+  ProjectionExec: expr=[id@0 as #3, value@1 as #4, category@2 as #5]
+    DataSourceExec: file_groups={1 group: [[]]}, projection=[id, value, category], file_type=parquet

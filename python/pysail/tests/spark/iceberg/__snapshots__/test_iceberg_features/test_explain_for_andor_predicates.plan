@@ -1,0 +1,7 @@
+== Physical Plan ==
+ProjectionExec: expr=[#3@0 as id, #4@1 as status, #5@2 as value]
+  ProjectionExec: expr=[id@0 as #3, status@1 as #4, value@2 as #5]
+    CoalesceBatchesExec: target_batch_size=8192
+      FilterExec: status@1 = active AND value@2 > 150 OR id@0 = 2
+        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+          DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_explain_filter/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, status, value], file_type=parquet, predicate=status@1 = active AND value@2 > 150 OR id@0 = 2, pruning_predicate=status_null_count@2 != row_count@3 AND status_min@0 <= active AND active <= status_max@1 AND value_null_count@5 != row_count@3 AND value_max@4 > 150 OR id_null_count@8 != row_count@3 AND id_min@6 <= 2 AND 2 <= id_max@7, required_guarantees=[]

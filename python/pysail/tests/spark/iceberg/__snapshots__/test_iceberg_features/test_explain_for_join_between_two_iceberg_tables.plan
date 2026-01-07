@@ -1,0 +1,16 @@
+== Physical Plan ==
+ProjectionExec: expr=[#4@0 as name, #5@1 as value]
+  ProjectionExec: expr=[#1@1 as #4, #3@0 as #5]
+    CoalesceBatchesExec: target_batch_size=8192
+      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#2@0, #0@0)], projection=[#3@1, #1@3]
+        CoalescePartitionsExec
+          ProjectionExec: expr=[id@0 as #2, value@1 as #3]
+            CoalesceBatchesExec: target_batch_size=8192
+              FilterExec: id@0 > 0
+                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                  DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_explain_join_right/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, value], file_type=parquet, predicate=id@0 > 0, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 0, required_guarantees=[]
+        ProjectionExec: expr=[id@0 as #0, name@1 as #1]
+          CoalesceBatchesExec: target_batch_size=8192
+            FilterExec: id@0 > 0
+              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_explain_join_left/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, name], file_type=parquet, predicate=id@0 > 0, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 0, required_guarantees=[]
