@@ -209,6 +209,8 @@ pub(crate) async fn handle_execute_write_operation_v2(
     handle_execute_plan(ctx, plan, metadata, ExecutePlanMode::EagerSilent).await
 }
 
+/// Handles execution of a SQL command.
+/// If a string is sent over we convert it to a relation then convert it to a plan, then execute it.
 pub(crate) async fn handle_execute_sql_command(
     ctx: &SessionContext,
     sql: SqlCommand,
