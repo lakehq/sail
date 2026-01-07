@@ -119,13 +119,15 @@ def render_normalized_file_tree(root_path: Path) -> str:
             lines.append(f"{indent}📂 {name}")
             render_dir(p, depth=depth + 1)
 
-        # Deduplicate file names (e.g., multiple *.parquet files)
+        dedup_names = {"*.parquet", "*.metadata.json", "snap-*.avro"}
         seen_files = set()
         for name in files:
-            if name not in seen_files:
-                indent = "  " * depth
-                lines.append(f"{indent}📄 {name}")
+            if name in dedup_names:
+                if name in seen_files:
+                    continue
                 seen_files.add(name)
+            indent = "  " * depth
+            lines.append(f"{indent}📄 {name}")
 
     render_dir(root_path, depth=0)
 
