@@ -227,12 +227,7 @@ impl TryFrom<DataType> for spec::DataType {
                     keys_sorted: false,
                 })
             }
-            Kind::Variant(variant) => {
-                let sdt::Variant {
-                    type_variation_reference: _,
-                } = variant;
-                Ok(spec::DataType::Variant)
-            }
+            Kind::Variant(_) => Ok(spec::DataType::Variant),
             Kind::Udt(udt) => {
                 let sdt::Udt {
                     r#type: _,
