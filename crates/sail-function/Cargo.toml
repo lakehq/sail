@@ -34,7 +34,7 @@ base64 = { workspace = true }
 num = { workspace = true }
 half = { workspace = true }
 url = { workspace = true }
-parquet-variant  = { workspace = true }
+parquet-variant = { workspace = true }
 parquet-variant-compute = { workspace = true }
 parquet-variant-json = { workspace = true }
 percent-encoding = { workspace = true }
