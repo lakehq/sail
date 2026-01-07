@@ -1,13 +1,3 @@
-//! A "meta table" scan for Delta log-derived file metadata.
-//!
-//! This node consumes an upstream plan that reads raw `_delta_log` actions (typically a
-//! `UnionExec` over `DataSourceExec(format=parquet/json)`), and produces a stable, flattened
-//! per-file metadata table:
-//! - `PATH_COLUMN` (Utf8, non-null)
-//! - `size_bytes` (Int64)
-//! - `modification_time` (Int64)
-//! - one Utf8 column per table partition column
-
 use std::any::Any;
 use std::fmt;
 use std::sync::Arc;

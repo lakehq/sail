@@ -1,10 +1,3 @@
-//! Arrow-native row-per-action schema for Delta DML.
-//!
-//! This module migrates the internal Sail delta physical-plan action stream from a
-//! "wide table + action_type" representation to an "Action enum -> UnionArray" representation.
-//!
-//! Note: MERGE joins on file path. With a union-only schema, the join key is derived using
-//! DataFusion scalar functions `union_extract + get_field` (see `planner/op_merge.rs`).
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, LazyLock};
 
