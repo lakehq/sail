@@ -1,4 +1,4 @@
 == Physical Plan ==
 ProjectionExec: expr=[#3@0 as id, #4@1 as value, #5@2 as category]
   ProjectionExec: expr=[id@0 as #3, value@1 as #4, category@2 as #5]
-    DataSourceExec: file_groups={1 group: [[]]}, projection=[id, value, category], file_type=parquet
+    DataSourceExec: file_groups={3 groups: [[<tmp>/iceberg_explain_prune/data/category=1/part-<uuid>-00000000000000000000.parquet], [<tmp>/iceberg_explain_prune/data/category=2/part-<uuid>-00000000000000000001.parquet], [<tmp>/iceberg_explain_prune/data/category=3/part-<uuid>-00000000000000000002.parquet]]}, projection=[id, value, category], file_type=parquet, predicate=category@2 = 1, pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= 1 AND 1 <= category_max@1, required_guarantees=[category in (1)]

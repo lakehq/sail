@@ -16,7 +16,6 @@ use datafusion::catalog::Session;
 use datafusion::common::Result;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
-use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
@@ -25,6 +24,7 @@ use url::Url;
 
 use crate::options::TableIcebergOptions;
 use crate::physical_plan::writer_exec::IcebergWriterExec;
+use crate::utils::partition_transform::parse_partition_field_expr;
 
 pub struct IcebergTableConfig {
     pub table_url: Url,
@@ -68,31 +68,25 @@ impl<'a> IcebergPlanBuilder<'a> {
     }
 
     fn add_projection_node(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
-        let input_schema = input.schema();
-        let mut projection_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
-        let mut part_idx = std::collections::HashMap::new();
-        let part_set: std::collections::HashSet<&String> =
-            self.table_config.partition_columns.iter().collect();
-
-        for (i, f) in input_schema.fields().iter().enumerate() {
-            if part_set.contains(f.name()) {
-                part_idx.insert(f.name().clone(), i);
-            } else {
-                projection_exprs.push((Arc::new(Column::new(f.name(), i)), f.name().clone()));
-            }
-        }
-
-        for name in &self.table_config.partition_columns {
-            let idx = *part_idx.get(name).ok_or_else(|| {
+        // Validate that partition transform expressions refer to real source columns.
+        // Do not reorder columns here: BDD "query result ordered" checks expect the original
+        // table column order from `SELECT *`.
+        let schema = input.schema();
+        for raw in &self.table_config.partition_columns {
+            let pf = parse_partition_field_expr(raw).map_err(|e| {
                 datafusion::common::DataFusionError::Plan(format!(
-                    "Partition column '{}' not found in schema",
-                    name
+                    "Invalid partition transform expression '{}': {e}",
+                    raw
                 ))
             })?;
-            projection_exprs.push((Arc::new(Column::new(name, idx)), name.clone()));
+            if schema.index_of(&pf.source_column).is_err() {
+                return Err(datafusion::common::DataFusionError::Plan(format!(
+                    "Partition column '{}' not found in schema",
+                    pf.source_column
+                )));
+            }
         }
-
-        Ok(Arc::new(ProjectionExec::try_new(projection_exprs, input)?))
+        Ok(input)
     }
 
     fn add_repartition_node(
@@ -103,12 +97,42 @@ impl<'a> IcebergPlanBuilder<'a> {
             Partitioning::RoundRobinBatch(4)
         } else {
             let schema = input.schema();
-            let n = schema.fields().len();
-            let k = self.table_config.partition_columns.len();
-            let exprs: Vec<Arc<dyn PhysicalExpr>> = (n - k..n)
-                .zip(self.table_config.partition_columns.iter())
-                .map(|(idx, name)| Arc::new(Column::new(name, idx)) as Arc<dyn PhysicalExpr>)
-                .collect();
+            let partition_specs = self
+                .table_config
+                .partition_columns
+                .iter()
+                .map(|s| {
+                    parse_partition_field_expr(s).map_err(|e| {
+                        datafusion::common::DataFusionError::Plan(format!(
+                            "Invalid partition transform expression '{}': {e}",
+                            s
+                        ))
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let mut seen = std::collections::HashSet::new();
+            let partition_source_columns = partition_specs
+                .iter()
+                .filter_map(|p| {
+                    if seen.insert(p.source_column.clone()) {
+                        Some(p.source_column.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            let exprs: Vec<Arc<dyn PhysicalExpr>> = partition_source_columns
+                .iter()
+                .map(|name| {
+                    let idx = schema.index_of(name).map_err(|_| {
+                        datafusion::common::DataFusionError::Plan(format!(
+                            "Partition column '{}' not found in schema",
+                            name
+                        ))
+                    })?;
+                    Ok(Arc::new(Column::new(name, idx)) as Arc<dyn PhysicalExpr>)
+                })
+                .collect::<Result<Vec<_>>>()?;
             Partitioning::Hash(exprs, 4)
         };
 

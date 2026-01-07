@@ -55,13 +55,12 @@ def normalize_plan_text(plan_text: str) -> str:
             flags=re.IGNORECASE,
         )
         # Normalize Iceberg parquet files: part-<UUID>-<sequence>.parquet, keeping the sequence number
-        path = re.sub(
+        return re.sub(
             r"part-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-(\d+)\.parquet",
             r"part-<uuid>-\1.parquet",
             path,
             flags=re.IGNORECASE,
         )
-        return path
 
     text = re.sub(
         r"table_path=file://([^\s\),]+)",

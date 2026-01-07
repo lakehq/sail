@@ -3,7 +3,76 @@
     {
       "input": "\nREPLACE TABLE my_tab (a INT, b STRING, ts TIMESTAMP) USING parquet\nPARTITIONED BY (\n    a,\n    bucket(16, b),\n    years(ts),\n    months(ts),\n    days(ts),\n    hours(ts),\n    foo(a, \"bar\", 34))\n      ",
       "output": {
-        "failure": "invalid argument: found ( at 102:103 expected ':', data type, ',', or ')'"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "columns": [
+                {
+                  "name": "a",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                },
+                {
+                  "name": "b",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                },
+                {
+                  "name": "ts",
+                  "dataType": {
+                    "timestamp": {
+                      "timeUnit": "microsecond",
+                      "timestampType": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [
+                "a",
+                "bucket ( 16 , b )",
+                "years ( ts )",
+                "months ( ts )",
+                "days ( ts )",
+                "hours ( ts )",
+                "foo ( a , \"bar\" , 34 )"
+              ],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": true,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
@@ -949,7 +1018,54 @@
       "input": "REPLACE TABLE my_tab (id bigint, p1 string) PARTITIONED BY (p2 string, truncate(p1, 16))",
       "exception": "\nOperation not allowed: PARTITION BY: Cannot mix partition expressions and partition columns:\nExpressions: truncate(p1, 16)\nColumns: p2 string.\n== SQL (line 1, position 1) ==\nREPLACE TABLE my_tab (id bigint, p1 string) PARTITIONED BY (p2 string, truncate(p1, 16))\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found ( at 79:80 expected ':', data type, ',', or ')'"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                },
+                {
+                  "name": "p1",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": null,
+              "rowFormat": null,
+              "partitionBy": [
+                "p2",
+                "truncate ( p1 , 16 )"
+              ],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": true,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
