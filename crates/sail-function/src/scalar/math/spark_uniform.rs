@@ -431,21 +431,34 @@ fn uniform(args: &[ArrayRef]) -> Result<ArrayRef> {
             for i in 0..number_rows {
                 if min_arr.is_null(i) || max_arr.is_null(i) {
                     builder.append_null();
-                } else {
-                    let min_val = min_arr.value(i);
-                    let max_val = max_arr.value(i);
-                    let seed_val = extract_seed(seed_array, i);
-
-                    // Convert Decimal128 to f64 for generation
-                    let min_f64 = min_val as f64 / 10_f64.powi(scale as i32);
-                    let max_f64 = max_val as f64 / 10_f64.powi(scale as i32);
-
-                    // Generate and convert back to Decimal128
-                    let float_val = generate_uniform_float_single(min_f64, max_f64, seed_val);
-                    let decimal_val = (float_val * 10_f64.powi(scale as i32)).round() as i128;
-
-                    builder.append_value(decimal_val);
+                    continue;
                 }
+
+                let min_val = min_arr.value(i);
+                let max_val = max_arr.value(i);
+                let seed_val = extract_seed(seed_array, i);
+
+                // Generate random i128 directly in the scaled range to avoid precision loss
+                // This maintains full precision for high-precision decimals (e.g., Decimal(38, 10))
+                let (min_scaled, max_scaled) = if min_val > max_val {
+                    (max_val, min_val)
+                } else {
+                    (min_val, max_val)
+                };
+
+                let decimal_val = match (min_scaled == max_scaled, seed_val) {
+                    (true, _) => min_scaled,
+                    (false, Some(seed)) => {
+                        let mut rng = StdRng::seed_from_u64(seed);
+                        rng.random_range(min_scaled..max_scaled)
+                    }
+                    (false, None) => {
+                        let mut rng = rng();
+                        rng.random_range(min_scaled..max_scaled)
+                    }
+                };
+
+                builder.append_value(decimal_val);
             }
 
             Ok(Arc::new(builder.finish()))
@@ -863,13 +876,47 @@ mod tests {
         Ok(())
     }
 
-    /// Test 23: Verify that decimal overflow returns NULL instead of error
+    /// Test 23: Verify that high precision Decimal128 values are handled correctly
+    /// Tests that we can generate random decimals with high precision without loss
     #[test]
-    fn test_uniform_decimal_overflow_handling() -> Result<()> {
-        let values = generate_uniform_float(1e20, 1e30, Some(0), 10)?;
-        assert_eq!(values.len(), 10);
+    fn test_uniform_high_precision_decimal() -> Result<()> {
+        use datafusion::arrow::array::Decimal128Array;
 
-        // Check that we don't panic or error out
+        // Create high precision decimal inputs: Decimal(38, 10)
+        // min = 1000.0000000000 (scaled: 10000000000000)
+        // max = 9999.9999999999 (scaled: 99999999999999)
+        let precision = 38;
+        let scale = 10;
+        let min_scaled: i128 = 10000000000000; // 1000.0 * 10^10
+        let max_scaled: i128 = 99999999999999; // 9999.9999999999 * 10^10
+
+        let min = Arc::new(
+            Decimal128Array::from(vec![min_scaled]).with_precision_and_scale(precision, scale)?,
+        ) as ArrayRef;
+        let max = Arc::new(
+            Decimal128Array::from(vec![max_scaled]).with_precision_and_scale(precision, scale)?,
+        ) as ArrayRef;
+        let seed = Arc::new(Int64Array::from(vec![42])) as ArrayRef;
+
+        let args = vec![min, max, seed];
+        let res = uniform(&args)?;
+
+        let out = res
+            .as_any()
+            .downcast_ref::<Decimal128Array>()
+            .ok_or_else(|| generic_exec_err("test", "Failed to downcast to Decimal128Array"))?;
+
+        // Verify the result is within range
+        let result_val = out.value(0);
+        assert!(
+            result_val >= min_scaled && result_val < max_scaled,
+            "Generated decimal {result_val} should be in range [{min_scaled}, {max_scaled})"
+        );
+
+        // Verify precision and scale are maintained
+        assert_eq!(out.precision(), precision);
+        assert_eq!(out.scale(), scale);
+
         Ok(())
     }
 
