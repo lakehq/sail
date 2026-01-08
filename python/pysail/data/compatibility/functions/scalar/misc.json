@@ -119,8 +119,9 @@
   {
     "module": "pyspark.sql.functions",
     "function": "schema_of_avro",
-    "status": "??? not on roadmap",
-    "note": "Spark SQL only; not available in PySpark"
+    "status": "planned",
+    "note": "Spark SQL only; not available in PySpark",
+    "ref": "???"
   },
   {
     "module": "pyspark.sql.functions",
@@ -136,14 +137,16 @@
   {
     "module": "pyspark.sql.functions",
     "function": "to_avro",
-    "status": "??? not on roadmap",
-    "note": "Spark SQL only; not available in PySpark"
+    "status": "planned",
+    "note": "Spark SQL only; not available in PySpark",
+    "ref": "???"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "to_protobuf",
-    "status": "??? not on roadmap",
-    "note": "Spark SQL only; not available in PySpark"
+    "status": "planned",
+    "note": "Spark SQL only; not available in PySpark",
+    "ref": "???"
   },
   {
     "module": "pyspark.sql.functions",
@@ -153,7 +156,8 @@
   {
     "module": "pyspark.sql.functions",
     "function": "try_aes_encrypt",
-    "status": "??? questionable"
+    "status": "supported",
+    "note": "Sail exclusive; not available in PySpark or Spark SQL"
   },
   {
     "module": "pyspark.sql.functions",
