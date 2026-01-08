@@ -1,3 +1,19 @@
+/// Utility macro to match string data types and create corresponding ScalarValue.
+///
+/// This macro handles the three string type variants (Utf8View, LargeUtf8, Utf8)
+/// and creates the appropriate ScalarValue variant.
+///
+/// # Arguments
+/// * `$data_type` - The DataType enum to match against
+/// * `$value` - The Option<String> value to wrap in the ScalarValue
+///
+/// # Returns
+/// * `Result<ScalarValue>` - The corresponding string ScalarValue variant
+///
+/// # Example
+/// ```ignore
+/// let scalar = match_string_type!(DataType::Utf8View, Some("hello".to_string()))?;
+/// ```
 macro_rules! match_string_type {
     ($data_type:expr, $value:expr) => {
         match $data_type {
@@ -8,6 +24,21 @@ macro_rules! match_string_type {
     };
 }
 
+/// Utility macro to create a None ScalarValue for interval types.
+///
+/// This macro handles the three interval unit variants (YearMonth, DayTime, MonthDayNano)
+/// and creates the appropriate ScalarValue::Interval* variant with None value.
+///
+/// # Arguments
+/// * `$unit` - The IntervalUnit enum to match against
+///
+/// # Returns
+/// * `Result<ScalarValue>` - The corresponding interval ScalarValue variant with None
+///
+/// # Example
+/// ```ignore
+/// let scalar = interval_none!(IntervalUnit::YearMonth)?;
+/// ```
 macro_rules! interval_none {
     ($unit:expr) => {
         match $unit {

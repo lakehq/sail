@@ -99,6 +99,14 @@ impl AggregateUDFImpl for PercentileFunction {
             ))
         })?;
 
+        // Validate that percentile is within [0.0, 1.0]
+        if !(0.0..=1.0).contains(&percentile) {
+            return Err(DataFusionError::Execution(format!(
+                "Percentile value {} is out of range [0.0, 1.0]",
+                percentile
+            )));
+        }
+
         match data_type {
             DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => Ok(Box::new(
                 StringPercentileAccumulator::new(percentile, data_type.clone()),
