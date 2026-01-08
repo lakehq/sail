@@ -14,16 +14,19 @@ use crate::stream::reader::TaskReadLocation;
 use crate::stream::writer::{LocalStreamStorage, TaskWriteLocation};
 use crate::task::gen;
 
+#[derive(Debug, Clone)]
 pub struct TaskDefinition {
     pub plan: Arc<[u8]>,
     pub inputs: Vec<TaskInput>,
     pub output: TaskOutput,
 }
 
+#[derive(Debug, Clone)]
 pub struct TaskInput {
     pub locator: TaskInputLocator,
 }
 
+#[derive(Debug, Clone)]
 pub enum TaskInputLocator {
     Driver {
         stage: usize,
@@ -40,17 +43,20 @@ pub enum TaskInputLocator {
     },
 }
 
+#[derive(Debug, Clone)]
 pub struct TaskInputKey {
     pub partition: usize,
     pub attempt: usize,
     pub channel: usize,
 }
 
+#[derive(Debug, Clone)]
 pub struct TaskOutput {
     pub distribution: TaskOutputDistribution,
     pub locator: TaskOutputLocator,
 }
 
+#[derive(Debug, Clone)]
 pub enum TaskOutputDistribution {
     Hash {
         keys: Vec<Arc<[u8]>>,
@@ -61,6 +67,7 @@ pub enum TaskOutputDistribution {
     },
 }
 
+#[derive(Debug, Clone)]
 pub enum TaskOutputLocator {
     Local { replicas: usize },
     Remote { uri: String },

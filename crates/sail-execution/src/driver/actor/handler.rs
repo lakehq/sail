@@ -6,7 +6,7 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::ExecutionPlan;
 use futures::TryStreamExt;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::{ActorAction, ActorContext};
@@ -174,12 +174,12 @@ impl DriverActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_lost_job_output(
+    pub(super) fn handle_clean_up_job(
         &mut self,
         ctx: &mut ActorContext<Self>,
         job_id: JobId,
     ) -> ActorAction {
-        self.cancel_job(ctx, job_id);
+        self.clean_up_job(ctx, job_id);
         ActorAction::Continue
     }
 
@@ -244,7 +244,7 @@ impl DriverActor {
         if self
             .job_scheduler
             .get_task_state(&key)
-            .is_some_and(|x| matches!(x, TaskState::Pending))
+            .is_some_and(|x| matches!(x, TaskState::Created))
         {
             let message = "task scheduling timeout".to_string();
             ctx.send(DriverEvent::UpdateTask {
@@ -339,16 +339,26 @@ impl DriverActor {
         }
     }
 
-    fn cancel_job(&mut self, ctx: &mut ActorContext<Self>, job_id: JobId) {
-        for action in self.job_scheduler.cancel_job(job_id) {
+    fn clean_up_job(&mut self, ctx: &mut ActorContext<Self>, job_id: JobId) {
+        for action in self.job_scheduler.clean_up_job(job_id) {
             self.run_job_action(ctx, action);
         }
     }
 
     fn run_job_action(&mut self, ctx: &mut ActorContext<Self>, action: JobAction) {
-        dbg!(&action);
+        debug!("job action: {action:?}");
         match action {
-            JobAction::ScheduleTasks { region } => {
+            JobAction::ScheduleTaskRegion { region } => {
+                for (_, set) in &region.tasks {
+                    for entry in &set.entries {
+                        ctx.send_with_delay(
+                            DriverEvent::ProbePendingTask {
+                                key: entry.key.clone(),
+                            },
+                            self.options.task_launch_timeout,
+                        );
+                    }
+                }
                 self.task_assigner.enqueue_tasks(region);
             }
             JobAction::CancelTask { key } => {
@@ -362,32 +372,44 @@ impl DriverActor {
                     }
                 }
             }
-            JobAction::FetchJobOutputStreams { keys, schema } => {
-                for key in keys {
-                    let assignment =
-                        TaskAssignmentGetter::get(&self.task_assigner, &TaskKey::from(key.clone()));
-                    let stream = match assignment {
-                        None => {
-                            warn!(
-                                "cannot fetch unassigned stream {}",
-                                TaskStreamKeyDisplay(&key)
-                            );
-                            continue;
-                        }
-                        Some(TaskAssignment::Driver) => {
-                            self.stream_manager.fetch_local_stream(ctx, &key)
-                        }
-                        Some(TaskAssignment::Worker { worker_id, slot: _ }) => self
-                            .worker_pool
-                            .fetch_worker_stream(ctx, *worker_id, &key, schema.clone()),
-                    };
-                    let stream = futures::stream::once(async move {
-                        stream.map_err(|e| TaskStreamError::External(Arc::new(e)))
-                    })
-                    .try_flatten();
-                    self.job_scheduler
-                        .add_job_output_stream(ctx, key, Box::pin(stream))
-                }
+            JobAction::FailJobOutput { notifier } => {
+                ctx.spawn(async move {
+                    notifier
+                        .notify(CommonErrorCause::new::<PyErrExtractor>(
+                            &ExecutionError::InternalError("job failed".to_string()),
+                        ))
+                        .await;
+                });
+            }
+            JobAction::FetchJobOutputStream {
+                key,
+                schema,
+                sender,
+            } => {
+                let assignment =
+                    TaskAssignmentGetter::get(&self.task_assigner, &TaskKey::from(key.clone()));
+                let stream = match assignment {
+                    None => {
+                        warn!(
+                            "cannot fetch unassigned stream {}",
+                            TaskStreamKeyDisplay(&key)
+                        );
+                        return;
+                    }
+                    Some(TaskAssignment::Driver) => {
+                        self.stream_manager.fetch_local_stream(ctx, &key)
+                    }
+                    Some(TaskAssignment::Worker { worker_id, slot: _ }) => self
+                        .worker_pool
+                        .fetch_worker_stream(ctx, *worker_id, &key, schema.clone()),
+                };
+                let stream = futures::stream::once(async move {
+                    stream.map_err(|e| TaskStreamError::External(Arc::new(e)))
+                })
+                .try_flatten();
+                ctx.spawn(async move {
+                    sender.send(Box::pin(stream)).await;
+                });
             }
             JobAction::RemoveStreams { job_id, stage } => {
                 let assignments = self.task_assigner.unassign_streams(job_id, stage);
@@ -401,9 +423,6 @@ impl DriverActor {
                             .remove_worker_streams(ctx, worker_id, job_id, stage),
                     }
                 }
-            }
-            JobAction::CompleteJobOutput { job_id } => {
-                self.job_scheduler.complete_job_output(job_id);
             }
         }
     }
@@ -430,6 +449,8 @@ impl DriverActor {
                         continue;
                     }
                 };
+                self.job_scheduler
+                    .update_task(&entry.key, TaskState::Scheduled, None);
                 match assignment.assignment {
                     TaskAssignment::Driver => self
                         .task_runner

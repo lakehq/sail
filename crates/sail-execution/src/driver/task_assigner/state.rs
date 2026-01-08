@@ -161,10 +161,6 @@ impl TaskSlot {
         }
     }
 
-    pub fn add_task(&mut self, task: TaskKey) {
-        self.tasks.insert(task);
-    }
-
     pub fn remove_task(&mut self, task: &TaskKey) -> bool {
         self.tasks.swap_remove(task)
     }

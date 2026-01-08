@@ -2,41 +2,32 @@ use std::sync::Arc;
 
 use datafusion::execution::TaskContext;
 use datafusion::physical_plan::ExecutionPlanProperties;
-use tokio::sync::mpsc;
 
-use crate::driver::output::JobOutputCommand;
+use crate::driver::job_scheduler::topology::JobTopology;
+use crate::driver::output::JobOutputManager;
+use crate::error::ExecutionResult;
 use crate::job_graph::JobGraph;
 
 pub struct JobDescriptor {
     pub graph: JobGraph,
+    pub topology: JobTopology,
     pub stages: Vec<StageDescriptor>,
     pub state: JobState,
 }
 
 pub enum JobState {
     Running {
-        output: mpsc::Sender<JobOutputCommand>,
+        output: JobOutputManager,
         context: Arc<TaskContext>,
     },
-    Succeeded {
-        output: Option<mpsc::Sender<JobOutputCommand>>,
-        context: Arc<TaskContext>,
-    },
+    Draining,
+    Succeeded,
     Failed,
     Canceled,
 }
 
-impl JobState {
-    pub fn is_terminal(&self) -> bool {
-        match self {
-            JobState::Running { .. } => false,
-            JobState::Succeeded { .. } | JobState::Failed | JobState::Canceled => true,
-        }
-    }
-}
-
 impl JobDescriptor {
-    pub fn new(graph: JobGraph, state: JobState) -> Self {
+    pub fn try_new(graph: JobGraph, state: JobState) -> ExecutionResult<Self> {
         let mut stages = vec![];
         for (_, stage) in graph.stages().iter().enumerate() {
             let mut descriptor = StageDescriptor { tasks: vec![] };
@@ -45,11 +36,13 @@ impl JobDescriptor {
             }
             stages.push(descriptor);
         }
-        Self {
+        let topology = JobTopology::try_new(&graph)?;
+        Ok(Self {
             graph,
+            topology,
             stages,
             state,
-        }
+        })
     }
 }
 
@@ -68,15 +61,13 @@ pub struct TaskDescriptor {
 pub struct TaskAttemptDescriptor {
     pub state: TaskState,
     pub messages: Vec<String>,
-    pub stream_started: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum TaskState {
-    /// The task attempt has been created, but may not be eligible for scheduling.
+    /// The task attempt has been created, but is not assigned to any worker.
+    /// A task attempt is only created when the task region is eligible for scheduling.
     Created,
-    /// The task attempt is eligible for scheduling, but is not assigned to any worker.
-    Pending,
     /// The task attempt is scheduled to a worker, but its status is unknown.
     Scheduled,
     /// The task attempt is running on a worker.
@@ -93,14 +84,9 @@ impl TaskState {
     pub fn consolidate(&self, next: Self) -> Self {
         match (self, next) {
             (TaskState::Created, x) => x,
-            (TaskState::Pending, TaskState::Created) => *self,
-            (TaskState::Pending, x) => x,
-            (TaskState::Scheduled, TaskState::Created | TaskState::Pending) => *self,
+            (TaskState::Scheduled, TaskState::Created) => *self,
             (TaskState::Scheduled, x) => x,
-            (
-                TaskState::Running,
-                TaskState::Created | TaskState::Pending | TaskState::Scheduled,
-            ) => *self,
+            (TaskState::Running, TaskState::Created | TaskState::Scheduled) => *self,
             (TaskState::Running, x) => x,
             (TaskState::Succeeded | TaskState::Failed | TaskState::Canceled, _) => *self,
         }
@@ -109,9 +95,17 @@ impl TaskState {
     pub fn is_terminal(&self) -> bool {
         match self {
             TaskState::Succeeded | TaskState::Failed | TaskState::Canceled => true,
-            TaskState::Pending | TaskState::Created | TaskState::Scheduled | TaskState::Running => {
-                false
-            }
+            TaskState::Created | TaskState::Scheduled | TaskState::Running => false,
+        }
+    }
+
+    pub fn is_failure(&self) -> bool {
+        match self {
+            TaskState::Failed | TaskState::Canceled => true,
+            TaskState::Created
+            | TaskState::Scheduled
+            | TaskState::Running
+            | TaskState::Succeeded => false,
         }
     }
 }

@@ -9,6 +9,7 @@ use datafusion::physical_plan::joins::{
 };
 use datafusion::physical_plan::limit::GlobalLimitExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
+use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion::physical_plan::{
     with_new_children_if_necessary, ExecutionPlan, ExecutionPlanProperties,
 };
@@ -171,10 +172,41 @@ fn build_job_graph(
         } else {
             shuffled
         }
+    } else if plan.as_any().is::<SortPreservingMergeExec>() {
+        let child = plan.children().one()?;
+        plan.clone()
+            .with_new_children(vec![create_merge_input(child, graph)?])?
     } else {
         plan
     };
     Ok(plan)
+}
+
+fn create_merge_input(
+    plan: &Arc<dyn ExecutionPlan>,
+    graph: &mut JobGraph,
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    let schema = plan.schema();
+    let partitioning = plan.output_partitioning().clone();
+    let (plan, inputs) = rewrite_inputs(plan.clone())?;
+    let stage = Stage {
+        inputs,
+        plan,
+        group: String::new(),
+        mode: OutputMode::Pipelined,
+        distribution: OutputDistribution::RoundRobin { channels: 1 },
+        placement: TaskPlacement::Worker,
+    };
+    let s = graph.stages.len();
+    graph.stages.push(stage);
+    Ok(Arc::new(StageInputExec::new(
+        StageInput {
+            stage: s,
+            mode: InputMode::Broadcast,
+        },
+        schema,
+        partitioning,
+    )))
 }
 
 fn create_shuffle(

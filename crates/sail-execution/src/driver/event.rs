@@ -53,7 +53,7 @@ pub enum DriverEvent {
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     },
-    LostJobOutput {
+    CleanUpJob {
         job_id: JobId,
     },
     UpdateTask {
@@ -143,6 +143,7 @@ impl From<TaskStatus> for gen::TaskStatus {
         }
     }
 }
+
 impl SpanAssociation for DriverEvent {
     fn name(&self) -> Cow<'static, str> {
         let name = match self {
@@ -154,7 +155,7 @@ impl SpanAssociation for DriverEvent {
             DriverEvent::ProbeIdleWorker { .. } => "ProbeIdleWorker",
             DriverEvent::ProbeLostWorker { .. } => "ProbeLostWorker",
             DriverEvent::ExecuteJob { .. } => "ExecuteJob",
-            DriverEvent::LostJobOutput { .. } => "LostJobOutput",
+            DriverEvent::CleanUpJob { .. } => "CleanUpJob",
             DriverEvent::UpdateTask { .. } => "UpdateTask",
             DriverEvent::ProbePendingTask { .. } => "ProbePendingTask",
             DriverEvent::ProbePendingLocalStream { .. } => "ProbePendingLocalStream",
@@ -205,7 +206,7 @@ impl SpanAssociation for DriverEvent {
                 context: _,
                 result: _,
             } => {}
-            DriverEvent::LostJobOutput { job_id } => {
+            DriverEvent::CleanUpJob { job_id } => {
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
             }
             DriverEvent::UpdateTask {

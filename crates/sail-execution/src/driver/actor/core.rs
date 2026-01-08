@@ -87,7 +87,7 @@ impl Actor for DriverActor {
                 context,
                 result,
             } => self.handle_execute_job(ctx, plan, context, result),
-            DriverEvent::LostJobOutput { job_id } => self.handle_lost_job_output(ctx, job_id),
+            DriverEvent::CleanUpJob { job_id } => self.handle_clean_up_job(ctx, job_id),
             DriverEvent::UpdateTask {
                 key,
                 status,

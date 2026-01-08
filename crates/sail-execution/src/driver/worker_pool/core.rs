@@ -182,21 +182,6 @@ impl WorkerPool {
             .collect()
     }
 
-    pub fn track_worker_activity(
-        &mut self,
-        ctx: &mut ActorContext<DriverActor>,
-        worker_id: WorkerId,
-    ) {
-        let Some(worker) = self.workers.get_mut(&worker_id) else {
-            warn!("worker {worker_id} not found");
-            return;
-        };
-        if let WorkerState::Running { updated_at, .. } = &mut worker.state {
-            *updated_at = Instant::now();
-            Self::schedule_idle_worker_probe(ctx, worker_id, worker, &self.options);
-        }
-    }
-
     pub fn update_worker_heartbeat(
         &mut self,
         ctx: &mut ActorContext<DriverActor>,
@@ -281,6 +266,7 @@ impl WorkerPool {
             });
             return;
         };
+        Self::track_worker_activity(ctx, worker_id, worker, &self.options);
         let client = match Self::get_client_set(worker_id, worker, &self.options) {
             Ok(client) => client.core,
             Err(e) => {
@@ -344,6 +330,7 @@ impl WorkerPool {
             warn!("worker {worker_id} not found");
             return;
         };
+        Self::track_worker_activity(ctx, worker_id, worker, &self.options);
         let client = match Self::get_client_set(worker_id, worker, &self.options) {
             Ok(x) => x.core,
             Err(e) => {
@@ -364,7 +351,7 @@ impl WorkerPool {
 
     pub fn fetch_worker_stream(
         &mut self,
-        _ctx: &mut ActorContext<DriverActor>,
+        ctx: &mut ActorContext<DriverActor>,
         worker_id: WorkerId,
         key: &TaskStreamKey,
         schema: SchemaRef,
@@ -374,6 +361,7 @@ impl WorkerPool {
                 "worker {worker_id} not found"
             )));
         };
+        Self::track_worker_activity(ctx, worker_id, worker, &self.options);
         let client = match Self::get_client_set(worker_id, worker, &self.options) {
             Ok(x) => x.flight,
             Err(e) => {
@@ -404,6 +392,7 @@ impl WorkerPool {
             warn!("worker {worker_id} not found");
             return;
         };
+        Self::track_worker_activity(ctx, worker_id, worker, &self.options);
         Self::remove_streams(ctx, job_id, stage, worker_id, worker, &self.options);
     }
 
@@ -490,5 +479,17 @@ impl WorkerPool {
             },
             options.worker_heartbeat_timeout,
         );
+    }
+
+    fn track_worker_activity(
+        ctx: &mut ActorContext<DriverActor>,
+        worker_id: WorkerId,
+        worker: &mut WorkerDescriptor,
+        options: &WorkerPoolOptions,
+    ) {
+        if let WorkerState::Running { updated_at, .. } = &mut worker.state {
+            *updated_at = Instant::now();
+            Self::schedule_idle_worker_probe(ctx, worker_id, worker, &options);
+        }
     }
 }

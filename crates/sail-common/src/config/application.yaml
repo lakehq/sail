@@ -142,6 +142,11 @@
     This gives a grace period when a task is launched simultaneously with its dependency tasks
     and the task stream inputs may not be ready immediately.
 
+- key: cluster.task_max_attempts
+  type: number
+  default: "3"
+  description: The maximum number of attempts for a task.
+
 - key: cluster.job_output_buffer
   type: number
   default: "16"

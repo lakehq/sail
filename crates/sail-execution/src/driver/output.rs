@@ -1,10 +1,11 @@
-use std::mem;
+use std::fmt::Formatter;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::{fmt, mem};
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::common::{DataFusionError, Result};
+use datafusion::common::{DataFusionError, HashSet, Result};
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use futures::stream::SelectAll;
@@ -18,6 +19,71 @@ use crate::driver::{DriverActor, DriverEvent};
 use crate::id::{JobId, TaskStreamKey, TaskStreamKeyDisplay};
 use crate::stream::error::{TaskStreamError, TaskStreamResult};
 use crate::stream::reader::TaskStreamSource;
+
+pub struct JobOutputSender {
+    key: TaskStreamKey,
+    sender: mpsc::Sender<JobOutputCommand>,
+}
+
+impl fmt::Debug for JobOutputSender {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("JobOutputSender").finish()
+    }
+}
+
+impl JobOutputSender {
+    pub async fn send(self, stream: TaskStreamSource) {
+        let command = JobOutputCommand::AddStream {
+            key: self.key,
+            stream,
+        };
+        // We ignore the error here because it indicates that the job output
+        // consumer has been dropped.
+        let _ = self.sender.send(command).await;
+    }
+}
+
+pub struct JobOutputFailureNotifier {
+    sender: mpsc::Sender<JobOutputCommand>,
+}
+
+impl fmt::Debug for JobOutputFailureNotifier {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("JobOutputFailureNotifier").finish()
+    }
+}
+
+impl JobOutputFailureNotifier {
+    pub async fn notify(self, cause: CommonErrorCause) {
+        let command = JobOutputCommand::Fail { cause };
+        let _ = self.sender.send(command).await;
+    }
+}
+
+pub struct JobOutputManager {
+    streams: HashSet<TaskStreamKey>,
+    sender: mpsc::Sender<JobOutputCommand>,
+}
+
+impl JobOutputManager {
+    pub fn has_stream(&self, key: &TaskStreamKey) -> bool {
+        self.streams.contains(key)
+    }
+
+    pub fn send_stream(&mut self, key: TaskStreamKey) -> JobOutputSender {
+        self.streams.insert(key.clone());
+        JobOutputSender {
+            key,
+            sender: self.sender.clone(),
+        }
+    }
+
+    pub fn fail(&self) -> JobOutputFailureNotifier {
+        JobOutputFailureNotifier {
+            sender: self.sender.clone(),
+        }
+    }
+}
 
 pub enum JobOutputCommand {
     Fail {
@@ -52,7 +118,7 @@ pub fn build_job_output(
     ctx: &mut ActorContext<DriverActor>,
     job_id: JobId,
     schema: SchemaRef,
-) -> (mpsc::Sender<JobOutputCommand>, SendableRecordBatchStream) {
+) -> (JobOutputManager, SendableRecordBatchStream) {
     let (sender, receiver) = mpsc::channel(JobOutputCommand::CHANNEL_SIZE);
     let (tx, rx) = mpsc::channel(1);
     let stream = JobOutputStream::new(receiver);
@@ -61,13 +127,16 @@ pub fn build_job_output(
         let mut stream = stream;
         while let Some(batch) = stream.next().await {
             if tx.send(batch).await.is_err() {
-                let _ = handle.send(DriverEvent::LostJobOutput { job_id }).await;
+                let _ = handle.send(DriverEvent::CleanUpJob { job_id }).await;
                 break;
             }
         }
     });
     (
-        sender,
+        JobOutputManager {
+            streams: HashSet::new(),
+            sender,
+        },
         Box::pin(RecordBatchStreamAdapter::new(
             schema,
             ReceiverStream::new(rx),

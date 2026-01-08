@@ -1,6 +1,7 @@
 mod core;
 mod options;
 mod state;
+mod topology;
 
 use std::collections::HashMap;
 
@@ -11,6 +12,7 @@ pub use state::TaskState;
 
 use crate::codec::RemoteExecutionCodec;
 use crate::driver::job_scheduler::state::JobDescriptor;
+use crate::driver::output::{JobOutputFailureNotifier, JobOutputSender};
 use crate::id::{IdGenerator, JobId, TaskKey, TaskStreamKey};
 use crate::task::scheduling::TaskRegion;
 
@@ -34,21 +36,22 @@ impl JobScheduler {
 
 #[derive(Debug)]
 pub enum JobAction {
-    ScheduleTasks {
+    ScheduleTaskRegion {
         region: TaskRegion,
     },
     CancelTask {
         key: TaskKey,
     },
-    FetchJobOutputStreams {
-        keys: Vec<TaskStreamKey>,
+    FailJobOutput {
+        notifier: JobOutputFailureNotifier,
+    },
+    FetchJobOutputStream {
+        key: TaskStreamKey,
         schema: SchemaRef,
+        sender: JobOutputSender,
     },
     RemoveStreams {
         job_id: JobId,
         stage: Option<usize>,
-    },
-    CompleteJobOutput {
-        job_id: JobId,
     },
 }

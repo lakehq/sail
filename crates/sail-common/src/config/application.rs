@@ -108,6 +108,7 @@ pub struct ClusterConfig {
     pub worker_stream_buffer: usize,
     pub task_launch_timeout_secs: u64,
     pub task_stream_creation_timeout_secs: u64,
+    pub task_max_attempts: usize,
     pub job_output_buffer: usize,
     pub rpc_retry_strategy: RetryStrategy,
 }
