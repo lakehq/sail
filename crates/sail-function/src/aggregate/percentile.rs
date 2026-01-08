@@ -32,6 +32,8 @@ use sail_common_datafusion::literal::LiteralValue;
 /// Supported types:
 /// - Numeric types (Int, Float, etc.) -> returns Float64 with linear interpolation
 /// - String types (Utf8, Utf8View, LargeUtf8) -> returns the same string type
+/// - Interval types -> returns the same interval type
+/// - Duration types -> returns the same duration type
 #[derive(PartialEq, Eq, Hash)]
 pub struct PercentileFunction {
     signature: Signature,
