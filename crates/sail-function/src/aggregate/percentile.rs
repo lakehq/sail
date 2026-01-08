@@ -747,7 +747,9 @@ impl Accumulator for MultiStringPercentileAccumulator {
         }
 
         let array = &values[0];
-        let string_array = as_string_array(array)?;
+
+        let string_array = arrow::compute::cast(array, &DataType::Utf8)?;
+        let string_array = as_string_array(&string_array)?;
 
         for value in string_array.iter().flatten() {
             *self.value_counts.entry(value.to_string()).or_insert(0) += 1;
@@ -836,7 +838,9 @@ impl Accumulator for MultiStringPercentileAccumulator {
         }
 
         let array = &values[0];
-        let string_array = as_string_array(array)?;
+
+        let string_array = arrow::compute::cast(array, &DataType::Utf8)?;
+        let string_array = as_string_array(&string_array)?;
 
         for v in string_array.iter().flatten() {
             let key = v.to_string();
