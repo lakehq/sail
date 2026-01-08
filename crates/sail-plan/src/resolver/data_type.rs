@@ -207,11 +207,11 @@ impl PlanResolver<'_> {
             }
             DataType::ConfiguredBinary => Ok(self.arrow_binary_type(state)),
             DataType::Variant => {
-                // Variant is represented as a Struct with two binary fields: value and metadata
+                // Variant is represented as a Struct with two binary fields: metadata and value
                 // The extension type metadata is handled at the Field level
                 let fields = adt::Fields::from(vec![
-                    adt::Field::new("value", adt::DataType::Binary, true),
                     adt::Field::new("metadata", adt::DataType::Binary, true),
+                    adt::Field::new("value", adt::DataType::Binary, true),
                 ]);
                 Ok(adt::DataType::Struct(fields))
             }

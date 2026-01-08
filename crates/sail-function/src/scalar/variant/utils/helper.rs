@@ -56,7 +56,7 @@ pub fn try_parse_string_scalar(scalar: &ScalarValue) -> datafusion_common::Resul
         ScalarValue::Utf8(s) | ScalarValue::Utf8View(s) | ScalarValue::LargeUtf8(s) => s,
         unsupported => {
             return exec_err!(
-                "expected binary scalar value, got data type: {}",
+                "expected string scalar value, got data type: {}",
                 unsupported.data_type()
             );
         }
