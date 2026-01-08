@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
+use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
 use tokio::runtime::Handle;
 
 use super::{
-    CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewOptions, DatabaseStatus,
-    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace, TableStatus,
+    CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewOptions,
+    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
 };
 use crate::error::{CatalogError, CatalogResult};
 

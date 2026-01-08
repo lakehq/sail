@@ -1,14 +1,13 @@
 use std::time::Duration;
 
+use datafusion::prelude::SessionContext;
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
 use sail_server::RetryStrategy;
 
-use crate::error::ExecutionResult;
 use crate::id::WorkerId;
 use crate::worker_manager::WorkerLaunchOptions;
 
-#[derive(Debug)]
 #[readonly::make]
 pub struct WorkerOptions {
     pub worker_id: WorkerId,
@@ -23,11 +22,12 @@ pub struct WorkerOptions {
     pub worker_stream_buffer: usize,
     pub rpc_retry_strategy: RetryStrategy,
     pub runtime: RuntimeHandle,
+    pub session: SessionContext,
 }
 
 impl WorkerOptions {
-    pub fn try_new(config: &AppConfig, runtime: RuntimeHandle) -> ExecutionResult<Self> {
-        Ok(Self {
+    pub fn new(config: &AppConfig, runtime: RuntimeHandle, session: SessionContext) -> Self {
+        Self {
             worker_id: config.cluster.worker_id.into(),
             enable_tls: config.cluster.enable_tls,
             driver_host: config.cluster.driver_external_host.clone(),
@@ -46,10 +46,16 @@ impl WorkerOptions {
             worker_stream_buffer: config.cluster.worker_stream_buffer,
             rpc_retry_strategy: (&config.cluster.rpc_retry_strategy).into(),
             runtime,
-        })
+            session,
+        }
     }
 
-    pub fn local(id: WorkerId, options: WorkerLaunchOptions, runtime: RuntimeHandle) -> Self {
+    pub fn local(
+        id: WorkerId,
+        options: WorkerLaunchOptions,
+        runtime: RuntimeHandle,
+        session: SessionContext,
+    ) -> Self {
         WorkerOptions {
             worker_id: id,
             enable_tls: options.enable_tls,
@@ -63,6 +69,7 @@ impl WorkerOptions {
             worker_stream_buffer: options.worker_stream_buffer,
             rpc_retry_strategy: options.rpc_retry_strategy,
             runtime: runtime.clone(),
+            session,
         }
     }
 }

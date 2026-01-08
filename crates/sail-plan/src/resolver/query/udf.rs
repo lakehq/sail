@@ -114,6 +114,7 @@ impl PlanResolver<'_> {
             output_mode,
             timeout_conf,
             state_schema,
+            transform_with_state_info,
         } = map;
         // The following group map fields are not used in PySpark,
         // so there is no plan to support them.
@@ -148,6 +149,11 @@ impl PlanResolver<'_> {
         if state_schema.is_some() {
             return Err(PlanError::invalid(
                 "state schema not supported in group map",
+            ));
+        }
+        if transform_with_state_info.is_some() {
+            return Err(PlanError::invalid(
+                "transform with state info not supported in group map",
             ));
         }
 

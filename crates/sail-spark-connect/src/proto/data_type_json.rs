@@ -56,6 +56,10 @@ pub enum JsonDataType {
         start: Option<YearMonthIntervalField>,
         end: Option<YearMonthIntervalField>,
     },
+    #[serde(untagged, with = "serde_time")]
+    Time {
+        precision: Option<i32>,
+    },
     #[serde(untagged, rename_all = "camelCase")]
     Array {
         r#type: MustBe!("array"),
@@ -160,6 +164,43 @@ impl Display for YearMonthIntervalField {
 fn create_regex(regex: Result<regex::Regex, regex::Error>) -> regex::Regex {
     #[allow(clippy::unwrap_used)]
     regex.unwrap()
+}
+
+mod serde_time {
+    use lazy_static::lazy_static;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use crate::proto::data_type_json::create_regex;
+
+    lazy_static! {
+        static ref TIME_PRECISION: regex::Regex =
+            create_regex(regex::Regex::new(r"^time(\(\s*(\d+)\s*\))?$"));
+    }
+
+    pub fn serialize<S>(precision: &Option<i32>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match precision {
+            Some(p) => format!("time({})", *p).serialize(serializer),
+            None => "time".to_string().serialize(serializer),
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<i32>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        let caps = TIME_PRECISION
+            .captures(&s)
+            .ok_or_else(|| serde::de::Error::custom(format!("invalid time type: {s}")))?;
+        if let Some(m) = caps.get(2) {
+            Ok(Some(m.as_str().parse().map_err(serde::de::Error::custom)?))
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 mod serde_char {
@@ -440,6 +481,12 @@ fn from_spark_json_data_type(data_type: JsonDataType) -> SparkResult<sc::DataTyp
         },
         JsonDataType::Date => sc::DataType {
             kind: Some(dt::Kind::Date(dt::Date::default())),
+        },
+        JsonDataType::Time { precision } => sc::DataType {
+            kind: Some(dt::Kind::Time(dt::Time {
+                precision,
+                type_variation_reference: 0,
+            })),
         },
         JsonDataType::Timestamp => sc::DataType {
             kind: Some(dt::Kind::Timestamp(dt::Timestamp::default())),
@@ -797,6 +844,30 @@ mod tests {
                         end_field: None,
                         type_variation_reference: 0,
                     })),
+                },
+            ),
+            (
+                r#""time""#,
+                sc::DataType {
+                    kind: Some(dt::Kind::Time(dt::Time {
+                        precision: None,
+                        type_variation_reference: 0,
+                    })),
+                },
+            ),
+            (
+                r#""time(3)""#,
+                sc::DataType {
+                    kind: Some(dt::Kind::Time(dt::Time {
+                        precision: Some(3),
+                        type_variation_reference: 0,
+                    })),
+                },
+            ),
+            (
+                r#""variant""#,
+                sc::DataType {
+                    kind: Some(dt::Kind::Variant(dt::Variant::default())),
                 },
             ),
             (

@@ -48,6 +48,13 @@ Feature: Delta Lake Merge
           INSERT *
         """
       Then delta log latest commit info matches snapshot
+      Then delta log latest commit info contains
+        | path                                               | value                  |
+        | operation                                          | "MERGE"                |
+        | operationParameters.mergePredicate                 | "t . id = s . id " |
+        | operationParameters.matchedPredicates[0].actionType | "update"               |
+        | operationParameters.matchedPredicates[1].actionType | "delete"               |
+        | operationParameters.notMatchedPredicates[0].actionType | "insert"            |
       When query
         """
         SELECT id, value, flag FROM delta_merge_basic ORDER BY id
@@ -57,6 +64,186 @@ Feature: Delta Lake Merge
         | 1  | old   | keep   |
         | 2  | new   | update |
         | 4  | ins   | insert |
+
+  Rule: Cardinality violation is rejected when multiple source rows match one target row
+    Background:
+      Given variable location for temporary directory merge_cardinality
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_cardinality
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_cardinality (
+          id INT,
+          value STRING
+        )
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_cardinality
+        SELECT * FROM VALUES
+          (1, 't1')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW src_merge_cardinality AS
+        SELECT * FROM VALUES
+          (1, 's1'),
+          (1, 's2')
+        AS src(id, value)
+        """
+
+    Scenario: MERGE errors when a single target row matches multiple source rows
+      When query
+        """
+        MERGE INTO delta_merge_cardinality AS t
+        USING src_merge_cardinality AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN
+          UPDATE SET value = s.value
+        WHEN NOT MATCHED THEN
+          INSERT *
+        """
+      Then query error MERGE_CARDINALITY_VIOLATION
+
+  Rule: Cardinality check can be skipped when source is provably unique on join keys
+    Background:
+      Given variable location for temporary directory merge_cardinality_skip
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_cardinality_skip
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_cardinality_skip (
+          id INT,
+          value STRING
+        )
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_cardinality_skip
+        SELECT * FROM VALUES
+          (1, 't1')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW src_merge_cardinality_skip AS
+        SELECT
+          id,
+          max(value) AS value
+        FROM VALUES
+          (1, 's1'),
+          (1, 's2')
+        AS src(id, value)
+        GROUP BY id
+        """
+
+    Scenario: EXPLAIN EXTENDED does not include MergeCardinalityCheck when source is grouped by join keys
+      When query
+        """
+        EXPLAIN EXTENDED
+        MERGE INTO delta_merge_cardinality_skip AS t
+        USING src_merge_cardinality_skip AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN
+          UPDATE SET value = s.value
+        WHEN NOT MATCHED THEN
+          INSERT *
+        """
+      Then query plan matches snapshot
+
+    Scenario: MERGE succeeds when source is grouped by join keys
+      Given statement
+        """
+        MERGE INTO delta_merge_cardinality_skip AS t
+        USING src_merge_cardinality_skip AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN
+          UPDATE SET value = s.value
+        WHEN NOT MATCHED THEN
+          INSERT *
+        """
+      When query
+        """
+        SELECT id, value FROM delta_merge_cardinality_skip ORDER BY id
+        """
+      Then query result ordered
+        | id | value |
+        | 1  | s2    |
+
+  Rule: Insert-only MERGE can fast-append without rewriting target files
+    Background:
+      Given variable location for temporary directory merge_insert_only
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_insert_only
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_insert_only (
+          id INT,
+          value STRING
+        )
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_insert_only
+        SELECT * FROM VALUES
+          (1, 'keep'),
+          (2, 'keep')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW src_merge_insert_only AS
+        SELECT * FROM VALUES
+          (2, 'ignored'),
+          (3, 'inserted')
+        AS src(id, value)
+        """
+
+    Scenario: Insert-only MERGE appends new rows and produces no remove actions
+      Given statement
+        """
+        MERGE INTO delta_merge_insert_only AS t
+        USING src_merge_insert_only AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED THEN
+          INSERT *
+        """
+      Then delta log latest commit info matches snapshot
+      Then delta log latest commit info contains
+        | path                                               | value                  |
+        | operation                                          | "MERGE"                |
+        | operationParameters.mergePredicate                 | "t . id = s . id " |
+        | operationParameters.matchedPredicates              | []                     |
+        | operationParameters.notMatchedBySourcePredicates   | []                     |
+        | operationParameters.notMatchedPredicates[0].actionType | "insert"            |
+      When query
+        """
+        SELECT id, value FROM delta_merge_insert_only ORDER BY id
+        """
+      Then query result ordered
+        | id | value    |
+        | 1  | keep     |
+        | 2  | keep     |
+        | 3  | inserted |
+
+    Scenario: EXPLAIN EXTENDED shows fast-append plan shape for insert-only MERGE
+      When query
+        """
+        EXPLAIN EXTENDED
+        MERGE INTO delta_merge_insert_only AS t
+        USING src_merge_insert_only AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED THEN
+          INSERT *
+        """
+      Then query plan matches snapshot
 
   Rule: Updates for rows not matched by source and explicit insert columns
     Background:
@@ -107,6 +294,13 @@ Feature: Delta Lake Merge
           VALUES (s.id, concat(s.value, '_insert'), s.flag)
         """
       Then delta log latest commit info matches snapshot
+      Then delta log latest commit info contains
+        | path                                               | value                  |
+        | operation                                          | "MERGE"                |
+        | operationParameters.mergePredicate                 | "t . id = s . id " |
+        | operationParameters.matchedPredicates[0].actionType | "update"               |
+        | operationParameters.notMatchedBySourcePredicates[0].actionType | "update"      |
+        | operationParameters.notMatchedPredicates[0].actionType | "insert"            |
       When query
         """
         SELECT id, value, flag FROM delta_merge_extended ORDER BY id
@@ -167,6 +361,13 @@ Feature: Delta Lake Merge
           VALUES (s.id, concat('insert_', s.value), s.flag)
         """
       Then delta log latest commit info matches snapshot
+      Then delta log latest commit info contains
+        | path                                               | value                  |
+        | operation                                          | "MERGE"                |
+        | operationParameters.mergePredicate                 | "t . id = s . id " |
+        | operationParameters.matchedPredicates[0].actionType | "update"               |
+        | operationParameters.notMatchedBySourcePredicates[0].actionType | "delete"      |
+        | operationParameters.notMatchedPredicates[0].actionType | "insert"            |
       When query
         """
         SELECT id, value, flag FROM delta_merge_cleanup ORDER BY id
@@ -228,6 +429,12 @@ Feature: Delta Lake Merge
           VALUES (s.id, s.category, s.amount, concat('default_', s.note))
         """
       Then delta log latest commit info matches snapshot
+      Then delta log latest commit info contains
+        | path                                               | value                   |
+        | operation                                          | "MERGE"                 |
+        | operationParameters.mergePredicate                 | "t . id = s . id "  |
+        | operationParameters.notMatchedPredicates[0].actionType | "insert"             |
+        | operationParameters.notMatchedPredicates[0].predicate | "s . id = 3 " |
       When query
         """
         SELECT id, category, amount, note FROM delta_merge_conditional ORDER BY id

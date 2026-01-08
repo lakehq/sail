@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use datafusion::prelude::SessionContext;
 use sail_common::runtime::RuntimeHandle;
 use sail_server::actor::{ActorHandle, ActorSystem};
 use tokio::sync::Mutex;
@@ -26,13 +27,15 @@ impl LocalWorkerManagerState {
 pub struct LocalWorkerManager {
     state: Mutex<LocalWorkerManagerState>,
     runtime: RuntimeHandle,
+    session: SessionContext,
 }
 
 impl LocalWorkerManager {
-    pub fn new(runtime: RuntimeHandle) -> Self {
+    pub fn new(runtime: RuntimeHandle, session: SessionContext) -> Self {
         Self {
             state: Mutex::new(LocalWorkerManagerState::new()),
             runtime,
+            session,
         }
     }
 }
@@ -44,7 +47,7 @@ impl WorkerManager for LocalWorkerManager {
         id: WorkerId,
         options: WorkerLaunchOptions,
     ) -> ExecutionResult<()> {
-        let options = WorkerOptions::local(id, options, self.runtime.clone());
+        let options = WorkerOptions::local(id, options, self.runtime.clone(), self.session.clone());
         let mut state = self.state.lock().await;
         let handle = state.system.spawn(options);
         state.workers.insert(id, handle);

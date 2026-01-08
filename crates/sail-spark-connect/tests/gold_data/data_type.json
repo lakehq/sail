@@ -350,6 +350,41 @@
       }
     },
     {
+      "input": "TIME(6)",
+      "output": {
+        "failure": "error in JSON serde: expected value at line 1 column 1"
+      }
+    },
+    {
+      "input": "TIME(6) WITHOUT TIME ZONE",
+      "output": {
+        "failure": "error in JSON serde: expected value at line 1 column 1"
+      }
+    },
+    {
+      "input": "TIMESTAMP WITHOUT TIME ZONE",
+      "output": {
+        "success": {
+          "timestamp": {
+            "timeUnit": "microsecond",
+            "timestampType": "withoutTimeZone"
+          }
+        }
+      }
+    },
+    {
+      "input": "TimE",
+      "output": {
+        "failure": "error in JSON serde: expected value at line 1 column 1"
+      }
+    },
+    {
+      "input": "TimE WiTHOUT TiME ZoNE",
+      "output": {
+        "failure": "error in JSON serde: expected value at line 1 column 1"
+      }
+    },
+    {
       "input": "array<doublE>",
       "output": {
         "success": {
@@ -652,9 +687,63 @@
     },
     {
       "input": "struct<x: int",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input: missing '>'. SQLSTATE: 42601 (line 1, pos 13)\n\n== SQL ==\nstruct<x: int\n-------------^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '<'. SQLSTATE: 42601 (line 1, pos 6)\n\n== SQL ==\nstruct<x: int\n------^^^\n",
       "output": {
         "failure": "error in JSON serde: expected value at line 1 column 1"
+      }
+    },
+    {
+      "input": "time(-1)",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '-'. SQLSTATE: 42601 (line 1, pos 5)\n\n== SQL ==\ntime(-1)\n-----^^^\n",
+      "output": {
+        "failure": "error in JSON serde: expected ident at line 1 column 2"
+      }
+    },
+    {
+      "input": "time(-100) WITHOUT TIME ZONE",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '-'. SQLSTATE: 42601 (line 1, pos 5)\n\n== SQL ==\ntime(-100) WITHOUT TIME ZONE\n-----^^^\n",
+      "output": {
+        "failure": "error in JSON serde: expected ident at line 1 column 2"
+      }
+    },
+    {
+      "input": "time(0)",
+      "output": {
+        "failure": "error in JSON serde: expected ident at line 1 column 2"
+      }
+    },
+    {
+      "input": "time(0) WITH TIME ZONE",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'WITH'. SQLSTATE: 42601 (line 1, pos 8)\n\n== SQL ==\ntime(0) WITH TIME ZONE\n--------^^^\n",
+      "output": {
+        "failure": "error in JSON serde: expected ident at line 1 column 2"
+      }
+    },
+    {
+      "input": "time(0) WITHOUT TIMEZONE",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'WITHOUT'. SQLSTATE: 42601 (line 1, pos 8)\n\n== SQL ==\ntime(0) WITHOUT TIMEZONE\n--------^^^\n",
+      "output": {
+        "failure": "error in JSON serde: expected ident at line 1 column 2"
+      }
+    },
+    {
+      "input": "time(0) without time zone",
+      "output": {
+        "failure": "error in JSON serde: expected ident at line 1 column 2"
+      }
+    },
+    {
+      "input": "time(8) without time zone",
+      "exception": "[UNSUPPORTED_TIME_PRECISION] The seconds precision 8 of the TIME data type is out of the supported range [0, 6]. SQLSTATE: 0A001",
+      "output": {
+        "failure": "error in JSON serde: expected ident at line 1 column 2"
+      }
+    },
+    {
+      "input": "time(9)",
+      "exception": "[UNSUPPORTED_TIME_PRECISION] The seconds precision 9 of the TIME data type is out of the supported range [0, 6]. SQLSTATE: 0A001",
+      "output": {
+        "failure": "error in JSON serde: expected ident at line 1 column 2"
       }
     },
     {
@@ -664,6 +753,36 @@
           "timestamp": {
             "timeUnit": "microsecond",
             "timestampType": "configured"
+          }
+        }
+      }
+    },
+    {
+      "input": "timestamp WITH TIME ZONE",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'WITH'. SQLSTATE: 42601 (line 1, pos 10)\n\n== SQL ==\ntimestamp WITH TIME ZONE\n----------^^^\n",
+      "output": {
+        "success": {
+          "timestamp": {
+            "timeUnit": "microsecond",
+            "timestampType": "withLocalTimeZone"
+          }
+        }
+      }
+    },
+    {
+      "input": "timestamp WITHOUT TIMEZONE",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'WITHOUT'. SQLSTATE: 42601 (line 1, pos 10)\n\n== SQL ==\ntimestamp WITHOUT TIMEZONE\n----------^^^\n",
+      "output": {
+        "failure": "error in JSON serde: expected ident at line 1 column 2"
+      }
+    },
+    {
+      "input": "timestamp without time zone",
+      "output": {
+        "success": {
+          "timestamp": {
+            "timeUnit": "microsecond",
+            "timestampType": "withoutTimeZone"
           }
         }
       }

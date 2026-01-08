@@ -1,8 +1,9 @@
+use sail_common_datafusion::catalog::{TableKind, TableStatus};
+
 use crate::error::{CatalogError, CatalogResult};
 use crate::manager::CatalogManager;
 use crate::provider::{
     CreateTemporaryViewOptions, CreateViewOptions, DropTemporaryViewOptions, DropViewOptions,
-    TableKind, TableStatus,
 };
 use crate::temp_view::GLOBAL_TEMPORARY_VIEW_MANAGER;
 use crate::utils::match_pattern;

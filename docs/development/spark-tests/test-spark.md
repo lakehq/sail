@@ -16,8 +16,8 @@ We have developed custom scripts to run the tests using [pytest](https://docs.py
 Before running Spark tests, you need to install the [patched PySpark package](./spark-setup) to the `test-spark` matrix environments that supports testing against multiple Spark versions.
 
 ```bash
-hatch run test-spark.spark-4.0.0:install-pyspark
-hatch run test-spark.spark-3.5.5:install-pyspark
+hatch run test-spark.spark-4.1.0:install-pyspark
+hatch run test-spark.spark-3.5.7:install-pyspark
 ```
 
 You can choose to run any or all of the commands above, depending on whether you have built the patched PySpark package for the corresponding Spark version.
@@ -37,7 +37,7 @@ hatch run scripts/spark-tests/run-server.sh
 After running the Spark Connect server, start another terminal and use the following command to run the Spark tests.
 
 ```bash
-hatch run test-spark.spark-4.0.0:scripts/spark-tests/run-tests.sh
+hatch run test-spark.spark-4.1.0:scripts/spark-tests/run-tests.sh
 ```
 
 The command runs a default set of test suites for Spark Connect.
@@ -54,7 +54,7 @@ You can also use `PYTEST_` environment variables to customize the test execution
 For example, `PYTEST_ADDOPTS="-k <expression>"` can be used to run specific tests matching `<expression>`.
 
 ```bash
-hatch run test-spark.spark-4.0.0:env \
+hatch run test-spark.spark-4.1.0:env \
   TEST_RUN_NAME=selected \
   scripts/spark-tests/run-tests.sh \
   --pyargs pyspark.sql.tests.connect -v -k "test_sql"
@@ -71,7 +71,7 @@ As a comparison, you can run the tests against the original JVM-based Spark libr
 by setting the `SPARK_TESTING_REMOTE_PORT` environment variable to an empty string.
 
 ```bash
-hatch run test-spark.spark-4.0.0:env \
+hatch run test-spark.spark-4.1.0:env \
   SPARK_TESTING_REMOTE_PORT= \
   scripts/spark-tests/run-tests.sh
 ```
@@ -84,16 +84,16 @@ The steps above start the server in the `default` Hatch environment.
 There are a few PySpark UDF tests that would fail in this setup, since they import testing UDFs available only in the **patched** PySpark library (installed in the `test-spark` Hatch environment).
 There are also a few data-dependent tests that would fail, since the data files in the `python/test_support` directory are only available in the **patched** PySpark library.
 
-Moreover, when the server is started in the `default` environment which has the PySpark 4.0.0 library installed, the tests for PySpark 3.5.5 does not work.
+Moreover, when the server is started in the `default` environment which has the PySpark 4.1.0 library installed, the tests for PySpark 3.5.7 does not work.
 
 To use the same PySpark library for both the server and the tests, run the server and the tests in the same `test-spark` environment.
 
 ```bash
-hatch run test-spark.spark-3.5.5:scripts/spark-tests/run-server.sh
+hatch run test-spark.spark-3.5.7:scripts/spark-tests/run-server.sh
 ```
 
 ```bash
-hatch run test-spark.spark-3.5.5:scripts/spark-tests/run-tests.sh
+hatch run test-spark.spark-3.5.7:scripts/spark-tests/run-tests.sh
 ```
 
 However, running the server outside the `default` environment [pollutes the build cache](../recipes/reducing-build-time.md), so you may notice that the server takes longer to build and start.

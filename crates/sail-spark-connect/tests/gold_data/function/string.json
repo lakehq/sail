@@ -2332,6 +2332,28 @@
     },
     {
       "input": {
+        "query": "SELECT quote('Don\\'t');",
+        "result": [
+          "'Don\\'t'"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "quote(Don't)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: quote"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT randstr(3, 0) AS result;",
         "result": [
           "ceV"

@@ -11,11 +11,15 @@ impl Debug for ArrowBatch {
             row_count,
             data,
             start_offset,
+            chunk_index,
+            num_chunks_in_batch,
         } = self;
         f.debug_struct("ArrowBatch")
             .field("row_count", row_count)
             .field("data", &DebugBinary::from(data))
             .field("start_offset", start_offset)
+            .field("chunk_index", chunk_index)
+            .field("num_chunks_in_batch", num_chunks_in_batch)
             .finish()
     }
 }

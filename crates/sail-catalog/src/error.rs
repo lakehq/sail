@@ -1,9 +1,12 @@
+use datafusion_common::DataFusionError;
 use thiserror::Error;
 
 pub type CatalogResult<T> = Result<T, CatalogError>;
 
 #[derive(Debug, Error)]
 pub enum CatalogError {
+    #[error("error in DataFusion: {0}")]
+    DataFusionError(#[from] DataFusionError),
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
     #[error("{0} not found: {1}")]

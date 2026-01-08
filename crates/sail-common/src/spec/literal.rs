@@ -129,15 +129,18 @@ pub enum Literal {
     },
     List {
         data_type: spec::DataType,
+        nullable: bool,
         values: Option<Vec<Literal>>,
     },
     FixedSizeList {
         length: i32,
         data_type: spec::DataType,
+        nullable: bool,
         values: Option<Vec<Literal>>,
     },
     LargeList {
         data_type: spec::DataType,
+        nullable: bool,
         values: Option<Vec<Literal>>,
     },
     Struct {
@@ -175,6 +178,7 @@ pub enum Literal {
     Map {
         key_type: spec::DataType,
         value_type: spec::DataType,
+        value_type_nullable: bool,
         keys: Option<Vec<Literal>>,
         values: Option<Vec<Literal>>,
     },
@@ -292,25 +296,28 @@ pub fn data_type_to_null_literal(data_type: spec::DataType) -> CommonResult<Lite
         spec::DataType::Utf8View => Ok(Literal::Utf8View { value: None }),
         spec::DataType::List {
             data_type,
-            nullable: _,
+            nullable,
         } => Ok(Literal::List {
             data_type: *data_type,
+            nullable,
             values: None,
         }),
         spec::DataType::FixedSizeList {
             data_type,
-            nullable: _,
+            nullable,
             length,
         } => Ok(Literal::FixedSizeList {
             length,
             data_type: *data_type,
+            nullable,
             values: None,
         }),
         spec::DataType::LargeList {
             data_type,
-            nullable: _,
+            nullable,
         } => Ok(Literal::LargeList {
             data_type: *data_type,
+            nullable,
             values: None,
         }),
         spec::DataType::Struct { fields } => Ok(Literal::Struct {
@@ -346,11 +353,12 @@ pub fn data_type_to_null_literal(data_type: spec::DataType) -> CommonResult<Lite
         spec::DataType::Map {
             key_type,
             value_type,
-            value_type_nullable: _,
+            value_type_nullable,
             keys_sorted: _,
         } => Ok(Literal::Map {
             key_type: *key_type,
             value_type: *value_type,
+            value_type_nullable,
             keys: None,
             values: None,
         }),

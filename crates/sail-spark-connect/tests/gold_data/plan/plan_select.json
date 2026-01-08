@@ -1,6 +1,43 @@
 {
   "tests": [
     {
+      "input": "\nSELECT *\nFROM\n(\n    SELECT *\n    FROM testData\n)\nWATERMARK ts DELAY OF INTERVAL 10 seconds AS tbl\nWHERE a > 1\n",
+      "output": {
+        "failure": "invalid argument: found ts at 60:62 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "\nSELECT *\nFROM\nVALUES (1, 1), (2, 2)\nWATERMARK ts DELAY OF INTERVAL 10 seconds AS dst\nWHERE a > 1\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'ts'. SQLSTATE: 42601 (line 5, pos 10)\n\n== SQL ==\n\nSELECT *\nFROM\nVALUES (1, 1), (2, 2)\nWATERMARK ts DELAY OF INTERVAL 10 seconds AS dst\n----------^^^\nWHERE a > 1\n",
+      "output": {
+        "failure": "invalid argument: found DELAY at 50:55 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "\nSELECT *\nFROM\nmock_tvf(1, 'a')\nWATERMARK ts DELAY OF INTERVAL 10 seconds AS dst\nWHERE a > 1\n",
+      "output": {
+        "failure": "invalid argument: found ts at 42:44 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "\nSELECT *\nFROM testData\nWATERMARK timestamp_seconds(value) AS eventTime DELAY OF INTERVAL 10 seconds AS tbl\nWHERE a > 1\n",
+      "output": {
+        "failure": "invalid argument: found timestamp_seconds at 34:51 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "\nSELECT *\nFROM testData\nWATERMARK timestamp_seconds(value) DELAY OF INTERVAL 10 seconds AS tbl\nWHERE a > 1\n",
+      "output": {
+        "failure": "invalid argument: found timestamp_seconds at 34:51 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "\nSELECT *\nFROM testData\nWATERMARK ts DELAY OF INTERVAL 10 seconds AS tbl\nWHERE a > 1\n",
+      "output": {
+        "failure": "invalid argument: found ts at 34:36 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
       "input": "\nSELECT -- continued after the following block comments...\n/* Deeply nested comment.\n   This includes a single apostrophe to make sure we aren't decoding this part as a string.\nSELECT 'deep nest' AS n1;\n/* Second level of nesting...\nSELECT 'deeper nest' as n2;\n/* Third level of nesting...\nSELECT 'deepest nest' as n3;\n*/\nHoo boy. Still two deep...\n*/\nNow just one deep...\n*/\n* FROM a\n      ",
       "output": {
         "success": {
@@ -63,6 +100,12 @@
       "input": "\nSELECT TRANSFORM(a, b, c)\nUSING 'cat' AS (a, b, c)\nFROM testData\n      ",
       "output": {
         "failure": "invalid argument: found USING at 27:32 expected 'RESPECT', 'IGNORE', 'WITHIN', 'FILTER', 'OVER', '.', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', 'AS', identifier, '(', ',', 'FROM', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "\nSELECT key, time\nFROM\n(\n    SELECT key, time\n    FROM\n    testData\n    WATERMARK timestamp_seconds(ts) AS time DELAY OF INTERVAL 10 seconds\n)\nAS tbl\nWHERE key = 'a'\n",
+      "output": {
+        "failure": "invalid argument: found timestamp_seconds at 82:99 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', or ')'"
       }
     },
     {
@@ -213,7 +256,7 @@
       }
     },
     {
-      "input": "SELECT * FROM a LIMIT :limitA",
+      "input": "SELECT * FROM a LIMIT 10",
       "output": {
         "success": {
           "query": {
@@ -254,57 +297,11 @@
               },
               "skip": null,
               "limit": {
-                "placeholder": ":limitA"
-              }
-            },
-            "planId": null
-          }
-        }
-      }
-    },
-    {
-      "input": "SELECT * FROM a LIMIT ?",
-      "output": {
-        "success": {
-          "query": {
-            "limit": {
-              "input": {
-                "project": {
-                  "input": {
-                    "read": {
-                      "namedTable": {
-                        "name": [
-                          "a"
-                        ],
-                        "temporal": null,
-                        "sample": null,
-                        "options": []
-                      },
-                      "isStreaming": false
-                    },
-                    "planId": null
-                  },
-                  "expressions": [
-                    {
-                      "unresolvedStar": {
-                        "target": null,
-                        "planId": null,
-                        "wildcardOptions": {
-                          "ilikePattern": null,
-                          "excludeColumns": null,
-                          "exceptColumns": null,
-                          "replaceColumns": null,
-                          "renameColumns": null
-                        }
-                      }
-                    }
-                  ]
-                },
-                "planId": null
-              },
-              "skip": null,
-              "limit": {
-                "placeholder": "?"
+                "literal": {
+                  "int32": {
+                    "value": 10
+                  }
+                }
               }
             },
             "planId": null
@@ -1783,21 +1780,7 @@
       }
     },
     {
-      "input": "SELECT :",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input. SQLSTATE: 42601 (line 1, pos 8)\n\n== SQL ==\nSELECT :\n--------^^^\n",
-      "output": {
-        "failure": "invalid argument: found : at 7:8 expected 'ALL', 'DISTINCT', or expression"
-      }
-    },
-    {
-      "input": "SELECT :-",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '-'. SQLSTATE: 42601 (line 1, pos 8)\n\n== SQL ==\nSELECT :-\n--------^^^\n",
-      "output": {
-        "failure": "invalid argument: found : at 7:8 expected 'ALL', 'DISTINCT', or expression"
-      }
-    },
-    {
-      "input": "SELECT :param_1",
+      "input": "SELECT 42",
       "output": {
         "success": {
           "query": {
@@ -1810,30 +1793,11 @@
               },
               "expressions": [
                 {
-                  "placeholder": ":param_1"
-                }
-              ]
-            },
-            "planId": null
-          }
-        }
-      }
-    },
-    {
-      "input": "SELECT ?",
-      "output": {
-        "success": {
-          "query": {
-            "project": {
-              "input": {
-                "empty": {
-                  "produceOneRow": true
-                },
-                "planId": null
-              },
-              "expressions": [
-                {
-                  "placeholder": "?"
+                  "literal": {
+                    "int32": {
+                      "value": 42
+                    }
+                  }
                 }
               ]
             },
@@ -2421,7 +2385,7 @@
       }
     },
     {
-      "input": "SELECT abs(:1Abc)",
+      "input": "SELECT abs(123)",
       "output": {
         "success": {
           "query": {
@@ -2440,46 +2404,11 @@
                     ],
                     "arguments": [
                       {
-                        "placeholder": ":1Abc"
-                      }
-                    ],
-                    "namedArguments": [],
-                    "isDistinct": false,
-                    "isUserDefinedFunction": false,
-                    "isInternal": null,
-                    "ignoreNulls": null,
-                    "filter": null,
-                    "orderBy": null
-                  }
-                }
-              ]
-            },
-            "planId": null
-          }
-        }
-      }
-    },
-    {
-      "input": "SELECT abs(?)",
-      "output": {
-        "success": {
-          "query": {
-            "project": {
-              "input": {
-                "empty": {
-                  "produceOneRow": true
-                },
-                "planId": null
-              },
-              "expressions": [
-                {
-                  "unresolvedFunction": {
-                    "functionName": [
-                      "abs"
-                    ],
-                    "arguments": [
-                      {
-                        "placeholder": "?"
+                        "literal": {
+                          "int32": {
+                            "value": 123
+                          }
+                        }
                       }
                     ],
                     "namedArguments": [],

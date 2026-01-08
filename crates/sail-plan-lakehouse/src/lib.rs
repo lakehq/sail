@@ -12,10 +12,11 @@ use sail_delta_lake::datasource::schema::DataFusionMixins;
 use sail_delta_lake::table::open_table_with_object_store;
 use sail_logical_plan::file_delete::FileDeleteNode;
 use sail_logical_plan::file_write::FileWriteNode;
-use sail_logical_plan::merge::MergeIntoWriteNode;
+use sail_logical_plan::merge::{MergeCardinalityCheckNode, MergeIntoWriteNode};
 use sail_physical_plan::file_delete::create_file_delete_physical_plan;
 use sail_physical_plan::file_write::create_file_write_physical_plan;
 use sail_physical_plan::merge::create_preexpanded_merge_physical_plan;
+use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use url::Url;
 
 mod optimizer;
@@ -124,6 +125,21 @@ impl ExtensionPlanner for DeltaExtensionPlanner {
             )
             .await?;
             return Ok(Some(plan));
+        }
+
+        if let Some(node) = node.as_any().downcast_ref::<MergeCardinalityCheckNode>() {
+            let [input] = physical_inputs else {
+                return internal_err!(
+                    "MergeCardinalityCheckNode requires exactly one physical input"
+                );
+            };
+            let exec = MergeCardinalityCheckExec::new(
+                input.clone(),
+                node.target_row_id_col(),
+                node.target_present_col(),
+                node.source_present_col(),
+            )?;
+            return Ok(Some(Arc::new(exec)));
         }
 
         Ok(None)

@@ -55,6 +55,9 @@ jobs:
           python-version: "3.11"
 
       - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: rust-build
+          install-testing-tools: false
 
       - name: Build Python Package
         uses: PyO3/maturin-action@v1

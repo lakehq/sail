@@ -46,6 +46,10 @@ Feature: Delta Lake Delete
         DELETE FROM delta_delete_basic WHERE department = 'Engineering'
         """
       Then delta log latest commit info matches snapshot
+      Then delta log latest commit info contains
+        | path                        | value                    |
+        | operation                   | "DELETE"                 |
+        | operationParameters.predicate | "department = 'Engineering' " |
       When query
         """
         SELECT * FROM delta_delete_basic

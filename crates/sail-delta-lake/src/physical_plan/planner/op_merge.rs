@@ -119,7 +119,6 @@ async fn finalize_merge(
         PhysicalSinkMode::Append,
         true,
         table_schema.clone(),
-        None,
         operation_override,
     ));
 

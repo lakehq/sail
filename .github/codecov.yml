@@ -1,22 +1,33 @@
-coverage:
-  status:
-    patch:
-      default:
-        target: 0
-    project:
-      default:
-        only_pulls: true
-        paths:
-          - "crates/"
-        target: 0
-        informational: true
-
 codecov:
+  require_ci_to_pass: true
   notify:
-    after_n_builds: 1
+    wait_for_ci: true
+    manual_trigger: true
 
 comment:
-  layout: "header, files"
+  layout: "header, diff, flags, components, tree"
+  show_carryforward_flags: true
 
 ignore:
   - "crates/sail-gold-test"
+
+flags:
+  rust-unit-tests:
+    carryforward: true
+  rust-slow-tests:
+    carryforward: true
+  python-unit-tests:
+    carryforward: true
+  spark-tests:
+    carryforward: true
+  ibis-tests:
+    carryforward: true
+
+coverage:
+  status:
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true

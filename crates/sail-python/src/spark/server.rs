@@ -7,8 +7,8 @@ use log::info;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use sail_common::config::AppConfig;
-use sail_common::runtime::RuntimeManager;
-use sail_spark_connect::entrypoint::{serve, SessionManagerOptions};
+use sail_common::runtime::{RuntimeHandle, RuntimeManager};
+use sail_spark_connect::entrypoint::serve;
 use sail_telemetry::telemetry::{init_telemetry, ResourceOptions};
 use tokio::net::TcpListener;
 use tokio::runtime::Handle;
@@ -37,6 +37,7 @@ impl SparkConnectServerState {
     }
 }
 
+/// The Spark connect server struct.
 #[pyclass]
 pub(super) struct SparkConnectServer {
     #[pyo3(get)]
@@ -50,6 +51,18 @@ pub(super) struct SparkConnectServer {
 
 #[pymethods]
 impl SparkConnectServer {
+    /// Creates a new SparkConnectServer instance.
+    ///
+    /// # Arguments
+    ///
+    /// * `ip` - The IP address to bind the server to.
+    /// * `port` - The port to bind the server to.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PyRuntimeError` if:
+    /// - The application config fails to load.
+    /// - The runtime manager fails to initialize.
     #[new]
     #[pyo3(signature = (ip, port, /))]
     fn new(ip: &str, port: u16) -> PyResult<Self> {
@@ -81,6 +94,8 @@ impl SparkConnectServer {
         }
     }
 
+    /// Actually starts the server. Sets some config then calls 'run' (not available in the Python API)
+    /// If background is False, will not return until the server finishes.
     #[pyo3(signature = (*, background))]
     fn start(&mut self, py: Python<'_>, background: bool) -> PyResult<()> {
         if self.state.is_some() {
@@ -140,14 +155,16 @@ impl SparkConnectServer {
         info!("Shutting down the Spark Connect server...");
     }
 
+    /// Thin wrapper on block_on
     fn run_blocking(
         handle: Handle,
-        options: SessionManagerOptions,
+        config: Arc<AppConfig>,
+        runtime: RuntimeHandle,
         listener: TcpListener,
         rx: Receiver<()>,
     ) -> PyResult<()> {
         handle
-            .block_on(async { serve(listener, Self::shutdown(rx), options).await })
+            .block_on(async { serve(listener, Self::shutdown(rx), config, runtime).await })
             .map_err(|e| {
                 PyErr::new::<PyRuntimeError, _>(format!(
                     "failed to run the Spark Connect server: {e:?}"
@@ -156,19 +173,19 @@ impl SparkConnectServer {
         Ok(())
     }
 
+    /// Starts the server, not available in the Python API.
     fn run(&self, listener: TcpListener) -> PyResult<SparkConnectServerState> {
-        let options = SessionManagerOptions {
-            config: Arc::clone(&self.config),
-            runtime: self.runtime.handle(),
-        };
+        let runtime = self.runtime.handle();
         // Get the actual listener address.
         // A port is assigned by the OS if the port is 0 when creating the listener.
         let address = listener.local_addr()?;
         let (tx, rx) = tokio::sync::oneshot::channel();
         let handle = self.runtime.handle();
+        let config = Arc::clone(&self.config);
         info!("Starting the Spark Connect server on {address}...");
-        let handle = thread::Builder::new()
-            .spawn(move || Self::run_blocking(handle.primary().clone(), options, listener, rx))?;
+        let handle = thread::Builder::new().spawn(move || {
+            Self::run_blocking(handle.primary().clone(), config, runtime, listener, rx)
+        })?;
         Ok(SparkConnectServerState {
             address,
             handle,
