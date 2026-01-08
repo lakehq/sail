@@ -1,9 +1,27 @@
-use std::fs;
 use std::path::Path;
+use std::{fmt, fs};
 
 use serde::{Deserialize, Serialize};
 
 use crate::bootstrap::spark::common::TestData;
+
+#[derive(Debug)]
+struct DataError {
+    source: Box<dyn std::error::Error>,
+    data: String,
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {}", self.source, self.data)
+    }
+}
+
+impl std::error::Error for DataError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
 
 pub struct TestSuiteWriter<P> {
     pub input_path: P,
@@ -24,7 +42,12 @@ where
         let content = fs::read_to_string(self.input_path.as_ref().join(input_file))?;
         let data: Vec<TestData<T>> = content
             .lines()
-            .map(serde_json::from_str)
+            .map(|x| {
+                serde_json::from_str(x).map_err(|e| DataError {
+                    source: Box::new(e),
+                    data: x.to_string(),
+                })
+            })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(data)
     }

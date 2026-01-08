@@ -6,7 +6,10 @@ on:
       spark_version:
         description: The Spark version to test
         type: string
-        default: "4.0.0"
+        default: "4.1.0"
+    secrets:
+      CODECOV_TOKEN:
+        required: false
 
 jobs:
   setup:
@@ -73,7 +76,7 @@ jobs:
           chmod +x /usr/local/bin/grpc_health_probe
           grpc_health_probe -version
 
-      # Building the patched PySpark package is slow (~40 minutes on GitHub Linux runners),
+      # Building the patched PySpark package is slow (~30 minutes on GitHub Linux runners),
       # so we create a dedicated cache entry for it.
       - uses: actions/cache@v4
         name: Cache PySpark
@@ -134,30 +137,7 @@ jobs:
       - name: Shutdown Spark Connect Server
         if: always()
         run: |
-          # Find and kill sail server processes
-          SAIL_PIDS=$(pgrep -f "sail spark server" || echo "")
-          if [ -n "$SAIL_PIDS" ]; then
-            echo "Found sail server processes: $SAIL_PIDS"
-            # Send SIGINT for graceful shutdown
-            kill -INT $SAIL_PIDS 2>/dev/null || true
-            # Wait up to 30 seconds for graceful shutdown
-            for i in {1..30}; do
-              if ! pgrep -f "sail spark server" > /dev/null; then
-                echo "Sail server stopped gracefully"
-                break
-              fi
-              sleep 1
-            done
-            # Force kill if still running
-            REMAINING_PIDS=$(pgrep -f "sail spark server" || echo "")
-            if [ -n "$REMAINING_PIDS" ]; then
-              echo "Force killing remaining processes: $REMAINING_PIDS"
-              kill -KILL $REMAINING_PIDS 2>/dev/null || true
-            fi
-          else
-            echo "No sail server processes found"
-          fi
-          sleep 10
+          scripts/spark-tests/stop-server.sh
 
       # Generate coverage report after Spark tests
       - name: Generate coverage report
@@ -172,12 +152,16 @@ jobs:
             -t lcov --branch --ignore-not-existing \
             -o coverage-spark-${{ inputs.spark_version }}.info
 
-      - name: Upload spark coverage artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload Spark coverage to Codecov
+        if: ${{ github.actor != 'dependabot[bot]' }}
+        uses: codecov/codecov-action@v5
         with:
-          name: spark-coverage-report-${{ inputs.spark_version }}
-          path: coverage-spark-${{ inputs.spark_version }}.info
-          retention-days: 1
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage-spark-${{ inputs.spark_version }}.info
+          flags: spark-tests
+          name: spark-tests
+          fail_ci_if_error: true
+          env_vars: OS
 
       - name: Upload Test Logs
         uses: actions/upload-artifact@v4
@@ -226,7 +210,7 @@ jobs:
 
       - name: Generate Test Report
         env:
-          SPARK_VERSION: ${{ inputs.spark_version }}
+          TEST_REPORT_NAME: "Spark ${{ inputs.spark_version }} Test Report"
           BASELINE_WORKFLOW_RUN_ID: ${{ steps.baseline-workflow.outputs.workflow_run_id }}
         run: |
           mkdir -p /tmp/report

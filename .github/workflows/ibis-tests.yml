@@ -2,6 +2,9 @@ name: Ibis Tests
 
 on:
   workflow_call:
+    secrets:
+      CODECOV_TOKEN:
+        required: false
 
 jobs:
   setup:
@@ -34,6 +37,8 @@ jobs:
     env:
       # Set the Hatch environment for `hatch run` commands.
       HATCH_ENV: "test-ibis"
+      RUSTC_WORKSPACE_WRAPPER: ${{ github.workspace }}/.github/scripts/rustc-workspace-wrapper.sh
+      LLVM_PROFILE_FILE: ${{ github.workspace }}/target/sail-ibis-%p-%m.profraw
 
     steps:
       - uses: actions/checkout@v4
@@ -44,6 +49,16 @@ jobs:
 
       - name: Install Hatch
         uses: pypa/hatch@install
+
+      - name: Install Rust toolchain and coverage tools
+        run: |
+          {
+            rustup toolchain install stable
+            rustup component add --toolchain stable llvm-tools-preview
+          } &
+
+      - name: Install grcov
+        uses: taiki-e/install-action@grcov
 
       - name: Checkout ibis testing data
         uses: actions/checkout@v4
@@ -57,7 +72,7 @@ jobs:
           name: python-package
           path: target/wheels
 
-      - name: Build native extension
+      - name: Set Up Hatch Environment
         run: |
           hatch run install-pysail
 
@@ -80,37 +95,109 @@ jobs:
         # which can happen occasionally for unknown reasons.
         # The timeout value should be adjusted as we add more tests.
         timeout-minutes: 10
+        env:
+          TEST_RUN_GIT_COMMIT: ${{ github.sha }}
+          TEST_RUN_GIT_REF: ${{ github.ref }}
         run: |
           hatch run test-ibis:env SPARK_REMOTE="sc://localhost:50051" scripts/spark-tests/run-tests.sh || true
-          echo "## 🧪 Ibis Tests Summary" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          tail -n 1 tmp/spark-tests/ibis/test-ibis.log >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Shutdown Spark Connect Server
         if: always()
         run: |
-          # Find and kill sail server processes
-          SAIL_PIDS=$(pgrep -f "sail spark server" || echo "")
-          if [ -n "$SAIL_PIDS" ]; then
-            echo "Found sail server processes: $SAIL_PIDS"
-            # Send SIGINT for graceful shutdown
-            kill -INT $SAIL_PIDS 2>/dev/null || true
-            # Wait up to 30 seconds for graceful shutdown
-            for i in {1..30}; do
-              if ! pgrep -f "sail spark server" > /dev/null; then
-                echo "Sail server stopped gracefully"
-                break
-              fi
-              sleep 1
-            done
-            # Force kill if still running
-            REMAINING_PIDS=$(pgrep -f "sail spark server" || echo "")
-            if [ -n "$REMAINING_PIDS" ]; then
-              echo "Force killing remaining processes: $REMAINING_PIDS"
-              kill -KILL $REMAINING_PIDS 2>/dev/null || true
-            fi
-          else
-            echo "No sail server processes found"
+          scripts/spark-tests/stop-server.sh
+
+      # Generate coverage report after Ibis tests
+      - name: Generate coverage report
+        run: |
+          # Wait for background Rust toolchain installation to complete
+          wait
+          BINARY_PATH=$(hatch run python -c 'import pysail._native; import os; print(os.path.dirname(pysail._native.__file__))')
+          echo "Binary path: $BINARY_PATH"
+          LLVM_PATH=$(.github/scripts/find-llvm-profdata.sh)
+          grcov target --binary-path "$BINARY_PATH" -s . \
+            --llvm-path "$LLVM_PATH" \
+            -t lcov --branch --ignore-not-existing \
+            -o coverage-ibis.info
+
+      - name: Upload Ibis coverage to Codecov
+        if: ${{ github.actor != 'dependabot[bot]' }}
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage-ibis.info
+          flags: ibis-tests
+          name: ibis-tests
+          fail_ci_if_error: true
+          env_vars: OS
+
+      - name: Upload Test Logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: ibis-test-logs
+          path: tmp/spark-tests/ibis
+          retention-days: 30
+
+  analyze:
+    name: Analyze
+    runs-on: ubuntu-latest
+    needs:
+      - test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/commit-baseline
+        id: baseline
+
+      - uses: ./.github/actions/commit-workflow
+        id: baseline-workflow
+        with:
+          sha: ${{ steps.baseline.outputs.sha }}
+          workflow_name: Build
+          artifact_name: ibis-test-logs
+
+      - name: Download Test Logs
+        uses: actions/download-artifact@v4
+        with:
+          name: ibis-test-logs
+          path: /tmp/test-after
+
+      - name: Download Test Logs (Baseline)
+        if: ${{ steps.baseline-workflow.outputs.workflow_run_id != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ibis-test-logs
+          path: /tmp/test-before
+          run-id: ${{ steps.baseline-workflow.outputs.workflow_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download Test Logs (No Baseline)
+        if: ${{ steps.baseline-workflow.outputs.workflow_run_id == '' }}
+        run: |
+          cp -r /tmp/test-after /tmp/test-before
+
+      - name: Generate Test Report
+        env:
+          TEST_REPORT_NAME: "Ibis Test Report"
+          BASELINE_WORKFLOW_RUN_ID: ${{ steps.baseline-workflow.outputs.workflow_run_id }}
+        run: |
+          mkdir -p /tmp/report
+          report="/tmp/report/report.md"
+          if [[ -z "$BASELINE_WORKFLOW_RUN_ID" ]]; then
+            printf "> [!WARNING]\n> The baseline was not found.\n\n" >> "$report"
           fi
-          sleep 10
+          scripts/spark-tests/generate-test-report.sh /tmp/test-after /tmp/test-before >> "$report"
+          cat "$report" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save Pull Request Number
+        if: github.event_name == 'pull_request'
+        env:
+          NUMBER: ${{ github.event.number }}
+        run: |
+          echo "$NUMBER" > /tmp/report/pull-request.txt
+
+      - name: Upload Test Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: ibis-test-report
+          path: /tmp/report
+          retention-days: 1

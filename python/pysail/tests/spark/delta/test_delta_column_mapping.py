@@ -200,3 +200,88 @@ class TestDeltaColumnMapping:
 
         row = spark.read.format("delta").load(str(base)).collect()[0].asDict(recursive=True)
         assert "b" in row["attrs"]["k"]
+
+    def test_partitioned_table_with_column_mapping_name(self, spark, tmp_path: Path):
+        """Ensure partition columns are resolved when column mapping is enabled."""
+
+        base = tmp_path / "delta_partitioned_cm_name"
+
+        # Create initial partitioned table with column mapping
+        df = spark.createDataFrame(
+            [
+                Row(id=1, region="us", data="a"),
+                Row(id=2, region="eu", data="b"),
+            ]
+        )
+
+        (
+            df.write.format("delta")
+            .mode("overwrite")
+            .option("column_mapping_mode", "name")
+            .partitionBy("region")
+            .save(str(base))
+        )
+
+        # Verify initial write produced data files under the partitioned directory
+        parquet_files = list(base.glob("**/*.parquet"))
+        assert parquet_files
+
+        # Append new data
+        df2 = spark.createDataFrame(
+            [
+                Row(id=3, region="us", data="c"),
+                Row(id=4, region="asia", data="d"),
+            ]
+        )
+
+        # This would fail previously because the physical partition column was "col-<uuid>"
+        df2.write.format("delta").mode("append").save(str(base))
+
+        # Verify read
+        out = spark.read.format("delta").load(str(base)).orderBy("id").collect()
+        assert [r.asDict() for r in out] == [
+            {"id": 1, "region": "us", "data": "a"},
+            {"id": 2, "region": "eu", "data": "b"},
+            {"id": 3, "region": "us", "data": "c"},
+            {"id": 4, "region": "asia", "data": "d"},
+        ]
+
+    def test_partitioned_table_with_column_mapping_id(self, spark, tmp_path: Path):
+        """Partitioned table append/read should work in column mapping id mode."""
+
+        base = tmp_path / "delta_partitioned_cm_id"
+
+        df = spark.createDataFrame(
+            [
+                Row(id=1, region="us", data="a"),
+                Row(id=2, region="eu", data="b"),
+            ]
+        )
+
+        (
+            df.write.format("delta")
+            .mode("overwrite")
+            .option("column_mapping_mode", "id")
+            .partitionBy("region")
+            .save(str(base))
+        )
+
+        parquet_files = list(base.glob("**/*.parquet"))
+        assert parquet_files
+
+        df2 = spark.createDataFrame(
+            [
+                Row(id=3, region="us", data="c"),
+                Row(id=4, region="asia", data="d"),
+            ]
+        )
+
+        df2.write.format("delta").mode("append").save(str(base))
+
+        out = spark.read.format("delta").load(str(base)).orderBy("id").collect()
+        assert [r.asDict() for r in out] == [
+            {"id": 1, "region": "us", "data": "a"},
+            {"id": 2, "region": "eu", "data": "b"},
+            {"id": 3, "region": "us", "data": "c"},
+            {"id": 4, "region": "asia", "data": "d"},
+        ]

@@ -430,11 +430,7 @@ pub enum CommandNode {
         row_format: Option<TableRowFormat>,
         options: Vec<(String, String)>,
     },
-    MergeInto {
-        target: ObjectName,
-        with_schema_evolution: bool,
-        // TODO: add other fields
-    },
+    MergeInto(MergeInto),
     SetVariable {
         variable: String,
         value: String,
@@ -448,7 +444,7 @@ pub enum CommandNode {
     Delete {
         table: ObjectName,
         table_alias: Option<Identifier>,
-        condition: Option<Expr>,
+        condition: Option<ExprWithSource>,
     },
     AlterTable {
         table: ObjectName,
@@ -513,6 +509,84 @@ pub enum CommandNode {
     CommentOnColumn {
         column: ObjectName,
         value: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeInto {
+    pub target: ObjectName,
+    pub target_alias: Option<Identifier>,
+    pub source: MergeSource,
+    pub on_condition: ExprWithSource,
+    pub clauses: Vec<MergeClause>,
+    pub with_schema_evolution: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MergeSource {
+    Table {
+        name: ObjectName,
+        alias: Option<Identifier>,
+    },
+    Query {
+        input: Box<QueryPlan>,
+        alias: Option<Identifier>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MergeClause {
+    Matched(MergeMatchedClause),
+    NotMatchedBySource(MergeNotMatchedBySourceClause),
+    NotMatchedByTarget(MergeNotMatchedByTargetClause),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeMatchedClause {
+    pub condition: Option<ExprWithSource>,
+    pub action: MergeMatchedAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MergeMatchedAction {
+    Delete,
+    UpdateAll,
+    UpdateSet(Vec<(ObjectName, Expr)>),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeNotMatchedBySourceClause {
+    pub condition: Option<ExprWithSource>,
+    pub action: MergeNotMatchedBySourceAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MergeNotMatchedBySourceAction {
+    Delete,
+    UpdateSet(Vec<(ObjectName, Expr)>),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeNotMatchedByTargetClause {
+    pub condition: Option<ExprWithSource>,
+    pub action: MergeNotMatchedByTargetAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MergeNotMatchedByTargetAction {
+    InsertAll,
+    InsertColumns {
+        columns: Vec<ObjectName>,
+        values: Vec<Expr>,
     },
 }
 
@@ -714,6 +788,15 @@ pub struct GroupMap {
     pub output_mode: Option<String>,
     pub timeout_conf: Option<String>,
     pub state_schema: Option<Schema>,
+    pub transform_with_state_info: Option<TransformWithStateInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransformWithStateInfo {
+    pub time_mode: String,
+    pub event_time_column_name: Option<Identifier>,
+    pub output_schema: Option<Schema>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -940,7 +1023,7 @@ pub enum InsertMode {
         overwrite: bool,
     },
     Replace {
-        condition: Box<Expr>,
+        condition: Box<ExprWithSource>,
     },
 }
 
@@ -1188,5 +1271,16 @@ pub enum AlterViewOperation {
 pub struct Delete {
     pub table: ObjectName,
     pub table_alias: Option<Identifier>,
-    pub condition: Option<Expr>,
+    pub condition: Option<ExprWithSource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExprWithSource {
+    pub expr: Expr,
+    /// An optional SQL source string for information purposes.
+    /// This source string may not be syntactically correct, or
+    /// may not be an exact representation of the expression
+    /// if the expression is not created from SQL.
+    pub source: Option<String>,
 }

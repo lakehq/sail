@@ -21,6 +21,7 @@ workspace = true
 [dependencies]
 sail-catalog = { path = "../sail-catalog" }
 sail-common = { path = "../sail-common" }
+sail-common-datafusion = { path = "../sail-common-datafusion" }
 
 async-trait = { workspace = true }
 arrow = { workspace = true }

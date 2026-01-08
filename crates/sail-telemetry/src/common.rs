@@ -56,6 +56,7 @@ impl SpanAttribute {
     pub const CLUSTER_CHANNEL_PREFIX: &'static str = "cluster.channel.prefix";
     pub const CLUSTER_STREAM_LOCAL_STORAGE: &'static str = "cluster.stream.local.storage";
     pub const CLUSTER_STREAM_REMOTE_URI: &'static str = "cluster.stream.remote.uri";
+    pub const SESSION_KEY: &'static str = "session.key";
 }
 
 /// The OpenTelemetry span kinds.
@@ -88,3 +89,8 @@ pub trait SpanAssociation {
     /// The properties of the object associated with the span.
     fn properties(&self) -> impl IntoIterator<Item = (Cow<'static, str>, Cow<'static, str>)>;
 }
+
+/// A key-value pair for metric attributes.
+/// This is a restriction over [`opentelemetry::KeyValue`] to only allow
+/// static string keys and clone-on-write string values.
+pub type KeyValue = (&'static str, Cow<'static, str>);

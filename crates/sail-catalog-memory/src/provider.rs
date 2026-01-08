@@ -4,9 +4,10 @@ use dashmap::{DashMap, Entry};
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::provider::{
     CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions,
-    CreateViewColumnOptions, CreateViewOptions, DatabaseStatus, DropDatabaseOptions,
-    DropTableOptions, DropViewOptions, Namespace, TableColumnStatus, TableKind, TableStatus,
+    CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions,
+    DropViewOptions, Namespace,
 };
+use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
 
 struct MemoryDatabase {
     status: DatabaseStatus,

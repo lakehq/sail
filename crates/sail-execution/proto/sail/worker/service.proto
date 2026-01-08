@@ -6,20 +6,36 @@ message TaskStreamTicket {
   string channel = 1;
 }
 
+message WorkerLocation {
+  uint64 worker_id = 1;
+  string host = 2;
+  uint32 port = 3;
+}
+
 message RunTaskRequest {
-  uint64 task_id = 1;
-  uint64 attempt = 2;
-  bytes plan = 3;
-  uint64 partition = 4;
-  optional string channel = 5;
+  uint64 job_id = 1;
+  uint64 task_id = 2;
+  uint64 attempt = 3;
+  bytes plan = 4;
+  uint64 partition = 5;
+  optional string channel = 6;
+  // The locations of peer workers that may or may not be needed
+  // when fetching streams for this task.
+  // Note that we should not broadcast peer information to workers
+  // asynchronously because the requests may arrive out of order.
+  // However, the worker can asynchronously acknowledge the receipt
+  // of peer information to the driver so that duplicate peer
+  // information does not need to be sent again in the future.
+  repeated WorkerLocation peers = 7;
 }
 
 message RunTaskResponse {
 }
 
 message StopTaskRequest {
-  uint64 task_id = 1;
-  uint64 attempt = 2;
+  uint64 job_id = 1;
+  uint64 task_id = 2;
+  uint64 attempt = 3;
 }
 
 message StopTaskResponse {

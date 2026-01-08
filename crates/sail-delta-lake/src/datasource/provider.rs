@@ -20,6 +20,7 @@
 
 use std::any::Any;
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -35,10 +36,10 @@ use datafusion::physical_plan::ExecutionPlan;
 use delta_kernel::table_features::ColumnMappingMode;
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
 
-use crate::datasource::scan::FileScanParams;
+use crate::datasource::scan::{build_file_scan_config, FileScanParams};
 use crate::datasource::{
-    build_file_scan_config, df_logical_schema, get_pushdown_filters, prune_files, simplify_expr,
-    DataFusionMixins, DeltaScanConfig, DeltaTableStateExt,
+    df_logical_schema, get_pushdown_filters, prune_files, simplify_expr, DataFusionMixins,
+    DeltaScanConfig, DeltaTableStateExt,
 };
 use crate::kernel::models::Add;
 use crate::kernel::DeltaResult;
@@ -87,6 +88,18 @@ impl DeltaTableProvider {
     pub fn with_files(mut self, files: Vec<Add>) -> DeltaTableProvider {
         self.files = Some(Arc::new(files));
         self
+    }
+
+    pub fn snapshot(&self) -> &DeltaTableState {
+        &self.snapshot
+    }
+
+    pub fn log_store(&self) -> &LogStoreRef {
+        &self.log_store
+    }
+
+    pub fn config(&self) -> &DeltaScanConfig {
+        &self.config
     }
 
     /// Separate filters into those used for pruning vs those pushed down to Parquet
@@ -235,10 +248,19 @@ impl TableProvider for DeltaTableProvider {
             .map(|f| f.name().clone())
             .collect();
         log::trace!("read_file_schema_fields: {:?}", &phys_field_names);
+        let physical_partition_cols: HashSet<String> = table_partition_cols
+            .iter()
+            .map(|col| {
+                kschema_arc
+                    .field(col)
+                    .map(|f| f.physical_name(kmode).to_string())
+                    .unwrap_or_else(|| col.clone())
+            })
+            .collect();
         let file_fields = physical_arrow
             .fields()
             .iter()
-            .filter(|f| !table_partition_cols.contains(f.name()))
+            .filter(|f| !physical_partition_cols.contains(f.name()))
             .cloned()
             .collect::<Vec<_>>();
         let file_schema = Arc::new(ArrowSchema::new(file_fields));

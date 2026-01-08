@@ -12,6 +12,365 @@
                 "ns2",
                 "tbl"
               ],
+              "targetAlias": "target",
+              "source": {
+                "query": {
+                  "input": {
+                    "project": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "testcat2",
+                              "ns1",
+                              "ns2",
+                              "tbl"
+                            ],
+                            "temporal": null,
+                            "sample": null,
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null
+                      },
+                      "expressions": [
+                        {
+                          "unresolvedStar": {
+                            "target": null,
+                            "planId": null,
+                            "wildcardOptions": {
+                              "ilikePattern": null,
+                              "excludeColumns": null,
+                              "exceptColumns": null,
+                              "replaceColumns": null,
+                              "renameColumns": null
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "planId": null
+                  },
+                  "alias": "source"
+                }
+              },
+              "onCondition": {
+                "expr": {
+                  "unresolvedFunction": {
+                    "functionName": [
+                      "=="
+                    ],
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "target",
+                            "col1"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      },
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "source",
+                            "col1"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      }
+                    ],
+                    "namedArguments": [],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "isInternal": null,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
+                  }
+                },
+                "source": "target . col1 = source . col1 "
+              },
+              "clauses": [
+                {
+                  "matched": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col2"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "delete"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col2 = 'delete' ) "
+                    },
+                    "action": "delete"
+                  }
+                },
+                {
+                  "matched": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col2"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "update"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col2 = 'update' ) "
+                    },
+                    "action": {
+                      "updateSet": [
+                        [
+                          [
+                            "target",
+                            "col2"
+                          ],
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "source",
+                                "col2"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          }
+                        ]
+                      ]
+                    }
+                  }
+                },
+                {
+                  "notMatchedByTarget": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col2"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "insert"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col2 = 'insert' ) "
+                    },
+                    "action": {
+                      "insertColumns": {
+                        "columns": [
+                          [
+                            "target",
+                            "col1"
+                          ],
+                          [
+                            "target",
+                            "col2"
+                          ]
+                        ],
+                        "values": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "source",
+                                "col1"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "source",
+                                "col2"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "notMatchedBySource": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col3"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "delete"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col3 = 'delete' ) "
+                    },
+                    "action": "delete"
+                  }
+                },
+                {
+                  "notMatchedBySource": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col3"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "update"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col3 = 'update' ) "
+                    },
+                    "action": {
+                      "updateSet": [
+                        [
+                          [
+                            "target",
+                            "col3"
+                          ],
+                          {
+                            "literal": {
+                              "utf8": {
+                                "value": "delete"
+                              }
+                            }
+                          }
+                        ]
+                      ]
+                    }
+                  }
+                }
+              ],
               "withSchemaEvolution": false
             },
             "planId": null
@@ -30,6 +389,417 @@
                 "ns1",
                 "ns2",
                 "tbl"
+              ],
+              "targetAlias": "target",
+              "source": {
+                "query": {
+                  "input": {
+                    "withCtes": {
+                      "input": {
+                        "project": {
+                          "input": {
+                            "read": {
+                              "namedTable": {
+                                "name": [
+                                  "s"
+                                ],
+                                "temporal": null,
+                                "sample": null,
+                                "options": []
+                              },
+                              "isStreaming": false
+                            },
+                            "planId": null
+                          },
+                          "expressions": [
+                            {
+                              "unresolvedStar": {
+                                "target": null,
+                                "planId": null,
+                                "wildcardOptions": {
+                                  "ilikePattern": null,
+                                  "excludeColumns": null,
+                                  "exceptColumns": null,
+                                  "replaceColumns": null,
+                                  "renameColumns": null
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        "planId": null
+                      },
+                      "recursive": false,
+                      "ctes": [
+                        [
+                          "s",
+                          {
+                            "tableAlias": {
+                              "input": {
+                                "project": {
+                                  "input": {
+                                    "read": {
+                                      "namedTable": {
+                                        "name": [
+                                          "testcat2",
+                                          "ns1",
+                                          "ns2",
+                                          "tbl"
+                                        ],
+                                        "temporal": null,
+                                        "sample": null,
+                                        "options": []
+                                      },
+                                      "isStreaming": false
+                                    },
+                                    "planId": null
+                                  },
+                                  "expressions": [
+                                    {
+                                      "unresolvedStar": {
+                                        "target": null,
+                                        "planId": null,
+                                        "wildcardOptions": {
+                                          "ilikePattern": null,
+                                          "excludeColumns": null,
+                                          "exceptColumns": null,
+                                          "replaceColumns": null,
+                                          "renameColumns": null
+                                        }
+                                      }
+                                    }
+                                  ]
+                                },
+                                "planId": null
+                              },
+                              "name": "s",
+                              "columns": []
+                            },
+                            "planId": null
+                          }
+                        ]
+                      ]
+                    },
+                    "planId": null
+                  },
+                  "alias": "source"
+                }
+              },
+              "onCondition": {
+                "expr": {
+                  "unresolvedFunction": {
+                    "functionName": [
+                      "=="
+                    ],
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "target",
+                            "col1"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      },
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "source",
+                            "col1"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      }
+                    ],
+                    "namedArguments": [],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "isInternal": null,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
+                  }
+                },
+                "source": "target . col1 = source . col1 "
+              },
+              "clauses": [
+                {
+                  "matched": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col2"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "delete"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col2 = 'delete' ) "
+                    },
+                    "action": "delete"
+                  }
+                },
+                {
+                  "matched": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col2"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "update"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col2 = 'update' ) "
+                    },
+                    "action": {
+                      "updateSet": [
+                        [
+                          [
+                            "target",
+                            "col2"
+                          ],
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "source",
+                                "col2"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          }
+                        ]
+                      ]
+                    }
+                  }
+                },
+                {
+                  "notMatchedByTarget": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col2"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "insert"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col2 = 'insert' ) "
+                    },
+                    "action": {
+                      "insertColumns": {
+                        "columns": [
+                          [
+                            "target",
+                            "col1"
+                          ],
+                          [
+                            "target",
+                            "col2"
+                          ]
+                        ],
+                        "values": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "source",
+                                "col1"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "source",
+                                "col2"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "notMatchedBySource": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col3"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "delete"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col3 = 'delete' ) "
+                    },
+                    "action": "delete"
+                  }
+                },
+                {
+                  "notMatchedBySource": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col3"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "update"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col3 = 'update' ) "
+                    },
+                    "action": {
+                      "updateSet": [
+                        [
+                          [
+                            "target",
+                            "col3"
+                          ],
+                          {
+                            "literal": {
+                              "utf8": {
+                                "value": "delete"
+                              }
+                            }
+                          }
+                        ]
+                      ]
+                    }
+                  }
+                }
               ],
               "withSchemaEvolution": false
             },
@@ -50,6 +820,182 @@
                 "ns2",
                 "tbl"
               ],
+              "targetAlias": "target",
+              "source": {
+                "table": {
+                  "name": [
+                    "testcat2",
+                    "ns1",
+                    "ns2",
+                    "tbl"
+                  ],
+                  "alias": "source"
+                }
+              },
+              "onCondition": {
+                "expr": {
+                  "unresolvedFunction": {
+                    "functionName": [
+                      "=="
+                    ],
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "target",
+                            "col1"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      },
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "source",
+                            "col1"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      }
+                    ],
+                    "namedArguments": [],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "isInternal": null,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
+                  }
+                },
+                "source": "target . col1 = source . col1 "
+              },
+              "clauses": [
+                {
+                  "matched": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col2"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "delete"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col2 = 'delete' ) "
+                    },
+                    "action": "delete"
+                  }
+                },
+                {
+                  "matched": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col2"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "update"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col2 = 'update' ) "
+                    },
+                    "action": "updateAll"
+                  }
+                },
+                {
+                  "notMatchedByTarget": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col2"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "insert"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col2 = 'insert' ) "
+                    },
+                    "action": "insertAll"
+                  }
+                }
+              ],
               "withSchemaEvolution": false
             },
             "planId": null
@@ -68,6 +1014,334 @@
                 "ns1",
                 "ns2",
                 "tbl"
+              ],
+              "targetAlias": "target",
+              "source": {
+                "table": {
+                  "name": [
+                    "testcat2",
+                    "ns1",
+                    "ns2",
+                    "tbl"
+                  ],
+                  "alias": "source"
+                }
+              },
+              "onCondition": {
+                "expr": {
+                  "unresolvedFunction": {
+                    "functionName": [
+                      "=="
+                    ],
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "target",
+                            "col1"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      },
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "source",
+                            "col1"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      }
+                    ],
+                    "namedArguments": [],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "isInternal": null,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
+                  }
+                },
+                "source": "target . col1 = source . col1 "
+              },
+              "clauses": [
+                {
+                  "matched": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col2"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "delete"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col2 = 'delete' ) "
+                    },
+                    "action": "delete"
+                  }
+                },
+                {
+                  "matched": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col2"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "update"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col2 = 'update' ) "
+                    },
+                    "action": {
+                      "updateSet": [
+                        [
+                          [
+                            "target",
+                            "col2"
+                          ],
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "DEFAULT"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          }
+                        ]
+                      ]
+                    }
+                  }
+                },
+                {
+                  "notMatchedByTarget": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col2"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "insert"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col2 = 'insert' ) "
+                    },
+                    "action": {
+                      "insertColumns": {
+                        "columns": [
+                          [
+                            "target",
+                            "col1"
+                          ],
+                          [
+                            "target",
+                            "col2"
+                          ]
+                        ],
+                        "values": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "source",
+                                "col1"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "DEFAULT"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "notMatchedBySource": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col2"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "delete"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col2 = 'delete' ) "
+                    },
+                    "action": "delete"
+                  }
+                },
+                {
+                  "notMatchedBySource": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col2"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "update"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col2 = 'update' ) "
+                    },
+                    "action": {
+                      "updateSet": [
+                        [
+                          [
+                            "target",
+                            "col2"
+                          ],
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "DEFAULT"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          }
+                        ]
+                      ]
+                    }
+                  }
+                }
               ],
               "withSchemaEvolution": false
             },
@@ -88,6 +1362,334 @@
                 "ns2",
                 "tbl"
               ],
+              "targetAlias": "target",
+              "source": {
+                "table": {
+                  "name": [
+                    "testcat2",
+                    "ns1",
+                    "ns2",
+                    "tbl"
+                  ],
+                  "alias": "source"
+                }
+              },
+              "onCondition": {
+                "expr": {
+                  "unresolvedFunction": {
+                    "functionName": [
+                      "=="
+                    ],
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "target",
+                            "col1"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      },
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "source",
+                            "col1"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      }
+                    ],
+                    "namedArguments": [],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "isInternal": null,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
+                  }
+                },
+                "source": "target . col1 = source . col1 "
+              },
+              "clauses": [
+                {
+                  "matched": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col2"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "delete"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col2 = 'delete' ) "
+                    },
+                    "action": "delete"
+                  }
+                },
+                {
+                  "matched": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col2"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "update"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col2 = 'update' ) "
+                    },
+                    "action": {
+                      "updateSet": [
+                        [
+                          [
+                            "target",
+                            "col2"
+                          ],
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "source",
+                                "col2"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          }
+                        ]
+                      ]
+                    }
+                  }
+                },
+                {
+                  "notMatchedByTarget": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col2"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "insert"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col2 = 'insert' ) "
+                    },
+                    "action": {
+                      "insertColumns": {
+                        "columns": [
+                          [
+                            "target",
+                            "col1"
+                          ],
+                          [
+                            "target",
+                            "col2"
+                          ]
+                        ],
+                        "values": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "source",
+                                "col1"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "source",
+                                "col2"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "notMatchedBySource": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col3"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "delete"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col3 = 'delete' ) "
+                    },
+                    "action": "delete"
+                  }
+                },
+                {
+                  "notMatchedBySource": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col3"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "update"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col3 = 'update' ) "
+                    },
+                    "action": {
+                      "updateSet": [
+                        [
+                          [
+                            "target",
+                            "col3"
+                          ],
+                          {
+                            "literal": {
+                              "utf8": {
+                                "value": "delete"
+                              }
+                            }
+                          }
+                        ]
+                      ]
+                    }
+                  }
+                }
+              ],
               "withSchemaEvolution": false
             },
             "planId": null
@@ -107,6 +1709,515 @@
                 "ns2",
                 "tbl"
               ],
+              "targetAlias": "target",
+              "source": {
+                "table": {
+                  "name": [
+                    "testcat2",
+                    "ns1",
+                    "ns2",
+                    "tbl"
+                  ],
+                  "alias": "source"
+                }
+              },
+              "onCondition": {
+                "expr": {
+                  "unresolvedFunction": {
+                    "functionName": [
+                      "=="
+                    ],
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "target",
+                            "col1"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      },
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "source",
+                            "col1"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      }
+                    ],
+                    "namedArguments": [],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "isInternal": null,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
+                  }
+                },
+                "source": "target . col1 = source . col1 "
+              },
+              "clauses": [
+                {
+                  "matched": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col2"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "delete"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col2 = 'delete' ) "
+                    },
+                    "action": "delete"
+                  }
+                },
+                {
+                  "matched": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col2"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "update1"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col2 = 'update1' ) "
+                    },
+                    "action": {
+                      "updateSet": [
+                        [
+                          [
+                            "target",
+                            "col2"
+                          ],
+                          {
+                            "literal": {
+                              "int32": {
+                                "value": 1
+                              }
+                            }
+                          }
+                        ]
+                      ]
+                    }
+                  }
+                },
+                {
+                  "matched": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col2"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "update2"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col2 = 'update2' ) "
+                    },
+                    "action": {
+                      "updateSet": [
+                        [
+                          [
+                            "target",
+                            "col2"
+                          ],
+                          {
+                            "literal": {
+                              "int32": {
+                                "value": 2
+                              }
+                            }
+                          }
+                        ]
+                      ]
+                    }
+                  }
+                },
+                {
+                  "notMatchedByTarget": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col2"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "insert1"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col2 = 'insert1' ) "
+                    },
+                    "action": {
+                      "insertColumns": {
+                        "columns": [
+                          [
+                            "target",
+                            "col1"
+                          ],
+                          [
+                            "target",
+                            "col2"
+                          ]
+                        ],
+                        "values": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "source",
+                                "col1"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          },
+                          {
+                            "literal": {
+                              "int32": {
+                                "value": 1
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "notMatchedByTarget": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col2"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "insert2"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col2 = 'insert2' ) "
+                    },
+                    "action": {
+                      "insertColumns": {
+                        "columns": [
+                          [
+                            "target",
+                            "col1"
+                          ],
+                          [
+                            "target",
+                            "col2"
+                          ]
+                        ],
+                        "values": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "source",
+                                "col1"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          },
+                          {
+                            "literal": {
+                              "int32": {
+                                "value": 2
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "notMatchedBySource": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col3"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "delete"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col3 = 'delete' ) "
+                    },
+                    "action": "delete"
+                  }
+                },
+                {
+                  "notMatchedBySource": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col3"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "update1"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col3 = 'update1' ) "
+                    },
+                    "action": {
+                      "updateSet": [
+                        [
+                          [
+                            "target",
+                            "col3"
+                          ],
+                          {
+                            "literal": {
+                              "int32": {
+                                "value": 1
+                              }
+                            }
+                          }
+                        ]
+                      ]
+                    }
+                  }
+                },
+                {
+                  "notMatchedBySource": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col3"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "update2"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col3 = 'update2' ) "
+                    },
+                    "action": {
+                      "updateSet": [
+                        [
+                          [
+                            "target",
+                            "col3"
+                          ],
+                          {
+                            "literal": {
+                              "int32": {
+                                "value": 2
+                              }
+                            }
+                          }
+                        ]
+                      ]
+                    }
+                  }
+                }
+              ],
               "withSchemaEvolution": false
             },
             "planId": null
@@ -125,6 +2236,131 @@
                 "ns1",
                 "ns2",
                 "tbl"
+              ],
+              "targetAlias": "target",
+              "source": {
+                "table": {
+                  "name": [
+                    "testcat2",
+                    "ns1",
+                    "ns2",
+                    "tbl"
+                  ],
+                  "alias": "source"
+                }
+              },
+              "onCondition": {
+                "expr": {
+                  "unresolvedFunction": {
+                    "functionName": [
+                      "=="
+                    ],
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "target",
+                            "col1"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      },
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "source",
+                            "col1"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      }
+                    ],
+                    "namedArguments": [],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "isInternal": null,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
+                  }
+                },
+                "source": "target . col1 = source . col1 "
+              },
+              "clauses": [
+                {
+                  "matched": {
+                    "condition": null,
+                    "action": {
+                      "updateSet": [
+                        [
+                          [
+                            "target",
+                            "col2"
+                          ],
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "source",
+                                "col2"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          }
+                        ]
+                      ]
+                    }
+                  }
+                },
+                {
+                  "notMatchedByTarget": {
+                    "condition": null,
+                    "action": {
+                      "insertColumns": {
+                        "columns": [
+                          [
+                            "target",
+                            "col1"
+                          ],
+                          [
+                            "target",
+                            "col2"
+                          ]
+                        ],
+                        "values": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "source",
+                                "col1"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "source",
+                                "col2"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "notMatchedBySource": {
+                    "condition": null,
+                    "action": "delete"
+                  }
+                }
               ],
               "withSchemaEvolution": false
             },
@@ -151,6 +2387,211 @@
                 "ns1",
                 "ns2",
                 "tbl"
+              ],
+              "targetAlias": "target",
+              "source": {
+                "table": {
+                  "name": [
+                    "testcat2",
+                    "ns1",
+                    "ns2",
+                    "tbl"
+                  ],
+                  "alias": "source"
+                }
+              },
+              "onCondition": {
+                "expr": {
+                  "unresolvedFunction": {
+                    "functionName": [
+                      "=="
+                    ],
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "target",
+                            "col1"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      },
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "source",
+                            "col1"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      }
+                    ],
+                    "namedArguments": [],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "isInternal": null,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
+                  }
+                },
+                "source": "target . col1 = source . col1 "
+              },
+              "clauses": [
+                {
+                  "notMatchedByTarget": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col3"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "insert1"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col3 = 'insert1' ) "
+                    },
+                    "action": {
+                      "insertColumns": {
+                        "columns": [
+                          [
+                            "target",
+                            "col1"
+                          ],
+                          [
+                            "target",
+                            "col2"
+                          ]
+                        ],
+                        "values": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "source",
+                                "col1"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          },
+                          {
+                            "literal": {
+                              "int32": {
+                                "value": 0
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "notMatchedByTarget": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col3"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "insert2"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col3 = 'insert2' ) "
+                    },
+                    "action": {
+                      "insertColumns": {
+                        "columns": [
+                          [
+                            "target",
+                            "col1"
+                          ],
+                          [
+                            "target",
+                            "col2"
+                          ]
+                        ],
+                        "values": [
+                          {
+                            "literal": {
+                              "int32": {
+                                "value": 1
+                              }
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "source",
+                                "col2"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "notMatchedByTarget": {
+                    "condition": null,
+                    "action": "insertAll"
+                  }
+                }
               ],
               "withSchemaEvolution": false
             },
@@ -179,6 +2620,286 @@
                 "ns2",
                 "tbl"
               ],
+              "targetAlias": "target",
+              "source": {
+                "table": {
+                  "name": [
+                    "testcat2",
+                    "ns1",
+                    "ns2",
+                    "tbl"
+                  ],
+                  "alias": "source"
+                }
+              },
+              "onCondition": {
+                "expr": {
+                  "unresolvedFunction": {
+                    "functionName": [
+                      "=="
+                    ],
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "target",
+                            "col1"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      },
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "source",
+                            "col1"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      }
+                    ],
+                    "namedArguments": [],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "isInternal": null,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
+                  }
+                },
+                "source": "target . col1 = source . col1 "
+              },
+              "clauses": [
+                {
+                  "matched": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col2"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "update"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col2 == 'update' ) "
+                    },
+                    "action": {
+                      "updateSet": [
+                        [
+                          [
+                            "target",
+                            "col2"
+                          ],
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "source",
+                                "col2"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          }
+                        ]
+                      ]
+                    }
+                  }
+                },
+                {
+                  "matched": {
+                    "condition": null,
+                    "action": "delete"
+                  }
+                },
+                {
+                  "notMatchedByTarget": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col2"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "insert"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col2 = 'insert' ) "
+                    },
+                    "action": {
+                      "insertColumns": {
+                        "columns": [
+                          [
+                            "target",
+                            "col1"
+                          ],
+                          [
+                            "target",
+                            "col2"
+                          ]
+                        ],
+                        "values": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "source",
+                                "col1"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "source",
+                                "col2"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "notMatchedBySource": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col3"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "update"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col3 = 'update' ) "
+                    },
+                    "action": {
+                      "updateSet": [
+                        [
+                          [
+                            "target",
+                            "col3"
+                          ],
+                          {
+                            "literal": {
+                              "utf8": {
+                                "value": "delete"
+                              }
+                            }
+                          }
+                        ]
+                      ]
+                    }
+                  }
+                },
+                {
+                  "notMatchedBySource": {
+                    "condition": null,
+                    "action": {
+                      "updateSet": [
+                        [
+                          [
+                            "target",
+                            "col3"
+                          ],
+                          {
+                            "literal": {
+                              "utf8": {
+                                "value": "update"
+                              }
+                            }
+                          }
+                        ]
+                      ]
+                    }
+                  }
+                },
+                {
+                  "notMatchedBySource": {
+                    "condition": null,
+                    "action": "delete"
+                  }
+                }
+              ],
               "withSchemaEvolution": false
             },
             "planId": null
@@ -199,6 +2920,277 @@
                 "ns2",
                 "tbl"
               ],
+              "targetAlias": "target",
+              "source": {
+                "table": {
+                  "name": [
+                    "testcat2",
+                    "ns1",
+                    "ns2",
+                    "tbl"
+                  ],
+                  "alias": "source"
+                }
+              },
+              "onCondition": {
+                "expr": {
+                  "unresolvedFunction": {
+                    "functionName": [
+                      "=="
+                    ],
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "target",
+                            "col1"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      },
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "source",
+                            "col1"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      }
+                    ],
+                    "namedArguments": [],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "isInternal": null,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
+                  }
+                },
+                "source": "target . col1 = source . col1 "
+              },
+              "clauses": [
+                {
+                  "matched": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col2"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "update"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col2 == 'update' ) "
+                    },
+                    "action": {
+                      "updateSet": [
+                        [
+                          [
+                            "target",
+                            "col2"
+                          ],
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "source",
+                                "col2"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          }
+                        ]
+                      ]
+                    }
+                  }
+                },
+                {
+                  "matched": {
+                    "condition": null,
+                    "action": "delete"
+                  }
+                },
+                {
+                  "notMatchedByTarget": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col2"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "insert1"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col2 = 'insert1' ) "
+                    },
+                    "action": {
+                      "insertColumns": {
+                        "columns": [
+                          [
+                            "target",
+                            "col1"
+                          ],
+                          [
+                            "target",
+                            "col2"
+                          ]
+                        ],
+                        "values": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "source",
+                                "col1"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          },
+                          {
+                            "literal": {
+                              "int32": {
+                                "value": 1
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "notMatchedByTarget": {
+                    "condition": null,
+                    "action": {
+                      "insertColumns": {
+                        "columns": [
+                          [
+                            "target",
+                            "col1"
+                          ],
+                          [
+                            "target",
+                            "col2"
+                          ]
+                        ],
+                        "values": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "source",
+                                "col1"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          },
+                          {
+                            "literal": {
+                              "int32": {
+                                "value": 2
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "notMatchedByTarget": {
+                    "condition": null,
+                    "action": {
+                      "insertColumns": {
+                        "columns": [
+                          [
+                            "target",
+                            "col1"
+                          ],
+                          [
+                            "target",
+                            "col2"
+                          ]
+                        ],
+                        "values": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "source",
+                                "col1"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "source",
+                                "col2"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ],
               "withSchemaEvolution": false
             },
             "planId": null
@@ -218,6 +3210,220 @@
                 "ns1",
                 "ns2",
                 "tbl"
+              ],
+              "targetAlias": "target",
+              "source": {
+                "table": {
+                  "name": [
+                    "testcat2",
+                    "ns1",
+                    "ns2",
+                    "tbl"
+                  ],
+                  "alias": "source"
+                }
+              },
+              "onCondition": {
+                "expr": {
+                  "unresolvedFunction": {
+                    "functionName": [
+                      "=="
+                    ],
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "target",
+                            "col1"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      },
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "source",
+                            "col1"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      }
+                    ],
+                    "namedArguments": [],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "isInternal": null,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
+                  }
+                },
+                "source": "target . col1 = source . col1 "
+              },
+              "clauses": [
+                {
+                  "matched": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col2"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "update1"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col2 == 'update1' ) "
+                    },
+                    "action": {
+                      "updateSet": [
+                        [
+                          [
+                            "target",
+                            "col2"
+                          ],
+                          {
+                            "literal": {
+                              "int32": {
+                                "value": 1
+                              }
+                            }
+                          }
+                        ]
+                      ]
+                    }
+                  }
+                },
+                {
+                  "matched": {
+                    "condition": null,
+                    "action": {
+                      "updateSet": [
+                        [
+                          [
+                            "target",
+                            "col2"
+                          ],
+                          {
+                            "literal": {
+                              "int32": {
+                                "value": 2
+                              }
+                            }
+                          }
+                        ]
+                      ]
+                    }
+                  }
+                },
+                {
+                  "matched": {
+                    "condition": null,
+                    "action": "delete"
+                  }
+                },
+                {
+                  "notMatchedByTarget": {
+                    "condition": {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "=="
+                          ],
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "target",
+                                  "col2"
+                                ],
+                                "planId": null,
+                                "isMetadataColumn": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "utf8": {
+                                  "value": "insert"
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      },
+                      "source": "( target . col2 = 'insert' ) "
+                    },
+                    "action": {
+                      "insertColumns": {
+                        "columns": [
+                          [
+                            "target",
+                            "col1"
+                          ],
+                          [
+                            "target",
+                            "col2"
+                          ]
+                        ],
+                        "values": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "source",
+                                "col1"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "source",
+                                "col2"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
               ],
               "withSchemaEvolution": false
             },

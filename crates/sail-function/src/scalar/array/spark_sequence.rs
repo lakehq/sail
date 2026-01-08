@@ -158,12 +158,12 @@ fn gen_sequence_timestamp(args: &[ArrayRef]) -> Result<ArrayRef> {
     };
     let mut list_builder = ListBuilder::new(values_builder);
 
-    let start_tz = Tz::from_str(start_tz.as_ref().map_or_else(|| "+00", |s| s)).map_err(|err| {
+    let start_tz = Tz::from_str(start_tz.as_deref().unwrap_or("+00")).map_err(|err| {
         exec_datafusion_err!(
             "Spark `sequence` function: failed to parse timezone {start_tz:?}: {err}"
         )
     })?;
-    let stop_tz = Tz::from_str(stop_tz.as_ref().map_or_else(|| "+00", |s| s)).map_err(|err| {
+    let stop_tz = Tz::from_str(stop_tz.as_deref().unwrap_or("+00")).map_err(|err| {
         exec_datafusion_err!(
             "Spark `sequence` function: failed to parse timezone {stop_tz:?}: {err}"
         )

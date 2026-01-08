@@ -1,3 +1,4 @@
+use datafusion::prelude::SessionContext;
 use fastrace::collector::SpanContext;
 use fastrace::Span;
 use sail_common::config::AppConfig;
@@ -11,9 +12,10 @@ use crate::worker::{WorkerActor, WorkerOptions};
 pub async fn run_worker(
     config: &AppConfig,
     runtime: RuntimeHandle,
+    session: SessionContext,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut system = ActorSystem::new();
-    let options = WorkerOptions::try_new(config, runtime)?;
+    let options = WorkerOptions::new(config, runtime, session);
     let span = match std::env::var(ContextPropagationEnv::TRACEPARENT) {
         Ok(x) => {
             let Some(span_context) = SpanContext::decode_w3c_traceparent(&x) else {

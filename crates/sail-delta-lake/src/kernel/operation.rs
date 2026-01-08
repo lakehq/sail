@@ -26,6 +26,16 @@ use serde_json::Value;
 use crate::kernel::models::{CommitInfo, Metadata};
 use crate::kernel::{DeltaResult, DeltaTableError};
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MergePredicate {
+    /// The type of merge operation performed
+    pub action_type: String,
+    /// The predicate used for the merge operation
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub predicate: Option<String>,
+}
+
 /// The SaveMode used when performing a DeltaOperation.
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq)]
 pub enum SaveMode {
@@ -68,6 +78,20 @@ pub enum DeltaOperation {
         #[serde(skip_serializing_if = "Option::is_none")]
         predicate: Option<String>,
     },
+    Delete {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        predicate: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    Merge {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        predicate: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        merge_predicate: Option<String>,
+        matched_predicates: Vec<MergePredicate>,
+        not_matched_predicates: Vec<MergePredicate>,
+        not_matched_by_source_predicates: Vec<MergePredicate>,
+    },
     FileSystemCheck {},
     Restore {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -86,6 +110,8 @@ impl DeltaOperation {
             } => "CREATE OR REPLACE TABLE",
             Self::Create { .. } => "CREATE TABLE",
             Self::Write { .. } => "WRITE",
+            Self::Delete { .. } => "DELETE",
+            Self::Merge { .. } => "MERGE",
             Self::FileSystemCheck { .. } => "FSCK",
             Self::Restore { .. } => "RESTORE",
         }
@@ -100,11 +126,15 @@ impl DeltaOperation {
                 .iter()
                 .filter(|item| !item.1.is_null())
                 .map(|(k, v)| {
-                    let value = match v.as_str() {
-                        Some(text) => Value::String(text.to_string()),
-                        None => v.clone(),
-                    };
-                    (k.to_owned(), value)
+                    // Delta commitInfo.operationParameters expects values to be strings.
+                    (
+                        k.to_owned(),
+                        Value::String(if v.is_string() {
+                            String::from(v.as_str().unwrap_or_default())
+                        } else {
+                            v.to_string()
+                        }),
+                    )
                 })
                 .collect())
         } else {
@@ -128,14 +158,29 @@ impl DeltaOperation {
         }
     }
 
+    /// Convert this operation into the JSON shape stored in Delta log `commitInfo`.
+    ///
+    /// Note: this does **not** add volatile fields like `timestamp` / `readVersion`; those are
+    /// filled in by the transaction layer at commit time.
+    pub fn to_commit_info_json(&self) -> DeltaResult<Value> {
+        serde_json::to_value(self.get_commit_info())
+            .map_err(|e| DeltaTableError::generic(format!("failed to serialize commit info: {e}")))
+    }
+
     pub fn read_predicate(&self) -> Option<String> {
         match self {
             Self::Write { predicate, .. } => predicate.clone(),
+            Self::Delete { predicate, .. } => predicate.clone(),
+            Self::Merge { predicate, .. } => predicate.clone(),
             _ => None,
         }
     }
 
     pub fn read_whole_table(&self) -> bool {
-        false
+        match self {
+            // Predicate is none -> Merge operation had to join full source and target
+            Self::Merge { predicate, .. } if predicate.is_none() => true,
+            _ => false,
+        }
     }
 }

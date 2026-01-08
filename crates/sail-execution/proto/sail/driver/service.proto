@@ -18,14 +18,23 @@ message ReportWorkerHeartbeatRequest {
 message ReportWorkerHeartbeatResponse {
 }
 
+message ReportWorkerKnownPeersRequest {
+  uint64 worker_id = 1;
+  repeated uint64 peer_worker_ids = 2;
+}
+
+message ReportWorkerKnownPeersResponse {
+}
+
 message ReportTaskStatusRequest {
-  uint64 task_id = 1;
-  TaskStatus status = 2;
+  uint64 job_id = 1;
+  uint64 task_id = 2;
   uint64 attempt = 3;
+  TaskStatus status = 4;
   // An optional explanation of the task status.
-  optional string message = 4;
+  optional string message = 5;
   // An optional JSON string that contains the cause of the task failure.
-  optional string cause = 5;
+  optional string cause = 6;
   uint64 sequence = 101;
 }
 
@@ -42,5 +51,8 @@ message ReportTaskStatusResponse {
 service DriverService {
   rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse) {}
   rpc ReportWorkerHeartbeat(ReportWorkerHeartbeatRequest) returns (ReportWorkerHeartbeatResponse) {}
+  // Report the peers known to the worker so that the driver does not need to
+  // send the peer information to the worker again when running tasks in the future.
+  rpc ReportWorkerKnownPeers(ReportWorkerKnownPeersRequest) returns (ReportWorkerKnownPeersResponse) {}
   rpc ReportTaskStatus(ReportTaskStatusRequest) returns (ReportTaskStatusResponse) {}
 }

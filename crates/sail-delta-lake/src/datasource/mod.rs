@@ -31,7 +31,7 @@ use url::Url;
 use crate::kernel::snapshot::LogDataHandler;
 use crate::kernel::{DeltaResult, DeltaTableError};
 use crate::table::DeltaTableState;
-pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
+pub const PATH_COLUMN: &str = "__sail_file_path";
 
 pub mod actions;
 pub mod expressions;

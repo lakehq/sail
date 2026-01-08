@@ -1,14 +1,13 @@
-use datafusion::arrow::util::pretty::pretty_format_batches;
 use datafusion::prelude::SessionContext;
+use log::warn;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::schema::rename_schema;
-use sail_plan::resolve_and_execute_plan;
+use sail_plan::explain::{explain_string, ExplainOptions};
 use sail_plan::resolver::plan::NamedPlan;
 use sail_plan::resolver::PlanResolver;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
-use crate::executor::read_stream;
 use crate::proto::data_type::parse_spark_data_type;
 use crate::schema::{to_spark_schema, to_tree_string};
 use crate::session::SparkSession;
@@ -67,16 +66,17 @@ pub(crate) async fn handle_analyze_explain(
     let ExplainRequest { plan, explain_mode } = request;
     let plan = plan.required("plan")?;
     let explain_mode = ExplainMode::try_from(explain_mode)?;
-    let explain = spec::Plan::Command(spec::CommandPlan::new(spec::CommandNode::Explain {
-        mode: explain_mode.try_into()?,
-        input: Box::new(spec::Plan::Query(plan.try_into()?)),
-    }));
-    let (plan, _) = resolve_and_execute_plan(ctx, spark.plan_config()?, explain).await?;
-    let stream = spark.job_runner().execute(ctx, plan).await?;
-    let batches = read_stream(stream).await?;
+    let spec_mode = explain_mode.try_into()?;
+    let options = ExplainOptions::from_mode(spec_mode);
+    let explain = explain_string(
+        ctx,
+        spark.plan_config()?,
+        spec::Plan::Query(plan.try_into()?),
+        options,
+    )
+    .await?;
     Ok(ExplainResponse {
-        // FIXME: The explain output should not be formatted as a table.
-        explain_string: pretty_format_batches(&batches)?.to_string(),
+        explain_string: explain.output,
     })
 }
 
@@ -156,6 +156,8 @@ pub(crate) async fn handle_analyze_persist(
     _ctx: &SessionContext,
     _request: PersistRequest,
 ) -> SparkResult<PersistResponse> {
+    // TODO: Implement
+    warn!("Persist operation is not yet supported and is a no-op");
     Ok(PersistResponse {})
 }
 
@@ -163,6 +165,8 @@ pub(crate) async fn handle_analyze_unpersist(
     _ctx: &SessionContext,
     _request: UnpersistRequest,
 ) -> SparkResult<UnpersistResponse> {
+    // TODO: Implement
+    warn!("Unpersist operation is not yet supported and is a no-op");
     Ok(UnpersistResponse {})
 }
 

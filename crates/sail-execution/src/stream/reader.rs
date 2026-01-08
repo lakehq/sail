@@ -14,8 +14,6 @@ use crate::stream::error::TaskStreamResult;
 pub enum TaskReadLocation {
     Worker {
         worker_id: WorkerId,
-        host: String,
-        port: u16,
         channel: ChannelName,
     },
     Remote {
@@ -26,12 +24,9 @@ pub enum TaskReadLocation {
 impl Display for TaskReadLocation {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            TaskReadLocation::Worker {
-                worker_id,
-                host,
-                port,
-                channel,
-            } => write!(f, "Worker({worker_id}, {host}:{port}, {channel})"),
+            TaskReadLocation::Worker { worker_id, channel } => {
+                write!(f, "Worker({worker_id}, {channel})")
+            }
             TaskReadLocation::Remote { uri } => write!(f, "Remote({uri})"),
         }
     }

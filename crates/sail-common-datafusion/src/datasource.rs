@@ -9,11 +9,12 @@ use datafusion::physical_expr::{
     create_physical_sort_exprs, LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortRequirement,
 };
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, Result};
+use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, DFSchemaRef, Result};
 use datafusion_expr::expr::Sort;
-use datafusion_expr::Expr;
 
 use crate::extension::SessionExtension;
+use crate::logical_expr::ExprWithSource;
+use crate::physical_expr::PhysicalExprWithSource;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
 pub enum SinkMode {
@@ -21,7 +22,7 @@ pub enum SinkMode {
     IgnoreIfExists,
     Append,
     Overwrite,
-    OverwriteIf { condition: Box<Expr> },
+    OverwriteIf { condition: Box<ExprWithSource> },
     OverwritePartitions,
 }
 
@@ -31,7 +32,7 @@ pub enum PhysicalSinkMode {
     IgnoreIfExists,
     Append,
     Overwrite,
-    OverwriteIf { condition: Arc<dyn PhysicalExpr> },
+    OverwriteIf { condition: PhysicalExprWithSource },
     OverwritePartitions,
 }
 
@@ -74,11 +75,127 @@ pub struct SinkInfo {
 #[derive(Debug, Clone)]
 pub struct DeleteInfo {
     pub path: String,
-    pub condition: Option<Arc<dyn PhysicalExpr>>,
+    pub condition: Option<PhysicalExprWithSource>,
     /// The sets of options for the data deletion.
     /// A later set of options can override earlier ones.
     pub options: Vec<HashMap<String, String>>,
 }
+
+#[derive(Debug, Clone)]
+pub struct MergeTargetInfo {
+    pub table_name: Vec<String>,
+    pub path: String,
+    pub partition_by: Vec<String>,
+    pub options: Vec<HashMap<String, String>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MergeAssignmentInfo {
+    pub column: String,
+    pub value: Arc<dyn PhysicalExpr>,
+}
+
+#[derive(Debug, Clone)]
+pub enum MergeMatchedActionInfo {
+    Delete,
+    UpdateAll,
+    UpdateSet(Vec<MergeAssignmentInfo>),
+}
+
+#[derive(Debug, Clone)]
+pub struct MergeMatchedClauseInfo {
+    pub condition: Option<PhysicalExprWithSource>,
+    pub action: MergeMatchedActionInfo,
+}
+
+#[derive(Debug, Clone)]
+pub enum MergeNotMatchedBySourceActionInfo {
+    Delete,
+    UpdateSet(Vec<MergeAssignmentInfo>),
+}
+
+#[derive(Debug, Clone)]
+pub struct MergeNotMatchedBySourceClauseInfo {
+    pub condition: Option<PhysicalExprWithSource>,
+    pub action: MergeNotMatchedBySourceActionInfo,
+}
+
+#[derive(Debug, Clone)]
+pub enum MergeNotMatchedByTargetActionInfo {
+    InsertAll,
+    InsertColumns {
+        columns: Vec<String>,
+        values: Vec<Arc<dyn PhysicalExpr>>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct MergeNotMatchedByTargetClauseInfo {
+    pub condition: Option<PhysicalExprWithSource>,
+    pub action: MergeNotMatchedByTargetActionInfo,
+}
+
+/// Merge operation metadata used to construct commit log `operationParameters`.
+#[derive(Debug, Clone)]
+pub struct MergePredicateInfo {
+    /// The type of merge operation performed (e.g. "update", "delete", "insert").
+    pub action_type: String,
+    /// The predicate used for the merge operation.
+    pub predicate: Option<String>,
+}
+
+/// Optional override metadata for operation commit logs (currently used by Delta MERGE).
+#[derive(Debug, Clone)]
+pub enum OperationOverride {
+    Merge {
+        predicate: Option<String>,
+        merge_predicate: Option<String>,
+        matched_predicates: Vec<MergePredicateInfo>,
+        not_matched_predicates: Vec<MergePredicateInfo>,
+        not_matched_by_source_predicates: Vec<MergePredicateInfo>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct MergeInfo {
+    pub target: MergeTargetInfo,
+    pub target_input: Arc<dyn ExecutionPlan>,
+    pub source: Arc<dyn ExecutionPlan>,
+    pub target_schema: DFSchemaRef,
+    pub source_schema: DFSchemaRef,
+    /// Joined logical schema (target followed by source)
+    pub join_schema: Arc<Schema>,
+    /// Indicates that join/filter/project have been expanded in the logical plan
+    pub pre_expanded: bool,
+    /// Final physical plan ready for writing (if pre_expanded)
+    pub expanded_input: Option<Arc<dyn ExecutionPlan>>,
+    /// Physical plan that yields touched file paths (if pre_expanded)
+    pub touched_file_plan: Option<Arc<dyn ExecutionPlan>>,
+    pub on_condition: PhysicalExprWithSource,
+    /// Equality join keys extracted from the ON condition (target, source)
+    pub join_keys: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
+    /// Residual predicates from the ON condition (applied as join filter)
+    pub join_filter: Option<Arc<dyn PhysicalExpr>>,
+    /// Filters that only touch target columns (can be applied before join)
+    pub target_only_filters: Vec<Arc<dyn PhysicalExpr>>,
+    /// Predicates for matched clauses that rewrite target rows (delete/update)
+    pub rewrite_matched_predicates: Vec<Arc<dyn PhysicalExpr>>,
+    /// Predicates for NOT MATCHED BY SOURCE clauses that rewrite target rows
+    pub rewrite_not_matched_by_source_predicates: Vec<Arc<dyn PhysicalExpr>>,
+    /// Final output column order for the target table
+    pub output_columns: Vec<String>,
+    pub matched_clauses: Vec<MergeMatchedClauseInfo>,
+    pub not_matched_by_source_clauses: Vec<MergeNotMatchedBySourceClauseInfo>,
+    pub not_matched_by_target_clauses: Vec<MergeNotMatchedByTargetClauseInfo>,
+    pub with_schema_evolution: bool,
+    /// Optional override for commit operation metadata.
+    pub operation_override: Option<OperationOverride>,
+}
+
+// TODO: MERGE schema evolution end-to-end
+// - Expand sink schema during MERGE: detect source-only columns (case-insensitive), keep target order, append new cols, project source/NULL for them.
+// - Emit Metadata (and Protocol if required) in writer/commit so the new schema is persisted and readable.
+// - Reading: time-travel must stay on the requested version; non-time-travel can refresh to latest snapshot to see new schema.
 
 /// A trait for preparing physical execution for a specific format.
 #[async_trait]
@@ -109,6 +226,19 @@ pub trait TableFormat: Send + Sync {
         let _ = (ctx, info);
         not_impl_err!(
             "DELETE operation is not yet implemented for {} format",
+            self.name()
+        )
+    }
+
+    /// Creates an `ExecutionPlan` for MERGE.
+    async fn create_merger(
+        &self,
+        ctx: &dyn Session,
+        info: MergeInfo,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let _ = (ctx, info);
+        not_impl_err!(
+            "MERGE operation is not yet implemented for {} format",
             self.name()
         )
     }
