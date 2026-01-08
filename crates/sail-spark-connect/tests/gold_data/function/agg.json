@@ -2267,7 +2267,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: Failed to extract percentile value in percentile(): Execution error: Cannot convert percentile literal List([0.2, 0.5]) to f64"
+        "success": "ok"
       }
     },
     {
@@ -2293,7 +2293,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: Failed to extract percentile value in percentile(): Execution error: Cannot convert percentile literal List([0.25, 0.75]) to f64"
+        "success": "ok"
       }
     },
     {
