@@ -259,28 +259,11 @@ macro_rules! generate_uniform_fn {
             seed: Option<u64>,
             number_rows: usize,
         ) -> Result<Vec<$type>> {
-            let mut min_v = min;
-            let mut max_v = max;
-
-            if min_v > max_v {
-                std::mem::swap(&mut min_v, &mut max_v);
-            }
-
-            if min_v == max_v {
-                return Ok(vec![min_v; number_rows]);
-            }
-
-            let values: Vec<$type> = if let Some(seed_val) = seed {
-                let mut rng = StdRng::seed_from_u64(seed_val);
-                (0..number_rows)
-                    .map(|_| rng.random_range(min_v..max_v))
-                    .collect()
-            } else {
-                let mut rng = rng();
-                (0..number_rows)
-                    .map(|_| rng.random_range(min_v..max_v))
-                    .collect()
-            };
+            // Match the runtime behavior: generate each row using the single-value
+            // generator, which creates a new RNG per call when a seed is provided.
+            let values: Vec<$type> = (0..number_rows)
+                .map(|_| $fn_name_single(min, max, seed))
+                .collect();
 
             Ok(values)
         }
@@ -487,22 +470,24 @@ mod tests {
         Ok(())
     }
 
-    /// Test 2: uniform(10, 20, 0) FROM range(5) - should return DIFFERENT values
+    /// Test 2: With a constant seed, all values should be the same
+    /// (matches Spark behavior: each row creates a new RNG with the same seed)
     #[test]
-    fn test_uniform_multiple_values_are_different() -> Result<()> {
+    fn test_uniform_constant_seed_same_values() -> Result<()> {
         let values = generate_uniform_int32(10, 20, Some(0), 5)?;
 
         // Verify that we have 5 values
         assert_eq!(values.len(), 5);
 
-        // Verify that the first value is 18 (with i32 RNG)
+        // Verify that the first value is 18 (with i32 RNG and seed 0)
         assert_eq!(values[0], 18);
 
-        // Verify that NOT all values are the same (this is the key test)
+        // With a constant seed, all values should be identical
+        // (each call creates a new RNG with the same seed)
         let all_same = values.windows(2).all(|w| w[0] == w[1]);
         assert!(
-            !all_same,
-            "All values are {:?} but should be different!",
+            all_same,
+            "All values should be the same with constant seed, got {:?}",
             values
         );
 
@@ -565,15 +550,19 @@ mod tests {
         Ok(())
     }
 
-    /// Test 8: Multiple different float values
+    /// Test 8: With a constant seed, all float values should be the same
     #[test]
-    fn test_uniform_float_multiple_different() -> Result<()> {
+    fn test_uniform_float_constant_seed() -> Result<()> {
         let values = generate_uniform_float(0.0, 1.0, Some(99), 10)?;
         assert_eq!(values.len(), 10);
 
-        // Verify that not all are the same
+        // With a constant seed, all values should be identical
         let all_same = values.windows(2).all(|w| w[0] == w[1]);
-        assert!(!all_same, "Float values should be different: {:?}", values);
+        assert!(
+            all_same,
+            "Float values should be the same with constant seed: {:?}",
+            values
+        );
 
         // All in range
         for &v in &values {
@@ -582,22 +571,19 @@ mod tests {
         Ok(())
     }
 
-    /// Test 9: Verify that seed 0 with 10 values generates the expected sequence
+    /// Test 9: Verify that seed 0 with 10 values all produce the same value
     #[test]
-    fn test_uniform_seed_zero_sequence() -> Result<()> {
+    fn test_uniform_seed_zero_constant() -> Result<()> {
         let values = generate_uniform_int32(10, 20, Some(0), 10)?;
         assert_eq!(values.len(), 10);
 
         assert_eq!(values[0], 18);
 
-        // Verify that there is variety
-        let unique_count = values
-            .iter()
-            .collect::<std::collections::HashSet<_>>()
-            .len();
+        // With constant seed, all values should be the same
+        let all_same = values.windows(2).all(|w| w[0] == w[1]);
         assert!(
-            unique_count > 1,
-            "Should have multiple unique values, got {:?}",
+            all_same,
+            "All values should be the same with constant seed, got {:?}",
             values
         );
         Ok(())
