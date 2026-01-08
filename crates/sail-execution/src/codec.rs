@@ -72,7 +72,7 @@ use sail_delta_lake::physical_plan::{
 };
 use sail_duck_lake::metadata::ListDataFilesRequest;
 use sail_duck_lake::physical_plan::{
-    DuckLakeMetadataScanExec, DuckLakePruningExec, DuckLakeScanExec,
+    DuckLakeDynamicScanExec, DuckLakeMetadataScanExec, DuckLakePruningExec, DuckLakeScanExec,
 };
 use sail_duck_lake::spec::{FieldIndex, PartitionFieldInfo, PartitionFilter, TableIndex};
 use sail_function::aggregate::kurtosis::KurtosisFunction;
@@ -758,6 +758,60 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     pushdown_predicate,
                 )?))
             }
+            NodeKind::DuckLakeDynamicScan(gen::DuckLakeDynamicScanExecNode {
+                input,
+                base_path,
+                schema_name,
+                table_name,
+                table_schema,
+                projection,
+                limit,
+                pushdown_predicate,
+                max_files,
+                max_bytes,
+            }) => {
+                let input = self.try_decode_plan(&input, ctx)?;
+                let table_schema = Arc::new(self.try_decode_schema(&table_schema)?);
+                let projection = self.try_decode_projection(&projection)?;
+                let projection = (!projection.is_empty()).then_some(projection);
+                let limit = if let Some(l) = limit {
+                    Some(usize::try_from(l).map_err(|_| {
+                        plan_datafusion_err!("invalid limit for DuckLakeDynamicScanExec: {l}")
+                    })?)
+                } else {
+                    None
+                };
+                let pushdown_predicate = if let Some(pred_bytes) = pushdown_predicate {
+                    Some(parse_physical_expr(
+                        &self.try_decode_message(&pred_bytes)?,
+                        ctx,
+                        &table_schema,
+                        self,
+                    )?)
+                } else {
+                    None
+                };
+                let max_files = if let Some(m) = max_files {
+                    Some(usize::try_from(m).map_err(|_| {
+                        plan_datafusion_err!("invalid max_files for DuckLakeDynamicScanExec: {m}")
+                    })?)
+                } else {
+                    None
+                };
+                // let max_bytes = max_bytes;
+                Ok(Arc::new(DuckLakeDynamicScanExec::try_new(
+                    input,
+                    base_path,
+                    schema_name,
+                    table_name,
+                    table_schema,
+                    projection,
+                    limit,
+                    pushdown_predicate,
+                    max_files,
+                    max_bytes,
+                )?))
+            }
             NodeKind::ConsoleSink(gen::ConsoleSinkExecNode { input }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 Ok(Arc::new(ConsoleSinkExec::new(input)))
@@ -1319,6 +1373,46 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 projection,
                 limit,
                 pushdown_predicate,
+            })
+        } else if let Some(ducklake_dynamic_scan) =
+            node.as_any().downcast_ref::<DuckLakeDynamicScanExec>()
+        {
+            let input = self.try_encode_plan(ducklake_dynamic_scan.input().clone())?;
+            let table_schema = self.try_encode_schema(ducklake_dynamic_scan.table_schema())?;
+            let projection = if let Some(p) = ducklake_dynamic_scan.projection() {
+                self.try_encode_projection(p)?
+            } else {
+                vec![]
+            };
+            let limit = if let Some(l) = ducklake_dynamic_scan.limit() {
+                Some(u64::try_from(l).map_err(|_| {
+                    plan_datafusion_err!("cannot encode limit for DuckLakeDynamicScanExec")
+                })?)
+            } else {
+                None
+            };
+            let pushdown_predicate = if let Some(pred) = ducklake_dynamic_scan.pushdown_predicate()
+            {
+                let predicate_node = serialize_physical_expr(&pred.clone(), self)?;
+                Some(self.try_encode_message(predicate_node)?)
+            } else {
+                None
+            };
+            let max_files = Some(u64::try_from(ducklake_dynamic_scan.max_files()).map_err(
+                |_| plan_datafusion_err!("cannot encode max_files for DuckLakeDynamicScanExec"),
+            )?);
+            let max_bytes = Some(ducklake_dynamic_scan.max_bytes());
+            NodeKind::DuckLakeDynamicScan(gen::DuckLakeDynamicScanExecNode {
+                input,
+                base_path: ducklake_dynamic_scan.base_path().to_string(),
+                schema_name: ducklake_dynamic_scan.schema_name().to_string(),
+                table_name: ducklake_dynamic_scan.table_name().to_string(),
+                table_schema,
+                projection,
+                limit,
+                pushdown_predicate,
+                max_files,
+                max_bytes,
             })
         } else if let Some(console_sink) = node.as_any().downcast_ref::<ConsoleSinkExec>() {
             let input = self.try_encode_plan(console_sink.input().clone())?;

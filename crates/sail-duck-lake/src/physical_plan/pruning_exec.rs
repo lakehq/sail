@@ -3,8 +3,9 @@ use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion::arrow::array::BooleanArray;
+use datafusion::arrow::compute::filter_record_batch;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -18,7 +19,6 @@ use futures::{stream, StreamExt};
 use serde_arrow::from_record_batch;
 
 use crate::datasource::pruning::prune_files_with_physical_predicate;
-use crate::metadata::file_info_fields;
 use crate::spec::{FileInfo, PartitionFieldInfo};
 
 /// Physical node that prunes DuckLake data files (metadata) using DataFusion pruning predicates.
@@ -138,10 +138,6 @@ impl ExecutionPlan for DuckLakePruningExec {
         let prune_schema = self.prune_schema.clone();
         let partition_fields = self.partition_fields.clone();
         let remaining_limit: Option<u64> = self.limit.map(|x| x as u64);
-        let output_schema = self.output_schema.clone();
-
-        // Use serde_arrow schema for re-encoding filtered FileInfo back to RecordBatch.
-        let fields = file_info_fields()?;
 
         struct PruningState {
             input_stream: SendableRecordBatchStream,
@@ -149,8 +145,6 @@ impl ExecutionPlan for DuckLakePruningExec {
             prune_schema: SchemaRef,
             partition_fields: Vec<PartitionFieldInfo>,
             remaining_limit: Option<u64>,
-            output_schema: SchemaRef,
-            fields: Vec<datafusion::arrow::datatypes::FieldRef>,
             done: bool,
         }
 
@@ -160,8 +154,6 @@ impl ExecutionPlan for DuckLakePruningExec {
             prune_schema,
             partition_fields,
             remaining_limit,
-            output_schema,
-            fields,
             done: false,
         };
 
@@ -206,7 +198,7 @@ impl ExecutionPlan for DuckLakePruningExec {
                     .map(|x| x.min(usize::MAX as u64) as usize)
                     .filter(|x| *x > 0);
 
-                let (kept, _mask) = match prune_files_with_physical_predicate(
+                let (kept, mask) = match prune_files_with_physical_predicate(
                     state.predicate.clone(),
                     batch_limit,
                     state.prune_schema.clone(),
@@ -227,16 +219,17 @@ impl ExecutionPlan for DuckLakePruningExec {
                     *rem = rem.saturating_sub(kept_rows);
                 }
 
-                let out_batch = if kept.is_empty() {
-                    RecordBatch::new_empty(state.output_schema.clone())
-                } else {
-                    match serde_arrow::to_record_batch(&state.fields, &kept) {
+                let out_batch = if let Some(mask) = mask {
+                    let mask = BooleanArray::from(mask);
+                    match filter_record_batch(&batch, &mask) {
                         Ok(b) => b,
                         Err(e) => {
                             state.done = true;
                             return Some((Err(DataFusionError::External(Box::new(e))), state));
                         }
                     }
+                } else {
+                    batch
                 };
 
                 return Some((Ok(out_batch), state));

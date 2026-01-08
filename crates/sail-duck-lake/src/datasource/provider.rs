@@ -9,14 +9,17 @@ use datafusion::common::ToDFSchema;
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::repartition::RepartitionExec;
+use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_common::{DataFusionError, Result as DataFusionResult};
 
 use crate::datasource::arrow::{field_column_id, schema_column_name_by_id};
 use crate::datasource::expressions::{get_pushdown_filters, simplify_expr};
 use crate::metadata::{DuckLakeMetaStore, DuckLakeTable, ListDataFilesRequest};
 use crate::options::DuckLakeOptions;
-use crate::physical_plan::{DuckLakeMetadataScanExec, DuckLakePruningExec, DuckLakeScanExec};
+use crate::physical_plan::{
+    DuckLakeDynamicScanExec, DuckLakeMetadataScanExec, DuckLakePruningExec,
+};
 use crate::spec::{FieldIndex, PartitionFieldInfo, PartitionFilter};
 
 pub struct DuckLakeTableProvider {
@@ -155,9 +158,16 @@ impl TableProvider for DuckLakeTableProvider {
             limit,
         )?);
 
-        // Sink: consume pruned file list and scan Parquet data.
-        let scan_exec = Arc::new(DuckLakeScanExec::try_new(
+        // Distribute pruned file metadata across workers.
+        let target_partitions = session.config().target_partitions();
+        let repartition_exec = Arc::new(RepartitionExec::try_new(
             pruning_exec,
+            Partitioning::RoundRobinBatch(target_partitions),
+        )?);
+
+        // Sink: dynamically consume the file list per-partition and scan Parquet data.
+        let scan_exec = Arc::new(DuckLakeDynamicScanExec::try_new(
+            repartition_exec,
             self.base_path.clone(),
             self.table.schema_info.schema_name.clone(),
             self.table.table_info.table_name.clone(),
@@ -165,6 +175,8 @@ impl TableProvider for DuckLakeTableProvider {
             projection.cloned(),
             limit,
             pushdown_predicate,
+            None,
+            None,
         )?);
 
         Ok(scan_exec)

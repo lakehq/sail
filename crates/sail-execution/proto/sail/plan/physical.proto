@@ -48,6 +48,7 @@ message ExtendedPhysicalPlanNode {
     DuckLakeMetadataScanExecNode duck_lake_metadata_scan = 34;
     DuckLakePruningExecNode duck_lake_pruning = 35;
     DuckLakeScanExecNode duck_lake_scan = 36;
+    DuckLakeDynamicScanExecNode duck_lake_dynamic_scan = 37;
   }
 }
 
@@ -406,6 +407,19 @@ message DuckLakeScanExecNode {
   repeated uint64 projection = 6;
   optional uint64 limit = 7;
   optional bytes pushdown_predicate = 8;
+}
+
+message DuckLakeDynamicScanExecNode {
+  bytes input = 1;
+  string base_path = 2;
+  string schema_name = 3;
+  string table_name = 4;
+  bytes table_schema = 5;
+  repeated uint64 projection = 6;
+  optional uint64 limit = 7;
+  optional bytes pushdown_predicate = 8;
+  optional uint64 max_files = 9;
+  optional uint64 max_bytes = 10;
 }
 
 message DeltaRemoveActionsExecNode {

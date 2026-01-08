@@ -352,26 +352,30 @@ pub fn prune_files(
     };
 
     let mut kept = Vec::new();
+    let mut kept_mask = Vec::with_capacity(stats.num_containers());
     let mut rows_collected: u64 = 0;
-    for (file, keep) in stats.files.into_iter().zip(files_to_keep.iter()) {
-        if *keep {
+    let mut stop = false;
+    for (file, keep) in stats.files.into_iter().zip(files_to_keep.iter().copied()) {
+        let mut final_keep = keep && !stop;
+        if final_keep {
             if let Some(lim) = limit {
-                if rows_collected <= lim as u64 {
+                if rows_collected > lim as u64 {
+                    final_keep = false;
+                } else {
                     rows_collected = rows_collected.saturating_add(file.record_count);
                     kept.push(file);
                     if rows_collected > lim as u64 {
-                        break;
+                        stop = true;
                     }
-                } else {
-                    break;
                 }
             } else {
                 kept.push(file);
             }
         }
+        kept_mask.push(final_keep);
     }
 
-    Ok((kept, Some(files_to_keep)))
+    Ok((kept, Some(kept_mask)))
 }
 
 pub fn prune_files_with_physical_predicate(
@@ -394,24 +398,28 @@ pub fn prune_files_with_physical_predicate(
     };
 
     let mut kept = Vec::new();
+    let mut kept_mask = Vec::with_capacity(stats.num_containers());
     let mut rows_collected: u64 = 0;
-    for (file, keep) in stats.files.into_iter().zip(files_to_keep.iter()) {
-        if *keep {
+    let mut stop = false;
+    for (file, keep) in stats.files.into_iter().zip(files_to_keep.iter().copied()) {
+        let mut final_keep = keep && !stop;
+        if final_keep {
             if let Some(lim) = limit {
-                if rows_collected <= lim as u64 {
+                if rows_collected > lim as u64 {
+                    final_keep = false;
+                } else {
                     rows_collected = rows_collected.saturating_add(file.record_count);
                     kept.push(file);
                     if rows_collected > lim as u64 {
-                        break;
+                        stop = true;
                     }
-                } else {
-                    break;
                 }
             } else {
                 kept.push(file);
             }
         }
+        kept_mask.push(final_keep);
     }
 
-    Ok((kept, Some(files_to_keep)))
+    Ok((kept, Some(kept_mask)))
 }
