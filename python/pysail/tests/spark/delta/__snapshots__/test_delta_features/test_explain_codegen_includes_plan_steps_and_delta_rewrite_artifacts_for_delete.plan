@@ -90,7 +90,7 @@ initial_physical_plan:
 DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
   UnionExec
     DeltaWriterExec(table_path=file://<tmp>/delete_explain_codegen/)
-      FilterExec: NOT salary@<i> + 1 > 70000 AND (department@<i> = Engineering OR department@<i> = Marketing) AND active@<i> IS NOT NULL
+      FilterExec: NOT salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL
         DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
           RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
             DeltaDiscoveryExec(table_path=file://<tmp>/delete_explain_codegen/)
@@ -107,7 +107,7 @@ initial_physical_plan_with_stats:
 DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
   UnionExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
     DeltaWriterExec(table_path=file://<tmp>/delete_explain_codegen/), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
-      FilterExec: NOT salary@<i> + 1 > 70000 AND (department@<i> = Engineering OR department@<i> = Marketing) AND active@<i> IS NOT NULL, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
+      FilterExec: NOT salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
         DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
           RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
             DeltaDiscoveryExec(table_path=file://<tmp>/delete_explain_codegen/), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
@@ -124,7 +124,7 @@ initial_physical_plan_with_schema:
 DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/), schema=[count:UInt64;N]
   UnionExec, schema=[action:Union([(0, Field { name: "add", data_type: Struct([Field { name: "path", data_type: Utf8 }, Field { name: "partition_values", data_type: Map(Field { name: "entries", data_type: Struct([Field { name: "keys", data_type: Utf8 }, Field { name: "values", data_type: Utf8, nullable: true }]) }, false) }, Field { name: "size", data_type: Int64 }, Field { name: "modification_time", data_type: Int64 }, Field { name: "data_change", data_type: Boolean }, Field { name: "stats_json", data_type: Utf8, nullable: true }]) }), (1, Field { name: "remove", data_type: Struct([Field { name: "path", data_type: Utf8 }, Field { name: "data_change", data_type: Boolean }, Field { name: "deletion_timestamp", data_type: Int64, nullable: true }, Field { name: "extended_file_metadata", data_type: Boolean, nullable: true }, Field { name: "partition_values", data_type: Map(Field { name: "entries", data_type: Struct([Field { name: "keys", data_type: Utf8 }, Field { name: "values", data_type: Utf8, nullable: true }]) }, false) }, Field { name: "size", data_type: Int64, nullable: true }]) }), (2, Field { name: "protocol", data_type: Utf8 }), (3, Field { name: "metadata", data_type: Utf8 }), (4, Field { name: "commit_meta", data_type: Struct([Field { name: "commit_row_count", data_type: UInt64 }, Field { name: "operation_json", data_type: Utf8, nullable: true }, Field { name: "operation_metrics_json", data_type: Utf8 }]) })], Dense)]
     DeltaWriterExec(table_path=file://<tmp>/delete_explain_codegen/), schema=[action:Union([(0, Field { name: "add", data_type: Struct([Field { name: "path", data_type: Utf8 }, Field { name: "partition_values", data_type: Map(Field { name: "entries", data_type: Struct([Field { name: "keys", data_type: Utf8 }, Field { name: "values", data_type: Utf8, nullable: true }]) }, false) }, Field { name: "size", data_type: Int64 }, Field { name: "modification_time", data_type: Int64 }, Field { name: "data_change", data_type: Boolean }, Field { name: "stats_json", data_type: Utf8, nullable: true }]) }), (1, Field { name: "remove", data_type: Struct([Field { name: "path", data_type: Utf8 }, Field { name: "data_change", data_type: Boolean }, Field { name: "deletion_timestamp", data_type: Int64, nullable: true }, Field { name: "extended_file_metadata", data_type: Boolean, nullable: true }, Field { name: "partition_values", data_type: Map(Field { name: "entries", data_type: Struct([Field { name: "keys", data_type: Utf8 }, Field { name: "values", data_type: Utf8, nullable: true }]) }, false) }, Field { name: "size", data_type: Int64, nullable: true }]) }), (2, Field { name: "protocol", data_type: Utf8 }), (3, Field { name: "metadata", data_type: Utf8 }), (4, Field { name: "commit_meta", data_type: Struct([Field { name: "commit_row_count", data_type: UInt64 }, Field { name: "operation_json", data_type: Utf8, nullable: true }, Field { name: "operation_metrics_json", data_type: Utf8 }]) })], Dense)]
-      FilterExec: NOT salary@<i> + 1 > 70000 AND (department@<i> = Engineering OR department@<i> = Marketing) AND active@<i> IS NOT NULL, schema=[id:Int32;N, name:Utf8;N, age:Int32;N, department:Utf8;N, salary:Int32;N, active:Boolean;N]
+      FilterExec: NOT salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL, schema=[id:Int32;N, name:Utf8;N, age:Int32;N, department:Utf8;N, salary:Int32;N, active:Boolean;N]
         DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/), schema=[id:Int32;N, name:Utf8;N, age:Int32;N, department:Utf8;N, salary:Int32;N, active:Boolean;N]
           RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[action:Union([(0, Field { name: "add", data_type: Struct([Field { name: "path", data_type: Utf8 }, Field { name: "partition_values", data_type: Map(Field { name: "entries", data_type: Struct([Field { name: "keys", data_type: Utf8 }, Field { name: "values", data_type: Utf8, nullable: true }]) }, false) }, Field { name: "size", data_type: Int64 }, Field { name: "modification_time", data_type: Int64 }, Field { name: "data_change", data_type: Boolean }, Field { name: "stats_json", data_type: Utf8, nullable: true }]) }), (1, Field { name: "remove", data_type: Struct([Field { name: "path", data_type: Utf8 }, Field { name: "data_change", data_type: Boolean }, Field { name: "deletion_timestamp", data_type: Int64, nullable: true }, Field { name: "extended_file_metadata", data_type: Boolean, nullable: true }, Field { name: "partition_values", data_type: Map(Field { name: "entries", data_type: Struct([Field { name: "keys", data_type: Utf8 }, Field { name: "values", data_type: Utf8, nullable: true }]) }, false) }, Field { name: "size", data_type: Int64, nullable: true }]) }), (2, Field { name: "protocol", data_type: Utf8 }), (3, Field { name: "metadata", data_type: Utf8 }), (4, Field { name: "commit_meta", data_type: Struct([Field { name: "commit_row_count", data_type: UInt64 }, Field { name: "operation_json", data_type: Utf8, nullable: true }, Field { name: "operation_metrics_json", data_type: Utf8 }]) })], Dense), partition_scan:Boolean]
             DeltaDiscoveryExec(table_path=file://<tmp>/delete_explain_codegen/), schema=[action:Union([(0, Field { name: "add", data_type: Struct([Field { name: "path", data_type: Utf8 }, Field { name: "partition_values", data_type: Map(Field { name: "entries", data_type: Struct([Field { name: "keys", data_type: Utf8 }, Field { name: "values", data_type: Utf8, nullable: true }]) }, false) }, Field { name: "size", data_type: Int64 }, Field { name: "modification_time", data_type: Int64 }, Field { name: "data_change", data_type: Boolean }, Field { name: "stats_json", data_type: Utf8, nullable: true }]) }), (1, Field { name: "remove", data_type: Struct([Field { name: "path", data_type: Utf8 }, Field { name: "data_change", data_type: Boolean }, Field { name: "deletion_timestamp", data_type: Int64, nullable: true }, Field { name: "extended_file_metadata", data_type: Boolean, nullable: true }, Field { name: "partition_values", data_type: Map(Field { name: "entries", data_type: Struct([Field { name: "keys", data_type: Utf8 }, Field { name: "values", data_type: Utf8, nullable: true }]) }, false) }, Field { name: "size", data_type: Int64, nullable: true }]) }), (2, Field { name: "protocol", data_type: Utf8 }), (3, Field { name: "metadata", data_type: Utf8 }), (4, Field { name: "commit_meta", data_type: Struct([Field { name: "commit_row_count", data_type: UInt64 }, Field { name: "operation_json", data_type: Utf8, nullable: true }, Field { name: "operation_metrics_json", data_type: Utf8 }]) })], Dense), partition_scan:Boolean]
@@ -142,7 +142,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
   DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
     UnionExec
       DeltaWriterExec(table_path=file://<tmp>/delete_explain_codegen/)
-        FilterExec: NOT salary@<i> + 1 > 70000 AND (department@<i> = Engineering OR department@<i> = Marketing) AND active@<i> IS NOT NULL
+        FilterExec: NOT salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL
           DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
             RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
               DeltaDiscoveryExec(table_path=file://<tmp>/delete_explain_codegen/)
@@ -177,7 +177,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
       UnionExec
         DeltaWriterExec(table_path=file://<tmp>/delete_explain_codegen/)
           CoalescePartitionsExec
-            FilterExec: NOT salary@<i> + 1 > 70000 AND (department@<i> = Engineering OR department@<i> = Marketing) AND active@<i> IS NOT NULL
+            FilterExec: NOT salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL
               DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
                 RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                   DeltaDiscoveryExec(table_path=file://<tmp>/delete_explain_codegen/)
@@ -213,7 +213,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
         DeltaWriterExec(table_path=file://<tmp>/delete_explain_codegen/)
           CoalescePartitionsExec
             CoalesceBatchesExec: target_batch_size=8192
-              FilterExec: NOT salary@<i> + 1 > 70000 AND (department@<i> = Engineering OR department@<i> = Marketing) AND active@<i> IS NOT NULL
+              FilterExec: NOT salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL
                 DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
                   RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                     DeltaDiscoveryExec(table_path=file://<tmp>/delete_explain_codegen/)
@@ -239,7 +239,7 @@ DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
       DeltaWriterExec(table_path=file://<tmp>/delete_explain_codegen/)
         CoalescePartitionsExec
           CoalesceBatchesExec: target_batch_size=8192
-            FilterExec: NOT salary@<i> + 1 > 70000 AND (department@<i> = Engineering OR department@<i> = Marketing) AND active@<i> IS NOT NULL
+            FilterExec: NOT salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL
               DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
                 RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                   DeltaDiscoveryExec(table_path=file://<tmp>/delete_explain_codegen/)
@@ -286,7 +286,7 @@ DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
       DeltaWriterExec(table_path=file://<tmp>/delete_explain_codegen/)
         CoalescePartitionsExec
           CoalesceBatchesExec: target_batch_size=8192
-            FilterExec: NOT salary@<i> + 1 > 70000 AND (department@<i> = Engineering OR department@<i> = Marketing) AND active@<i> IS NOT NULL
+            FilterExec: NOT salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL
               DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
                 RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                   DeltaDiscoveryExec(table_path=file://<tmp>/delete_explain_codegen/)
@@ -309,7 +309,7 @@ DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
       DeltaWriterExec(table_path=file://<tmp>/delete_explain_codegen/)
         CoalescePartitionsExec
           CoalesceBatchesExec: target_batch_size=8192
-            FilterExec: NOT salary@<i> + 1 > 70000 AND (department@<i> = Engineering OR department@<i> = Marketing) AND active@<i> IS NOT NULL
+            FilterExec: NOT salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL
               DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
                 RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                   DeltaDiscoveryExec(table_path=file://<tmp>/delete_explain_codegen/)

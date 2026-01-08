@@ -584,6 +584,10 @@ Feature: Delta Lake Merge
         """
         DROP TABLE IF EXISTS delta_merge_explain_partition_pushdown
         """
+      Given final statement
+        """
+        DROP VIEW IF EXISTS src_merge_explain_partition_pushdown
+        """
       Given statement template
         """
         CREATE TABLE delta_merge_explain_partition_pushdown (

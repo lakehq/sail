@@ -72,11 +72,8 @@ def normalize_plan_text(plan_text: str) -> str:
         flags=re.IGNORECASE,
     )
 
-    # Normalize unstable expression / column indices (can vary across runs when a session is reused).
-    text = re.sub(r"__common_expr_\d+", "__common_expr_<id>", text)
-    text = re.sub(r"@\d+", "@<i>", text)
-
     # Normalize file_groups ordering: group ordering is not guaranteed (e.g. parallel listing / async head).
+    # TODO: consider sorting the file groups during planner.
     def _normalize_file_groups_block(match: re.Match[str]) -> str:
         block = match.group(0)  # e.g. "file_groups={2 groups: [[...], [...]]}"
         # Extract the group list between the first "[" and the last "]"

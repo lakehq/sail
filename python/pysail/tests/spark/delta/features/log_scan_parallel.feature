@@ -7,6 +7,10 @@ Feature: Delta Lake LogScan Parallelism
         """
         DROP TABLE IF EXISTS delta_logscan_parallel
         """
+      Given final statement
+        """
+        DROP VIEW IF EXISTS src_logscan_parallel
+        """
       Given statement template
         """
         CREATE TABLE delta_logscan_parallel (

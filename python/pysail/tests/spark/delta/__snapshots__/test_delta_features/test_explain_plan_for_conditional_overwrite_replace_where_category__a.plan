@@ -5,10 +5,10 @@ DeltaCommitExec(table_path=file://<tmp>/delta_overwrite/)
       DeltaWriterExec(table_path=file://<tmp>/delta_overwrite/)
         CoalescePartitionsExec
           UnionExec
-            ProjectionExec: expr=[CAST(column1@<i> AS Int64) as id, column2@<i> as category, CAST(column3@<i> AS Int64) as value]
+            ProjectionExec: expr=[CAST(column1@0 AS Int64) as id, column2@1 as category, CAST(column3@2 AS Int64) as value]
               DataSourceExec: partitions=1, partition_sizes=[<sizes>]
             CoalesceBatchesExec: target_batch_size=8192
-              FilterExec: NOT category@<i> = A
+              FilterExec: NOT category@1 = A
                 DeltaScanByAddsExec(table_path=file://<tmp>/delta_overwrite/)
                   RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                     DeltaDiscoveryExec(table_path=file://<tmp>/delta_overwrite/)
