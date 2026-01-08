@@ -5,6 +5,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::context::TaskContext;
+use datafusion::physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
@@ -12,7 +13,6 @@ use datafusion::physical_plan::{
     SendableRecordBatchStream,
 };
 use datafusion_common::{internal_err, DataFusionError, Result as DataFusionResult};
-use datafusion::physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::StreamExt;
 use serde_arrow::from_record_batch;
 use tokio::sync::mpsc;
@@ -245,4 +245,3 @@ impl DisplayAs for DuckLakePruningExec {
         }
     }
 }
-

@@ -5,7 +5,19 @@ from urllib.parse import urlparse, urlunparse
 
 from sqlalchemy import and_, bindparam, column, create_engine, or_, select, table, text
 
+_PYARROW_IMPORT_ERROR: ModuleNotFoundError | None = None
+try:
+    import pyarrow as pa  # type: ignore[import-not-found]
+except ModuleNotFoundError as e:  # pragma: no cover
+    pa = None  # type: ignore[assignment]
+    _PYARROW_IMPORT_ERROR = e
+
 _ENGINES: dict[str, Any] = {}
+
+
+class PyArrowNotInstalledError(ModuleNotFoundError):
+    def __init__(self) -> None:
+        super().__init__("pyarrow is required for scan_data_files_arrow")
 
 
 def _normalize_sqlalchemy_url(url: str) -> str:
@@ -430,7 +442,8 @@ def scan_data_files_arrow(
     This is the Arrow-native alternative to `list_data_files`. It avoids returning
     a huge `list[dict]` to Rust, and instead yields `pyarrow.RecordBatch` chunks.
     """
-    import pyarrow as pa
+    if pa is None:  # pragma: no cover
+        raise PyArrowNotInstalledError from _PYARROW_IMPORT_ERROR
 
     # Keep the schema stable so Rust can decode it as a RecordBatch stream.
     # NOTE: These types intentionally use "large" variants to match serde_arrow defaults.
@@ -544,9 +557,7 @@ def scan_data_files_arrow(
                     and_(
                         partition_value_table.c.data_file_id == data_file_table.c.data_file_id,
                         partition_value_table.c.partition_key_index == bindparam(key_param),
-                        partition_value_table.c.partition_value.in_(
-                            bindparam(values_param, expanding=True)
-                        ),
+                        partition_value_table.c.partition_value.in_(bindparam(values_param, expanding=True)),
                     )
                 )
                 .exists()
@@ -703,12 +714,8 @@ def scan_data_files_arrow(
                     }
                 )
 
-            column_stats: list[list[dict[str, Any]]] = [
-                stats_map.get(fid, []) for fid in data_file_ids
-            ]
-            partition_values: list[list[dict[str, Any]]] = [
-                pv_map.get(fid, []) for fid in data_file_ids
-            ]
+            column_stats: list[list[dict[str, Any]]] = [stats_map.get(fid, []) for fid in data_file_ids]
+            partition_values: list[list[dict[str, Any]]] = [pv_map.get(fid, []) for fid in data_file_ids]
 
             arrays = [
                 pa.array(data_file_ids, type=pa.uint64()),

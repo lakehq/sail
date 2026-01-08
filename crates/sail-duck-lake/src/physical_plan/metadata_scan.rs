@@ -5,16 +5,15 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::context::TaskContext;
+use datafusion::physical_expr::{Distribution, EquivalenceProperties};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     SendableRecordBatchStream,
 };
 use datafusion_common::{internal_err, Result as DataFusionResult};
-use datafusion::physical_expr::{Distribution, EquivalenceProperties};
 
-use crate::metadata::{file_info_schema, ListDataFilesRequest, PythonMetaStore};
-use crate::metadata::DuckLakeMetaStore;
+use crate::metadata::{file_info_schema, DuckLakeMetaStore, ListDataFilesRequest, PythonMetaStore};
 use crate::spec::{FieldIndex, PartitionFilter, TableIndex};
 
 /// Physical source node that streams DuckLake data file metadata as Arrow RecordBatches.
@@ -117,7 +116,9 @@ impl ExecutionPlan for DuckLakeMetadataScanExec {
         _context: Arc<TaskContext>,
     ) -> DataFusionResult<SendableRecordBatchStream> {
         if partition != 0 {
-            return internal_err!("DuckLakeMetadataScanExec can only be executed in a single partition");
+            return internal_err!(
+                "DuckLakeMetadataScanExec can only be executed in a single partition"
+            );
         }
 
         let meta_store = PythonMetaStore::new_sync(&self.metastore_url);
@@ -139,9 +140,12 @@ impl DisplayAs for DuckLakeMetadataScanExec {
             ),
             DisplayFormatType::TreeRender => {
                 writeln!(f, "format: ducklake")?;
-                write!(f, "url={}, table_id={}", self.metastore_url, self.request.table_id.0)
+                write!(
+                    f,
+                    "url={}, table_id={}",
+                    self.metastore_url, self.request.table_id.0
+                )
             }
         }
     }
 }
-

@@ -1,14 +1,13 @@
-mod py_impl;
 mod file_info_arrow;
 mod file_info_stream;
+mod py_impl;
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use datafusion::common::Result as DataFusionResult;
 use datafusion::execution::SendableRecordBatchStream;
-pub use py_impl::PythonMetaStore;
-
 pub use file_info_arrow::{file_info_fields, file_info_schema};
+pub use py_impl::PythonMetaStore;
 
 use crate::spec::{FieldIndex, FileInfo, PartitionFilter, SchemaInfo, SnapshotInfo, TableInfo};
 

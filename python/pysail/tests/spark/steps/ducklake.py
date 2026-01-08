@@ -6,17 +6,20 @@ from pathlib import Path
 import pytest
 from pytest_bdd import given, parsers
 
-from pysail.tests.spark.utils import escape_sql_string_literal
 from pysail.tests.spark.steps.sql import PathWrapper
+from pysail.tests.spark.utils import escape_sql_string_literal
+
+_DUCKDB_IMPORT_ERROR: ModuleNotFoundError | None = None
+try:
+    import duckdb  # type: ignore[import-not-found]
+except ModuleNotFoundError as e:  # pragma: no cover
+    duckdb = None  # type: ignore[assignment]
+    _DUCKDB_IMPORT_ERROR = e
 
 
 def _ensure_duckdb_ducklake_available() -> None:
-    try:
-        import duckdb  # noqa: F401
-    except ModuleNotFoundError as e:  # pragma: no cover
-        pytest.skip(f"duckdb is required for DuckLake BDD setup: {e}")
-
-    import duckdb
+    if duckdb is None:  # pragma: no cover
+        pytest.skip(f"duckdb is required for DuckLake BDD setup: {_DUCKDB_IMPORT_ERROR}")
 
     conn = duckdb.connect(":memory:")
     try:
@@ -33,7 +36,7 @@ def _ensure_duckdb_ducklake_available() -> None:
     parsers.parse("ducklake test table is created in {metadata_var} and {data_var}"),
     target_fixture="variables",
 )
-def ducklake_test_table_created(metadata_var: str, data_var: str, tmp_path: Path, variables: dict) -> dict:
+def ducklake_test_table_created(metadata_var: str, data_var: str, variables: dict) -> dict:
     """
     Create a minimal DuckLake table via DuckDB (DuckLake extension) so Spark can read it.
 
@@ -43,7 +46,7 @@ def ducklake_test_table_created(metadata_var: str, data_var: str, tmp_path: Path
         pytest.skip("DuckLake BDD setup may not work on Windows")
 
     _ensure_duckdb_ducklake_available()
-    import duckdb
+    assert duckdb is not None  # for type checkers; `_ensure_duckdb_ducklake_available` will skip otherwise
 
     meta = variables.get(metadata_var)
     data = variables.get(data_var)
@@ -92,4 +95,3 @@ def ducklake_test_table_created(metadata_var: str, data_var: str, tmp_path: Path
     variables["ducklake_table"] = "test_table"
     variables["ducklake_base_path"] = escape_sql_string_literal(f"file://{data_path}/")
     return variables
-
