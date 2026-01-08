@@ -565,14 +565,14 @@ impl Accumulator for IntervalPercentileAccumulator {
                             let val = arr.value(row_idx);
                             // IntervalDayTime is stored as (days, milliseconds)
                             // Convert to total milliseconds for interpolation
-                            val.days as i64 * 86400000 + val.milliseconds as i64
+                            val.days as i64 * 86_400_000 + val.milliseconds as i64
                         }
                         IntervalUnit::MonthDayNano => {
                             let arr = array.as_primitive::<datafusion::arrow::datatypes::IntervalMonthDayNanoType>();
                             let val = arr.value(row_idx);
                             // Convert to nanoseconds for interpolation
-                            val.months as i64 * 2592000000000000 // ~30 days in nanos
-                                + val.days as i64 * 86400000000000 // days to nanos
+                            val.months as i64 * 2_592_000_000_000_000 // ~30 days in nanos
+                                + val.days as i64 * 86_400_000_000_000 // days to nanos
                                 + val.nanoseconds
                         }
                     }
@@ -633,8 +633,8 @@ impl Accumulator for IntervalPercentileAccumulator {
                         IntervalUnit::DayTime => {
                             // Convert back from milliseconds to (days, milliseconds)
                             use datafusion::arrow::datatypes::IntervalDayTime;
-                            let days = (result_i64 / 86400000) as i32;
-                            let milliseconds = (result_i64 % 86400000) as i32;
+                            let days = (result_i64 / 86_400_000) as i32;
+                            let milliseconds = (result_i64 % 86_400_000) as i32;
                             Ok(ScalarValue::IntervalDayTime(Some(IntervalDayTime {
                                 days,
                                 milliseconds,
@@ -643,10 +643,10 @@ impl Accumulator for IntervalPercentileAccumulator {
                         IntervalUnit::MonthDayNano => {
                             // Convert back from nanoseconds
                             use datafusion::arrow::datatypes::IntervalMonthDayNano;
-                            let months = (result_i64 / 2592000000000000) as i32;
-                            let remaining = result_i64 % 2592000000000000;
-                            let days = (remaining / 86400000000000) as i32;
-                            let nanoseconds = remaining % 86400000000000;
+                            let months = (result_i64 / 2_592_000_000_000_000) as i32;
+                            let remaining = result_i64 % 2_592_000_000_000_000;
+                            let days = (remaining / 86_400_000_000_000) as i32;
+                            let nanoseconds = remaining % 86_400_000_000_000;
                             Ok(ScalarValue::IntervalMonthDayNano(Some(
                                 IntervalMonthDayNano {
                                     months,
