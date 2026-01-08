@@ -41,7 +41,7 @@
 +------+
 |result|
 +------+
-|   6.4|
+|   6.2|
 +------+
 
 >>> spark.sql("SELECT uniform(5, 105, -3) AS result").show()
@@ -76,13 +76,13 @@ root
 root
  |-- result: long (nullable = false)
 
->>> spark.sql("""
-...   SELECT uniform(
-...     CAST(2147483648 AS BIGINT),
-...     CAST(9223372036854775807 AS BIGINT),
-...     42
-...   ) AS result
-... """).printSchema()
+spark.sql("""
+  SELECT uniform(
+    CAST(2147483648 AS BIGINT),
+    CAST(9223372036854775807 AS BIGINT),
+    42
+  ) AS result
+""").printSchema()
 root
  |-- result: long (nullable = false)
 
