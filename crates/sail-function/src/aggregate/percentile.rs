@@ -1596,10 +1596,11 @@ fn extract_percentiles_array(expr: &Arc<dyn PhysicalExpr>) -> Result<Vec<f64>, D
             // Get the values array from the ListArray
             let values = arr.values();
 
-            let mut percentiles = Vec::with_capacity(arr.len());
-            for i in 0..arr.len() {
-                // Check if this element is null
-                if arr.is_null(i) {
+            // Use values.len() instead of arr.len() to get the number of elements in the list
+            let mut percentiles = Vec::with_capacity(values.len());
+            for i in 0..values.len() {
+                // Check if this element is null in the values array
+                if values.is_null(i) {
                     return Err(DataFusionError::Execution(format!(
                         "Percentiles array element at index {i} is NULL"
                     )));
