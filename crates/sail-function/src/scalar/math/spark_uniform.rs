@@ -112,29 +112,23 @@ impl SparkUniform {
 
     fn calculate_output_type(t_min: &DataType, t_max: &DataType) -> DataType {
         if t_min.is_integer() && t_max.is_integer() {
-            // Preserve type when both arguments have the same small integer type
-            if matches!((t_min, t_max), (DataType::Int8, DataType::Int8)) {
-                return DataType::Int8;
-            }
-            if matches!((t_min, t_max), (DataType::Int16, DataType::Int16)) {
-                return DataType::Int16;
-            }
+            // Integer type promotion hierarchy: Int8 < Int16 < Int32 < Int64
+            // UInt32/UInt64 require Int64 to safely represent all values
+            use DataType::*;
 
-            // Check for 64-bit types (signed or unsigned)
-            let is_64: bool = matches!(t_min, DataType::Int64 | DataType::UInt64)
-                || matches!(t_max, DataType::Int64 | DataType::UInt64);
-
-            // Check for unsigned 32-bit types
-            let is_unsigned_32: bool =
-                matches!(t_min, DataType::UInt32) || matches!(t_max, DataType::UInt32);
-
-            return if is_64 {
-                DataType::Int64
-            } else if is_unsigned_32 {
-                // UInt32 needs Int64 to safely represent all values
-                DataType::Int64
-            } else {
-                DataType::Int32
+            return match (t_min, t_max) {
+                // 64-bit types or UInt32 -> Int64 (highest priority)
+                (Int64, _) | (_, Int64) | (UInt32, _) | (_, UInt32) | (UInt64, _) | (_, UInt64) => {
+                    DataType::Int64
+                }
+                // 32-bit types or UInt16 -> Int32
+                (Int32, _) | (_, Int32) | (UInt16, _) | (_, UInt16) => DataType::Int32,
+                // 16-bit types or UInt8 -> Int16
+                (Int16, _) | (_, Int16) | (UInt8, _) | (_, UInt8) => DataType::Int16,
+                // Both Int8 -> Int8
+                (Int8, Int8) => DataType::Int8,
+                // Fallback for any other integer types
+                _ => DataType::Int32,
             };
         }
 
@@ -155,11 +149,11 @@ impl SparkUniform {
             (Some((p, s)), None) => DataType::Decimal128(p, s),
             (None, Some((p, s))) => DataType::Decimal128(p, s),
             (None, None) => {
-                // Preserve Float32 when both arguments are Float32
-                if matches!((t_min, t_max), (DataType::Float32, DataType::Float32)) {
-                    DataType::Float32
-                } else {
-                    DataType::Float64
+                // Float type handling: Float32 only if both are Float32, otherwise Float64
+                use DataType::*;
+                match (t_min, t_max) {
+                    (Float32, Float32) => DataType::Float32,
+                    _ => DataType::Float64,
                 }
             }
         }
@@ -1293,6 +1287,131 @@ mod tests {
             field.data_type(),
             &DataType::Decimal128(15, 5),
             "Decimal256 with same precision should use max scale"
+        );
+        Ok(())
+    }
+
+    /// Test 40: Int8 mixed with Int16 should return Int16
+    #[test]
+    fn test_uniform_return_type_int8_int16() -> Result<()> {
+        let uniform_fn = SparkUniform::new();
+        let arg_fields = vec![
+            Arc::new(Field::new("min", DataType::Int8, false)),
+            Arc::new(Field::new("max", DataType::Int16, false)),
+            Arc::new(Field::new("seed", DataType::Int64, false)),
+        ];
+
+        let args = ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &[None, None, None],
+        };
+
+        let field = uniform_fn.return_field_from_args(args)?;
+
+        assert_eq!(
+            field.data_type(),
+            &DataType::Int16,
+            "Int8 + Int16 should return Int16"
+        );
+        Ok(())
+    }
+
+    /// Test 41: Int16 with both arguments should preserve Int16
+    #[test]
+    fn test_uniform_return_type_int16_int16() -> Result<()> {
+        let uniform_fn = SparkUniform::new();
+        let arg_fields = vec![
+            Arc::new(Field::new("min", DataType::Int16, false)),
+            Arc::new(Field::new("max", DataType::Int16, false)),
+            Arc::new(Field::new("seed", DataType::Int64, false)),
+        ];
+
+        let args = ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &[None, None, None],
+        };
+
+        let field = uniform_fn.return_field_from_args(args)?;
+
+        assert_eq!(
+            field.data_type(),
+            &DataType::Int16,
+            "Int16 + Int16 should return Int16"
+        );
+        Ok(())
+    }
+
+    /// Test 42: UInt8 mixed with Int8 should return Int16
+    #[test]
+    fn test_uniform_return_type_uint8_int8() -> Result<()> {
+        let uniform_fn = SparkUniform::new();
+        let arg_fields = vec![
+            Arc::new(Field::new("min", DataType::UInt8, false)),
+            Arc::new(Field::new("max", DataType::Int8, false)),
+            Arc::new(Field::new("seed", DataType::Int64, false)),
+        ];
+
+        let args = ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &[None, None, None],
+        };
+
+        let field = uniform_fn.return_field_from_args(args)?;
+
+        assert_eq!(
+            field.data_type(),
+            &DataType::Int16,
+            "UInt8 + Int8 should return Int16"
+        );
+        Ok(())
+    }
+
+    /// Test 43: Float32 with both arguments should preserve Float32
+    #[test]
+    fn test_uniform_return_type_float32_float32() -> Result<()> {
+        let uniform_fn = SparkUniform::new();
+        let arg_fields = vec![
+            Arc::new(Field::new("min", DataType::Float32, false)),
+            Arc::new(Field::new("max", DataType::Float32, false)),
+            Arc::new(Field::new("seed", DataType::Int64, false)),
+        ];
+
+        let args = ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &[None, None, None],
+        };
+
+        let field = uniform_fn.return_field_from_args(args)?;
+
+        assert_eq!(
+            field.data_type(),
+            &DataType::Float32,
+            "Float32 + Float32 should return Float32"
+        );
+        Ok(())
+    }
+
+    /// Test 44: Float32 mixed with Float64 should return Float64
+    #[test]
+    fn test_uniform_return_type_float32_float64() -> Result<()> {
+        let uniform_fn = SparkUniform::new();
+        let arg_fields = vec![
+            Arc::new(Field::new("min", DataType::Float32, false)),
+            Arc::new(Field::new("max", DataType::Float64, false)),
+            Arc::new(Field::new("seed", DataType::Int64, false)),
+        ];
+
+        let args = ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &[None, None, None],
+        };
+
+        let field = uniform_fn.return_field_from_args(args)?;
+
+        assert_eq!(
+            field.data_type(),
+            &DataType::Float64,
+            "Float32 + Float64 should return Float64"
         );
         Ok(())
     }
