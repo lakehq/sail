@@ -1,9 +1,14 @@
 mod py_impl;
+mod file_info_arrow;
+mod file_info_stream;
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use datafusion::common::Result as DataFusionResult;
+use datafusion::execution::SendableRecordBatchStream;
 pub use py_impl::PythonMetaStore;
+
+pub use file_info_arrow::{file_info_fields, file_info_schema};
 
 use crate::spec::{FieldIndex, FileInfo, PartitionFilter, SchemaInfo, SnapshotInfo, TableInfo};
 
@@ -45,6 +50,16 @@ pub trait DuckLakeMetaStore: Send + Sync {
         &self,
         request: ListDataFilesRequest,
     ) -> DataFusionResult<Vec<FileInfo>>;
+
+    fn scan_data_files(
+        &self,
+        _request: ListDataFilesRequest,
+        _batch_size: usize,
+    ) -> DataFusionResult<SendableRecordBatchStream> {
+        Err(datafusion_common::DataFusionError::NotImplemented(
+            "scan_data_files is not implemented for this DuckLake metastore".to_string(),
+        ))
+    }
 
     async fn list_delete_files(
         &self,

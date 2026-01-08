@@ -1,0 +1,21 @@
+== Parsed Logical Plan ==
+Projection: ducklake_explain_test.#0 AS #3, ducklake_explain_test.#1 AS #4, ducklake_explain_test.#2 AS #5
+  Filter: ducklake_explain_test.#2 > Int32(90)
+    Projection: ducklake_explain_test.id AS #0, ducklake_explain_test.name AS #1, ducklake_explain_test.score AS #2
+      TableScan: ducklake_explain_test
+
+== Analyzed Logical Plan ==
+Projection: ducklake_explain_test.id AS #3, ducklake_explain_test.name AS #4, ducklake_explain_test.score AS #5
+  Filter: ducklake_explain_test.score > Float64(90)
+    TableScan: ducklake_explain_test projection=[id, name, score], partial_filters=[ducklake_explain_test.score > Float64(90)]
+
+== Physical Plan ==
+ProjectionExec: expr=[#3@0 as id, #4@1 as name, #5@2 as score]
+  ProjectionExec: expr=[id@0 as #3, name@1 as #4, score@2 as #5]
+    CoalesceBatchesExec: target_batch_size=8192
+      FilterExec: score@2 > 90
+        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+          DuckLakeScanExec(base_path=file:<tmp>/data/, table=main.test_table)
+            DuckLakePruningExec
+              CooperativeExec
+                DuckLakeMetadataScanExec(url=sqlite:<tmp>/metadata.ducklake, table_id=1)

@@ -3,13 +3,16 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::{Field, Schema};
 use datafusion::common::{DataFusionError, Result as DataFusionResult};
+use datafusion::execution::SendableRecordBatchStream;
 use pyo3::prelude::PyAnyMethods;
 use pyo3::type_object::PyTypeInfo;
 use pyo3::{FromPyObject, PyResult, Python};
 use serde::Deserialize;
 
 use crate::datasource::arrow::build_arrow_field;
-use crate::metadata::{DuckLakeMetaStore, DuckLakeSnapshot, DuckLakeTable, ListDataFilesRequest};
+use crate::metadata::{
+    file_info_schema, DuckLakeMetaStore, DuckLakeSnapshot, DuckLakeTable, ListDataFilesRequest,
+};
 use crate::python::Modules;
 use crate::spec::{
     DataFileIndex, FieldIndex, FileInfo, MappingIndex, PartitionId, SchemaInfo, SnapshotInfo,
@@ -144,6 +147,16 @@ impl PythonMetaStore {
         Ok(Self {
             url: url.to_string(),
         })
+    }
+
+    pub fn new_sync(url: &str) -> Self {
+        Self {
+            url: url.to_string(),
+        }
+    }
+
+    pub fn url(&self) -> &str {
+        &self.url
     }
 }
 
@@ -464,5 +477,37 @@ impl DuckLakeMetaStore for PythonMetaStore {
             .map(|r| r.into_file_info(table_id))
             .collect();
         Ok(out)
+    }
+
+    fn scan_data_files(
+        &self,
+        request: ListDataFilesRequest,
+        batch_size: usize,
+    ) -> DataFusionResult<SendableRecordBatchStream> {
+        // TODO: also surface associated ducklake_delete_file rows so readers can apply row-level deletes
+        let table_id = request.table_id;
+        let snapshot_id = request.snapshot_id;
+        let url = self.url.clone();
+        let py_partition_filters: Option<Vec<(u64, Vec<String>)>> =
+            request.partition_filters.map(|filters| {
+                filters
+                    .into_iter()
+                    .map(|f| (f.partition_key_index, f.values))
+                    .collect()
+            });
+        let required_column_ids: Option<Vec<u64>> = request
+            .required_column_stats
+            .map(|cols| cols.into_iter().map(|field| field.0).collect());
+        let schema = file_info_schema()?;
+
+        super::file_info_stream::PyFileInfoStream::scan_data_files_arrow(
+            schema,
+            url,
+            table_id.0,
+            snapshot_id,
+            py_partition_filters,
+            required_column_ids,
+            batch_size,
+        )
     }
 }

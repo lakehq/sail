@@ -10,6 +10,7 @@ use datafusion::common::scalar::ScalarValue;
 use datafusion::common::{Column, Result as DataFusionResult, ToDFSchema};
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::Expr;
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 
 use crate::datasource::arrow::field_column_id;
@@ -345,6 +346,48 @@ pub fn prune_files(
         let df_schema = logical_schema.clone().to_dfschema()?;
         let physical_predicate = session.create_physical_expr(predicate.clone(), &df_schema)?;
         let pruning_predicate = PruningPredicate::try_new(physical_predicate, logical_schema)?;
+        pruning_predicate.prune(&stats)?
+    } else {
+        vec![true; stats.num_containers()]
+    };
+
+    let mut kept = Vec::new();
+    let mut rows_collected: u64 = 0;
+    for (file, keep) in stats.files.into_iter().zip(files_to_keep.iter()) {
+        if *keep {
+            if let Some(lim) = limit {
+                if rows_collected <= lim as u64 {
+                    rows_collected = rows_collected.saturating_add(file.record_count);
+                    kept.push(file);
+                    if rows_collected > lim as u64 {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            } else {
+                kept.push(file);
+            }
+        }
+    }
+
+    Ok((kept, Some(files_to_keep)))
+}
+
+pub fn prune_files_with_physical_predicate(
+    predicate: Option<Arc<dyn PhysicalExpr>>,
+    limit: Option<usize>,
+    logical_schema: Arc<ArrowSchema>,
+    files: Vec<FileInfo>,
+    partition_fields: &[PartitionFieldInfo],
+) -> DataFusionResult<(Vec<FileInfo>, Option<Vec<bool>>)> {
+    if predicate.is_none() && limit.is_none() {
+        return Ok((files, None));
+    }
+
+    let stats = DuckLakePruningStats::new(files, logical_schema.clone(), partition_fields);
+    let files_to_keep = if let Some(predicate) = predicate {
+        let pruning_predicate = PruningPredicate::try_new(predicate, logical_schema)?;
         pruning_predicate.prune(&stats)?
     } else {
         vec![true; stats.num_containers()]

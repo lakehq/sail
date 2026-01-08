@@ -45,6 +45,9 @@ message ExtendedPhysicalPlanNode {
     IcebergWriterExecNode iceberg_writer = 31;
     IcebergCommitExecNode iceberg_commit = 32;
     MergeCardinalityCheckExecNode merge_cardinality_check = 33;
+    DuckLakeMetadataScanExecNode duck_lake_metadata_scan = 34;
+    DuckLakePruningExecNode duck_lake_pruning = 35;
+    DuckLakeScanExecNode duck_lake_scan = 36;
   }
 }
 
@@ -370,6 +373,39 @@ message DeltaFindFilesExecNode {
   optional bytes predicate = 2;
   optional bytes table_schema = 3;
   int64 version = 4;
+}
+
+message DuckLakePartitionFilter {
+  uint64 partition_key_index = 1;
+  repeated string values = 2;
+}
+
+message DuckLakeMetadataScanExecNode {
+  string metastore_url = 1;
+  uint64 table_id = 2;
+  optional uint64 snapshot_id = 3;
+  repeated DuckLakePartitionFilter partition_filters = 4;
+  repeated uint64 required_column_ids = 5;
+  uint64 batch_size = 6;
+}
+
+message DuckLakePruningExecNode {
+  bytes input = 1;
+  optional bytes predicate = 2;
+  bytes prune_schema = 3;
+  string partition_fields_json = 4;
+  optional uint64 limit = 5;
+}
+
+message DuckLakeScanExecNode {
+  bytes input = 1;
+  string base_path = 2;
+  string schema_name = 3;
+  string table_name = 4;
+  bytes table_schema = 5;
+  repeated uint64 projection = 6;
+  optional uint64 limit = 7;
+  optional bytes pushdown_predicate = 8;
 }
 
 message DeltaRemoveActionsExecNode {

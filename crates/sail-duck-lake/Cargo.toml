@@ -8,6 +8,7 @@ edition = { workspace = true }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-data-source = { path = "../sail-data-source" }
 serde = { workspace = true, features = ["derive"] }
+serde_arrow = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 async-trait = { workspace = true }
@@ -17,7 +18,10 @@ object_store = { workspace = true }
 url = { workspace = true }
 log = { workspace = true }
 tokio = { workspace = true }
+tokio-stream = { workspace = true }
+futures = { workspace = true }
 pyo3 = { workspace = true }
+arrow-pyarrow = { workspace = true }
 
 [lints]
 workspace = true

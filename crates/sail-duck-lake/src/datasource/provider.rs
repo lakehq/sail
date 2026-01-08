@@ -4,35 +4,27 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
-use datafusion::catalog::memory::DataSourceExec;
 use datafusion::catalog::Session;
-use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
 use datafusion::common::ToDFSchema;
-use datafusion::config::TableParquetOptions;
-use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
 use datafusion::datasource::{TableProvider, TableType};
-use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{DataFusionError, Result as DataFusionResult};
-use object_store::path::Path as ObjectStorePath;
-use url::Url;
 
 use crate::datasource::arrow::{field_column_id, schema_column_name_by_id};
 use crate::datasource::expressions::{get_pushdown_filters, simplify_expr};
-use crate::datasource::pruning::prune_files;
 use crate::metadata::{DuckLakeMetaStore, DuckLakeTable, ListDataFilesRequest};
 use crate::options::DuckLakeOptions;
-use crate::spec::{FieldIndex, FileInfo, PartitionFieldInfo, PartitionFilter};
+use crate::physical_plan::{DuckLakeMetadataScanExec, DuckLakePruningExec, DuckLakeScanExec};
+use crate::spec::{FieldIndex, PartitionFieldInfo, PartitionFilter};
 
 pub struct DuckLakeTableProvider {
     table: DuckLakeTable,
     schema: ArrowSchemaRef,
     base_path: String,
+    metastore_url: String,
     snapshot_id: Option<u64>,
-    meta_store: Arc<dyn DuckLakeMetaStore>,
 }
 
 impl DuckLakeTableProvider {
@@ -67,8 +59,8 @@ impl DuckLakeTableProvider {
             table,
             schema,
             base_path: opts.base_path,
+            metastore_url: opts.url,
             snapshot_id: opts.snapshot_id,
-            meta_store,
         })
     }
 }
@@ -126,53 +118,56 @@ impl TableProvider for DuckLakeTableProvider {
         let prune_schema = self.build_prune_schema(projection, &pruning_filters);
         let required_stats = self.collect_required_stat_fields(prune_schema.as_ref());
         let request = self.build_data_file_request(partition_filters, required_stats);
-        let files = self.meta_store.list_data_files(request).await?;
-        // TODO: fetch and apply delete files (row-level deletes) alongside data files
-        // TODO: load name mappings (mapping_id) and adapt physical<->logical schema for schema evolution
-        // TODO: union inlined_data_tables into the scan (MemoryExec) so unflushed inserts are visible
-
-        log::trace!("Found {} data files", files.len());
-
-        let (files, _mask) = prune_files(
-            session,
-            &pruning_filters,
-            limit,
-            prune_schema.clone(),
-            files,
-            &self.table.partition_fields,
-        )?;
-
-        let (object_store_url, table_prefix) = self.build_object_store_context()?;
-        let table_stats = self.aggregate_statistics(self.schema.as_ref(), &files);
-        let file_groups = self.build_file_groups(files, &table_prefix)?;
-
-        let parquet_options = TableParquetOptions {
-            global: session.config().options().execution.parquet.clone(),
-            ..Default::default()
-        };
-
-        let mut parquet_source = ParquetSource::new(parquet_options);
-        let pushdown_filter: Option<Arc<dyn PhysicalExpr>> = if !pushdown_filters.is_empty() {
+        // Build pruning predicate (for metadata pruning) and pushdown predicate (for Parquet scan).
+        let pruning_predicate: Option<Arc<dyn PhysicalExpr>> =
+            if let Some(expr) = datafusion::logical_expr::utils::conjunction(pruning_filters) {
+                let df_schema = prune_schema.clone().to_dfschema()?;
+                Some(session.create_physical_expr(expr, &df_schema)?)
+            } else {
+                None
+            };
+        let pushdown_predicate: Option<Arc<dyn PhysicalExpr>> = if !pushdown_filters.is_empty() {
             let df_schema = prune_schema.clone().to_dfschema()?;
             let pushdown_expr = datafusion::logical_expr::utils::conjunction(pushdown_filters);
             pushdown_expr.map(|expr| simplify_expr(session, &df_schema, expr))
         } else {
             None
         };
-        if let Some(pred) = pushdown_filter {
-            parquet_source = parquet_source.with_predicate(pred);
-        }
-        let parquet_source = Arc::new(parquet_source);
 
-        let file_scan_config =
-            FileScanConfigBuilder::new(object_store_url, self.schema.clone(), parquet_source)
-                .with_file_groups(file_groups)
-                .with_statistics(table_stats)
-                .with_projection_indices(projection.cloned())
-                .with_limit(limit)
-                .build();
+        // TODO: fetch and apply delete files (row-level deletes) alongside data files
+        // TODO: load name mappings (mapping_id) and adapt physical<->logical schema for schema evolution
+        // TODO: union inlined_data_tables into the scan (MemoryExec) so unflushed inserts are visible
 
-        Ok(DataSourceExec::from_data_source(file_scan_config))
+        // Source: stream metadata from metastore as Arrow batches.
+        let metadata_batch_size = 10_000usize;
+        let metadata_exec = Arc::new(DuckLakeMetadataScanExec::try_new(
+            self.metastore_url.clone(),
+            request,
+            metadata_batch_size,
+        )?);
+
+        // Prune metadata using DataFusion pruning rules.
+        let pruning_exec = Arc::new(DuckLakePruningExec::try_new(
+            metadata_exec,
+            pruning_predicate,
+            prune_schema,
+            self.table.partition_fields.clone(),
+            limit,
+        )?);
+
+        // Sink: consume pruned file list and scan Parquet data.
+        let scan_exec = Arc::new(DuckLakeScanExec::try_new(
+            pruning_exec,
+            self.base_path.clone(),
+            self.table.schema_info.schema_name.clone(),
+            self.table.table_info.table_name.clone(),
+            self.schema.clone(),
+            projection.cloned(),
+            limit,
+            pushdown_predicate,
+        )?);
+
+        Ok(scan_exec)
     }
 }
 
@@ -242,82 +237,6 @@ impl DuckLakeTableProvider {
             partition_filters: (!partition_filters.is_empty()).then_some(partition_filters),
             required_column_stats: (!required_stats.is_empty()).then_some(required_stats),
         }
-    }
-
-    fn build_object_store_context(&self) -> DataFusionResult<(ObjectStoreUrl, ObjectStorePath)> {
-        let base_url =
-            Url::parse(&self.base_path).map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let mut object_store_base = base_url.clone();
-        object_store_base.set_query(None);
-        object_store_base.set_fragment(None);
-        object_store_base.set_path("/");
-        let object_store_url = ObjectStoreUrl::parse(object_store_base.as_str())?;
-
-        let mut table_prefix = ObjectStorePath::parse(base_url.path())
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        table_prefix = table_prefix
-            .child(self.table.schema_info.schema_name.as_str())
-            .child(self.table.table_info.table_name.as_str());
-
-        // TODO: honor catalog path/path_is_relative instead of assuming schema/table layout
-        Ok((object_store_url, table_prefix))
-    }
-
-    fn build_file_groups(
-        &self,
-        files: Vec<FileInfo>,
-        table_prefix: &ObjectStorePath,
-    ) -> DataFusionResult<Vec<FileGroup>> {
-        let mut file_groups: HashMap<Option<u64>, Vec<PartitionedFile>> = HashMap::new();
-
-        for file in files {
-            let object_path = Self::resolve_file_path(table_prefix, &file)?;
-            // TODO: propagate row_id_start, mapping_id, encryption, delete file refs, and file_format into scan config
-            let partitioned_file = PartitionedFile::new(object_path, file.file_size_bytes);
-            let partition_key = file.partition_id.map(|p| p.0);
-            file_groups
-                .entry(partition_key)
-                .or_default()
-                .push(partitioned_file);
-        }
-
-        log::trace!(
-            "Created {} file groups from {} files",
-            file_groups.len(),
-            file_groups.values().map(|v| v.len()).sum::<usize>()
-        );
-
-        if file_groups.is_empty() {
-            log::warn!("No data files found for table");
-            Ok(vec![FileGroup::from(vec![])])
-        } else {
-            Ok(file_groups.into_values().map(FileGroup::from).collect())
-        }
-    }
-
-    fn resolve_file_path(
-        base_prefix: &ObjectStorePath,
-        file: &FileInfo,
-    ) -> DataFusionResult<ObjectStorePath> {
-        if file.path_is_relative {
-            let relative = ObjectStorePath::parse(&file.path)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            Ok(Self::append_relative_path(base_prefix, &relative))
-        } else if let Ok(path_url) = Url::parse(&file.path) {
-            ObjectStorePath::from_url_path(path_url.path())
-                .map_err(|e| DataFusionError::External(Box::new(e)))
-        } else {
-            ObjectStorePath::parse(&file.path).map_err(|e| DataFusionError::External(Box::new(e)))
-        }
-    }
-
-    fn append_relative_path(
-        base_prefix: &ObjectStorePath,
-        relative: &ObjectStorePath,
-    ) -> ObjectStorePath {
-        relative
-            .parts()
-            .fold(base_prefix.clone(), |acc, part| acc.child(part))
     }
 
     fn separate_filters(&self, filters: &[Expr]) -> (Vec<Expr>, Vec<Expr>) {
@@ -462,33 +381,5 @@ impl DuckLakeTableProvider {
         }
     }
 
-    fn aggregate_statistics(
-        &self,
-        schema: &datafusion::arrow::datatypes::Schema,
-        files: &[FileInfo],
-    ) -> Statistics {
-        // TODO: fill min/max/null_count from FileInfo.column_stats so pruning/limits can use stats
-        let column_statistics = (0..schema.fields().len())
-            .map(|_| ColumnStatistics {
-                null_count: Precision::Absent,
-                max_value: Precision::Absent,
-                min_value: Precision::Absent,
-                distinct_count: Precision::Absent,
-                sum_value: Precision::Absent,
-            })
-            .collect();
-        let total_rows = files
-            .iter()
-            .fold(0u64, |acc, file| acc.saturating_add(file.record_count));
-        let total_bytes = files
-            .iter()
-            .fold(0u64, |acc, file| acc.saturating_add(file.file_size_bytes));
-        let num_rows = total_rows.min(usize::MAX as u64) as usize;
-        let total_byte_size = total_bytes.min(usize::MAX as u64) as usize;
-        Statistics {
-            num_rows: Precision::Exact(num_rows),
-            total_byte_size: Precision::Exact(total_byte_size),
-            column_statistics,
-        }
-    }
+    // NOTE: file scan statistics and file-group construction now happen inside `DuckLakeScanExec`.
 }

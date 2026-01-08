@@ -70,6 +70,11 @@ use sail_delta_lake::physical_plan::{
     DeltaCommitExec, DeltaFileLookupExec, DeltaFindFilesExec, DeltaRemoveActionsExec,
     DeltaScanByAddsExec, DeltaWriterExec,
 };
+use sail_duck_lake::metadata::ListDataFilesRequest;
+use sail_duck_lake::physical_plan::{
+    DuckLakeMetadataScanExec, DuckLakePruningExec, DuckLakeScanExec,
+};
+use sail_duck_lake::spec::{FieldIndex, PartitionFieldInfo, PartitionFilter, TableIndex};
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
@@ -633,6 +638,126 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     input, table_url, version,
                 )))
             }
+            NodeKind::DuckLakeMetadataScan(gen::DuckLakeMetadataScanExecNode {
+                metastore_url,
+                table_id,
+                snapshot_id,
+                partition_filters,
+                required_column_ids,
+                batch_size,
+            }) => {
+                let partition_filters = if partition_filters.is_empty() {
+                    None
+                } else {
+                    Some(
+                        partition_filters
+                            .into_iter()
+                            .map(|f| PartitionFilter {
+                                partition_key_index: f.partition_key_index,
+                                values: f.values,
+                            })
+                            .collect(),
+                    )
+                };
+                let required_column_stats = if required_column_ids.is_empty() {
+                    None
+                } else {
+                    Some(required_column_ids.into_iter().map(FieldIndex).collect())
+                };
+                let request = ListDataFilesRequest {
+                    table_id: TableIndex(table_id),
+                    snapshot_id,
+                    partition_filters,
+                    required_column_stats,
+                };
+                let batch_size = usize::try_from(batch_size).map_err(|_| {
+                    plan_datafusion_err!("invalid batch_size for DuckLakeMetadataScanExec")
+                })?;
+                Ok(Arc::new(DuckLakeMetadataScanExec::try_new(
+                    metastore_url,
+                    request,
+                    batch_size,
+                )?))
+            }
+            NodeKind::DuckLakePruning(gen::DuckLakePruningExecNode {
+                input,
+                predicate,
+                prune_schema,
+                partition_fields_json,
+                limit,
+            }) => {
+                let input = self.try_decode_plan(&input, ctx)?;
+                let prune_schema = Arc::new(self.try_decode_schema(&prune_schema)?);
+                let predicate = if let Some(pred_bytes) = predicate {
+                    Some(parse_physical_expr(
+                        &self.try_decode_message(&pred_bytes)?,
+                        ctx,
+                        &prune_schema,
+                        self,
+                    )?)
+                } else {
+                    None
+                };
+                let partition_fields: Vec<PartitionFieldInfo> =
+                    serde_json::from_str(&partition_fields_json)
+                        .map_err(|e| plan_datafusion_err!("{e}"))?;
+                let limit = if let Some(l) = limit {
+                    Some(usize::try_from(l).map_err(|_| {
+                        plan_datafusion_err!("invalid limit for DuckLakePruningExec: {l}")
+                    })?)
+                } else {
+                    None
+                };
+                Ok(Arc::new(DuckLakePruningExec::try_new(
+                    input,
+                    predicate,
+                    prune_schema,
+                    partition_fields,
+                    limit,
+                )?))
+            }
+            NodeKind::DuckLakeScan(gen::DuckLakeScanExecNode {
+                input,
+                base_path,
+                schema_name,
+                table_name,
+                table_schema,
+                projection,
+                limit,
+                pushdown_predicate,
+            }) => {
+                let input = self.try_decode_plan(&input, ctx)?;
+                let table_schema = Arc::new(self.try_decode_schema(&table_schema)?);
+                let projection = self.try_decode_projection(&projection)?;
+                let projection = (!projection.is_empty()).then_some(projection);
+                let limit = if let Some(l) = limit {
+                    Some(usize::try_from(l).map_err(|_| {
+                        plan_datafusion_err!("invalid limit for DuckLakeScanExec: {l}")
+                    })?)
+                } else {
+                    None
+                };
+                let pushdown_predicate = if let Some(pred_bytes) = pushdown_predicate {
+                    Some(parse_physical_expr(
+                        &self.try_decode_message(&pred_bytes)?,
+                        ctx,
+                        &table_schema,
+                        self,
+                    )?)
+                } else {
+                    None
+                };
+                Ok(Arc::new(DuckLakeScanExec::try_new(
+                    input,
+                    base_path,
+                    schema_name,
+                    table_name,
+                    table_schema,
+                    projection,
+                    limit,
+                    pushdown_predicate,
+                )?))
+            }
             NodeKind::ConsoleSink(gen::ConsoleSinkExecNode { input }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 Ok(Arc::new(ConsoleSinkExec::new(input)))
@@ -1109,6 +1234,91 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 table_url: delta_file_lookup_exec.table_url().to_string(),
                 version: delta_file_lookup_exec.version(),
+            })
+        } else if let Some(ducklake_metadata_scan) =
+            node.as_any().downcast_ref::<DuckLakeMetadataScanExec>()
+        {
+            let partition_filters = ducklake_metadata_scan
+                .partition_filters()
+                .unwrap_or(&[])
+                .iter()
+                .map(|f| gen::DuckLakePartitionFilter {
+                    partition_key_index: f.partition_key_index,
+                    values: f.values.clone(),
+                })
+                .collect();
+            let required_column_ids = ducklake_metadata_scan
+                .required_column_stats()
+                .unwrap_or(&[])
+                .iter()
+                .map(|x| x.0)
+                .collect();
+            let batch_size = u64::try_from(ducklake_metadata_scan.batch_size()).map_err(|_| {
+                plan_datafusion_err!("cannot encode batch_size for DuckLakeMetadataScanExec")
+            })?;
+            NodeKind::DuckLakeMetadataScan(gen::DuckLakeMetadataScanExecNode {
+                metastore_url: ducklake_metadata_scan.metastore_url().to_string(),
+                table_id: ducklake_metadata_scan.table_id().0,
+                snapshot_id: ducklake_metadata_scan.snapshot_id(),
+                partition_filters,
+                required_column_ids,
+                batch_size,
+            })
+        } else if let Some(ducklake_pruning) = node.as_any().downcast_ref::<DuckLakePruningExec>() {
+            let input = self.try_encode_plan(ducklake_pruning.input().clone())?;
+            let predicate = if let Some(pred) = ducklake_pruning.predicate() {
+                let predicate_node = serialize_physical_expr(&pred.clone(), self)?;
+                Some(self.try_encode_message(predicate_node)?)
+            } else {
+                None
+            };
+            let prune_schema = self.try_encode_schema(ducklake_pruning.prune_schema())?;
+            let partition_fields_json = serde_json::to_string(ducklake_pruning.partition_fields())
+                .map_err(|e| plan_datafusion_err!("{e}"))?;
+            let limit = if let Some(l) = ducklake_pruning.limit() {
+                Some(u64::try_from(l).map_err(|_| {
+                    plan_datafusion_err!("cannot encode limit for DuckLakePruningExec")
+                })?)
+            } else {
+                None
+            };
+            NodeKind::DuckLakePruning(gen::DuckLakePruningExecNode {
+                input,
+                predicate,
+                prune_schema,
+                partition_fields_json,
+                limit,
+            })
+        } else if let Some(ducklake_scan) = node.as_any().downcast_ref::<DuckLakeScanExec>() {
+            let input = self.try_encode_plan(ducklake_scan.input().clone())?;
+            let table_schema = self.try_encode_schema(ducklake_scan.table_schema())?;
+            let projection = if let Some(p) = ducklake_scan.projection() {
+                self.try_encode_projection(p)?
+            } else {
+                vec![]
+            };
+            let limit = if let Some(l) = ducklake_scan.limit() {
+                Some(u64::try_from(l).map_err(|_| {
+                    plan_datafusion_err!("cannot encode limit for DuckLakeScanExec")
+                })?)
+            } else {
+                None
+            };
+            let pushdown_predicate = if let Some(pred) = ducklake_scan.pushdown_predicate() {
+                let predicate_node = serialize_physical_expr(&pred.clone(), self)?;
+                Some(self.try_encode_message(predicate_node)?)
+            } else {
+                None
+            };
+            NodeKind::DuckLakeScan(gen::DuckLakeScanExecNode {
+                input,
+                base_path: ducklake_scan.base_path().to_string(),
+                schema_name: ducklake_scan.schema_name().to_string(),
+                table_name: ducklake_scan.table_name().to_string(),
+                table_schema,
+                projection,
+                limit,
+                pushdown_predicate,
             })
         } else if let Some(console_sink) = node.as_any().downcast_ref::<ConsoleSinkExec>() {
             let input = self.try_encode_plan(console_sink.input().clone())?;

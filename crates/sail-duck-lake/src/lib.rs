@@ -1,6 +1,7 @@
 pub mod datasource;
 pub mod metadata;
 pub mod options;
+pub mod physical_plan;
 mod python;
 pub mod spec;
 pub mod table_format;

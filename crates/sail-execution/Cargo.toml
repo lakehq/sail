@@ -13,6 +13,7 @@ sail-data-source = { path = "../sail-data-source" }
 sail-server = { path = "../sail-server" }
 sail-python-udf = { path = "../sail-python-udf" }
 sail-delta-lake = { path = "../sail-delta-lake" }
+sail-duck-lake = { path = "../sail-duck-lake" }
 sail-iceberg = { path = "../sail-iceberg" }
 sail-function = { path = "../sail-function" }
 sail-logical-plan = { path = "../sail-logical-plan" }

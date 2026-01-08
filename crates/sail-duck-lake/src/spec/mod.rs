@@ -150,9 +150,9 @@ pub struct FileInfo {
     pub encryption_key: String,
     pub partial_file_info: Option<String>,
     pub mapping_id: MappingIndex,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub column_stats: Vec<ColumnStatsInfo>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub partition_values: Vec<FilePartitionInfo>,
 }
 
