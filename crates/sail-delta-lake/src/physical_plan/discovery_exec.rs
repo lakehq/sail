@@ -244,9 +244,11 @@ impl ExecutionPlan for DeltaDiscoveryExec {
                 let part_arrays: Vec<(String, Arc<dyn Array>)> = partition_columns
                     .iter()
                     .filter_map(|name| {
-                        batch
-                            .column_by_name(name)
-                            .map(|a| (name.clone(), a.clone()))
+                        batch.column_by_name(name).map(|a| {
+                            let a = datafusion::arrow::compute::cast(a, &DataType::Utf8)
+                                .unwrap_or_else(|_| a.clone());
+                            (name.clone(), a)
+                        })
                     })
                     .collect();
 
@@ -260,18 +262,22 @@ impl ExecutionPlan for DeltaDiscoveryExec {
                     let size = size_arr.map(|a| a.value(row)).unwrap_or_default();
                     let modification_time = mod_time_arr.map(|a| a.value(row)).unwrap_or_default();
 
-                    let mut partition_values: HashMap<String, Option<String>> = HashMap::new();
+                    let mut partition_values: HashMap<String, Option<String>> =
+                        HashMap::with_capacity(part_arrays.len());
                     for (name, arr) in &part_arrays {
                         let v = if arr.is_null(row) {
                             None
+                        } else if let Some(s) = arr
+                            .as_any()
+                            .downcast_ref::<datafusion::arrow::array::StringArray>()
+                        {
+                            Some(s.value(row).to_string())
                         } else {
-                            Some(
-                                datafusion_common::scalar::ScalarValue::try_from_array(
-                                    arr.as_ref(),
-                                    row,
-                                )?
-                                .to_string(),
+                            datafusion::arrow::util::display::array_value_to_string(
+                                arr.as_ref(),
+                                row,
                             )
+                            .ok()
                         };
                         partition_values.insert(name.clone(), v);
                     }

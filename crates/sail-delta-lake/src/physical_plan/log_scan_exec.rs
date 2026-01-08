@@ -94,7 +94,7 @@ impl DeltaLogScanExec {
     }
 
     fn output_schema(partition_columns: &[String]) -> SchemaRef {
-        // Partition columns are typed by the kernel evaluator, so we mark them nullable here.
+        // Partition values are typed by the kernel evaluator, so we mark them nullable here.
         let mut fields = vec![
             Arc::new(Field::new(PATH_COLUMN, DataType::Utf8, false)),
             Arc::new(Field::new(COL_SIZE_BYTES, DataType::Int64, false)),
