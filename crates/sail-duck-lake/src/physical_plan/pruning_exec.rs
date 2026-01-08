@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -13,16 +14,12 @@ use datafusion::physical_plan::{
     SendableRecordBatchStream,
 };
 use datafusion_common::{internal_err, DataFusionError, Result as DataFusionResult};
-use futures::StreamExt;
+use futures::{stream, StreamExt};
 use serde_arrow::from_record_batch;
-use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
 
 use crate::datasource::pruning::prune_files_with_physical_predicate;
 use crate::metadata::file_info_fields;
 use crate::spec::{FileInfo, PartitionFieldInfo};
-
-const OUTPUT_CHANNEL_BUFFER: usize = 16;
 
 /// Physical node that prunes DuckLake data files (metadata) using DataFusion pruning predicates.
 ///
@@ -136,63 +133,94 @@ impl ExecutionPlan for DuckLakePruningExec {
             return internal_err!("DuckLakePruningExec can only be executed in a single partition");
         }
 
-        let mut input_stream = self.input.execute(0, context)?;
+        let input_stream = self.input.execute(0, context)?;
         let predicate = self.predicate.clone();
         let prune_schema = self.prune_schema.clone();
         let partition_fields = self.partition_fields.clone();
-        let mut remaining_limit: Option<u64> = self.limit.map(|x| x as u64);
+        let remaining_limit: Option<u64> = self.limit.map(|x| x as u64);
         let output_schema = self.output_schema.clone();
 
         // Use serde_arrow schema for re-encoding filtered FileInfo back to RecordBatch.
         let fields = file_info_fields()?;
 
-        let (output_tx, output_rx) = mpsc::channel(OUTPUT_CHANNEL_BUFFER);
-        tokio::spawn(async move {
-            while let Some(batch_result) = input_stream.next().await {
+        struct PruningState {
+            input_stream: SendableRecordBatchStream,
+            predicate: Option<Arc<dyn PhysicalExpr>>,
+            prune_schema: SchemaRef,
+            partition_fields: Vec<PartitionFieldInfo>,
+            remaining_limit: Option<u64>,
+            output_schema: SchemaRef,
+            fields: Vec<datafusion::arrow::datatypes::FieldRef>,
+            done: bool,
+        }
+
+        let state = PruningState {
+            input_stream,
+            predicate,
+            prune_schema,
+            partition_fields,
+            remaining_limit,
+            output_schema,
+            fields,
+            done: false,
+        };
+
+        // Demand-driven (lazy) stream: does no work until polled.
+        let stream = stream::unfold(state, |mut state| async move {
+            if state.done || state.remaining_limit.is_some_and(|x| x == 0) {
+                return None;
+            }
+
+            loop {
+                let batch_result = match state.input_stream.next().await {
+                    None => return None,
+                    Some(v) => v,
+                };
+
                 let batch = match batch_result {
                     Ok(b) => b,
                     Err(e) => {
-                        let _ = output_tx.send(Err(e)).await;
-                        break;
+                        state.done = true;
+                        return Some((Err(e), state));
                     }
                 };
+
                 if batch.num_rows() == 0 {
                     continue;
                 }
 
-                if remaining_limit.is_some_and(|x| x == 0) {
-                    break;
+                if state.remaining_limit.is_some_and(|x| x == 0) {
+                    return None;
                 }
 
                 let files: Vec<FileInfo> = match from_record_batch(&batch) {
                     Ok(v) => v,
                     Err(e) => {
-                        let _ = output_tx
-                            .send(Err(DataFusionError::External(Box::new(e))))
-                            .await;
-                        break;
+                        state.done = true;
+                        return Some((Err(DataFusionError::External(Box::new(e))), state));
                     }
                 };
 
-                let batch_limit = remaining_limit
+                let batch_limit = state
+                    .remaining_limit
                     .map(|x| x.min(usize::MAX as u64) as usize)
                     .filter(|x| *x > 0);
 
                 let (kept, _mask) = match prune_files_with_physical_predicate(
-                    predicate.clone(),
+                    state.predicate.clone(),
                     batch_limit,
-                    prune_schema.clone(),
+                    state.prune_schema.clone(),
                     files,
-                    &partition_fields,
+                    &state.partition_fields,
                 ) {
                     Ok(v) => v,
                     Err(e) => {
-                        let _ = output_tx.send(Err(e)).await;
-                        break;
+                        state.done = true;
+                        return Some((Err(e), state));
                     }
                 };
 
-                if let Some(rem) = &mut remaining_limit {
+                if let Some(rem) = &mut state.remaining_limit {
                     let kept_rows = kept
                         .iter()
                         .fold(0u64, |acc, f| acc.saturating_add(f.record_count));
@@ -200,30 +228,21 @@ impl ExecutionPlan for DuckLakePruningExec {
                 }
 
                 let out_batch = if kept.is_empty() {
-                    datafusion::arrow::record_batch::RecordBatch::new_empty(output_schema.clone())
+                    RecordBatch::new_empty(state.output_schema.clone())
                 } else {
-                    match serde_arrow::to_record_batch(&fields, &kept) {
+                    match serde_arrow::to_record_batch(&state.fields, &kept) {
                         Ok(b) => b,
                         Err(e) => {
-                            let _ = output_tx
-                                .send(Err(DataFusionError::External(Box::new(e))))
-                                .await;
-                            break;
+                            state.done = true;
+                            return Some((Err(DataFusionError::External(Box::new(e))), state));
                         }
                     }
                 };
 
-                if output_tx.send(Ok(out_batch)).await.is_err() {
-                    break;
-                }
-
-                if remaining_limit.is_some_and(|x| x == 0) {
-                    break;
-                }
+                return Some((Ok(out_batch), state));
             }
         });
 
-        let stream = ReceiverStream::new(output_rx);
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),
             stream,
