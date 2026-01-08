@@ -296,20 +296,23 @@ impl ExecutionPlan for DeltaLogScanExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let schema = self.schema();
-        let mut input_stream = self.input.execute(partition, context)?;
+        let input_stream = self.input.execute(partition, context)?;
         let this = self.clone();
-        let s = async_stream::try_stream! {
-            while let Some(batch) = input_stream.try_next().await? {
+        let s = input_stream.try_filter_map(move |batch| {
+            let this = this.clone();
+            async move {
                 if batch.num_rows() == 0 {
-                    continue;
+                    return Ok(None);
                 }
+
                 let out = this.to_file_rows(&batch)?;
                 if out.num_rows() == 0 {
-                    continue;
+                    return Ok(None);
                 }
-                yield out;
+
+                Ok(Some(out))
             }
-        };
+        });
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, s)))
     }
 }

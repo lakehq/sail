@@ -50,7 +50,6 @@ itertools = { workspace = true }
 percent-encoding = { workspace = true }
 regex = { workspace = true }
 serde_arrow = { workspace = true }
-async-stream = { workspace = true }
 
 [lints]
 workspace = true
