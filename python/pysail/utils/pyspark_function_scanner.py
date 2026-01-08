@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 # Modules to track
 TARGET_MODULES: frozenset[str] = frozenset(
     {
+        "pyspark.SparkContext",
         "pyspark.sql.Column",
         "pyspark.sql.DataFrame",
         "pyspark.sql.functions",
