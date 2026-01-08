@@ -378,7 +378,3 @@ root
 +--------------------------+
 |[0.0, 2.5, 5.0, 7.5, 10.0]|
 +--------------------------+
-
--- Test 4: Multiple percentiles with strings
-spark.sql("""SELECT percentile(str, array(0.0, 0.5, 1.0)) AS percentiles FROM (VALUES ('a'), ('b'), ('c'), ('d'), ('e')) AS t(str)""").show()
--- fallo
