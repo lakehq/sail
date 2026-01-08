@@ -13,14 +13,18 @@ use crate::kernel::DeltaOperation;
 pub const COL_ACTION: &str = "action";
 const COL_PARTITION_VALUES: &str = "partition_values";
 
-static ACTION_FIELDS: LazyLock<
-    std::result::Result<Vec<datafusion::arrow::datatypes::FieldRef>, String>,
-> = LazyLock::new(delta_action_fields_build);
-static ACTION_SCHEMA: LazyLock<std::result::Result<SchemaRef, String>> =
-    LazyLock::new(|| match (*ACTION_FIELDS).as_ref() {
-        Ok(fields) => Ok(Arc::new(Schema::new(fields.clone()))),
-        Err(msg) => Err(msg.clone()),
-    });
+static ACTION_FIELDS: LazyLock<Vec<datafusion::arrow::datatypes::FieldRef>> = LazyLock::new(|| {
+    #[expect(
+        clippy::unwrap_used,
+        reason = "ACTION_FIELDS is a process-global constant."
+    )]
+    let fields = delta_action_fields_build()
+        .map_err(|msg| format!("delta action fields initialization failed: {msg}"))
+        .unwrap();
+    fields
+});
+static ACTION_SCHEMA: LazyLock<SchemaRef> =
+    LazyLock::new(|| Arc::new(Schema::new((*ACTION_FIELDS).clone())));
 
 #[derive(Debug, Clone, Default)]
 pub struct CommitMeta {
@@ -123,21 +127,11 @@ fn delta_action_fields_build(
 }
 
 fn delta_action_fields() -> Result<&'static Vec<datafusion::arrow::datatypes::FieldRef>> {
-    match (*ACTION_FIELDS).as_ref() {
-        Ok(v) => Ok(v),
-        Err(msg) => Err(DataFusionError::Internal(format!(
-            "delta action fields initialization failed: {msg}"
-        ))),
-    }
+    Ok(&*ACTION_FIELDS)
 }
 
 pub fn delta_action_schema() -> Result<SchemaRef> {
-    match &*ACTION_SCHEMA {
-        Ok(schema) => Ok(Arc::clone(schema)),
-        Err(msg) => Err(DataFusionError::Internal(format!(
-            "delta action schema initialization failed: {msg}"
-        ))),
-    }
+    Ok(Arc::clone(&*ACTION_SCHEMA))
 }
 
 pub fn encode_actions(actions: Vec<ExecAction>) -> Result<RecordBatch> {
