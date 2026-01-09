@@ -212,6 +212,22 @@ class TestCsvDataSource:
         assert read_df.columns == ["col1", "col2"]
         assert read_df.collect()[0].col2 == expected_col2_value
 
+    def test_csv_read_truncated_rows(self, spark, tmp_path):
+        path = tmp_path / "csv_read_truncated_rows"
+        path.mkdir()
+        data_path = path / "data.csv"
+        with open(data_path, "w") as f:
+            f.write("col1,col2\n")
+            f.write("x,10\n")
+            f.write("y\n")
+
+        df = spark.read.option("header", "true").csv(str(path))
+        with pytest.raises(Exception, match="unequal"):
+            df.collect()
+
+        df = spark.read.option("header", "true").option("allowTruncatedRows", "true").csv(str(path))
+        assert sorted(df.collect()) == [Row(col1="x", col2=10), Row(col1="y", col2=None)]
+
 
 class TestJsonDataSource:
     def test_read_write_basic(self, spark, sample_df, tmp_path):

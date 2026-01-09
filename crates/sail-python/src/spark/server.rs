@@ -94,6 +94,8 @@ impl SparkConnectServer {
         }
     }
 
+    /// Actually starts the server. Sets some config then calls 'run' (not available in the Python API)
+    /// If background is False, will not return until the server finishes.
     #[pyo3(signature = (*, background))]
     fn start(&mut self, py: Python<'_>, background: bool) -> PyResult<()> {
         if self.state.is_some() {
@@ -153,6 +155,7 @@ impl SparkConnectServer {
         info!("Shutting down the Spark Connect server...");
     }
 
+    /// Thin wrapper on block_on
     fn run_blocking(
         handle: Handle,
         config: Arc<AppConfig>,
@@ -170,6 +173,7 @@ impl SparkConnectServer {
         Ok(())
     }
 
+    /// Starts the server, not available in the Python API.
     fn run(&self, listener: TcpListener) -> PyResult<SparkConnectServerState> {
         let runtime = self.runtime.handle();
         // Get the actual listener address.

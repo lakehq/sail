@@ -12,6 +12,7 @@ use crate::server::SparkConnectServer;
 use crate::session_manager::create_spark_session_manager;
 use crate::spark::connect::spark_connect_service_server::SparkConnectServiceServer;
 
+/// The meat of the gRPC server.
 pub async fn serve<F>(
     listener: TcpListener,
     signal: F,
