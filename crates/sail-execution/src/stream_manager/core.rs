@@ -131,18 +131,15 @@ impl StreamManager {
     }
 
     pub fn fail_local_stream_if_pending(&mut self, key: &TaskStreamKey) {
-        match self.local_streams.remove(key) {
-            Some(LocalStreamState::Pending { senders }) => {
-                for tx in senders {
-                    // `try_send` would not fail due to full buffer because we have
-                    // never sent any data to the channel.
-                    // So we do not need to spawn a task to send the error asynchronously.
-                    let _ = tx.try_send(Err(TaskStreamError::Unknown(
-                        "local stream is not created within the expected time".to_string(),
-                    )));
-                }
+        if let Some(LocalStreamState::Pending { senders }) = self.local_streams.remove(key) {
+            for tx in senders {
+                // `try_send` would not fail due to full buffer because we have
+                // never sent any data to the channel.
+                // So we do not need to spawn a task to send the error asynchronously.
+                let _ = tx.try_send(Err(TaskStreamError::Unknown(
+                    "local stream is not created within the expected time".to_string(),
+                )));
             }
-            _ => {}
         }
     }
 

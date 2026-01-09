@@ -71,7 +71,7 @@ impl JobScheduler {
             .and_then(|stage| stage.tasks.get_mut(key.partition))
             .and_then(|task| task.attempts.get_mut(key.attempt))
         else {
-            warn!("{} not found", TaskKeyDisplay(&key));
+            warn!("{} not found", TaskKeyDisplay(key));
             return;
         };
         attempt.state = attempt.state.consolidate(state);
@@ -89,9 +89,9 @@ impl JobScheduler {
             .and_then(|stage| stage.tasks.get(key.partition))
             .and_then(|task| task.attempts.get(key.attempt));
         if attempt.is_none() {
-            warn!("{} not found", TaskKeyDisplay(&key));
+            warn!("{} not found", TaskKeyDisplay(key));
         };
-        attempt.map(|x| x.state.clone())
+        attempt.map(|x| x.state)
     }
 
     /// Determine the actions needed in the driver for the job whose
@@ -196,11 +196,8 @@ impl JobScheduler {
             for t in &region.tasks {
                 let attempts = &job.stages[t.stage].tasks[t.partition].attempts;
                 if let Some(attempt) = attempts.last() {
-                    match attempt.state {
-                        TaskState::Failed => {
-                            failed = true;
-                        }
-                        _ => {}
+                    if matches!(attempt.state, TaskState::Failed) {
+                        failed = true;
                     }
                 }
             }
@@ -242,7 +239,7 @@ impl JobScheduler {
                     job.stages[c].tasks[p]
                         .attempts
                         .last()
-                        .map_or(false, |a| matches!(a.state, TaskState::Succeeded))
+                        .is_some_and(|a| matches!(a.state, TaskState::Succeeded))
                 })
             });
 

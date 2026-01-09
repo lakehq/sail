@@ -68,7 +68,7 @@ impl TaskRunner {
     }
 
     pub fn stop_task(&mut self, key: &TaskKey) {
-        if let Some(signal) = self.signals.remove(&key) {
+        if let Some(signal) = self.signals.remove(key) {
             let _ = signal.send(());
         }
     }
@@ -102,7 +102,7 @@ impl TaskRunner {
         let options = TracingExecOptions {
             metric_registry: global_metric_registry(),
             job_id: Some(key.job_id.into()),
-            stage: Some(key.stage.into()),
+            stage: Some(key.stage),
             attempt: Some(key.attempt),
             operator_id: None,
         };

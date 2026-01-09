@@ -100,12 +100,11 @@ impl JobTopology {
             let mut all_forward = true;
             for &u in &component {
                 for input in &graph.stages()[u].inputs {
-                    if component.contains(&input.stage) {
-                        if !matches!(input.mode, InputMode::Forward) {
+                    if component.contains(&input.stage)
+                        && !matches!(input.mode, InputMode::Forward) {
                             all_forward = false;
                             break;
                         }
-                    }
                 }
                 if !all_forward {
                     break;

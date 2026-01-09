@@ -436,7 +436,7 @@ impl TryFrom<gen::TaskOutputDistribution> for TaskOutputDistribution {
                 keys,
                 channels,
             })) => Ok(TaskOutputDistribution::Hash {
-                keys: keys.into_iter().map(|k| Arc::from(k)).collect(),
+                keys: keys.into_iter().map(Arc::from).collect(),
                 channels: channels as usize,
             }),
             Some(gen::task_output_distribution::Kind::RoundRobin(

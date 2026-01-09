@@ -489,7 +489,7 @@ impl WorkerPool {
     ) {
         if let WorkerState::Running { updated_at, .. } = &mut worker.state {
             *updated_at = Instant::now();
-            Self::schedule_idle_worker_probe(ctx, worker_id, worker, &options);
+            Self::schedule_idle_worker_probe(ctx, worker_id, worker, options);
         }
     }
 }

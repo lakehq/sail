@@ -30,7 +30,7 @@ pub enum JobState {
 impl JobDescriptor {
     pub fn try_new(graph: JobGraph, state: JobState) -> ExecutionResult<Self> {
         let mut stages = vec![];
-        for (_, stage) in graph.stages().iter().enumerate() {
+        for stage in graph.stages().iter() {
             let mut descriptor = StageDescriptor { tasks: vec![] };
             for _ in 0..stage.plan.output_partitioning().partition_count() {
                 descriptor.tasks.push(TaskDescriptor { attempts: vec![] });
