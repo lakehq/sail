@@ -25,6 +25,7 @@ fn apply_csv_read_options(
         schema_infer_max_records,
         multi_line,
         compression,
+        allow_truncated_rows,
     } = from;
     let null_regex = match (null_value, null_regex) {
         (Some(null_value), Some(null_regex))
@@ -71,6 +72,9 @@ fn apply_csv_read_options(
     }
     if let Some(multi_line) = multi_line {
         to.newlines_in_values = Some(multi_line);
+    }
+    if let Some(allow_truncated_rows) = allow_truncated_rows {
+        to.truncated_rows = Some(allow_truncated_rows);
     }
     Ok(())
 }
