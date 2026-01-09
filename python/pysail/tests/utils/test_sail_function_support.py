@@ -29,8 +29,8 @@ def test_check_sail_pyspark_compatibility(tmp_path):
     expected = {
         ("pyspark.sql.DataFrame", "collect", "supported"): 1,
         ("pyspark.sql.DataFrame", "filter", "supported"): 1,
-        ("pyspark.sql.functions", "col", "unknown"): 1,
-        ("pyspark.sql.functions", "lit", "unknown"): 1,
+        ("pyspark.sql.functions", "col", "supported"): 1,
+        ("pyspark.sql.functions", "lit", "supported"): 1,
         ("pyspark.sql.session.SparkSession", "getOrCreate", "unknown"): 1,
         ("pyspark.sql.session.SparkSession", "range", "supported"): 1,
     }
