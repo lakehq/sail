@@ -43,18 +43,23 @@ impl JobOutputSender {
     }
 }
 
-pub struct JobOutputFailureNotifier {
+pub struct JobOutputNotifier {
     sender: mpsc::Sender<JobOutputCommand>,
 }
 
-impl fmt::Debug for JobOutputFailureNotifier {
+impl fmt::Debug for JobOutputNotifier {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("JobOutputFailureNotifier").finish()
     }
 }
 
-impl JobOutputFailureNotifier {
-    pub async fn notify(self, cause: CommonErrorCause) {
+impl JobOutputNotifier {
+    pub async fn succeed(self) {
+        let command = JobOutputCommand::Succeed;
+        let _ = self.sender.send(command).await;
+    }
+
+    pub async fn fail(self, cause: CommonErrorCause) {
         let command = JobOutputCommand::Fail { cause };
         let _ = self.sender.send(command).await;
     }
@@ -78,14 +83,15 @@ impl JobOutputManager {
         }
     }
 
-    pub fn fail(&self) -> JobOutputFailureNotifier {
-        JobOutputFailureNotifier {
+    pub fn notifier(&self) -> JobOutputNotifier {
+        JobOutputNotifier {
             sender: self.sender.clone(),
         }
     }
 }
 
 pub enum JobOutputCommand {
+    Succeed,
     Fail {
         cause: CommonErrorCause,
     },
@@ -101,6 +107,7 @@ impl JobOutputCommand {
 
 struct JobOutputStream {
     state: JobOutputState,
+    succeeded: bool,
 }
 
 impl JobOutputStream {
@@ -110,6 +117,7 @@ impl JobOutputStream {
                 receiver,
                 inner: Box::pin(SelectAll::new()),
             },
+            succeeded: false,
         }
     }
 }
@@ -127,10 +135,10 @@ pub fn build_job_output(
         let mut stream = stream;
         while let Some(batch) = stream.next().await {
             if tx.send(batch).await.is_err() {
-                let _ = handle.send(DriverEvent::CleanUpJob { job_id }).await;
                 break;
             }
         }
+        let _ = handle.send(DriverEvent::CleanUpJob { job_id }).await;
     });
     (
         JobOutputManager {
@@ -175,6 +183,10 @@ impl Stream for JobOutputStream {
             } => match receiver.poll_recv(cx) {
                 Poll::Pending => {
                     self.state = JobOutputState::Active { receiver, inner };
+                }
+                Poll::Ready(Some(JobOutputCommand::Succeed)) => {
+                    self.state = JobOutputState::Active { receiver, inner };
+                    self.succeeded = true;
                 }
                 Poll::Ready(Some(JobOutputCommand::Fail { cause })) => {
                     self.state = JobOutputState::Failed;
@@ -223,7 +235,11 @@ impl Stream for JobOutputStream {
                 Poll::Pending => Poll::Pending,
                 Poll::Ready(None) => {
                     self.state = JobOutputState::Completed;
-                    Poll::Ready(None)
+                    if self.succeeded {
+                        Poll::Ready(None)
+                    } else {
+                        Poll::Pending
+                    }
                 }
                 Poll::Ready(Some(result)) => Poll::Ready(Some(
                     result.map_err(|e| DataFusionError::External(Box::new(e))),

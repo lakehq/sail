@@ -15,7 +15,7 @@ use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::ActorContext;
 
 use crate::driver::job_scheduler::state::{
-    JobDescriptor, JobState, TaskAttemptDescriptor, TaskState,
+    JobDescriptor, JobState, StageState, TaskAttemptDescriptor, TaskState,
 };
 use crate::driver::job_scheduler::topology::TaskRegionTopology;
 use crate::driver::job_scheduler::{JobAction, JobScheduler, JobSchedulerOptions};
@@ -124,7 +124,7 @@ impl JobScheduler {
 
         actions.extend(Self::update_job_output(job_id, job));
         actions.extend(Self::cascade_cancel_task_attempts(job_id, job));
-        actions.extend(Self::remove_streams_by_stage(job_id, job));
+        actions.extend(Self::clean_up_job_by_stage(job_id, job));
 
         let region_status = Self::get_task_region_status(job, &self.options);
         if region_status
@@ -134,7 +134,7 @@ impl JobScheduler {
             let cause = Self::infer_job_failure_cause(job);
             if let JobState::Running { output, .. } = &job.state {
                 actions.push(JobAction::FailJobOutput {
-                    notifier: output.fail(),
+                    notifier: output.notifier(),
                     cause,
                 })
             }
@@ -146,6 +146,11 @@ impl JobScheduler {
             .all(|x| matches!(*x, TaskRegionStatus::Succeeded))
         {
             job.state = JobState::Draining;
+            if let JobState::Running { output, .. } = &job.state {
+                actions.push(JobAction::SucceedJobOutput {
+                    notifier: output.notifier(),
+                });
+            }
             return actions;
         }
         actions.extend(Self::schedule_task_regions(job_id, job, &region_status));
@@ -228,10 +233,13 @@ impl JobScheduler {
         actions
     }
 
-    fn remove_streams_by_stage(job_id: JobId, job: &JobDescriptor) -> Vec<JobAction> {
+    fn clean_up_job_by_stage(job_id: JobId, job: &mut JobDescriptor) -> Vec<JobAction> {
         let mut actions = vec![];
 
         for (s, stage) in job.topology.stages.iter().enumerate() {
+            if matches!(job.stages[s].state, StageState::Inactive) {
+                continue;
+            }
             let all_consumers_succeeded = stage.consumers.iter().all(|&c| {
                 let partitions = job.graph.stages()[c]
                     .plan
@@ -246,7 +254,8 @@ impl JobScheduler {
             });
 
             if all_consumers_succeeded && !stage.consumers.is_empty() {
-                actions.push(JobAction::RemoveStreams {
+                job.stages[s].state = StageState::Inactive;
+                actions.push(JobAction::CleanUpJob {
                     job_id,
                     stage: Some(s),
                 });
@@ -462,7 +471,10 @@ impl JobScheduler {
                 }
             }
         }
-        actions.push(JobAction::RemoveStreams {
+        for stage in job.stages.iter_mut() {
+            stage.state = StageState::Inactive;
+        }
+        actions.push(JobAction::CleanUpJob {
             job_id,
             stage: None,
         });

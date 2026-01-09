@@ -4,7 +4,7 @@ use log::warn;
 use crate::id::{JobId, TaskKey};
 use crate::task::scheduling::TaskSet;
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct DriverResource {
     /// The task slots on the driver.
     /// The number of task slot can grow indefinitely.
@@ -48,6 +48,7 @@ impl DriverResource {
     }
 }
 
+#[derive(Debug)]
 pub enum WorkerResource {
     Active {
         /// The task slots on the worker.
@@ -137,7 +138,7 @@ impl WorkerResource {
 /// A task slot only represents logical task assignment.
 /// There is no physical resource isolation since the session context
 /// is shared within the driver or each worker.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct TaskSlot {
     tasks: IndexSet<TaskKey>,
 }

@@ -257,11 +257,12 @@ impl WorkerPool {
         let running_workers = self.list_running_workers();
         let Some(worker) = self.workers.get_mut(&worker_id) else {
             let message = format!("worker {} not found", worker_id);
+            let cause = CommonErrorCause::Internal(message.clone());
             ctx.send(DriverEvent::UpdateTask {
                 key,
                 status: TaskStatus::Failed,
                 message: Some(message),
-                cause: None,
+                cause: Some(cause),
                 sequence: None,
             });
             return;
@@ -290,11 +291,12 @@ impl WorkerPool {
                     TaskKeyDisplay(&key),
                     worker_id
                 );
+                let cause = CommonErrorCause::Internal(message.clone());
                 ctx.send(DriverEvent::UpdateTask {
                     key,
                     status: TaskStatus::Failed,
                     message: Some(message),
-                    cause: None,
+                    cause: Some(cause),
                     sequence: None,
                 });
                 return;
@@ -312,7 +314,7 @@ impl WorkerPool {
                         key,
                         status: TaskStatus::Failed,
                         message: Some(format!("failed to run task via the worker client: {e}")),
-                        cause: None,
+                        cause: Some(CommonErrorCause::new::<PyErrExtractor>(&e)),
                         sequence: None,
                     })
                     .await;

@@ -31,7 +31,10 @@ impl JobDescriptor {
     pub fn try_new(graph: JobGraph, state: JobState) -> ExecutionResult<Self> {
         let mut stages = vec![];
         for stage in graph.stages().iter() {
-            let mut descriptor = StageDescriptor { tasks: vec![] };
+            let mut descriptor = StageDescriptor {
+                tasks: vec![],
+                state: StageState::Active,
+            };
             for _ in 0..stage.plan.output_partitioning().partition_count() {
                 descriptor.tasks.push(TaskDescriptor { attempts: vec![] });
             }
@@ -51,6 +54,17 @@ impl JobDescriptor {
 pub struct StageDescriptor {
     /// A list of tasks for each partition of the stage.
     pub tasks: Vec<TaskDescriptor>,
+    pub state: StageState,
+}
+
+#[derive(Debug)]
+pub enum StageState {
+    /// The tasks in the stage are not yet completed,
+    /// or the task streams are still being consumed.
+    Active,
+    /// The tasks in the stage will not be scheduled anymore,
+    /// and the task streams are no longer being consumed.
+    Inactive,
 }
 
 #[derive(Debug)]

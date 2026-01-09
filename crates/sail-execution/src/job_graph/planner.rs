@@ -167,8 +167,7 @@ fn build_job_graph(
         let fetch = coalesce.fetch();
         let shuffled = create_shuffle(child, graph, partitioning, consumption)?;
         if let Some(f) = fetch {
-            Arc::new(CoalescePartitionsExec::new(shuffled).with_fetch(Some(f)))
-                as Arc<dyn ExecutionPlan>
+            Arc::new(GlobalLimitExec::new(shuffled, 0, Some(f))) as Arc<dyn ExecutionPlan>
         } else {
             shuffled
         }

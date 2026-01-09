@@ -3,7 +3,7 @@ use log::{error, warn};
 
 use crate::driver::task_assigner::state::{TaskSlot, WorkerResource};
 use crate::driver::task_assigner::{TaskAssigner, TaskRegion};
-use crate::id::{JobId, TaskKey, TaskKeyDisplay, WorkerId};
+use crate::id::{JobId, TaskKey, WorkerId};
 use crate::job_graph::TaskPlacement;
 use crate::task::scheduling::{
     TaskAssignment, TaskAssignmentGetter, TaskSetAssignment, TaskStreamAssignment,
@@ -38,11 +38,14 @@ impl TaskAssigner {
             .values()
             .filter(|worker| matches!(worker, WorkerResource::Active { .. }))
             .count();
-        let allowed_workers = self
-            .options
-            .worker_max_count
-            .saturating_sub(self.requested_worker_count)
-            .saturating_sub(active_workers);
+        let allowed_workers = if self.options.worker_max_count == 0 {
+            usize::MAX
+        } else {
+            self.options
+                .worker_max_count
+                .saturating_sub(self.requested_worker_count)
+                .saturating_sub(active_workers)
+        };
         let required_workers = required_slots
             .div_ceil(self.options.worker_task_slots)
             .min(allowed_workers);
@@ -142,10 +145,7 @@ impl TaskAssigner {
     }
 
     pub fn unassign_task(&mut self, key: &TaskKey) -> Option<TaskAssignment> {
-        let Some(assignment) = self.task_assignments.get(key) else {
-            warn!("{} not found in task assignments", TaskKeyDisplay(key));
-            return None;
-        };
+        let assignment = self.task_assignments.get(key)?;
         match assignment {
             TaskAssignment::Driver => {
                 self.driver.remove_task(key);

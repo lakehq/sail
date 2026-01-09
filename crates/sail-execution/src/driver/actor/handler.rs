@@ -252,11 +252,12 @@ impl DriverActor {
             .is_some_and(|x| matches!(x, TaskState::Created))
         {
             let message = "task scheduling timeout".to_string();
+            let cause = CommonErrorCause::Execution(message.clone());
             ctx.send(DriverEvent::UpdateTask {
                 key,
                 status: TaskStatus::Failed,
-                message: Some(message.clone()),
-                cause: None,
+                message: Some(message),
+                cause: Some(cause),
                 sequence: None,
             })
         }
@@ -378,9 +379,14 @@ impl DriverActor {
                     }
                 }
             }
+            JobAction::SucceedJobOutput { notifier } => {
+                ctx.spawn(async move {
+                    notifier.succeed().await;
+                });
+            }
             JobAction::FailJobOutput { notifier, cause } => {
                 ctx.spawn(async move {
-                    notifier.notify(cause).await;
+                    notifier.fail(cause).await;
                 });
             }
             JobAction::FetchJobOutputStream {
@@ -413,7 +419,7 @@ impl DriverActor {
                     sender.send(Box::pin(stream)).await;
                 });
             }
-            JobAction::RemoveStreams { job_id, stage } => {
+            JobAction::CleanUpJob { job_id, stage } => {
                 let assignments = self.task_assigner.unassign_streams(job_id, stage);
                 for assignment in assignments {
                     match assignment {

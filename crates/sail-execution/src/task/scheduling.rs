@@ -65,13 +65,13 @@ impl TaskSet {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct TaskSetAssignment {
     pub set: TaskSet,
     pub assignment: TaskAssignment,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum TaskAssignment {
     Driver,
     Worker { worker_id: WorkerId, slot: usize },
