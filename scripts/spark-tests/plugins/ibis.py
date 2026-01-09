@@ -106,7 +106,7 @@ def add_ibis_test_markers(items: list[pytest.Item]):
 
 
 def _needs_ansi_disabled(item: pytest.Item) -> bool:
-    return any(all(k in item.name for k in test.keywords) for test in ANSI_DISABLED_IBIS_TESTS)
+    return any(all(any(k in kw for kw in item.keywords) for k in test.keywords) for test in ANSI_DISABLED_IBIS_TESTS)
 
 
 @pytest.fixture(autouse=True)
