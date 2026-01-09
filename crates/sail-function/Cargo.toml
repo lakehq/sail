@@ -34,5 +34,3 @@ half = { workspace = true }
 url = { workspace = true }
 percent-encoding = { workspace = true }
 jiter = { workspace = true }
-log = { workspace = true }
-paste = { workspace = true }

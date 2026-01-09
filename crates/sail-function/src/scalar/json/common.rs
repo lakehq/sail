@@ -1,4 +1,5 @@
-// https://github.com/datafusion-contrib/datafusion-functions-json/blob/78c5abbf7222510ff221517f5d2e3c344969da98/src/common.rs
+// https://github.com/datafusion-contrib/datafusion-functions-json/blob/cb1ba7a80a84e10a4d658f3100eae8f6bca2ced9/LICENSE
+//
 // Copyright datafusion-functions-json contributors
 // Portions Copyright (2026) LakeSail, Inc.
 // Modified in 2026 by LakeSail, Inc.
@@ -14,6 +15,8 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// [Credit]: https://github.com/datafusion-contrib/datafusion-functions-json/blob/78c5abbf7222510ff221517f5d2e3c344969da98/src/common.rs
 
 use std::str::Utf8Error;
 use std::sync::Arc;
@@ -25,10 +28,8 @@ use datafusion::arrow::array::{
 use datafusion::arrow::compute::kernels::cast;
 use datafusion::arrow::compute::take;
 use datafusion::arrow::datatypes::{ArrowNativeType, DataType, Int64Type, UInt64Type};
-use datafusion::common::{
-    exec_err, plan_err, DataFusionError, Result as DataFusionResult, ScalarValue,
-};
-use datafusion::logical_expr::ColumnarValue;
+use datafusion_common::{exec_err, plan_err, DataFusionError, Result, ScalarValue};
+use datafusion_expr::ColumnarValue;
 use jiter::{Jiter, JiterError, Peek};
 
 use crate::scalar::json::common_union::{
@@ -47,7 +48,7 @@ pub fn return_type_check(
     args: &[DataType],
     fn_name: &str,
     value_type: DataType,
-) -> DataFusionResult<DataType> {
+) -> Result<DataType> {
     let Some(first) = args.first() else {
         return plan_err!("The '{fn_name}' function requires one or more arguments.");
     };
@@ -132,7 +133,7 @@ enum JsonPathArgs<'a> {
 }
 
 impl<'s> JsonPathArgs<'s> {
-    fn extract_path(path_args: &'s [ColumnarValue]) -> DataFusionResult<Self> {
+    fn extract_path(path_args: &'s [ColumnarValue]) -> Result<Self> {
         // If there is a single argument as an array, we know how to handle it
         if let Some((ColumnarValue::Array(array), &[])) = path_args.split_first() {
             return Ok(Self::Array(array));
@@ -165,7 +166,7 @@ impl<'s> JsonPathArgs<'s> {
                     pos + 1
                 ),
             })
-            .collect::<DataFusionResult<_>>()
+            .collect::<Result<_>>()
             .map(JsonPathArgs::Scalars)
     }
 }
@@ -179,7 +180,7 @@ pub trait InvokeResult {
 
     fn builder(capacity: usize) -> Self::Builder;
     fn append_value(builder: &mut Self::Builder, value: Option<Self::Item>);
-    fn finish(builder: Self::Builder) -> DataFusionResult<ArrayRef>;
+    fn finish(builder: Self::Builder) -> Result<ArrayRef>;
 
     /// Convert a single value to a scalar
     fn scalar(value: Option<Self::Item>) -> ScalarValue;
@@ -188,7 +189,7 @@ pub trait InvokeResult {
 pub fn invoke<R: InvokeResult>(
     args: &[ColumnarValue],
     jiter_find: impl Fn(Option<&str>, &[JsonPath]) -> Result<R::Item, GetError>,
-) -> DataFusionResult<ColumnarValue> {
+) -> Result<ColumnarValue> {
     let Some((json_arg, path_args)) = args.split_first() else {
         return exec_err!("expected at least one argument");
     };
@@ -214,7 +215,7 @@ fn invoke_array_array<R: InvokeResult>(
     json_array: &ArrayRef,
     path_array: &ArrayRef,
     jiter_find: impl Fn(Option<&str>, &[JsonPath]) -> Result<R::Item, GetError>,
-) -> DataFusionResult<ArrayRef> {
+) -> Result<ArrayRef> {
     match json_array.data_type() {
         // for string dictionaries, cast dictionary keys to larger types to avoid generic explosion
         DataType::Dictionary(_, value_type) if value_type.as_ref() == &DataType::Utf8 => {
@@ -328,13 +329,13 @@ fn invoke_array_scalars<R: InvokeResult>(
     json_array: &ArrayRef,
     path: &[JsonPath],
     jiter_find: impl Fn(Option<&str>, &[JsonPath]) -> Result<R::Item, GetError>,
-) -> DataFusionResult<ArrayRef> {
+) -> Result<ArrayRef> {
     #[allow(clippy::needless_pass_by_value)] // ArrayAccessor is implemented on references
     fn inner<'j, R: InvokeResult>(
         json_array: impl ArrayAccessor<Item = &'j str>,
         path: &[JsonPath],
         jiter_find: impl Fn(Option<&str>, &[JsonPath]) -> Result<R::Item, GetError>,
-    ) -> DataFusionResult<ArrayRef> {
+    ) -> Result<ArrayRef> {
         let mut builder = R::builder(json_array.len());
         for i in 0..json_array.len() {
             let opt_json = if json_array.is_null(i) {
@@ -384,7 +385,7 @@ fn invoke_scalar_array<R: InvokeResult>(
     scalar: &ScalarValue,
     path_array: &ArrayRef,
     jiter_find: impl Fn(Option<&str>, &[JsonPath]) -> Result<R::Item, GetError>,
-) -> DataFusionResult<ColumnarValue> {
+) -> Result<ColumnarValue> {
     let s = extract_json_scalar(scalar)?;
     let arr = s.map_or_else(
         || StringArray::new_null(1),
@@ -417,7 +418,7 @@ fn invoke_scalar_scalars<I>(
     path: &[JsonPath],
     jiter_find: impl Fn(Option<&str>, &[JsonPath]) -> Result<I, GetError>,
     to_scalar: impl Fn(Option<I>) -> ScalarValue,
-) -> DataFusionResult<ColumnarValue> {
+) -> Result<ColumnarValue> {
     let s = extract_json_scalar(scalar)?;
     let v = jiter_find(s, path).ok();
     // FIXME edge cases where scalar is wrapped in a dictionary, should return a dictionary?
@@ -428,7 +429,7 @@ fn zip_apply<'a, R: InvokeResult>(
     json_array: impl ArrayAccessor<Item = &'a str>,
     path_array: &ArrayRef,
     jiter_find: impl Fn(Option<&'a str>, &[JsonPath]) -> Result<R::Item, GetError>,
-) -> DataFusionResult<ArrayRef> {
+) -> Result<ArrayRef> {
     fn get_array_values<'j, 'p, P: Into<JsonPath<'p>>>(
         j: &impl ArrayAccessor<Item = &'j str>,
         p: &impl ArrayAccessor<Item = P>,
@@ -454,7 +455,7 @@ fn zip_apply<'a, R: InvokeResult>(
         json_array: impl ArrayAccessor<Item = &'a str>,
         path_array: impl ArrayAccessor<Item = P>,
         jiter_find: impl Fn(Option<&'a str>, &[JsonPath]) -> Result<R::Item, GetError>,
-    ) -> DataFusionResult<ArrayRef> {
+    ) -> Result<ArrayRef> {
         let mut builder = R::builder(json_array.len());
         for i in 0..json_array.len() {
             if let Some((opt_json, path)) = get_array_values(&json_array, &path_array, i) {
@@ -548,7 +549,7 @@ fn zip_apply<'a, R: InvokeResult>(
     }
 }
 
-fn extract_json_scalar(scalar: &ScalarValue) -> DataFusionResult<Option<&str>> {
+fn extract_json_scalar(scalar: &ScalarValue) -> Result<Option<&str>> {
     match scalar {
         ScalarValue::Dictionary(_, b) => extract_json_scalar(b.as_ref()),
         ScalarValue::Utf8(s) | ScalarValue::Utf8View(s) | ScalarValue::LargeUtf8(s) => {
@@ -588,7 +589,7 @@ fn is_object_lookup_array(data_type: &DataType) -> bool {
 /// So we'll just use i64 as the largest signed integer type.
 fn cast_to_large_dictionary(
     dict_array: &dyn AnyDictionaryArray,
-) -> DataFusionResult<DictionaryArray<Int64Type>> {
+) -> Result<DictionaryArray<Int64Type>> {
     let keys = downcast_array(&cast(dict_array.keys(), &DataType::Int64)?);
     Ok(DictionaryArray::<Int64Type>::new(
         keys,
@@ -600,7 +601,7 @@ fn cast_to_large_dictionary(
 fn wrap_as_large_dictionary(
     original: &dyn AnyDictionaryArray,
     new_values: ArrayRef,
-) -> DataFusionResult<DictionaryArray<Int64Type>> {
+) -> Result<DictionaryArray<Int64Type>> {
     assert_eq!(original.keys().len(), new_values.len());
     let mut keys = PrimitiveArray::from_iter_values(
         0i64..original.keys().len().try_into().map_err(|_| {

@@ -1,4 +1,5 @@
-// https://github.com/datafusion-contrib/datafusion-functions-json/blob/78c5abbf7222510ff221517f5d2e3c344969da98/src/json_object_keys.rs
+// https://github.com/datafusion-contrib/datafusion-functions-json/blob/cb1ba7a80a84e10a4d658f3100eae8f6bca2ced9/LICENSE
+//
 // Copyright datafusion-functions-json contributors
 // Portions Copyright (2026) LakeSail, Inc.
 // Modified in 2026 by LakeSail, Inc.
@@ -14,38 +15,38 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// [Credit]: https://github.com/datafusion-contrib/datafusion-functions-json/blob/78c5abbf7222510ff221517f5d2e3c344969da98/src/json_object_keys.rs
 
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use datafusion::arrow::array::{ArrayRef, ListBuilder, StringBuilder};
 use datafusion::arrow::datatypes::{DataType, Field};
-use datafusion::common::{Result as DataFusionResult, ScalarValue};
-use datafusion::logical_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::{
+    ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
 use jiter::Peek;
 
 use crate::scalar::json::common::{
     get_err, invoke, jiter_json_find, return_type_check, GetError, InvokeResult, JsonPath,
 };
-use crate::scalar::json::common_macros::make_udf_function;
-
-make_udf_function!(
-    JsonObjectKeys,
-    json_object_keys,
-    json_data path,
-    r"Get the keys of a JSON object as an array."
-);
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub(super) struct JsonObjectKeys {
+pub struct JsonObjectKeys {
     signature: Signature,
     aliases: [String; 2],
 }
 
 impl Default for JsonObjectKeys {
     fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl JsonObjectKeys {
+    pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
             aliases: ["json_object_keys".to_string(), "json_keys".to_string()],
@@ -66,7 +67,7 @@ impl ScalarUDFImpl for JsonObjectKeys {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> DataFusionResult<DataType> {
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         return_type_check(
             arg_types,
             self.name(),
@@ -74,13 +75,20 @@ impl ScalarUDFImpl for JsonObjectKeys {
         )
     }
 
-    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> DataFusionResult<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         invoke::<BuildListArray>(&args.args, jiter_json_object_keys)
     }
 
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+}
+
+pub fn json_object_keys_udf() -> Arc<ScalarUDF> {
+    static STATIC_JSON_OBJECT_KEYS: OnceLock<Arc<ScalarUDF>> = OnceLock::new();
+    STATIC_JSON_OBJECT_KEYS
+        .get_or_init(|| Arc::new(ScalarUDF::new_from_impl(JsonObjectKeys::new())))
+        .clone()
 }
 
 /// Struct used to build a `ListArray` from the result of `jiter_json_object_keys`.
@@ -103,7 +111,7 @@ impl InvokeResult for BuildListArray {
         builder.append_option(value.map(|v| v.into_iter().map(Some)));
     }
 
-    fn finish(mut builder: Self::Builder) -> DataFusionResult<ArrayRef> {
+    fn finish(mut builder: Self::Builder) -> Result<ArrayRef> {
         Ok(Arc::new(builder.finish()))
     }
 

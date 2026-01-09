@@ -1,4 +1,5 @@
-// https://github.com/datafusion-contrib/datafusion-functions-json/blob/78c5abbf7222510ff221517f5d2e3c344969da98/src/json_as_text.rs
+// https://github.com/datafusion-contrib/datafusion-functions-json/blob/cb1ba7a80a84e10a4d658f3100eae8f6bca2ced9/LICENSE
+//
 // Copyright datafusion-functions-json contributors
 // Portions Copyright (2026) LakeSail, Inc.
 // Modified in 2026 by LakeSail, Inc.
@@ -14,38 +15,38 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// [Credit]: https://github.com/datafusion-contrib/datafusion-functions-json/blob/78c5abbf7222510ff221517f5d2e3c344969da98/src/json_as_text.rs
 
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use datafusion::arrow::array::{ArrayRef, StringArray, StringBuilder};
 use datafusion::arrow::datatypes::DataType;
-use datafusion::common::{Result as DataFusionResult, ScalarValue};
-use datafusion::logical_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::{
+    ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
 use jiter::Peek;
 
 use crate::scalar::json::common::{
     get_err, invoke, jiter_json_find, return_type_check, GetError, InvokeResult, JsonPath,
 };
-use crate::scalar::json::common_macros::make_udf_function;
-
-make_udf_function!(
-    JsonAsText,
-    json_as_text,
-    json_data path,
-    r#"Get any value from a JSON string by its "path", represented as a string"#
-);
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub(super) struct JsonAsText {
+pub struct JsonAsText {
     signature: Signature,
     aliases: [String; 1],
 }
 
 impl Default for JsonAsText {
     fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl JsonAsText {
+    pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
             aliases: ["json_as_text".to_string()],
@@ -66,17 +67,24 @@ impl ScalarUDFImpl for JsonAsText {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> DataFusionResult<DataType> {
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         return_type_check(arg_types, self.name(), DataType::Utf8)
     }
 
-    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> DataFusionResult<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         invoke::<StringArray>(&args.args, jiter_json_as_text)
     }
 
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+}
+
+pub fn json_as_text_udf() -> Arc<ScalarUDF> {
+    static STATIC_JSON_AS_TEXT: OnceLock<Arc<ScalarUDF>> = OnceLock::new();
+    STATIC_JSON_AS_TEXT
+        .get_or_init(|| Arc::new(ScalarUDF::new_from_impl(JsonAsText::new())))
+        .clone()
 }
 
 impl InvokeResult for StringArray {
@@ -94,7 +102,7 @@ impl InvokeResult for StringArray {
         builder.append_option(value);
     }
 
-    fn finish(mut builder: Self::Builder) -> DataFusionResult<ArrayRef> {
+    fn finish(mut builder: Self::Builder) -> Result<ArrayRef> {
         Ok(Arc::new(builder.finish()))
     }
 
