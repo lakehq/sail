@@ -2,51 +2,61 @@
   {
     "module": "pyspark.sql.functions",
     "function": "is_variant_null",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/862"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "parse_json",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/862"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "schema_of_variant",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/862"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "schema_of_variant_agg",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/862"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "to_variant_object",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/862"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "try_parse_json",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/862"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "try_variant_get",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/862"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "variant_explode",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/862"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "variant_explode_outer",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/862"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "variant_get",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/862"
   }
 ]

@@ -24,7 +24,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::Utc;
-use datafusion::catalog::Session;
 use delta_kernel::table_features::TableFeature;
 use delta_kernel::table_properties::TableProperties;
 use futures::future::BoxFuture;
@@ -509,7 +508,6 @@ impl<'a> CommitBuilder {
         table_data: Option<&'a dyn TableReference>,
         log_store: LogStoreRef,
         operation: DeltaOperation,
-        session: &'a dyn Session,
     ) -> PreCommit<'a> {
         let data = CommitData::new(
             self.actions,
@@ -526,7 +524,6 @@ impl<'a> CommitBuilder {
             post_commit_hook: self.post_commit_hook,
             post_commit_hook_handler: self.post_commit_hook_handler,
             operation_id: self.operation_id,
-            session,
         }
     }
 }
@@ -540,7 +537,6 @@ pub struct PreCommit<'a> {
     post_commit_hook: Option<PostCommitHookProperties>,
     post_commit_hook_handler: Option<Arc<dyn CustomExecuteHandler>>,
     operation_id: Uuid,
-    session: &'a dyn Session,
 }
 
 impl<'a> std::future::IntoFuture for PreCommit<'a> {
@@ -599,7 +595,6 @@ impl<'a> PreCommit<'a> {
                 post_commit: this.post_commit_hook,
                 post_commit_hook_handler: this.post_commit_hook_handler,
                 operation_id: this.operation_id,
-                session: this.session,
             })
         })
     }
@@ -615,7 +610,6 @@ pub struct PreparedCommit<'a> {
     post_commit: Option<PostCommitHookProperties>,
     post_commit_hook_handler: Option<Arc<dyn CustomExecuteHandler>>,
     operation_id: Uuid,
-    session: &'a dyn Session,
 }
 
 // impl PreparedCommit<'_> {
@@ -772,10 +766,8 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                                 .await?;
                                 let transaction_info = TransactionInfo::try_new(
                                     snapshot.log_data(),
-                                    this.data.operation.read_predicate(),
                                     &local_actions,
                                     this.data.operation.read_whole_table(),
-                                    Some(this.session),
                                 )?;
                                 let conflict_checker = ConflictChecker::new(
                                     transaction_info,

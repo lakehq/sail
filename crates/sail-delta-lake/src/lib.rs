@@ -23,7 +23,23 @@ pub mod storage;
 pub mod table;
 pub mod table_format;
 
+use std::sync::Once;
+
+use sail_physical_plan::{register_format_type, FormatTag};
 pub use table::create_delta_provider;
 pub use table_format::DeltaTableFormat;
 
 pub use crate::error::{DeltaError, DeltaError as DeltaTableError, DeltaResult, KernelError};
+
+static INIT: Once = Once::new();
+
+pub fn init_delta_types() {
+    INIT.call_once(|| {
+        let _ = register_format_type::<physical_plan::DeltaCommitExec>(FormatTag::Delta);
+        let _ = register_format_type::<physical_plan::DeltaWriterExec>(FormatTag::Delta);
+        let _ = register_format_type::<physical_plan::DeltaDiscoveryExec>(FormatTag::Delta);
+        let _ = register_format_type::<physical_plan::DeltaScanByAddsExec>(FormatTag::Delta);
+        let _ = register_format_type::<physical_plan::DeltaRemoveActionsExec>(FormatTag::Delta);
+        let _ = register_format_type::<physical_plan::DeltaLogScanExec>(FormatTag::Delta);
+    });
+}

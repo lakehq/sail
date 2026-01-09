@@ -1,0 +1,32 @@
+[
+  {
+    "module": "pyspark.sql.Column",
+    "function": "asc",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "asc_nulls_first",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "asc_nulls_last",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "desc",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "desc_nulls_first",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "desc_nulls_last",
+    "status": "supported"
+  }
+]

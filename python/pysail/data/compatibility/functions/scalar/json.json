@@ -1,6 +1,12 @@
 [
   {
     "module": "pyspark.sql.functions",
+    "function": "from_json",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/219"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "get_json_object",
     "status": "supported"
   },
@@ -16,22 +22,20 @@
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "from_json",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
     "function": "json_tuple",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/219"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "schema_of_json",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/219"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "to_json",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/219"
   }
 ]

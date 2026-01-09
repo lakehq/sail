@@ -3,13 +3,12 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result, ToDFSchema};
+use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::datasource::{
     DeleteInfo, MergeInfo, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
 };
-use sail_common_datafusion::physical_expr::PhysicalExprWithSource;
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_data_source::options::{
     load_default_options, load_options, DeltaReadOptions, DeltaWriteOptions,
@@ -17,7 +16,6 @@ use sail_data_source::options::{
 use sail_data_source::resolve_listing_urls;
 use url::Url;
 
-use crate::datasource::{parse_predicate_expression, DataFusionMixins};
 use crate::options::{ColumnMappingModeOption, TableDeltaOptions};
 use crate::physical_plan::planner::{
     plan_delete, plan_merge, DeltaPhysicalPlanner, DeltaTableConfig, PlannerContext,
@@ -31,7 +29,10 @@ pub struct DeltaTableFormat;
 
 impl DeltaTableFormat {
     pub fn register(registry: &TableFormatRegistry) -> Result<()> {
-        registry.register(Arc::new(Self))
+        registry.register(Arc::new(Self))?;
+
+        crate::init_delta_types();
+        Ok(())
     }
 }
 
@@ -120,22 +121,8 @@ impl TableFormat for DeltaTableFormat {
             _ => {}
         }
 
-        let (unified_mode, table_schema_for_cond) = if let PhysicalSinkMode::Overwrite = mode {
-            if let Some(replace_where) = &delta_options.replace_where {
-                let (mode, schema) = Self::parse_replace_where_condition(
-                    ctx,
-                    &table_url,
-                    replace_where,
-                    table_exists,
-                )
-                .await?;
-                (mode, Some(schema))
-            } else {
-                (mode, None)
-            }
-        } else {
-            (mode, None)
-        };
+        let unified_mode = mode;
+        let table_schema_for_cond = None;
 
         // Get existing partition columns from table metadata if available
         let existing_partition_columns = if let Some(table) = &table {
@@ -254,53 +241,6 @@ impl DeltaTableFormat {
             (Some(path), true) => Ok(<ListingTableUrl as AsRef<Url>>::as_ref(&path).clone()),
             _ => plan_err!("expected a single path for Delta table sink: {paths:?}"),
         }
-    }
-
-    async fn parse_replace_where_condition(
-        ctx: &dyn Session,
-        table_url: &Url,
-        replace_where: &str,
-        table_exists: bool,
-    ) -> Result<(PhysicalSinkMode, Arc<datafusion::arrow::datatypes::Schema>)> {
-        if !table_exists {
-            return plan_err!("Table does not exist, cannot use replaceWhere");
-        }
-
-        let object_store = ctx
-            .runtime_env()
-            .object_store_registry
-            .get_store(table_url)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        let table =
-            open_table_with_object_store(table_url.clone(), object_store, Default::default())
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        let snapshot = table
-            .snapshot()
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        let arrow_schema = snapshot
-            .arrow_schema()
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        let df_schema = arrow_schema.clone().to_dfschema()?;
-
-        let logical_expr = parse_predicate_expression(&df_schema, replace_where, ctx)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        let physical_expr = ctx.create_physical_expr(logical_expr, &df_schema)?;
-
-        Ok((
-            PhysicalSinkMode::OverwriteIf {
-                condition: PhysicalExprWithSource::new(
-                    physical_expr,
-                    Some(replace_where.to_string()),
-                ),
-            },
-            arrow_schema,
-        ))
     }
 }
 
