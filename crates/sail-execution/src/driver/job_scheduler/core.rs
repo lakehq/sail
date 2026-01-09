@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -7,6 +7,7 @@ use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion_proto::physical_plan::to_proto::serialize_physical_expr;
 use datafusion_proto::physical_plan::AsExecutionPlan;
 use datafusion_proto::protobuf::PhysicalPlanNode;
+use indexmap::{IndexMap, IndexSet};
 use log::{debug, warn};
 use prost::Message;
 use sail_common_datafusion::error::CommonErrorCause;
@@ -16,6 +17,7 @@ use sail_server::actor::ActorContext;
 use crate::driver::job_scheduler::state::{
     JobDescriptor, JobState, TaskAttemptDescriptor, TaskState,
 };
+use crate::driver::job_scheduler::topology::TaskRegionTopology;
 use crate::driver::job_scheduler::{JobAction, JobScheduler, JobSchedulerOptions};
 use crate::driver::output::build_job_output;
 use crate::driver::DriverActor;
@@ -261,10 +263,11 @@ impl JobScheduler {
     ) -> Vec<JobAction> {
         let mut actions = vec![];
 
-        'region: for (r, region) in job.topology.regions.iter().enumerate() {
+        for (r, region) in job.topology.regions.iter().enumerate() {
             if matches!(region_status[r], TaskRegionStatus::Succeeded) {
                 continue;
             }
+
             if !region
                 .dependencies
                 .iter()
@@ -274,94 +277,97 @@ impl JobScheduler {
                 continue;
             }
 
-            for t in &region.tasks {
-                let task = &job.stages[t.stage].tasks[t.partition];
-                if task.attempts.last().is_some_and(|x| !x.state.is_terminal()) {
-                    // The latest task attempt is still active, so the region must have been
-                    // scheduled already.
-                    continue 'region;
-                }
+            if region.tasks.iter().any(|t| {
+                job.stages[t.stage].tasks[t.partition]
+                    .attempts
+                    .last()
+                    .is_some_and(|x| !x.state.is_terminal())
+            }) {
+                // The latest task attempt is still active, so the region must have been
+                // scheduled already.
+                continue;
             }
 
             for t in &region.tasks {
-                let task = &mut job.stages[t.stage].tasks[t.partition];
-                task.attempts.push(TaskAttemptDescriptor {
-                    state: TaskState::Created,
-                    messages: vec![],
-                    cause: None,
-                });
-            }
-
-            // Proceed with scheduling (bucket logic)
-            let mut stages_by_group: HashMap<(TaskPlacement, String), HashSet<usize>> =
-                HashMap::new();
-            for t in &region.tasks {
-                let stage = &job.graph.stages()[t.stage];
-                let key = (stage.placement, stage.group.clone());
-                stages_by_group.entry(key).or_default().insert(t.stage);
-            }
-
-            let mut buckets_by_group: HashMap<
-                (TaskPlacement, String),
-                (usize, Vec<Vec<TaskSetEntry>>),
-            > = HashMap::new();
-
-            for (key, stages) in stages_by_group {
-                let max_partitions = stages
-                    .iter()
-                    .map(|&s| {
-                        job.graph.stages()[s]
-                            .plan
-                            .output_partitioning()
-                            .partition_count()
-                    })
-                    .max()
-                    .unwrap_or(1);
-                let buckets = vec![Vec::new(); max_partitions];
-                buckets_by_group.insert(key, (max_partitions, buckets));
-            }
-
-            for t in &region.tasks {
-                if let Some(attempt) = Self::get_latest_task_attempt(job, t.stage, t.partition) {
-                    let stage = &job.graph.stages()[t.stage];
-                    let output = match stage.mode {
-                        OutputMode::Pipelined => TaskOutputKind::Local,
-                        OutputMode::Blocking => TaskOutputKind::Remote,
-                    };
-                    let key = (stage.placement, stage.group.clone());
-                    if let Some((max_partitions, buckets)) = buckets_by_group.get_mut(&key) {
-                        let p_count = stage.plan.output_partitioning().partition_count();
-                        let b = t.partition * *max_partitions / p_count;
-                        if b < buckets.len() {
-                            buckets[b].push(TaskSetEntry {
-                                key: TaskKey {
-                                    job_id,
-                                    stage: t.stage,
-                                    partition: t.partition,
-                                    attempt,
-                                },
-                                output,
-                            });
-                        }
-                    }
-                }
-            }
-
-            let mut tasks: Vec<(TaskPlacement, TaskSet)> = vec![];
-            for ((placement, _), (_, buckets)) in buckets_by_group {
-                for entries in buckets {
-                    if !entries.is_empty() {
-                        tasks.push((placement, TaskSet { entries }));
-                    }
-                }
+                job.stages[t.stage].tasks[t.partition]
+                    .attempts
+                    .push(TaskAttemptDescriptor {
+                        state: TaskState::Created,
+                        messages: vec![],
+                        cause: None,
+                    });
             }
 
             actions.push(JobAction::ScheduleTaskRegion {
-                region: TaskRegion { tasks },
+                region: Self::build_task_region(job_id, job, region),
             });
         }
 
         actions
+    }
+
+    fn build_task_region(
+        job_id: JobId,
+        job: &JobDescriptor,
+        region: &TaskRegionTopology,
+    ) -> TaskRegion {
+        let stages = region
+            .tasks
+            .iter()
+            .map(|t| t.stage)
+            .collect::<IndexSet<_>>();
+        let mut stage_groups: IndexMap<StageGroupKey, StageGroup> = IndexMap::new();
+        for s in stages {
+            let stage = &job.graph.stages()[s];
+            let key = StageGroupKey {
+                placement: stage.placement,
+                group: stage.group.clone(),
+            };
+            let group: &mut StageGroup = stage_groups.entry(key).or_default();
+            group.stages.insert(s);
+            let n = group.buckets.len();
+            let p = stage.plan.output_partitioning().partition_count();
+            // ensure that the number of buckets is the maximum partitions among the stages
+            if p > n {
+                group.buckets.resize(p, Vec::new());
+            }
+        }
+
+        for t in &region.tasks {
+            if let Some(attempt) = Self::get_latest_task_attempt(job, t.stage, t.partition) {
+                let stage = &job.graph.stages()[t.stage];
+                let output = match stage.mode {
+                    OutputMode::Pipelined => TaskOutputKind::Local,
+                    OutputMode::Blocking => TaskOutputKind::Remote,
+                };
+                let key = StageGroupKey {
+                    placement: stage.placement,
+                    group: stage.group.clone(),
+                };
+                if let Some(group) = stage_groups.get_mut(&key) {
+                    let partitions = stage.plan.output_partitioning().partition_count();
+                    let b = t.partition * group.buckets.len() / partitions;
+                    group.buckets[b].push(TaskSetEntry {
+                        key: TaskKey {
+                            job_id,
+                            stage: t.stage,
+                            partition: t.partition,
+                            attempt,
+                        },
+                        output,
+                    });
+                }
+            }
+        }
+
+        let mut tasks: Vec<(TaskPlacement, TaskSet)> = vec![];
+        for (key, value) in stage_groups {
+            for entries in value.buckets {
+                tasks.push((key.placement, TaskSet { entries }));
+            }
+        }
+
+        TaskRegion { tasks }
     }
 
     fn update_job_output(job_id: JobId, job: &mut JobDescriptor) -> Vec<JobAction> {
@@ -375,15 +381,14 @@ impl JobScheduler {
         let schema = job.graph.schema().clone();
         let mut actions = vec![];
         for p in 0..partitions {
-            if let Some(attempt) = job.stages[s].tasks[p].attempts.last_mut() {
+            if let Some((attempt, head)) = job.stages[s].tasks[p].attempts.split_last_mut() {
                 if matches!(attempt.state, TaskState::Running | TaskState::Succeeded) {
-                    let a = job.stages[s].tasks[p].attempts.len() - 1;
                     for c in 0..channels {
                         let key = TaskStreamKey {
                             job_id,
                             stage: s,
                             partition: p,
-                            attempt: a,
+                            attempt: head.len(),
                             channel: c,
                         };
                         if !output.has_stream(&key) {
@@ -662,6 +667,18 @@ impl JobScheduler {
             }
         })
     }
+}
+
+#[derive(PartialEq, Eq, Hash)]
+struct StageGroupKey {
+    placement: TaskPlacement,
+    group: String,
+}
+
+#[derive(Default)]
+struct StageGroup {
+    stages: IndexSet<usize>,
+    buckets: Vec<Vec<TaskSetEntry>>,
 }
 
 enum TaskRegionStatus {

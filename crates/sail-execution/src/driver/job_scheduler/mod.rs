@@ -3,10 +3,9 @@ mod options;
 mod state;
 mod topology;
 
-use std::collections::HashMap;
-
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
+use indexmap::IndexMap;
 pub use options::JobSchedulerOptions;
 use sail_common_datafusion::error::CommonErrorCause;
 pub use state::TaskState;
@@ -19,7 +18,7 @@ use crate::task::scheduling::TaskRegion;
 
 pub struct JobScheduler {
     options: JobSchedulerOptions,
-    jobs: HashMap<JobId, JobDescriptor>,
+    jobs: IndexMap<JobId, JobDescriptor>,
     job_id_generator: IdGenerator<JobId>,
     codec: Box<dyn PhysicalExtensionCodec>,
 }
@@ -28,7 +27,7 @@ impl JobScheduler {
     pub fn new(options: JobSchedulerOptions) -> Self {
         Self {
             options,
-            jobs: HashMap::new(),
+            jobs: IndexMap::new(),
             job_id_generator: IdGenerator::new(),
             codec: Box::new(RemoteExecutionCodec),
         }

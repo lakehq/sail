@@ -1,6 +1,7 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 
 use datafusion::physical_plan::ExecutionPlanProperties;
+use indexmap::IndexSet;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::job_graph::{InputMode, JobGraph, OutputMode};
@@ -17,7 +18,7 @@ pub struct TaskRegionTopology {
     pub tasks: Vec<TaskTopology>,
     /// A set of regions that this region depends on.
     /// The indices refer to the indices of regions in [`JobTopology`].
-    pub dependencies: HashSet<usize>,
+    pub dependencies: IndexSet<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -100,11 +101,11 @@ impl JobTopology {
             let mut all_forward = true;
             for &u in &component {
                 for input in &graph.stages()[u].inputs {
-                    if component.contains(&input.stage)
-                        && !matches!(input.mode, InputMode::Forward) {
-                            all_forward = false;
-                            break;
-                        }
+                    if component.contains(&input.stage) && !matches!(input.mode, InputMode::Forward)
+                    {
+                        all_forward = false;
+                        break;
+                    }
                 }
                 if !all_forward {
                     break;
@@ -127,7 +128,7 @@ impl JobTopology {
                     }
                     regions.push(TaskRegionTopology {
                         tasks,
-                        dependencies: HashSet::new(),
+                        dependencies: IndexSet::new(),
                     });
                 }
             } else {
@@ -147,7 +148,7 @@ impl JobTopology {
                 }
                 regions.push(TaskRegionTopology {
                     tasks,
-                    dependencies: HashSet::new(),
+                    dependencies: IndexSet::new(),
                 });
             }
         }

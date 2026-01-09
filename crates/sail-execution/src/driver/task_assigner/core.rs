@@ -172,11 +172,12 @@ impl TaskAssigner {
         }
         for (worker_id, worker) in self.workers.iter_mut() {
             if matches!(worker, WorkerResource::Active { .. })
-                && worker.remove_streams(job_id, stage) {
-                    assignments.push(TaskStreamAssignment::Worker {
-                        worker_id: *worker_id,
-                    });
-                }
+                && worker.remove_streams(job_id, stage)
+            {
+                assignments.push(TaskStreamAssignment::Worker {
+                    worker_id: *worker_id,
+                });
+            }
         }
         assignments
     }
@@ -254,9 +255,9 @@ impl TaskSlotAssigner {
     }
 
     fn next(&mut self) -> Option<(WorkerId, usize)> {
-        self.slots.iter_mut().find_map(|(worker_id, slots)| {
-            slots.pop().map(|slot| (*worker_id, slot))
-        })
+        self.slots
+            .iter_mut()
+            .find_map(|(worker_id, slots)| slots.pop().map(|slot| (*worker_id, slot)))
     }
 
     fn try_assign_task_region(
