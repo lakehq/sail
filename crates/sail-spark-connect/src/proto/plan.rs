@@ -52,6 +52,7 @@ impl TryFrom<Plan> for spec::QueryPlan {
 impl TryFrom<Relation> for spec::Plan {
     type Error = SparkError;
 
+    /// Converts a relation to a plan, somehow SQL text is parsed here.
     fn try_from(relation: Relation) -> SparkResult<spec::Plan> {
         let Relation { common, rel_type } = relation;
         let rel_type = rel_type.required("relation type")?;

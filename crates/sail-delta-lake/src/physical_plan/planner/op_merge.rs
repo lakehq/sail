@@ -13,19 +13,26 @@
 use std::sync::Arc;
 
 use datafusion::common::{internal_err, DataFusionError, Result};
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion::physical_plan::filter::FilterExec;
+use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion_common::{JoinType, NullEquality};
+use datafusion_physical_expr::expressions::{Column, IsNullExpr};
 use sail_common_datafusion::datasource::{
     MergeInfo as PhysicalMergeInfo, MergePredicateInfo, OperationOverride, PhysicalSinkMode,
 };
 use url::Url;
 
 use super::context::PlannerContext;
-use crate::datasource::DataFusionMixins;
+use super::log_scan::build_delta_log_datasource_union;
+use crate::datasource::{DataFusionMixins, PATH_COLUMN};
 use crate::kernel::{DeltaOperation, MergePredicate};
 use crate::options::TableDeltaOptions;
 use crate::physical_plan::{
-    DeltaCommitExec, DeltaFileLookupExec, DeltaRemoveActionsExec, DeltaWriterExec,
+    DeltaCommitExec, DeltaDiscoveryExec, DeltaLogScanExec, DeltaRemoveActionsExec, DeltaWriterExec,
 };
 
 /// Entry point for MERGE execution. Expects the logical MERGE to be fully
@@ -51,6 +58,19 @@ pub async fn build_merge_plan(
         .arrow_schema()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let partition_columns = snapshot_state.metadata().partition_columns().clone();
+
+    let kernel_snapshot = snapshot_state.snapshot().snapshot().inner.clone();
+    let log_segment = kernel_snapshot.log_segment();
+    let checkpoint_files = log_segment
+        .checkpoint_parts
+        .iter()
+        .map(|p| p.filename.clone())
+        .collect::<Vec<_>>();
+    let commit_files = log_segment
+        .ascending_commit_files
+        .iter()
+        .map(|p| p.filename.clone())
+        .collect::<Vec<_>>();
 
     let mut options = ctx.options().clone();
     if merge_info.with_schema_evolution {
@@ -89,6 +109,7 @@ pub async fn build_merge_plan(
         }
     };
     finalize_merge(
+        ctx,
         expanded,
         ctx.table_url().clone(),
         version,
@@ -96,12 +117,16 @@ pub async fn build_merge_plan(
         partition_columns,
         table_schema,
         merge_info.touched_file_plan.clone(),
+        checkpoint_files,
+        commit_files,
         merge_operation,
     )
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn finalize_merge(
+    ctx: &PlannerContext<'_>,
     projected: Arc<dyn ExecutionPlan>,
     table_url: Url,
     version: i64,
@@ -109,10 +134,116 @@ async fn finalize_merge(
     partition_columns: Vec<String>,
     table_schema: datafusion::arrow::datatypes::SchemaRef,
     touched_file_plan: Option<Arc<dyn ExecutionPlan>>,
+    checkpoint_files: Vec<String>,
+    commit_files: Vec<String>,
     operation_override: Option<DeltaOperation>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
+    let touched_plan_opt = touched_file_plan;
+
+    // Targeted rewrite: if we have a touched file plan, restrict the writer input to:
+    // - rows from touched files (post-merge)
+    // - inserted rows (path is NULL)
+    //
+    // Untouched files remain as-is (not removed, not rewritten).
+    let writer_input: Arc<dyn ExecutionPlan> = if let Some(touched_plan) = &touched_plan_opt {
+        let projected_schema = projected.schema();
+        if projected_schema.column_with_name(PATH_COLUMN).is_none() {
+            return internal_err!(
+                "MERGE writer input is missing required column '{PATH_COLUMN}' for targeted rewrite"
+            );
+        }
+        if touched_plan
+            .schema()
+            .column_with_name(PATH_COLUMN)
+            .is_none()
+        {
+            return internal_err!(
+                "MERGE touched file plan is missing required column '{PATH_COLUMN}'"
+            );
+        }
+
+        // Insert rows: path is NULL.
+        let path_idx = projected_schema
+            .index_of(PATH_COLUMN)
+            .map_err(|e| DataFusionError::Plan(format!("{e}")))?;
+        let insert_pred: Arc<dyn datafusion_physical_expr::PhysicalExpr> = Arc::new(
+            IsNullExpr::new(Arc::new(Column::new(PATH_COLUMN, path_idx))),
+        );
+        let insert_rows: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(insert_pred, Arc::clone(&projected))?);
+
+        // Touched rows: inner join touched_paths (small, collected) with writer input (big).
+        let touched_schema = touched_plan.schema();
+        let touched_idx = touched_schema
+            .index_of(PATH_COLUMN)
+            .map_err(|e| DataFusionError::Plan(format!("{e}")))?;
+
+        let join = Arc::new(HashJoinExec::try_new(
+            Arc::clone(touched_plan),
+            Arc::clone(&projected),
+            vec![(
+                Arc::new(Column::new(PATH_COLUMN, touched_idx)),
+                Arc::new(Column::new(PATH_COLUMN, path_idx)),
+            )],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+        )?);
+
+        // Keep only the right side columns (original writer input schema) after join.
+        let left_cols = touched_schema.fields().len();
+        let proj_exprs = projected_schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(i, f)| {
+                (
+                    Arc::new(Column::new(f.name(), left_cols + i))
+                        as Arc<dyn datafusion_physical_expr::PhysicalExpr>,
+                    f.name().clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let touched_rows: Arc<dyn ExecutionPlan> =
+            Arc::new(ProjectionExec::try_new(proj_exprs, join)?);
+
+        UnionExec::try_new(vec![insert_rows, touched_rows])?
+    } else {
+        Arc::clone(&projected)
+    };
+
+    // DeltaWriterExec expects rows to match the target table schema. Drop the internal path column
+    // after using it for targeted rewrite filtering.
+    let writer_input: Arc<dyn ExecutionPlan> = if writer_input
+        .schema()
+        .column_with_name(PATH_COLUMN)
+        .is_some()
+    {
+        let schema = writer_input.schema();
+        let proj_exprs = schema
+            .fields()
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| f.name() != PATH_COLUMN)
+            .map(|(i, f)| {
+                (
+                    Arc::new(Column::new(f.name(), i))
+                        as Arc<dyn datafusion_physical_expr::PhysicalExpr>,
+                    f.name().clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        Arc::new(ProjectionExec::try_new(proj_exprs, writer_input)?)
+    } else {
+        writer_input
+    };
+
+    // DeltaWriterExec requires single partition input.
+    let writer_input: Arc<dyn ExecutionPlan> = Arc::new(CoalescePartitionsExec::new(writer_input));
     let writer = Arc::new(DeltaWriterExec::new(
-        Arc::clone(&projected),
+        writer_input,
         table_url.clone(),
         options,
         partition_columns.clone(),
@@ -120,20 +251,75 @@ async fn finalize_merge(
         true,
         table_schema.clone(),
         operation_override,
-    ));
+    )?);
 
     let mut action_inputs: Vec<Arc<dyn ExecutionPlan>> = vec![writer.clone()];
 
-    if let Some(touched_plan) = touched_file_plan {
-        // Convert Path stream -> Add(JSON) stream on the Worker.
-        let lookup_plan = Arc::new(DeltaFileLookupExec::new(
-            touched_plan,
+    if let Some(touched_plan) = &touched_plan_opt {
+        // Build a log-side stream of Add rows using a visible log scan pipeline:
+        // Union(DataSourceExec parquet/json) -> DeltaLogScanExec -> ... -> DeltaDiscoveryExec.
+        let (raw_scan, checkpoint_files, commit_files) =
+            build_delta_log_datasource_union(ctx, checkpoint_files, commit_files).await?;
+        let meta_scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaLogScanExec::new(
+            raw_scan,
             table_url.clone(),
             version,
+            partition_columns.clone(),
+            checkpoint_files,
+            commit_files,
         ));
 
-        // Convert Add(JSON) -> Remove actions commit info.
-        let remove_plan = Arc::new(DeltaRemoveActionsExec::new(lookup_plan));
+        // Restrict to touched file paths by joining touched_paths with the metadata stream.
+        let touched_schema = touched_plan.schema();
+        let touched_idx = touched_schema
+            .index_of(PATH_COLUMN)
+            .map_err(|e| DataFusionError::Plan(format!("{e}")))?;
+        let meta_schema = meta_scan.schema();
+        let meta_idx = meta_schema
+            .index_of(PATH_COLUMN)
+            .map_err(|e| DataFusionError::Plan(format!("{e}")))?;
+
+        let join = Arc::new(HashJoinExec::try_new(
+            Arc::clone(touched_plan),
+            meta_scan,
+            vec![(
+                Arc::new(Column::new(PATH_COLUMN, touched_idx)),
+                Arc::new(Column::new(PATH_COLUMN, meta_idx)),
+            )],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+        )?);
+
+        // Keep only the right side columns (metadata stream schema).
+        let left_cols = touched_schema.fields().len();
+        let proj_exprs = meta_schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(i, f)| {
+                (
+                    Arc::new(Column::new(f.name(), left_cols + i))
+                        as Arc<dyn datafusion_physical_expr::PhysicalExpr>,
+                    f.name().clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let touched_meta: Arc<dyn ExecutionPlan> =
+            Arc::new(ProjectionExec::try_new(proj_exprs, join)?);
+
+        let touched_adds: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::from_log_scan(
+            touched_meta,
+            table_url.clone(),
+            version,
+            partition_columns.clone(),
+            true, // partition_scan
+        )?);
+
+        // Convert Add rows -> Remove action rows (touched-only).
+        let remove_plan = Arc::new(DeltaRemoveActionsExec::new(touched_adds)?);
         action_inputs.push(remove_plan);
     }
 

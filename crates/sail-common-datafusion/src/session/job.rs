@@ -9,6 +9,7 @@ use crate::extension::SessionExtension;
 
 #[tonic::async_trait]
 pub trait JobRunner: Send + Sync + 'static {
+    /// Executes a plan
     async fn execute(
         &self,
         ctx: &SessionContext,

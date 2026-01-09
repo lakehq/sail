@@ -1,5 +1,12 @@
 name: Rust setup
 description: Prepare Rust build environment and build cache
+inputs:
+  cache-key:
+    description: Cache key prefix (e.g., 'rust-tests', 'rust-lint', or 'rust-build')
+    required: true
+  install-testing-tools:
+    description: Whether to install testing tools (grcov, nextest, llvm-tools-preview)
+    default: "true"
 runs:
   using: composite
   steps:
@@ -14,14 +21,20 @@ runs:
     # The Rust nightly toolchain is needed for features used in e.g. code formatting.
     - name: Install Rust toolchains
       run: |
-        rustup toolchain install stable --profile default --component llvm-tools-preview
+        if [[ "${{ inputs.install-testing-tools }}" == "true" ]]; then
+          rustup toolchain install stable --profile default --component llvm-tools-preview
+        else
+          rustup toolchain install stable --profile default
+        fi
         rustup toolchain install nightly --profile default
       shell: bash
 
     - name: Install grcov
+      if: ${{ inputs.install-testing-tools == 'true' }}
       uses: taiki-e/install-action@grcov
 
     - name: Install cargo-nextest
+      if: ${{ inputs.install-testing-tools == 'true' }}
       uses: taiki-e/install-action@nextest
 
     - name: Show versions
@@ -60,7 +73,7 @@ runs:
       if: ${{ github.event_name == 'push' }}
       with:
         path: ${{ steps.config.outputs.path }}
-        key: setup-rust-${{ steps.config.outputs.label }}-${{ steps.config.outputs.hash }}
+        key: ${{ inputs.cache-key }}-${{ steps.config.outputs.label }}-${{ steps.config.outputs.hash }}
 
     # We save the cache only for push events, so that more cache space can be reserved
     # for the default branch and cache eviction is less likely to happen.
@@ -70,9 +83,9 @@ runs:
       if: ${{ github.event_name != 'push' }}
       with:
         path: ${{ steps.config.outputs.path }}
-        key: setup-rust-${{ steps.config.outputs.label }}-${{ steps.config.outputs.hash }}
+        key: ${{ inputs.cache-key }}-${{ steps.config.outputs.label }}-${{ steps.config.outputs.hash }}
         restore-keys: |
-          setup-rust-${{ steps.config.outputs.label }}-
+          ${{ inputs.cache-key }}-${{ steps.config.outputs.label }}-
 
     # Incremental compilation is not beneficial for CI builds.
     # So we turn it off to speed up the build and reduce the cache size.

@@ -181,6 +181,7 @@ impl PlanResolver<'_> {
         if !cluster_by.is_empty() {
             return Err(PlanError::todo("CLUSTER BY for write"));
         }
+        let input_schema = input.schema().inner().clone();
         let options_map = options
             .clone()
             .into_iter()
@@ -209,7 +210,11 @@ impl PlanResolver<'_> {
                     file_write_options.format = self.config.default_table_file_format.clone();
                 }
                 file_write_options.path = location;
-                file_write_options.mode = self.resolve_write_mode(mode, None, state).await?;
+                let schema_for_cond =
+                    matches!(mode, WriteMode::OverwriteIf { .. }).then_some(input_schema.as_ref());
+                file_write_options.mode = self
+                    .resolve_write_mode(mode, schema_for_cond, state)
+                    .await?;
             }
             WriteTarget::Sink => {
                 if !table_properties.is_empty() {
@@ -220,7 +225,11 @@ impl PlanResolver<'_> {
                 if file_write_options.format.is_empty() {
                     file_write_options.format = self.config.default_table_file_format.clone();
                 }
-                file_write_options.mode = self.resolve_write_mode(mode, None, state).await?;
+                let schema_for_cond =
+                    matches!(mode, WriteMode::OverwriteIf { .. }).then_some(input_schema.as_ref());
+                file_write_options.mode = self
+                    .resolve_write_mode(mode, schema_for_cond, state)
+                    .await?;
             }
             WriteTarget::ExistingTable {
                 table,

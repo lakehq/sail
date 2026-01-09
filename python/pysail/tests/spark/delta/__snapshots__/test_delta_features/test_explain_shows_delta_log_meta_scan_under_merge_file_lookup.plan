@@ -1,0 +1,103 @@
+== Physical Plan ==
+DeltaCommitExec(table_path=file://<tmp>/merge_explain_partition_pushdown/)
+  CoalescePartitionsExec
+    UnionExec
+      DeltaWriterExec(table_path=file://<tmp>/merge_explain_partition_pushdown/)
+        CoalescePartitionsExec
+          UnionExec
+            ProjectionExec: expr=[CASE WHEN __common_expr_1@0 THEN __sail_src_id@7 ELSE id@1 END as id, CASE WHEN __sail_merge_target_row_present@6 IS NOT NULL AND __sail_merge_source_row_present@10 IS NOT NULL THEN __sail_src_value@9 WHEN __common_expr_1@0 THEN __sail_src_value@9 ELSE value@2 END as value, CASE WHEN __common_expr_1@0 THEN __sail_src_year@8 ELSE year@3 END as year]
+              ProjectionExec: expr=[__sail_merge_target_row_present@5 IS NULL AND __sail_merge_source_row_present@9 IS NOT NULL as __common_expr_1, id@0 as id, value@1 as value, year@2 as year, __sail_file_path@3 as __sail_file_path, __sail_merge_target_row_id@4 as __sail_merge_target_row_id, __sail_merge_target_row_present@5 as __sail_merge_target_row_present, __sail_src_id@6 as __sail_src_id, __sail_src_year@7 as __sail_src_year, __sail_src_value@8 as __sail_src_value, __sail_merge_source_row_present@9 as __sail_merge_source_row_present]
+                CoalesceBatchesExec: target_batch_size=8192
+                  FilterExec: __sail_file_path@3 IS NULL AND (__sail_merge_target_row_present@5 IS NOT NULL OR __sail_merge_target_row_present@5 IS NULL AND __sail_merge_source_row_present@9 IS NOT NULL)
+                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                      MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
+                        CoalescePartitionsExec
+                          ProjectionExec: expr=[id@4 as id, value@5 as value, year@6 as year, __sail_file_path@7 as __sail_file_path, __sail_merge_target_row_id@8 as __sail_merge_target_row_id, __sail_merge_target_row_present@9 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_year@1 as __sail_src_year, __sail_src_value@2 as __sail_src_value, __sail_merge_source_row_present@3 as __sail_merge_source_row_present]
+                            CoalesceBatchesExec: target_batch_size=8192
+                              HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=year@1 = 2024 AND value@0 > 150
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  RepartitionExec: partitioning=Hash([__sail_src_id@0], <partitions>), input_partitions=<partitions>
+                                    ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_year@1 as __sail_src_year, __sail_src_value@2 as __sail_src_value, true as __sail_merge_source_row_present]
+                                      ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_year, column3@2 as __sail_src_value]
+                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  RepartitionExec: partitioning=Hash([id@0], <partitions>), input_partitions=<partitions>
+                                    ProjectionExec: expr=[id@0 as id, value@1 as value, year@2 as year, __sail_file_path@3 as __sail_file_path, __sail_merge_target_row_id@4 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
+                                      ProjectionExec: expr=[id@0 as id, value@1 as value, year@2 as year, __sail_file_path@3 as __sail_file_path, uuid() as __sail_merge_target_row_id]
+                                        DataSourceExec: file_groups={2 groups: [[<tmp>/merge_explain_partition_pushdown/year=2023/part-<id>.snappy.parquet], [<tmp>/merge_explain_partition_pushdown/year=2024/part-<id>.snappy.parquet]]}, projection=[id, value, year, __sail_file_path], file_type=parquet
+            CoalesceBatchesExec: target_batch_size=8192
+              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@3)], projection=[id@1, value@2, year@3]
+                CoalescePartitionsExec
+                  AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      RepartitionExec: partitioning=Hash([__sail_file_path@0], <partitions>), input_partitions=<partitions>
+                        AggregateExec: mode=Partial, gby=[__sail_file_path@3 as __sail_file_path], aggr=[]
+                          CoalesceBatchesExec: target_batch_size=8192
+                            FilterExec: __sail_merge_target_row_present@5 IS NOT NULL AND __sail_merge_source_row_present@9 IS NOT NULL AND id@0 = __sail_src_id@6 AND year@2 = 2024 AND value@1 > 150
+                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
+                                  CoalescePartitionsExec
+                                    ProjectionExec: expr=[id@4 as id, value@5 as value, year@6 as year, __sail_file_path@7 as __sail_file_path, __sail_merge_target_row_id@8 as __sail_merge_target_row_id, __sail_merge_target_row_present@9 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_year@1 as __sail_src_year, __sail_src_value@2 as __sail_src_value, __sail_merge_source_row_present@3 as __sail_merge_source_row_present]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=year@1 = 2024 AND value@0 > 150
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            RepartitionExec: partitioning=Hash([__sail_src_id@0], <partitions>), input_partitions=<partitions>
+                                              ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_year@1 as __sail_src_year, __sail_src_value@2 as __sail_src_value, true as __sail_merge_source_row_present]
+                                                ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_year, column3@2 as __sail_src_value]
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            RepartitionExec: partitioning=Hash([id@0], <partitions>), input_partitions=<partitions>
+                                              ProjectionExec: expr=[id@0 as id, value@1 as value, year@2 as year, __sail_file_path@3 as __sail_file_path, __sail_merge_target_row_id@4 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
+                                                ProjectionExec: expr=[id@0 as id, value@1 as value, year@2 as year, __sail_file_path@3 as __sail_file_path, uuid() as __sail_merge_target_row_id]
+                                                  DataSourceExec: file_groups={2 groups: [[<tmp>/merge_explain_partition_pushdown/year=2023/part-<id>.snappy.parquet], [<tmp>/merge_explain_partition_pushdown/year=2024/part-<id>.snappy.parquet]]}, projection=[id, value, year, __sail_file_path], file_type=parquet
+                ProjectionExec: expr=[CASE WHEN __common_expr_1@0 THEN __sail_src_id@7 ELSE id@1 END as id, CASE WHEN __sail_merge_target_row_present@6 IS NOT NULL AND __sail_merge_source_row_present@10 IS NOT NULL THEN __sail_src_value@9 WHEN __common_expr_1@0 THEN __sail_src_value@9 ELSE value@2 END as value, CASE WHEN __common_expr_1@0 THEN __sail_src_year@8 ELSE year@3 END as year, __sail_file_path@4 as __sail_file_path]
+                  ProjectionExec: expr=[__sail_merge_target_row_present@5 IS NULL AND __sail_merge_source_row_present@9 IS NOT NULL as __common_expr_1, id@0 as id, value@1 as value, year@2 as year, __sail_file_path@3 as __sail_file_path, __sail_merge_target_row_id@4 as __sail_merge_target_row_id, __sail_merge_target_row_present@5 as __sail_merge_target_row_present, __sail_src_id@6 as __sail_src_id, __sail_src_year@7 as __sail_src_year, __sail_src_value@8 as __sail_src_value, __sail_merge_source_row_present@9 as __sail_merge_source_row_present]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      FilterExec: __sail_merge_target_row_present@5 IS NOT NULL OR __sail_merge_target_row_present@5 IS NULL AND __sail_merge_source_row_present@9 IS NOT NULL
+                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                          MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
+                            CoalescePartitionsExec
+                              ProjectionExec: expr=[id@4 as id, value@5 as value, year@6 as year, __sail_file_path@7 as __sail_file_path, __sail_merge_target_row_id@8 as __sail_merge_target_row_id, __sail_merge_target_row_present@9 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_year@1 as __sail_src_year, __sail_src_value@2 as __sail_src_value, __sail_merge_source_row_present@3 as __sail_merge_source_row_present]
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=year@1 = 2024 AND value@0 > 150
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      RepartitionExec: partitioning=Hash([__sail_src_id@0], <partitions>), input_partitions=<partitions>
+                                        ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_year@1 as __sail_src_year, __sail_src_value@2 as __sail_src_value, true as __sail_merge_source_row_present]
+                                          ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_year, column3@2 as __sail_src_value]
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      RepartitionExec: partitioning=Hash([id@0], <partitions>), input_partitions=<partitions>
+                                        ProjectionExec: expr=[id@0 as id, value@1 as value, year@2 as year, __sail_file_path@3 as __sail_file_path, __sail_merge_target_row_id@4 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
+                                          ProjectionExec: expr=[id@0 as id, value@1 as value, year@2 as year, __sail_file_path@3 as __sail_file_path, uuid() as __sail_merge_target_row_id]
+                                            DataSourceExec: file_groups={2 groups: [[<tmp>/merge_explain_partition_pushdown/year=2023/part-<id>.snappy.parquet], [<tmp>/merge_explain_partition_pushdown/year=2024/part-<id>.snappy.parquet]]}, projection=[id, value, year, __sail_file_path], file_type=parquet
+      DeltaRemoveActionsExec
+        DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_partition_pushdown/)
+          CoalescePartitionsExec
+            CoalesceBatchesExec: target_batch_size=8192
+              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, year@4]
+                CoalescePartitionsExec
+                  AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      RepartitionExec: partitioning=Hash([__sail_file_path@0], <partitions>), input_partitions=<partitions>
+                        AggregateExec: mode=Partial, gby=[__sail_file_path@3 as __sail_file_path], aggr=[]
+                          CoalesceBatchesExec: target_batch_size=8192
+                            FilterExec: __sail_merge_target_row_present@5 IS NOT NULL AND __sail_merge_source_row_present@9 IS NOT NULL AND id@0 = __sail_src_id@6 AND year@2 = 2024 AND value@1 > 150
+                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
+                                  CoalescePartitionsExec
+                                    ProjectionExec: expr=[id@4 as id, value@5 as value, year@6 as year, __sail_file_path@7 as __sail_file_path, __sail_merge_target_row_id@8 as __sail_merge_target_row_id, __sail_merge_target_row_present@9 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_year@1 as __sail_src_year, __sail_src_value@2 as __sail_src_value, __sail_merge_source_row_present@3 as __sail_merge_source_row_present]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=year@1 = 2024 AND value@0 > 150
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            RepartitionExec: partitioning=Hash([__sail_src_id@0], <partitions>), input_partitions=<partitions>
+                                              ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_year@1 as __sail_src_year, __sail_src_value@2 as __sail_src_value, true as __sail_merge_source_row_present]
+                                                ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_year, column3@2 as __sail_src_value]
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            RepartitionExec: partitioning=Hash([id@0], <partitions>), input_partitions=<partitions>
+                                              ProjectionExec: expr=[id@0 as id, value@1 as value, year@2 as year, __sail_file_path@3 as __sail_file_path, __sail_merge_target_row_id@4 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
+                                                ProjectionExec: expr=[id@0 as id, value@1 as value, year@2 as year, __sail_file_path@3 as __sail_file_path, uuid() as __sail_merge_target_row_id]
+                                                  DataSourceExec: file_groups={2 groups: [[<tmp>/merge_explain_partition_pushdown/year=2023/part-<id>.snappy.parquet], [<tmp>/merge_explain_partition_pushdown/year=2024/part-<id>.snappy.parquet]]}, projection=[id, value, year, __sail_file_path], file_type=parquet
+                DeltaLogScanExec(table_path=file://<tmp>/merge_explain_partition_pushdown/, version=0)
+                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                    DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_partition_pushdown/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
