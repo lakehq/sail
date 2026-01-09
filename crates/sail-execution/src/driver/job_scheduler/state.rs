@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use datafusion::execution::TaskContext;
 use datafusion::physical_plan::ExecutionPlanProperties;
+use sail_common_datafusion::error::CommonErrorCause;
 
 use crate::driver::job_scheduler::topology::JobTopology;
 use crate::driver::output::JobOutputManager;
@@ -61,6 +62,7 @@ pub struct TaskDescriptor {
 pub struct TaskAttemptDescriptor {
     pub state: TaskState,
     pub messages: Vec<String>,
+    pub cause: Option<CommonErrorCause>,
 }
 
 #[derive(Debug, Clone, Copy)]

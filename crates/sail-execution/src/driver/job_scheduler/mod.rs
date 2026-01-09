@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 pub use options::JobSchedulerOptions;
+use sail_common_datafusion::error::CommonErrorCause;
 pub use state::TaskState;
 
 use crate::codec::RemoteExecutionCodec;
@@ -44,6 +45,7 @@ pub enum JobAction {
     },
     FailJobOutput {
         notifier: JobOutputFailureNotifier,
+        cause: CommonErrorCause,
     },
     FetchJobOutputStream {
         key: TaskStreamKey,

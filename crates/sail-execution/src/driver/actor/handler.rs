@@ -16,7 +16,7 @@ use tokio::time::Instant;
 use crate::driver::actor::DriverActor;
 use crate::driver::job_scheduler::{JobAction, TaskState};
 use crate::driver::{DriverEvent, TaskStatus};
-use crate::error::{ExecutionError, ExecutionResult};
+use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey, TaskStreamKeyDisplay, WorkerId};
 use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
@@ -144,6 +144,7 @@ impl DriverActor {
                     key,
                     TaskState::Failed,
                     Some("task failed for lost worker".to_string()),
+                    None,
                 );
             }
 
@@ -207,12 +208,12 @@ impl DriverActor {
         match status {
             TaskStatus::Running => {
                 self.job_scheduler
-                    .update_task(&key, TaskState::Running, message);
+                    .update_task(&key, TaskState::Running, message, cause);
                 self.refresh_job(ctx, key.job_id);
             }
             TaskStatus::Succeeded => {
                 self.job_scheduler
-                    .update_task(&key, TaskState::Succeeded, message);
+                    .update_task(&key, TaskState::Succeeded, message, cause);
                 self.task_assigner.unassign_task(&key);
                 self.refresh_job(ctx, key.job_id);
                 self.run_tasks(ctx);
@@ -222,13 +223,17 @@ impl DriverActor {
                 // Some canceled tasks may report failed status due to closed streams,
                 // but it is fine to handle them as failed tasks again.
                 self.job_scheduler
-                    .update_task(&key, TaskState::Failed, message);
+                    .update_task(&key, TaskState::Failed, message, cause);
                 self.task_assigner.unassign_task(&key);
                 self.refresh_job(ctx, key.job_id);
                 self.run_tasks(ctx);
                 self.scale_up_workers(ctx);
             }
             TaskStatus::Canceled => {
+                // The task attempt state should already be "canceled" but we update it
+                // for the message and cause.
+                self.job_scheduler
+                    .update_task(&key, TaskState::Canceled, message, cause);
                 // Task cancellation must have been initiated by the driver itself,
                 // so it is a no-op to handle canceled tasks here.
             }
@@ -373,13 +378,9 @@ impl DriverActor {
                     }
                 }
             }
-            JobAction::FailJobOutput { notifier } => {
+            JobAction::FailJobOutput { notifier, cause } => {
                 ctx.spawn(async move {
-                    notifier
-                        .notify(CommonErrorCause::new::<PyErrExtractor>(
-                            &ExecutionError::InternalError("job failed".to_string()),
-                        ))
-                        .await;
+                    notifier.notify(cause).await;
                 });
             }
             JobAction::FetchJobOutputStream {
@@ -451,7 +452,7 @@ impl DriverActor {
                     }
                 };
                 self.job_scheduler
-                    .update_task(&entry.key, TaskState::Scheduled, None);
+                    .update_task(&entry.key, TaskState::Scheduled, None, None);
                 match assignment.assignment {
                     TaskAssignment::Driver => self
                         .task_runner

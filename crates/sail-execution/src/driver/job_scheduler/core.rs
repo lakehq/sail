@@ -9,6 +9,8 @@ use datafusion_proto::physical_plan::AsExecutionPlan;
 use datafusion_proto::protobuf::PhysicalPlanNode;
 use log::{debug, warn};
 use prost::Message;
+use sail_common_datafusion::error::CommonErrorCause;
+use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::ActorContext;
 
 use crate::driver::job_scheduler::state::{
@@ -55,42 +57,41 @@ impl JobScheduler {
         Ok((job_id, stream))
     }
 
-    fn get_task_attempt(&self, key: &TaskKey) -> Option<&TaskAttemptDescriptor> {
-        let descriptor = self
+    pub fn update_task(
+        &mut self,
+        key: &TaskKey,
+        state: TaskState,
+        message: Option<String>,
+        cause: Option<CommonErrorCause>,
+    ) {
+        let Some(attempt) = self
+            .jobs
+            .get_mut(&key.job_id)
+            .and_then(|job| job.stages.get_mut(key.stage))
+            .and_then(|stage| stage.tasks.get_mut(key.partition))
+            .and_then(|task| task.attempts.get_mut(key.attempt))
+        else {
+            warn!("{} not found", TaskKeyDisplay(&key));
+            return;
+        };
+        attempt.state = attempt.state.consolidate(state);
+        attempt.messages.extend(message);
+        if let Some(cause) = cause {
+            attempt.cause = Some(cause);
+        }
+    }
+
+    pub fn get_task_state(&self, key: &TaskKey) -> Option<TaskState> {
+        let attempt = self
             .jobs
             .get(&key.job_id)
             .and_then(|job| job.stages.get(key.stage))
             .and_then(|stage| stage.tasks.get(key.partition))
             .and_then(|task| task.attempts.get(key.attempt));
-        if descriptor.is_none() {
+        if attempt.is_none() {
             warn!("{} not found", TaskKeyDisplay(&key));
         };
-        descriptor
-    }
-
-    fn get_task_attempt_mut(&mut self, key: &TaskKey) -> Option<&mut TaskAttemptDescriptor> {
-        let descriptor = self
-            .jobs
-            .get_mut(&key.job_id)
-            .and_then(|job| job.stages.get_mut(key.stage))
-            .and_then(|stage| stage.tasks.get_mut(key.partition))
-            .and_then(|task| task.attempts.get_mut(key.attempt));
-        if descriptor.is_none() {
-            warn!("{} not found", TaskKeyDisplay(&key));
-        };
-        descriptor
-    }
-
-    pub fn update_task(&mut self, key: &TaskKey, state: TaskState, message: Option<String>) {
-        let Some(descriptor) = self.get_task_attempt_mut(key) else {
-            return;
-        };
-        descriptor.state = descriptor.state.consolidate(state);
-        descriptor.messages.extend(message);
-    }
-
-    pub fn get_task_state(&self, key: &TaskKey) -> Option<TaskState> {
-        self.get_task_attempt(key).map(|x| x.state.clone())
+        attempt.map(|x| x.state.clone())
     }
 
     /// Determine the actions needed in the driver for the job whose
@@ -128,9 +129,11 @@ impl JobScheduler {
             .iter()
             .any(|x| matches!(*x, TaskRegionStatus::Failed))
         {
+            let cause = Self::infer_job_failure_cause(job);
             if let JobState::Running { output, .. } = &job.state {
                 actions.push(JobAction::FailJobOutput {
                     notifier: output.fail(),
+                    cause,
                 })
             }
             job.state = JobState::Failed;
@@ -288,6 +291,7 @@ impl JobScheduler {
                 task.attempts.push(TaskAttemptDescriptor {
                     state: TaskState::Created,
                     messages: vec![],
+                    cause: None,
                 });
             }
 
@@ -400,6 +404,37 @@ impl JobScheduler {
         actions
     }
 
+    fn infer_job_failure_cause(job: &JobDescriptor) -> CommonErrorCause {
+        // a map from (stage, partition) to a list of causes
+        let mut causes: HashMap<(usize, usize), Vec<&CommonErrorCause>> = HashMap::new();
+        for (s, stage) in job.stages.iter().enumerate() {
+            for (t, task) in stage.tasks.iter().enumerate() {
+                for attempt in task.attempts.iter() {
+                    if matches!(attempt.state, TaskState::Failed) {
+                        if let Some(cause) = &attempt.cause {
+                            causes.entry((s, t)).or_default().push(cause);
+                        }
+                    }
+                }
+            }
+        }
+        // Get the most recent cause from the most likely failed task.
+        if let Some((_, &[.., cause])) = causes.iter().map(|(k, v)| (k, v.as_slice())).min_by(
+            |((s1, p1), v1), ((s2, p2), v2)| {
+                // Find the task that fails the most number of times,
+                // and if there is a tie, choose the one with the smallest
+                // stage and partition.
+                v2.len().cmp(&v1.len()).then(s1.cmp(s2)).then(p1.cmp(p2))
+            },
+        ) {
+            cause.clone()
+        } else {
+            CommonErrorCause::new::<PyErrExtractor>(&ExecutionError::InternalError(
+                "job failed for unknown reason".to_string(),
+            ))
+        }
+    }
+
     /// Determine the actions needed in the driver to cancel the job.
     /// The method cancels all the task attempts that are not in terminal states
     /// and removes all the job output streams.
@@ -483,48 +518,23 @@ impl JobScheduler {
                 let partitions = stage.plan.output_partitioning().partition_count();
                 let channels = stage.distribution.channels();
                 let keys = match input.mode {
-                    InputMode::Forward => {
-                        let mut keys = vec![vec![]; partitions];
-                        let Some(k) = keys.get_mut(key.partition) else {
-                            return Err(ExecutionError::InvalidArgument(format!(
-                                "job {} input stage {} has no partition {}",
-                                key.job_id, input.stage, key.partition
-                            )));
-                        };
-                        *k = (0..channels)
-                            .map(|channel| {
-                                Ok(TaskInputKey {
-                                    partition: key.partition,
-                                    attempt: latest_attempt(input.stage, key.partition)?,
-                                    channel,
-                                })
-                            })
-                            .collect::<ExecutionResult<Vec<_>>>()?;
-                        keys
-                    }
-                    InputMode::Shuffle => {
-                        let mut keys = vec![vec![]; channels];
-                        let Some(k) = keys.get_mut(key.partition) else {
-                            return Err(ExecutionError::InvalidArgument(format!(
-                                "job {} input stage {} has no channel {}",
-                                key.job_id, input.stage, key.partition
-                            )));
-                        };
-                        *k = (0..partitions)
-                            .map(|partition| {
-                                Ok(TaskInputKey {
-                                    partition,
-                                    attempt: latest_attempt(input.stage, partition)?,
-                                    channel: key.partition,
-                                })
-                            })
-                            .collect::<ExecutionResult<Vec<_>>>()?;
-                        keys
-                    }
-                    InputMode::Broadcast => {
+                    InputMode::Forward | InputMode::Broadcast => {
                         (0..partitions).map(|partition| {
                             (0..channels)
                                 .map(|channel| {
+                                    Ok(TaskInputKey {
+                                        partition,
+                                        attempt: latest_attempt(input.stage, partition)?,
+                                        channel,
+                                    })
+                                })
+                                .collect::<ExecutionResult<Vec<_>>>()
+                        }).collect::<ExecutionResult<Vec<Vec<_>>>>()?
+                    }
+                    InputMode::Shuffle => {
+                        (0..channels).map(|channel| {
+                            (0..partitions)
+                                .map(|partition| {
                                     Ok(TaskInputKey {
                                         partition,
                                         attempt: latest_attempt(input.stage, partition)?,
