@@ -236,9 +236,9 @@ impl Stream for JobOutputStream {
                 Poll::Ready(None) => {
                     self.state = JobOutputState::Completed;
                     if self.succeeded {
-                        Poll::Ready(None)
-                    } else {
                         Poll::Pending
+                    } else {
+                        Poll::Ready(None)
                     }
                 }
                 Poll::Ready(Some(result)) => Poll::Ready(Some(
