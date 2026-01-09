@@ -306,15 +306,16 @@ impl DriverActor {
 
     pub(super) fn handle_fetch_worker_stream(
         &mut self,
-        _ctx: &mut ActorContext<Self>,
-        _worker_id: WorkerId,
-        _key: TaskStreamKey,
-        _schema: SchemaRef,
+        ctx: &mut ActorContext<Self>,
+        worker_id: WorkerId,
+        key: TaskStreamKey,
+        schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
-        let _ = result.send(Err(ExecutionError::InternalError(
-            "not implemented: fetch worker stream".to_string(),
-        )));
+        let _ = result.send(
+            self.worker_pool
+                .fetch_worker_stream(ctx, worker_id, &key, schema),
+        );
         ActorAction::Continue
     }
 
