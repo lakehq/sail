@@ -20,7 +20,7 @@ use sail_server::actor::ActorContext;
 use sail_telemetry::common::SpanAttribute;
 use tokio::time::Instant;
 
-use crate::driver::job_scheduler::{JobOutputMetadata, TaskSchedule, TaskSchedulePlan};
+use crate::driver::job_scheduler::{JobOutputMetadata, ScheduledTask, TaskSchedulePlan};
 use crate::driver::worker_pool::state::WorkerState;
 use crate::driver::worker_pool::{
     WorkerDescriptor, WorkerIdle, WorkerLost, WorkerPool, WorkerPoolOptions, WorkerTimeout,
@@ -314,7 +314,7 @@ impl WorkerPool {
         }
     }
 
-    pub fn run_task(&mut self, ctx: &mut ActorContext<DriverActor>, schedule: TaskSchedule) {
+    pub fn run_task(&mut self, ctx: &mut ActorContext<DriverActor>, schedule: ScheduledTask) {
         let running_worker_locations = self.list_running_workers();
         let plan = match schedule.plan {
             TaskSchedulePlan::Valid(plan) => plan,

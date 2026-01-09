@@ -131,6 +131,8 @@ impl DriverActor {
         ActorAction::Continue
     }
 
+    /// This is where the driver takes in an execution plan
+    /// Does not complete it directly in here but schedules it instead.
     pub(super) fn handle_execute_job(
         &mut self,
         ctx: &mut ActorContext<Self>,
@@ -204,6 +206,7 @@ impl DriverActor {
         ActorAction::Continue
     }
 
+    /// Spins up more workes if needed.
     fn scale_up_workers(&mut self, ctx: &mut ActorContext<Self>) {
         let max_workers = self.options.worker_max_count;
         let slots_per_worker = self.options.worker_task_slots;
@@ -282,6 +285,9 @@ impl DriverActor {
         ActorAction::Continue
     }
 
+    /// Takes a look at the idle task slots and if there are
+    /// finds out the what tasks should be assigned to them
+    /// and then runs them.
     fn schedule_tasks(&mut self, ctx: &mut ActorContext<Self>) {
         let slots = self.worker_pool.find_idle_task_slots();
         for schedule in self.job_scheduler.schedule_tasks(ctx, slots) {

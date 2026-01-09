@@ -14,6 +14,7 @@ use crate::driver::gen;
 use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskInstance, WorkerId};
 
+/// Events that the driver can recieve and react to.
 pub enum DriverEvent {
     ServerReady {
         /// The local port that the driver server listens on.
@@ -45,6 +46,7 @@ pub enum DriverEvent {
         worker_id: WorkerId,
         instant: Instant,
     },
+    /// Exactly what you think - executes a plan. Contains a sender so we can send back the result too.
     ExecuteJob {
         plan: Arc<dyn ExecutionPlan>,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,

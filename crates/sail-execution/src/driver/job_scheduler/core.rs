@@ -11,7 +11,7 @@ use sail_server::actor::ActorContext;
 
 use crate::driver::job_scheduler::state::{JobDescriptor, TaskDescriptor, TaskState};
 use crate::driver::job_scheduler::{
-    JobOutputChannel, JobOutputMetadata, JobScheduler, TaskSchedule, TaskSchedulePlan, TaskTimeout,
+    JobOutputChannel, JobOutputMetadata, JobScheduler, ScheduledTask, TaskSchedulePlan, TaskTimeout,
 };
 use crate::driver::planner::JobGraph;
 use crate::driver::{DriverActor, DriverEvent};
@@ -133,11 +133,13 @@ impl JobScheduler {
         task.messages.extend(message);
     }
 
+    /// Iterates through the task queue and finds tasks that are eligible
+    /// for scheduling and returns a vector of scheduled tasks.
     pub fn schedule_tasks(
         &mut self,
         ctx: &mut ActorContext<DriverActor>,
         slots: Vec<(WorkerId, usize)>,
-    ) -> Vec<TaskSchedule> {
+    ) -> Vec<ScheduledTask> {
         let mut assigner = TaskSlotAssigner::new(slots);
         let mut skipped_tasks = vec![];
         let mut scheduled_tasks = vec![];
@@ -204,7 +206,7 @@ impl JobScheduler {
                     }
                 }
             };
-            scheduled_tasks.push(TaskSchedule {
+            scheduled_tasks.push(ScheduledTask {
                 instance,
                 worker_id,
                 plan,

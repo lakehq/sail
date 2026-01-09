@@ -7,6 +7,7 @@ use datafusion::prelude::SessionContext;
 
 use crate::extension::SessionExtension;
 
+/// Executes a physical execution plan and streams back the results.
 #[tonic::async_trait]
 pub trait JobRunner: Send + Sync + 'static {
     /// Executes a plan

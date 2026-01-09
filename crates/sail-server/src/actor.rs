@@ -144,6 +144,7 @@ impl ActorSystem {
     }
 }
 
+/// Wrapper around the Sender to Actors.
 pub struct ActorHandle<T: Actor> {
     sender: mpsc::Sender<MessageEnvelop<T::Message>>,
 }

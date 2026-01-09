@@ -660,6 +660,8 @@ impl CatalogProvider for UnityCatalogProvider {
         }
     }
 
+    /// Probably the most important method for the sail-unity-catalog. Actually gets the table
+    /// location from the Unity Catalog.
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
         let client = self
             .get_client()

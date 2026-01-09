@@ -39,7 +39,7 @@ pub enum TaskTimeout {
     No,
 }
 
-pub struct TaskSchedule {
+pub struct ScheduledTask {
     pub instance: TaskInstance,
     pub worker_id: WorkerId,
     pub plan: TaskSchedulePlan,

@@ -60,6 +60,8 @@ impl JobRunner for LocalJobRunner {
     }
 }
 
+/// Runs the jobs on the cluster but is more or less a wrapper around the
+/// ActorHandle that we use to send messages to the driver.
 pub struct ClusterJobRunner {
     driver: ActorHandle<DriverActor>,
 }
