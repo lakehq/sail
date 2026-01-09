@@ -17,11 +17,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Utc;
-use datafusion::arrow::array::{Array, StringArray, UInt64Array};
+use datafusion::arrow::array::UInt64Array;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
-use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -41,7 +40,10 @@ use url::Url;
 use crate::kernel::models::{Action, Add, Metadata, Protocol, RemoveOptions};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
 use crate::kernel::{DeltaOperation, SaveMode};
-use crate::physical_plan::{current_timestamp_millis, CommitInfo};
+use crate::physical_plan::action_schema::CommitMeta;
+use crate::physical_plan::{
+    current_timestamp_millis, decode_actions_and_meta_from_batch, COL_ACTION,
+};
 use crate::schema::normalize_delta_schema;
 use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::{create_delta_table_with_object_store, open_table_with_object_store};
@@ -228,6 +230,8 @@ impl ExecutionPlan for DeltaCommitExec {
 
             let mut total_rows = 0u64;
             let mut has_data = false;
+            // "data" actions (Add/Remove/other) and "initial" actions (Protocol/Metadata)
+            // are kept separate so we can preserve the required action ordering on commit.
             let mut actions: Vec<Action> = Vec::new();
             let mut initial_actions: Vec<Action> = Vec::new();
             let mut operation: Option<DeltaOperation> = None;
@@ -237,35 +241,34 @@ impl ExecutionPlan for DeltaCommitExec {
             while let Some(batch_result) = data.next().await {
                 let batch = batch_result?;
 
-                // Extract commit info from the single data column (skip empty/invalid rows)
-                if let Some(array) = batch.column(0).as_any().downcast_ref::<StringArray>() {
-                    for i in 0..array.len() {
-                        let s = array.value(i);
-                        if s.trim().is_empty() {
-                            continue;
+                // Arrow-native action rows + optional CommitMeta row only.
+                if batch.column_by_name(COL_ACTION).is_some() {
+                    let (decoded_actions, decoded_meta) =
+                        decode_actions_and_meta_from_batch(&batch)?;
+                    for a in decoded_actions {
+                        match a {
+                            Action::Protocol(_) | Action::Metadata(_) => initial_actions.push(a),
+                            _ => actions.push(a),
                         }
-                        let parsed: Result<CommitInfo, _> = serde_json::from_str(s);
-                        let commit_info = match parsed {
-                            Ok(ci) => ci,
-                            Err(e) => {
-                                return Err(DataFusionError::External(Box::new(e)));
-                            }
-                        };
-
-                        total_rows += commit_info.row_count;
-                        actions.extend(commit_info.actions);
-                        if initial_actions.is_empty() {
-                            initial_actions = commit_info.initial_actions;
-                        }
-                        if operation.is_none() {
-                            operation = commit_info.operation;
-                        }
-                        merge_operation_metrics(
-                            &mut operation_metrics,
-                            commit_info.operation_metrics,
-                        );
-                        has_data = true;
                     }
+                    if let Some(CommitMeta {
+                        row_count,
+                        operation: op,
+                        operation_metrics: metrics,
+                    }) = decoded_meta
+                    {
+                        total_rows = total_rows.saturating_add(row_count);
+                        if operation.is_none() {
+                            operation = op;
+                        }
+                        merge_operation_metrics(&mut operation_metrics, metrics);
+                    }
+                    has_data = has_data || batch.num_rows() > 0;
+                } else {
+                    return Err(DataFusionError::Plan(
+                        "DeltaCommitExec input must be delta action rows (action_type: UInt8)"
+                            .to_string(),
+                    ));
                 }
             }
 
@@ -425,23 +428,11 @@ impl ExecutionPlan for DeltaCommitExec {
             };
             let reference = snapshot.as_ref().map(|s| *s as &dyn TableReference);
 
-            // FIXME: avoid creating a new session state
-            //   This session state is used to parse predicates in the commit info
-            //   back to physical expressions. But the predicate string is not always available
-            //   (e.g., for DML operations constructed from the DataFrame API). Should we
-            //   store the physical expression directly when creating `DeltaCommitExec`?
-            //   The physical expression should be known at planning time so it does not
-            //   need to be sent back from the writer.
-            let session_state = SessionStateBuilder::new()
-                .with_runtime_env(context.runtime_env().clone())
-                .with_config(context.session_config().clone())
-                .build();
-
             let finalized_commit = CommitBuilder::from(
                 CommitProperties::default().with_operation_metrics(operation_metrics),
             )
             .with_actions(final_actions)
-            .build(reference, table.log_store(), operation, &session_state)
+            .build(reference, table.log_store(), operation)
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 

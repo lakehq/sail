@@ -1,0 +1,21 @@
+== Physical Plan ==
+DeltaCommitExec(table_path=file://<tmp>/x/)
+  CoalescePartitionsExec
+    UnionExec
+      DeltaWriterExec(table_path=file://<tmp>/x/)
+        CoalescePartitionsExec
+          CoalesceBatchesExec: target_batch_size=8192
+            FilterExec: NOT year@3 = 2024 AND value@2 > 650
+              DeltaScanByAddsExec(table_path=file://<tmp>/x/)
+                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                  DeltaDiscoveryExec(table_path=file://<tmp>/x/)
+                    CoalescePartitionsExec
+                      DeltaLogScanExec(table_path=file://<tmp>/x/, version=0)
+                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                          DataSourceExec: file_groups={1 group: [[<tmp>/x/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+      DeltaRemoveActionsExec
+        DeltaDiscoveryExec(table_path=file://<tmp>/x/)
+          CoalescePartitionsExec
+            DeltaLogScanExec(table_path=file://<tmp>/x/, version=0)
+              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                DataSourceExec: file_groups={1 group: [[<tmp>/x/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet

@@ -72,6 +72,51 @@ def normalize_plan_text(plan_text: str) -> str:
         flags=re.IGNORECASE,
     )
 
+    # Normalize file_groups ordering: group ordering is not guaranteed (e.g. parallel listing / async head).
+    # TODO: consider sorting the file groups during planner.
+    def _normalize_file_groups_block(match: re.Match[str]) -> str:
+        block = match.group(0)  # e.g. "file_groups={2 groups: [[...], [...]]}"
+        # Extract the group list between the first "[" and the last "]"
+        start = block.find("[")
+        end = block.rfind("]")
+        if start == -1 or end == -1 or end <= start:
+            return block
+        groups_list = block[start : end + 1]
+
+        # Parse top-level groups inside the outer list.
+        # groups_list looks like: "[[a], [b]]" or "[[a]]"
+        # Depth 2 means we're inside an inner group (outer list is depth 1, inner group is depth 2)
+        inner_group_depth = 2
+        groups: list[str] = []
+        depth = 0
+        current: list[str] = []
+        in_group = False
+        for ch in groups_list:
+            if ch == "[":
+                depth += 1
+                if depth == inner_group_depth:
+                    in_group = True
+            if in_group:
+                current.append(ch)
+            if ch == "]":
+                if depth == inner_group_depth and in_group:
+                    # End of one group
+                    grp = "".join(current).strip()
+                    if grp:
+                        groups.append(grp)
+                    current = []
+                    in_group = False
+                depth -= 1
+
+        if not groups:
+            return block
+
+        groups_sorted = sorted(groups)
+        normalized_groups_list = "[" + ", ".join(groups_sorted) + "]"
+        return block[:start] + normalized_groups_list + block[end + 1 :]
+
+    text = re.sub(r"file_groups=\{[^}]+\}", _normalize_file_groups_block, text)
+
     text = re.sub(r"Bytes=Exact\(\d+\)", r"Bytes=Exact(<bytes>)", text)
     return re.sub(r"Bytes=Inexact\(\d+\)", r"Bytes=Inexact(<bytes>)", text)
 

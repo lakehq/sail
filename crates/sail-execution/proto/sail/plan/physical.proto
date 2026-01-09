@@ -30,9 +30,9 @@ message ExtendedPhysicalPlanNode {
     DeltaWriterExecNode delta_writer = 16;
     DeltaCommitExecNode delta_commit = 17;
     DeltaScanByAddsExecNode delta_scan_by_adds = 18;
-    DeltaFindFilesExecNode delta_find_files = 19;
+    DeltaDiscoveryExecNode delta_discovery = 19;
     DeltaRemoveActionsExecNode delta_remove_actions = 20;
-    DeltaFileLookupExecNode delta_file_lookup = 21;
+    DeltaLogScanExecNode delta_log_scan = 21;
     AvroExecNode avro = 22;
     ConsoleSinkExecNode console_sink = 23;
     SocketSourceExecNode socket_source = 24;
@@ -365,21 +365,18 @@ message DeltaScanByAddsExecNode {
   bytes table_schema = 3;
 }
 
-message DeltaFindFilesExecNode {
+message DeltaDiscoveryExecNode {
   string table_url = 1;
   optional bytes predicate = 2;
   optional bytes table_schema = 3;
   int64 version = 4;
+  optional bytes input = 5;
+  repeated string input_partition_columns = 6;
+  bool input_partition_scan = 7;
 }
 
 message DeltaRemoveActionsExecNode {
   bytes input = 1;
-}
-
-message DeltaFileLookupExecNode {
-  bytes input = 1;
-  string table_url = 2;
-  int64 version = 3;
 }
 
 message ConsoleSinkExecNode {
@@ -543,4 +540,13 @@ message IcebergWriterExecNode {
 message IcebergCommitExecNode {
   bytes input = 1;
   string table_url = 2;
+}
+
+message DeltaLogScanExecNode {
+  bytes input = 1;
+  string table_url = 2;
+  int64 version = 3;
+  repeated string partition_columns = 4;
+  repeated string checkpoint_files = 5;
+  repeated string commit_files = 6;
 }
