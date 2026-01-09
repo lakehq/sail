@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-variant/blob/51e0d4be62d7675e9b7b56ed1c0b0a10ae4a28d7/src/json_to_variant.rs>
 use arrow::array::{Array, ArrayRef, StringViewArray, StructArray};
+use arrow::compute::cast;
 use arrow_schema::{DataType, Field, Fields};
 use datafusion::common::exec_datafusion_err;
 use datafusion::error::Result;
@@ -50,9 +51,11 @@ impl ScalarUDFImpl for SparkJsonToVariantUdf {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        // Use Binary instead of BinaryView for PySpark compatibility
+        // (PySpark doesn't support BinaryView in Arrow conversion)
         Ok(DataType::Struct(Fields::from(vec![
-            Field::new("metadata", DataType::BinaryView, false),
-            Field::new("value", DataType::BinaryView, false),
+            Field::new("metadata", DataType::Binary, false),
+            Field::new("value", DataType::Binary, false),
         ])))
     }
 
@@ -95,6 +98,7 @@ impl ScalarUDFImpl for SparkJsonToVariantUdf {
                 }
 
                 let struct_array: StructArray = builder.build().into();
+                let struct_array = convert_binaryview_to_binary(struct_array)?;
                 ColumnarValue::Scalar(ScalarValue::Struct(Arc::new(struct_array)))
             }
             ColumnarValue::Array(arr) => match arr.data_type() {
@@ -159,6 +163,7 @@ macro_rules! define_from_string_array {
             }
 
             let variant_array: StructArray = builder.build().into();
+            let variant_array = convert_binaryview_to_binary(variant_array)?;
 
             Ok(Arc::new(variant_array) as ArrayRef)
         }
@@ -166,6 +171,30 @@ macro_rules! define_from_string_array {
 }
 
 define_from_string_array!(from_utf8view_arr, StringViewArray);
+
+/// Converts a StructArray with BinaryView fields to Binary fields for PySpark compatibility
+fn convert_binaryview_to_binary(struct_array: StructArray) -> Result<StructArray> {
+    let fields: Vec<Arc<Field>> = struct_array
+        .fields()
+        .iter()
+        .map(|f| Arc::new(Field::new(f.name(), DataType::Binary, f.is_nullable())))
+        .collect();
+
+    let columns: Result<Vec<ArrayRef>> = struct_array
+        .columns()
+        .iter()
+        .map(|col| {
+            cast(col, &DataType::Binary)
+                .map_err(|e| exec_datafusion_err!("Failed to cast BinaryView to Binary: {e}"))
+        })
+        .collect();
+
+    Ok(StructArray::new(
+        Fields::from(fields),
+        columns?,
+        struct_array.nulls().cloned(),
+    ))
+}
 
 #[cfg(test)]
 mod tests {
