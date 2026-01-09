@@ -1,0 +1,106 @@
+>>> spark.sql("""SELECT parse_json(null) AS result""").show()
++------+
+|result|
++------+
+|  NULL|
++------+
+
+>>> spark.sql("""SELECT parse_json('{"name":"sail"}') AS result""").printSchema()
+root
+ |-- result: variant (nullable = true)
+
+>>> spark.sql("""SELECT parse_json('{"name":"sail"}') AS result""").show()
++---------------+
+|         result|
++---------------+
+|{"name":"sail"}|
++---------------+
+
+>>> spark.sql("""SELECT parse_json('{"level1": {"level2": {"level3": "value"}}}') AS result""").show(truncate=False)
++----------------------------------------+
+|result                                  |
++----------------------------------------+
+|{"level1":{"level2":{"level3":"value"}}}|
++----------------------------------------+
+
+>>> spark.sql("""SELECT parse_json('{"user": {"profile": {"settings": {"theme": "dark", "notifications": true}}, "name": "Alice"}, "status": "active"}') AS result""").show(truncate=False)
++--------------------------------------------------------------------------------------------------------+
+|result                                                                                                  |
++--------------------------------------------------------------------------------------------------------+
+|{"status":"active","user":{"name":"Alice","profile":{"settings":{"notifications":true,"theme":"dark"}}}}|
++--------------------------------------------------------------------------------------------------------+
+
+>>> spark.sql("""SELECT parse_json('{"company": {"departments": [{"name": "Engineering", "team": {"lead": "Bob", "members": 15}}, {"name": "Sales", "team": {"lead": "Carol", "members": 8}}], "founded": 2020}}') AS result""").show(truncate=False)
++-----------------------------------------------------------------------------------------------------------------------------------------------------------+
+|result                                                                                                                                                     |
++-----------------------------------------------------------------------------------------------------------------------------------------------------------+
+|{"company":{"departments":[{"name":"Engineering","team":{"lead":"Bob","members":15}},{"name":"Sales","team":{"lead":"Carol","members":8}}],"founded":2020}}|
++-----------------------------------------------------------------------------------------------------------------------------------------------------------+
+
+>>> spark.sql("""SELECT parse_json('{}') AS result""").show()
++------+
+|result|
++------+
+|    {}|
++------+
+
+
+>>> spark.sql("""SELECT parse_json('""') AS result""").show()
++------+
+|result|
++------+
+|    ""|
++------+
+
+>>> spark.sql("""SELECT parse_json('{"company": {"departments": [{"name": "Engineering", "team": {"lead": "Bob", "members": 15}}, {"name": "Sales", "team": {"lead": "Carol", "members": 8}}], "founded": 2020}}') AS result""").show(truncate=False)
++-----------------------------------------------------------------------------------------------------------------------------------------------------------+
+|result                                                                                                                                                     |
++-----------------------------------------------------------------------------------------------------------------------------------------------------------+
+|{"company":{"departments":[{"name":"Engineering","team":{"lead":"Bob","members":15}},{"name":"Sales","team":{"lead":"Carol","members":8}}],"founded":2020}}|
++-----------------------------------------------------------------------------------------------------------------------------------------------------------+
+
+>>> spark.sql("""SELECT parse_json(col) FROM VALUES ('null'), ('{"a":1}'), (null), ('[]') AS t(col)""").show()
++---------------+
+|parse_json(col)|
++---------------+
+|           null|
+|        {"a":1}|
+|           NULL|
+|             []|
++---------------+
+
+>>> spark.sql("""SELECT is_variant_null(parse_json(col)) FROM VALUES ('null'), ('{"a":1}'), (null), ('0') AS t(col)""").show()
++--------------------------------+
+|is_variant_null(parse_json(col))|
++--------------------------------+
+|                            true|
+|                           false|
+|                           false|
+|                           false|
++--------------------------------+
+
+>>> spark.sql("""SELECT struct(cast('test' as binary) as value, cast('other' as binary) as data) AS result""").printSchema()
+root
+ |-- result: struct (nullable = false)
+ |    |-- value: binary (nullable = false)
+ |    |-- data: binary (nullable = false)
+
+>>> spark.sql("""SELECT struct(cast('test' as binary) as value, cast('other' as binary) as data) AS result""").show(truncate=False)
++---------------------------------+
+|result                           |
++---------------------------------+
+|{[74 65 73 74], [6F 74 68 65 72]}|
++---------------------------------+
+
+>>> spark.sql("""SELECT struct(cast('test' as binary) as value, cast('meta' as binary) as metadata) AS result""").printSchema()
+root
+ |-- result: struct (nullable = false)
+ |    |-- value: binary (nullable = false)
+ |    |-- metadata: binary (nullable = false)
+
+>>> spark.sql("""SELECT struct(cast('test' as binary) as value, cast('meta' as binary) as metadata) AS result""").show(truncate=False)
++------------------------------+
+|result                        |
++------------------------------+
+|{[74 65 73 74], [6D 65 74 61]}|
++------------------------------+

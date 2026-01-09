@@ -188,6 +188,13 @@ fn arrays_zip_fixed_size(args: &[ArrayRef], fixed_size: &i32) -> Result<ArrayRef
         .map(|arr| arr.as_fixed_size_list())
         .collect::<Vec<_>>();
 
+    // Create fields with nullable=true (arrays_zip always creates nullable fields)
+    let arg_fields: Vec<Arc<Field>> = data_types
+        .iter()
+        .zip(field_names.iter())
+        .map(|(dt, name)| Arc::new(Field::new(name, dt.clone(), true)))
+        .collect();
+
     let values = to_struct_array(
         lists
             .into_iter()
@@ -195,6 +202,7 @@ fn arrays_zip_fixed_size(args: &[ArrayRef], fixed_size: &i32) -> Result<ArrayRef
             .collect::<Vec<_>>()
             .as_slice(),
         &field_names,
+        &arg_fields,
     )?;
 
     Ok(Arc::new(FixedSizeListArray::try_new(
@@ -208,6 +216,13 @@ fn arrays_zip_fixed_size(args: &[ArrayRef], fixed_size: &i32) -> Result<ArrayRef
 fn arrays_zip_generic<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let (num_rows, data_types, field_names) = num_rows_data_types_field_names(args)?;
     let validity_mask_opt = combine_validity_masks(args);
+
+    // Create fields with nullable=true (arrays_zip always creates nullable fields)
+    let arg_fields: Vec<Arc<Field>> = data_types
+        .iter()
+        .zip(field_names.iter())
+        .map(|(dt, name)| Arc::new(Field::new(name, dt.clone(), true)))
+        .collect();
 
     let casted_lists = args
         .iter()
@@ -277,7 +292,11 @@ fn arrays_zip_generic<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef>
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let struct_array = to_struct_array(arrays_padded.as_slice(), field_names.as_slice())?;
+        let struct_array = to_struct_array(
+            arrays_padded.as_slice(),
+            field_names.as_slice(),
+            &arg_fields,
+        )?;
         let offset = O::from_usize(struct_array.len()).ok_or_else(|| {
             DataFusionError::Execution("`arrays_zip` offset overflow error".to_string())
         })?;
