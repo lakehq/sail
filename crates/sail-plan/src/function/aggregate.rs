@@ -257,27 +257,69 @@ fn count_if(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn collect_set(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    // Spark's collect_set ignores NULLs by default
+    let ignore_nulls = input.ignore_nulls.or(Some(true));
+
+    // WORKAROUND: DataFusion's array_agg doesn't properly handle null_treatment when distinct=true
+    // So we need to add an explicit filter for NULLs
+    let (filter, null_treatment) = if ignore_nulls == Some(true) {
+        let arg = input
+            .arguments
+            .first()
+            .cloned()
+            .unwrap_or_else(|| lit(ScalarValue::Null));
+        let null_filter = arg.clone().is_not_null();
+        let combined_filter = match input.filter {
+            Some(existing) => Some(Box::new(existing.as_ref().clone().and(null_filter))),
+            None => Some(Box::new(null_filter)),
+        };
+        (combined_filter, None) // Don't use null_treatment when we have explicit filter
+    } else {
+        (input.filter, get_null_treatment(ignore_nulls))
+    };
+
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: array_agg::array_agg_udaf(),
         params: AggregateFunctionParams {
             args: input.arguments.clone(),
             distinct: true,
             order_by: input.order_by,
-            filter: input.filter,
-            null_treatment: get_null_treatment(Some(true)),
+            filter,
+            null_treatment,
         },
     }))
 }
 
 fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    // Spark's collect_list ignores NULLs by default
+    let ignore_nulls = input.ignore_nulls.or(Some(true));
+
+    // WORKAROUND: DataFusion's array_agg doesn't properly handle null_treatment when distinct=true
+    // So we need to add an explicit filter for NULLs when both distinct and ignore_nulls are true
+    let (filter, null_treatment) = if input.distinct && ignore_nulls == Some(true) {
+        let arg = input
+            .arguments
+            .first()
+            .cloned()
+            .unwrap_or_else(|| lit(ScalarValue::Null));
+        let null_filter = arg.clone().is_not_null();
+        let combined_filter = match input.filter {
+            Some(existing) => Some(Box::new(existing.as_ref().clone().and(null_filter))),
+            None => Some(Box::new(null_filter)),
+        };
+        (combined_filter, None) // Don't use null_treatment when we have explicit filter
+    } else {
+        (input.filter, get_null_treatment(ignore_nulls))
+    };
+
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: array_agg::array_agg_udaf(),
         params: AggregateFunctionParams {
             args: input.arguments.clone(),
             distinct: input.distinct,
             order_by: input.order_by,
-            filter: input.filter,
-            null_treatment: get_null_treatment(Some(true)),
+            filter,
+            null_treatment,
         },
     }))
 }
@@ -380,7 +422,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("bitmap_or_agg", F::unknown("bitmap_or_agg")),
         ("bool_and", F::default(bool_and_or::bool_and_udaf)),
         ("bool_or", F::default(bool_and_or::bool_or_udaf)),
-        ("collect_list", F::default(array_agg::array_agg_udaf)),
+        ("collect_list", F::custom(array_agg_compacted)),
         ("collect_set", F::custom(collect_set)),
         ("corr", F::default(correlation::corr_udaf)),
         ("count", F::custom(count)),
