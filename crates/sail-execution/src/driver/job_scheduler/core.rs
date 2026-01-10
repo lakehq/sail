@@ -15,7 +15,7 @@ use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::ActorContext;
 
 use crate::driver::job_scheduler::state::{
-    JobDescriptor, JobState, StageState, TaskAttemptDescriptor, TaskState,
+    JobDescriptor, JobState, StageState, TaskAttemptDescriptor, TaskRegionState, TaskState,
 };
 use crate::driver::job_scheduler::topology::TaskRegionTopology;
 use crate::driver::job_scheduler::{JobAction, JobScheduler, JobSchedulerOptions};
@@ -103,14 +103,15 @@ impl JobScheduler {
     /// the actions to take.
     ///   1. For each task region, if any task attempt fails, all existing task attempts
     ///      in the region are canceled if not already.
-    ///   2. If any task exceeds the maximum allowed attempts, the job is marked as failed.
-    ///   3. If all the tasks in the final stage have succeeded, the job is marked as succeeded.
-    ///   4. If any task in the final stage is running or has succeeded, all its channels are
-    ///      added as job output streams.
-    ///   5. For each task region, schedule the tasks of the region if all the dependency
+    ///   2. If any task in the final stage is running or has succeeded, all its channels are
+    ///      added as job output streams if not already.
+    ///   3. For each stage, if all the stages that depends on it have succeeded, remove
+    ///      the output streams of the stage if not already.
+    ///   4. If any task exceeds the maximum allowed attempts, the task region and the job
+    ///      are marked as failed.
+    ///   5. If all the tasks in the final stage have succeeded, the job is marked as succeeded.
+    ///   6. For each task region, schedule the tasks of the region if all the dependency
     ///      regions have succeeded.
-    ///   6. For each stage, if all the stages that depends on it have succeeded, remove
-    ///      the output streams of the stage.
     pub fn refresh_job(&mut self, job_id: JobId) -> Vec<JobAction> {
         let Some(job) = self.jobs.get_mut(&job_id) else {
             warn!("job {job_id} not found");
@@ -122,76 +123,73 @@ impl JobScheduler {
 
         let mut actions = vec![];
 
-        actions.extend(Self::update_job_output(job_id, job));
         actions.extend(Self::cascade_cancel_task_attempts(job_id, job));
+        actions.extend(Self::update_job_output(job_id, job));
         actions.extend(Self::clean_up_job_by_stage(job_id, job));
 
-        let region_status = Self::get_task_region_status(job, &self.options);
-        if region_status
+        Self::refresh_task_regions(job, &self.options);
+
+        if job
+            .regions
             .iter()
-            .any(|x| matches!(*x, TaskRegionStatus::Failed))
+            .any(|x| matches!(x.state, TaskRegionState::Failed))
         {
             let cause = Self::infer_job_failure_cause(job);
             if let JobState::Running { output, .. } = &job.state {
                 actions.push(JobAction::FailJobOutput {
-                    notifier: output.notifier(),
+                    handle: output.handle(),
                     cause,
                 })
             }
             job.state = JobState::Failed;
             return actions;
         }
-        if region_status
+
+        if job
+            .regions
             .iter()
-            .all(|x| matches!(*x, TaskRegionStatus::Succeeded))
+            .all(|x| matches!(x.state, TaskRegionState::Succeeded))
         {
+            // This drops `JobOutputManager` in the job state,
+            // so that `JobOutputStream` turns to the draining state as well.
             job.state = JobState::Draining;
-            if let JobState::Running { output, .. } = &job.state {
-                actions.push(JobAction::SucceedJobOutput {
-                    notifier: output.notifier(),
-                });
-            }
             return actions;
         }
-        actions.extend(Self::schedule_task_regions(job_id, job, &region_status));
+
+        actions.extend(Self::schedule_task_regions(job_id, job));
 
         actions
     }
 
-    fn get_task_region_status(
-        job: &JobDescriptor,
-        options: &JobSchedulerOptions,
-    ) -> Vec<TaskRegionStatus> {
-        job.topology
-            .regions
-            .iter()
-            .map(|region| {
-                let failed = region.tasks.iter().any(|t| {
-                    let attempts = &job.stages[t.stage].tasks[t.partition].attempts;
-                    if let Some(attempt) = attempts.last() {
-                        if attempt.state.is_failure() && attempts.len() >= options.task_max_attempts
-                        {
-                            return true;
-                        }
+    fn refresh_task_regions(job: &mut JobDescriptor, options: &JobSchedulerOptions) {
+        for (r, region) in job.topology.regions.iter().enumerate() {
+            let failed = region.tasks.iter().any(|t| {
+                let attempts = &job.stages[t.stage].tasks[t.partition].attempts;
+                if let Some(attempt) = attempts.last() {
+                    if matches!(attempt.state, TaskState::Failed | TaskState::Canceled)
+                        && attempts.len() >= options.task_max_attempts
+                    {
+                        return true;
                     }
-                    false
-                });
-                if failed {
-                    return TaskRegionStatus::Failed;
                 }
-                let succeeded = region.tasks.iter().all(|t| {
-                    job.stages[t.stage].tasks[t.partition]
-                        .attempts
-                        .last()
-                        .is_some_and(|x| matches!(x.state, TaskState::Succeeded))
-                });
-                if succeeded {
-                    TaskRegionStatus::Succeeded
-                } else {
-                    TaskRegionStatus::Running
-                }
-            })
-            .collect::<Vec<_>>()
+                false
+            });
+            if failed {
+                job.regions[r].state = TaskRegionState::Failed;
+                continue;
+            }
+            let succeeded = region.tasks.iter().all(|t| {
+                job.stages[t.stage].tasks[t.partition]
+                    .attempts
+                    .last()
+                    .is_some_and(|x| matches!(x.state, TaskState::Succeeded))
+            });
+            if succeeded {
+                job.regions[r].state = TaskRegionState::Succeeded;
+            } else {
+                job.regions[r].state = TaskRegionState::Running;
+            }
+        }
     }
 
     fn cascade_cancel_task_attempts(job_id: JobId, job: &mut JobDescriptor) -> Vec<JobAction> {
@@ -265,22 +263,18 @@ impl JobScheduler {
         actions
     }
 
-    fn schedule_task_regions(
-        job_id: JobId,
-        job: &mut JobDescriptor,
-        region_status: &[TaskRegionStatus],
-    ) -> Vec<JobAction> {
+    fn schedule_task_regions(job_id: JobId, job: &mut JobDescriptor) -> Vec<JobAction> {
         let mut actions = vec![];
 
         for (r, region) in job.topology.regions.iter().enumerate() {
-            if matches!(region_status[r], TaskRegionStatus::Succeeded) {
+            if matches!(job.regions[r].state, TaskRegionState::Succeeded) {
                 continue;
             }
 
             if !region
                 .dependencies
                 .iter()
-                .all(|d| matches!(region_status[*d], TaskRegionStatus::Succeeded))
+                .all(|d| matches!(job.regions[*d].state, TaskRegionState::Succeeded))
             {
                 // The region has dependencies that are not yet succeeded.
                 continue;
@@ -304,6 +298,7 @@ impl JobScheduler {
                         state: TaskState::Created,
                         messages: vec![],
                         cause: None,
+                        job_output_fetched: false,
                     });
             }
 
@@ -383,35 +378,42 @@ impl JobScheduler {
         let JobState::Running { output, .. } = &mut job.state else {
             return vec![];
         };
-        let s = job.graph.stages().len() - 1;
-        let stage = &job.graph.stages()[s];
-        let partitions = stage.plan.output_partitioning().partition_count();
-        let channels = stage.distribution.channels();
-        let schema = job.graph.schema().clone();
         let mut actions = vec![];
-        for p in 0..partitions {
-            if let Some((attempt, head)) = job.stages[s].tasks[p].attempts.split_last_mut() {
-                if matches!(attempt.state, TaskState::Running | TaskState::Succeeded) {
-                    for c in 0..channels {
-                        let key = TaskStreamKey {
-                            job_id,
-                            stage: s,
-                            partition: p,
-                            attempt: head.len(),
-                            channel: c,
-                        };
-                        if !output.has_stream(&key) {
-                            let sender = output.send_stream(key.clone());
-                            actions.push(JobAction::FetchJobOutputStream {
-                                key,
-                                schema: schema.clone(),
-                                sender,
-                            });
-                        }
-                    }
+        let schema = job.graph.schema().clone();
+        for (s, stage) in job.graph.stages().iter().enumerate() {
+            if job.topology.stages[s].consumers.len() > 0 {
+                // The stage is not a final stage.
+                continue;
+            }
+            let partitions = stage.plan.output_partitioning().partition_count();
+            let channels = stage.distribution.channels();
+            for p in 0..partitions {
+                let Some((attempt, head)) = job.stages[s].tasks[p].attempts.split_last_mut() else {
+                    continue;
+                };
+                if !matches!(attempt.state, TaskState::Running | TaskState::Succeeded)
+                    || attempt.job_output_fetched
+                {
+                    continue;
+                }
+                attempt.job_output_fetched = true;
+                for c in 0..channels {
+                    let key = TaskStreamKey {
+                        job_id,
+                        stage: s,
+                        partition: p,
+                        attempt: head.len(),
+                        channel: c,
+                    };
+                    actions.push(JobAction::FetchJobOutputStream {
+                        handle: output.handle(),
+                        key,
+                        schema: schema.clone(),
+                    });
                 }
             }
         }
+
         actions
     }
 
@@ -666,18 +668,10 @@ impl JobScheduler {
         stage: usize,
         partition: usize,
     ) -> Option<usize> {
-        let descriptor = job
-            .stages
+        job.stages
             .get(stage)
-            .and_then(|stage| stage.tasks.get(partition));
-        descriptor.and_then(|task| {
-            let n = task.attempts.len();
-            if n == 0 {
-                None
-            } else {
-                Some(n - 1)
-            }
-        })
+            .and_then(|stage| stage.tasks.get(partition))
+            .and_then(|task| task.attempts.split_last().map(|(_, head)| head.len()))
     }
 }
 
@@ -691,10 +685,4 @@ struct StageGroupKey {
 struct StageGroup {
     stages: IndexSet<usize>,
     buckets: Vec<Vec<TaskSetEntry>>,
-}
-
-enum TaskRegionStatus {
-    Running,
-    Failed,
-    Succeeded,
 }

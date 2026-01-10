@@ -28,10 +28,8 @@ impl JobGraph {
 
     /// Get the required number of output replicas for the given stage.
     pub fn replicas(&self, stage: usize) -> usize {
-        if stage == self.stages.len() - 1 {
-            return 1;
-        }
-        self.stages
+        let replicas = self
+            .stages
             .iter()
             .flat_map(|x| {
                 x.inputs
@@ -42,7 +40,9 @@ impl JobGraph {
                         InputMode::Broadcast => x.plan.output_partitioning().partition_count(),
                     })
             })
-            .sum()
+            .sum::<usize>();
+        // ensure one replica for final stages for the job output
+        replicas.max(1)
     }
 }
 

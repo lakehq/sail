@@ -12,7 +12,7 @@ pub use state::TaskState;
 
 use crate::codec::RemoteExecutionCodec;
 use crate::driver::job_scheduler::state::JobDescriptor;
-use crate::driver::output::{JobOutputNotifier, JobOutputSender};
+use crate::driver::output::JobOutputHandle;
 use crate::id::{IdGenerator, JobId, TaskKey, TaskStreamKey};
 use crate::task::scheduling::TaskRegion;
 
@@ -42,17 +42,14 @@ pub enum JobAction {
     CancelTask {
         key: TaskKey,
     },
-    SucceedJobOutput {
-        notifier: JobOutputNotifier,
-    },
     FailJobOutput {
-        notifier: JobOutputNotifier,
+        handle: JobOutputHandle,
         cause: CommonErrorCause,
     },
     FetchJobOutputStream {
+        handle: JobOutputHandle,
         key: TaskStreamKey,
         schema: SchemaRef,
-        sender: JobOutputSender,
     },
     CleanUpJob {
         job_id: JobId,

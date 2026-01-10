@@ -13,6 +13,7 @@ pub struct JobDescriptor {
     pub graph: JobGraph,
     pub topology: JobTopology,
     pub stages: Vec<StageDescriptor>,
+    pub regions: Vec<TaskRegionDescriptor>,
     pub state: JobState,
 }
 
@@ -41,10 +42,16 @@ impl JobDescriptor {
             stages.push(descriptor);
         }
         let topology = JobTopology::try_new(&graph)?;
+        let regions = (0..topology.regions.len())
+            .map(|_| TaskRegionDescriptor {
+                state: TaskRegionState::Running,
+            })
+            .collect();
         Ok(Self {
             graph,
             topology,
             stages,
+            regions,
             state,
         })
     }
@@ -57,7 +64,7 @@ pub struct StageDescriptor {
     pub state: StageState,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum StageState {
     /// The tasks in the stage are not yet completed,
     /// or the task streams are still being consumed.
@@ -65,6 +72,18 @@ pub enum StageState {
     /// The tasks in the stage will not be scheduled anymore,
     /// and the task streams are no longer being consumed.
     Inactive,
+}
+
+#[derive(Debug)]
+pub struct TaskRegionDescriptor {
+    pub state: TaskRegionState,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum TaskRegionState {
+    Running,
+    Failed,
+    Succeeded,
 }
 
 #[derive(Debug)]
@@ -77,6 +96,10 @@ pub struct TaskAttemptDescriptor {
     pub state: TaskState,
     pub messages: Vec<String>,
     pub cause: Option<CommonErrorCause>,
+    /// Whether the task streams are fetched for the job output.
+    /// This will always be false if the task does not belong to
+    /// the final stages of the job.
+    pub job_output_fetched: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -112,16 +135,6 @@ impl TaskState {
         match self {
             TaskState::Succeeded | TaskState::Failed | TaskState::Canceled => true,
             TaskState::Created | TaskState::Scheduled | TaskState::Running => false,
-        }
-    }
-
-    pub fn is_failure(&self) -> bool {
-        match self {
-            TaskState::Failed | TaskState::Canceled => true,
-            TaskState::Created
-            | TaskState::Scheduled
-            | TaskState::Running
-            | TaskState::Succeeded => false,
         }
     }
 }

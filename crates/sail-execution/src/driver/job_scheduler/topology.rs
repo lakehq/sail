@@ -53,19 +53,14 @@ impl JobTopology {
             }
         }
 
-        // detect final stages (stages that are not consumed by any other stage)
-        let final_stages = stages
-            .iter()
-            .enumerate()
-            .filter_map(|(s, stage)| stage.consumers.is_empty().then_some(s))
-            .collect::<Vec<usize>>();
-
-        match final_stages.as_slice() {
-            [s] if *s == stages.len() - 1 => {}
-            _ => {
-                return Err(ExecutionError::InternalError(
-                    "the job graph must have a single final stage at the end".to_string(),
-                ));
+        // validate final stages (stages that are not consumed by any other stage)
+        for (s, stage) in stages.iter().enumerate() {
+            if stage.consumers.is_empty() {
+                if graph.stages()[s].plan.schema().as_ref() != graph.schema().as_ref() {
+                    return Err(ExecutionError::InternalError(
+                        "the job graph must have final stages with the same schema".to_string(),
+                    ));
+                }
             }
         }
 

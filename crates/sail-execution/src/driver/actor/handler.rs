@@ -379,20 +379,15 @@ impl DriverActor {
                     }
                 }
             }
-            JobAction::SucceedJobOutput { notifier } => {
+            JobAction::FailJobOutput { handle, cause } => {
                 ctx.spawn(async move {
-                    notifier.succeed().await;
-                });
-            }
-            JobAction::FailJobOutput { notifier, cause } => {
-                ctx.spawn(async move {
-                    notifier.fail(cause).await;
+                    handle.fail(cause).await;
                 });
             }
             JobAction::FetchJobOutputStream {
+                handle,
                 key,
                 schema,
-                sender,
             } => {
                 let assignment =
                     TaskAssignmentGetter::get(&self.task_assigner, &TaskKey::from(key.clone()));
@@ -416,7 +411,7 @@ impl DriverActor {
                 })
                 .try_flatten();
                 ctx.spawn(async move {
-                    sender.send(Box::pin(stream)).await;
+                    handle.add_stream(key, Box::pin(stream)).await;
                 });
             }
             JobAction::CleanUpJob { job_id, stage } => {

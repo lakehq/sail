@@ -1,11 +1,10 @@
-use std::fmt::Formatter;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{fmt, mem};
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::common::{DataFusionError, HashSet, Result};
+use datafusion::common::{DataFusionError, Result};
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use futures::stream::SelectAll;
@@ -20,42 +19,21 @@ use crate::id::{JobId, TaskStreamKey, TaskStreamKeyDisplay};
 use crate::stream::error::{TaskStreamError, TaskStreamResult};
 use crate::stream::reader::TaskStreamSource;
 
-pub struct JobOutputSender {
-    key: TaskStreamKey,
+pub struct JobOutputHandle {
     sender: mpsc::Sender<JobOutputCommand>,
 }
 
-impl fmt::Debug for JobOutputSender {
+impl fmt::Debug for JobOutputHandle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("JobOutputSender").finish()
+        f.debug_struct("JobOutputHandle").finish()
     }
 }
 
-impl JobOutputSender {
-    pub async fn send(self, stream: TaskStreamSource) {
-        let command = JobOutputCommand::AddStream {
-            key: self.key,
-            stream,
-        };
+impl JobOutputHandle {
+    pub async fn add_stream(self, key: TaskStreamKey, stream: TaskStreamSource) {
+        let command = JobOutputCommand::AddStream { key, stream };
         // We ignore the error here because it indicates that the job output
         // consumer has been dropped.
-        let _ = self.sender.send(command).await;
-    }
-}
-
-pub struct JobOutputNotifier {
-    sender: mpsc::Sender<JobOutputCommand>,
-}
-
-impl fmt::Debug for JobOutputNotifier {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("JobOutputFailureNotifier").finish()
-    }
-}
-
-impl JobOutputNotifier {
-    pub async fn succeed(self) {
-        let command = JobOutputCommand::Succeed;
         let _ = self.sender.send(command).await;
     }
 
@@ -66,32 +44,18 @@ impl JobOutputNotifier {
 }
 
 pub struct JobOutputManager {
-    streams: HashSet<TaskStreamKey>,
     sender: mpsc::Sender<JobOutputCommand>,
 }
 
 impl JobOutputManager {
-    pub fn has_stream(&self, key: &TaskStreamKey) -> bool {
-        self.streams.contains(key)
-    }
-
-    pub fn send_stream(&mut self, key: TaskStreamKey) -> JobOutputSender {
-        self.streams.insert(key.clone());
-        JobOutputSender {
-            key,
-            sender: self.sender.clone(),
-        }
-    }
-
-    pub fn notifier(&self) -> JobOutputNotifier {
-        JobOutputNotifier {
+    pub fn handle(&self) -> JobOutputHandle {
+        JobOutputHandle {
             sender: self.sender.clone(),
         }
     }
 }
 
-pub enum JobOutputCommand {
-    Succeed,
+enum JobOutputCommand {
     Fail {
         cause: CommonErrorCause,
     },
@@ -107,7 +71,6 @@ impl JobOutputCommand {
 
 struct JobOutputStream {
     state: JobOutputState,
-    succeeded: bool,
 }
 
 impl JobOutputStream {
@@ -117,7 +80,6 @@ impl JobOutputStream {
                 receiver,
                 inner: Box::pin(SelectAll::new()),
             },
-            succeeded: false,
         }
     }
 }
@@ -141,10 +103,7 @@ pub fn build_job_output(
         let _ = handle.send(DriverEvent::CleanUpJob { job_id }).await;
     });
     (
-        JobOutputManager {
-            streams: HashSet::new(),
-            sender,
-        },
+        JobOutputManager { sender },
         Box::pin(RecordBatchStreamAdapter::new(
             schema,
             ReceiverStream::new(rx),
@@ -183,10 +142,6 @@ impl Stream for JobOutputStream {
             } => match receiver.poll_recv(cx) {
                 Poll::Pending => {
                     self.state = JobOutputState::Active { receiver, inner };
-                }
-                Poll::Ready(Some(JobOutputCommand::Succeed)) => {
-                    self.state = JobOutputState::Active { receiver, inner };
-                    self.succeeded = true;
                 }
                 Poll::Ready(Some(JobOutputCommand::Fail { cause })) => {
                     self.state = JobOutputState::Failed;
@@ -235,11 +190,7 @@ impl Stream for JobOutputStream {
                 Poll::Pending => Poll::Pending,
                 Poll::Ready(None) => {
                     self.state = JobOutputState::Completed;
-                    if self.succeeded {
-                        Poll::Pending
-                    } else {
-                        Poll::Ready(None)
-                    }
+                    Poll::Ready(None)
                 }
                 Poll::Ready(Some(result)) => Poll::Ready(Some(
                     result.map_err(|e| DataFusionError::External(Box::new(e))),
