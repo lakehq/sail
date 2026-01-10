@@ -37,7 +37,9 @@ impl JobGraph {
                     .filter(|input| input.stage == stage)
                     .map(|input| match input.mode {
                         InputMode::Forward | InputMode::Shuffle => 1,
-                        InputMode::Broadcast => x.plan.output_partitioning().partition_count(),
+                        InputMode::Merge | InputMode::Broadcast => {
+                            x.plan.output_partitioning().partition_count()
+                        }
                     })
             })
             .sum::<usize>();
@@ -113,15 +115,18 @@ impl fmt::Display for StageInput {
 
 #[derive(Debug, Clone, Copy)]
 pub enum InputMode {
-    /// For each partition in the current stage, read all channels from the
-    /// same partition in the input stage.
+    /// For each partition in the current stage, execute the same partition to fetch the input
+    /// which reads all channels from the corresponding partition in the input stage.
     #[expect(unused)]
     Forward,
-    /// For each partition in the current stage, read data from the corresponding
-    /// channel of all partitions in the input stage.
+    /// For each partition in the current stage, execute all partitions to fetch the input
+    /// which each reads all channels from the corresponding partition in the input stage.
+    Merge,
+    /// For each partition in the current stage, execute the same partition to fetch the input
+    /// which reads data from the corresponding channel of all partitions in the input stage.
     Shuffle,
-    /// For each partition in the current stage, read all channels from all
-    /// partitions in the input stage.
+    /// For each partition in the current stage, execute a single partition to fetch the input
+    /// which reads all channels from all partitions in the input stage.
     Broadcast,
 }
 
@@ -129,6 +134,7 @@ impl fmt::Display for InputMode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             InputMode::Forward => write!(f, "Forward"),
+            InputMode::Merge => write!(f, "Merge"),
             InputMode::Shuffle => write!(f, "Shuffle"),
             InputMode::Broadcast => write!(f, "Broadcast"),
         }

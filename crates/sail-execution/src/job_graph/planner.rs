@@ -201,7 +201,7 @@ fn create_merge_input(
     Ok(Arc::new(StageInputExec::new(
         StageInput {
             stage: s,
-            mode: InputMode::Broadcast,
+            mode: InputMode::Merge,
         },
         schema,
         partitioning,

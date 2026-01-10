@@ -23,7 +23,9 @@ use crate::driver::output::build_job_output;
 use crate::driver::DriverActor;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey};
-use crate::job_graph::{InputMode, JobGraph, OutputDistribution, OutputMode, TaskPlacement};
+use crate::job_graph::{
+    InputMode, JobGraph, OutputDistribution, OutputMode, Stage, StageInput, TaskPlacement,
+};
 use crate::task::definition::{
     TaskDefinition, TaskInput, TaskInputKey, TaskInputLocator, TaskOutput, TaskOutputDistribution,
     TaskOutputLocator,
@@ -512,6 +514,30 @@ impl JobScheduler {
             )));
         };
 
+        let plan =
+            PhysicalPlanNode::try_from_physical_plan(stage.plan.clone(), self.codec.as_ref())?
+                .encode_to_vec();
+        let inputs = stage
+            .inputs
+            .iter()
+            .map(|input| self.get_task_input(job, key, input, assignments))
+            .collect::<ExecutionResult<Vec<_>>>()?;
+        let output = self.get_task_output(job, key, stage)?;
+        let definition = TaskDefinition {
+            plan: Arc::from(plan),
+            inputs,
+            output,
+        };
+        Ok((definition, context.clone()))
+    }
+
+    fn get_task_input(
+        &self,
+        job: &JobDescriptor,
+        key: &TaskKey,
+        input: &StageInput,
+        assignments: &dyn TaskAssignmentGetter,
+    ) -> ExecutionResult<TaskInput> {
         let latest_attempt = |stage: usize, partition: usize| -> ExecutionResult<usize> {
             Self::get_latest_task_attempt(job, stage, partition).ok_or_else(|| {
                 ExecutionError::InvalidArgument(format!(
@@ -521,109 +547,123 @@ impl JobScheduler {
             })
         };
 
-        let inputs = stage
-            .inputs
-            .iter()
-            .map(|input| {
-                let Some(stage) = job.graph.stages().get(input.stage) else {
-                    return Err(ExecutionError::InvalidArgument(format!(
-                        "job {} input stage {} not found",
-                        key.job_id, input.stage
-                    )));
-                };
-                let partitions = stage.plan.output_partitioning().partition_count();
-                let channels = stage.distribution.channels();
-                let keys = match input.mode {
-                    InputMode::Forward | InputMode::Broadcast => {
-                        (0..partitions).map(|partition| {
-                            (0..channels)
-                                .map(|channel| {
-                                    Ok(TaskInputKey {
-                                        partition,
-                                        attempt: latest_attempt(input.stage, partition)?,
-                                        channel,
-                                    })
-                                })
-                                .collect::<ExecutionResult<Vec<_>>>()
-                        }).collect::<ExecutionResult<Vec<Vec<_>>>>()?
-                    }
-                    InputMode::Shuffle => {
-                        (0..channels).map(|channel| {
-                            (0..partitions)
-                                .map(|partition| {
-                                    Ok(TaskInputKey {
-                                        partition,
-                                        attempt: latest_attempt(input.stage, partition)?,
-                                        channel,
-                                    })
-                                })
-                                .collect::<ExecutionResult<Vec<_>>>()
-                        }).collect::<ExecutionResult<Vec<Vec<_>>>>()?
-                    }
-                };
-                let locator = match stage.mode {
-                    OutputMode::Pipelined => match stage.placement {
-                        TaskPlacement::Driver => {
-                            keys.iter().flatten().try_for_each(|k| {
-                                match assignments.get(
-                                    &TaskKey {
-                                        job_id: key.job_id,
-                                        stage: input.stage,
-                                        partition: k.partition,
-                                        attempt: k.attempt,
-                                    }
-                                ) {
-                                    Some(TaskAssignment::Driver) => Ok(()),
-                                    _ => Err(ExecutionError::InternalError(format!(
-                                        "job {} input stage {} partition {} attempt {} is not assigned to driver",
-                                        key.job_id, input.stage, k.partition, k.attempt
-                                    ))),
-                                }
-                            })?;
-                            TaskInputLocator::Driver {
+        let Some(producer) = job.graph.stages().get(input.stage) else {
+            return Err(ExecutionError::InvalidArgument(format!(
+                "job {} input stage {} not found",
+                key.job_id, input.stage
+            )));
+        };
+        let partitions = producer.plan.output_partitioning().partition_count();
+        let channels = producer.distribution.channels();
+        let keys = match input.mode {
+            InputMode::Forward | InputMode::Merge => (0..partitions)
+                .map(|partition| {
+                    (0..channels)
+                        .map(|channel| {
+                            Ok(TaskInputKey {
+                                partition,
+                                attempt: latest_attempt(input.stage, partition)?,
+                                channel,
+                            })
+                        })
+                        .collect::<ExecutionResult<Vec<_>>>()
+                })
+                .collect::<ExecutionResult<Vec<Vec<_>>>>()?,
+            InputMode::Shuffle => (0..channels)
+                .map(|channel| {
+                    (0..partitions)
+                        .map(|partition| {
+                            Ok(TaskInputKey {
+                                partition,
+                                attempt: latest_attempt(input.stage, partition)?,
+                                channel,
+                            })
+                        })
+                        .collect::<ExecutionResult<Vec<_>>>()
+                })
+                .collect::<ExecutionResult<Vec<Vec<_>>>>()?,
+            InputMode::Broadcast => {
+                let keys = (0..partitions)
+                    .flat_map(|partition| {
+                        (0..channels).map(move |channel| {
+                            Ok(TaskInputKey {
+                                partition,
+                                attempt: latest_attempt(input.stage, partition)?,
+                                channel,
+                            })
+                        })
+                    })
+                    .collect::<ExecutionResult<Vec<_>>>()?;
+                vec![keys]
+            }
+        };
+        let locator = match producer.mode {
+            OutputMode::Pipelined => match producer.placement {
+                TaskPlacement::Driver => {
+                    keys.iter().flatten().try_for_each(|k| {
+                        match assignments.get(
+                            &TaskKey {
+                                job_id: key.job_id,
                                 stage: input.stage,
-                                keys,
+                                partition: k.partition,
+                                attempt: k.attempt,
                             }
-                        },
-                        TaskPlacement::Worker => {
-                            let keys = keys.into_iter().map(|keys| keys.into_iter().map(|k|{
-                                let Some(TaskAssignment::Worker { worker_id, slot: _ }) = assignments.get(
-                                    &TaskKey {
-                                        job_id: key.job_id,
-                                        stage: input.stage,
-                                        partition: k.partition,
-                                        attempt: k.attempt,
-                                    }
-                                ) else {
-                                    return Err(ExecutionError::InternalError(format!(
-                                        "job {} input stage {} partition {} attempt {} is not assigned to worker",
-                                        key.job_id, input.stage, k.partition, k.attempt
-                                    )));
-                                };
-                                Ok((*worker_id, k))
-                            }).collect::<ExecutionResult<Vec<_>>>()).collect::<ExecutionResult<Vec<Vec<_>>>>()?;
-                            TaskInputLocator::Worker {
-                                stage: input.stage,
-                                keys,
-                            }
-                        },
-                    },
-                    OutputMode::Blocking => {
-                        let uri =
-                            Err(ExecutionError::InternalError("not implemented".to_string()))?;
-                        TaskInputLocator::Remote {
-                            uri,
-                            stage: input.stage,
-                            keys,
+                        ) {
+                            Some(TaskAssignment::Driver) => Ok(()),
+                            _ => Err(ExecutionError::InternalError(format!(
+                                "job {} input stage {} partition {} attempt {} is not assigned to driver",
+                                key.job_id, input.stage, k.partition, k.attempt
+                            ))),
                         }
+                    })?;
+                    TaskInputLocator::Driver {
+                        stage: input.stage,
+                        keys,
                     }
-                };
-                Ok(TaskInput { locator })
-            })
-            .collect::<ExecutionResult<Vec<_>>>()?;
-        let plan =
-            PhysicalPlanNode::try_from_physical_plan(stage.plan.clone(), self.codec.as_ref())?
-                .encode_to_vec();
+                }
+                TaskPlacement::Worker => {
+                    let keys = keys.into_iter().map(|keys| {
+                        keys.into_iter().map(|k| {
+                            let Some(TaskAssignment::Worker { worker_id, slot: _ }) = assignments.get(
+                                &TaskKey {
+                                    job_id: key.job_id,
+                                    stage: input.stage,
+                                    partition: k.partition,
+                                    attempt: k.attempt,
+                                }
+                            ) else {
+                                return Err(ExecutionError::InternalError(format!(
+                                    "job {} input stage {} partition {} attempt {} is not assigned to worker",
+                                    key.job_id, input.stage, k.partition, k.attempt
+                                )));
+                            };
+                            Ok((*worker_id, k))
+                        }).collect::<ExecutionResult<Vec<_>>>()
+                    }).collect::<ExecutionResult<Vec<Vec<_>>>>()?;
+                    TaskInputLocator::Worker {
+                        stage: input.stage,
+                        keys,
+                    }
+                }
+            },
+            OutputMode::Blocking => {
+                let uri = Err(ExecutionError::InternalError("not implemented".to_string()))?;
+                TaskInputLocator::Remote {
+                    uri,
+                    stage: input.stage,
+                    keys,
+                }
+            }
+        };
+        Ok(TaskInput { locator })
+    }
+
+    fn get_task_output(
+        &self,
+        job: &JobDescriptor,
+        key: &TaskKey,
+        stage: &Stage,
+    ) -> ExecutionResult<TaskOutput> {
         let replicas = job.graph.replicas(key.stage);
         let distribution = match &stage.distribution {
             OutputDistribution::Hash { keys, channels } => {
@@ -651,16 +691,10 @@ impl JobScheduler {
                 TaskOutputLocator::Remote { uri }
             }
         };
-        let output = TaskOutput {
+        Ok(TaskOutput {
             distribution,
             locator,
-        };
-        let definition = TaskDefinition {
-            plan: Arc::from(plan),
-            inputs,
-            output,
-        };
-        Ok((definition, context.clone()))
+        })
     }
 
     fn get_latest_task_attempt(

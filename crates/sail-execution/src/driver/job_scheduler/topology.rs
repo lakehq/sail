@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use datafusion::physical_plan::ExecutionPlanProperties;
 use indexmap::IndexSet;
@@ -92,7 +92,7 @@ impl JobTopology {
         let mut regions = vec![];
 
         for component in components {
-            // check if all edges within component are forward mode
+            // check if all inputs within component are forward inputs
             let mut all_forward = true;
             for &u in &component {
                 for input in &graph.stages()[u].inputs {
@@ -109,10 +109,24 @@ impl JobTopology {
 
             if all_forward {
                 // create regions by "slicing" the stages by partition
-                let partitions = graph.stages()[component[0]]
-                    .plan
-                    .output_partitioning()
-                    .partition_count();
+                let partitions = component
+                    .iter()
+                    .map(|c| {
+                        graph.stages()[*c]
+                            .plan
+                            .output_partitioning()
+                            .partition_count()
+                    })
+                    .collect::<HashSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                let partitions = match partitions.as_slice() {
+                    [p] => *p,
+                    _ => return Err(ExecutionError::InternalError(
+                        "task region with all forward inputs must have the same partition count"
+                            .to_string(),
+                    )),
+                };
                 for p in 0..partitions {
                     let mut tasks = vec![];
                     for &s in &component {
@@ -158,17 +172,28 @@ impl JobTopology {
         for (r, region) in regions.iter_mut().enumerate() {
             for task in &region.tasks {
                 for input in &graph.stages()[task.stage].inputs {
-                    let partitions = graph.stages()[input.stage]
-                        .plan
-                        .output_partitioning()
-                        .partition_count();
-                    for p in 0..partitions {
-                        if let Some(&dr) = task_to_region.get(&TaskTopology {
+                    if matches!(input.mode, InputMode::Forward) {
+                        if let Some(&d) = task_to_region.get(&TaskTopology {
                             stage: input.stage,
-                            partition: p,
+                            partition: task.partition,
                         }) {
-                            if dr != r {
-                                region.dependencies.insert(dr);
+                            if d != r {
+                                region.dependencies.insert(d);
+                            }
+                        }
+                    } else {
+                        let partitions = graph.stages()[input.stage]
+                            .plan
+                            .output_partitioning()
+                            .partition_count();
+                        for p in 0..partitions {
+                            if let Some(&d) = task_to_region.get(&TaskTopology {
+                                stage: input.stage,
+                                partition: p,
+                            }) {
+                                if d != r {
+                                    region.dependencies.insert(d);
+                                }
                             }
                         }
                     }
