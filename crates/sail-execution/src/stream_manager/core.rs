@@ -47,16 +47,16 @@ impl StreamManager {
                     std::mem::take(senders),
                     &self.options,
                 )?;
-                let sink = stream.publish()?;
+                let result = stream.publish();
                 *entry.into_mut() = LocalStreamState::Created { stream };
-                Ok(sink)
+                result
             }
             Entry::Vacant(entry) => {
                 let mut stream =
                     Self::create_local_stream_with_senders(storage, vec![], &self.options)?;
-                let sink = stream.publish()?;
+                let result = stream.publish();
                 entry.insert(LocalStreamState::Created { stream });
-                Ok(sink)
+                result
             }
         }
     }
@@ -120,14 +120,11 @@ impl StreamManager {
     }
 
     pub fn remove_local_streams(&mut self, job_id: JobId, stage: Option<usize>) {
-        let mut keys = Vec::new();
-        for key in self.local_streams.keys() {
-            if key.job_id == job_id && stage.is_none_or(|x| key.stage == x) {
-                keys.push(key.clone());
-            }
-        }
-        for key in keys {
-            self.local_streams.remove(&key);
+        if let Some(stage) = stage {
+            self.local_streams
+                .retain(|key, _| key.job_id != job_id || key.stage != stage);
+        } else {
+            self.local_streams.retain(|key, _| key.job_id != job_id);
         }
     }
 
