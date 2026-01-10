@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use log::warn;
+use sail_common_datafusion::error::CommonErrorCause;
+use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::{Actor, ActorContext};
 use tokio::sync::mpsc;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
@@ -31,6 +33,13 @@ impl StreamManager {
         storage: LocalStreamStorage,
         _schema: SchemaRef,
     ) -> ExecutionResult<Box<dyn TaskStreamSink>> {
+        let create = |senders: Vec<_>| -> ExecutionResult<_> {
+            let mut stream =
+                Self::create_local_stream_with_senders(storage, senders, &self.options)?;
+            let sink = stream.publish()?;
+            Ok((stream, sink))
+        };
+
         match self.local_streams.entry(key.clone()) {
             Entry::Occupied(mut entry) => {
                 let senders = match entry.get_mut() {
@@ -41,23 +50,39 @@ impl StreamManager {
                         )));
                     }
                     LocalStreamState::Pending { senders } => senders,
+                    LocalStreamState::Failed { cause } => {
+                        return Err(ExecutionError::InternalError(format!(
+                            "local stream creation has failed for {}: {}",
+                            TaskStreamKeyDisplay(&key),
+                            TaskStreamError::from(cause.clone())
+                        )));
+                    }
                 };
-                let mut stream = Self::create_local_stream_with_senders(
-                    storage,
-                    std::mem::take(senders),
-                    &self.options,
-                )?;
-                let result = stream.publish();
-                *entry.into_mut() = LocalStreamState::Created { stream };
-                result
+                match create(std::mem::take(senders)) {
+                    Ok((stream, sink)) => {
+                        *entry.into_mut() = LocalStreamState::Created { stream };
+                        Ok(sink)
+                    }
+                    Err(e) => {
+                        *entry.into_mut() = LocalStreamState::Failed {
+                            cause: CommonErrorCause::new::<PyErrExtractor>(&e),
+                        };
+                        Err(e)
+                    }
+                }
             }
-            Entry::Vacant(entry) => {
-                let mut stream =
-                    Self::create_local_stream_with_senders(storage, vec![], &self.options)?;
-                let result = stream.publish();
-                entry.insert(LocalStreamState::Created { stream });
-                result
-            }
+            Entry::Vacant(entry) => match create(vec![]) {
+                Ok((stream, sink)) => {
+                    entry.insert(LocalStreamState::Created { stream });
+                    Ok(sink)
+                }
+                Err(e) => {
+                    entry.insert(LocalStreamState::Failed {
+                        cause: CommonErrorCause::new::<PyErrExtractor>(&e),
+                    });
+                    Err(e)
+                }
+            },
         }
     }
 
@@ -90,6 +115,11 @@ impl StreamManager {
                     // There is no need to probe the pending stream again.
                     Ok(Box::pin(ReceiverStream::new(rx)))
                 }
+                LocalStreamState::Failed { cause } => Err(ExecutionError::InternalError(format!(
+                    "local stream creation has failed for {}: {}",
+                    TaskStreamKeyDisplay(key),
+                    TaskStreamError::from(cause.clone())
+                ))),
             },
             Entry::Vacant(entry) => {
                 let (tx, rx) = mpsc::channel(self.options.worker_stream_buffer);
@@ -140,15 +170,20 @@ impl StreamManager {
     }
 
     pub fn fail_local_stream_if_pending(&mut self, key: &TaskStreamKey) {
-        if let Some(LocalStreamState::Pending { senders }) = self.local_streams.remove(key) {
+        let Some(value) = self.local_streams.get_mut(key) else {
+            return;
+        };
+        if let LocalStreamState::Pending { senders } = value {
+            let message = "local stream is not created within the expected time".to_string();
             for tx in senders {
                 // `try_send` would not fail due to full buffer because we have
                 // never sent any data to the channel.
                 // So we do not need to spawn a task to send the error asynchronously.
-                let _ = tx.try_send(Err(TaskStreamError::Unknown(
-                    "local stream is not created within the expected time".to_string(),
-                )));
+                let _ = tx.try_send(Err(TaskStreamError::Unknown(message.clone())));
             }
+            *value = LocalStreamState::Failed {
+                cause: CommonErrorCause::Execution(message),
+            };
         }
     }
 

@@ -6,6 +6,7 @@ use std::collections::HashMap;
 
 use datafusion::arrow::array::RecordBatch;
 pub use options::StreamManagerOptions;
+use sail_common_datafusion::error::CommonErrorCause;
 use tokio::sync::mpsc;
 
 use crate::driver::DriverEvent;
@@ -24,6 +25,9 @@ pub enum LocalStreamState {
     },
     Created {
         stream: Box<dyn local::LocalStream>,
+    },
+    Failed {
+        cause: CommonErrorCause,
     },
 }
 
