@@ -320,7 +320,7 @@ impl DriverActor {
     ) -> ActorAction {
         let _ = result.send(
             self.worker_pool
-                .fetch_worker_stream(ctx, worker_id, &key, schema),
+                .fetch_task_stream(ctx, worker_id, &key, schema),
         );
         ActorAction::Continue
     }
@@ -404,7 +404,7 @@ impl DriverActor {
                     }
                     Some(TaskAssignment::Worker { worker_id, slot: _ }) => self
                         .worker_pool
-                        .fetch_worker_stream(ctx, *worker_id, &key, schema.clone()),
+                        .fetch_task_stream(ctx, *worker_id, &key, schema.clone()),
                 };
                 let stream = futures::stream::once(async move {
                     stream.map_err(|e| TaskStreamError::External(Arc::new(e)))
@@ -415,15 +415,18 @@ impl DriverActor {
                 });
             }
             JobAction::CleanUpJob { job_id, stage } => {
-                let assignments = self.task_assigner.unassign_streams(job_id, stage);
-                for assignment in assignments {
-                    match assignment {
+                if self.task_assigner.untrack_remote_streams(job_id, stage) {
+                    self.stream_manager
+                        .remove_remote_streams(ctx, job_id, stage);
+                }
+                for x in self.task_assigner.untrack_local_streams(job_id, stage) {
+                    match x {
                         TaskStreamAssignment::Driver => {
-                            self.stream_manager.remove_local_stream(job_id, stage);
+                            self.stream_manager.remove_local_streams(job_id, stage);
                         }
-                        TaskStreamAssignment::Worker { worker_id } => self
-                            .worker_pool
-                            .remove_worker_streams(ctx, worker_id, job_id, stage),
+                        TaskStreamAssignment::Worker { worker_id } => {
+                            self.worker_pool.clean_up_job(ctx, worker_id, job_id, stage)
+                        }
                     }
                 }
             }
@@ -432,6 +435,7 @@ impl DriverActor {
 
     fn run_tasks(&mut self, ctx: &mut ActorContext<Self>) {
         let assignments = self.task_assigner.assign_tasks();
+        self.task_assigner.track_streams(&assignments);
         for assignment in assignments {
             for entry in assignment.set.entries {
                 let (definition, context) = match self

@@ -60,6 +60,13 @@ impl TaskSet {
             .map(|entry| &entry.key)
     }
 
+    pub fn remote_streams(&self) -> impl Iterator<Item = &TaskKey> {
+        self.entries
+            .iter()
+            .filter(|entry| matches!(entry.output, TaskOutputKind::Remote))
+            .map(|entry| &entry.key)
+    }
+
     pub fn contains(&self, key: &TaskKey) -> bool {
         self.entries.iter().any(|entry| &entry.key == key)
     }
@@ -81,6 +88,7 @@ pub trait TaskAssignmentGetter {
     fn get(&self, key: &TaskKey) -> Option<&TaskAssignment>;
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TaskStreamAssignment {
     Driver,
     Worker { worker_id: WorkerId },

@@ -127,7 +127,7 @@ impl JobScheduler {
         actions.extend(Self::update_job_output(job_id, job));
         actions.extend(Self::clean_up_job_by_stage(job_id, job));
 
-        Self::refresh_task_regions(job, &self.options);
+        Self::update_task_regions(job, &self.options);
 
         if job
             .regions
@@ -161,7 +161,7 @@ impl JobScheduler {
         actions
     }
 
-    fn refresh_task_regions(job: &mut JobDescriptor, options: &JobSchedulerOptions) {
+    fn update_task_regions(job: &mut JobDescriptor, options: &JobSchedulerOptions) {
         for (r, region) in job.topology.regions.iter().enumerate() {
             let failed = region.tasks.iter().any(|t| {
                 let attempts = &job.stages[t.stage].tasks[t.partition].attempts;
@@ -381,7 +381,7 @@ impl JobScheduler {
         let mut actions = vec![];
         let schema = job.graph.schema().clone();
         for (s, stage) in job.graph.stages().iter().enumerate() {
-            if job.topology.stages[s].consumers.len() > 0 {
+            if !job.topology.stages[s].consumers.is_empty() {
                 // The stage is not a final stage.
                 continue;
             }

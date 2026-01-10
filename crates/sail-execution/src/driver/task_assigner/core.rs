@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use indexmap::IndexSet;
 use log::{error, warn};
 
@@ -161,25 +163,47 @@ impl TaskAssigner {
         Some(assignment.clone())
     }
 
-    pub fn unassign_streams(
+    pub fn track_streams(&mut self, assignments: &[TaskSetAssignment]) {
+        for assignment in assignments {
+            self.driver.track_remote_streams(&assignment.set);
+            match &assignment.assignment {
+                TaskAssignment::Driver => {
+                    self.driver.track_local_streams(&assignment.set);
+                }
+                TaskAssignment::Worker { worker_id, .. } => {
+                    if let Some(worker) = self.workers.get_mut(worker_id) {
+                        worker.track_local_streams(&assignment.set);
+                    } else {
+                        error!("worker {worker_id} not found");
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn untrack_local_streams(
         &mut self,
         job_id: JobId,
         stage: Option<usize>,
-    ) -> Vec<TaskStreamAssignment> {
-        let mut assignments = vec![];
-        if self.driver.remove_streams(job_id, stage) {
-            assignments.push(TaskStreamAssignment::Driver);
+    ) -> HashSet<TaskStreamAssignment> {
+        let mut assignments = HashSet::new();
+        if self.driver.untrack_local_streams(job_id, stage) {
+            assignments.insert(TaskStreamAssignment::Driver);
         }
         for (worker_id, worker) in self.workers.iter_mut() {
             if matches!(worker, WorkerResource::Active { .. })
-                && worker.remove_streams(job_id, stage)
+                && worker.untrack_local_streams(job_id, stage)
             {
-                assignments.push(TaskStreamAssignment::Worker {
+                assignments.insert(TaskStreamAssignment::Worker {
                     worker_id: *worker_id,
                 });
             }
         }
         assignments
+    }
+
+    pub fn untrack_remote_streams(&mut self, job_id: JobId, stage: Option<usize>) -> bool {
+        self.driver.untrack_remote_streams(job_id, stage)
     }
 
     pub fn is_worker_idle(&self, worker_id: WorkerId) -> bool {

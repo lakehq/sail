@@ -264,13 +264,13 @@ impl WorkerActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_remove_local_stream(
+    pub(super) fn handle_clean_up_job(
         &mut self,
         _ctx: &mut ActorContext<Self>,
         job_id: JobId,
         stage: Option<usize>,
     ) -> ActorAction {
-        self.stream_manager.remove_local_stream(job_id, stage);
+        self.stream_manager.remove_local_streams(job_id, stage);
         ActorAction::Continue
     }
 }

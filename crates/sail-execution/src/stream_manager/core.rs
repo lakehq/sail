@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
+use log::warn;
 use sail_server::actor::{Actor, ActorContext};
 use tokio::sync::mpsc;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
@@ -118,7 +119,7 @@ impl StreamManager {
         ))
     }
 
-    pub fn remove_local_stream(&mut self, job_id: JobId, stage: Option<usize>) {
+    pub fn remove_local_streams(&mut self, job_id: JobId, stage: Option<usize>) {
         let mut keys = Vec::new();
         for key in self.local_streams.keys() {
             if key.job_id == job_id && stage.is_none_or(|x| key.stage == x) {
@@ -128,6 +129,17 @@ impl StreamManager {
         for key in keys {
             self.local_streams.remove(&key);
         }
+    }
+
+    pub fn remove_remote_streams<T>(
+        &mut self,
+        _ctx: &mut ActorContext<T>,
+        _job_id: JobId,
+        _stage: Option<usize>,
+    ) where
+        T: Actor,
+    {
+        warn!("removing remote streams is not implemented");
     }
 
     pub fn fail_local_stream_if_pending(&mut self, key: &TaskStreamKey) {

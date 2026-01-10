@@ -9,7 +9,7 @@ use crate::task::definition::TaskDefinition;
 use crate::worker::actor::WorkerActor;
 use crate::worker::gen::worker_service_server::WorkerService;
 use crate::worker::gen::{
-    RemoveStreamRequest, RemoveStreamResponse, RunTaskRequest, RunTaskResponse, StopTaskRequest,
+    CleanUpJobRequest, CleanUpJobResponse, RunTaskRequest, RunTaskResponse, StopTaskRequest,
     StopTaskResponse, StopWorkerRequest, StopWorkerResponse,
 };
 use crate::worker::WorkerEvent;
@@ -94,14 +94,14 @@ impl WorkerService for WorkerServer {
         Ok(Response::new(response))
     }
 
-    async fn remove_stream(
+    async fn clean_up_job(
         &self,
-        request: Request<RemoveStreamRequest>,
-    ) -> Result<Response<RemoveStreamResponse>, Status> {
+        request: Request<CleanUpJobRequest>,
+    ) -> Result<Response<CleanUpJobResponse>, Status> {
         let request = request.into_inner();
         debug!("{request:?}");
-        let RemoveStreamRequest { job_id, stage } = request;
-        let event = WorkerEvent::RemoveLocalStream {
+        let CleanUpJobRequest { job_id, stage } = request;
+        let event = WorkerEvent::CleanUpJob {
             job_id: job_id.into(),
             stage: stage.map(|x| x as usize),
         };
@@ -109,7 +109,7 @@ impl WorkerService for WorkerServer {
             .send(event)
             .await
             .map_err(ExecutionError::from)?;
-        let response = RemoveStreamResponse {};
+        let response = CleanUpJobResponse {};
         debug!("{response:?}");
         Ok(Response::new(response))
     }

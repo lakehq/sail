@@ -11,11 +11,14 @@ pub struct DriverResource {
     task_slots: Vec<TaskSlot>,
     /// The active local task streams that the driver owns.
     local_streams: IndexSet<TaskKey>,
+    /// The active remote task streams.
+    /// Remote task streams are tracked by the driver
+    /// regardless of whether they are created by the driver or workers.
+    remote_streams: IndexSet<TaskKey>,
 }
 
 impl DriverResource {
     pub fn add_task_set(&mut self, set: TaskSet) {
-        self.local_streams.extend(set.local_streams().cloned());
         for slot in &mut self.task_slots {
             if slot.is_vacant() {
                 slot.add_tasks(set.tasks().cloned());
@@ -36,7 +39,15 @@ impl DriverResource {
         false
     }
 
-    pub fn remove_streams(&mut self, job_id: JobId, stage: Option<usize>) -> bool {
+    pub fn track_local_streams(&mut self, set: &TaskSet) {
+        self.local_streams.extend(set.local_streams().cloned());
+    }
+
+    pub fn track_remote_streams(&mut self, set: &TaskSet) {
+        self.remote_streams.extend(set.remote_streams().cloned());
+    }
+
+    pub fn untrack_local_streams(&mut self, job_id: JobId, stage: Option<usize>) -> bool {
         let count = self.local_streams.len();
         if let Some(stage) = stage {
             self.local_streams
@@ -45,6 +56,17 @@ impl DriverResource {
             self.local_streams.retain(|x| x.job_id != job_id);
         }
         count != self.local_streams.len()
+    }
+
+    pub fn untrack_remote_streams(&mut self, job_id: JobId, stage: Option<usize>) -> bool {
+        let count = self.remote_streams.len();
+        if let Some(stage) = stage {
+            self.remote_streams
+                .retain(|x| x.job_id != job_id || x.stage != stage);
+        } else {
+            self.remote_streams.retain(|x| x.job_id != job_id);
+        }
+        count != self.remote_streams.len()
     }
 }
 
@@ -74,11 +96,7 @@ pub enum WorkerResource {
 impl WorkerResource {
     pub fn add_task_set(&mut self, slot: usize, set: TaskSet) {
         match self {
-            WorkerResource::Active {
-                task_slots,
-                local_streams,
-            } => {
-                local_streams.extend(set.local_streams().cloned());
+            WorkerResource::Active { task_slots, .. } => {
                 if let Some(slot) = task_slots.get_mut(slot) {
                     slot.add_tasks(set.tasks().cloned());
                 } else {
@@ -108,7 +126,18 @@ impl WorkerResource {
         }
     }
 
-    pub fn remove_streams(&mut self, job_id: JobId, stage: Option<usize>) -> bool {
+    pub fn track_local_streams(&mut self, set: &TaskSet) {
+        match self {
+            WorkerResource::Active { local_streams, .. } => {
+                local_streams.extend(set.local_streams().cloned());
+            }
+            WorkerResource::Inactive => {
+                warn!("cannot track local streams on inactive worker");
+            }
+        }
+    }
+
+    pub fn untrack_local_streams(&mut self, job_id: JobId, stage: Option<usize>) -> bool {
         match self {
             WorkerResource::Active { local_streams, .. } => {
                 let count = local_streams.len();
@@ -120,7 +149,7 @@ impl WorkerResource {
                 count != local_streams.len()
             }
             WorkerResource::Inactive => {
-                warn!("cannot remove streams from inactive worker");
+                warn!("cannot untrack local streams from inactive worker");
                 false
             }
         }

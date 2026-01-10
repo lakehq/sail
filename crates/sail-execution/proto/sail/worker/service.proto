@@ -37,12 +37,14 @@ message StopTaskRequest {
 message StopTaskResponse {
 }
 
-message RemoveStreamRequest {
+message CleanUpJobRequest {
   uint64 job_id = 1;
+  // An optional stage to clean up.
+  // If not specified, clean up all stages for the job.
   optional uint64 stage = 2;
 }
 
-message RemoveStreamResponse {
+message CleanUpJobResponse {
 }
 
 message StopWorkerRequest {
@@ -54,6 +56,6 @@ message StopWorkerResponse {
 service WorkerService {
   rpc RunTask(RunTaskRequest) returns (RunTaskResponse) {}
   rpc StopTask(StopTaskRequest) returns (StopTaskResponse) {}
-  rpc RemoveStream(RemoveStreamRequest) returns (RemoveStreamResponse) {}
+  rpc CleanUpJob(CleanUpJobRequest) returns (CleanUpJobResponse) {}
   rpc StopWorker(StopWorkerRequest) returns (StopWorkerResponse) {}
 }

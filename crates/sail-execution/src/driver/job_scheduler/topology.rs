@@ -55,12 +55,12 @@ impl JobTopology {
 
         // validate final stages (stages that are not consumed by any other stage)
         for (s, stage) in stages.iter().enumerate() {
-            if stage.consumers.is_empty() {
-                if graph.stages()[s].plan.schema().as_ref() != graph.schema().as_ref() {
-                    return Err(ExecutionError::InternalError(
-                        "the job graph must have final stages with the same schema".to_string(),
-                    ));
-                }
+            if stage.consumers.is_empty()
+                && graph.stages()[s].plan.schema().as_ref() != graph.schema().as_ref()
+            {
+                return Err(ExecutionError::InternalError(
+                    "the job graph must have final stages with the same schema".to_string(),
+                ));
             }
         }
 

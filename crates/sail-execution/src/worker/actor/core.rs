@@ -104,8 +104,8 @@ impl Actor for WorkerActor {
                 schema,
                 result,
             } => self.handle_fetch_remote_stream(ctx, uri, key, schema, result),
-            WorkerEvent::RemoveLocalStream { job_id, stage } => {
-                self.handle_remove_local_stream(ctx, job_id, stage)
+            WorkerEvent::CleanUpJob { job_id, stage } => {
+                self.handle_clean_up_job(ctx, job_id, stage)
             }
             WorkerEvent::Shutdown => ActorAction::Stop,
         }

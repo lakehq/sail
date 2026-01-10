@@ -351,7 +351,7 @@ impl WorkerPool {
         });
     }
 
-    pub fn fetch_worker_stream(
+    pub fn fetch_task_stream(
         &mut self,
         ctx: &mut ActorContext<DriverActor>,
         worker_id: WorkerId,
@@ -383,7 +383,7 @@ impl WorkerPool {
         Ok(Box::pin(stream))
     }
 
-    pub fn remove_worker_streams(
+    pub fn clean_up_job(
         &mut self,
         ctx: &mut ActorContext<DriverActor>,
         worker_id: WorkerId,
@@ -395,7 +395,7 @@ impl WorkerPool {
             return;
         };
         Self::track_worker_activity(ctx, worker_id, worker, &self.options);
-        Self::remove_streams(ctx, job_id, stage, worker_id, worker, &self.options);
+        Self::clean_up_job_for_worker(ctx, job_id, stage, worker_id, worker, &self.options);
     }
 
     fn get_client_set(
@@ -423,7 +423,7 @@ impl WorkerPool {
         }
     }
 
-    fn remove_streams(
+    fn clean_up_job_for_worker(
         ctx: &mut ActorContext<DriverActor>,
         job_id: JobId,
         stage: Option<usize>,
@@ -434,13 +434,13 @@ impl WorkerPool {
         let client = match Self::get_client_set(worker_id, worker, options) {
             Ok(x) => x.core,
             Err(e) => {
-                error!("failed to remove streams in worker {worker_id}: {e}");
+                error!("failed to clean up job in worker {worker_id}: {e}");
                 return;
             }
         };
         ctx.spawn(async move {
-            if let Err(e) = client.remove_stream(job_id, stage).await {
-                error!("failed to remove streams in worker {worker_id}: {e}");
+            if let Err(e) = client.clean_up_job(job_id, stage).await {
+                error!("failed to clean up job in worker {worker_id}: {e}");
             }
         });
     }

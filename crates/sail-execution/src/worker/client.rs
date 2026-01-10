@@ -8,7 +8,7 @@ use crate::task::definition::TaskDefinition;
 use crate::worker::event::WorkerLocation;
 use crate::worker::gen::worker_service_client::WorkerServiceClient;
 use crate::worker::gen::{
-    RemoveStreamRequest, RemoveStreamResponse, RunTaskRequest, RunTaskResponse, StopTaskRequest,
+    CleanUpJobRequest, CleanUpJobResponse, RunTaskRequest, RunTaskResponse, StopTaskRequest,
     StopTaskResponse, StopWorkerRequest, StopWorkerResponse,
 };
 
@@ -73,13 +73,13 @@ impl WorkerClient {
         Ok(())
     }
 
-    pub async fn remove_stream(&self, job_id: JobId, stage: Option<usize>) -> ExecutionResult<()> {
-        let request = RemoveStreamRequest {
+    pub async fn clean_up_job(&self, job_id: JobId, stage: Option<usize>) -> ExecutionResult<()> {
+        let request = CleanUpJobRequest {
             job_id: job_id.into(),
             stage: stage.map(|x| x as u64),
         };
-        let response = self.inner.get().await?.remove_stream(request).await?;
-        let RemoveStreamResponse {} = response.into_inner();
+        let response = self.inner.get().await?.clean_up_job(request).await?;
+        let CleanUpJobResponse {} = response.into_inner();
         Ok(())
     }
 

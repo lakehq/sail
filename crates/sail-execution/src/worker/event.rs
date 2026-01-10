@@ -69,7 +69,7 @@ pub enum WorkerEvent {
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     },
-    RemoveLocalStream {
+    CleanUpJob {
         job_id: JobId,
         stage: Option<usize>,
     },
@@ -99,7 +99,7 @@ impl SpanAssociation for WorkerEvent {
             WorkerEvent::FetchDriverStream { .. } => "FetchDriverStream",
             WorkerEvent::FetchWorkerStream { .. } => "FetchWorkerStream",
             WorkerEvent::FetchRemoteStream { .. } => "FetchRemoteStream",
-            WorkerEvent::RemoveLocalStream { .. } => "RemoveLocalStream",
+            WorkerEvent::CleanUpJob { .. } => "CleanUpJob",
             WorkerEvent::Shutdown => "Shutdown",
         };
         name.into()
@@ -288,7 +288,7 @@ impl SpanAssociation for WorkerEvent {
                 p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
                 p.push((SpanAttribute::EXECUTION_STREAM_REMOTE_URI, uri.clone()));
             }
-            WorkerEvent::RemoveLocalStream { job_id, stage } => {
+            WorkerEvent::CleanUpJob { job_id, stage } => {
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
                 if let Some(stage) = stage {
                     p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
