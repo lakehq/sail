@@ -155,8 +155,8 @@ fn mode(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 /// in order_by and the percentile in arguments. This function combines them.
 fn percentile_cont_expr(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     // Extract the single column expression from ORDER BY (error if multiple)
-    let sort = input.order_by.one()?;
-    let column = sort.expr.clone();
+    let sort = input.order_by.clone().one()?;
+    let column = sort.expr;
 
     // Get the percentile value from arguments
     let percentile = input.arguments.one()?;
