@@ -192,12 +192,12 @@ impl ScalarFunctionBuilder {
     }
 }
 
-/// Resolved Aggregate Function Components, excluding the function name.
+/// Aggregate function input components, excluding the function name.
 ///
 /// Populated by the resolver from `spec::UnresolvedFunction` after resolving spec expressions
 /// to DataFusion expressions. Used by aggregate function builders to produce the final
 /// DataFusion aggregate expression.
-pub struct ResolvedAggFuncComps<'a> {
+pub struct AggFunctionInput<'a> {
     pub arguments: Vec<expr::Expr>,
     pub distinct: bool,
     pub ignore_nulls: Option<bool>,
@@ -211,7 +211,7 @@ pub struct ResolvedAggFuncComps<'a> {
 /// Takes the resolved arguments, modifiers (DISTINCT, FILTER, ORDER BY), and context,
 /// and produces a `datafusion_expr::Expr::AggregateFunction` ready for inclusion in the logical plan.
 pub(crate) type AggFunction =
-    Arc<dyn Fn(ResolvedAggFuncComps) -> PlanResult<expr::Expr> + Send + Sync>;
+    Arc<dyn Fn(AggFunctionInput) -> PlanResult<expr::Expr> + Send + Sync>;
 
 /// Factory methods for creating `AggFunction`s.
 ///
@@ -230,7 +230,7 @@ impl AggFunctionBuilder {
         F: Fn() -> Arc<AggregateUDF> + Send + Sync + 'static,
     {
         Arc::new(move |input| {
-            let ResolvedAggFuncComps {
+            let AggFunctionInput {
                 arguments,
                 distinct,
                 ignore_nulls,
@@ -257,7 +257,7 @@ impl AggFunctionBuilder {
     /// Use when the function needs special argument handling that `default` cannot provide.
     pub fn custom<F>(f: F) -> AggFunction
     where
-        F: Fn(ResolvedAggFuncComps) -> PlanResult<expr::Expr> + Send + Sync + 'static,
+        F: Fn(AggFunctionInput) -> PlanResult<expr::Expr> + Send + Sync + 'static,
     {
         Arc::new(f)
     }

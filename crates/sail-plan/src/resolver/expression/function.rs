@@ -9,7 +9,7 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{FunctionContextInput, ResolvedAggFuncComps, ScalarFunctionInput};
+use crate::function::common::{FunctionContextInput, AggFunctionInput, ScalarFunctionInput};
 use crate::function::{get_built_in_aggregate_function, get_built_in_function};
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::function::PythonUdf;
@@ -106,7 +106,7 @@ impl PlanResolver<'_> {
                 Some(x) => self.resolve_sort_orders(x, true, schema, state).await?,
                 None => vec![],
             };
-            let input = ResolvedAggFuncComps {
+            let input = AggFunctionInput {
                 arguments,
                 distinct: is_distinct,
                 ignore_nulls,
