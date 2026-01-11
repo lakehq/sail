@@ -1,12 +1,10 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
-use datafusion::arrow::error::ArrowError;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{cast, expr, lit, Expr, ExprSchemable, Operator, ScalarUDF};
 use datafusion_spark::function::math::expr_fn as math_fn;
-use half::f16;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::error::generic_exec_err;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
@@ -26,7 +24,7 @@ use sail_function::scalar::math::spark_try_mult::SparkTryMult;
 use sail_function::scalar::math::spark_try_subtract::SparkTrySubtract;
 use sail_function::scalar::math::spark_unhex::SparkUnHex;
 
-use crate::error::{PlanError, PlanResult};
+use crate::error::PlanResult;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
 /// Arguments:
@@ -191,29 +189,13 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
     let (dividend, divisor) = arguments.two()?;
 
-    if matches!(
-        &divisor,
-        Expr::Literal(ScalarValue::Int8(Some(0)), _metadata)
-            | Expr::Literal(ScalarValue::Int16(Some(0)), _metadata)
-            | Expr::Literal(ScalarValue::Int32(Some(0)), _metadata)
-            | Expr::Literal(ScalarValue::Int64(Some(0)), _metadata)
-            | Expr::Literal(ScalarValue::UInt8(Some(0)), _metadata)
-            | Expr::Literal(ScalarValue::UInt16(Some(0)), _metadata)
-            | Expr::Literal(ScalarValue::UInt32(Some(0)), _metadata)
-            | Expr::Literal(ScalarValue::UInt64(Some(0)), _metadata)
-            | Expr::Literal(ScalarValue::Float32(Some(0.0)), _metadata)
-            | Expr::Literal(ScalarValue::Float64(Some(0.0)), _metadata)
-    ) || matches!(
-        &divisor,
-        Expr::Literal(ScalarValue::Float16(Some(f16)), _metadata) if *f16 == f16::from_f32(0.0)
-    ) {
-        // FIXME: Account for array input.
-        return if function_context.plan_config.ansi_mode {
-            Err(PlanError::ArrowError(ArrowError::DivideByZero))
-        } else {
-            Ok(Expr::Literal(ScalarValue::Null, None))
-        };
-    }
+    // Note: We let DataFusion handle division by zero at runtime.
+    // DataFusion returns inf/nan correctly matching pandas/numpy behavior:
+    // - x/0 returns inf (for x != 0)
+    // - 0/0 returns nan
+    //
+    // Previously, Spark would throw an error (with ANSI mode) or return NULL (without ANSI mode),
+    // but DataFusion's behavior matches data science expectations better.
 
     let (dividend_type, divisor_type) = (
         dividend.get_type(function_context.schema),
@@ -222,13 +204,15 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
     Ok(match (dividend_type, divisor_type) {
         // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
         //  Seems to be a bug in DataFusion.
-        // TODO: Cast the precision and scale that matches the Spark's behavior after the division.
-        //  See `test_divide` in python/pysail/tests/spark/test_math.py
+        // For Decimal division, cast to Float64 to avoid divide-by-zero errors
+        // and match pandas/numpy behavior
         (Ok(DataType::Decimal128(_, _)), Ok(_))
         | (Ok(_), Ok(DataType::Decimal128(_, _)))
         | (Ok(DataType::Decimal256(_, _)), Ok(_))
-        | (Ok(_), Ok(DataType::Decimal256(_, _)))
-        | (Ok(DataType::Interval(IntervalUnit::YearMonth)), Ok(_))
+        | (Ok(_), Ok(DataType::Decimal256(_, _))) => {
+            cast(dividend, DataType::Float64) / cast(divisor, DataType::Float64)
+        }
+        (Ok(DataType::Interval(IntervalUnit::YearMonth)), Ok(_))
         | (Ok(DataType::Interval(IntervalUnit::DayTime)), Ok(_)) => dividend / divisor,
         (Ok(DataType::Duration(TimeUnit::Microsecond)), Ok(_)) => {
             // Match duration because we cast Spark's DayTime interval to Duration.
