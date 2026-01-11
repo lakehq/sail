@@ -135,9 +135,7 @@ impl PlanResolver<'_> {
 
         // For other types (List, Struct), extraction must be a literal
         let spec::Expr::Literal(extraction) = extraction else {
-            return Err(PlanError::invalid(
-                "extraction must be a literal for List and Struct types",
-            ));
+            return Err(PlanError::invalid("extraction must be a literal"));
         };
         let extraction = self.resolve_literal(extraction, state)?;
         let service = self.ctx.extension::<PlanService>()?;
