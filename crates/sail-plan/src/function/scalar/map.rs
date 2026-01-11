@@ -1,4 +1,5 @@
 use datafusion::functions_nested::expr_fn;
+use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, lit};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::map::map_from_arrays::MapFromArrays;
@@ -33,8 +34,17 @@ fn map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn map_concat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    use datafusion_expr::Expr;
+
     use crate::function::common::ScalarFunctionBuilder as F;
 
+    // If any input is NULL, return NULL
+    // This is done by creating a CASE expression that checks each input for NULL
+    if input.arguments.is_empty() {
+        return Ok(lit(ScalarValue::Null));
+    }
+
+    // Build the result expression
     let (keys, values) = input
         .arguments
         .iter()
@@ -48,10 +58,29 @@ fn map_concat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 
     let keys = expr_fn::array_concat(keys);
     let values = expr_fn::array_concat(values);
-    F::udf(MapFromArrays::new())(ScalarFunctionInput {
+    let result = F::udf(MapFromArrays::new())(ScalarFunctionInput {
         arguments: vec![keys, values],
         function_context: input.function_context,
-    })
+    })?;
+
+    // Wrap the result with CASE to handle NULLs:
+    // CASE WHEN arg1 IS NULL OR arg2 IS NULL OR ... THEN NULL ELSE result END
+    // We already checked that arguments is not empty, so reduce will always return Some
+    if let Some(null_check) = input
+        .arguments
+        .iter()
+        .map(|arg| arg.clone().is_null())
+        .reduce(|a, b| a.or(b))
+    {
+        Ok(Expr::Case(expr::Case {
+            expr: None,
+            when_then_expr: vec![(Box::new(null_check), Box::new(lit(ScalarValue::Null)))],
+            else_expr: Some(Box::new(result)),
+        }))
+    } else {
+        // This should never happen because we checked arguments is not empty
+        Ok(result)
+    }
 }
 
 fn map_contains_key(map: expr::Expr, key: expr::Expr) -> expr::Expr {
