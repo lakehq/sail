@@ -112,13 +112,24 @@ impl PlanResolver<'_> {
 
         // For Maps, we support non-literal expressions as keys
         if matches!(data_type, DataType::Map(_, _)) {
+            // Check if extraction is a literal to generate appropriate column name
+            let result_name = if let spec::Expr::Literal(ref lit) = extraction {
+                let literal_value = self.resolve_literal(lit.clone(), state)?;
+                let service = self.ctx.extension::<PlanService>()?;
+                let literal_name = service
+                    .plan_formatter()
+                    .literal_to_string(&literal_value, &self.config.session_timezone)?;
+                format!("{}[{}]", name.one()?, literal_name)
+            } else {
+                format!("{}[<expr>]", name.one()?)
+            };
+
             let extraction_expr = self
                 .resolve_named_expression(extraction, schema, state)
                 .await?
                 .expr;
             // Use map_extract which supports dynamic keys, then extract first element
             let result_expr = array_element(map_extract(expr, extraction_expr), lit(1));
-            let result_name = format!("{}[<expr>]", name.one()?);
             return Ok(NamedExpr::new(vec![result_name], result_expr));
         }
 
