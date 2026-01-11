@@ -232,7 +232,7 @@
   {
     "module": "pyspark.sql.functions",
     "function": "percentile_cont",
-    "status": "planned",
+    "status": "supported",
     "note": "Spark SQL only; not available in PySpark",
     "ref": "https://github.com/lakehq/sail/issues/309"
   },

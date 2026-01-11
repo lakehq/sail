@@ -4,8 +4,8 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field};
 use datafusion::functions_aggregate::{
     approx_distinct, approx_percentile_cont, array_agg, average, bit_and_or_xor, bool_and_or,
-    correlation, count, covariance, first_last, grouping, median, min_max, regr, stddev, sum,
-    variance,
+    correlation, count, covariance, first_last, grouping, median, min_max, percentile_cont, regr,
+    stddev, sum, variance,
 };
 use datafusion::functions_nested::string::array_to_string;
 use datafusion_common::ScalarValue;
@@ -24,7 +24,7 @@ use sail_function::scalar::struct_function::StructFunction;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
-    get_arguments_and_null_treatment, get_null_treatment, AggFunction, AggFunctionInput,
+    get_arguments_and_null_treatment, get_null_treatment, AggFunction, ResolvedAggFuncComps,
 };
 use crate::function::transform_count_star_wildcard_expr;
 
@@ -33,7 +33,7 @@ lazy_static! {
         HashMap::from_iter(list_built_in_aggregate_functions());
 }
 
-fn avg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+fn avg(input: ResolvedAggFuncComps) -> PlanResult<expr::Expr> {
     let (args, null_treatment) =
         get_arguments_and_null_treatment(input.arguments, input.ignore_nulls)?;
     if args
@@ -56,7 +56,7 @@ fn avg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
-fn first_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+fn first_value(input: ResolvedAggFuncComps) -> PlanResult<expr::Expr> {
     let (args, null_treatment) =
         get_arguments_and_null_treatment(input.arguments, input.ignore_nulls)?;
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
@@ -71,7 +71,7 @@ fn first_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
-fn last_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+fn last_value(input: ResolvedAggFuncComps) -> PlanResult<expr::Expr> {
     let (args, null_treatment) =
         get_arguments_and_null_treatment(input.arguments, input.ignore_nulls)?;
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
@@ -86,7 +86,7 @@ fn last_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
-fn kurtosis(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+fn kurtosis(input: ResolvedAggFuncComps) -> PlanResult<expr::Expr> {
     let args = input
         .arguments
         .into_iter()
@@ -109,7 +109,7 @@ fn kurtosis(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
-fn max_by(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+fn max_by(input: ResolvedAggFuncComps) -> PlanResult<expr::Expr> {
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(MaxByFunction::new())),
         params: AggregateFunctionParams {
@@ -122,7 +122,7 @@ fn max_by(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
-fn min_by(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+fn min_by(input: ResolvedAggFuncComps) -> PlanResult<expr::Expr> {
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(MinByFunction::new())),
         params: AggregateFunctionParams {
@@ -135,7 +135,7 @@ fn min_by(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
-fn mode(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+fn mode(input: ResolvedAggFuncComps) -> PlanResult<expr::Expr> {
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(ModeFunction::new())),
         params: AggregateFunctionParams {
@@ -148,7 +148,39 @@ fn mode(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
-fn skewness(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+/// Builds a percentile_cont aggregate expression from WITHIN GROUP syntax.
+///
+/// DataFusion's percentile_cont expects args = [column, percentile], but Spark's
+/// SQL syntax `percentile_cont(0.5) WITHIN GROUP (ORDER BY col)` puts the column
+/// in order_by and the percentile in arguments. This function combines them.
+fn percentile_cont_expr(input: ResolvedAggFuncComps) -> PlanResult<expr::Expr> {
+    // Extract the column expression from ORDER BY
+    let column = input
+        .order_by
+        .first()
+        .ok_or_else(|| PlanError::invalid("percentile_cont requires WITHIN GROUP (ORDER BY ...)"))?
+        .expr
+        .clone();
+
+    // Get the percentile value from arguments
+    let percentile = input.arguments.one()?;
+
+    // Combine: [column, percentile] as DataFusion expects
+    let args = vec![column, percentile];
+
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: percentile_cont::percentile_cont_udaf(),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
+fn skewness(input: ResolvedAggFuncComps) -> PlanResult<expr::Expr> {
     let args = input
         .arguments
         .into_iter()
@@ -171,7 +203,7 @@ fn skewness(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
-fn try_sum(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+fn try_sum(input: ResolvedAggFuncComps) -> PlanResult<expr::Expr> {
     let args = input.arguments;
 
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
@@ -186,7 +218,7 @@ fn try_sum(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
-fn try_avg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+fn try_avg(input: ResolvedAggFuncComps) -> PlanResult<expr::Expr> {
     let args = input.arguments;
 
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
@@ -201,8 +233,8 @@ fn try_avg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
-fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
-    let AggFunctionInput {
+fn count(input: ResolvedAggFuncComps) -> PlanResult<expr::Expr> {
+    let ResolvedAggFuncComps {
         arguments,
         distinct,
         ignore_nulls,
@@ -234,7 +266,7 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
-fn count_if(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+fn count_if(input: ResolvedAggFuncComps) -> PlanResult<expr::Expr> {
     match input.arguments.len() {
         1 => Ok(expr::Expr::AggregateFunction(AggregateFunction {
             func: count::count_udaf(),
@@ -256,7 +288,7 @@ fn count_if(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }
 }
 
-fn collect_set(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+fn collect_set(input: ResolvedAggFuncComps) -> PlanResult<expr::Expr> {
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: array_agg::array_agg_udaf(),
         params: AggregateFunctionParams {
@@ -269,7 +301,7 @@ fn collect_set(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
-fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+fn array_agg_compacted(input: ResolvedAggFuncComps) -> PlanResult<expr::Expr> {
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: array_agg::array_agg_udaf(),
         params: AggregateFunctionParams {
@@ -282,7 +314,7 @@ fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
-fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+fn listagg(input: ResolvedAggFuncComps) -> PlanResult<expr::Expr> {
     let schema = input.function_context.schema;
     let (agg_col, other_args) = input.arguments.at_least_one()?;
     if agg_col.get_type(schema)? == DataType::Null {
@@ -328,7 +360,7 @@ fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         .end()?)
 }
 
-fn median(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+fn median(input: ResolvedAggFuncComps) -> PlanResult<expr::Expr> {
     Ok(cast(
         expr::Expr::AggregateFunction(AggregateFunction {
             func: median::median_udaf(),
@@ -344,7 +376,7 @@ fn median(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     ))
 }
 
-fn approx_count_distinct(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+fn approx_count_distinct(input: ResolvedAggFuncComps) -> PlanResult<expr::Expr> {
     Ok(cast(
         expr::Expr::AggregateFunction(AggregateFunction {
             func: approx_distinct::approx_distinct_udaf(),
@@ -360,6 +392,9 @@ fn approx_count_distinct(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     ))
 }
 
+/// Creates a list of built-in aggregate functions.
+/// This is used to create a hashmap that the resolver uses to look up
+/// aggregate functions by name.
 fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
     use crate::function::common::AggFunctionBuilder as F;
 
@@ -412,7 +447,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
             "percentile_approx",
             F::default(approx_percentile_cont::approx_percentile_cont_udaf),
         ),
-        ("percentile_cont", F::unknown("percentile_cont")),
+        ("percentile_cont", F::custom(percentile_cont_expr)),
         ("percentile_disc", F::unknown("percentile_disc")),
         ("regr_avgx", F::default(regr::regr_avgx_udaf)),
         ("regr_avgy", F::default(regr::regr_avgy_udaf)),

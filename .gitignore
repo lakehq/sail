@@ -5,6 +5,9 @@ target/
 # The Cargo target directory may be a symlink in CI
 /target
 
+# Local Cargo configuration (machine-specific settings)
+.cargo/
+
 # We commit Cargo.lock to keep track of the exact versions of dependencies
 # More information here https://doc.rust-lang.org/cargo/guide/cargo-toml-vs-cargo-lock.html
 
