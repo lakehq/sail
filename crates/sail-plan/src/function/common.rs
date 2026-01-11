@@ -210,8 +210,7 @@ pub struct AggFunctionInput<'a> {
 ///
 /// Takes the resolved arguments, modifiers (DISTINCT, FILTER, ORDER BY), and context,
 /// and produces a `datafusion_expr::Expr::AggregateFunction` ready for inclusion in the logical plan.
-pub(crate) type AggFunction =
-    Arc<dyn Fn(AggFunctionInput) -> PlanResult<expr::Expr> + Send + Sync>;
+pub(crate) type AggFunction = Arc<dyn Fn(AggFunctionInput) -> PlanResult<expr::Expr> + Send + Sync>;
 
 /// Factory methods for creating `AggFunction`s.
 ///

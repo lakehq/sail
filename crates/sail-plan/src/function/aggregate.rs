@@ -154,13 +154,9 @@ fn mode(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 /// SQL syntax `percentile_cont(0.5) WITHIN GROUP (ORDER BY col)` puts the column
 /// in order_by and the percentile in arguments. This function combines them.
 fn percentile_cont_expr(input: AggFunctionInput) -> PlanResult<expr::Expr> {
-    // Extract the column expression from ORDER BY
-    let column = input
-        .order_by
-        .first()
-        .ok_or_else(|| PlanError::invalid("percentile_cont requires WITHIN GROUP (ORDER BY ...)"))?
-        .expr
-        .clone();
+    // Extract the single column expression from ORDER BY (error if multiple)
+    let sort = input.order_by.one()?;
+    let column = sort.expr.clone();
 
     // Get the percentile value from arguments
     let percentile = input.arguments.one()?;
