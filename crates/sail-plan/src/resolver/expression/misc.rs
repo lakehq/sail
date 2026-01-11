@@ -117,15 +117,16 @@ impl PlanResolver<'_> {
                 .await?
                 .expr;
             // Use map_extract which supports dynamic keys, then extract first element
-            let result_expr =
-                array_element(map_extract(expr.clone(), extraction_expr.clone()), lit(1));
+            let result_expr = array_element(map_extract(expr, extraction_expr), lit(1));
             let result_name = format!("{}[<expr>]", name.one()?);
             return Ok(NamedExpr::new(vec![result_name], result_expr));
         }
 
         // For other types (List, Struct), extraction must be a literal
         let spec::Expr::Literal(extraction) = extraction else {
-            return Err(PlanError::invalid("extraction must be a literal"));
+            return Err(PlanError::invalid(
+                "extraction must be a literal for List and Struct types",
+            ));
         };
         let extraction = self.resolve_literal(extraction, state)?;
         let service = self.ctx.extension::<PlanService>()?;
