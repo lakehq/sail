@@ -1,13 +1,13 @@
 [project]
 name = "pysail"
-version = "0.4.5"
+version = "0.4.6"
 description = "Sail Python library"
 authors = [
     { name = "LakeSail", email = "hello@lakesail.com" },
 ]
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.9,<3.14"
+requires-python = ">=3.9,<3.15"
 dependencies = []
 keywords = ["data", "big data", "sql", "spark", "pyspark", "arrow", "datafusion"]
 classifiers = [
