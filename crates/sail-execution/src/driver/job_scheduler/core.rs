@@ -105,13 +105,13 @@ impl JobScheduler {
     /// the actions to take.
     ///   1. For each task region, if any task attempt fails, all existing task attempts
     ///      in the region are canceled if not already.
-    ///   2. If any task in the final stage is running or has succeeded, all its channels are
+    ///   2. If any task in the final stages is running or has succeeded, all its channels are
     ///      added as job output streams if not already.
-    ///   3. For each stage, if all the stages that depends on it have succeeded, remove
+    ///   3. For each stage, if all the stages that consume it have succeeded, remove
     ///      the output streams of the stage if not already.
     ///   4. If any task exceeds the maximum allowed attempts, the task region and the job
     ///      are marked as failed.
-    ///   5. If all the tasks in the final stage have succeeded, the job is marked as succeeded.
+    ///   5. If all the tasks in the final stages have succeeded, the job is marked as succeeded.
     ///   6. For each task region, schedule the tasks of the region if all the dependency
     ///      regions have succeeded.
     pub fn refresh_job(&mut self, job_id: JobId) -> Vec<JobAction> {
@@ -126,7 +126,7 @@ impl JobScheduler {
         let mut actions = vec![];
 
         actions.extend(Self::cascade_cancel_task_attempts(job_id, job));
-        actions.extend(Self::update_job_output(job_id, job));
+        actions.extend(Self::extend_job_output(job_id, job));
         actions.extend(Self::clean_up_job_by_stage(job_id, job));
 
         Self::update_task_regions(job, &self.options);
@@ -376,7 +376,7 @@ impl JobScheduler {
         TaskRegion { tasks }
     }
 
-    fn update_job_output(job_id: JobId, job: &mut JobDescriptor) -> Vec<JobAction> {
+    fn extend_job_output(job_id: JobId, job: &mut JobDescriptor) -> Vec<JobAction> {
         let JobState::Running { output, .. } = &mut job.state else {
             return vec![];
         };
@@ -407,7 +407,7 @@ impl JobScheduler {
                         attempt: head.len(),
                         channel: c,
                     };
-                    actions.push(JobAction::FetchJobOutputStream {
+                    actions.push(JobAction::ExtendJobOutput {
                         handle: output.handle(),
                         key,
                         schema: schema.clone(),
@@ -450,7 +450,7 @@ impl JobScheduler {
         }
     }
 
-    /// Determine the actions needed in the driver to cancel the job.
+    /// Determine the actions needed in the driver to clean up the job.
     /// The method cancels all the task attempts that are not in terminal states
     /// and removes all the job output streams.
     pub fn clean_up_job(&mut self, job_id: JobId) -> Vec<JobAction> {
@@ -569,6 +569,8 @@ impl JobScheduler {
                         .collect::<ExecutionResult<Vec<_>>>()
                 })
                 .collect::<ExecutionResult<Vec<Vec<_>>>>()?,
+            // Enumerate channels in the outer loop and partitions in the inner loop.
+            // This is the whole point of shuffle!
             InputMode::Shuffle => (0..channels)
                 .map(|channel| {
                     (0..partitions)

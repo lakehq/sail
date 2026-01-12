@@ -42,14 +42,14 @@ pub enum JobAction {
     CancelTask {
         key: TaskKey,
     },
-    FailJobOutput {
-        handle: JobOutputHandle,
-        cause: CommonErrorCause,
-    },
-    FetchJobOutputStream {
+    ExtendJobOutput {
         handle: JobOutputHandle,
         key: TaskStreamKey,
         schema: SchemaRef,
+    },
+    FailJobOutput {
+        handle: JobOutputHandle,
+        cause: CommonErrorCause,
     },
     CleanUpJob {
         job_id: JobId,

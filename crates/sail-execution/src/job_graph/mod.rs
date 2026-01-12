@@ -7,6 +7,11 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties, PhysicalExpr};
 
+/// A job graph represents a distributed execution plan for a job.
+/// A job consists of multiple *stages*, where each stage has one or more
+/// *partitions*. There are *tasks* which each corresponds to the execution of a single partition
+/// of a stage and can have multiple *attempts*.
+/// Each task produces output split into multiple *channels*.
 #[derive(Debug)]
 pub struct JobGraph {
     /// A list of stages sorted in topological order.
@@ -79,6 +84,7 @@ impl fmt::Display for JobGraph {
 pub struct Stage {
     pub inputs: Vec<StageInput>,
     pub plan: Arc<dyn ExecutionPlan>,
+    /// The name of the "slot sharing group" for the stage.
     pub group: String,
     pub mode: OutputMode,
     pub distribution: OutputDistribution,
@@ -113,6 +119,11 @@ impl fmt::Display for StageInput {
     }
 }
 
+/// Usually, when partition `p` is executed for the stage, all the child physical plan nodes
+/// are executed recursively with the same partition `p`, but this is not always the case.
+/// So we introduce input mode to describe the expectation how stage inputs (which are
+/// leaf nodes of the physical plan) are executed and which partitions and channels are read
+/// from the dependent stages.
 #[derive(Debug, Clone, Copy)]
 pub enum InputMode {
     /// For each partition in the current stage, execute the same partition to fetch the input

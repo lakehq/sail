@@ -58,15 +58,15 @@ impl StreamManager {
                         )));
                     }
                 };
-                match create(std::mem::take(senders)) {
+                match create(senders.clone()) {
                     Ok((stream, sink)) => {
                         *entry.into_mut() = LocalStreamState::Created { stream };
                         Ok(sink)
                     }
                     Err(e) => {
-                        *entry.into_mut() = LocalStreamState::Failed {
-                            cause: CommonErrorCause::new::<PyErrExtractor>(&e),
-                        };
+                        let cause = CommonErrorCause::new::<PyErrExtractor>(&e);
+                        Self::fail_senders(senders, &cause);
+                        *entry.into_mut() = LocalStreamState::Failed { cause };
                         Err(e)
                     }
                 }
@@ -77,9 +77,8 @@ impl StreamManager {
                     Ok(sink)
                 }
                 Err(e) => {
-                    entry.insert(LocalStreamState::Failed {
-                        cause: CommonErrorCause::new::<PyErrExtractor>(&e),
-                    });
+                    let cause = CommonErrorCause::new::<PyErrExtractor>(&e);
+                    entry.insert(LocalStreamState::Failed { cause });
                     Err(e)
                 }
             },
@@ -175,15 +174,21 @@ impl StreamManager {
         };
         if let LocalStreamState::Pending { senders } = value {
             let message = "local stream is not created within the expected time".to_string();
-            for tx in senders {
-                // `try_send` would not fail due to full buffer because we have
-                // never sent any data to the channel.
-                // So we do not need to spawn a task to send the error asynchronously.
-                let _ = tx.try_send(Err(TaskStreamError::Unknown(message.clone())));
-            }
-            *value = LocalStreamState::Failed {
-                cause: CommonErrorCause::Execution(message),
-            };
+            let cause = CommonErrorCause::Execution(message);
+            Self::fail_senders(senders, &cause);
+            *value = LocalStreamState::Failed { cause };
+        }
+    }
+
+    pub fn fail_senders(
+        senders: &[mpsc::Sender<TaskStreamResult<RecordBatch>>],
+        cause: &CommonErrorCause,
+    ) {
+        for tx in senders {
+            // `try_send` would not fail due to full buffer because we have
+            // never sent any data to the channel.
+            // So we do not need to spawn a task to send the error asynchronously.
+            let _ = tx.try_send(Err(TaskStreamError::from(cause.clone())));
         }
     }
 

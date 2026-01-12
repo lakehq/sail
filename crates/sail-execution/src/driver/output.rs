@@ -20,7 +20,7 @@ use crate::stream::error::{TaskStreamError, TaskStreamResult};
 use crate::stream::reader::TaskStreamSource;
 
 pub struct JobOutputHandle {
-    sender: mpsc::Sender<JobOutputCommand>,
+    sender: mpsc::Sender<JobOutputItem>,
 }
 
 impl fmt::Debug for JobOutputHandle {
@@ -30,21 +30,15 @@ impl fmt::Debug for JobOutputHandle {
 }
 
 impl JobOutputHandle {
-    pub async fn add_stream(self, key: TaskStreamKey, stream: TaskStreamSource) {
-        let command = JobOutputCommand::AddStream { key, stream };
+    pub async fn send(self, item: JobOutputItem) {
         // We ignore the error here because it indicates that the job output
         // consumer has been dropped.
-        let _ = self.sender.send(command).await;
-    }
-
-    pub async fn fail(self, cause: CommonErrorCause) {
-        let command = JobOutputCommand::Fail { cause };
-        let _ = self.sender.send(command).await;
+        let _ = self.sender.send(item).await;
     }
 }
 
 pub struct JobOutputManager {
-    sender: mpsc::Sender<JobOutputCommand>,
+    sender: mpsc::Sender<JobOutputItem>,
 }
 
 impl JobOutputManager {
@@ -55,18 +49,18 @@ impl JobOutputManager {
     }
 }
 
-enum JobOutputCommand {
-    Fail {
-        cause: CommonErrorCause,
-    },
-    AddStream {
+pub enum JobOutputItem {
+    Stream {
         key: TaskStreamKey,
         stream: TaskStreamSource,
     },
+    Error {
+        cause: CommonErrorCause,
+    },
 }
 
-impl JobOutputCommand {
-    pub const CHANNEL_SIZE: usize = 32;
+impl JobOutputItem {
+    const CHANNEL_SIZE: usize = 32;
 }
 
 struct JobOutputStream {
@@ -74,7 +68,7 @@ struct JobOutputStream {
 }
 
 impl JobOutputStream {
-    fn new(receiver: mpsc::Receiver<JobOutputCommand>) -> Self {
+    fn new(receiver: mpsc::Receiver<JobOutputItem>) -> Self {
         Self {
             state: JobOutputState::Active {
                 receiver,
@@ -89,7 +83,7 @@ pub fn build_job_output(
     job_id: JobId,
     schema: SchemaRef,
 ) -> (JobOutputManager, SendableRecordBatchStream) {
-    let (sender, receiver) = mpsc::channel(JobOutputCommand::CHANNEL_SIZE);
+    let (sender, receiver) = mpsc::channel(JobOutputItem::CHANNEL_SIZE);
     let (tx, rx) = mpsc::channel(1);
     let stream = JobOutputStream::new(receiver);
     let handle = ctx.handle().clone();
@@ -113,7 +107,7 @@ pub fn build_job_output(
 
 enum JobOutputState {
     Active {
-        receiver: mpsc::Receiver<JobOutputCommand>,
+        receiver: mpsc::Receiver<JobOutputItem>,
         inner: Pin<Box<SelectAll<TaskStreamWrapper>>>,
     },
     Draining {
@@ -143,13 +137,13 @@ impl Stream for JobOutputStream {
                 Poll::Pending => {
                     self.state = JobOutputState::Active { receiver, inner };
                 }
-                Poll::Ready(Some(JobOutputCommand::Fail { cause })) => {
+                Poll::Ready(Some(JobOutputItem::Error { cause })) => {
                     self.state = JobOutputState::Failed;
                     return Poll::Ready(Some(Err(DataFusionError::External(Box::new(
                         TaskStreamError::from(cause),
                     )))));
                 }
-                Poll::Ready(Some(JobOutputCommand::AddStream { key, stream })) => {
+                Poll::Ready(Some(JobOutputItem::Stream { key, stream })) => {
                     if inner.iter().any(|s| s.conflicts_with(&key)) {
                         self.state = JobOutputState::Failed;
                         return Poll::Ready(Some(Err(DataFusionError::External(Box::new(

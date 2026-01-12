@@ -15,6 +15,7 @@ use tokio::time::Instant;
 
 use crate::driver::actor::DriverActor;
 use crate::driver::job_scheduler::{JobAction, TaskState};
+use crate::driver::output::JobOutputItem;
 use crate::driver::{DriverEvent, TaskStatus};
 use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey, TaskStreamKeyDisplay, WorkerId};
@@ -137,14 +138,15 @@ impl DriverActor {
                 Some("worker heartbeat timeout".to_string()),
             );
 
+            let message = "task failed for lost worker".to_string();
             let keys = self.task_assigner.find_worker_tasks(worker_id);
             self.task_assigner.deactivate_worker(worker_id);
             for key in keys.iter() {
                 self.job_scheduler.update_task(
                     key,
                     TaskState::Failed,
-                    Some("task failed for lost worker".to_string()),
-                    None,
+                    Some(message.clone()),
+                    Some(CommonErrorCause::Execution(message.clone())),
                 );
             }
 
@@ -379,12 +381,7 @@ impl DriverActor {
                     }
                 }
             }
-            JobAction::FailJobOutput { handle, cause } => {
-                ctx.spawn(async move {
-                    handle.fail(cause).await;
-                });
-            }
-            JobAction::FetchJobOutputStream {
+            JobAction::ExtendJobOutput {
                 handle,
                 key,
                 schema,
@@ -411,7 +408,17 @@ impl DriverActor {
                 })
                 .try_flatten();
                 ctx.spawn(async move {
-                    handle.add_stream(key, Box::pin(stream)).await;
+                    handle
+                        .send(JobOutputItem::Stream {
+                            key,
+                            stream: Box::pin(stream),
+                        })
+                        .await;
+                });
+            }
+            JobAction::FailJobOutput { handle, cause } => {
+                ctx.spawn(async move {
+                    handle.send(JobOutputItem::Error { cause }).await;
                 });
             }
             JobAction::CleanUpJob { job_id, stage } => {
