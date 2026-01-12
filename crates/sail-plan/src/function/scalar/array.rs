@@ -32,7 +32,7 @@ fn slice(array: expr::Expr, start: expr::Expr, length: expr::Expr) -> expr::Expr
     expr_fn::array_slice(array, start, end, None)
 }
 
-fn sort_array(array: expr::Expr, asc: expr::Expr) -> PlanResult<expr::Expr> {
+pub(super) fn sort_array(array: expr::Expr, asc: expr::Expr) -> PlanResult<expr::Expr> {
     let (sort, nulls) = match asc {
         expr::Expr::Literal(ScalarValue::Boolean(Some(true)), _metadata) => (
             lit(ScalarValue::Utf8(Some("ASC".to_string()))),
