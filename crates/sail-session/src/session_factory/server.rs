@@ -259,6 +259,9 @@ impl<I> ServerSessionFactory<I> {
         let execution = &mut config.options_mut().execution;
 
         execution.batch_size = self.config.execution.batch_size;
+        if self.config.execution.default_parallelism > 0 {
+            execution.target_partitions = self.config.execution.default_parallelism;
+        }
         execution.collect_statistics = self.config.execution.collect_statistics;
         execution.use_row_number_estimates_to_optimize_partitioning = self
             .config
