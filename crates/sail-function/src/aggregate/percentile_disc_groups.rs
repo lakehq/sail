@@ -13,7 +13,7 @@ use datafusion::logical_expr::{Accumulator, EmitTo, GroupsAccumulator};
 use datafusion::physical_expr::aggregate::utils::Hashable;
 
 use crate::aggregate::utils::{
-    accumulate, calculate_percentile_disc, cast_to_type, filtered_null_mask,
+    calculate_percentile_disc, cast_to_type, filtered_null_mask,
 };
 
 #[derive(Debug)]
@@ -31,6 +31,49 @@ impl<T: ArrowNumericType + Send> PercentileDiscGroupsAccumulator<T> {
             percentile,
         }
     }
+
+    fn accumulate_with_nulls_chunked(
+        &mut self,
+        group_indices: &[usize],
+        values: &PrimitiveArray<T>,
+    ) {
+        let data = values.values();
+        let nulls = values.nulls().unwrap();
+        let group_indices_chunks = group_indices.chunks_exact(64);
+        let data_chunks = data.chunks_exact(64);
+        let bit_chunks = nulls.inner().bit_chunks();
+
+        let group_indices_remainder = group_indices_chunks.remainder();
+        let data_remainder = data_chunks.remainder();
+
+        group_indices_chunks
+            .zip(data_chunks)
+            .zip(bit_chunks.iter())
+            .for_each(|((group_index_chunk, data_chunk), mask)| {
+                let mut index_mask = 1;
+                group_index_chunk.iter().zip(data_chunk.iter()).for_each(
+                    |(&group_index, &new_value)| {
+                        let is_valid = (mask & index_mask) != 0;
+                        if is_valid {
+                            self.group_values[group_index].push(new_value);
+                        }
+                        index_mask <<= 1;
+                    },
+                )
+            });
+
+        let remainder_bits = bit_chunks.remainder_bits();
+        group_indices_remainder
+            .iter()
+            .zip(data_remainder.iter())
+            .enumerate()
+            .for_each(|(i, (&group_index, &new_value))| {
+                let is_valid = remainder_bits & (1 << i) != 0;
+                if is_valid {
+                    self.group_values[group_index].push(new_value);
+                }
+            });
+    }
 }
 
 impl<T: ArrowNumericType + Send> GroupsAccumulator for PercentileDiscGroupsAccumulator<T> {
@@ -45,14 +88,46 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for PercentileDiscGroupsAccum
         let values = values_array.as_primitive::<T>();
 
         self.group_values.resize(total_num_groups, Vec::new());
-        accumulate(
-            group_indices,
-            values,
-            opt_filter,
-            |group_index, new_value| {
-                self.group_values[group_index].push(new_value);
-            },
-        );
+
+        let data: &[T::Native] = values.values();
+        assert_eq!(data.len(), group_indices.len());
+
+        match (values.null_count() > 0, opt_filter) {
+            (false, None) => {
+                for (&group_index, &new_value) in group_indices.iter().zip(data.iter()) {
+                    self.group_values[group_index].push(new_value);
+                }
+            }
+            (true, None) => {
+                self.accumulate_with_nulls_chunked(group_indices, values);
+            }
+            (false, Some(filter)) => {
+                assert_eq!(filter.len(), group_indices.len());
+                group_indices
+                    .iter()
+                    .zip(data.iter())
+                    .zip(filter.iter())
+                    .for_each(|((&group_index, &new_value), filter_value)| {
+                        if let Some(true) = filter_value {
+                            self.group_values[group_index].push(new_value);
+                        }
+                    })
+            }
+            (true, Some(filter)) => {
+                assert_eq!(filter.len(), group_indices.len());
+                filter
+                    .iter()
+                    .zip(group_indices.iter())
+                    .zip(values.iter())
+                    .for_each(|((filter_value, &group_index), new_value)| {
+                        if let Some(true) = filter_value {
+                            if let Some(new_value) = new_value {
+                                self.group_values[group_index].push(new_value)
+                            }
+                        }
+                    })
+            }
+        }
 
         Ok(())
     }

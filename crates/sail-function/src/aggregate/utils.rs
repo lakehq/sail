@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, BooleanArray, PrimitiveArray, RecordBatch,
+    Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, BooleanArray, RecordBatch,
 };
 use datafusion::arrow::buffer::NullBuffer;
-use datafusion::arrow::datatypes::{ArrowNativeType, ArrowPrimitiveType, DataType, Schema};
+use datafusion::arrow::datatypes::{ArrowNativeType, DataType, Schema};
 use datafusion::common::{DataFusionError, Result, ScalarValue};
 use datafusion::logical_expr::ColumnarValue;
 use datafusion::physical_expr::PhysicalExpr;
@@ -66,91 +66,6 @@ pub fn filtered_null_mask(
         NullBuffer::union(Some(&filter_bools), filter_nulls.as_ref())
     });
     NullBuffer::union(opt_filter.as_ref(), input.nulls())
-}
-
-pub fn accumulate<T, F>(
-    group_indices: &[usize],
-    values: &PrimitiveArray<T>,
-    opt_filter: Option<&BooleanArray>,
-    mut value_fn: F,
-) where
-    T: ArrowPrimitiveType + Send,
-    F: FnMut(usize, T::Native) + Send,
-{
-    let data: &[T::Native] = values.values();
-    assert_eq!(data.len(), group_indices.len());
-
-    match (values.null_count() > 0, opt_filter) {
-        (false, None) => {
-            let iter = group_indices.iter().zip(data.iter());
-            for (&group_index, &new_value) in iter {
-                value_fn(group_index, new_value);
-            }
-        }
-        (true, None) => {
-            let nulls = values.nulls().unwrap();
-            let group_indices_chunks = group_indices.chunks_exact(64);
-            let data_chunks = data.chunks_exact(64);
-            let bit_chunks = nulls.inner().bit_chunks();
-
-            let group_indices_remainder = group_indices_chunks.remainder();
-            let data_remainder = data_chunks.remainder();
-
-            group_indices_chunks
-                .zip(data_chunks)
-                .zip(bit_chunks.iter())
-                .for_each(|((group_index_chunk, data_chunk), mask)| {
-                    let mut index_mask = 1;
-                    group_index_chunk.iter().zip(data_chunk.iter()).for_each(
-                        |(&group_index, &new_value)| {
-                            let is_valid = (mask & index_mask) != 0;
-                            if is_valid {
-                                value_fn(group_index, new_value);
-                            }
-                            index_mask <<= 1;
-                        },
-                    )
-                });
-
-            let remainder_bits = bit_chunks.remainder_bits();
-            group_indices_remainder
-                .iter()
-                .zip(data_remainder.iter())
-                .enumerate()
-                .for_each(|(i, (&group_index, &new_value))| {
-                    let is_valid = remainder_bits & (1 << i) != 0;
-                    if is_valid {
-                        value_fn(group_index, new_value);
-                    }
-                });
-        }
-        (false, Some(filter)) => {
-            assert_eq!(filter.len(), group_indices.len());
-            group_indices
-                .iter()
-                .zip(data.iter())
-                .zip(filter.iter())
-                .for_each(|((&group_index, &new_value), filter_value)| {
-                    if let Some(true) = filter_value {
-                        value_fn(group_index, new_value);
-                    }
-                })
-        }
-        (true, Some(filter)) => {
-            assert_eq!(filter.len(), group_indices.len());
-            filter
-                .iter()
-                .zip(group_indices.iter())
-                .zip(values.iter())
-                .for_each(|((filter_value, &group_index), new_value)| {
-                    if let Some(true) = filter_value {
-                        if let Some(new_value) = new_value {
-                            value_fn(group_index, new_value)
-                        }
-                    }
-                })
-        }
-    }
 }
 
 pub fn calculate_percentile_disc<T: ArrowNumericType>(
