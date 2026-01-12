@@ -57,26 +57,27 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        for (q, remaining) in Self::generate_qualified_wildcard_candidates(name.parts()) {
+            if remaining.is_empty()
+                && schema
+                    .iter()
+                    .any(|(qualifier, _)| qualifier_matches(q.as_ref(), qualifier))
+            {
+                return Ok(NamedExpr::new(
+                    vec!["*".to_string()],
+                    #[allow(deprecated)]
+                    expr::Expr::Wildcard {
+                        qualifier: q,
+                        options: Default::default(),
+                    },
+                ));
+            }
+        }
+
         let candidates = Self::generate_qualified_wildcard_candidates(name.parts())
             .into_iter()
             .flat_map(|(q, name)| match name {
-                [] => {
-                    if schema
-                        .iter()
-                        .any(|(qualifier, _)| qualifier_matches(q.as_ref(), qualifier))
-                    {
-                        vec![NamedExpr::new(
-                            vec!["*".to_string()],
-                            #[allow(deprecated)]
-                            expr::Expr::Wildcard {
-                                qualifier: q,
-                                options: Default::default(),
-                            },
-                        )]
-                    } else {
-                        vec![]
-                    }
-                }
+                [] => vec![],
                 [column, inner @ ..] => schema
                     .iter()
                     .filter_map(|(qualifier, field)| {
@@ -98,11 +99,6 @@ impl PlanResolver<'_> {
                     .collect(),
             })
             .collect::<Vec<_>>();
-        if candidates.len() > 1 {
-            return Err(PlanError::AnalysisError(format!(
-                "ambiguous wildcard: {name:?}"
-            )));
-        }
         candidates
             .one()
             .map_err(|_| PlanError::AnalysisError(format!("cannot resolve wildcard: {name:?}")))

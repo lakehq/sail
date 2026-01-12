@@ -1,11 +1,13 @@
 use datafusion_common::DFSchemaRef;
-use datafusion_expr::expr;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::registry::FunctionRegistry;
+use datafusion_expr::utils::{expand_qualified_wildcard, expand_wildcard};
+use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan};
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::multi_expr::MultiExpr;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::error::{PlanError, PlanResult};
@@ -50,9 +52,13 @@ impl PlanResolver<'_> {
             }
         }
 
-        let (argument_display_names, arguments) = self
-            .resolve_expressions_and_names(arguments, schema, state)
-            .await?;
+        let (argument_display_names, arguments) = if canonical_function_name == "struct" {
+            self.resolve_struct_expressions_and_names(arguments, schema, state)
+                .await?
+        } else {
+            self.resolve_expressions_and_names(arguments, schema, state)
+                .await?
+        };
 
         // FIXME: `is_user_defined_function` is always false,
         //   so we need to check UDFs before built-in functions.
@@ -155,5 +161,94 @@ impl PlanResolver<'_> {
         };
         self.resolve_expression_function(function, schema, state)
             .await
+    }
+
+    async fn resolve_struct_expressions_and_names(
+        &self,
+        expressions: Vec<spec::Expr>,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<(Vec<String>, Vec<expr::Expr>)> {
+        fn column_display_name(
+            column: &datafusion_common::Column,
+            state: &PlanResolverState,
+        ) -> PlanResult<Option<String>> {
+            let info = state.get_field_info(column.name())?;
+            if info.is_hidden() {
+                return Ok(None);
+            }
+            Ok(Some(info.name().to_string()))
+        }
+
+        let mut names: Vec<String> = vec![];
+        let mut exprs: Vec<expr::Expr> = vec![];
+
+        for expression in expressions {
+            let NamedExpr { name, expr, .. } = self
+                .resolve_named_expression(expression, schema, state)
+                .await?;
+
+            match expr {
+                // Expand wildcard inside `struct(...)` only, to match Spark behavior:
+                // - struct(*) expands to all visible columns
+                // - struct(alias.*) expands to all visible columns from that qualifier
+                #[allow(deprecated)]
+                Expr::Wildcard { qualifier, options } => {
+                    let plan = LogicalPlan::EmptyRelation(EmptyRelation {
+                        produce_one_row: false,
+                        schema: schema.clone(),
+                    });
+
+                    #[allow(deprecated)]
+                    let expanded = match qualifier {
+                        Some(q) => expand_qualified_wildcard(&q, schema, Some(&options))?,
+                        None => expand_wildcard(schema, &plan, Some(&options))?,
+                    };
+
+                    for e in expanded {
+                        let Expr::Column(column) = e else {
+                            return Err(PlanError::internal(format!(
+                                "column expected for expanded wildcard expression in struct, got: {e:?}"
+                            )));
+                        };
+                        if let Some(display_name) = column_display_name(&column, state)? {
+                            names.push(display_name);
+                            exprs.push(Expr::Column(column));
+                        }
+                    }
+                }
+
+                // Nested-field wildcard expansion can produce a MultiExpr.
+                // Flatten it so `struct(a.*)` can become `struct(a.x, a.y, ...)`.
+                Expr::ScalarFunction(ScalarFunction { func, args })
+                    if func.inner().as_any().is::<MultiExpr>() =>
+                {
+                    if name.len() == args.len() {
+                        for (n, arg) in name.into_iter().zip(args) {
+                            let field_name = n;
+                            names.push(field_name.clone());
+                            exprs.push(Expr::Alias(expr::Alias::new(
+                                arg,
+                                None::<datafusion_common::TableReference>,
+                                field_name,
+                            )));
+                        }
+                    } else {
+                        return Err(PlanError::internal(format!(
+                            "MultiExpr in struct argument must provide one name per expression, got {} names for {} expressions",
+                            name.len(),
+                            args.len()
+                        )));
+                    }
+                }
+
+                other => {
+                    names.push(name.one()?);
+                    exprs.push(other);
+                }
+            }
+        }
+
+        Ok((names, exprs))
     }
 }
