@@ -2,10 +2,22 @@ from pathlib import Path
 from typing import Optional
 
 import pandas as pd
-from pyiceberg.catalog import load_catalog
+
+try:
+    from pyiceberg.catalog import load_catalog
+
+    HAS_PYICEBERG = True
+except ImportError:
+    HAS_PYICEBERG = False
+
+PYICEBERG_REQUIRED_MSG = "PyIceberg is required for this operation"
 
 
 def create_sql_catalog(tmp_path: Path):
+    if not HAS_PYICEBERG:
+        msg = "PyIceberg is required for create_sql_catalog"
+        raise ImportError(msg)
+
     warehouse_path = tmp_path / "warehouse"
     warehouse_path.mkdir(parents=True, exist_ok=True)
     catalog = load_catalog(
@@ -22,6 +34,10 @@ def create_sql_catalog(tmp_path: Path):
 
 
 def pyiceberg_to_pandas(table, sort_by=None, dtypes_like: Optional[pd.Series] = None):  # noqa: FA100
+    if not HAS_PYICEBERG:
+        msg = "PyIceberg is required for pyiceberg_to_pandas"
+        raise ImportError(msg)
+
     df = table.scan().to_arrow().to_pandas()
     if sort_by is not None:
         if isinstance(sort_by, (list, tuple)):

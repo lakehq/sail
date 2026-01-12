@@ -1,0 +1,459 @@
+# serializer version: 1
+---
+name: "test_bucket_transform_creates_consistent_partitions"
+data:
+  current-schema-id: 0
+  current-snapshot-id: <snapshot-id>
+  default-spec-id: 0
+  format-version: 2
+  last-column-id: 3
+  last-partition-id: 0
+  last-sequence-number: 1
+  last-updated-ms: <timestamp>
+  location: file://<root>/iceberg_bucket_transform/
+  metadata-log: []
+  partition-specs:
+  - fields: []
+    spec-id: 0
+  properties: {}
+  refs:
+    main:
+      snapshot-id: <snapshot-id>
+      type: branch
+  schemas:
+  - fields:
+    - id: 1
+      name: id
+      required: false
+      type: int
+    - id: 2
+      name: user_id
+      required: false
+      type: long
+    - id: 3
+      name: action
+      required: false
+      type: string
+    schema-id: 0
+    type: struct
+  snapshot-log:
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  snapshots:
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    schema-id: 0
+    sequence-number: 1
+    snapshot-id: <snapshot-id>
+    summary:
+      operation: append
+    timestamp-ms: <timestamp>
+  table-uuid: <uuid>
+---
+name: "test_combined_year_and_category_partitioning"
+data:
+  current-schema-id: 0
+  current-snapshot-id: <snapshot-id>
+  default-spec-id: 0
+  format-version: 2
+  last-column-id: 4
+  last-partition-id: 1001
+  last-sequence-number: 1
+  last-updated-ms: <timestamp>
+  location: file://<root>/iceberg_multi_transform/
+  metadata-log: []
+  partition-specs:
+  - fields:
+    - field-id: 1000
+      name: event_date_year
+      source-id: 2
+      transform: year
+    - field-id: 1001
+      name: category
+      source-id: 3
+      transform: identity
+    spec-id: 0
+  properties: {}
+  refs:
+    main:
+      snapshot-id: <snapshot-id>
+      type: branch
+  schemas:
+  - fields:
+    - id: 1
+      name: id
+      required: false
+      type: int
+    - id: 2
+      name: event_date
+      required: false
+      type: date
+    - id: 3
+      name: category
+      required: false
+      type: string
+    - id: 4
+      name: value
+      required: false
+      type: double
+    schema-id: 0
+    type: struct
+  snapshot-log:
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  snapshots:
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    schema-id: 0
+    sequence-number: 1
+    snapshot-id: <snapshot-id>
+    summary:
+      operation: append
+    timestamp-ms: <timestamp>
+  table-uuid: <uuid>
+---
+name: "test_combined_year_and_category_partitioning.1"
+data:
+  default-spec-id: 0
+  partition-specs:
+  - fields:
+    - field-id: 1000
+      name: event_date_year
+      source-id: 2
+      transform: year
+    - field-id: 1001
+      name: category
+      source-id: 3
+      transform: identity
+    spec-id: 0
+---
+name: "test_day_transform_partitions_by_full_date"
+data:
+  current-schema-id: 0
+  current-snapshot-id: <snapshot-id>
+  default-spec-id: 0
+  format-version: 2
+  last-column-id: 3
+  last-partition-id: 1000
+  last-sequence-number: 1
+  last-updated-ms: <timestamp>
+  location: file://<root>/iceberg_date_transform/
+  metadata-log: []
+  partition-specs:
+  - fields:
+    - field-id: 1000
+      name: event_date_day
+      source-id: 2
+      transform: day
+    spec-id: 0
+  properties: {}
+  refs:
+    main:
+      snapshot-id: <snapshot-id>
+      type: branch
+  schemas:
+  - fields:
+    - id: 1
+      name: id
+      required: false
+      type: int
+    - id: 2
+      name: event_date
+      required: false
+      type: date
+    - id: 3
+      name: metric
+      required: false
+      type: int
+    schema-id: 0
+    type: struct
+  snapshot-log:
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  snapshots:
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    schema-id: 0
+    sequence-number: 1
+    snapshot-id: <snapshot-id>
+    summary:
+      operation: append
+    timestamp-ms: <timestamp>
+  table-uuid: <uuid>
+---
+name: "test_evolve_from_unpartitioned_to_partitioned"
+data:
+  current-schema-id: 0
+  current-snapshot-id: <snapshot-id>
+  default-spec-id: 0
+  format-version: 2
+  last-column-id: 3
+  last-partition-id: 0
+  last-sequence-number: 2
+  last-updated-ms: <timestamp>
+  location: file://<root>/iceberg_partition_evolution/
+  metadata-log:
+  - metadata-file: <tmp>/iceberg_partition_evolution/metadata/<version>-<uuid>.metadata.json
+    timestamp-ms: <timestamp>
+  partition-specs:
+  - fields: []
+    spec-id: 0
+  properties: {}
+  refs:
+    main:
+      snapshot-id: <snapshot-id>
+      type: branch
+  schemas:
+  - fields:
+    - id: 1
+      name: id
+      required: false
+      type: int
+    - id: 2
+      name: event_date
+      required: false
+      type: date
+    - id: 3
+      name: data
+      required: false
+      type: string
+    schema-id: 0
+    type: struct
+  snapshot-log:
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  snapshots:
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    schema-id: 0
+    sequence-number: 1
+    snapshot-id: <snapshot-id>
+    summary:
+      operation: append
+    timestamp-ms: <timestamp>
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    parent-snapshot-id: <parent-snapshot-id>
+    schema-id: 0
+    sequence-number: 2
+    snapshot-id: <snapshot-id>
+    summary:
+      operation: append
+    timestamp-ms: <timestamp>
+  table-uuid: <uuid>
+---
+name: "test_hour_transform_partitions_by_hour"
+data:
+  current-schema-id: 0
+  current-snapshot-id: <snapshot-id>
+  default-spec-id: 0
+  format-version: 2
+  last-column-id: 3
+  last-partition-id: 1000
+  last-sequence-number: 1
+  last-updated-ms: <timestamp>
+  location: file://<root>/iceberg_timestamp_transform/
+  metadata-log: []
+  partition-specs:
+  - fields:
+    - field-id: 1000
+      name: event_time_hour
+      source-id: 2
+      transform: hour
+    spec-id: 0
+  properties: {}
+  refs:
+    main:
+      snapshot-id: <snapshot-id>
+      type: branch
+  schemas:
+  - fields:
+    - id: 1
+      name: id
+      required: false
+      type: int
+    - id: 2
+      name: event_time
+      required: false
+      type: timestamptz
+    - id: 3
+      name: event_name
+      required: false
+      type: string
+    schema-id: 0
+    type: struct
+  snapshot-log:
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  snapshots:
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    schema-id: 0
+    sequence-number: 1
+    snapshot-id: <snapshot-id>
+    summary:
+      operation: append
+    timestamp-ms: <timestamp>
+  table-uuid: <uuid>
+---
+name: "test_month_transform_partitions_by_year_and_month"
+data:
+  current-schema-id: 0
+  current-snapshot-id: <snapshot-id>
+  default-spec-id: 0
+  format-version: 2
+  last-column-id: 3
+  last-partition-id: 1000
+  last-sequence-number: 1
+  last-updated-ms: <timestamp>
+  location: file://<root>/iceberg_date_transform/
+  metadata-log: []
+  partition-specs:
+  - fields:
+    - field-id: 1000
+      name: created_at_month
+      source-id: 2
+      transform: month
+    spec-id: 0
+  properties: {}
+  refs:
+    main:
+      snapshot-id: <snapshot-id>
+      type: branch
+  schemas:
+  - fields:
+    - id: 1
+      name: id
+      required: false
+      type: int
+    - id: 2
+      name: created_at
+      required: false
+      type: date
+    - id: 3
+      name: status
+      required: false
+      type: string
+    schema-id: 0
+    type: struct
+  snapshot-log:
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  snapshots:
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    schema-id: 0
+    sequence-number: 1
+    snapshot-id: <snapshot-id>
+    summary:
+      operation: append
+    timestamp-ms: <timestamp>
+  table-uuid: <uuid>
+---
+name: "test_month_transform_partitions_by_year_and_month.1"
+data:
+  operation: append
+---
+name: "test_truncate_on_string_column_groups_similar_values"
+data:
+  current-schema-id: 0
+  current-snapshot-id: <snapshot-id>
+  default-spec-id: 0
+  format-version: 2
+  last-column-id: 3
+  last-partition-id: 0
+  last-sequence-number: 1
+  last-updated-ms: <timestamp>
+  location: file://<root>/iceberg_truncate_transform/
+  metadata-log: []
+  partition-specs:
+  - fields: []
+    spec-id: 0
+  properties: {}
+  refs:
+    main:
+      snapshot-id: <snapshot-id>
+      type: branch
+  schemas:
+  - fields:
+    - id: 1
+      name: id
+      required: false
+      type: int
+    - id: 2
+      name: code
+      required: false
+      type: string
+    - id: 3
+      name: value
+      required: false
+      type: double
+    schema-id: 0
+    type: struct
+  snapshot-log:
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  snapshots:
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    schema-id: 0
+    sequence-number: 1
+    snapshot-id: <snapshot-id>
+    summary:
+      operation: append
+    timestamp-ms: <timestamp>
+  table-uuid: <uuid>
+---
+name: "test_truncate_on_string_column_groups_similar_values.1"
+data:
+  default-spec-id: 0
+  partition-specs:
+  - fields: []
+    spec-id: 0
+---
+name: "test_year_transform_partitions_by_year"
+data:
+  current-schema-id: 0
+  current-snapshot-id: <snapshot-id>
+  default-spec-id: 0
+  format-version: 2
+  last-column-id: 3
+  last-partition-id: 1000
+  last-sequence-number: 1
+  last-updated-ms: <timestamp>
+  location: file://<root>/iceberg_date_transform/
+  metadata-log: []
+  partition-specs:
+  - fields:
+    - field-id: 1000
+      name: event_date_year
+      source-id: 2
+      transform: year
+    spec-id: 0
+  properties: {}
+  refs:
+    main:
+      snapshot-id: <snapshot-id>
+      type: branch
+  schemas:
+  - fields:
+    - id: 1
+      name: id
+      required: false
+      type: int
+    - id: 2
+      name: event_date
+      required: false
+      type: date
+    - id: 3
+      name: event_type
+      required: false
+      type: string
+    schema-id: 0
+    type: struct
+  snapshot-log:
+  - snapshot-id: <snapshot-id>
+    timestamp-ms: <timestamp>
+  snapshots:
+  - manifest-list: file://<root>/metadata/snap-<id>.avro
+    schema-id: 0
+    sequence-number: 1
+    snapshot-id: <snapshot-id>
+    summary:
+      operation: append
+    timestamp-ms: <timestamp>
+  table-uuid: <uuid>

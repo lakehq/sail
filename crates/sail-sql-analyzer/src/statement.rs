@@ -14,10 +14,10 @@ use sail_sql_parser::ast::statement::{
     ColumnTypeDefinition, CommentValue, CreateDatabaseClause, CreateTableClause, CreateViewClause,
     DeleteTableAlias, DescribeItem, ExplainFormat, FileFormat, InsertDirectoryDestination,
     MergeMatchClause, MergeMatchedAction, MergeNotMatchedBySourceAction,
-    MergeNotMatchedByTargetAction, MergeSource, PartitionClause, PartitionColumn,
-    PartitionColumnList, PartitionValue, PartitionValueList, PropertyKey, PropertyKeyValue,
-    PropertyList, PropertyValue, RowFormat, RowFormatDelimitedClause, SetClause, SortColumn,
-    SortColumnList, Statement, UpdateTableAlias, ViewColumn,
+    MergeNotMatchedByTargetAction, MergeSource, PartitionByItem, PartitionByList, PartitionClause,
+    PartitionValue, PartitionValueList, PropertyKey, PropertyKeyValue, PropertyList, PropertyValue,
+    RowFormat, RowFormatDelimitedClause, SetClause, SortColumn, SortColumnList, Statement,
+    UpdateTableAlias, ViewColumn,
 };
 use sail_sql_parser::tree::TreeText;
 
@@ -1122,9 +1122,10 @@ fn from_ast_table_definition(
         .into_iter()
         .flatten()
         .map(|x| match x {
-            PartitionColumn::Typed(ColumnTypeDefinition { name, .. }) => name.value.into(),
-            PartitionColumn::Name(x) => x.value.into(),
+            PartitionByItem::ColumnDefinition(ColumnTypeDefinition { name, .. }) => name.value,
+            PartitionByItem::Expression(expr) => expr.text().trim().to_string(),
         })
+        .map(Into::into)
         .collect();
     let (sort_by, bucket_by) = if let Some(bucket_by) = bucket_by {
         let CreateTableBucketBy {
@@ -1430,7 +1431,7 @@ struct CreateTableBucketBy {
 
 #[derive(Default)]
 struct CreateTableClauses {
-    partition_by: Option<Vec<PartitionColumn>>,
+    partition_by: Option<Vec<PartitionByItem>>,
     bucket_by: Option<CreateTableBucketBy>,
     cluster_by: Option<Vec<ObjectName>>,
     row_format: Option<RowFormat>,
@@ -1451,7 +1452,7 @@ impl TryFrom<Vec<CreateTableClause>> for CreateTableClauses {
                 CreateTableClause::PartitionedBy(
                     _,
                     _,
-                    PartitionColumnList {
+                    PartitionByList {
                         left: _,
                         columns,
                         right: _,

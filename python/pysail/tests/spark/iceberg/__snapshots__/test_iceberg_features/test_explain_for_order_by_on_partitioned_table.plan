@@ -1,0 +1,6 @@
+== Physical Plan ==
+ProjectionExec: expr=[#3@0 as id, #4@1 as name, #5@2 as partition_col]
+  SortPreservingMergeExec: [#5@2 ASC, #3@0 ASC]
+    SortExec: expr=[#5@2 ASC, #3@0 ASC], preserve_partitioning=[true]
+      ProjectionExec: expr=[id@0 as #3, name@1 as #4, partition_col@2 as #5]
+        DataSourceExec: file_groups={2 groups: [[<tmp>/iceberg_explain_sort/data/partition_col=1/part-<uuid>-00000000000000000000.parquet], [<tmp>/iceberg_explain_sort/data/partition_col=2/part-<uuid>-00000000000000000001.parquet]]}, projection=[id, name, partition_col], file_type=parquet

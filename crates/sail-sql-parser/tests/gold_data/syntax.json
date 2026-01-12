@@ -1536,7 +1536,7 @@
                         "nonTerminal": "Keyword(By)"
                       },
                       {
-                        "nonTerminal": "PartitionColumnList"
+                        "nonTerminal": "PartitionByList"
                       }
                     ]
                   },
@@ -7529,20 +7529,7 @@
               }
             },
             {
-              "name": "PartitionClause",
-              "node": {
-                "sequence": [
-                  {
-                    "nonTerminal": "Keyword(Partition)"
-                  },
-                  {
-                    "nonTerminal": "PartitionValueList"
-                  }
-                ]
-              }
-            },
-            {
-              "name": "PartitionColumn",
+              "name": "PartitionByItem",
               "node": {
                 "choice": [
                   {
@@ -7555,7 +7542,7 @@
                   {
                     "sequence": [
                       {
-                        "nonTerminal": "Identifier"
+                        "nonTerminal": "Expression"
                       }
                     ]
                   }
@@ -7563,17 +7550,30 @@
               }
             },
             {
-              "name": "PartitionColumnList",
+              "name": "PartitionByList",
               "node": {
                 "sequence": [
                   {
                     "nonTerminal": "Operator(LeftParenthesis)"
                   },
                   {
-                    "nonTerminal": "Sequence(PartitionColumn, Operator(Comma))"
+                    "nonTerminal": "Sequence(PartitionByItem, Operator(Comma))"
                   },
                   {
                     "nonTerminal": "Operator(RightParenthesis)"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "PartitionClause",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Keyword(Partition)"
+                  },
+                  {
+                    "nonTerminal": "PartitionValueList"
                   }
                 ]
               }
@@ -8398,11 +8398,11 @@
               }
             },
             {
-              "name": "Sequence(PartitionColumn, Operator(Comma))",
+              "name": "Sequence(PartitionByItem, Operator(Comma))",
               "node": {
                 "sequence": [
                   {
-                    "nonTerminal": "PartitionColumn"
+                    "nonTerminal": "PartitionByItem"
                   },
                   {
                     "oneOrMore": {
@@ -8411,7 +8411,7 @@
                           "nonTerminal": "Operator(Comma)"
                         },
                         {
-                          "nonTerminal": "PartitionColumn"
+                          "nonTerminal": "PartitionByItem"
                         }
                       ]
                     }

@@ -38,6 +38,11 @@ class PathWrapper:
         """The corresponding SQL string literal for the path."""
         return f"'{escape_sql_string_literal(str(self.path))}'"
 
+    @property
+    def uri(self):
+        """The file URI representation of the path."""
+        return f"'file://{self.path}'"
+
 
 @given(parsers.parse("variable {name} for temporary directory {directory}"), target_fixture="variables")
 def variable_for_temporary_directory(name, directory, tmp_path, variables):

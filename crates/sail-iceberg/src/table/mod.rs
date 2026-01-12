@@ -98,6 +98,7 @@ impl Table {
             schema,
             snapshot,
             partition_specs,
+            self.metadata.default_spec_id,
         )
     }
 
