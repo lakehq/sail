@@ -4,24 +4,24 @@
   type: Gauge
   value_type: u64
   attributes:
-    - job.id
-    - task.id
-    - task.attempt
-    - operator.id
-    - operator.name
-    - partition
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
 
 - name: execution.output_row_count
   description: The total number of output rows.
   type: Gauge
   value_type: u64
   attributes:
-    - job.id
-    - task.id
-    - task.attempt
-    - operator.id
-    - operator.name
-    - partition
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
 
 - name: execution.elapsed_compute_time
   description: The total elapsed compute time.
@@ -29,24 +29,24 @@
   type: Gauge
   value_type: f64
   attributes:
-    - job.id
-    - task.id
-    - task.attempt
-    - operator.id
-    - operator.name
-    - partition
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
 
 - name: execution.spill_count
   description: The total number of spills to disk.
   type: Gauge
   value_type: u64
   attributes:
-    - job.id
-    - task.id
-    - task.attempt
-    - operator.id
-    - operator.name
-    - partition
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
 
 - name: execution.spill_size
   description: The total size of spills to disk.
@@ -54,24 +54,24 @@
   type: Gauge
   value_type: u64
   attributes:
-    - job.id
-    - task.id
-    - task.attempt
-    - operator.id
-    - operator.name
-    - partition
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
 
 - name: execution.spill_row_count
   description: The total number of rows for all spills to disk.
   type: Gauge
   value_type: u64
   attributes:
-    - job.id
-    - task.id
-    - task.attempt
-    - operator.id
-    - operator.name
-    - partition
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
 
 - name: execution.memory_used
   description: The amount of memory used.
@@ -79,12 +79,12 @@
   type: Gauge
   value_type: u64
   attributes:
-    - job.id
-    - task.id
-    - task.attempt
-    - operator.id
-    - operator.name
-    - partition
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
 
 - name: execution.filter.input_row_count
   description: |
@@ -93,12 +93,12 @@
   type: Gauge
   value_type: u64
   attributes:
-    - job.id
-    - task.id
-    - task.attempt
-    - operator.id
-    - operator.name
-    - partition
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
 
 - name: execution.filter.output_row_count
   description: |
@@ -107,12 +107,12 @@
   type: Gauge
   value_type: u64
   attributes:
-    - job.id
-    - task.id
-    - task.attempt
-    - operator.id
-    - operator.name
-    - partition
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
 
 - name: execution.join.build_side_time
   description: The time taken to collect the build side of a build-probe join.
@@ -120,36 +120,36 @@
   type: Gauge
   value_type: f64
   attributes:
-    - job.id
-    - task.id
-    - task.attempt
-    - operator.id
-    - operator.name
-    - partition
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
 
 - name: execution.join.build_side_batch_count
   description: The number of batches in the build side of a build-probe join.
   type: Gauge
   value_type: u64
   attributes:
-    - job.id
-    - task.id
-    - task.attempt
-    - operator.id
-    - operator.name
-    - partition
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
 
 - name: execution.join.build_side_row_count
   description: The number of rows in the build side of a build-probe join.
   type: Gauge
   value_type: u64
   attributes:
-    - job.id
-    - task.id
-    - task.attempt
-    - operator.id
-    - operator.name
-    - partition
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
 
 - name: execution.join.build_side_memory_used
   description: The amount of memory used by the build side of a build-probe join.
@@ -157,36 +157,36 @@
   type: Gauge
   value_type: u64
   attributes:
-    - job.id
-    - task.id
-    - task.attempt
-    - operator.id
-    - operator.name
-    - partition
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
 
 - name: execution.join.probe_side_batch_count
   description: The number of batches in the probe side of a build-probe join.
   type: Gauge
   value_type: u64
   attributes:
-    - job.id
-    - task.id
-    - task.attempt
-    - operator.id
-    - operator.name
-    - partition
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
 
 - name: execution.join.probe_side_row_count
   description: The number of rows in the probe side of a build-probe join.
   type: Gauge
   value_type: u64
   attributes:
-    - job.id
-    - task.id
-    - task.attempt
-    - operator.id
-    - operator.name
-    - partition
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
 
 - name: execution.join.operation_time
   description: The time taken to perform the join operation.
@@ -194,24 +194,24 @@
   type: Gauge
   value_type: f64
   attributes:
-    - job.id
-    - task.id
-    - task.attempt
-    - operator.id
-    - operator.name
-    - partition
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
 
 - name: execution.join.output_batch_count
   description: The number of output batches from the join operation.
   type: Gauge
   value_type: u64
   attributes:
-    - job.id
-    - task.id
-    - task.attempt
-    - operator.id
-    - operator.name
-    - partition
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
 
 - name: execution.join.output_row_count
   description: |
@@ -220,12 +220,12 @@
   type: Gauge
   value_type: u64
   attributes:
-    - job.id
-    - task.id
-    - task.attempt
-    - operator.id
-    - operator.name
-    - partition
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
 
 - name: execution.join.candidate_count
   description: |
@@ -235,12 +235,12 @@
   type: Gauge
   value_type: u64
   attributes:
-    - job.id
-    - task.id
-    - task.attempt
-    - operator.id
-    - operator.name
-    - partition
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
 
 - name: execution.join.input_batch_count
   description: |
@@ -249,12 +249,12 @@
   type: Gauge
   value_type: u64
   attributes:
-    - job.id
-    - task.id
-    - task.attempt
-    - operator.id
-    - operator.name
-    - partition
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
 
 - name: execution.join.input_row_count
   description: |
@@ -263,60 +263,60 @@
   type: Gauge
   value_type: u64
   attributes:
-    - job.id
-    - task.id
-    - task.attempt
-    - operator.id
-    - operator.name
-    - partition
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
 
 - name: execution.join.left_input_batch_count
   description: The number of batches in the left stream of a stream join.
   type: Gauge
   value_type: u64
   attributes:
-    - job.id
-    - task.id
-    - task.attempt
-    - operator.id
-    - operator.name
-    - partition
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
 
 - name: execution.join.left_input_row_count
   description: The number of rows in the left stream of a stream join.
   type: Gauge
   value_type: u64
   attributes:
-    - job.id
-    - task.id
-    - task.attempt
-    - operator.id
-    - operator.name
-    - partition
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
 
 - name: execution.join.right_input_batch_count
   description: The number of batches in the right stream of a stream join.
   type: Gauge
   value_type: u64
   attributes:
-    - job.id
-    - task.id
-    - task.attempt
-    - operator.id
-    - operator.name
-    - partition
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
 
 - name: execution.join.right_input_row_count
   description: The number of rows in the right stream of a stream join.
   type: Gauge
   value_type: u64
   attributes:
-    - job.id
-    - task.id
-    - task.attempt
-    - operator.id
-    - operator.name
-    - partition
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
 
 - name: execution.join.memory_used
   description: |
@@ -326,24 +326,24 @@
   type: Gauge
   value_type: u64
   attributes:
-    - job.id
-    - task.id
-    - task.attempt
-    - operator.id
-    - operator.name
-    - partition
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
 
 - name: execution.unknown_metric_count
   description: The number of unknown DataFusion metrics reported during execution.
   type: Counter
   value_type: u64
   attributes:
-    - job.id
-    - task.id
-    - task.attempt
-    - operator.id
-    - operator.name
-    - partition
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
   debug: true
 
 - name: execution.unknown_metric_label_count
@@ -351,10 +351,10 @@
   type: Counter
   value_type: u64
   attributes:
-    - job.id
-    - task.id
-    - task.attempt
-    - operator.id
-    - operator.name
-    - partition
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
   debug: true

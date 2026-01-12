@@ -1,120 +1,245 @@
-use std::sync::Arc;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use std::{fmt, mem};
 
 use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::datatypes::Schema;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result};
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-use futures::StreamExt;
-use log::error;
+use futures::stream::SelectAll;
+use futures::{Stream, StreamExt};
 use sail_common_datafusion::error::CommonErrorCause;
-use sail_server::actor::{ActorContext, ActorHandle};
-use tokio::sync::{mpsc, oneshot};
+use sail_server::actor::ActorContext;
+use tokio::sync::mpsc;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 
 use crate::driver::{DriverActor, DriverEvent};
-use crate::error::ExecutionResult;
-use crate::id::JobId;
-use crate::stream::error::TaskStreamError;
+use crate::id::{JobId, TaskStreamKey, TaskStreamKeyDisplay};
+use crate::stream::error::{TaskStreamError, TaskStreamResult};
+use crate::stream::reader::TaskStreamSource;
 
-pub enum JobOutput {
-    Pending {
-        result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
+pub struct JobOutputHandle {
+    sender: mpsc::Sender<JobOutputItem>,
+}
+
+impl fmt::Debug for JobOutputHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("JobOutputHandle").finish()
+    }
+}
+
+impl JobOutputHandle {
+    pub async fn send(self, item: JobOutputItem) {
+        // We ignore the error here because it indicates that the job output
+        // consumer has been dropped.
+        let _ = self.sender.send(item).await;
+    }
+}
+
+pub struct JobOutputManager {
+    sender: mpsc::Sender<JobOutputItem>,
+}
+
+impl JobOutputManager {
+    pub fn handle(&self) -> JobOutputHandle {
+        JobOutputHandle {
+            sender: self.sender.clone(),
+        }
+    }
+}
+
+pub enum JobOutputItem {
+    Stream {
+        key: TaskStreamKey,
+        stream: TaskStreamSource,
     },
-    Running {
-        signal: oneshot::Sender<CommonErrorCause>,
+    Error {
+        cause: CommonErrorCause,
     },
 }
 
-impl JobOutput {
-    pub fn run(
-        ctx: &mut ActorContext<DriverActor>,
-        job_id: JobId,
-        stream: SendableRecordBatchStream,
-        sender: mpsc::Sender<Result<RecordBatch>>,
-    ) -> Self {
-        let (tx, rx) = oneshot::channel();
-        let handle = ctx.handle().clone();
-        ctx.spawn(Self::output(handle, job_id, stream, rx, sender));
-        JobOutput::Running { signal: tx }
-    }
+impl JobOutputItem {
+    const CHANNEL_SIZE: usize = 32;
+}
 
-    async fn output(
-        handle: ActorHandle<DriverActor>,
-        job_id: JobId,
-        stream: SendableRecordBatchStream,
-        signal: oneshot::Receiver<CommonErrorCause>,
-        sender: mpsc::Sender<Result<RecordBatch>>,
-    ) {
-        // If the task fails, the consumer of the job output will receive an error
-        // from either the stream ("data plane") or the stop signal ("control plane").
-        // We cannot guarantee which error will be received. Fortunately, the error
-        // will appear to be the same to the consumer, since they are standardized
-        // via `CommonErrorCause`.
-        tokio::select! {
-            _ = Self::read(stream, sender.clone()) => {},
-            _ = Self::stop(signal, sender) => {},
+struct JobOutputStream {
+    state: JobOutputState,
+}
+
+impl JobOutputStream {
+    fn new(receiver: mpsc::Receiver<JobOutputItem>) -> Self {
+        Self {
+            state: JobOutputState::Active {
+                receiver,
+                inner: Box::pin(SelectAll::new()),
+            },
         }
-        Self::finalize(handle, job_id).await;
     }
+}
 
-    async fn read(
-        mut stream: SendableRecordBatchStream,
-        sender: mpsc::Sender<Result<RecordBatch>>,
-    ) {
+pub fn build_job_output(
+    ctx: &mut ActorContext<DriverActor>,
+    job_id: JobId,
+    schema: SchemaRef,
+) -> (JobOutputManager, SendableRecordBatchStream) {
+    let (sender, receiver) = mpsc::channel(JobOutputItem::CHANNEL_SIZE);
+    let (tx, rx) = mpsc::channel(1);
+    let stream = JobOutputStream::new(receiver);
+    let handle = ctx.handle().clone();
+    ctx.spawn(async move {
+        let mut stream = stream;
         while let Some(batch) = stream.next().await {
-            if let Err(e) = sender.send(batch).await {
-                error!("failed to send job output record batch: {e}");
+            if tx.send(batch).await.is_err() {
                 break;
             }
         }
-    }
+        let _ = handle.send(DriverEvent::CleanUpJob { job_id }).await;
+    });
+    (
+        JobOutputManager { sender },
+        Box::pin(RecordBatchStreamAdapter::new(
+            schema,
+            ReceiverStream::new(rx),
+        )),
+    )
+}
 
-    async fn finalize(handle: ActorHandle<DriverActor>, job_id: JobId) {
-        if let Err(e) = handle.send(DriverEvent::CleanUpJob { job_id }).await {
-            error!("failed to clean up job: {e}");
+enum JobOutputState {
+    Active {
+        receiver: mpsc::Receiver<JobOutputItem>,
+        inner: Pin<Box<SelectAll<TaskStreamWrapper>>>,
+    },
+    Draining {
+        inner: Pin<Box<SelectAll<TaskStreamWrapper>>>,
+    },
+    Modifying,
+    Completed,
+    Failed,
+}
+
+// If the task fails, the consumer of the job output will receive an error
+// from either the stream ("data plane") or the fail action ("control plane").
+// We cannot guarantee which error will be received. Fortunately, the error
+// will appear to be the same to the consumer, since they are standardized
+// via `CommonErrorCause`.
+
+impl Stream for JobOutputStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let state = mem::replace(&mut self.state, JobOutputState::Modifying);
+        match state {
+            JobOutputState::Active {
+                mut receiver,
+                mut inner,
+            } => match receiver.poll_recv(cx) {
+                Poll::Pending => {
+                    self.state = JobOutputState::Active { receiver, inner };
+                }
+                Poll::Ready(Some(JobOutputItem::Error { cause })) => {
+                    self.state = JobOutputState::Failed;
+                    return Poll::Ready(Some(Err(DataFusionError::External(Box::new(
+                        TaskStreamError::from(cause),
+                    )))));
+                }
+                Poll::Ready(Some(JobOutputItem::Stream { key, stream })) => {
+                    if inner.iter().any(|s| s.conflicts_with(&key)) {
+                        self.state = JobOutputState::Failed;
+                        return Poll::Ready(Some(Err(DataFusionError::External(Box::new(
+                            TaskStreamError::Unknown(format!(
+                                "cannot add stream for {}: a different attempt has already produced job output",
+                                TaskStreamKeyDisplay(&key)
+                            )),
+                        )))));
+                    }
+                    inner.iter_mut().for_each(|s| s.mute_if_needed(&key));
+                    inner.push(TaskStreamWrapper::new(key, stream));
+                    self.state = JobOutputState::Active { receiver, inner };
+                }
+                Poll::Ready(None) => {
+                    self.state = JobOutputState::Draining { inner };
+                }
+            },
+            _ => {
+                self.state = state;
+            }
+        }
+        match &mut self.state {
+            JobOutputState::Active { inner, receiver: _ } => {
+                match inner.as_mut().poll_next(cx) {
+                    Poll::Pending => Poll::Pending,
+                    Poll::Ready(None) => {
+                        // We return pending even if all the existing streams are done,
+                        // because new streams may still be added.
+                        Poll::Pending
+                    }
+                    Poll::Ready(Some(result)) => Poll::Ready(Some(
+                        result.map_err(|e| DataFusionError::External(Box::new(e))),
+                    )),
+                }
+            }
+            JobOutputState::Modifying => Poll::Pending,
+            JobOutputState::Draining { inner } => match inner.as_mut().poll_next(cx) {
+                Poll::Pending => Poll::Pending,
+                Poll::Ready(None) => {
+                    self.state = JobOutputState::Completed;
+                    Poll::Ready(None)
+                }
+                Poll::Ready(Some(result)) => Poll::Ready(Some(
+                    result.map_err(|e| DataFusionError::External(Box::new(e))),
+                )),
+            },
+            JobOutputState::Completed | JobOutputState::Failed => Poll::Ready(None),
+        }
+    }
+}
+
+struct TaskStreamWrapper {
+    key: TaskStreamKey,
+    inner: Option<TaskStreamSource>,
+    count: usize,
+}
+
+impl TaskStreamWrapper {
+    fn new(key: TaskStreamKey, inner: TaskStreamSource) -> Self {
+        Self {
+            key,
+            inner: Some(inner),
+            count: 0,
         }
     }
 
-    async fn stop(
-        signal: oneshot::Receiver<CommonErrorCause>,
-        sender: mpsc::Sender<Result<RecordBatch>>,
-    ) {
-        if let Ok(cause) = signal.await {
-            let error = DataFusionError::External(Box::new(TaskStreamError::from(cause)));
-            if let Err(e) = sender.send(Err(error)).await {
-                error!("failed to send job output stop signal: {e}");
-            }
-        }
+    fn conflicts_with(&self, key: &TaskStreamKey) -> bool {
+        self.key.job_id == key.job_id
+            && self.key.stage == key.stage
+            && self.key.partition == key.partition
+            && self.key.channel == key.channel
+            && self.count > 0
     }
 
-    pub fn fail(self, ctx: &mut ActorContext<DriverActor>, job_id: JobId, cause: CommonErrorCause) {
-        match self {
-            JobOutput::Pending { result } => {
-                // The job output can be pending when this function is called.
-                // This happens when the task "running" and "failed" events are received
-                // out of order. In this case, the stale "running" event is ignored,
-                // and the job output never transitions to the running state.
-                // So we create a data stream here and send the error to the job output consumer.
-                let (tx, rx) = mpsc::channel(1);
-                let stream = Box::pin(RecordBatchStreamAdapter::new(
-                    Arc::new(Schema::empty()),
-                    ReceiverStream::new(rx),
-                ));
-                let handle = ctx.handle().clone();
-                ctx.spawn(async move {
-                    let _ = tx
-                        .send(Err(DataFusionError::External(Box::new(
-                            TaskStreamError::from(cause),
-                        ))))
-                        .await;
-                    let _ = result.send(Ok(stream));
-                    Self::finalize(handle, job_id).await;
-                });
-            }
-            JobOutput::Running { signal } => {
-                let _ = signal.send(cause);
-            }
+    fn mute_if_needed(&mut self, key: &TaskStreamKey) {
+        if self.key.job_id == key.job_id
+            && self.key.stage == key.stage
+            && self.key.partition == key.partition
+            && self.key.channel == key.channel
+        {
+            self.inner = None;
         }
+    }
+}
+
+impl Stream for TaskStreamWrapper {
+    type Item = TaskStreamResult<RecordBatch>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let Some(inner) = &mut self.inner else {
+            return Poll::Ready(None);
+        };
+        let poll = inner.as_mut().poll_next(cx);
+        if let Poll::Ready(Some(Ok(ref batch))) = poll {
+            self.count += batch.num_rows();
+        }
+        poll
     }
 }

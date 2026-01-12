@@ -1,54 +1,57 @@
-use std::fmt::{Debug, Display};
+use std::fmt;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result};
 use tokio::sync::mpsc;
 
-use crate::stream::channel::ChannelName;
+use crate::id::{TaskStreamKey, TaskStreamKeyDenseDisplay};
 use crate::stream::error::TaskStreamResult;
-
 #[derive(Debug, Clone)]
 pub enum TaskWriteLocation {
     Local {
-        channel: ChannelName,
         storage: LocalStreamStorage,
+        key: TaskStreamKey,
     },
     Remote {
         uri: String,
+        key: TaskStreamKey,
     },
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum LocalStreamStorage {
-    Ephemeral,
-    Memory,
+    Memory {
+        replicas: usize,
+    },
+    #[expect(unused)]
     Disk,
 }
 
-impl Display for TaskWriteLocation {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl fmt::Display for TaskWriteLocation {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            TaskWriteLocation::Local { channel, storage } => {
-                write!(f, "Local({channel}, {storage})")
+            TaskWriteLocation::Local { key, storage } => {
+                write!(f, "Local({storage}, {})", TaskStreamKeyDenseDisplay(key))
             }
-            TaskWriteLocation::Remote { uri } => write!(f, "Remote({uri})"),
+            TaskWriteLocation::Remote { uri, key } => {
+                write!(f, "Remote({uri}, {})", TaskStreamKeyDenseDisplay(key))
+            }
         }
     }
 }
 
-impl Display for LocalStreamStorage {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl fmt::Display for LocalStreamStorage {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::Ephemeral => write!(f, "Ephemeral"),
-            Self::Memory => write!(f, "Memory"),
+            Self::Memory { replicas } => write!(f, "Memory({replicas})"),
             Self::Disk => write!(f, "Disk"),
         }
     }
 }
 
 #[tonic::async_trait]
-pub trait TaskStreamWriter: Debug + Send + Sync {
+pub trait TaskStreamWriter: fmt::Debug + Send + Sync {
     async fn open(
         &self,
         location: &TaskWriteLocation,

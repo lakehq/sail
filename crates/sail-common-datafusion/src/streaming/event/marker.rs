@@ -1,6 +1,5 @@
 use chrono::{DateTime, Utc};
-use datafusion_common::{internal_datafusion_err, plan_datafusion_err, plan_err, Result};
-use prost::bytes::BytesMut;
+use datafusion_common::{plan_datafusion_err, plan_err, Result};
 use prost::Message;
 
 use crate::streaming::event::gen;
@@ -62,11 +61,7 @@ impl FlowMarker {
             FlowMarker::EndOfData => gen::flow_marker::Kind::EndOfData(gen::EndOfData {}),
         };
         let message = gen::FlowMarker { kind: Some(kind) };
-        let mut buffer = BytesMut::new();
-        message
-            .encode(&mut buffer)
-            .map_err(|e| internal_datafusion_err!("failed to encode marker: {e}"))?;
-        Ok(buffer.freeze().into())
+        Ok(message.encode_to_vec())
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self> {

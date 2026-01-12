@@ -16,7 +16,7 @@ use sail_common::config::{AppConfig, CacheType, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::session::{ActivityTracker, JobRunner, JobService};
 use sail_execution::driver::DriverOptions;
-use sail_execution::runner::{ClusterJobRunner, LocalJobRunner};
+use sail_execution::job_runner::{ClusterJobRunner, LocalJobRunner};
 use sail_execution::worker_manager::{
     KubernetesWorkerManager, KubernetesWorkerManagerOptions, LocalWorkerManager,
 };

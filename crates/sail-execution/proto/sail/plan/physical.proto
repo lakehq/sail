@@ -13,8 +13,9 @@ message ExtendedPhysicalPlanNode {
   oneof NodeKind {
     RangeExecNode range = 1;
     ShowStringExecNode show_string = 2;
-    ShuffleReadExecNode shuffle_read = 3;
-    ShuffleWriteExecNode shuffle_write = 4;
+    // We have removed shuffle read and write nodes.
+    StageInputExecNode stage_input = 3;
+    // TODO: update field number for all subsequent nodes
     SchemaPivotExecNode schema_pivot = 5;
     MapPartitionsExecNode map_partitions = 6;
     // TODO: This can be removed once it is supported by DataFusion.
@@ -229,6 +230,12 @@ enum ShowStringStyle {
   SHOW_STRING_STYLE_DEFAULT = 0;
   SHOW_STRING_STYLE_VERTICAL = 1;
   SHOW_STRING_STYLE_HTML = 2;
+}
+
+message StageInputExecNode {
+  uint64 input = 1;
+  bytes schema = 2;
+  bytes partitioning = 3;
 }
 
 message SchemaPivotExecNode {
@@ -452,72 +459,6 @@ message SortOptions {
 
 message PhysicalProjection {
   repeated uint64 columns = 1;
-}
-
-message ShuffleReadExecNode {
-  uint64 stage = 1;
-  bytes schema = 2;
-  bytes partitioning = 3;
-  repeated TaskReadLocationList locations = 4;
-}
-
-message TaskReadLocationList {
-  repeated TaskReadLocation locations = 1;
-}
-
-message TaskReadLocation {
-  oneof Location {
-    TaskReadLocationWorker worker = 1;
-    TaskReadLocationRemote remote = 2;
-  }
-}
-
-message TaskReadLocationWorker {
-  uint64 worker_id = 1;
-  string channel = 2;
-}
-
-message TaskReadLocationRemote {
-  string uri = 1;
-}
-
-message ShuffleWriteExecNode {
-  uint64 stage = 1;
-  bytes plan = 2;
-  bytes partitioning = 3;
-  ShuffleConsumption consumption = 4;
-  repeated TaskWriteLocationList locations = 5;
-}
-
-message TaskWriteLocationList {
-  repeated TaskWriteLocation locations = 1;
-}
-
-message TaskWriteLocation {
-  oneof Location {
-    TaskWriteLocationLocal local = 1;
-    TaskWriteLocationRemote remote = 2;
-  }
-}
-
-message TaskWriteLocationLocal {
-  string channel = 1;
-  LocalStreamStorage storage = 2;
-}
-
-message TaskWriteLocationRemote {
-  string uri = 1;
-}
-
-enum ShuffleConsumption {
-  SHUFFLE_CONSUMPTION_SINGLE = 0;
-  SHUFFLE_CONSUMPTION_MULTIPLE = 1;
-}
-
-enum LocalStreamStorage {
-  LOCAL_STREAM_STORAGE_EPHEMERAL = 0;
-  LOCAL_STREAM_STORAGE_MEMORY = 1;
-  LOCAL_STREAM_STORAGE_DISK = 2;
 }
 
 enum CompressionTypeVariant {

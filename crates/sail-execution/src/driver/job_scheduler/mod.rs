@@ -1,66 +1,58 @@
 mod core;
 mod options;
 mod state;
+mod topology;
 
-use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
-
-use datafusion::arrow::datatypes::Schema;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::arrow::datatypes::SchemaRef;
+use datafusion_proto::physical_plan::PhysicalExtensionCodec;
+use indexmap::IndexMap;
 pub use options::JobSchedulerOptions;
 use sail_common_datafusion::error::CommonErrorCause;
+pub use state::TaskState;
 
+use crate::codec::RemoteExecutionCodec;
 use crate::driver::job_scheduler::state::JobDescriptor;
-use crate::id::{IdGenerator, JobId, TaskInstance, WorkerId};
-use crate::stream::channel::ChannelName;
+use crate::driver::output::JobOutputHandle;
+use crate::id::{IdGenerator, JobId, TaskKey, TaskStreamKey};
+use crate::task::scheduling::TaskRegion;
 
 pub struct JobScheduler {
     options: JobSchedulerOptions,
-    jobs: HashMap<JobId, JobDescriptor>,
+    jobs: IndexMap<JobId, JobDescriptor>,
     job_id_generator: IdGenerator<JobId>,
-    /// The queue of tasks that need to be scheduled.
-    /// A task is enqueued after all its dependencies in the previous job stage.
-    task_queue: VecDeque<TaskInstance>,
+    codec: Box<dyn PhysicalExtensionCodec>,
 }
 
 impl JobScheduler {
     pub fn new(options: JobSchedulerOptions) -> Self {
         Self {
             options,
-            jobs: HashMap::new(),
+            jobs: IndexMap::new(),
             job_id_generator: IdGenerator::new(),
-            task_queue: VecDeque::new(),
+            codec: Box::new(RemoteExecutionCodec),
         }
     }
 }
 
-pub enum TaskTimeout {
-    Yes,
-    No,
-}
-
-pub struct TaskSchedule {
-    pub instance: TaskInstance,
-    pub worker_id: WorkerId,
-    pub plan: TaskSchedulePlan,
-    pub partition: usize,
-    pub channel: Option<ChannelName>,
-}
-
-pub enum TaskSchedulePlan {
-    Valid(Arc<dyn ExecutionPlan>),
-    Invalid {
-        message: String,
-        cause: Option<CommonErrorCause>,
+#[derive(Debug)]
+pub enum JobAction {
+    ScheduleTaskRegion {
+        region: TaskRegion,
     },
-}
-
-pub struct JobOutputMetadata {
-    pub schema: Arc<Schema>,
-    pub channels: Vec<JobOutputChannel>,
-}
-
-pub struct JobOutputChannel {
-    pub worker_id: WorkerId,
-    pub channel: ChannelName,
+    CancelTask {
+        key: TaskKey,
+    },
+    ExtendJobOutput {
+        handle: JobOutputHandle,
+        key: TaskStreamKey,
+        schema: SchemaRef,
+    },
+    FailJobOutput {
+        handle: JobOutputHandle,
+        cause: CommonErrorCause,
+    },
+    CleanUpJob {
+        job_id: JobId,
+        stage: Option<usize>,
+    },
 }

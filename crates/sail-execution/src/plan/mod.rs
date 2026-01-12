@@ -1,10 +1,12 @@
 mod shuffle_read;
 mod shuffle_write;
+mod stage_input;
 
 use std::fmt::Display;
 
 pub(crate) use shuffle_read::ShuffleReadExec;
 pub(crate) use shuffle_write::ShuffleWriteExec;
+pub(crate) use stage_input::StageInputExec;
 
 #[allow(clippy::all)]
 pub(crate) mod gen {
@@ -20,23 +22,24 @@ pub(crate) enum ShuffleConsumption {
     Multiple,
 }
 
-fn write_list_of_lists<T: Display>(
-    f: &mut std::fmt::Formatter,
-    data: &[Vec<T>],
-) -> std::fmt::Result {
-    write!(f, "[")?;
-    for (i, list) in data.iter().enumerate() {
-        if i > 0 {
-            write!(f, ", ")?;
-        }
+struct ListListDisplay<'a, T: Display>(pub &'a [Vec<T>]);
+
+impl<'a, T: Display> Display for ListListDisplay<'a, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "[")?;
-        for (j, item) in list.iter().enumerate() {
-            if j > 0 {
+        for (i, list) in self.0.iter().enumerate() {
+            if i > 0 {
                 write!(f, ", ")?;
             }
-            write!(f, "{item}")?;
+            write!(f, "[")?;
+            for (j, item) in list.iter().enumerate() {
+                if j > 0 {
+                    write!(f, ", ")?;
+                }
+                write!(f, "{item}")?;
+            }
+            write!(f, "]")?;
         }
-        write!(f, "]")?;
+        write!(f, "]")
     }
-    write!(f, "]")
 }

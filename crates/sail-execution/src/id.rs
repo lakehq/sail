@@ -1,7 +1,7 @@
+use std::fmt;
 use std::marker::PhantomData;
 
 use crate::error::{ExecutionError, ExecutionResult};
-
 pub trait IdValueType: Sized {
     fn first() -> Self;
     fn next(v: Self) -> ExecutionResult<Self>;
@@ -30,7 +30,7 @@ pub trait IdType: Sized {
 
 macro_rules! define_id_type {
     ($name:ident, $value_type:ty) => {
-        #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+        #[derive(Copy, Clone, Eq, PartialEq, Hash)]
         pub struct $name($value_type);
 
         impl IdType for $name {
@@ -49,6 +49,12 @@ macro_rules! define_id_type {
             }
         }
 
+        impl std::fmt::Debug for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}({})", stringify!($name), self.0)
+            }
+        }
+
         impl std::fmt::Display for $name {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 write!(f, "{}", self.0)
@@ -58,7 +64,6 @@ macro_rules! define_id_type {
 }
 
 define_id_type!(JobId, u64);
-define_id_type!(TaskId, u64);
 define_id_type!(WorkerId, u64);
 
 #[derive(Debug)]
@@ -85,9 +90,66 @@ where
     }
 }
 
-#[derive(Clone, Eq, Hash, PartialEq)]
-pub struct TaskInstance {
+#[derive(Debug, Clone, Eq, Hash, PartialEq)]
+pub struct TaskKey {
     pub job_id: JobId,
-    pub task_id: TaskId,
+    pub stage: usize,
+    pub partition: usize,
     pub attempt: usize,
+}
+
+pub struct TaskKeyDisplay<'a>(pub &'a TaskKey);
+
+impl fmt::Display for TaskKeyDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "job {} stage {} partition {} attempt {}",
+            self.0.job_id, self.0.stage, self.0.partition, self.0.attempt
+        )
+    }
+}
+
+#[derive(Debug, Clone, Eq, Hash, PartialEq)]
+pub struct TaskStreamKey {
+    pub job_id: JobId,
+    pub stage: usize,
+    pub partition: usize,
+    pub attempt: usize,
+    pub channel: usize,
+}
+
+pub struct TaskStreamKeyDisplay<'a>(pub &'a TaskStreamKey);
+
+impl fmt::Display for TaskStreamKeyDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "job {} stage {} partition {} attempt {} channel {}",
+            self.0.job_id, self.0.stage, self.0.partition, self.0.attempt, self.0.channel
+        )
+    }
+}
+
+pub struct TaskStreamKeyDenseDisplay<'a>(pub &'a TaskStreamKey);
+
+impl fmt::Display for TaskStreamKeyDenseDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}/{}/{}/{}/{}",
+            self.0.job_id, self.0.stage, self.0.partition, self.0.attempt, self.0.channel
+        )
+    }
+}
+
+impl From<TaskStreamKey> for TaskKey {
+    fn from(key: TaskStreamKey) -> Self {
+        Self {
+            job_id: key.job_id,
+            stage: key.stage,
+            partition: key.partition,
+            attempt: key.attempt,
+        }
+    }
 }
