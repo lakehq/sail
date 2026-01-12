@@ -294,7 +294,36 @@ fn gen_sequence_date(args: &[ArrayRef]) -> Result<ArrayRef> {
                     );
                 }
 
-                let negative = months < 0 || days < 0;
+                let negative = months < 0 || days < 0 || nanoseconds < 0;
+
+                // Validate step direction matches sequence direction
+                // For error message, show the non-zero component
+                let step_value = if months != 0 {
+                    months
+                } else if days != 0 {
+                    days
+                } else {
+                    // Convert nanoseconds to days for display
+                    (nanoseconds / nanos_per_day) as i32
+                };
+
+                if start < stop && negative {
+                    return exec_err!(
+                        "Illegal sequence boundaries: {} to {} by {}",
+                        start,
+                        stop,
+                        step_value
+                    );
+                }
+                if start > stop && !negative {
+                    return exec_err!(
+                        "Illegal sequence boundaries: {} to {} by {}",
+                        start,
+                        stop,
+                        step_value
+                    );
+                }
+
                 let mut new_date = start;
                 let values = from_fn(|| {
                     if (negative && new_date < stop) || (!negative && new_date > stop) {
