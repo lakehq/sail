@@ -29,10 +29,6 @@ def normalize_plan_text(plan_text: str) -> str:
         return f", metrics=[{body}]"
 
     text = re.sub(r", metrics=\[([^\]]*)\]", _normalize_metrics_block, text)
-    text = re.sub(r"Hash\(\[([^\]]+)\], \d+\)", r"Hash([\1], <partitions>)", text)
-    text = re.sub(r"RoundRobinBatch\(\d+\)", r"RoundRobinBatch(<partitions>)", text)
-    text = re.sub(r"input_partitions=\d+", r"input_partitions=<partitions>", text)
-    text = re.sub(r"partition_sizes=\[[^\]]+\]", r"partition_sizes=[<sizes>]", text)
 
     # Normalize temp paths / file URIs that appear in plans.
     pytest_tmp_prefix = re.compile(

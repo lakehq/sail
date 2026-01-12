@@ -41,4 +41,4 @@ DeltaCommitExec(table_path=file://<tmp>/merge_insert_only/)
         HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(id@0, __sail_src_id@0)]
           DataSourceExec: file_groups={1 group: [[<tmp>/merge_insert_only/part-<id>.snappy.parquet]]}, projection=[id, value, __sail_file_path], file_type=parquet
           ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_value]
-            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+            DataSourceExec: partitions=1, partition_sizes=[1]

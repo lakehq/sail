@@ -200,6 +200,16 @@
   description: The batch size for physical plan execution.
   experimental: true
 
+- key: execution.default_parallelism
+  type: number
+  default: "0"
+  description: |
+    The default parallelism for physical plan execution.
+    If the value is `0`, the parallelism is determined based on the number of available CPU cores.
+    It is recommended to set this value explicitly in the cluster mode since the number of CPU cores
+    available to the driver may not be the same as that available to the workers.
+  experimental: true
+
 - key: execution.collect_statistics
   type: boolean
   default: "true"
