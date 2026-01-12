@@ -32,7 +32,6 @@ def sail_default_parallelism():
     snapshot tests involving execution plans.
     """
     os.environ["SAIL_EXECUTION__DEFAULT_PARALLELISM"] = "4"
-    yield
 
 
 @pytest.fixture(scope="session")
