@@ -2,7 +2,7 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::{cast, expr, lit, when};
 use datafusion_functions::unicode::expr_fn as unicode_fn;
-use datafusion_functions_json::udfs;
+use sail_function::scalar::json::{json_as_text_udf, json_length_udf, json_object_keys_udf};
 
 use crate::error::PlanResult;
 use crate::function::common::ScalarFunction;
@@ -25,18 +25,15 @@ fn get_json_object(expr: expr::Expr, path: expr::Expr) -> PlanResult<expr::Expr>
     let mut args = Vec::with_capacity(1 + paths.len());
     args.push(expr);
     args.extend(paths);
-    Ok(udfs::json_as_text_udf().call(args))
+    Ok(json_as_text_udf().call(args))
 }
 
 fn json_array_length(json_data: expr::Expr) -> expr::Expr {
-    cast(
-        udfs::json_length_udf().call(vec![json_data]),
-        DataType::Int32,
-    )
+    cast(json_length_udf().call(vec![json_data]), DataType::Int32)
 }
 
 fn json_object_keys(json_data: expr::Expr) -> expr::Expr {
-    udfs::json_object_keys_udf().call(vec![json_data])
+    json_object_keys_udf().call(vec![json_data])
 }
 
 pub(super) fn list_built_in_json_functions() -> Vec<(&'static str, ScalarFunction)> {
