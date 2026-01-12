@@ -13,6 +13,7 @@ use sail_data_source::formats::rate::RateTableFormat;
 use sail_data_source::formats::socket::SocketTableFormat;
 use sail_data_source::formats::text::TextTableFormat;
 use sail_delta_lake::DeltaTableFormat;
+use sail_duck_lake::DuckLakeTableFormat;
 use sail_iceberg::IcebergTableFormat;
 
 pub fn create_table_format_registry() -> Result<Arc<TableFormatRegistry>> {
@@ -39,5 +40,6 @@ fn register_builtin_formats(registry: &Arc<TableFormatRegistry>) -> Result<()> {
 fn register_external_formats(registry: &Arc<TableFormatRegistry>) -> Result<()> {
     DeltaTableFormat::register(registry)?;
     IcebergTableFormat::register(registry)?;
+    DuckLakeTableFormat::register(registry)?;
     Ok(())
 }
