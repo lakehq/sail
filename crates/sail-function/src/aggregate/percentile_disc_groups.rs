@@ -32,6 +32,11 @@ impl<T: ArrowNumericType + Send> PercentileDiscGroupsAccumulator<T> {
         }
     }
 
+    /// Accumulates values with nulls using chunked bitmap iteration.
+    ///
+    /// This processes data in 64-element chunks, checking the null bitmap via
+    /// bitwise operations rather than per-element validity calls. The pattern
+    /// is borrowed from DataFusion's `percentile_cont` implementation.
     fn accumulate_with_nulls_chunked(
         &mut self,
         group_indices: &[usize],
@@ -39,6 +44,7 @@ impl<T: ArrowNumericType + Send> PercentileDiscGroupsAccumulator<T> {
     ) {
         let data = values.values();
         let nulls = values.nulls().unwrap();
+
         let group_indices_chunks = group_indices.chunks_exact(64);
         let data_chunks = data.chunks_exact(64);
         let bit_chunks = nulls.inner().bit_chunks();
