@@ -228,39 +228,67 @@ fn gen_sequence_timestamp(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 fn gen_sequence_date(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 3 {
+    if args.len() < 2 || args.len() > 3 {
         return exec_err!(
-            "Spark `sequence` function requires 3 arguments for DATE, got {}",
+            "Spark `sequence` function requires 2 or 3 arguments for DATE, got {}",
             args.len()
         );
     }
 
-    let (start_array, stop_array, step_array) = (
-        Some(args[0].as_primitive::<Date32Type>()),
-        args[1].as_primitive::<Date32Type>(),
-        Some(args[2].as_primitive::<IntervalMonthDayNanoType>()),
-    );
+    let (start_array, stop_array, step_array) = match args.len() {
+        2 => (
+            Some(args[0].as_primitive::<Date32Type>()),
+            args[1].as_primitive::<Date32Type>(),
+            None,
+        ),
+        3 => (
+            Some(args[0].as_primitive::<Date32Type>()),
+            args[1].as_primitive::<Date32Type>(),
+            Some(args[2].as_primitive::<IntervalMonthDayNanoType>()),
+        ),
+        _ => unreachable!(),
+    };
 
     let values_builder = Date32Builder::new();
     let mut list_builder = ListBuilder::new(values_builder);
 
-    match (start_array, step_array) {
-        (Some(start_array), Some(step_array)) => {
+    // Default step: 1 day if ascending, -1 day if descending
+    let default_step_positive = IntervalMonthDayNanoType::make_value(0, 1, 0);
+    let default_step_negative = IntervalMonthDayNanoType::make_value(0, -1, 0);
+
+    match start_array {
+        Some(start_array) => {
             for index in 0..stop_array.len() {
-                if start_array.is_null(index)
-                    || stop_array.is_null(index)
-                    || step_array.is_null(index)
-                {
+                if start_array.is_null(index) || stop_array.is_null(index) {
                     list_builder.append_null();
                     continue;
                 }
 
                 let start = start_array.value(index);
                 let stop = stop_array.value(index);
-                let step = step_array.value(index);
 
-                let (months, days, _nanoseconds) = IntervalMonthDayNanoType::to_parts(step);
-                if months == 0 && days == 0 {
+                // Determine step: use provided step or default based on direction
+                let step = if let Some(step_array) = &step_array {
+                    if step_array.is_null(index) {
+                        list_builder.append_null();
+                        continue;
+                    }
+                    step_array.value(index)
+                } else {
+                    // No step provided, use default based on direction
+                    if start <= stop {
+                        default_step_positive
+                    } else {
+                        default_step_negative
+                    }
+                };
+
+                let (months, days, nanoseconds) = IntervalMonthDayNanoType::to_parts(step);
+                // Check if the interval is at least 1 day
+                // Note: interval can be represented as days OR as nanoseconds (86400000000000 ns = 1 day)
+                let nanos_per_day = 86_400_000_000_000i64;
+                let total_nanos = nanoseconds;
+                if months == 0 && days == 0 && total_nanos.abs() < nanos_per_day {
                     return exec_err!(
                         "Spark `sequence` function cannot generate date range less than 1 day."
                     );
@@ -281,7 +309,7 @@ fn gen_sequence_date(args: &[ArrayRef]) -> Result<ArrayRef> {
                 list_builder.append_value(values);
             }
         }
-        _ => {
+        None => {
             for _index in 0..stop_array.len() {
                 list_builder.append_null()
             }
