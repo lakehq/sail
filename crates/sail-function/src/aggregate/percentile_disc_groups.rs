@@ -1,5 +1,5 @@
 use std::fmt::{Debug, Formatter};
-use std::mem::size_of;
+use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -114,7 +114,7 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for PercentileDiscGroupsAccum
                     .zip(filter.iter())
                     .for_each(|((&group_index, &new_value), filter_value)| {
                         if let Some(true) = filter_value {
-                self.group_values[group_index].push(new_value);
+                            self.group_values[group_index].push(new_value);
                         }
                     })
             }
@@ -237,10 +237,12 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for PercentileDiscGroupsAccum
     }
 
     fn size(&self) -> usize {
-        self.group_values
-            .iter()
-            .map(|values| values.capacity() * size_of::<T::Native>())
-            .sum::<usize>()
+        size_of_val(self)
+            + self
+                .group_values
+                .iter()
+                .map(|values| values.capacity() * size_of::<T::Native>())
+                .sum::<usize>()
             + self.group_values.capacity() * size_of::<Vec<T::Native>>()
     }
 }
