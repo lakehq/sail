@@ -262,22 +262,26 @@ fn collect_set(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 
     // WORKAROUND: DataFusion's array_agg doesn't properly handle null_treatment when distinct=true
     // So we need to add an explicit filter for NULLs
-    let (filter, null_treatment) = if ignore_nulls == Some(true) {
-        let arg = input.arguments.clone().one()?;
+    let (args, filter, null_treatment) = if ignore_nulls == Some(true) {
+        let arg = input.arguments.one()?;
         let null_filter = arg.clone().is_not_null();
         let combined_filter = match input.filter {
             Some(existing) => Some(Box::new(existing.as_ref().clone().and(null_filter))),
             None => Some(Box::new(null_filter)),
         };
-        (combined_filter, None) // Don't use null_treatment when we have explicit filter
+        (vec![arg], combined_filter, None) // Don't use null_treatment when we have explicit filter
     } else {
-        (input.filter, get_null_treatment(ignore_nulls))
+        (
+            input.arguments,
+            input.filter,
+            get_null_treatment(ignore_nulls),
+        )
     };
 
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: array_agg::array_agg_udaf(),
         params: AggregateFunctionParams {
-            args: input.arguments.clone(),
+            args,
             distinct: true,
             order_by: input.order_by,
             filter,
@@ -292,22 +296,26 @@ fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 
     // WORKAROUND: DataFusion's array_agg doesn't properly handle null_treatment when distinct=true
     // So we need to add an explicit filter for NULLs when both distinct and ignore_nulls are true
-    let (filter, null_treatment) = if input.distinct && ignore_nulls == Some(true) {
-        let arg = input.arguments.clone().one()?;
+    let (args, filter, null_treatment) = if input.distinct && ignore_nulls == Some(true) {
+        let arg = input.arguments.one()?;
         let null_filter = arg.clone().is_not_null();
         let combined_filter = match input.filter {
             Some(existing) => Some(Box::new(existing.as_ref().clone().and(null_filter))),
             None => Some(Box::new(null_filter)),
         };
-        (combined_filter, None) // Don't use null_treatment when we have explicit filter
+        (vec![arg], combined_filter, None) // Don't use null_treatment when we have explicit filter
     } else {
-        (input.filter, get_null_treatment(ignore_nulls))
+        (
+            input.arguments,
+            input.filter,
+            get_null_treatment(ignore_nulls),
+        )
     };
 
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: array_agg::array_agg_udaf(),
         params: AggregateFunctionParams {
-            args: input.arguments.clone(),
+            args,
             distinct: input.distinct,
             order_by: input.order_by,
             filter,
