@@ -58,7 +58,7 @@ def test_percentile_disc_with_group_by(spark):
     df.createOrReplaceTempView("test_disc_grouped")
 
     actual = spark.sql("""
-        SELECT 
+        SELECT
             category,
             percentile_disc(0.5) WITHIN GROUP (ORDER BY val) AS median
         FROM test_disc_grouped
@@ -81,7 +81,7 @@ def test_percentile_disc_edge_cases(spark):
     df.createOrReplaceTempView("test_disc_edges")
 
     actual = spark.sql("""
-        SELECT 
+        SELECT
             percentile_disc(0.0) WITHIN GROUP (ORDER BY val) AS p0,
             percentile_disc(1.0) WITHIN GROUP (ORDER BY val) AS p100
         FROM test_disc_edges
