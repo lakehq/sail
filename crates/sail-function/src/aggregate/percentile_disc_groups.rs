@@ -12,9 +12,7 @@ use datafusion::common::{DataFusionError, HashSet, Result, ScalarValue};
 use datafusion::logical_expr::{Accumulator, EmitTo, GroupsAccumulator};
 use datafusion::physical_expr::aggregate::utils::Hashable;
 
-use crate::aggregate::utils::{
-    calculate_percentile_disc, cast_to_type, filtered_null_mask,
-};
+use crate::aggregate::utils::{calculate_percentile_disc, cast_to_type, filtered_null_mask};
 
 #[derive(Debug)]
 pub struct PercentileDiscGroupsAccumulator<T: ArrowNumericType + Send> {
