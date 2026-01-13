@@ -1,0 +1,357 @@
+use std::sync::Arc;
+
+/// [Credit]: <https://github.com/datafusion-contrib/datafusion-variant/blob/51e0d4be62d7675e9b7b56ed1c0b0a10ae4a28d7/src/json_to_variant.rs>
+use arrow::array::{Array, ArrayRef, StringViewArray, StructArray};
+use arrow::compute::cast;
+use arrow_schema::{DataType, Field, Fields};
+use datafusion::common::exec_datafusion_err;
+use datafusion::error::Result;
+use datafusion::logical_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+};
+use datafusion::scalar::ScalarValue;
+use datafusion_expr_common::signature::Volatility;
+use parquet_variant_compute::{VariantArrayBuilder, VariantType};
+use parquet_variant_json::JsonToVariant as JsonToVariantExt;
+
+use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
+use crate::scalar::variant::utils::helper::{try_field_as_string, try_parse_string_scalar};
+
+/// Returns a Variant from a JSON string
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct SparkJsonToVariantUdf {
+    signature: Signature,
+}
+
+impl SparkJsonToVariantUdf {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::user_defined(Volatility::Immutable),
+        }
+    }
+}
+
+impl Default for SparkJsonToVariantUdf {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ScalarUDFImpl for SparkJsonToVariantUdf {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "parse_json"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        // Use Binary instead of BinaryView for PySpark compatibility
+        // (PySpark doesn't support BinaryView in Arrow conversion)
+        Ok(DataType::Struct(Fields::from(vec![
+            Field::new("metadata", DataType::Binary, false),
+            Field::new("value", DataType::Binary, false),
+        ])))
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Arc<Field>> {
+        let data_type = self.return_type(
+            args.arg_fields
+                .iter()
+                .map(|f| f.data_type().clone())
+                .collect::<Vec<_>>()
+                .as_slice(),
+        )?;
+        Ok(Arc::new(
+            Field::new(self.name(), data_type, true).with_extension_type(VariantType),
+        ))
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let arg_field = args
+            .arg_fields
+            .first()
+            .ok_or_else(|| exec_datafusion_err!("empty argument, expected 1 argument"))?;
+
+        try_field_as_string(arg_field.as_ref())?;
+
+        let arg = args
+            .args
+            .first()
+            .ok_or_else(|| exec_datafusion_err!("empty argument, expected 1 argument"))?;
+
+        let out = match arg {
+            ColumnarValue::Scalar(scalar_value) => {
+                let json_str = try_parse_string_scalar(scalar_value)?;
+
+                let mut builder = VariantArrayBuilder::new(1);
+
+                match json_str {
+                    Some(json_str) => builder.append_json(json_str.as_str())?,
+                    // When input is NULL, return SQL NULL (not a Variant)
+                    None => builder.append_null(),
+                }
+
+                let struct_array: StructArray = builder.build().into();
+                let struct_array = convert_binaryview_to_binary(struct_array)?;
+                ColumnarValue::Scalar(ScalarValue::Struct(Arc::new(struct_array)))
+            }
+            ColumnarValue::Array(arr) => match arr.data_type() {
+                DataType::Utf8View => ColumnarValue::Array(from_utf8view_arr(arr)?),
+                _ => {
+                    return Err(unsupported_data_type_exec_err(
+                        "parse_json",
+                        "string",
+                        arr.data_type(),
+                    ));
+                }
+            },
+        };
+
+        Ok(out)
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 1 {
+            return Err(invalid_arg_count_exec_err(
+                "parse_json",
+                (1, 1),
+                arg_types.len(),
+            ));
+        }
+
+        // Coerce all string types to Utf8View for consistency
+        let coerced_type = match &arg_types[0] {
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => DataType::Utf8View,
+            DataType::Null => DataType::Null,
+            other => {
+                return Err(unsupported_data_type_exec_err(
+                    "parse_json",
+                    "string",
+                    other,
+                ));
+            }
+        };
+
+        Ok(vec![coerced_type])
+    }
+}
+
+macro_rules! define_from_string_array {
+    ($fn_name:ident, $array_type:ty) => {
+        pub(crate) fn $fn_name(arr: &ArrayRef) -> Result<ArrayRef> {
+            let typed_arr = arr.as_any().downcast_ref::<$array_type>().ok_or_else(|| {
+                exec_datafusion_err!(
+                    "Unable to downcast array of type {} to expected type {}",
+                    arr.data_type(),
+                    stringify!($array_type)
+                )
+            })?;
+
+            let mut builder = VariantArrayBuilder::new(typed_arr.len());
+
+            for v in typed_arr {
+                match v {
+                    Some(json_str) => builder.append_json(json_str)?,
+                    None => builder.append_null(),
+                }
+            }
+
+            let variant_array: StructArray = builder.build().into();
+            let variant_array = convert_binaryview_to_binary(variant_array)?;
+
+            Ok(Arc::new(variant_array) as ArrayRef)
+        }
+    };
+}
+
+define_from_string_array!(from_utf8view_arr, StringViewArray);
+
+/// Converts a StructArray with BinaryView fields to Binary fields for PySpark compatibility
+fn convert_binaryview_to_binary(struct_array: StructArray) -> Result<StructArray> {
+    let fields: Vec<Arc<Field>> = struct_array
+        .fields()
+        .iter()
+        .map(|f| Arc::new(Field::new(f.name(), DataType::Binary, f.is_nullable())))
+        .collect();
+
+    let columns: Result<Vec<ArrayRef>> = struct_array
+        .columns()
+        .iter()
+        .map(|col| {
+            cast(col, &DataType::Binary)
+                .map_err(|e| exec_datafusion_err!("Failed to cast BinaryView to Binary: {e}"))
+        })
+        .collect();
+
+    Ok(StructArray::new(
+        Fields::from(fields),
+        columns?,
+        struct_array.nulls().cloned(),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::logical_expr::{ReturnFieldArgs, ScalarFunctionArgs};
+    use datafusion_common::exec_err;
+    use parquet_variant::{Variant, VariantBuilder};
+    use parquet_variant_compute::VariantArray;
+
+    use super::*;
+
+    #[test]
+    fn test_json_to_variant_udf_scalar_none() -> Result<()> {
+        let json_input = ScalarValue::Utf8(None);
+
+        let udf = SparkJsonToVariantUdf::default();
+        let arg_field = Arc::new(Field::new("input", DataType::Utf8, true));
+
+        let return_field = udf.return_field_from_args(ReturnFieldArgs {
+            arg_fields: std::slice::from_ref(&arg_field),
+            scalar_arguments: &[],
+        })?;
+
+        let args = ScalarFunctionArgs {
+            args: vec![ColumnarValue::Scalar(json_input)],
+            return_field,
+            arg_fields: vec![arg_field],
+            number_rows: Default::default(),
+            config_options: Default::default(),
+        };
+
+        let result = udf.invoke_with_args(args)?;
+
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Struct(sv)) => {
+                // parse_json(null) should return SQL NULL
+                assert!(sv.is_null(0), "expected SQL NULL for parse_json(null)");
+            }
+            _ => return exec_err!("Expected Variant struct result"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_json_to_variant_udf_scalar_null() -> Result<()> {
+        let json_input = ScalarValue::Utf8(Some("null".into()));
+
+        let udf = SparkJsonToVariantUdf::default();
+        let arg_field = Arc::new(Field::new("input", DataType::Utf8, true));
+        let return_field = udf.return_field_from_args(ReturnFieldArgs {
+            arg_fields: std::slice::from_ref(&arg_field),
+            scalar_arguments: &[],
+        })?;
+
+        let args = ScalarFunctionArgs {
+            args: vec![ColumnarValue::Scalar(json_input)],
+            return_field,
+            arg_fields: vec![arg_field],
+            number_rows: Default::default(),
+            config_options: Default::default(),
+        };
+
+        let result = udf.invoke_with_args(args)?;
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Struct(v)) => {
+                let variant_array = VariantArray::try_new(v.as_ref())?;
+                let variant = variant_array.value(0);
+                assert_eq!(variant, Variant::from(()));
+            }
+            _ => return exec_err!("Expected scalar BinaryView result"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_json_to_variant_udf_scalar_complex() -> Result<()> {
+        let json_input =
+            ScalarValue::Utf8(Some(r#"{"key": 123, "data": [4, 5, "str"]}"#.to_string()));
+
+        let udf = SparkJsonToVariantUdf::default();
+
+        let (expected_m, expected_v) = {
+            let mut variant_builder = VariantBuilder::new();
+            let mut object_builder = variant_builder.new_object();
+
+            object_builder.insert("key", 123_u8);
+
+            let mut inner_array_builder = object_builder.new_list("data");
+
+            inner_array_builder.append_value(4u8);
+            inner_array_builder.append_value(5u8);
+            inner_array_builder.append_value("str");
+
+            inner_array_builder.finish();
+
+            object_builder.finish();
+
+            variant_builder.finish()
+        };
+
+        let expected_variant = Variant::try_new(&expected_m, &expected_v)?;
+
+        let arg_field = Arc::new(Field::new("input", DataType::Utf8, true));
+        let return_field = udf.return_field_from_args(ReturnFieldArgs {
+            arg_fields: std::slice::from_ref(&arg_field),
+            scalar_arguments: &[],
+        })?;
+
+        let args = ScalarFunctionArgs {
+            args: vec![ColumnarValue::Scalar(json_input)],
+            return_field,
+            arg_fields: vec![arg_field],
+            number_rows: Default::default(),
+            config_options: Default::default(),
+        };
+
+        let result = udf.invoke_with_args(args)?;
+
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Struct(v)) => {
+                let variant_array = VariantArray::try_new(v.as_ref())?;
+                let variant = variant_array.value(0);
+                assert_eq!(variant, expected_variant);
+            }
+            _ => return exec_err!("Expected scalar BinaryView result"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_json_to_variant_udf_scalar_primitive() -> Result<()> {
+        let json_input = ScalarValue::Utf8(Some("123".to_string()));
+
+        let udf = SparkJsonToVariantUdf::default();
+        let arg_field = Arc::new(Field::new("input", DataType::Utf8, true));
+        let return_field = udf.return_field_from_args(ReturnFieldArgs {
+            arg_fields: std::slice::from_ref(&arg_field),
+            scalar_arguments: &[],
+        })?;
+
+        let args = ScalarFunctionArgs {
+            args: vec![ColumnarValue::Scalar(json_input)],
+            return_field,
+            arg_fields: vec![arg_field],
+            number_rows: Default::default(),
+            config_options: Default::default(),
+        };
+
+        let result = udf.invoke_with_args(args)?;
+
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Struct(v)) => {
+                let variant_array = VariantArray::try_new(v.as_ref())?;
+                let variant = variant_array.value(0);
+                assert_eq!(variant, Variant::from(123_u8));
+            }
+            _ => return exec_err!("Expected scalar BinaryView result"),
+        }
+        Ok(())
+    }
+}

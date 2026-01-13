@@ -10,6 +10,12 @@ impl TryFrom<adt::Field> for sdt::StructField {
 
     fn try_from(field: adt::Field) -> SparkResult<sdt::StructField> {
         let is_udt = field.metadata().keys().any(|k| k.starts_with("udt."));
+        let is_variant = field
+            .metadata()
+            .get("ARROW:extension:name")
+            .map(|s| s == "arrow.parquet.variant")
+            .unwrap_or(false);
+
         let data_type = if is_udt {
             DataType {
                 kind: Some(sdt::Kind::Udt(Box::new(sdt::Udt {
@@ -22,6 +28,12 @@ impl TryFrom<adt::Field> for sdt::StructField {
                         .cloned(),
                     sql_type: Some(Box::new(field.data_type().clone().try_into()?)),
                 }))),
+            }
+        } else if is_variant {
+            DataType {
+                kind: Some(sdt::Kind::Variant(sdt::Variant {
+                    type_variation_reference: 0,
+                })),
             }
         } else {
             field.data_type().clone().try_into()?
@@ -138,13 +150,17 @@ impl TryFrom<adt::DataType> for DataType {
                     type_variation_reference: 0,
                 }))
             }
-            adt::DataType::Struct(fields) => Kind::Struct(sdt::Struct {
-                fields: fields
-                    .into_iter()
-                    .map(|f| f.as_ref().clone().try_into())
-                    .collect::<SparkResult<Vec<sdt::StructField>>>()?,
-                type_variation_reference: 0,
-            }),
+            adt::DataType::Struct(fields) => {
+                // Always treat as a regular Struct
+                // Variant detection is handled at the Field level via extension type metadata
+                Kind::Struct(sdt::Struct {
+                    fields: fields
+                        .into_iter()
+                        .map(|f| f.as_ref().clone().try_into())
+                        .collect::<SparkResult<Vec<sdt::StructField>>>()?,
+                    type_variation_reference: 0,
+                })
+            }
             adt::DataType::Map(ref field, ref _keys_sorted) => {
                 let field = sdt::StructField::try_from(field.as_ref().clone())?;
                 let Some(DataType {
@@ -170,5 +186,75 @@ impl TryFrom<adt::DataType> for DataType {
             | adt::DataType::Decimal64(_, _) => return Err(error(&data_type)),
         };
         Ok(DataType { kind: Some(kind) })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use adt::{DataType as ArrowDataType, Field, Fields};
+
+    use super::*;
+
+    #[test]
+    #[allow(clippy::assertions_on_constants)]
+    fn test_struct_with_metadata_value_fields_not_variant() {
+        // A struct with fields named "metadata" and "value" should NOT be treated as Variant
+        // unless it has the extension type metadata
+        let fields = Fields::from(vec![
+            Field::new("value", ArrowDataType::Binary, true),
+            Field::new("metadata", ArrowDataType::Binary, true),
+        ]);
+        let struct_type = ArrowDataType::Struct(fields);
+
+        // Convert to Spark DataType
+        let spark_type = match DataType::try_from(struct_type) {
+            Ok(dt) => dt,
+            Err(e) => {
+                assert!(false, "Should convert successfully, got error: {e}");
+                return;
+            }
+        };
+
+        // Should be a Struct, NOT a Variant
+        assert!(
+            matches!(spark_type.kind, Some(sdt::Kind::Struct(_))),
+            "Struct with metadata/value fields should be treated as regular Struct, not Variant"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::assertions_on_constants)]
+    fn test_field_with_variant_extension_type_is_variant() {
+        // A field with the arrow.parquet.variant extension type SHOULD be treated as Variant
+        let fields = Fields::from(vec![
+            Field::new("value", ArrowDataType::Binary, true),
+            Field::new("metadata", ArrowDataType::Binary, true),
+        ]);
+
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "ARROW:extension:name".to_string(),
+            "arrow.parquet.variant".to_string(),
+        );
+
+        let field = Field::new("test", ArrowDataType::Struct(fields), true).with_metadata(metadata);
+
+        // Convert to Spark StructField
+        let spark_field = match sdt::StructField::try_from(field) {
+            Ok(f) => f,
+            Err(e) => {
+                assert!(false, "Should convert successfully, got error: {e}");
+                return;
+            }
+        };
+
+        // Should be a Variant
+        assert!(
+            matches!(
+                spark_field.data_type.and_then(|dt| dt.kind),
+                Some(sdt::Kind::Variant(_))
+            ),
+            "Field with arrow.parquet.variant extension should be treated as Variant"
+        );
     }
 }

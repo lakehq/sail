@@ -210,6 +210,9 @@ pub enum DataType {
         serialized_python_class: Option<String>,
         sql_type: Box<DataType>,
     },
+    /// Variant type for semi-structured data.
+    /// Corresponds to Spark's VariantType.
+    Variant,
     /// Resolves to either [`DataType::Utf8`] or [`DataType::LargeUtf8`],
     /// based on `config.arrow_use_large_var_types`.
     ConfiguredUtf8 {
