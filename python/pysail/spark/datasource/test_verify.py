@@ -6,7 +6,7 @@ This script creates a simple Python datasource and tests it with Sail.
 
 from pysail.spark.datasource.base import (
     DataSource, DataSourceReader, InputPartition,
-    EqualTo, register
+    register
 )
 
 

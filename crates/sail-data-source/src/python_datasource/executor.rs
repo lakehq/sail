@@ -57,18 +57,17 @@ pub trait PythonExecutor: Send + Sync {
 /// This is the MVP implementation that calls Python directly via PyO3.
 /// GIL contention is acceptable for control plane operations (schema, partitions).
 /// Data plane uses Arrow C Data Interface for efficiency.
+///
+/// Note: Python version validation happens in PythonDataSource::new(), not here.
 #[cfg(feature = "python")]
-pub struct InProcessExecutor {
-    /// Python version for compatibility checking
-    #[allow(dead_code)]
-    python_ver: String,
-}
+#[derive(Debug, Default)]
+pub struct InProcessExecutor;
 
 #[cfg(feature = "python")]
 impl InProcessExecutor {
     /// Create a new in-process executor.
-    pub fn new(python_ver: String) -> Self {
-        Self { python_ver }
+    pub fn new() -> Self {
+        Self
     }
 }
 
@@ -167,11 +166,9 @@ fn pickle_object(py: pyo3::Python<'_>, obj: &pyo3::Bound<'_, pyo3::PyAny>) -> Re
     Ok(bytes)
 }
 
-/// Convert PyO3 error to DataFusion error.
+/// Re-export py_err from error module.
 #[cfg(feature = "python")]
-fn py_err(e: pyo3::PyErr) -> datafusion_common::DataFusionError {
-    datafusion_common::DataFusionError::External(Box::new(std::io::Error::other(e.to_string())))
-}
+use super::error::py_err;
 
 #[cfg(test)]
 mod tests {

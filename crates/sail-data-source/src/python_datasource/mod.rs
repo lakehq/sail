@@ -43,6 +43,7 @@ pub use error::PythonDataSourceError;
 pub use exec::PythonDataSourceExec;
 #[cfg(feature = "python")]
 pub use executor::{InProcessExecutor, InputPartition, PythonExecutor};
+#[cfg(feature = "python")]
 pub use filter::{exprs_to_python_filters, ColumnPath, FilterValue, PythonFilter};
 #[cfg(feature = "python")]
 pub use python_datasource::PythonDataSource;

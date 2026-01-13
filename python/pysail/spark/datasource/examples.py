@@ -5,7 +5,7 @@ These examples demonstrate how to implement custom data sources in Python.
 They can also be used for testing and demonstration purposes.
 """
 
-from typing import Iterator, List, Tuple, Union, Any
+from typing import Iterator, List, Any
 
 try:
     import pyarrow as pa
@@ -155,6 +155,7 @@ class RangeDataSource(DataSource):
         return "range"
 
     def schema(self):
+        # PyArrow Schema preferred; DDL string fallback also works for basic types
         if HAS_PYARROW:
             return pa.schema([("id", pa.int64())])
         return "id BIGINT"

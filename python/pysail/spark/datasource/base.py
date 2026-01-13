@@ -317,8 +317,11 @@ class DataSource(ABC):
         Return the schema of the data source.
 
         Returns:
-            DDL-formatted schema string (e.g., "id INT, name STRING")
-            OR a PyArrow Schema object
+            PyArrow Schema object (preferred), OR a DDL-formatted schema string.
+            
+            DDL strings support: INT, BIGINT, FLOAT, DOUBLE, BOOLEAN, STRING,
+            DATE, TIMESTAMP, DECIMAL(p,s). For complex types (arrays, structs),
+            use PyArrow Schema.
         """
         pass
 
@@ -411,6 +414,16 @@ def discover_entry_points(group: str = "sail.datasources") -> List[Tuple[str, ty
 # Re-exports for convenience
 # ============================================================================
 
+# Import PySpark compatibility function from compat module
+from .compat import install_pyspark_shim  # noqa: E402
+
+# Legacy alias for backward compatibility
+setup_pyspark_compat_shim = install_pyspark_shim
+
+# Auto-install the shim when this module is imported
+install_pyspark_shim()
+
+
 __all__ = [
     # Core classes
     "DataSource",
@@ -440,4 +453,7 @@ __all__ = [
     "get_registered_datasource",
     "list_registered_datasources",
     "discover_entry_points",
+    # PySpark compatibility
+    "setup_pyspark_compat_shim",
+    "install_pyspark_shim",
 ]

@@ -280,9 +280,13 @@ fn expr_to_value(expr: &Expr) -> Option<FilterValue> {
     }
 }
 
+// TODO(Phase 2): Activate filter pushdown - see RFC "Filter Pushdown Pipeline"
+// These functions convert Rust PythonFilter objects to Python filter class instances
+// for passing to DataSourceReader.pushFilters(). Currently all filters are marked
+// Unsupported and DataFusion applies post-read filtering.
 /// Convert Python filters to Python objects.
 #[cfg(feature = "python")]
-#[allow(dead_code)]
+#[allow(dead_code)] // Reserved for Phase 2 filter pushdown
 pub fn filters_to_python(py: Python<'_>, filters: &[PythonFilter]) -> PyResult<Py<PyAny>> {
     let datasource_module = py.import("pysail.spark.datasource.base")?;
 
@@ -295,7 +299,7 @@ pub fn filters_to_python(py: Python<'_>, filters: &[PythonFilter]) -> PyResult<P
 }
 
 #[cfg(feature = "python")]
-#[allow(dead_code)]
+#[allow(dead_code)] // Reserved for Phase 2 filter pushdown
 fn filter_to_python(
     py: Python<'_>,
     module: &Bound<'_, PyAny>,
@@ -400,7 +404,7 @@ fn filter_to_python(
 }
 
 #[cfg(feature = "python")]
-#[allow(dead_code)]
+#[allow(dead_code)] // Reserved for Phase 2 filter pushdown
 fn column_to_python(py: Python<'_>, column: &ColumnPath) -> PyResult<Py<PyAny>> {
     let parts: Vec<&str> = column.iter().map(|s| s.as_str()).collect();
     Ok(PyTuple::new(py, parts)?.into_any().unbind())

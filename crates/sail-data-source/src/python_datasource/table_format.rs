@@ -98,21 +98,28 @@ impl PythonTableFormat {
         let python_ver = Self::get_python_version()?;
 
         Python::attach(|py| {
-            // Deserialize the class
-            let cloudpickle = py.import("cloudpickle").map_err(|e| {
+            // Use pysail's compat module to unpickle with PySpark shim support
+            let compat = py.import("pysail.spark.datasource.compat").map_err(|e| {
                 datafusion_common::DataFusionError::External(Box::new(std::io::Error::other(
-                    format!("Failed to import cloudpickle: {}", e),
+                    format!("Failed to import pysail.spark.datasource.compat: {}", e),
                 )))
             })?;
 
             let class_bytes = PyBytes::new(py, pickled_class);
-            let ds_class = cloudpickle
-                .call_method1("loads", (class_bytes,))
+            let ds_class = compat
+                .call_method1("unpickle_datasource_class", (class_bytes,))
                 .map_err(|e| {
                     datafusion_common::DataFusionError::External(Box::new(std::io::Error::other(
                         format!("Failed to deserialize datasource class: {}", e),
                     )))
                 })?;
+
+            // Import cloudpickle for later use (pickling the instance)
+            let cloudpickle = py.import("cloudpickle").map_err(|e| {
+                datafusion_common::DataFusionError::External(Box::new(std::io::Error::other(
+                    format!("Failed to import cloudpickle: {}", e),
+                )))
+            })?;
 
             // Create options dict
             let py_options = PyDict::new(py);
@@ -155,11 +162,9 @@ impl PythonTableFormat {
     }
 }
 
-/// Convert PyO3 error to DataFusion error.
-#[allow(dead_code)]
-fn py_err(e: pyo3::PyErr) -> datafusion_common::DataFusionError {
-    datafusion_common::DataFusionError::External(Box::new(std::io::Error::other(e.to_string())))
-}
+/// Re-export py_err from error module for internal use.
+#[allow(unused_imports)]
+use super::error::py_err;
 
 #[async_trait]
 impl TableFormat for PythonTableFormat {

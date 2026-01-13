@@ -91,7 +91,9 @@ async fn handle_command(
             service::handle_execute_streaming_query_listener_bus_command(ctx, command, metadata)
                 .await
         }
-        CommandType::RegisterDataSource(_) => Err(SparkError::todo("register data source command")),
+        CommandType::RegisterDataSource(ds) => {
+            service::handle_execute_register_datasource(ctx, ds, metadata).await
+        }
         CommandType::CreateResourceProfileCommand(_) => {
             Err(SparkError::todo("create resource profile command"))
         }

@@ -269,7 +269,7 @@ impl PythonDataSource {
 
     /// Validate Python version compatibility.
     ///
-    /// Currently accepts Python 3.8+.
+    /// Requires Python 3.9+ per RFC (entry_points API changes in 3.9).
     #[cfg(feature = "python")]
     fn validate_python_version(version: &str) -> Result<()> {
         // Parse version string (e.g., "3.11" -> major=3, minor=11)
@@ -290,10 +290,10 @@ impl PythonDataSource {
             PythonDataSourceError::VersionError(format!("Invalid minor version: {}", parts[1]))
         })?;
 
-        // Require Python 3.8+
-        if major < 3 || (major == 3 && minor < 8) {
+        // Require Python 3.9+ (entry_points API changed in 3.9)
+        if major < 3 || (major == 3 && minor < 9) {
             return Err(PythonDataSourceError::VersionError(format!(
-                "Python {} is not supported. Require Python 3.8+",
+                "Python {} is not supported. Require Python 3.9+",
                 version
             ))
             .into());
@@ -329,7 +329,8 @@ impl PythonDataSource {
     /// DDL format: "id INT, name STRING, age INT"
     #[cfg(feature = "python")]
     fn parse_ddl_schema(ddl: &str) -> Result<SchemaRef> {
-        // Use DataFusion's SQL parser for DDL schema parsing
+        use arrow_schema::Field;
+        use datafusion::sql::sqlparser::ast::Statement;
         use datafusion::sql::sqlparser::dialect::GenericDialect;
         use datafusion::sql::sqlparser::parser::Parser;
 
@@ -345,12 +346,108 @@ impl PythonDataSource {
             return Err(PythonDataSourceError::SchemaError("Empty DDL schema".to_string()).into());
         }
 
-        // Extract column definitions from parsed statement
-        // For now, return a simple error - full DDL parsing will be implemented
-        // when we integrate with DataFusion's schema parser
-        Err(PythonDataSourceError::SchemaError(
-            "DDL schema parsing not yet implemented. Please return PyArrow Schema from schema() method".to_string()
-        ).into())
+        // Extract column definitions from CREATE TABLE statement
+        let columns = match &statements[0] {
+            Statement::CreateTable(create) => &create.columns,
+            _ => {
+                return Err(PythonDataSourceError::SchemaError(
+                    "Expected CREATE TABLE statement".to_string(),
+                )
+                .into())
+            }
+        };
+
+        // Convert each column to an Arrow Field
+        let fields: Vec<Field> = columns
+            .iter()
+            .map(sql_column_to_arrow_field)
+            .collect::<Result<Vec<_>>>()?;
+
+        if fields.is_empty() {
+            return Err(
+                PythonDataSourceError::SchemaError("No columns in DDL schema".to_string()).into(),
+            );
+        }
+
+        Ok(std::sync::Arc::new(arrow_schema::Schema::new(fields)))
+    }
+}
+
+/// Convert SQL column definition to Arrow Field.
+#[cfg(feature = "python")]
+fn sql_column_to_arrow_field(
+    col: &datafusion::sql::sqlparser::ast::ColumnDef,
+) -> Result<arrow_schema::Field> {
+    use arrow_schema::Field;
+
+    let name = col.name.value.clone();
+    let data_type = sql_type_to_arrow(&col.data_type)?;
+
+    // Check for NOT NULL constraint
+    let nullable = !col.options.iter().any(|opt| {
+        matches!(
+            opt.option,
+            datafusion::sql::sqlparser::ast::ColumnOption::NotNull
+        )
+    });
+
+    Ok(Field::new(name, data_type, nullable))
+}
+
+/// Convert SQL data type to Arrow DataType.
+#[cfg(feature = "python")]
+fn sql_type_to_arrow(
+    sql_type: &datafusion::sql::sqlparser::ast::DataType,
+) -> Result<arrow_schema::DataType> {
+    use arrow_schema::{DataType, TimeUnit};
+    use datafusion::sql::sqlparser::ast::DataType as SqlDataType;
+
+    match sql_type {
+        // Integer types
+        SqlDataType::TinyInt(_) => Ok(DataType::Int8),
+        SqlDataType::SmallInt(_) => Ok(DataType::Int16),
+        SqlDataType::Int(_) | SqlDataType::Integer(_) => Ok(DataType::Int32),
+        SqlDataType::BigInt(_) => Ok(DataType::Int64),
+
+        // Floating point types
+        SqlDataType::Float(_) | SqlDataType::Real => Ok(DataType::Float32),
+        SqlDataType::Double(_) | SqlDataType::DoublePrecision => Ok(DataType::Float64),
+
+        // Boolean
+        SqlDataType::Boolean => Ok(DataType::Boolean),
+
+        // String types - Spark's STRING maps to Utf8
+        SqlDataType::Char(_)
+        | SqlDataType::Varchar(_)
+        | SqlDataType::Text
+        | SqlDataType::String(_) => Ok(DataType::Utf8),
+
+        // Binary
+        SqlDataType::Binary(_) | SqlDataType::Varbinary(_) | SqlDataType::Blob(_) => {
+            Ok(DataType::Binary)
+        }
+
+        // Date and time
+        SqlDataType::Date => Ok(DataType::Date32),
+        SqlDataType::Timestamp(_, _) => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
+
+        // Decimal (use default precision/scale if not specified)
+        SqlDataType::Decimal(info) | SqlDataType::Numeric(info) => {
+            use datafusion::sql::sqlparser::ast::ExactNumberInfo;
+            let (precision, scale) = match info {
+                ExactNumberInfo::PrecisionAndScale(p, s) => (*p as u8, *s as i8),
+                ExactNumberInfo::Precision(p) => (*p as u8, 0),
+                ExactNumberInfo::None => (38, 10), // Default Spark precision/scale
+            };
+            Ok(DataType::Decimal128(precision, scale))
+        }
+
+        // Unsupported types - fall through to error
+        other => Err(PythonDataSourceError::SchemaError(format!(
+            "Unsupported SQL type in DDL schema: {:?}. Use PyArrow Schema for complex types.",
+            other
+        ))
+        .into()),
     }
 }
 
@@ -370,14 +467,42 @@ mod tests {
 
     #[test]
     fn test_validate_python_version() {
-        // Valid versions
-        assert!(PythonDataSource::validate_python_version("3.8").is_ok());
+        // Valid versions (3.9+)
+        assert!(PythonDataSource::validate_python_version("3.9").is_ok());
+        assert!(PythonDataSource::validate_python_version("3.10").is_ok());
         assert!(PythonDataSource::validate_python_version("3.11").is_ok());
         assert!(PythonDataSource::validate_python_version("3.12").is_ok());
 
         // Invalid versions
         assert!(PythonDataSource::validate_python_version("2.7").is_err());
         assert!(PythonDataSource::validate_python_version("3.6").is_err());
+        assert!(PythonDataSource::validate_python_version("3.8").is_err()); // 3.8 no longer supported
         assert!(PythonDataSource::validate_python_version("invalid").is_err());
+    }
+
+    #[test]
+    fn test_parse_ddl_schema() -> Result<()> {
+        // Basic types
+        let schema = PythonDataSource::parse_ddl_schema("id INT, name STRING")?;
+        assert_eq!(schema.fields().len(), 2);
+        assert_eq!(schema.field(0).name(), "id");
+        assert_eq!(schema.field(0).data_type(), &arrow_schema::DataType::Int32);
+        assert_eq!(schema.field(1).name(), "name");
+        assert_eq!(schema.field(1).data_type(), &arrow_schema::DataType::Utf8);
+
+        // More types
+        let schema = PythonDataSource::parse_ddl_schema("a BIGINT, b DOUBLE, c BOOLEAN, d DATE")?;
+        assert_eq!(schema.fields().len(), 4);
+        assert_eq!(schema.field(0).data_type(), &arrow_schema::DataType::Int64);
+        assert_eq!(
+            schema.field(1).data_type(),
+            &arrow_schema::DataType::Float64
+        );
+        assert_eq!(
+            schema.field(2).data_type(),
+            &arrow_schema::DataType::Boolean
+        );
+        assert_eq!(schema.field(3).data_type(), &arrow_schema::DataType::Date32);
+        Ok(())
     }
 }

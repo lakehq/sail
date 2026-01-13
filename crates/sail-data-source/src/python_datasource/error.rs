@@ -49,3 +49,12 @@ impl From<pyo3::PyErr> for PythonDataSourceError {
         Self::PythonError(e.to_string())
     }
 }
+
+/// Convert PyO3 error to DataFusion error.
+///
+/// This is a shared helper to avoid duplicating this conversion pattern
+/// across multiple modules (stream.rs, executor.rs, arrow_utils.rs, etc.).
+#[cfg(feature = "python")]
+pub fn py_err(e: pyo3::PyErr) -> DataFusionError {
+    DataFusionError::External(Box::new(std::io::Error::other(e.to_string())))
+}

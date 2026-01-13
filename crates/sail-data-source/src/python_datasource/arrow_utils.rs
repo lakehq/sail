@@ -270,10 +270,9 @@ fn extract_value<'py, T: pyo3::FromPyObject<'py>>(
     item.extract::<T>().map(Some).map_err(py_err)
 }
 
+/// Re-export py_err from error module.
 #[cfg(feature = "python")]
-fn py_err(e: pyo3::PyErr) -> DataFusionError {
-    DataFusionError::External(Box::new(std::io::Error::other(e.to_string())))
-}
+use super::error::py_err;
 
 #[cfg(test)]
 mod tests {

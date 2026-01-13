@@ -26,10 +26,11 @@ use crate::spark::connect::execute_plan_response::{
     ResponseType, ResultComplete, SqlCommandResult,
 };
 use crate::spark::connect::{
-    relation, CheckpointCommand, CheckpointCommandResult, CommonInlineUserDefinedFunction,
-    CommonInlineUserDefinedTableFunction, CreateDataFrameViewCommand, ExecutePlanResponse,
-    GetResourcesCommand, LocalRelation, Relation, SqlCommand, StreamingQueryCommand,
-    StreamingQueryCommandResult, StreamingQueryListenerBusCommand, StreamingQueryManagerCommand,
+    relation, CheckpointCommand, CheckpointCommandResult, CommonInlineUserDefinedDataSource,
+    CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction,
+    CreateDataFrameViewCommand, ExecutePlanResponse, GetResourcesCommand, LocalRelation, Relation,
+    SqlCommand, StreamingQueryCommand, StreamingQueryCommandResult,
+    StreamingQueryListenerBusCommand, StreamingQueryManagerCommand,
     StreamingQueryManagerCommandResult, WriteOperation, WriteOperationV2,
     WriteStreamOperationStart, WriteStreamOperationStartResult,
 };
@@ -598,4 +599,77 @@ pub(crate) async fn handle_release_execute(
         executor.release(response_id)?;
     }
     Ok(())
+}
+
+pub(crate) async fn handle_execute_register_datasource(
+    ctx: &SessionContext,
+    datasource: CommonInlineUserDefinedDataSource,
+    metadata: ExecutorMetadata,
+) -> SparkResult<ExecutePlanResponseStream> {
+    use crate::spark::connect::common_inline_user_defined_data_source::DataSource;
+
+    log::info!(
+        "RegisterDataSource handler called for datasource: {}",
+        datasource.name
+    );
+
+    let spark = ctx.extension::<SparkSession>()?;
+    let name = datasource.name.clone();
+
+    // Extract the pickled Python datasource class
+    let command = match datasource.data_source {
+        Some(DataSource::PythonDataSource(pds)) => pds.command,
+        None => {
+            return Err(SparkError::invalid(
+                "RegisterDataSource requires a python_data_source",
+            ))
+        }
+    };
+
+    // Register in the global datasource registry and TableFormatRegistry
+    #[cfg(feature = "python")]
+    {
+        use std::sync::Arc;
+
+        use sail_common_datafusion::datasource::TableFormatRegistry;
+        use sail_data_source::python_datasource::{
+            DataSourceEntry, PythonTableFormat, DATASOURCE_REGISTRY,
+        };
+
+        // Store pickled class in global registry
+        let entry = DataSourceEntry {
+            name: name.clone(),
+            pickled_class: command,
+            module_path: "client_registered".to_string(),
+        };
+        DATASOURCE_REGISTRY.register(entry);
+
+        // Also register format in TableFormatRegistry so spark.read.format() works
+        if let Ok(registry) = ctx.extension::<TableFormatRegistry>() {
+            let format = Arc::new(PythonTableFormat::new(name.clone()));
+            // Ignore error if already registered
+            let _ = registry.register(format);
+        }
+
+        log::info!("Registered client-side datasource: {}", name);
+    }
+
+    #[cfg(not(feature = "python"))]
+    {
+        let _ = command; // Suppress unused warning
+        return Err(SparkError::unsupported(
+            "RegisterDataSource requires Python feature enabled",
+        ));
+    }
+
+    // Return empty success response
+    let mut output = vec![];
+    if metadata.reattachable {
+        output.push(ExecutorOutput::complete());
+    }
+    Ok(ExecutePlanResponseStream::new(
+        spark.session_id().to_string(),
+        metadata.operation_id,
+        Box::pin(stream::iter(output)),
+    ))
 }

@@ -4,7 +4,7 @@ use std::task::{Context, Poll};
 use arrow::array::RecordBatch;
 use arrow_schema::SchemaRef;
 use datafusion::physical_plan::RecordBatchStream;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::Result;
 use futures::Stream;
 use tokio::sync::{mpsc, oneshot};
 
@@ -199,11 +199,9 @@ impl Drop for PythonDataSourceStream {
     }
 }
 
-/// Convert PyO3 error to DataFusion error.
+/// Re-export py_err from error module.
 #[cfg(feature = "python")]
-fn py_err(e: pyo3::PyErr) -> DataFusionError {
-    DataFusionError::External(Box::new(std::io::Error::other(e.to_string())))
-}
+use super::error::py_err;
 
 /// Helper for collecting rows into batches.
 pub struct RowBatchCollector {
