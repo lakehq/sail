@@ -4,7 +4,7 @@ use datafusion::arrow::array::{
     Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, BooleanArray, RecordBatch,
 };
 use datafusion::arrow::buffer::NullBuffer;
-use datafusion::arrow::datatypes::{ArrowNativeType, DataType, Schema};
+use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::common::{DataFusionError, Result, ScalarValue};
 use datafusion::logical_expr::ColumnarValue;
 use datafusion::physical_expr::PhysicalExpr;
