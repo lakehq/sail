@@ -169,6 +169,7 @@ mod retry_strategy {
 #[serde(deny_unknown_fields)]
 pub struct ExecutionConfig {
     pub batch_size: usize,
+    pub default_parallelism: usize,
     pub collect_statistics: bool,
     pub use_row_number_estimates_to_optimize_partitioning: bool,
     pub file_listing_cache: FileListingCacheConfig,

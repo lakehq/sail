@@ -173,7 +173,7 @@ jobs:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     strategy:
       matrix:
-        spark-version: ["3.5.7", "4.1.0"]
+        spark-version: ["3.5.7", "4.1.1"]
     with:
       spark_version: ${{ matrix.spark-version }}
     needs:
