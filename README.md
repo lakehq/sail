@@ -14,7 +14,7 @@ Our mission is to **unify batch processing, stream processing, and compute-inten
 - **94% cheaper** on infrastructure costs.
 - **100% Rust-native** with no JVM overhead, delivering memory safety, instant startup, and predictable performance.
 
-**✨Using Sail? [Tell us your story](https://lakesail.com/share-story/) and get free merch!✨**
+**🚀 Sail outperforms Spark, popular Spark accelerators, Databricks, and Snowflake in [benchmarks](https://shm.to/clickbench).**
 
 ## Documentation
 
@@ -134,6 +134,8 @@ These results come from a derived TPC-H benchmark (22 queries, scale factor 100,
 
 See the full analysis and graphs on our [Benchmark Results](https://docs.lakesail.com/sail/latest/introduction/benchmark-results/) page.
 
+Additionally, see how Sail compares to Spark, popular Spark accelerators, Databricks, and Snowflake on [Clickbench](https://shm.to/clickbench).
+
 ## Contributing
 
 Contributions are more than welcome!
@@ -185,3 +187,5 @@ Curious about how Sail stacks up against Spark? Explore our [Why Sail?](https://
 - [Query Planning](https://docs.lakesail.com/sail/latest/concepts/query-planning/) – Detailed explanation of how Sail parses SQL and Spark relations, builds logical and physical plans, and handles execution for local and cluster modes.
 - [SQL](https://docs.lakesail.com/sail/latest/guide/sql/) and [DataFrame](https://docs.lakesail.com/sail/latest/guide/dataframe/) Features – Complete reference for Spark SQL and DataFrame API compatibility.
 - [LakeSail Blog](https://lakesail.com/blog/) – Updates on Sail releases, benchmarks, and technical insights.
+
+**✨Using Sail? [Tell us your story](https://lakesail.com/share-story/) and get free merch!✨**
