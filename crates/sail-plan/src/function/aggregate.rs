@@ -263,11 +263,7 @@ fn collect_set(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     // WORKAROUND: DataFusion's array_agg doesn't properly handle null_treatment when distinct=true
     // So we need to add an explicit filter for NULLs
     let (filter, null_treatment) = if ignore_nulls == Some(true) {
-        let arg = input
-            .arguments
-            .first()
-            .cloned()
-            .unwrap_or_else(|| lit(ScalarValue::Null));
+        let arg = input.arguments.clone().one()?;
         let null_filter = arg.clone().is_not_null();
         let combined_filter = match input.filter {
             Some(existing) => Some(Box::new(existing.as_ref().clone().and(null_filter))),
@@ -297,11 +293,7 @@ fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     // WORKAROUND: DataFusion's array_agg doesn't properly handle null_treatment when distinct=true
     // So we need to add an explicit filter for NULLs when both distinct and ignore_nulls are true
     let (filter, null_treatment) = if input.distinct && ignore_nulls == Some(true) {
-        let arg = input
-            .arguments
-            .first()
-            .cloned()
-            .unwrap_or_else(|| lit(ScalarValue::Null));
+        let arg = input.arguments.clone().one()?;
         let null_filter = arg.clone().is_not_null();
         let combined_filter = match input.filter {
             Some(existing) => Some(Box::new(existing.as_ref().clone().and(null_filter))),
