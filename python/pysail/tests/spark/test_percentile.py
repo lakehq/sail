@@ -91,3 +91,22 @@ def test_percentile_disc_edge_cases(spark):
     # 100th percentile = max = 20
     expected = pd.DataFrame({"p0": [5], "p100": [20]})
     pd.testing.assert_frame_equal(actual, expected)
+
+
+def test_percentile_disc_with_nulls(spark):
+    """Tests percentile_disc correctly ignores null values."""
+    df = spark.createDataFrame(
+        [(10,), (None,), (20,), (None,), (30,), (40,), (None,), (50,)],
+        ["val"],
+    )
+    df.createOrReplaceTempView("test_disc_nulls")
+
+    actual = spark.sql("""
+        SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY val) AS median
+        FROM test_disc_nulls
+    """).toPandas()
+
+    # Non-null values: [10, 20, 30, 40, 50]
+    # 50th percentile (discrete) = 30
+    expected = pd.DataFrame({"median": [30]})
+    pd.testing.assert_frame_equal(actual, expected)
