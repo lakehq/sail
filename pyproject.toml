@@ -77,7 +77,7 @@ python = "3.11"
 installer = "pip"
 skip-install = true
 dependencies = [
-    "pyspark[connect]==4.1.1",
+    "pyspark[connect]==4.1.0",
     "ibis-framework>=11,<12",
     "pytest>=8.4,<9",
     "pytest-bdd>=8.1,<9",
