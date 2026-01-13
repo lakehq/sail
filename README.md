@@ -132,7 +132,7 @@ These results come from a derived TPC-H benchmark (22 queries, scale factor 100,
 
 ![Query Time Comparison](https://github.com/lakehq/sail/raw/46d0520532f22e99de6d9ade6373a117216484ca/.github/images/query-time.svg)
 
-See the full analysis and graphs of the TPC-H benchmark on our [Benchmark Results](https://docs.lakesail.com/sail/latest/introduction/benchmark-results/) page. 
+See the full analysis and graphs on our [Benchmark Results](https://docs.lakesail.com/sail/latest/introduction/benchmark-results/) page. 
 
 Additionally, see how Sail compares to Spark, popular Spark accelerators, Databricks, and Snowflake on [ClickBench](https://shm.to/clickbench).
 
