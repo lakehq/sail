@@ -5,6 +5,26 @@ next: false
 
 # Changelog
 
+## 0.4.6
+
+_January 13, 2026_
+
+- Improved Delta Lake integration ([#1146](https://github.com/lakehq/sail/pull/1146), [#1159](https://github.com/lakehq/sail/pull/1159), [#1158](https://github.com/lakehq/sail/pull/1158), and [#1161](https://github.com/lakehq/sail/pull/1161)).
+- Improved the internals for session management ([#1138](https://github.com/lakehq/sail/pull/1138)).
+- Supported reading CSV files with truncated rows ([#1185](https://github.com/lakehq/sail/pull/1185)).
+- Added the configuration option for default parallelism ([#1198](https://github.com/lakehq/sail/pull/1198)).
+- Added the `percentile_cont` SQL aggregate function ([#1188](https://github.com/lakehq/sail/pull/1188)).
+- Supported non-literal expressions for map extraction ([#1193](https://github.com/lakehq/sail/pull/1193)).
+- Supported wildcard for the `struct` SQL function ([#1197](https://github.com/lakehq/sail/pull/1197)).
+- Fixed an issue with null value handling in the `map_concat` SQL function ([#1194](https://github.com/lakehq/sail/pull/1194)).
+- Updated the PySpark compatibility checker example and function support status ([#1127](https://github.com/lakehq/sail/pull/1127)).
+- Updated the TPC-H benchmark example ([#1179](https://github.com/lakehq/sail/pull/1179)).
+- Supported Spark 4.1.1 ([#1199](https://github.com/lakehq/sail/pull/1199)).
+
+### Contributors
+
+Huge thanks to [@davidlghellin](https://github.com/davidlghellin), [keen85](https://github.com/keen85), and [@pomykalakyle](https://github.com/pomykalakyle) (_first-time contributor_) for your contributions!
+
 ## 0.4.5
 
 _December 22, 2025_
