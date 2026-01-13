@@ -114,7 +114,7 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for PercentileDiscGroupsAccum
                     .zip(filter.iter())
                     .for_each(|((&group_index, &new_value), filter_value)| {
                         if let Some(true) = filter_value {
-                            self.group_values[group_index].push(new_value);
+                self.group_values[group_index].push(new_value);
                         }
                     })
             }
