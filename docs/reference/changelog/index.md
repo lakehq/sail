@@ -23,7 +23,7 @@ _January 13, 2026_
 
 ### Contributors
 
-Huge thanks to [@davidlghellin](https://github.com/davidlghellin), [keen85](https://github.com/keen85), and [@pomykalakyle](https://github.com/pomykalakyle) (_first-time contributor_) for your contributions!
+Huge thanks to [@davidlghellin](https://github.com/davidlghellin), [@keen85](https://github.com/keen85), and [@pomykalakyle](https://github.com/pomykalakyle) (_first-time contributor_) for your contributions!
 
 ## 0.4.5
 
@@ -67,7 +67,7 @@ _December 12, 2025_
 
 ### Contributors
 
-Huge thanks to [@davidlghellin](https://github.com/davidlghellin), [@zemin-piao](https://github.com/zemin-piao), [keen85](https://github.com/keen85) (_first-time contributor_), [@YichiZhang0613](https://github.com/YichiZhang0613) (_first-time contributor_), and [@gstvg](https://github.com/gstvg) (_first-time contributor_) for your contributions!
+Huge thanks to [@davidlghellin](https://github.com/davidlghellin), [@zemin-piao](https://github.com/zemin-piao), [@keen85](https://github.com/keen85) (_first-time contributor_), [@YichiZhang0613](https://github.com/YichiZhang0613) (_first-time contributor_), and [@gstvg](https://github.com/gstvg) (_first-time contributor_) for your contributions!
 
 ## 0.4.3
 
