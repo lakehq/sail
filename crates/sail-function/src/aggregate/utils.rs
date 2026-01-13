@@ -68,53 +68,34 @@ pub fn filtered_null_mask(
     NullBuffer::union(opt_filter.as_ref(), input.nulls())
 }
 
+/// Returns the value at the given discrete percentile.
+///
+/// Returns an actual value from the dataset (no interpolation). Specifically,
+/// returns the first value whose cumulative distribution is >= the requested percentile.
 pub fn calculate_percentile_disc<T: ArrowNumericType>(
     mut values: Vec<T::Native>,
     percentile: f64,
 ) -> Option<T::Native> {
-    let cmp = |x: &T::Native, y: &T::Native| x.compare(*y);
-
     let len = values.len();
     if len == 0 {
-        None
-    } else if len == 1 {
-        Some(values[0])
-    } else if percentile == 0.0 {
-        Some(
-            *values
-                .iter()
-                .min_by(|a, b| cmp(a, b))
-                .expect("we checked for len > 0 a few lines above"),
-        )
-    } else if percentile == 1.0 {
-        Some(
-            *values
-                .iter()
-                .max_by(|a, b| cmp(a, b))
-                .expect("we checked for len > 0 a few lines above"),
-        )
-    } else {
-        let index = percentile * ((len - 1) as f64);
-        let lower_index = index.floor() as usize;
-        let upper_index = index.ceil() as usize;
-
-        if lower_index == upper_index {
-            let (_, value, _) = values.select_nth_unstable_by(lower_index, cmp);
-            Some(*value)
-        } else {
-            let (_, lower_value, _) = values.select_nth_unstable_by(lower_index, cmp);
-            let lower_value = *lower_value;
-
-            let (_, upper_value, _) = values.select_nth_unstable_by(upper_index, cmp);
-            let upper_value = *upper_value;
-
-            let fraction = index - (lower_index as f64);
-            let diff = upper_value.sub_wrapping(lower_value);
-            let interpolated = lower_value.add_wrapping(
-                diff.mul_wrapping(T::Native::usize_as((fraction * 1_000_000_f64) as usize))
-                    .div_wrapping(T::Native::usize_as(1_000_000)),
-            );
-            Some(interpolated)
-        }
+        return None;
     }
+
+    let cmp = |x: &T::Native, y: &T::Native| x.compare(*y);
+
+    // percentile_disc: return actual value at the target index (no interpolation)
+    // index = ceil(percentile * len) - 1, clamped to valid range
+    let index = if percentile == 0.0 {
+        0
+    } else if percentile == 1.0 {
+        len - 1
+    } else {
+        ((percentile * len as f64).ceil() as usize)
+            .saturating_sub(1)
+            .min(len - 1)
+    };
+
+    // select_nth_unstable_by is O(n) partial sort - finds the value at index
+    let (_, value, _) = values.select_nth_unstable_by(index, cmp);
+    Some(*value)
 }
