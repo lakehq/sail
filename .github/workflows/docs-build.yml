@@ -22,7 +22,7 @@ on:
 jobs:
   docs-build:
     name: Docs Build
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-latest
     environment: ${{ inputs.stage != 'test' && format('docs/{0}', inputs.stage) || '' }}
     steps:
       - uses: actions/checkout@v4
