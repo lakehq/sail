@@ -6,7 +6,7 @@ on:
       spark_version:
         description: The Spark version to test
         type: string
-        default: "4.1.0"
+        required: true
     secrets:
       CODECOV_TOKEN:
         required: false

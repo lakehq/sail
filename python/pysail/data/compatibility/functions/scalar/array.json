@@ -22,7 +22,8 @@
   {
     "module": "pyspark.sql.functions",
     "function": "array_contains_all",
-    "status": "supported"
+    "status": "supported",
+    "note": "Sail exclusive; not available in PySpark or Spark SQL"
   },
   {
     "module": "pyspark.sql.functions",
@@ -47,7 +48,8 @@
   {
     "module": "pyspark.sql.functions",
     "function": "array_join",
-    "status": "supported"
+    "status": "partially supported",
+    "ref": "https://github.com/lakehq/sail/issues/220"
   },
   {
     "module": "pyspark.sql.functions",
@@ -112,7 +114,14 @@
   {
     "module": "pyspark.sql.functions",
     "function": "sequence",
-    "status": "supported"
+    "status": "partially supported",
+    "ref": "https://github.com/lakehq/sail/issues/220"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "shuffle",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/220"
   },
   {
     "module": "pyspark.sql.functions",
@@ -123,10 +132,5 @@
     "module": "pyspark.sql.functions",
     "function": "sort_array",
     "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "shuffle",
-    "status": "in progress"
   }
 ]

@@ -1,37 +1,33 @@
 [
   {
     "module": "pyspark.sql.functions",
-    "function": "explode",
+    "function": "broadcast",
+    "status": "not supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "call_function",
+    "status": "partially supported",
+    "info": "Creating a function via Spark SQL does not work yet"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "col",
     "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "explode_outer",
+    "function": "column",
     "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "inline",
+    "function": "expr",
     "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "inline_outer",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "posexplode",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "posexplode_outer",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "stack",
+    "function": "lit",
     "status": "supported"
   }
 ]

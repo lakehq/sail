@@ -2411,7 +2411,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: percentile_cont"
+        "success": "ok"
       }
     },
     {
@@ -2433,7 +2433,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: percentile_cont"
+        "failure": "error in DataFusion: Error during planning: Failed to coerce arguments to satisfy a call to 'percentile_cont' function: coercion from Interval(YearMonth), Decimal128(2, 2) to the signature OneOf([Exact([Int8, Float64]), Exact([Int16, Float64]), Exact([Int32, Float64]), Exact([Int64, Float64]), Exact([UInt8, Float64]), Exact([UInt16, Float64]), Exact([UInt32, Float64]), Exact([UInt64, Float64]), Exact([Float32, Float64]), Exact([Float64, Float64])]) failed No function matches the given name and argument types 'percentile_cont(Interval(YearMonth), Decimal128(2, 2))'. You might need to add explicit type casts.\n\tCandidate functions:\n\tpercentile_cont(expr: Int8, percentile: Float64)\n\tpercentile_cont(expr: Int16, percentile: Float64)\n\tpercentile_cont(expr: Int32, percentile: Float64)\n\tpercentile_cont(expr: Int64, percentile: Float64)\n\tpercentile_cont(expr: UInt8, percentile: Float64)\n\tpercentile_cont(expr: UInt16, percentile: Float64)\n\tpercentile_cont(expr: UInt32, percentile: Float64)\n\tpercentile_cont(expr: UInt64, percentile: Float64)\n\tpercentile_cont(expr: Float32, percentile: Float64)\n\tpercentile_cont(expr: Float64, percentile: Float64)"
       }
     },
     {

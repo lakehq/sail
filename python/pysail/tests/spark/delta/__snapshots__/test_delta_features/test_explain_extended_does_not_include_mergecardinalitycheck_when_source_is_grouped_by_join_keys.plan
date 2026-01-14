@@ -73,24 +73,24 @@ DeltaCommitExec(table_path=file://<tmp>/merge_cardinality_skip/)
                     CoalesceBatchesExec: target_batch_size=8192
                       HashJoinExec: mode=Partitioned, join_type=Full, on=[(id@0, __sail_src_id@0)]
                         CoalesceBatchesExec: target_batch_size=8192
-                          RepartitionExec: partitioning=Hash([id@0], <partitions>), input_partitions=<partitions>
+                          RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
                             ProjectionExec: expr=[id@0 as id, value@1 as value, __sail_file_path@2 as __sail_file_path, true as __sail_merge_target_row_present]
                               DataSourceExec: file_groups={1 group: [[<tmp>/merge_cardinality_skip/part-<id>.snappy.parquet]]}, projection=[id, value, __sail_file_path], file_type=parquet
                         ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_value@1 as __sail_src_value, true as __sail_merge_source_row_present]
                           ProjectionExec: expr=[#2@0 as __sail_src_id, max(src.#3)@1 as __sail_src_value]
                             AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[max(src.#3)]
                               CoalesceBatchesExec: target_batch_size=8192
-                                RepartitionExec: partitioning=Hash([#2@0], <partitions>), input_partitions=<partitions>
-                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=4
+                                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                     AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[max(src.#3)]
                                       ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
-                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                        DataSourceExec: partitions=1, partition_sizes=[1]
             CoalesceBatchesExec: target_batch_size=8192
               HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@2)], projection=[id@1, value@2]
                 CoalescePartitionsExec
                   AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
                     CoalesceBatchesExec: target_batch_size=8192
-                      RepartitionExec: partitioning=Hash([__sail_file_path@0], <partitions>), input_partitions=<partitions>
+                      RepartitionExec: partitioning=Hash([__sail_file_path@0], 4), input_partitions=4
                         AggregateExec: mode=Partial, gby=[__sail_file_path@2 as __sail_file_path], aggr=[]
                           CoalesceBatchesExec: target_batch_size=8192
                             HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, __sail_src_id@0)]
@@ -100,11 +100,11 @@ DeltaCommitExec(table_path=file://<tmp>/merge_cardinality_skip/)
                                 ProjectionExec: expr=[#2@0 as __sail_src_id, max(src.#3)@1 as __sail_src_value]
                                   AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[max(src.#3)]
                                     CoalesceBatchesExec: target_batch_size=8192
-                                      RepartitionExec: partitioning=Hash([#2@0], <partitions>), input_partitions=<partitions>
-                                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                      RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=4
+                                        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                           AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[max(src.#3)]
                                             ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
-                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                              DataSourceExec: partitions=1, partition_sizes=[1]
                 ProjectionExec: expr=[CASE WHEN __common_expr_1@0 THEN __sail_src_id@5 ELSE id@1 END as id, CASE WHEN __sail_merge_target_row_present@4 IS NOT NULL AND __sail_merge_source_row_present@7 IS NOT NULL THEN __sail_src_value@6 WHEN __common_expr_1@0 THEN __sail_src_value@6 ELSE value@2 END as value, __sail_file_path@3 as __sail_file_path]
                   ProjectionExec: expr=[__sail_merge_target_row_present@3 IS NULL AND __sail_merge_source_row_present@6 IS NOT NULL as __common_expr_1, id@0 as id, value@1 as value, __sail_file_path@2 as __sail_file_path, __sail_merge_target_row_present@3 as __sail_merge_target_row_present, __sail_src_id@4 as __sail_src_id, __sail_src_value@5 as __sail_src_value, __sail_merge_source_row_present@6 as __sail_merge_source_row_present]
                     CoalesceBatchesExec: target_batch_size=8192
@@ -112,18 +112,18 @@ DeltaCommitExec(table_path=file://<tmp>/merge_cardinality_skip/)
                         CoalesceBatchesExec: target_batch_size=8192
                           HashJoinExec: mode=Partitioned, join_type=Full, on=[(id@0, __sail_src_id@0)]
                             CoalesceBatchesExec: target_batch_size=8192
-                              RepartitionExec: partitioning=Hash([id@0], <partitions>), input_partitions=<partitions>
+                              RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
                                 ProjectionExec: expr=[id@0 as id, value@1 as value, __sail_file_path@2 as __sail_file_path, true as __sail_merge_target_row_present]
                                   DataSourceExec: file_groups={1 group: [[<tmp>/merge_cardinality_skip/part-<id>.snappy.parquet]]}, projection=[id, value, __sail_file_path], file_type=parquet
                             ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_value@1 as __sail_src_value, true as __sail_merge_source_row_present]
                               ProjectionExec: expr=[#2@0 as __sail_src_id, max(src.#3)@1 as __sail_src_value]
                                 AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[max(src.#3)]
                                   CoalesceBatchesExec: target_batch_size=8192
-                                    RepartitionExec: partitioning=Hash([#2@0], <partitions>), input_partitions=<partitions>
-                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                    RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=4
+                                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                         AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[max(src.#3)]
                                           ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
-                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                            DataSourceExec: partitions=1, partition_sizes=[1]
       DeltaRemoveActionsExec
         DeltaDiscoveryExec(table_path=file://<tmp>/merge_cardinality_skip/)
           CoalescePartitionsExec
@@ -132,7 +132,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_cardinality_skip/)
                 CoalescePartitionsExec
                   AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
                     CoalesceBatchesExec: target_batch_size=8192
-                      RepartitionExec: partitioning=Hash([__sail_file_path@0], <partitions>), input_partitions=<partitions>
+                      RepartitionExec: partitioning=Hash([__sail_file_path@0], 4), input_partitions=4
                         AggregateExec: mode=Partial, gby=[__sail_file_path@2 as __sail_file_path], aggr=[]
                           CoalesceBatchesExec: target_batch_size=8192
                             HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, __sail_src_id@0)]
@@ -142,11 +142,11 @@ DeltaCommitExec(table_path=file://<tmp>/merge_cardinality_skip/)
                                 ProjectionExec: expr=[#2@0 as __sail_src_id, max(src.#3)@1 as __sail_src_value]
                                   AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[max(src.#3)]
                                     CoalesceBatchesExec: target_batch_size=8192
-                                      RepartitionExec: partitioning=Hash([#2@0], <partitions>), input_partitions=<partitions>
-                                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                      RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=4
+                                        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                           AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[max(src.#3)]
                                             ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
-                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                              DataSourceExec: partitions=1, partition_sizes=[1]
                 DeltaLogScanExec(table_path=file://<tmp>/merge_cardinality_skip/, version=0)
-                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                     DataSourceExec: file_groups={1 group: [[<tmp>/merge_cardinality_skip/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet

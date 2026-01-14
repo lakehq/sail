@@ -41,6 +41,16 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "collate",
+    "status": "??? not on roadmap"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "collation",
+    "status": "??? not on roadmap"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "concat_ws",
     "status": "supported"
   },
@@ -76,6 +86,18 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "format_number",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/508"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "format_string",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/508"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "initcap",
     "status": "supported"
   },
@@ -102,7 +124,8 @@
   {
     "module": "pyspark.sql.functions",
     "function": "len",
-    "status": "supported"
+    "status": "supported",
+    "note": "Spark SQL only; not available in PySpark"
   },
   {
     "module": "pyspark.sql.functions",
@@ -137,7 +160,9 @@
   {
     "module": "pyspark.sql.functions",
     "function": "luhn_check",
-    "status": "supported"
+    "status": "planned",
+    "note": "Spark SQL only; not available in PySpark",
+    "ref": "https://github.com/lakehq/sail/issues/508"
   },
   {
     "module": "pyspark.sql.functions",
@@ -166,18 +191,48 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "printf",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/508"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "randstr",
+    "status": "??? not on roadmap"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "regexp_count",
     "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "regexp_extract",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/508"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "regexp_extract_all",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/508"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "regexp_instr",
-    "status": "supported"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/508"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "regexp_replace",
     "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "regexp_substr",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/508"
   },
   {
     "module": "pyspark.sql.functions",
@@ -206,8 +261,21 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "sentences",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/508"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "soundex",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/508"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "space",
-    "status": "supported"
+    "status": "supported",
+    "note": "Spark SQL only; not available in PySpark"
   },
   {
     "module": "pyspark.sql.functions",
@@ -222,6 +290,11 @@
   {
     "module": "pyspark.sql.functions",
     "function": "startswith",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "strpos",
     "status": "supported"
   },
   {
@@ -246,8 +319,20 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "to_char",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/508"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "to_number",
     "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "to_varchar",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/508"
   },
   {
     "module": "pyspark.sql.functions",
@@ -293,75 +378,5 @@
     "module": "pyspark.sql.functions",
     "function": "validate_utf8",
     "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "strpos",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "collate",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "collation",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "format_number",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "format_string",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "printf",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "randstr",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "regexp_extract",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "regexp_extract_all",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "regexp_substr",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "sentences",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "soundex",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "to_char",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "to_varchar",
-    "status": "in progress"
   }
 ]
