@@ -16,35 +16,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/expr.rs>
-
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::DataType as ArrowDataType;
 use datafusion::catalog::Session;
-use datafusion::common::config::ConfigOptions;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion::common::{Column, DFSchema, Result, ToDFSchema};
+use datafusion::common::{Column, DFSchema, Result};
 use datafusion::logical_expr::execution_props::ExecutionProps;
-use datafusion::logical_expr::planner::ExprPlanner;
 use datafusion::logical_expr::simplify::SimplifyContext;
-use datafusion::logical_expr::{
-    AggregateUDF, BinaryExpr, Expr, Operator, ScalarUDF, TableProviderFilterPushDown, TableSource,
-};
+use datafusion::logical_expr::{BinaryExpr, Expr, Operator, TableProviderFilterPushDown};
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::expressions::Column as PhysicalColumn;
-use datafusion::sql::planner::{ContextProvider, SqlToRel};
-use datafusion::sql::sqlparser::dialect::GenericDialect;
-use datafusion::sql::sqlparser::parser::Parser;
-use datafusion::sql::sqlparser::tokenizer::Tokenizer;
 
-use crate::kernel::snapshot::LogDataHandler;
-use crate::kernel::{DeltaResult, DeltaTableError};
-use crate::schema::arrow_schema_from_struct_type;
+use crate::kernel::DeltaResult;
 
-/// Simplify a logical expression and convert it to a physical expression
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
+
+/// Simplify a logical expression and convert it to a physical expression.
 pub fn simplify_expr(
     session: &dyn Session,
     df_schema: &DFSchema,
@@ -58,7 +47,7 @@ pub fn simplify_expr(
     session.create_physical_expr(simplified, df_schema)
 }
 
-/// Determine which filters can be pushed down to the table provider
+/// Determine which filters can be pushed down to the table provider.
 pub fn get_pushdown_filters(
     filter: &[&Expr],
     partition_cols: &[String],
@@ -77,7 +66,7 @@ pub fn get_pushdown_filters(
         .collect()
 }
 
-/// Check if an expression is an exact predicate for the given columns
+/// Check if an expression is an exact predicate for the given columns.
 fn expr_is_exact_predicate_for_cols(partition_cols: &[String], expr: &Expr) -> bool {
     let mut is_applicable = true;
     let _ = expr.apply(|expr| match expr {
@@ -122,7 +111,7 @@ fn expr_is_exact_predicate_for_cols(partition_cols: &[String], expr: &Expr) -> b
     is_applicable
 }
 
-/// Extract column names referenced by a PhysicalExpr
+/// Extract column names referenced by a `PhysicalExpr`.
 pub fn collect_physical_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<String> {
     let mut columns = HashSet::<String>::new();
     let _ = expr.apply(|expr| {
@@ -134,107 +123,7 @@ pub fn collect_physical_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<String>
     columns
 }
 
-/// Simple context provider for Delta Lake expression parsing
-pub struct DeltaContextProvider<'a> {
-    session: &'a dyn Session,
-}
-
-impl<'a> DeltaContextProvider<'a> {
-    pub fn new(session: &'a dyn Session) -> Self {
-        DeltaContextProvider { session }
-    }
-}
-
-impl ContextProvider for DeltaContextProvider<'_> {
-    fn get_table_source(
-        &self,
-        _name: datafusion::common::TableReference,
-    ) -> Result<Arc<dyn TableSource>> {
-        unimplemented!("DeltaContextProvider does not support table sources")
-    }
-
-    fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
-        &[]
-    }
-
-    fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
-        self.session.scalar_functions().get(name).cloned()
-    }
-
-    fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
-        self.session.aggregate_functions().get(name).cloned()
-    }
-
-    fn get_window_meta(&self, name: &str) -> Option<Arc<datafusion::logical_expr::WindowUDF>> {
-        self.session.window_functions().get(name).cloned()
-    }
-
-    fn get_variable_type(&self, _var: &[String]) -> Option<ArrowDataType> {
-        unimplemented!("DeltaContextProvider does not support variables")
-    }
-
-    fn options(&self) -> &ConfigOptions {
-        self.session.config_options()
-    }
-
-    fn udf_names(&self) -> Vec<String> {
-        Vec::new()
-    }
-
-    fn udaf_names(&self) -> Vec<String> {
-        Vec::new()
-    }
-
-    fn udwf_names(&self) -> Vec<String> {
-        Vec::new()
-    }
-}
-
-/// Parse a string predicate into a DataFusion `Expr`
-pub fn parse_predicate_expression(
-    schema: &DFSchema,
-    expr: impl AsRef<str>,
-    session: &dyn Session,
-) -> DeltaResult<Expr> {
-    let dialect = &GenericDialect {};
-    let mut tokenizer = Tokenizer::new(dialect, expr.as_ref());
-    let tokens = tokenizer
-        .tokenize()
-        .map_err(|err| DeltaTableError::generic(format!("Failed to tokenize expression: {err}")))?;
-
-    let sql = Parser::new(dialect)
-        .with_tokens(tokens)
-        .parse_expr()
-        .map_err(|err| DeltaTableError::generic(format!("Failed to parse expression: {err}")))?;
-
-    let context_provider = DeltaContextProvider::new(session);
-    let sql_to_rel = SqlToRel::new(&context_provider);
-
-    sql_to_rel
-        .sql_to_expr(sql, schema, &mut Default::default())
-        .map_err(|err| {
-            DeltaTableError::generic(format!("Failed to convert SQL to expression: {err}"))
-        })
-}
-
-/// Parse predicate strings using the schema materialized in [`LogDataHandler`]
-pub fn parse_log_data_predicate(
-    read_snapshot: &LogDataHandler<'_>,
-    expr: impl AsRef<str>,
-    session: &dyn Session,
-) -> DeltaResult<Expr> {
-    let table_config = read_snapshot.table_configuration();
-    let schema = table_config.schema();
-    let arrow_schema = arrow_schema_from_struct_type(
-        schema.as_ref(),
-        table_config.metadata().partition_columns(),
-        false,
-    )?;
-    let df_schema = arrow_schema.to_dfschema_ref()?;
-    parse_predicate_expression(df_schema.as_ref(), expr, session)
-}
-
-/// Analyze predicate properties for file pruning
+/// Analyze predicate properties for file pruning.
 #[derive(Debug)]
 pub struct PredicateProperties {
     pub partition_columns: Vec<String>,

@@ -192,6 +192,11 @@ impl ScalarFunctionBuilder {
     }
 }
 
+/// Aggregate function input components, excluding the function name.
+///
+/// Populated by the resolver from `spec::UnresolvedFunction` after resolving spec expressions
+/// to DataFusion expressions. Used by aggregate function builders to produce the final
+/// DataFusion aggregate expression.
 pub struct AggFunctionInput<'a> {
     pub arguments: Vec<expr::Expr>,
     pub distinct: bool,
@@ -201,11 +206,24 @@ pub struct AggFunctionInput<'a> {
     pub function_context: FunctionContextInput<'a>,
 }
 
+/// Builds a DataFusion aggregate expression from resolved function components.
+///
+/// Takes the resolved arguments, modifiers (DISTINCT, FILTER, ORDER BY), and context,
+/// and produces a `datafusion_expr::Expr::AggregateFunction` ready for inclusion in the logical plan.
 pub(crate) type AggFunction = Arc<dyn Fn(AggFunctionInput) -> PlanResult<expr::Expr> + Send + Sync>;
 
+/// Factory methods for creating `AggFunction`s.
+///
+/// Provides different ways to build aggregate function handlers:
+/// - `default`: Use an existing DataFusion UDAF directly
+/// - `custom`: Provide custom logic for building the expression
+/// - `unknown`: Placeholder for unimplemented functions
 pub(crate) struct AggFunctionBuilder;
 
 impl AggFunctionBuilder {
+    /// Converts a DataFusion UDAF factory into an AggFunction.
+    ///
+    /// Passes all resolved components through directly with no transformation.
     pub fn default<F>(f: F) -> AggFunction
     where
         F: Fn() -> Arc<AggregateUDF> + Send + Sync + 'static,
@@ -233,6 +251,9 @@ impl AggFunctionBuilder {
         })
     }
 
+    /// Wraps a custom function that builds the aggregate expression with full control.
+    ///
+    /// Use when the function needs special argument handling that `default` cannot provide.
     pub fn custom<F>(f: F) -> AggFunction
     where
         F: Fn(AggFunctionInput) -> PlanResult<expr::Expr> + Send + Sync + 'static,

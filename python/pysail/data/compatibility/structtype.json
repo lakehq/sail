@@ -1,0 +1,73 @@
+[
+  {
+    "module": "pyspark.sql.types.StructType",
+    "function": "add",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.types.StructType",
+    "function": "fieldNames",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.types.StructType",
+    "function": "fromDDL",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.types.StructType",
+    "function": "fromInternal",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.types.StructType",
+    "function": "fromJson",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.types.StructType",
+    "function": "json",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.types.StructType",
+    "function": "jsonValue",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.types.StructType",
+    "function": "needConversion",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.types.StructType",
+    "function": "simpleString",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.types.StructType",
+    "function": "toDDL",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/1060"
+  },
+  {
+    "module": "pyspark.sql.types.StructType",
+    "function": "toInternal",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.types.StructType",
+    "function": "toNullable",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.types.StructType",
+    "function": "treeString",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.types.StructType",
+    "function": "typeName",
+    "status": "supported"
+  }
+]

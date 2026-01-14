@@ -7,11 +7,13 @@
   {
     "module": "pyspark.sql.functions",
     "function": "schema_of_csv",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/225"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "to_csv",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/225"
   }
 ]

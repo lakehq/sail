@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import time
+from pathlib import Path
 
 from pyspark.sql import SparkSession
 
@@ -10,22 +11,45 @@ from pyspark.sql import SparkSession
 class TpchBenchmark:
     TABLE_NAMES = ("customer", "lineitem", "nation", "orders", "part", "partsupp", "region", "supplier")
 
-    def __init__(self, url: str, data_path: str, query_path: str):
+    def __init__(
+        self,
+        url: str,
+        data_path: str,
+        query_path: str,
+        format: str = "parquet",  # noqa: A002
+        include_load_time: bool = False,  # noqa: FBT001, FBT002
+    ):
         self.url = url
         self.data_path = data_path
         self.query_path = query_path
+        self.format = format
+        self.include_load_time = include_load_time
 
     def _is_remote(self):
         return self.url.startswith("sc://")
+
+    def _load_tables(self, spark: SparkSession):
+        """Load tables from disk into temp views."""
+        for table in self.TABLE_NAMES:
+            if self.format == "delta":
+                path = f"{self.data_path}/{table}"
+                df = spark.read.format("delta").load(path)
+            elif self.format == "iceberg":
+                # Iceberg requires file:// URL for local paths (especially with Sail)
+                table_path = Path(self.data_path) / "tpch" / table
+                path = table_path.resolve().as_uri() + "/"
+                df = spark.read.format("iceberg").load(path)
+            else:
+                path = f"{self.data_path}/{table}.parquet"
+                df = spark.read.parquet(path)
+            df.createOrReplaceTempView(table)
 
     @contextlib.contextmanager
     def spark_session(self):
         builder = SparkSession.builder.remote(self.url) if self._is_remote() else SparkSession.builder.master(self.url)
         spark = builder.appName("TPC-H").getOrCreate()
-        for table in self.TABLE_NAMES:
-            path = f"{self.data_path}/{table}.parquet"
-            df = spark.read.parquet(path)
-            df.createOrReplaceTempView(table)
+        if not self.include_load_time:
+            self._load_tables(spark)
         try:
             yield spark
         finally:
@@ -54,6 +78,8 @@ class TpchBenchmark:
                             print(line)
                 else:
                     start_time = time.time()
+                    if self.include_load_time:
+                        self._load_tables(spark)
                     df = spark.sql(sql)
                     rows = df.toPandas()
                     end_time = time.time()
@@ -85,6 +111,13 @@ def main():
     parser.add_argument("--data-path", type=str, required=True)
     parser.add_argument("--query-path", type=str, required=True)
     parser.add_argument("--num-runs", type=int, default=1)
+    parser.add_argument("--format", type=str, default="parquet", choices=["parquet", "delta", "iceberg"])
+    parser.add_argument(
+        "--include-load-time",
+        action="store_true",
+        default=False,
+        help="Include data loading time in benchmark measurements",
+    )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--console", action="store_true")
     group.add_argument("--query", type=int, choices=range(1, 23))
@@ -92,7 +125,7 @@ def main():
     group.add_argument("--explain", type=int, choices=range(1, 23))
     args = parser.parse_args()
 
-    benchmark = TpchBenchmark(args.url, args.data_path, args.query_path)
+    benchmark = TpchBenchmark(args.url, args.data_path, args.query_path, args.format, args.include_load_time)
     if args.console:
         with benchmark.spark_session() as spark:
             import code  # noqa: PLC0415

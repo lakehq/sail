@@ -29,6 +29,50 @@ data:
     - actionType: insert
   timestamp: <timestamp>
 ---
+name: "test_conditional_overwrite_can_replace_all_rows_replace_where_id__cast0_as_bigint"
+data:
+  clientVersion: sail-delta-lake.x.x.x
+  engineInfo: sail-delta-lake:x.x.x
+  isBlindAppend: false
+  operation: WRITE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 1067
+    numAddedFiles: 1
+    numFiles: 1
+    numOutputBytes: 1067
+    numOutputFiles: 1
+    numOutputRows: 2
+    numRemovedBytes: 1093
+    numRemovedFiles: 1
+    writeTimeMs: <time_ms>
+  operationParameters:
+    mode: Overwrite
+    predicate: 'id >= CAST ( 0 AS BIGINT ) '
+  timestamp: <timestamp>
+---
+name: "test_conditional_overwrite_keeps_nonmatching_rows_replace_where"
+data:
+  clientVersion: sail-delta-lake.x.x.x
+  engineInfo: sail-delta-lake:x.x.x
+  isBlindAppend: false
+  operation: WRITE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 1093
+    numAddedFiles: 1
+    numFiles: 1
+    numOutputBytes: 1093
+    numOutputFiles: 1
+    numOutputRows: 4
+    numRemovedBytes: 1093
+    numRemovedFiles: 1
+    writeTimeMs: <time_ms>
+  operationParameters:
+    mode: Overwrite
+    predicate: 'category = ''A'' '
+  timestamp: <timestamp>
+---
 name: "test_create_partitioned_table_with_column_mapping_name_mode_ddl"
 data:
   metaData:
@@ -300,10 +344,10 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 1419
+    numAddedBytes: 1420
     numAddedFiles: 1
     numFiles: 1
-    numOutputBytes: 1419
+    numOutputBytes: 1420
     numOutputFiles: 1
     numOutputRows: 4
     numRemovedBytes: 1293

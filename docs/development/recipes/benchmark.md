@@ -28,7 +28,23 @@ Please follow the README in that repository to generate the TPC-H data.
 
 - You can use `--console` instead of `--query [N]` to start a PySpark console and explore the TPC-H data interactively.
 - You can use `--url` to specify the Spark URL. Use `local` for Spark local mode (JVM) and use `sc://localhost:50051` for Spark Connect (the default).
+- You can use `--format` to specify the data format: `parquet` (default), `delta`, or `iceberg`.
+- You can use `--include-load-time` to include data loading time in benchmark measurements. By default, tables are pre-loaded before timing starts.
 - You can use `--help` to see all the supported arguments.
+
+## Converting to Delta Lake Format
+
+To benchmark with Delta Lake format, first convert the Parquet data using the provided utility:
+
+```shell
+python -m pysail.examples.spark.convert_to_delta \
+  --input-path "$BENCHMARK_PATH"/tpch/data \
+  --output-path "$BENCHMARK_PATH"/tpch/data_delta
+```
+
+Then run the benchmark with `--format delta` and `--data-path` pointing to the Delta Lake directory.
+
+## Running the Server
 
 Please use the following command to run the Spark Connect server.
 It runs the server in release mode without debug logs.

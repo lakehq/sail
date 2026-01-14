@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        spark-version: ["3.5.7", "4.0.1", "4.1.0"]
+        spark-version: ["3.5.7", "4.0.1", "4.1.1"]
     env:
       HATCH_ENV: "test.spark-${{ matrix.spark-version }}"
       # Coverage environment variables

@@ -25,32 +25,30 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_physical_expr::expressions::{lit, Column as PhysicalColumn};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
-use crate::kernel::models::Action;
-use crate::kernel::DeltaOperation;
-
+mod action_schema;
 mod commit_exec;
+pub mod discovery_exec;
 mod expr_adapter;
-mod file_lookup_exec;
-pub mod find_files_exec;
+mod log_scan_exec;
 mod remove_actions_exec;
 mod scan_by_adds_exec;
-mod utils;
 mod writer_exec;
 
+pub use action_schema::{
+    decode_actions_and_meta_from_batch, decode_adds_from_batch, delta_action_schema,
+    encode_actions, CommitMeta, ExecAction, COL_ACTION,
+};
 pub use commit_exec::DeltaCommitExec;
+pub use discovery_exec::DeltaDiscoveryExec;
 pub use expr_adapter::DeltaPhysicalExprAdapterFactory;
-pub use file_lookup_exec::DeltaFileLookupExec;
-pub use find_files_exec::DeltaFindFilesExec;
+pub use log_scan_exec::DeltaLogScanExec;
 pub mod planner;
 pub use planner::{
     plan_delete, plan_merge, plan_update, DeltaPhysicalPlanner, DeltaTableConfig, PlannerContext,
 };
 pub use remove_actions_exec::DeltaRemoveActionsExec;
 pub use scan_by_adds_exec::DeltaScanByAddsExec;
-pub(crate) use utils::join_batches_with_add_actions;
 pub use writer_exec::DeltaWriterExec;
 
 /// Create a `ProjectionExec` instance that reorders columns so that partition columns
@@ -184,17 +182,6 @@ pub fn create_repartition(
     };
 
     Ok(Arc::new(RepartitionExec::try_new(input, partitioning)?))
-}
-
-/// Helper struct for serializing commit information into a single JSON field
-#[derive(Serialize, Deserialize, Default)]
-pub struct CommitInfo {
-    pub row_count: u64,
-    pub actions: Vec<Action>,
-    pub initial_actions: Vec<Action>,
-    pub operation: Option<DeltaOperation>,
-    #[serde(rename = "operationMetrics", default)]
-    pub operation_metrics: std::collections::HashMap<String, Value>,
 }
 
 pub(crate) fn current_timestamp_millis() -> Result<i64> {

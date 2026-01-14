@@ -1,7 +1,7 @@
 use datafusion_expr::LogicalPlan;
 use sail_common::spec;
 
-use crate::error::PlanResult;
+use crate::error::{PlanError, PlanResult};
 use crate::resolver::command::write::{
     WriteColumnMatch, WriteMode, WritePlanBuilder, WriteTableAction, WriteTarget,
 };
@@ -29,6 +29,14 @@ impl PlanResolver<'_> {
             options,
         } = write;
 
+        let replace_where = options.iter().find_map(|(k, v)| {
+            if k.eq_ignore_ascii_case("replaceWhere") || k.eq_ignore_ascii_case("replace_where") {
+                Some(v.clone())
+            } else {
+                None
+            }
+        });
+
         let input = self.resolve_write_input(*input, state).await?;
         let clustering_columns = self.resolve_write_cluster_by_columns(clustering_columns)?;
 
@@ -47,7 +55,31 @@ impl PlanResolver<'_> {
                     Some(SaveMode::ErrorIfExists) | None => WriteMode::ErrorIfExists,
                     Some(SaveMode::IgnoreIfExists) => WriteMode::IgnoreIfExists,
                     Some(SaveMode::Append) => WriteMode::Append,
-                    Some(SaveMode::Overwrite) => WriteMode::Overwrite,
+                    Some(SaveMode::Overwrite) => match replace_where {
+                        Some(ref replace_where) => {
+                            let ast_expr =
+                                sail_sql_analyzer::parser::parse_expression(replace_where.as_str())
+                                    .map_err(|e| {
+                                        PlanError::invalid(format!(
+                                    "invalid replaceWhere expression: {replace_where} ({e})"
+                                ))
+                                    })?;
+                            let spec_expr =
+                                sail_sql_analyzer::expression::from_ast_expression(ast_expr)
+                                    .map_err(|e| {
+                                        PlanError::invalid(format!(
+                                            "invalid replaceWhere expression: {replace_where} ({e})"
+                                        ))
+                                    })?;
+                            WriteMode::OverwriteIf {
+                                condition: Box::new(spec::ExprWithSource {
+                                    expr: spec_expr,
+                                    source: Some(replace_where.clone()),
+                                }),
+                            }
+                        }
+                        None => WriteMode::Overwrite,
+                    },
                 };
                 builder = builder
                     .with_target(WriteTarget::Path { location })
