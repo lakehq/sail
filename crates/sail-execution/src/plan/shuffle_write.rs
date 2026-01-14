@@ -185,7 +185,17 @@ impl ExecutionPlan for ShuffleWriteExec {
             shuffle_partitioning => shuffle_partitioning.clone(),
         };
         // TODO: Support metrics in batch partitioner
-        let partitioner = BatchPartitioner::try_new(shuffle_partitioning, Default::default())?;
+        let num_input_partitions = self
+            .plan
+            .properties()
+            .output_partitioning()
+            .partition_count();
+        let partitioner = BatchPartitioner::try_new(
+            shuffle_partitioning,
+            Default::default(),
+            partition,
+            num_input_partitions,
+        )?;
         let output_schema = Arc::new(Schema::empty());
         let output_data = RecordBatch::new_empty(output_schema.clone());
         let output = futures::stream::once(async move {
