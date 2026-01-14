@@ -11,9 +11,9 @@ on:
       - "pyproject.toml"
 
 jobs:
-  python-lint:
-    name: Python Lint
-    runs-on: ubuntu-latest
+  lint:
+    name: Lint
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@v4
 

@@ -14,7 +14,7 @@ on:
 jobs:
   setup:
     name: Setup
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       build_package: ${{ github.event_name == 'push' || steps.filter.outputs.package == 'true' || steps.baseline-workflow.outputs.workflow_run_id == '' }}
       baseline_run_id: ${{ steps.baseline-workflow.outputs.workflow_run_id }}
@@ -131,8 +131,8 @@ jobs:
           fail_ci_if_error: true
           env_vars: OS
 
-  python-build:
-    name: Python Build
+  rust-build:
+    name: Rust Build
     if: ${{ needs.setup.outputs.build_package == 'true' }}
     runs-on: ubuntu-latest
     needs:
@@ -178,7 +178,7 @@ jobs:
       spark_version: ${{ matrix.spark-version }}
     needs:
       - setup
-      - python-build
+      - rust-build
 
   ibis-tests:
     name: Ibis Tests
@@ -188,7 +188,7 @@ jobs:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     needs:
       - setup
-      - python-build
+      - rust-build
 
   python-tests:
     name: Python Tests
@@ -196,14 +196,19 @@ jobs:
     uses: ./.github/workflows/python-tests.yml
     secrets:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+    strategy:
+      matrix:
+        spark-version: ["3.5.7", "4.0.1", "4.1.1"]
+    with:
+      spark_version: ${{ matrix.spark-version }}
     needs:
       - setup
-      - python-build
+      - rust-build
 
   codecov-notify:
-    name: Codecov Finalize
-    if: ${{ always() && github.actor != 'dependabot[bot]' }}
-    runs-on: ubuntu-latest
+    name: Codecov Notify
+    if: ${{ !cancelled() && github.actor != 'dependabot[bot]' }}
+    runs-on: ubuntu-slim
     needs:
       - rust-tests
       - python-tests
@@ -228,7 +233,7 @@ jobs:
     needs:
       - setup
       - rust-tests
-      - python-build
+      - rust-build
     strategy:
       matrix:
         stage: ${{ fromJSON(github.event_name == 'push' && '["dev", "prod"]' || '["test"]') }}
