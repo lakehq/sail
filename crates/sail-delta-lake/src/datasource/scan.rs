@@ -18,11 +18,13 @@
 
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, SchemaRef};
 use datafusion::catalog::Session;
+use datafusion::common::scalar::ScalarValue;
 use datafusion::common::{DataFusionError, Result};
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
@@ -42,6 +44,17 @@ use crate::kernel::models::Add;
 use crate::physical_plan::DeltaPhysicalExprAdapterFactory;
 use crate::storage::LogStoreRef;
 use crate::table::DeltaTableState;
+
+fn cmp_partition_values(a: &[ScalarValue], b: &[ScalarValue]) -> Ordering {
+    for (val_a, val_b) in a.iter().zip(b.iter()) {
+        match val_a.partial_cmp(val_b) {
+            Some(Ordering::Equal) => continue,
+            Some(ordering) => return ordering,
+            None => continue,
+        }
+    }
+    a.len().cmp(&b.len())
+}
 
 /// Parameters for building file scan configuration
 pub struct FileScanParams<'a> {
@@ -82,10 +95,7 @@ pub fn build_file_scan_config(
         .collect();
 
     // Build file groups by partition values
-    let mut file_groups: HashMap<
-        Vec<datafusion::common::scalar::ScalarValue>,
-        Vec<PartitionedFile>,
-    > = HashMap::new();
+    let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
 
     for action in files.iter() {
         let mut part =
@@ -120,6 +130,12 @@ pub fn build_file_scan_config(
             ));
         });
     });
+
+    // Ensure deterministic file group ordering for stable EXPLAIN snapshots.
+    // `file_groups` is keyed by partition values and built via `HashMap`, so iteration order is
+    // not stable. We sort groups by partition values, and files within each group by path.
+    let mut sorted_groups: Vec<_> = file_groups.into_iter().collect();
+    sorted_groups.sort_by(|(a, _), (b, _)| cmp_partition_values(a, b));
 
     // Build table partition columns schema
     let mut table_partition_cols_schema = Vec::with_capacity(table_partition_cols.len());
@@ -187,10 +203,21 @@ pub fn build_file_scan_config(
             // If all files were filtered out, we still need to emit at least one partition
             // to pass datafusion sanity checks.
             // See https://github.com/apache/datafusion/issues/11322
-            if file_groups.is_empty() {
+            if sorted_groups.is_empty() {
                 vec![FileGroup::from(vec![])]
             } else {
-                file_groups.into_values().map(FileGroup::from).collect()
+                sorted_groups
+                    .into_iter()
+                    .map(|(_, mut files)| {
+                        files.sort_by(|a, b| {
+                            a.object_meta
+                                .location
+                                .as_ref()
+                                .cmp(b.object_meta.location.as_ref())
+                        });
+                        FileGroup::from(files)
+                    })
+                    .collect()
             },
         )
         .with_statistics(stats)
