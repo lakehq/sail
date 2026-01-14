@@ -161,7 +161,7 @@ impl ExecutionPlan for ShuffleWriteExec {
         let output_data = RecordBatch::new_empty(output_schema.clone());
         let output = futures::stream::once(async move {
             shuffle_write(writer, stream, &locations, partitioner).await?;
-            Ok(empty)
+            Ok(output_data)
         });
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),

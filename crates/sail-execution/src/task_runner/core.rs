@@ -13,7 +13,7 @@ use datafusion_proto::protobuf::PhysicalPlanNode;
 use log::debug;
 use prost::Message;
 use sail_common_datafusion::error::CommonErrorCause;
-use sail_common_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
+use sail_delta_lake::physical_plan::DeltaPhysicalExprAdapterFactory;
 use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::{Actor, ActorContext};
 use sail_telemetry::telemetry::global_metric_registry;
@@ -119,12 +119,10 @@ impl TaskRunner {
             if let Some(ds) = node.as_any().downcast_ref::<DataSourceExec>() {
                 if let Some((base_config, _parquet)) = ds.downcast_to_file_source::<ParquetSource>()
                 {
-                    let builder = FileScanConfigBuilder::from(base_config.clone());
-                    let new_source = base_config
-                        .file_source()
-                        .with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory))?;
-                    let new_exec =
-                        DataSourceExec::from_data_source(builder.with_source(new_source).build());
+                    let adapter_factory = Arc::new(DeltaPhysicalExprAdapterFactory {});
+                    let builder = FileScanConfigBuilder::from(base_config.clone())
+                        .with_expr_adapter(Some(adapter_factory));
+                    let new_exec = DataSourceExec::from_data_source(builder.build());
                     return Ok(Transformed::yes(new_exec as Arc<dyn ExecutionPlan>));
                 }
             }

@@ -3,8 +3,6 @@ use std::mem;
 use datafusion::arrow::datatypes::SchemaRef;
 use log::{error, info, warn};
 use sail_common_datafusion::error::CommonErrorCause;
-use sail_delta_lake::physical_plan::DeltaPhysicalExprAdapterFactory;
-use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
 
@@ -274,83 +272,5 @@ impl WorkerActor {
     ) -> ActorAction {
         self.stream_manager.remove_local_streams(job_id, stage);
         ActorAction::Continue
-    }
-
-    fn execute_plan(
-        &mut self,
-        ctx: &mut ActorContext<Self>,
-        instance: &TaskInstance,
-        plan: Vec<u8>,
-        partition: usize,
-    ) -> ExecutionResult<SendableRecordBatchStream> {
-        let task_ctx = self.options.session.task_ctx();
-        let plan = PhysicalPlanNode::decode(plan.as_slice())?;
-        let plan = plan.try_into_physical_plan(&task_ctx, self.physical_plan_codec.as_ref())?;
-        let plan = self.rewrite_shuffle(ctx, plan)?;
-        let plan = self.rewrite_parquet_adapters(plan)?;
-        debug!(
-            "job {} task {} attempt {} execution plan\n{}",
-            instance.job_id,
-            instance.task_id,
-            instance.attempt,
-            DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
-        );
-        let options = TracingExecOptions {
-            metric_registry: global_metric_registry(),
-            job_id: Some(instance.job_id.into()),
-            task_id: Some(instance.task_id.into()),
-            task_attempt: Some(instance.attempt),
-            operator_id: None,
-        };
-        let plan = trace_execution_plan(plan, options)?;
-        let stream = plan.execute(partition, task_ctx)?;
-        Ok(stream)
-    }
-
-    fn rewrite_shuffle(
-        &mut self,
-        ctx: &mut ActorContext<Self>,
-        plan: Arc<dyn ExecutionPlan>,
-    ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
-        let worker_id = self.options.worker_id;
-        let handle = ctx.handle();
-        let result = plan.transform(move |node| {
-            if let Some(shuffle) = node.as_any().downcast_ref::<ShuffleReadExec>() {
-                let accessor = WorkerStreamAccessor::new(worker_id, handle.clone());
-                let shuffle = shuffle.clone().with_reader(Some(Arc::new(accessor)));
-                Ok(Transformed::yes(Arc::new(shuffle)))
-            } else if let Some(shuffle) = node.as_any().downcast_ref::<ShuffleWriteExec>() {
-                let accessor = WorkerStreamAccessor::new(worker_id, handle.clone());
-                let shuffle = shuffle.clone().with_writer(Some(Arc::new(accessor)));
-                Ok(Transformed::yes(Arc::new(shuffle)))
-            } else {
-                Ok(Transformed::no(node))
-            }
-        });
-        Ok(result.data()?)
-    }
-
-    fn rewrite_parquet_adapters(
-        &mut self,
-        plan: Arc<dyn ExecutionPlan>,
-    ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
-        let result = plan.transform(|node| {
-            if let Some(ds) = node.as_any().downcast_ref::<DataSourceExec>() {
-                if let Some((base_config, _parquet)) = ds.downcast_to_file_source::<ParquetSource>()
-                {
-                    // Try to determine if this is Delta or Iceberg based on table metadata
-                    // For now, we default to Delta adapter. In the future, we could add
-                    // metadata to distinguish between different table formats.
-                    let adapter_factory = Arc::new(DeltaPhysicalExprAdapterFactory {});
-
-                    let builder = FileScanConfigBuilder::from(base_config.clone())
-                        .with_expr_adapter(Some(adapter_factory));
-                    let new_exec = DataSourceExec::from_data_source(builder.build());
-                    return Ok(Transformed::yes(new_exec));
-                }
-            }
-            Ok(Transformed::no(node))
-        });
-        Ok(result.data()?)
     }
 }
