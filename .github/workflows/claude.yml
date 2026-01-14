@@ -41,6 +41,9 @@ jobs:
       - uses: pypa/hatch@install
 
       - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: rust-build
+          install-testing-tools: false
 
       - uses: pnpm/action-setup@v4
 
@@ -72,4 +75,4 @@ jobs:
           use_bedrock: "true"
           claude_args: |
             --allowedTools Bash
-            --model us.anthropic.claude-sonnet-4-5-20250929-v1:0
+            --model us.anthropic.claude-opus-4-5-20251101-v1:0

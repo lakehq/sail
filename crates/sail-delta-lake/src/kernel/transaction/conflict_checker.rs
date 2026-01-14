@@ -22,13 +22,10 @@
 
 use std::collections::HashSet;
 
-use datafusion::catalog::Session;
-use datafusion::logical_expr::Expr;
 use delta_kernel::table_properties::IsolationLevel;
 use delta_kernel::Error as KernelError;
 use thiserror::Error;
 
-use crate::datasource::parse_log_data_predicate;
 use crate::kernel::models::{Action, Add, CommitInfo, Metadata, Protocol, Remove, Transaction};
 use crate::kernel::snapshot::LogDataHandler;
 use crate::kernel::{DeltaOperation, DeltaResult, TablePropertiesExt};
@@ -79,8 +76,6 @@ pub enum CommitConflictError {
 #[allow(unused)]
 pub(crate) struct TransactionInfo<'a> {
     txn_id: String,
-    /// partition predicates by which files have been queried by the transaction
-    read_predicates: Option<Expr>,
     /// appIds that have been seen by the transaction
     read_app_ids: HashSet<String>,
     /// delta log actions that the transaction wants to commit
@@ -94,16 +89,9 @@ pub(crate) struct TransactionInfo<'a> {
 impl<'a> TransactionInfo<'a> {
     pub fn try_new(
         read_snapshot: LogDataHandler<'a>,
-        read_predicates: Option<String>,
         actions: &'a [Action],
         read_whole_table: bool,
-        session: Option<&dyn Session>,
     ) -> DeltaResult<Self> {
-        let read_predicates = match (read_predicates, session) {
-            (Some(pred), Some(s)) => Some(parse_log_data_predicate(&read_snapshot, pred, s)?),
-            _ => None,
-        };
-
         let mut read_app_ids = HashSet::<String>::new();
         for action in actions.iter() {
             if let Action::Txn(Transaction { app_id, .. }) = action {
@@ -111,17 +99,11 @@ impl<'a> TransactionInfo<'a> {
             }
         }
 
-        Ok(Self::new(
-            read_snapshot,
-            read_predicates,
-            actions,
-            read_whole_table,
-        ))
+        Ok(Self::new(read_snapshot, actions, read_whole_table))
     }
 
     pub fn new(
         read_snapshot: LogDataHandler<'a>,
-        read_predicates: Option<Expr>,
         actions: &'a [Action],
         read_whole_table: bool,
     ) -> Self {
@@ -133,7 +115,6 @@ impl<'a> TransactionInfo<'a> {
         }
         Self {
             txn_id: "".into(),
-            read_predicates,
             read_app_ids,
             actions,
             read_snapshot,

@@ -167,6 +167,25 @@ pub async fn open_table_with_object_store(
     Ok(table)
 }
 
+/// Open and load a Delta table with an explicit kernel load config.
+///
+/// This is primarily useful for planning-time code paths where we want to avoid eagerly loading
+/// file-level metadata on the driver (e.g. `require_files=false`).
+pub async fn open_table_with_object_store_and_table_config(
+    location: Url,
+    object_store: Arc<dyn ObjectStore>,
+    storage_options: StorageConfig,
+    table_config: DeltaTableConfig,
+) -> DeltaResult<DeltaTable> {
+    let log_store =
+        create_logstore_with_object_store(object_store.clone(), location, storage_options)?;
+
+    let mut table = DeltaTable::new(log_store, table_config);
+    table.load().await?;
+
+    Ok(table)
+}
+
 pub(crate) async fn create_delta_table_with_object_store(
     location: Url,
     object_store: Arc<dyn ObjectStore>,

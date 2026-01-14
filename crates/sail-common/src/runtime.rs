@@ -14,6 +14,15 @@ pub struct RuntimeManager {
 }
 
 impl RuntimeManager {
+    /// Attempts to initialize a new RuntimeManager instance.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - The runtime configuration to use.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `CommonError` if the runtime manager fails to initialize.
     pub fn try_new(config: &RuntimeConfig) -> CommonResult<Self> {
         let primary = Self::build_runtime(config.stack_size)?;
         let io = Self::build_runtime(config.stack_size)?;

@@ -1,196 +1,140 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use datafusion::execution::TaskContext;
+use datafusion::physical_plan::ExecutionPlanProperties;
+use sail_common_datafusion::error::CommonErrorCause;
 
-use crate::driver::planner::JobGraph;
+use crate::driver::job_scheduler::topology::JobTopology;
+use crate::driver::output::JobOutputManager;
 use crate::error::ExecutionResult;
-use crate::id::{IdGenerator, JobId, TaskId, TaskInstance, WorkerId};
-use crate::stream::channel::ChannelName;
+use crate::job_graph::JobGraph;
 
 pub struct JobDescriptor {
-    pub stages: Vec<JobStage>,
-    pub tasks: HashMap<TaskId, TaskDescriptor>,
+    pub graph: JobGraph,
+    pub topology: JobTopology,
+    pub stages: Vec<StageDescriptor>,
+    pub regions: Vec<TaskRegionDescriptor>,
+    pub state: JobState,
+}
+
+pub enum JobState {
+    Running {
+        output: JobOutputManager,
+        context: Arc<TaskContext>,
+    },
+    Draining,
+    Succeeded,
+    Failed,
+    Canceled,
 }
 
 impl JobDescriptor {
-    pub fn try_new(job_id: JobId, graph: JobGraph) -> ExecutionResult<Self> {
+    pub fn try_new(graph: JobGraph, state: JobState) -> ExecutionResult<Self> {
         let mut stages = vec![];
-        let mut tasks = HashMap::new();
-        let mut task_id_generator = IdGenerator::new();
-        for (s, plan) in graph.stages().iter().enumerate() {
-            let last = s == graph.stages().len() - 1;
-            let mut stage = JobStage {
-                plan: Arc::clone(plan),
+        for stage in graph.stages().iter() {
+            let mut descriptor = StageDescriptor {
                 tasks: vec![],
+                state: StageState::Active,
             };
-            for p in 0..plan.output_partitioning().partition_count() {
-                let task_id = task_id_generator.next()?;
-                let attempt = 0;
-                let channel = if last {
-                    Some(format!("job-{job_id}/task-{task_id}/attempt-{attempt}").into())
-                } else {
-                    None
-                };
-                tasks.insert(
-                    task_id,
-                    TaskDescriptor {
-                        stage: s,
-                        partition: p,
-                        attempt,
-                        mode: TaskMode::Pipelined,
-                        state: TaskState::Created,
-                        messages: vec![],
-                        channel,
-                    },
-                );
-                stage.tasks.push(task_id);
+            for _ in 0..stage.plan.output_partitioning().partition_count() {
+                descriptor.tasks.push(TaskDescriptor { attempts: vec![] });
             }
-            stages.push(stage);
+            stages.push(descriptor);
         }
-        Ok(Self { stages, tasks })
-    }
-
-    pub fn can_schedule_task(&self, task_id: TaskId) -> bool {
-        let Some(task) = self.tasks.get(&task_id) else {
-            return false;
-        };
-        self.stages.iter().take(task.stage).all(|stage| {
-            stage.tasks.iter().all(|&task_id| {
-                self.tasks.get(&task_id).is_some_and(|task| {
-                    matches!(
-                        task.state,
-                        TaskState::Running { .. } | TaskState::Succeeded { .. }
-                    )
-                })
+        let topology = JobTopology::try_new(&graph)?;
+        let regions = (0..topology.regions.len())
+            .map(|_| TaskRegionDescriptor {
+                state: TaskRegionState::Running,
             })
+            .collect();
+        Ok(Self {
+            graph,
+            topology,
+            stages,
+            regions,
+            state,
         })
-    }
-
-    pub fn cancel_active_tasks(
-        &mut self,
-        job_id: JobId,
-        reason: Option<String>,
-    ) -> Vec<TaskInstance> {
-        let mut result = vec![];
-        for stage in self.stages.iter_mut() {
-            for task_id in stage.tasks.iter_mut() {
-                if let Some(task) = self.tasks.get_mut(task_id) {
-                    match task.state {
-                        TaskState::Scheduled { .. } | TaskState::Running { .. } => {
-                            task.state = TaskState::Canceled;
-                            if let Some(reason) = &reason {
-                                task.messages.push(reason.clone());
-                            }
-                            result.push(TaskInstance {
-                                job_id,
-                                task_id: *task_id,
-                                attempt: task.attempt,
-                            });
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-        result
     }
 }
 
 #[derive(Debug)]
-pub struct JobStage {
-    pub plan: Arc<dyn ExecutionPlan>,
-    /// A list of task IDs for each partition of the stage.
-    pub tasks: Vec<TaskId>,
+pub struct StageDescriptor {
+    /// A list of tasks for each partition of the stage.
+    pub tasks: Vec<TaskDescriptor>,
+    pub state: StageState,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum StageState {
+    /// The tasks in the stage are not yet completed,
+    /// or the task streams are still being consumed.
+    Active,
+    /// The tasks in the stage will not be scheduled anymore,
+    /// and the task streams are no longer being consumed.
+    Inactive,
+}
+
+#[derive(Debug)]
+pub struct TaskRegionDescriptor {
+    pub state: TaskRegionState,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum TaskRegionState {
+    Running,
+    Failed,
+    Succeeded,
 }
 
 #[derive(Debug)]
 pub struct TaskDescriptor {
-    pub stage: usize,
-    pub partition: usize,
-    pub attempt: usize,
-    #[allow(dead_code)]
-    pub mode: TaskMode,
+    pub attempts: Vec<TaskAttemptDescriptor>,
+}
+
+#[derive(Debug)]
+pub struct TaskAttemptDescriptor {
     pub state: TaskState,
     pub messages: Vec<String>,
-    /// An optional channel for writing task output.
-    /// This is used for sending the last stage output
-    /// from the worker to the driver.
-    pub channel: Option<ChannelName>,
+    pub cause: Option<CommonErrorCause>,
+    /// Whether the task streams are fetched for the job output.
+    /// This will always be false if the task does not belong to
+    /// the final stages of the job.
+    pub job_output_fetched: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum TaskMode {
-    #[allow(dead_code)]
-    Blocking,
-    Pipelined,
-}
-
-#[derive(Debug, Clone)]
 pub enum TaskState {
-    /// The task has been created, but may not be eligible for scheduling.
+    /// The task attempt has been created, but is not assigned to any worker.
+    /// A task attempt is only created when the task region is eligible for scheduling.
     Created,
-    /// The task is eligible for scheduling, but is not assigned to any worker.
-    Pending,
-    /// The task is scheduled to a worker, but its status is unknown.
-    Scheduled {
-        /// The worker ID to schedule the current task attempt.
-        worker_id: WorkerId,
-    },
-    /// The task is running on a worker.
-    Running {
-        /// The worker ID for running the current task attempt.
-        worker_id: WorkerId,
-    },
-    /// The task has succeeded.
-    Succeeded {
-        /// The worker ID for the task output.
-        worker_id: WorkerId,
-    },
-    /// The task has failed.
+    /// The task attempt is scheduled to a worker, but its status is unknown.
+    Scheduled,
+    /// The task attempt is running on a worker.
+    Running,
+    /// The task attempt has succeeded.
+    Succeeded,
+    /// The task attempt has failed.
     Failed,
-    /// The task has been canceled.
+    /// The task attempt has been canceled.
     Canceled,
 }
 
 impl TaskState {
-    pub fn run(&self) -> Option<TaskState> {
-        match self {
-            TaskState::Created => None,
-            TaskState::Pending => None,
-            TaskState::Scheduled { worker_id } => Some(TaskState::Running {
-                worker_id: *worker_id,
-            }),
-            TaskState::Running { .. } => Some(self.clone()),
-            TaskState::Succeeded { .. } => None,
-            TaskState::Failed => None,
-            TaskState::Canceled => None,
+    pub fn consolidate(&self, next: Self) -> Self {
+        match (self, next) {
+            (TaskState::Created, x) => x,
+            (TaskState::Scheduled, TaskState::Created) => *self,
+            (TaskState::Scheduled, x) => x,
+            (TaskState::Running, TaskState::Created | TaskState::Scheduled) => *self,
+            (TaskState::Running, x) => x,
+            (TaskState::Succeeded | TaskState::Failed | TaskState::Canceled, _) => *self,
         }
     }
 
-    pub fn succeed(&self) -> Option<TaskState> {
+    pub fn is_terminal(&self) -> bool {
         match self {
-            TaskState::Created => None,
-            TaskState::Pending => None,
-            TaskState::Scheduled { worker_id } | TaskState::Running { worker_id } => {
-                Some(TaskState::Succeeded {
-                    worker_id: *worker_id,
-                })
-            }
-            TaskState::Succeeded { .. } => Some(self.clone()),
-            TaskState::Failed => None,
-            TaskState::Canceled => None,
-        }
-    }
-}
-
-impl TaskState {
-    pub fn worker_id(&self) -> Option<WorkerId> {
-        match self {
-            TaskState::Scheduled { worker_id }
-            | TaskState::Running { worker_id }
-            | TaskState::Succeeded { worker_id } => Some(*worker_id),
-            _ => None,
+            TaskState::Succeeded | TaskState::Failed | TaskState::Canceled => true,
+            TaskState::Created | TaskState::Scheduled | TaskState::Running => false,
         }
     }
 }

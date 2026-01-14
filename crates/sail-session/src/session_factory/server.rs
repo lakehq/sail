@@ -18,7 +18,7 @@ use sail_common::config::{AppConfig, CacheType, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::session::{ActivityTracker, JobRunner, JobService};
 use sail_execution::driver::DriverOptions;
-use sail_execution::runner::{ClusterJobRunner, LocalJobRunner};
+use sail_execution::job_runner::{ClusterJobRunner, LocalJobRunner};
 use sail_execution::worker_manager::{
     KubernetesWorkerManager, KubernetesWorkerManagerOptions, LocalWorkerManager,
 };
@@ -265,6 +265,9 @@ impl<I> ServerSessionFactory<I> {
         let execution = &mut config.options_mut().execution;
 
         execution.batch_size = self.config.execution.batch_size;
+        if self.config.execution.default_parallelism > 0 {
+            execution.target_partitions = self.config.execution.default_parallelism;
+        }
         execution.collect_statistics = self.config.execution.collect_statistics;
         execution.use_row_number_estimates_to_optimize_partitioning = self
             .config

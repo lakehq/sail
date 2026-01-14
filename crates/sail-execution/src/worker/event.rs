@@ -7,10 +7,10 @@ use tokio::sync::oneshot;
 
 use crate::driver::TaskStatus;
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{TaskInstance, WorkerId};
-use crate::stream::channel::ChannelName;
+use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
+use crate::task::definition::TaskDefinition;
 use crate::worker::gen;
 
 pub enum WorkerEvent {
@@ -25,51 +25,63 @@ pub enum WorkerEvent {
         peer_worker_ids: Vec<WorkerId>,
     },
     RunTask {
-        instance: TaskInstance,
-        plan: Vec<u8>,
-        partition: usize,
-        channel: Option<ChannelName>,
+        key: TaskKey,
+        definition: TaskDefinition,
         peers: Vec<WorkerLocation>,
     },
     StopTask {
-        instance: TaskInstance,
+        key: TaskKey,
     },
     ReportTaskStatus {
-        instance: TaskInstance,
+        key: TaskKey,
         status: TaskStatus,
         message: Option<String>,
         cause: Option<CommonErrorCause>,
     },
+    ProbePendingLocalStream {
+        key: TaskStreamKey,
+    },
     CreateLocalStream {
-        channel: ChannelName,
+        key: TaskStreamKey,
         storage: LocalStreamStorage,
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     },
     CreateRemoteStream {
         uri: String,
+        key: TaskStreamKey,
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     },
-    FetchThisWorkerStream {
-        channel: ChannelName,
+    FetchDriverStream {
+        key: TaskStreamKey,
+        schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     },
-    FetchOtherWorkerStream {
-        worker_id: WorkerId,
-        channel: ChannelName,
-        schema: SchemaRef,
+    FetchWorkerStream {
+        owner: WorkerStreamOwner,
+        key: TaskStreamKey,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     },
     FetchRemoteStream {
         uri: String,
+        key: TaskStreamKey,
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     },
-    RemoveLocalStream {
-        channel_prefix: String,
+    CleanUpJob {
+        job_id: JobId,
+        stage: Option<usize>,
     },
     Shutdown,
+}
+
+pub enum WorkerStreamOwner {
+    This,
+    Worker {
+        worker_id: WorkerId,
+        schema: SchemaRef,
+    },
 }
 
 impl SpanAssociation for WorkerEvent {
@@ -81,12 +93,13 @@ impl SpanAssociation for WorkerEvent {
             WorkerEvent::RunTask { .. } => "RunTask",
             WorkerEvent::StopTask { .. } => "StopTask",
             WorkerEvent::ReportTaskStatus { .. } => "ReportTaskStatus",
+            WorkerEvent::ProbePendingLocalStream { .. } => "ProbePendingLocalStream",
             WorkerEvent::CreateLocalStream { .. } => "CreateLocalStream",
             WorkerEvent::CreateRemoteStream { .. } => "CreateRemoteStream",
-            WorkerEvent::FetchThisWorkerStream { .. } => "FetchThisWorkerStream",
-            WorkerEvent::FetchOtherWorkerStream { .. } => "FetchOtherWorkerStream",
+            WorkerEvent::FetchDriverStream { .. } => "FetchDriverStream",
+            WorkerEvent::FetchWorkerStream { .. } => "FetchWorkerStream",
             WorkerEvent::FetchRemoteStream { .. } => "FetchRemoteStream",
-            WorkerEvent::RemoveLocalStream { .. } => "RemoveLocalStream",
+            WorkerEvent::CleanUpJob { .. } => "CleanUpJob",
             WorkerEvent::Shutdown => "Shutdown",
         };
         name.into()
@@ -101,105 +114,185 @@ impl SpanAssociation for WorkerEvent {
             WorkerEvent::StartHeartbeat => {}
             WorkerEvent::ReportKnownPeers { peer_worker_ids: _ } => {}
             WorkerEvent::RunTask {
-                instance:
-                    TaskInstance {
+                key:
+                    TaskKey {
                         job_id,
-                        task_id,
+                        stage,
+                        partition,
                         attempt,
                     },
-                plan: _,
-                partition,
-                channel,
+                definition: _,
                 peers: _,
             } => {
-                p.push((SpanAttribute::CLUSTER_JOB_ID, job_id.to_string()));
-                p.push((SpanAttribute::CLUSTER_TASK_ID, task_id.to_string()));
-                p.push((SpanAttribute::CLUSTER_TASK_ATTEMPT, attempt.to_string()));
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
                 p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
-                if let Some(channel) = channel {
-                    p.push((SpanAttribute::CLUSTER_CHANNEL_NAME, channel.to_string()));
-                }
+                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
             }
             WorkerEvent::StopTask {
-                instance:
-                    TaskInstance {
+                key:
+                    TaskKey {
                         job_id,
-                        task_id,
+                        stage,
+                        partition,
                         attempt,
                     },
             } => {
-                p.push((SpanAttribute::CLUSTER_JOB_ID, job_id.to_string()));
-                p.push((SpanAttribute::CLUSTER_TASK_ID, task_id.to_string()));
-                p.push((SpanAttribute::CLUSTER_TASK_ATTEMPT, attempt.to_string()));
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
+                p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
+                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
             }
             WorkerEvent::ReportTaskStatus {
-                instance:
-                    TaskInstance {
+                key:
+                    TaskKey {
                         job_id,
-                        task_id,
+                        stage,
+                        partition,
                         attempt,
                     },
                 status,
                 message,
                 cause,
             } => {
-                p.push((SpanAttribute::CLUSTER_JOB_ID, job_id.to_string()));
-                p.push((SpanAttribute::CLUSTER_TASK_ID, task_id.to_string()));
-                p.push((SpanAttribute::CLUSTER_TASK_ATTEMPT, attempt.to_string()));
-                p.push((SpanAttribute::CLUSTER_TASK_STATUS, status.to_string()));
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
+                p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
+                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
+                p.push((SpanAttribute::EXECUTION_TASK_STATUS, status.to_string()));
                 if let Some(msg) = message {
-                    p.push((SpanAttribute::CLUSTER_TASK_MESSAGE, msg.clone()));
+                    p.push((SpanAttribute::EXECUTION_TASK_MESSAGE, msg.clone()));
                 }
                 if let Some(cause) = cause {
                     p.push((
-                        SpanAttribute::CLUSTER_TASK_ERROR_CAUSE,
+                        SpanAttribute::EXECUTION_TASK_ERROR_CAUSE,
                         format!("{cause:?}"),
                     ));
                 }
             }
+            WorkerEvent::ProbePendingLocalStream {
+                key:
+                    TaskStreamKey {
+                        job_id,
+                        stage,
+                        partition,
+                        attempt,
+                        channel,
+                    },
+            } => {
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
+                p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
+                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
+                p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
+            }
             WorkerEvent::CreateLocalStream {
-                channel,
+                key:
+                    TaskStreamKey {
+                        job_id,
+                        stage,
+                        partition,
+                        attempt,
+                        channel,
+                    },
                 storage,
                 schema: _,
                 result: _,
             } => {
-                p.push((SpanAttribute::CLUSTER_CHANNEL_NAME, channel.to_string()));
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
+                p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
+                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
+                p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
                 p.push((
-                    SpanAttribute::CLUSTER_STREAM_LOCAL_STORAGE,
+                    SpanAttribute::EXECUTION_STREAM_LOCAL_STORAGE,
                     storage.to_string(),
                 ));
             }
             WorkerEvent::CreateRemoteStream {
                 uri,
+                key:
+                    TaskStreamKey {
+                        job_id,
+                        stage,
+                        partition,
+                        attempt,
+                        channel,
+                    },
                 schema: _,
                 result: _,
             } => {
-                p.push((SpanAttribute::CLUSTER_STREAM_REMOTE_URI, uri.clone()));
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
+                p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
+                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
+                p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
+                p.push((SpanAttribute::EXECUTION_STREAM_REMOTE_URI, uri.clone()));
             }
-            WorkerEvent::FetchThisWorkerStream { channel, result: _ } => {
-                p.push((SpanAttribute::CLUSTER_CHANNEL_NAME, channel.to_string()));
-            }
-            WorkerEvent::FetchOtherWorkerStream {
-                worker_id,
-                channel,
+            WorkerEvent::FetchDriverStream {
+                key:
+                    TaskStreamKey {
+                        job_id,
+                        stage,
+                        partition,
+                        attempt,
+                        channel,
+                    },
                 schema: _,
                 result: _,
             } => {
-                p.push((SpanAttribute::CLUSTER_WORKER_ID, worker_id.to_string()));
-                p.push((SpanAttribute::CLUSTER_CHANNEL_NAME, channel.to_string()));
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
+                p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
+                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
+                p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
+            }
+            WorkerEvent::FetchWorkerStream {
+                owner,
+                key:
+                    TaskStreamKey {
+                        job_id,
+                        stage,
+                        partition,
+                        attempt,
+                        channel,
+                    },
+                result: _,
+            } => {
+                if let WorkerStreamOwner::Worker { worker_id, .. } = owner {
+                    p.push((SpanAttribute::CLUSTER_WORKER_ID, worker_id.to_string()));
+                }
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
+                p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
+                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
+                p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
             }
             WorkerEvent::FetchRemoteStream {
                 uri,
+                key:
+                    TaskStreamKey {
+                        job_id,
+                        stage,
+                        partition,
+                        attempt,
+                        channel,
+                    },
                 schema: _,
                 result: _,
             } => {
-                p.push((SpanAttribute::CLUSTER_STREAM_REMOTE_URI, uri.clone()));
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
+                p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
+                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
+                p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
+                p.push((SpanAttribute::EXECUTION_STREAM_REMOTE_URI, uri.clone()));
             }
-            WorkerEvent::RemoveLocalStream { channel_prefix } => {
-                p.push((
-                    SpanAttribute::CLUSTER_CHANNEL_PREFIX,
-                    channel_prefix.clone(),
-                ));
+            WorkerEvent::CleanUpJob { job_id, stage } => {
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                if let Some(stage) = stage {
+                    p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
+                }
             }
             WorkerEvent::Shutdown => {}
         }

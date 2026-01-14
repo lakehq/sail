@@ -29,3 +29,20 @@ cargo +nightly fmt && \
    Running `cargo test` without the environment variable will validate the gold data. The test would fail if the gold data is outdated.
 
 :::
+
+::: warning
+
+On Windows, you need to use the LLVM linker rather than MSVC to successfully build the project. You can do this by first installing LLVM:
+
+```bash
+scoop install llvm
+```
+
+Then create the file `.cargo/config.toml` with the following content:
+
+```toml
+[target.'cfg(all(windows, target_env = "msvc"))']
+linker = "lld-link"
+```
+
+:::

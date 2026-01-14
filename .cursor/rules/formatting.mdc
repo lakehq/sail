@@ -1,0 +1,9 @@
+---
+name: formatting
+description: This is a new rule
+---
+
+# Overview
+
+Before pushing any rust code make sure to run cargo +nightly fmt to catch formatting issues.
+Before pushing any python code make sure to run hatch run fmt to catch formatting issues.

@@ -1,0 +1,148 @@
+[
+  {
+    "module": "pyspark.sql.Catalog",
+    "function": "cacheTable",
+    "status": "planned",
+    "ref": "???"
+  },
+  {
+    "module": "pyspark.sql.Catalog",
+    "function": "clearCache",
+    "status": "planned",
+    "ref": "???"
+  },
+  {
+    "module": "pyspark.sql.Catalog",
+    "function": "createExternalTable",
+    "status": "partially supported"
+  },
+  {
+    "module": "pyspark.sql.Catalog",
+    "function": "createTable",
+    "status": "partially supported"
+  },
+  {
+    "module": "pyspark.sql.Catalog",
+    "function": "currentCatalog",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Catalog",
+    "function": "currentDatabase",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Catalog",
+    "function": "databaseExists",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Catalog",
+    "function": "dropGlobalTempView",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Catalog",
+    "function": "dropTempView",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Catalog",
+    "function": "functionExists",
+    "status": "planned",
+    "ref": "???"
+  },
+  {
+    "module": "pyspark.sql.Catalog",
+    "function": "getDatabase",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Catalog",
+    "function": "getFunction",
+    "status": "planned",
+    "ref": "???"
+  },
+  {
+    "module": "pyspark.sql.Catalog",
+    "function": "getTable",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Catalog",
+    "function": "isCached",
+    "status": "planned",
+    "ref": "???"
+  },
+  {
+    "module": "pyspark.sql.Catalog",
+    "function": "listCatalogs",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Catalog",
+    "function": "listColumns",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Catalog",
+    "function": "listDatabases",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Catalog",
+    "function": "listFunctions",
+    "status": "planned",
+    "ref": "???"
+  },
+  {
+    "module": "pyspark.sql.Catalog",
+    "function": "listTables",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Catalog",
+    "function": "recoverPartitions",
+    "status": "planned",
+    "ref": "???"
+  },
+  {
+    "module": "pyspark.sql.Catalog",
+    "function": "refreshByPath",
+    "status": "planned",
+    "ref": "???"
+  },
+  {
+    "module": "pyspark.sql.Catalog",
+    "function": "refreshTable",
+    "status": "planned",
+    "ref": "???"
+  },
+  {
+    "module": "pyspark.sql.Catalog",
+    "function": "registerFunction",
+    "status": "planned",
+    "ref": "???"
+  },
+  {
+    "module": "pyspark.sql.Catalog",
+    "function": "setCurrentCatalog",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Catalog",
+    "function": "setCurrentDatabase",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Catalog",
+    "function": "tableExists",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Catalog",
+    "function": "uncacheTable",
+    "status": "planned",
+    "ref": "???"
+  }
+]

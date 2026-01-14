@@ -6,11 +6,6 @@
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "if",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
     "function": "ifnull",
     "status": "supported"
   },
@@ -41,17 +36,12 @@
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "zeroifnull",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
     "function": "when",
     "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "case",
+    "function": "zeroifnull",
     "status": "supported"
   }
 ]

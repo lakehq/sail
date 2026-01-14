@@ -4,8 +4,8 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field};
 use datafusion::functions_aggregate::{
     approx_distinct, approx_percentile_cont, array_agg, average, bit_and_or_xor, bool_and_or,
-    correlation, count, covariance, first_last, grouping, median, min_max, regr, stddev, sum,
-    variance,
+    correlation, count, covariance, first_last, grouping, median, min_max, percentile_cont, regr,
+    stddev, sum, variance,
 };
 use datafusion::functions_nested::string::array_to_string;
 use datafusion_common::ScalarValue;
@@ -17,6 +17,7 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
+use sail_function::aggregate::percentile_disc::percentile_disc_udaf;
 use sail_function::aggregate::skewness::SkewnessFunc;
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::aggregate::try_sum::TrySumFunction;
@@ -140,6 +141,53 @@ fn mode(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         func: Arc::new(AggregateUDF::from(ModeFunction::new())),
         params: AggregateFunctionParams {
             args: input.arguments,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
+/// Builds a percentile_cont aggregate expression from WITHIN GROUP syntax.
+///
+/// DataFusion's percentile_cont expects args = [column, percentile], but Spark's
+/// SQL syntax `percentile_cont(0.5) WITHIN GROUP (ORDER BY col)` puts the column
+/// in order_by and the percentile in arguments. This function combines them.
+fn percentile_cont_expr(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    // Extract the single column expression from ORDER BY (error if multiple)
+    let sort = input.order_by.clone().one()?;
+    let column = sort.expr;
+
+    // Get the percentile value from arguments
+    let percentile = input.arguments.one()?;
+
+    // Combine: [column, percentile] as DataFusion expects
+    let args = vec![column, percentile];
+
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: percentile_cont::percentile_cont_udaf(),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
+/// Builds a percentile_disc aggregate expression from WITHIN GROUP syntax.
+fn percentile_disc_expr(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let sort = input.order_by.clone().one()?;
+    let column = sort.expr;
+    let percentile = input.arguments.one()?;
+    let args = vec![column, percentile];
+
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: percentile_disc_udaf(),
+        params: AggregateFunctionParams {
+            args,
             distinct: input.distinct,
             filter: input.filter,
             order_by: input.order_by,
@@ -360,6 +408,9 @@ fn approx_count_distinct(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     ))
 }
 
+/// Creates a list of built-in aggregate functions.
+/// This is used to create a hashmap that the resolver uses to look up
+/// aggregate functions by name.
 fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
     use crate::function::common::AggFunctionBuilder as F;
 
@@ -412,8 +463,8 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
             "percentile_approx",
             F::default(approx_percentile_cont::approx_percentile_cont_udaf),
         ),
-        ("percentile_cont", F::unknown("percentile_cont")),
-        ("percentile_disc", F::unknown("percentile_disc")),
+        ("percentile_cont", F::custom(percentile_cont_expr)),
+        ("percentile_disc", F::custom(percentile_disc_expr)),
         ("regr_avgx", F::default(regr::regr_avgx_udaf)),
         ("regr_avgy", F::default(regr::regr_avgy_udaf)),
         ("regr_count", F::default(regr::regr_count_udaf)),

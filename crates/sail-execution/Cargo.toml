@@ -39,6 +39,7 @@ k8s-openapi = { workspace = true }
 rand = { workspace = true }
 url = { workspace = true }
 readonly = { workspace = true }
+indexmap = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }

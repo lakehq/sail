@@ -21,7 +21,10 @@ impl MetricEmitter for BuildProbeJoinMetricEmitter {
                     .execution_join_build_side_time
                     .recorder(time)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
                 MetricHandled::Yes
             }
@@ -30,7 +33,10 @@ impl MetricEmitter for BuildProbeJoinMetricEmitter {
                     .execution_join_operation_time
                     .recorder(time)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
                 MetricHandled::Yes
             }
@@ -39,7 +45,10 @@ impl MetricEmitter for BuildProbeJoinMetricEmitter {
                     .execution_join_build_side_batch_count
                     .recorder(count)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
                 MetricHandled::Yes
             }
@@ -48,7 +57,10 @@ impl MetricEmitter for BuildProbeJoinMetricEmitter {
                     .execution_join_build_side_row_count
                     .recorder(count)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
                 MetricHandled::Yes
             }
@@ -57,7 +69,10 @@ impl MetricEmitter for BuildProbeJoinMetricEmitter {
                     .execution_join_build_side_memory_used
                     .recorder(gauge)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
                 MetricHandled::Yes
             }
@@ -66,7 +81,10 @@ impl MetricEmitter for BuildProbeJoinMetricEmitter {
                     .execution_join_probe_side_batch_count
                     .recorder(count)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
                 MetricHandled::Yes
             }
@@ -75,14 +93,25 @@ impl MetricEmitter for BuildProbeJoinMetricEmitter {
                     .execution_join_probe_side_row_count
                     .recorder(count)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
                 MetricHandled::Yes
             }
-            // Ratio metrics like probe_hit_rate and avg_fanout are operator-specific metrics
-            // that don't need to be tracked separately in telemetry
-            MetricValue::Ratio { .. } => MetricHandled::Yes,
-            // output_batches is now handled by BaselineMetrics and tracked through the default emitter
+            MetricValue::Count { name, count } if name == "output_batches" => {
+                registry
+                    .execution_join_output_batch_count
+                    .recorder(count)
+                    .with_attributes(attributes)
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
+                    .emit();
+                MetricHandled::Yes
+            }
             _ => MetricHandled::No,
         }
     }
@@ -108,13 +137,19 @@ impl MetricEmitter for NestedLoopJoinMetricEmitter {
                     .execution_join_candidate_count
                     .recorder(ratio_metrics.total())
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
                 registry
                     .execution_join_output_row_count
                     .recorder(ratio_metrics.part())
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
                 MetricHandled::Yes
             }
@@ -154,7 +189,10 @@ impl MetricEmitter for SortMergeJoinMetricEmitter {
                     .execution_join_operation_time
                     .recorder(time)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
                 MetricHandled::Yes
             }
@@ -163,7 +201,10 @@ impl MetricEmitter for SortMergeJoinMetricEmitter {
                     .execution_join_input_batch_count
                     .recorder(count)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
                 MetricHandled::Yes
             }
@@ -172,18 +213,34 @@ impl MetricEmitter for SortMergeJoinMetricEmitter {
                     .execution_join_input_row_count
                     .recorder(count)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
                 MetricHandled::Yes
             }
-            // output_batches is now handled by BaselineMetrics and tracked through the default emitter
-            // No need to handle it here as a custom join metric
+            MetricValue::Count { name, count } if name == "output_batches" => {
+                registry
+                    .execution_join_output_batch_count
+                    .recorder(count)
+                    .with_attributes(attributes)
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
+                    .emit();
+                MetricHandled::Yes
+            }
             MetricValue::Gauge { name, gauge } if name == "peak_mem_used" => {
                 registry
                     .execution_join_memory_used
                     .recorder(gauge)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
                 MetricHandled::Yes
             }
