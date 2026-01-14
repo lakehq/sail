@@ -9,7 +9,7 @@ on:
 jobs:
   setup:
     name: Setup
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       run_tests: ${{ ((github.event_name == 'pull_request' && (github.event.action == 'opened' || steps.match.outputs.result == 'true' || steps.label.outputs.has_label == 'true')) || github.event_name == 'push') && 'true' || 'false' }}
     steps:
@@ -102,7 +102,7 @@ jobs:
           hatch run test-ibis:env SPARK_REMOTE="sc://localhost:50051" scripts/spark-tests/run-tests.sh || true
 
       - name: Shutdown Spark Connect Server
-        if: always()
+        if: ${{ !cancelled() }}
         run: |
           scripts/spark-tests/stop-server.sh
 
@@ -131,6 +131,7 @@ jobs:
           env_vars: OS
 
       - name: Upload Test Logs
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: ibis-test-logs
@@ -139,7 +140,7 @@ jobs:
 
   analyze:
     name: Analyze
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     needs:
       - test
     steps:

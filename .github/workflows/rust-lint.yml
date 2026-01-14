@@ -14,8 +14,8 @@ on:
       - "rustfmt.toml"
 
 jobs:
-  rust-lint:
-    name: Rust Lint
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

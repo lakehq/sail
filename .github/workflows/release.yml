@@ -16,7 +16,7 @@ on:
 jobs:
   setup:
     name: Setup
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     permissions:
       # This is required for calling the GitHub API to generate release notes.
       contents: write
@@ -337,7 +337,7 @@ jobs:
 
   review:
     name: Review
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     needs:
       - test-sdist
       - test-wheel
@@ -359,7 +359,7 @@ jobs:
   release-pypi:
     name: Release to PyPI
     if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     environment: release
     permissions:
       id-token: write
@@ -388,7 +388,7 @@ jobs:
   release-github:
     name: Release to GitHub
     if: ${{ github.event_name == 'push' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     permissions:
       contents: write
       discussions: write
