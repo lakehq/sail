@@ -2157,17 +2157,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "datafusion-functions-json"
-version = "0.50.0"
-source = "git+https://github.com/lakehq/datafusion-functions-json.git?rev=f768013#f768013d628a483eac2d83f434a42bfbb5c4ccd4"
-dependencies = [
- "datafusion",
- "jiter",
- "log",
- "paste",
-]
-
-[[package]]
 name = "datafusion-functions-nested"
 version = "51.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5999,7 +5988,6 @@ version = "0.4.6"
 dependencies = [
  "arrow-flight",
  "datafusion",
- "datafusion-functions-json",
  "datafusion-proto",
  "datafusion-spark",
  "fastrace",
@@ -6050,6 +6038,7 @@ dependencies = [
  "datafusion-functions",
  "datafusion-functions-nested",
  "half",
+ "jiter",
  "lazy_static",
  "num",
  "percent-encoding",
@@ -6195,7 +6184,6 @@ dependencies = [
  "datafusion-expr",
  "datafusion-expr-common",
  "datafusion-functions",
- "datafusion-functions-json",
  "datafusion-functions-nested",
  "datafusion-physical-expr",
  "datafusion-spark",

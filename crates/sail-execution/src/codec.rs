@@ -1439,8 +1439,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_sha1" | "sha" | "sha1" => Ok(Arc::new(ScalarUDF::from(SparkSha1::new()))),
             "crc32" => Ok(Arc::new(ScalarUDF::from(SparkCrc32::new()))),
             "overlay" => Ok(Arc::new(ScalarUDF::from(OverlayFunc::new()))),
-            "json_length" | "json_len" => Ok(datafusion_functions_json::udfs::json_length_udf()),
-            "json_as_text" => Ok(datafusion_functions_json::udfs::json_as_text_udf()),
+            "json_length" | "json_len" => Ok(sail_function::scalar::json::json_length_udf()),
+            "json_as_text" => Ok(sail_function::scalar::json::json_as_text_udf()),
+            "json_object_keys" | "json_keys" => {
+                Ok(sail_function::scalar::json::json_object_keys_udf())
+            }
             "spark_base64" | "base64" => Ok(Arc::new(ScalarUDF::from(SparkBase64::new()))),
             "spark_bround" | "bround" => Ok(Arc::new(ScalarUDF::from(SparkBRound::new()))),
             "spark_interval_div" => Ok(Arc::new(ScalarUDF::from(SparkIntervalDiv::new()))),

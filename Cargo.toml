@@ -149,10 +149,12 @@ datafusion-functions = { version = "51.0.0" }
 datafusion-functions-nested = { version = "51.0.0" }
 datafusion-physical-expr = { version = "51.0.0" }
 datafusion-spark = { version = "51.0.0" }
-datafusion-functions-json = { git = "https://github.com/lakehq/datafusion-functions-json.git", rev = "f768013" }
 # The `pyo3` version must match the one used in `arrow-pyarrow` (replace `RELEASE` with the release we are using):
 #   https://github.com/apache/arrow-rs/blob/RELEASE/arrow-pyarrow/Cargo.toml
 pyo3 = { version = "0.26.0", features = ["serde"] }
+# Jiter has a dependency on pyo3, which needs to match the version used in Sail.
+# https://github.com/pydantic/jiter/blob/v0.11.1/Cargo.toml
+jiter = { version = "0.11.1" }
 arrow = { version = "57.1.0", features = ["chrono-tz"] }
 arrow-buffer = { version = "57.1.0" }
 arrow-schema = { version = "57.1.0", features = ["serde"] }
