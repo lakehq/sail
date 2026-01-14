@@ -2455,7 +2455,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: percentile_disc"
+        "success": "ok"
       }
     },
     {
@@ -2477,7 +2477,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: percentile_disc"
+        "failure": "error in DataFusion: Error during planning: Failed to coerce arguments to satisfy a call to 'percentile_disc' function: coercion from Interval(YearMonth), Decimal128(2, 2) to the signature OneOf([Exact([Int8, Float64]), Exact([Int16, Float64]), Exact([Int32, Float64]), Exact([Int64, Float64]), Exact([UInt8, Float64]), Exact([UInt16, Float64]), Exact([UInt32, Float64]), Exact([UInt64, Float64]), Exact([Float32, Float64]), Exact([Float64, Float64])]) failed No function matches the given name and argument types 'percentile_disc(Interval(YearMonth), Decimal128(2, 2))'. You might need to add explicit type casts.\n\tCandidate functions:\n\tpercentile_disc(Int8, Float64)\n\tpercentile_disc(Int16, Float64)\n\tpercentile_disc(Int32, Float64)\n\tpercentile_disc(Int64, Float64)\n\tpercentile_disc(UInt8, Float64)\n\tpercentile_disc(UInt16, Float64)\n\tpercentile_disc(UInt32, Float64)\n\tpercentile_disc(UInt64, Float64)\n\tpercentile_disc(Float32, Float64)\n\tpercentile_disc(Float64, Float64)"
       }
     },
     {

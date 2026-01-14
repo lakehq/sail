@@ -17,6 +17,7 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
+use sail_function::aggregate::percentile_disc::percentile_disc_udaf;
 use sail_function::aggregate::skewness::SkewnessFunc;
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::aggregate::try_sum::TrySumFunction;
@@ -166,6 +167,25 @@ fn percentile_cont_expr(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: percentile_cont::percentile_cont_udaf(),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
+/// Builds a percentile_disc aggregate expression from WITHIN GROUP syntax.
+fn percentile_disc_expr(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let sort = input.order_by.clone().one()?;
+    let column = sort.expr;
+    let percentile = input.arguments.one()?;
+    let args = vec![column, percentile];
+
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: percentile_disc_udaf(),
         params: AggregateFunctionParams {
             args,
             distinct: input.distinct,
@@ -444,7 +464,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
             F::default(approx_percentile_cont::approx_percentile_cont_udaf),
         ),
         ("percentile_cont", F::custom(percentile_cont_expr)),
-        ("percentile_disc", F::unknown("percentile_disc")),
+        ("percentile_disc", F::custom(percentile_disc_expr)),
         ("regr_avgx", F::default(regr::regr_avgx_udaf)),
         ("regr_avgy", F::default(regr::regr_avgy_udaf)),
         ("regr_count", F::default(regr::regr_count_udaf)),
