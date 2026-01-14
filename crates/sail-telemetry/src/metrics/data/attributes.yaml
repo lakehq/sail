@@ -1,17 +1,17 @@
-- name: job.id
+- name: execution.job.id
   description: The unique identifier for the job.
 
-- name: task.id
-  description: The unique identifier for the task.
+- name: execution.stage
+  description: The index of the stage within the job.
 
-- name: task.attempt
-  description: The attempt number for the task.
+- name: execution.partition
+  description: The partition for task execution.
 
-- name: operator.id
-  description: The unique identifier for the operator within a job.
+- name: execution.attempt
+  description: The attempt for task execution.
 
-- name: operator.name
+- name: execution.operator.id
+  description: The unique identifier for the operator within a job stage.
+
+- name: execution.operator.name
   description: The name of the operator.
-
-- name: partition
-  description: The execution partition.

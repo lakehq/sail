@@ -1,0 +1,105 @@
+syntax = "proto3";
+
+package sail.task;
+
+message TaskDefinition {
+  bytes plan = 1;
+  repeated TaskInput inputs = 2;
+  TaskOutput output = 3;
+}
+
+message TaskInput {
+  TaskInputLocator locator = 1;
+}
+
+message TaskInputLocator {
+  oneof Kind {
+    TaskInputDriverLocator driver = 1;
+    TaskInputWorkerLocator worker = 2;
+    TaskInputRemoteLocator remote = 3;
+  }
+}
+
+message TaskInputDriverLocator {
+  uint64 stage = 1;
+  repeated TaskInputDriverKeyList keys = 2;
+}
+
+message TaskInputDriverKey {
+  uint64 partition = 2;
+  uint64 attempt = 3;
+  uint64 channel = 4;
+}
+
+message TaskInputDriverKeyList {
+  repeated TaskInputDriverKey keys = 1;
+}
+
+message TaskInputWorkerLocator {
+  uint64 stage = 1;
+  repeated TaskInputWorkerKeyList keys = 2;
+}
+
+message TaskInputWorkerKey {
+  uint64 worker_id = 1;
+  uint64 partition = 2;
+  uint64 attempt = 3;
+  uint64 channel = 4;
+}
+
+message TaskInputWorkerKeyList {
+  repeated TaskInputWorkerKey keys = 1;
+}
+
+message TaskInputRemoteLocator {
+  string uri = 1;
+  uint64 stage = 2;
+  repeated TaskInputRemoteKeyList keys = 3;
+}
+
+message TaskInputRemoteKey {
+  uint64 partition = 1;
+  uint64 attempt = 2;
+  uint64 channel = 3;
+}
+
+message TaskInputRemoteKeyList {
+  repeated TaskInputRemoteKey keys = 1;
+}
+
+message TaskOutput {
+  TaskOutputDistribution distribution = 1;
+  TaskOutputLocator locator = 2;
+}
+
+message TaskOutputDistribution {
+  oneof Kind {
+    TaskOutputHashDistribution hash = 1;
+    TaskOutputRoundRobinDistribution round_robin = 2;
+  }
+}
+
+message TaskOutputHashDistribution {
+  repeated bytes keys = 1;
+  uint64 channels = 2;
+}
+
+message TaskOutputRoundRobinDistribution {
+  uint64 channels = 1;
+}
+
+message TaskOutputLocator {
+  oneof Kind {
+    TaskOutputLocalLocator local = 1;
+    TaskOutputRemoteLocator remote = 2;
+  }
+}
+
+message TaskOutputLocalLocator {
+  uint64 replicas = 1;
+}
+
+message TaskOutputRemoteLocator {
+  string uri = 1;
+}
+

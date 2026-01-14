@@ -8,32 +8,40 @@ use arrow_flight::{
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
     HandshakeRequest, HandshakeResponse, PollInfo, PutResult, SchemaResult, Ticket,
 };
-use futures::stream::TryStreamExt;
+use futures::{Stream, TryStreamExt};
 use log::debug;
 use prost::Message;
-use sail_server::actor::ActorHandle;
 use tokio::sync::oneshot;
-use tonic::codegen::tokio_stream::Stream;
-use tonic::{Request, Response, Status, Streaming};
+use tonic::{async_trait, Request, Response, Status, Streaming};
 
-use crate::error::ExecutionError;
-use crate::worker::gen::TaskStreamTicket;
-use crate::worker::WorkerActor;
+use crate::error::ExecutionResult;
+use crate::id::TaskStreamKey;
+use crate::stream::gen::TaskStreamTicket;
+use crate::stream::reader::TaskStreamSource;
 
-pub struct WorkerFlightServer {
-    handle: ActorHandle<WorkerActor>,
+#[async_trait]
+pub trait TaskStreamFetcher: Send + Sync {
+    async fn fetch(
+        &self,
+        key: TaskStreamKey,
+        sender: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
+    ) -> ExecutionResult<()>;
 }
 
-impl WorkerFlightServer {
-    pub fn new(handle: ActorHandle<WorkerActor>) -> Self {
-        Self { handle }
+pub struct TaskStreamFlightServer {
+    fetcher: Box<dyn TaskStreamFetcher>,
+}
+
+impl TaskStreamFlightServer {
+    pub fn new(fetcher: Box<dyn TaskStreamFetcher>) -> Self {
+        Self { fetcher }
     }
 }
 
 type BoxedFlightStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 'static>>;
 
-#[tonic::async_trait]
-impl FlightService for WorkerFlightServer {
+#[async_trait]
+impl FlightService for TaskStreamFlightServer {
     type HandshakeStream = BoxedFlightStream<HandshakeResponse>;
 
     async fn handshake(
@@ -86,16 +94,22 @@ impl FlightService for WorkerFlightServer {
                 .map_err(|e| Status::invalid_argument(e.to_string()))?
         };
         debug!("{ticket:?}");
-        let TaskStreamTicket { channel } = ticket;
+        let TaskStreamTicket {
+            job_id,
+            stage,
+            partition,
+            attempt,
+            channel,
+        } = ticket;
         let (tx, rx) = oneshot::channel();
-        let event = crate::worker::WorkerEvent::FetchThisWorkerStream {
-            channel: channel.into(),
-            result: tx,
+        let key = TaskStreamKey {
+            job_id: job_id.into(),
+            stage: stage as usize,
+            partition: partition as usize,
+            attempt: attempt as usize,
+            channel: channel as usize,
         };
-        self.handle
-            .send(event)
-            .await
-            .map_err(ExecutionError::from)?;
+        self.fetcher.fetch(key, tx).await?;
         let stream = rx
             .await
             .map_err(|_| Status::internal("failed to receive task stream"))??;

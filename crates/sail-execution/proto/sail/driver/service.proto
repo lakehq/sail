@@ -28,13 +28,14 @@ message ReportWorkerKnownPeersResponse {
 
 message ReportTaskStatusRequest {
   uint64 job_id = 1;
-  uint64 task_id = 2;
-  uint64 attempt = 3;
-  TaskStatus status = 4;
+  uint64 stage = 2;
+  uint64 partition = 3;
+  uint64 attempt = 4;
+  TaskStatus status = 5;
   // An optional explanation of the task status.
-  optional string message = 5;
+  optional string message = 6;
   // An optional JSON string that contains the cause of the task failure.
-  optional string cause = 6;
+  optional string cause = 7;
   uint64 sequence = 101;
 }
 

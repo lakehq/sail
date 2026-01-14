@@ -8,8 +8,24 @@ use crate::driver::gen::{
     ReportTaskStatusResponse,
 };
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{JobId, TaskId, WorkerId};
+use crate::id::{TaskKey, WorkerId};
 use crate::rpc::{ClientHandle, ClientOptions, ClientService};
+use crate::stream_service::TaskStreamFlightClient;
+
+#[derive(Clone)]
+pub struct DriverClientSet {
+    pub core: DriverClient,
+    pub flight: TaskStreamFlightClient,
+}
+
+impl DriverClientSet {
+    pub fn new(options: ClientOptions) -> Self {
+        Self {
+            core: DriverClient::new(options.clone()),
+            flight: TaskStreamFlightClient::new(options),
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct DriverClient {
@@ -19,7 +35,7 @@ pub struct DriverClient {
 impl DriverClient {
     pub fn new(options: ClientOptions) -> Self {
         Self {
-            inner: ClientHandle::new(options),
+            inner: ClientHandle::new(options.clone()),
         }
     }
 
@@ -74,9 +90,7 @@ impl DriverClient {
 
     pub async fn report_task_status(
         &self,
-        job_id: JobId,
-        task_id: TaskId,
-        attempt: usize,
+        key: TaskKey,
         status: TaskStatus,
         message: Option<String>,
         cause: Option<CommonErrorCause>,
@@ -90,9 +104,10 @@ impl DriverClient {
             })
             .transpose()?;
         let request = tonic::Request::new(ReportTaskStatusRequest {
-            job_id: job_id.into(),
-            task_id: task_id.into(),
-            attempt: attempt as u64,
+            job_id: key.job_id.into(),
+            stage: key.stage as u64,
+            partition: key.partition as u64,
+            attempt: key.attempt as u64,
             status: gen::TaskStatus::from(status) as i32,
             message,
             cause,

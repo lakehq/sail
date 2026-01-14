@@ -1,50 +1,44 @@
-use std::fmt::Display;
 use std::sync::Arc;
 
 use datafusion::common::plan_datafusion_err;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::physical_expr::Partitioning;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, PiecewiseMergeJoinExec,
 };
 use datafusion::physical_plan::limit::GlobalLimitExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
+use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion::physical_plan::{
     with_new_children_if_necessary, ExecutionPlan, ExecutionPlanProperties,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::plan::{ShuffleConsumption, ShuffleReadExec, ShuffleWriteExec};
-
-pub struct JobGraph {
-    stages: Vec<Arc<dyn ExecutionPlan>>,
-}
-
-impl Display for JobGraph {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        for (i, stage) in self.stages.iter().enumerate() {
-            let displayable = DisplayableExecutionPlan::new(stage.as_ref());
-            writeln!(f, "=== stage {i} ===")?;
-            writeln!(f, "{}", displayable.indent(true))?;
-        }
-        Ok(())
-    }
-}
+use crate::job_graph::{
+    InputMode, JobGraph, OutputDistribution, OutputMode, Stage, StageInput, TaskPlacement,
+};
+use crate::plan::{ShuffleConsumption, StageInputExec};
 
 impl JobGraph {
     pub fn try_new(plan: Arc<dyn ExecutionPlan>) -> ExecutionResult<Self> {
         let plan = ensure_single_partition_for_fetch(plan)?;
-        let mut graph = Self { stages: vec![] };
+        let mut graph = Self {
+            stages: vec![],
+            schema: plan.schema(),
+        };
         let last = build_job_graph(plan, PartitionUsage::Once, &mut graph)?;
-        graph.stages.push(last);
+        let (last, inputs) = rewrite_inputs(last)?;
+        graph.stages.push(Stage {
+            inputs,
+            plan: last,
+            group: String::new(),
+            mode: OutputMode::Pipelined,
+            distribution: OutputDistribution::RoundRobin { channels: 1 },
+            placement: TaskPlacement::Worker,
+        });
         Ok(graph)
-    }
-
-    pub fn stages(&self) -> &[Arc<dyn ExecutionPlan>] {
-        &self.stages
     }
 }
 
@@ -173,15 +167,45 @@ fn build_job_graph(
         let fetch = coalesce.fetch();
         let shuffled = create_shuffle(child, graph, partitioning, consumption)?;
         if let Some(f) = fetch {
-            Arc::new(CoalescePartitionsExec::new(shuffled).with_fetch(Some(f)))
-                as Arc<dyn ExecutionPlan>
+            Arc::new(GlobalLimitExec::new(shuffled, 0, Some(f))) as Arc<dyn ExecutionPlan>
         } else {
             shuffled
         }
+    } else if plan.as_any().is::<SortPreservingMergeExec>() {
+        let child = plan.children().one()?;
+        plan.clone()
+            .with_new_children(vec![create_merge_input(child, graph)?])?
     } else {
         plan
     };
     Ok(plan)
+}
+
+fn create_merge_input(
+    plan: &Arc<dyn ExecutionPlan>,
+    graph: &mut JobGraph,
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    let schema = plan.schema();
+    let partitioning = plan.output_partitioning().clone();
+    let (plan, inputs) = rewrite_inputs(plan.clone())?;
+    let stage = Stage {
+        inputs,
+        plan,
+        group: String::new(),
+        mode: OutputMode::Pipelined,
+        distribution: OutputDistribution::RoundRobin { channels: 1 },
+        placement: TaskPlacement::Worker,
+    };
+    let s = graph.stages.len();
+    graph.stages.push(stage);
+    Ok(Arc::new(StageInputExec::new(
+        StageInput {
+            stage: s,
+            mode: InputMode::Merge,
+        },
+        schema,
+        partitioning,
+    )))
 }
 
 fn create_shuffle(
@@ -190,19 +214,52 @@ fn create_shuffle(
     partitioning: Partitioning,
     consumption: ShuffleConsumption,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
-    let stage = graph.stages.len();
-
-    let writer = Arc::new(ShuffleWriteExec::new(
-        stage,
-        plan.clone(),
+    let distribution = match partitioning.clone() {
+        Partitioning::RoundRobinBatch(channels) | Partitioning::UnknownPartitioning(channels) => {
+            OutputDistribution::RoundRobin { channels }
+        }
+        Partitioning::Hash(keys, channels) => OutputDistribution::Hash { keys, channels },
+    };
+    let schema = plan.schema();
+    let (plan, inputs) = rewrite_inputs(plan.clone())?;
+    let stage = Stage {
+        inputs,
+        plan,
+        group: String::new(),
+        mode: OutputMode::Pipelined,
+        distribution,
+        placement: TaskPlacement::Worker,
+    };
+    let s = graph.stages.len();
+    graph.stages.push(stage);
+    let mode = match consumption {
+        ShuffleConsumption::Single => InputMode::Shuffle,
+        ShuffleConsumption::Multiple => InputMode::Broadcast,
+    };
+    Ok(Arc::new(StageInputExec::new(
+        StageInput { stage: s, mode },
+        schema,
         partitioning.clone(),
-        consumption,
-    ));
-    graph.stages.push(writer);
-
-    Ok(Arc::new(ShuffleReadExec::new(
-        stage,
-        plan.schema(),
-        partitioning,
     )))
+}
+
+fn rewrite_inputs(
+    plan: Arc<dyn ExecutionPlan>,
+) -> ExecutionResult<(Arc<dyn ExecutionPlan>, Vec<StageInput>)> {
+    let mut inputs = vec![];
+    let result = plan.transform(|node| {
+        if let Some(placeholder) = node.as_any().downcast_ref::<StageInputExec<StageInput>>() {
+            let index = inputs.len();
+            inputs.push(placeholder.input().clone());
+            let placeholder = StageInputExec::new(
+                index,
+                placeholder.schema(),
+                placeholder.properties().output_partitioning().clone(),
+            );
+            Ok(Transformed::yes(Arc::new(placeholder)))
+        } else {
+            Ok(Transformed::no(node))
+        }
+    });
+    Ok((result.data()?, inputs))
 }

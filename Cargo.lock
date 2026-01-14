@@ -5992,6 +5992,7 @@ dependencies = [
  "datafusion-spark",
  "fastrace",
  "futures",
+ "indexmap 2.12.1",
  "k8s-openapi",
  "kube",
  "log",
