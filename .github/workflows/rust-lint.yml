@@ -24,6 +24,7 @@ jobs:
         with:
           cache-key: rust-lint
           install-testing-tools: false
+          install-nightly-toolchain: true
 
       - name: Run Format Check
         run: cargo +nightly fmt -- --check
