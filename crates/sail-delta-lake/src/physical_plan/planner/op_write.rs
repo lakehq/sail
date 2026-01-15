@@ -12,11 +12,10 @@
 
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::compute::SortOptions;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result};
-use datafusion::physical_expr::expressions::NotExpr;
-use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::expressions::{Column, NotExpr};
 use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::filter::FilterExec;
@@ -35,8 +34,8 @@ use crate::datasource::PredicateProperties;
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::physical_plan::{
     create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaDiscoveryExec,
-    DeltaLogPathExtractExec, DeltaLogReplayExec, DeltaRemoveActionsExec, COL_REPLAY_PATH,
-    DeltaScanByAddsExec, DeltaWriterExec,
+    DeltaLogPathExtractExec, DeltaLogReplayExec, DeltaRemoveActionsExec, DeltaScanByAddsExec,
+    DeltaWriterExec, COL_REPLAY_PATH,
 };
 
 pub async fn build_write_plan(
@@ -120,11 +119,9 @@ async fn build_full_overwrite_plan(
         let log_scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaLogPathExtractExec::new(raw_scan)?);
         let log_partitions = ctx.session().config().target_partitions().max(1);
         let replay_path_idx = log_scan.schema().index_of(COL_REPLAY_PATH)?;
-        let replay_expr: Arc<dyn datafusion_physical_expr::PhysicalExpr> =
-            Arc::new(datafusion_physical_expr::expressions::Column::new(
-                COL_REPLAY_PATH,
-                replay_path_idx,
-            ));
+        let replay_expr: Arc<dyn datafusion_physical_expr::PhysicalExpr> = Arc::new(
+            datafusion_physical_expr::expressions::Column::new(COL_REPLAY_PATH, replay_path_idx),
+        );
         let log_scan: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
             log_scan,
             Partitioning::Hash(vec![replay_expr], log_partitions),
@@ -249,11 +246,9 @@ async fn build_overwrite_if_plan(
     let log_scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaLogPathExtractExec::new(raw_scan)?);
     let log_partitions = ctx.session().config().target_partitions().max(1);
     let replay_path_idx = log_scan.schema().index_of(COL_REPLAY_PATH)?;
-    let replay_expr: Arc<dyn datafusion_physical_expr::PhysicalExpr> =
-        Arc::new(datafusion_physical_expr::expressions::Column::new(
-            COL_REPLAY_PATH,
-            replay_path_idx,
-        ));
+    let replay_expr: Arc<dyn datafusion_physical_expr::PhysicalExpr> = Arc::new(
+        datafusion_physical_expr::expressions::Column::new(COL_REPLAY_PATH, replay_path_idx),
+    );
     let log_scan: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
         log_scan,
         Partitioning::Hash(vec![replay_expr], log_partitions),
@@ -350,11 +345,9 @@ async fn build_old_data_plan(
     let log_scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaLogPathExtractExec::new(raw_scan)?);
     let log_partitions = ctx.session().config().target_partitions().max(1);
     let replay_path_idx = log_scan.schema().index_of(COL_REPLAY_PATH)?;
-    let replay_expr: Arc<dyn datafusion_physical_expr::PhysicalExpr> =
-        Arc::new(datafusion_physical_expr::expressions::Column::new(
-            COL_REPLAY_PATH,
-            replay_path_idx,
-        ));
+    let replay_expr: Arc<dyn datafusion_physical_expr::PhysicalExpr> = Arc::new(
+        datafusion_physical_expr::expressions::Column::new(COL_REPLAY_PATH, replay_path_idx),
+    );
     let log_scan: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
         log_scan,
         Partitioning::Hash(vec![replay_expr], log_partitions),

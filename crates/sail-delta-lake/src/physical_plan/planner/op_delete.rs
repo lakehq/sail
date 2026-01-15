@@ -12,11 +12,10 @@
 
 use std::sync::Arc;
 
-use datafusion::common::{DataFusionError, Result};
-use datafusion::physical_expr::expressions::NotExpr;
-use datafusion::physical_expr::expressions::Column;
-use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion::arrow::compute::SortOptions;
+use datafusion::common::{DataFusionError, Result};
+use datafusion::physical_expr::expressions::{Column, NotExpr};
+use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
@@ -33,7 +32,7 @@ use crate::datasource::PredicateProperties;
 use crate::kernel::DeltaOperation;
 use crate::physical_plan::{
     DeltaCommitExec, DeltaDiscoveryExec, DeltaLogPathExtractExec, DeltaLogReplayExec,
-    DeltaRemoveActionsExec, COL_REPLAY_PATH, DeltaScanByAddsExec, DeltaWriterExec,
+    DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec, COL_REPLAY_PATH,
 };
 
 pub async fn build_delete_plan(
@@ -78,11 +77,9 @@ pub async fn build_delete_plan(
     let log_scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaLogPathExtractExec::new(raw_scan)?);
     let log_partitions = ctx.session().config().target_partitions().max(1);
     let replay_path_idx = log_scan.schema().index_of(COL_REPLAY_PATH)?;
-    let replay_expr: Arc<dyn datafusion_physical_expr::PhysicalExpr> =
-        Arc::new(datafusion_physical_expr::expressions::Column::new(
-            COL_REPLAY_PATH,
-            replay_path_idx,
-        ));
+    let replay_expr: Arc<dyn datafusion_physical_expr::PhysicalExpr> = Arc::new(
+        datafusion_physical_expr::expressions::Column::new(COL_REPLAY_PATH, replay_path_idx),
+    );
     let log_scan: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
         log_scan,
         Partitioning::Hash(vec![replay_expr], log_partitions),
@@ -97,9 +94,8 @@ pub async fn build_delete_plan(
         },
     }])
     .expect("non-degenerate ordering");
-    let log_scan: Arc<dyn ExecutionPlan> = Arc::new(
-        SortExec::new(ordering, log_scan).with_preserve_partitioning(true),
-    );
+    let log_scan: Arc<dyn ExecutionPlan> =
+        Arc::new(SortExec::new(ordering, log_scan).with_preserve_partitioning(true));
 
     let meta_scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaLogReplayExec::new(
         log_scan,

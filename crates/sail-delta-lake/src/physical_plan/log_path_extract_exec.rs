@@ -80,9 +80,14 @@ impl DeltaLogPathExtractExec {
         })?;
         let casted = cast(path.as_ref(), &DataType::Utf8)
             .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
-        let path = casted.as_any().downcast_ref::<StringArray>().ok_or_else(|| {
-            DataFusionError::Plan("DeltaLogPathExtractExec action.path must be Utf8".to_string())
-        })?;
+        let path = casted
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| {
+                DataFusionError::Plan(
+                    "DeltaLogPathExtractExec action.path must be Utf8".to_string(),
+                )
+            })?;
         if path.is_null(row) {
             return Err(DataFusionError::Plan(
                 "DeltaLogPathExtractExec action.path cannot be null".to_string(),
@@ -185,4 +190,3 @@ impl DisplayAs for DeltaLogPathExtractExec {
         }
     }
 }
-

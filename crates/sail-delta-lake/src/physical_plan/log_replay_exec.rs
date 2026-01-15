@@ -501,11 +501,9 @@ impl ExecutionPlan for DeltaLogReplayExec {
             Ok(i) => i,
             Err(_) => return vec![Distribution::SinglePartition],
         };
-        let expr: Arc<dyn datafusion_physical_expr::PhysicalExpr> =
-            Arc::new(datafusion_physical_expr::expressions::Column::new(
-                COL_REPLAY_PATH,
-                idx,
-            ));
+        let expr: Arc<dyn datafusion_physical_expr::PhysicalExpr> = Arc::new(
+            datafusion_physical_expr::expressions::Column::new(COL_REPLAY_PATH, idx),
+        );
         vec![Distribution::HashPartitioned(vec![expr])]
     }
 
@@ -603,11 +601,11 @@ impl DisplayAs for DeltaLogReplayExec {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use datafusion::arrow::array::{Int64Array, NullBufferBuilder};
     use datafusion::arrow::datatypes::Fields;
     use futures::TryStreamExt;
+
+    use super::*;
 
     #[derive(Debug)]
     struct OneBatchExec {

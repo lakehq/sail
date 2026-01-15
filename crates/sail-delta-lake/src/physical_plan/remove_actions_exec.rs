@@ -80,7 +80,9 @@ impl DeltaRemoveActionsExec {
             .collect())
     }
 
-    fn decode_adds_from_meta_batch(batch: &datafusion::arrow::record_batch::RecordBatch) -> Result<Vec<Add>> {
+    fn decode_adds_from_meta_batch(
+        batch: &datafusion::arrow::record_batch::RecordBatch,
+    ) -> Result<Vec<Add>> {
         let path_arr = batch
             .column_by_name(crate::datasource::PATH_COLUMN)
             .and_then(|c| c.as_any().downcast_ref::<StringArray>())
@@ -121,10 +123,8 @@ impl DeltaRemoveActionsExec {
             .iter()
             .filter_map(|name| {
                 batch.column_by_name(name).map(|a| {
-                    let a =
-                        datafusion::arrow::compute::cast(a, &DataType::Utf8).unwrap_or_else(|_| {
-                            a.clone()
-                        });
+                    let a = datafusion::arrow::compute::cast(a, &DataType::Utf8)
+                        .unwrap_or_else(|_| a.clone());
                     (name.clone(), a)
                 })
             })

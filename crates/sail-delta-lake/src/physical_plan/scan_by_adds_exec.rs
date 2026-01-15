@@ -170,10 +170,13 @@ impl ExecutionPlan for DeltaScanByAddsExec {
                     .object_store_registry
                     .get_store(&self.table_url)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let table =
-                    open_table_with_object_store(self.table_url.clone(), object_store, StorageConfig)
-                        .await
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let table = open_table_with_object_store(
+                    self.table_url.clone(),
+                    object_store,
+                    StorageConfig,
+                )
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let snapshot_state = table
                     .snapshot()
                     .map_err(|e| DataFusionError::External(Box::new(e)))?
@@ -280,16 +283,22 @@ impl ExecutionPlan for DeltaScanByAddsExec {
                         .flat_map(|group| group.into_inner())
                         .collect::<Vec<_>>();
                     file_scan_config.file_groups =
-                        vec![datafusion::datasource::physical_plan::FileGroup::new(merged)];
+                        vec![datafusion::datasource::physical_plan::FileGroup::new(
+                            merged,
+                        )];
                 }
 
-                let scan_exec =
-                    datafusion::datasource::source::DataSourceExec::from_data_source(file_scan_config);
+                let scan_exec = datafusion::datasource::source::DataSourceExec::from_data_source(
+                    file_scan_config,
+                );
                 self.current_scan = Some(scan_exec.execute(0, Arc::clone(&self.context))?);
                 Ok(())
             }
 
-            async fn decode_adds_from_meta_batch(&mut self, batch: &RecordBatch) -> Result<Vec<crate::kernel::models::Add>> {
+            async fn decode_adds_from_meta_batch(
+                &mut self,
+                batch: &RecordBatch,
+            ) -> Result<Vec<crate::kernel::models::Add>> {
                 self.ensure_table().await?;
                 let partition_columns = self
                     .partition_columns
@@ -299,26 +308,35 @@ impl ExecutionPlan for DeltaScanByAddsExec {
 
                 let path_arr = batch
                     .column_by_name(crate::datasource::PATH_COLUMN)
-                    .and_then(|c| c.as_any().downcast_ref::<datafusion::arrow::array::StringArray>())
+                    .and_then(|c| {
+                        c.as_any()
+                            .downcast_ref::<datafusion::arrow::array::StringArray>()
+                    })
                     .ok_or_else(|| {
                         DataFusionError::Plan(format!(
                             "DeltaScanByAddsExec input must have Utf8 column '{}'",
                             crate::datasource::PATH_COLUMN
                         ))
                     })?;
-                let size_arr = batch
-                    .column_by_name("size_bytes")
-                    .and_then(|c| c.as_any().downcast_ref::<datafusion::arrow::array::Int64Array>());
-                let mod_time_arr = batch
-                    .column_by_name("modification_time")
-                    .and_then(|c| c.as_any().downcast_ref::<datafusion::arrow::array::Int64Array>());
-                let stats_arr = batch.column_by_name("stats_json").map(|c| {
-                    datafusion::arrow::compute::cast(c, &datafusion::arrow::datatypes::DataType::Utf8)
-                        .unwrap_or_else(|_| c.clone())
+                let size_arr = batch.column_by_name("size_bytes").and_then(|c| {
+                    c.as_any()
+                        .downcast_ref::<datafusion::arrow::array::Int64Array>()
                 });
-                let stats_arr = stats_arr
-                    .as_ref()
-                    .and_then(|c| c.as_any().downcast_ref::<datafusion::arrow::array::StringArray>());
+                let mod_time_arr = batch.column_by_name("modification_time").and_then(|c| {
+                    c.as_any()
+                        .downcast_ref::<datafusion::arrow::array::Int64Array>()
+                });
+                let stats_arr = batch.column_by_name("stats_json").map(|c| {
+                    datafusion::arrow::compute::cast(
+                        c,
+                        &datafusion::arrow::datatypes::DataType::Utf8,
+                    )
+                    .unwrap_or_else(|_| c.clone())
+                });
+                let stats_arr = stats_arr.as_ref().and_then(|c| {
+                    c.as_any()
+                        .downcast_ref::<datafusion::arrow::array::StringArray>()
+                });
 
                 let part_arrays: Vec<(String, Arc<dyn Array>)> = partition_columns
                     .iter()
@@ -364,7 +382,11 @@ impl ExecutionPlan for DeltaScanByAddsExec {
                         {
                             Some(s.value(row).to_string())
                         } else {
-                            datafusion::arrow::util::display::array_value_to_string(arr.as_ref(), row).ok()
+                            datafusion::arrow::util::display::array_value_to_string(
+                                arr.as_ref(),
+                                row,
+                            )
+                            .ok()
                         };
                         partition_values.insert(name.clone(), v);
                     }
@@ -464,7 +486,10 @@ impl ExecutionPlan for DeltaScanByAddsExec {
                         // No adds at all: emit a single empty batch.
                         if !st.emitted_partition_empty {
                             st.emitted_partition_empty = true;
-                            return Ok(Some((RecordBatch::new_empty(st.output_schema.clone()), st)));
+                            return Ok(Some((
+                                RecordBatch::new_empty(st.output_schema.clone()),
+                                st,
+                            )));
                         }
                         return Ok(None);
                     }

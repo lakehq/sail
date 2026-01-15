@@ -12,7 +12,9 @@
 
 use std::sync::Arc;
 
+use datafusion::arrow::compute::SortOptions;
 use datafusion::common::{internal_err, DataFusionError, Result};
+use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
@@ -21,8 +23,6 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
-use datafusion::arrow::compute::SortOptions;
-use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_common::{JoinType, NullEquality};
 use datafusion_physical_expr::expressions::{Column, IsNullExpr};
 use sail_common_datafusion::datasource::{
@@ -37,7 +37,7 @@ use crate::kernel::{DeltaOperation, MergePredicate};
 use crate::options::TableDeltaOptions;
 use crate::physical_plan::{
     DeltaCommitExec, DeltaDiscoveryExec, DeltaLogPathExtractExec, DeltaLogReplayExec,
-    DeltaRemoveActionsExec, COL_REPLAY_PATH, DeltaWriterExec,
+    DeltaRemoveActionsExec, DeltaWriterExec, COL_REPLAY_PATH,
 };
 
 /// Entry point for MERGE execution. Expects the logical MERGE to be fully
@@ -268,11 +268,9 @@ async fn finalize_merge(
         let log_scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaLogPathExtractExec::new(raw_scan)?);
         let log_partitions = ctx.session().config().target_partitions().max(1);
         let replay_path_idx = log_scan.schema().index_of(COL_REPLAY_PATH)?;
-        let replay_expr: Arc<dyn datafusion_physical_expr::PhysicalExpr> =
-            Arc::new(datafusion_physical_expr::expressions::Column::new(
-                COL_REPLAY_PATH,
-                replay_path_idx,
-            ));
+        let replay_expr: Arc<dyn datafusion_physical_expr::PhysicalExpr> = Arc::new(
+            datafusion_physical_expr::expressions::Column::new(COL_REPLAY_PATH, replay_path_idx),
+        );
         let log_scan: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
             log_scan,
             Partitioning::Hash(vec![replay_expr], log_partitions),

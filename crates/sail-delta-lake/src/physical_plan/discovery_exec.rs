@@ -17,8 +17,7 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::scalar::ScalarValue;
-use datafusion_common::Column;
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{internal_err, Column, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::TryStreamExt;
 use url::Url;
@@ -160,35 +159,39 @@ impl DeltaDiscoveryExec {
     ) -> Result<Vec<Add>> {
         let path_arr = batch
             .column_by_name(PATH_COLUMN)
-            .and_then(|c| c.as_any().downcast_ref::<datafusion::arrow::array::StringArray>())
+            .and_then(|c| {
+                c.as_any()
+                    .downcast_ref::<datafusion::arrow::array::StringArray>()
+            })
             .ok_or_else(|| {
                 DataFusionError::Plan(format!(
                     "DeltaDiscoveryExec input must have Utf8 column '{PATH_COLUMN}'"
                 ))
             })?;
 
-        let size_arr = batch
-            .column_by_name("size_bytes")
-            .and_then(|c| c.as_any().downcast_ref::<datafusion::arrow::array::Int64Array>());
-        let mod_time_arr = batch
-            .column_by_name("modification_time")
-            .and_then(|c| c.as_any().downcast_ref::<datafusion::arrow::array::Int64Array>());
+        let size_arr = batch.column_by_name("size_bytes").and_then(|c| {
+            c.as_any()
+                .downcast_ref::<datafusion::arrow::array::Int64Array>()
+        });
+        let mod_time_arr = batch.column_by_name("modification_time").and_then(|c| {
+            c.as_any()
+                .downcast_ref::<datafusion::arrow::array::Int64Array>()
+        });
 
         let stats_arr = batch.column_by_name(COL_STATS_JSON).map(|c| {
             datafusion::arrow::compute::cast(c, &DataType::Utf8).unwrap_or_else(|_| c.clone())
         });
-        let stats_arr = stats_arr
-            .as_ref()
-            .and_then(|c| c.as_any().downcast_ref::<datafusion::arrow::array::StringArray>());
+        let stats_arr = stats_arr.as_ref().and_then(|c| {
+            c.as_any()
+                .downcast_ref::<datafusion::arrow::array::StringArray>()
+        });
 
         let part_arrays: Vec<(String, Arc<dyn Array>)> = partition_columns
             .iter()
             .filter_map(|name| {
                 batch.column_by_name(name).map(|a| {
-                    let a =
-                        datafusion::arrow::compute::cast(a, &DataType::Utf8).unwrap_or_else(|_| {
-                            a.clone()
-                        });
+                    let a = datafusion::arrow::compute::cast(a, &DataType::Utf8)
+                        .unwrap_or_else(|_| a.clone());
                     (name.clone(), a)
                 })
             })
@@ -258,11 +261,10 @@ impl DeltaDiscoveryExec {
         let referenced = collect_physical_columns(predicate);
         let stats =
             DeltaAddStatsPruningStatistics::try_new(table_schema.clone(), adds, referenced)?;
-        let pruning_predicate =
-            datafusion::physical_optimizer::pruning::PruningPredicate::try_new(
-                Arc::clone(predicate),
-                table_schema.clone(),
-            )?;
+        let pruning_predicate = datafusion::physical_optimizer::pruning::PruningPredicate::try_new(
+            Arc::clone(predicate),
+            table_schema.clone(),
+        )?;
         pruning_predicate.prune(&stats)
     }
 }
@@ -523,16 +525,17 @@ impl ExecutionPlan for DeltaDiscoveryExec {
                             batch.clone()
                         } else {
                             let b = BooleanArray::from(mask);
-                            filter_record_batch(&batch, &b).map_err(|e| {
-                                DataFusionError::ArrowError(Box::new(e), None)
-                            })?
+                            filter_record_batch(&batch, &b)
+                                .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?
                         }
                     }
                     _ => batch.clone(),
                 };
 
-                let scan_array =
-                    Arc::new(BooleanArray::from(vec![partition_scan; filtered.num_rows()]));
+                let scan_array = Arc::new(BooleanArray::from(vec![
+                    partition_scan;
+                    filtered.num_rows()
+                ]));
                 let mut cols = filtered.columns().to_vec();
                 cols.push(scan_array);
                 let out = RecordBatch::try_new(schema, cols)
