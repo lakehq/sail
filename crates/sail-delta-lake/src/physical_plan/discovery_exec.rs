@@ -4,7 +4,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::Array;
+use datafusion::arrow::array::{Array, BooleanArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::TableProvider;
@@ -15,8 +15,8 @@ use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
-    SendableRecordBatchStream,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
+    PlanProperties, SendableRecordBatchStream,
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
@@ -62,7 +62,12 @@ impl DeltaDiscoveryExec {
             false,
         )));
         let schema = Arc::new(Schema::new(fields));
-        let cache = Self::compute_properties(schema);
+        let output_partitions = if partition_scan {
+            input.output_partitioning().partition_count().max(1)
+        } else {
+            1
+        };
+        let cache = Self::compute_properties(schema, output_partitions);
         Ok(Self {
             table_url,
             predicate,
@@ -113,10 +118,10 @@ impl DeltaDiscoveryExec {
         )
     }
 
-    fn compute_properties(schema: SchemaRef) -> PlanProperties {
+    fn compute_properties(schema: SchemaRef, output_partitions: usize) -> PlanProperties {
         PlanProperties::new(
             EquivalenceProperties::new(schema),
-            Partitioning::UnknownPartitioning(1),
+            Partitioning::UnknownPartitioning(output_partitions.max(1)),
             EmissionType::Final,
             Boundedness::Bounded,
         )
@@ -173,7 +178,7 @@ impl ExecutionPlan for DeltaDiscoveryExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::SinglePartition]
+        vec![Distribution::UnspecifiedDistribution]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -199,10 +204,6 @@ impl ExecutionPlan for DeltaDiscoveryExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if partition != 0 {
-            return internal_err!("DeltaDiscoveryExec can only be executed in a single partition");
-        }
-
         let schema = self.schema();
         let input = Arc::clone(&self.input);
         let table_url = self.table_url.clone();
@@ -211,90 +212,211 @@ impl ExecutionPlan for DeltaDiscoveryExec {
         let partition_columns = self.input_partition_columns.clone();
         let partition_scan = self.input_partition_scan;
 
+        // Partition-only discovery can be streamed and parallelized across input partitions.
+        // This avoids forcing `CoalescePartitionsExec` above log replay, enabling parallel replay.
+        if partition_scan {
+            let input_stream = input.execute(partition, context)?;
+            let schema_for_stream = schema.clone();
+            let partition_columns_for_stream = partition_columns.clone();
+            let s = input_stream.try_filter_map(move |batch| {
+                let schema = schema_for_stream.clone();
+                let partition_columns = partition_columns_for_stream.clone();
+                async move {
+                    if batch.num_rows() == 0 {
+                        return Ok(None);
+                    }
+
+                    let path_arr = batch
+                        .column_by_name(PATH_COLUMN)
+                        .and_then(|c| {
+                            c.as_any()
+                                .downcast_ref::<datafusion::arrow::array::StringArray>()
+                        })
+                        .ok_or_else(|| {
+                            DataFusionError::Plan(format!(
+                                "DeltaDiscoveryExec input must have Utf8 column '{PATH_COLUMN}'"
+                            ))
+                        })?;
+
+                    let size_arr = batch.column_by_name("size_bytes").and_then(|c| {
+                        c.as_any()
+                            .downcast_ref::<datafusion::arrow::array::Int64Array>()
+                    });
+                    let mod_time_arr = batch.column_by_name("modification_time").and_then(|c| {
+                        c.as_any()
+                            .downcast_ref::<datafusion::arrow::array::Int64Array>()
+                    });
+
+                    let part_arrays: Vec<(String, Arc<dyn Array>)> = partition_columns
+                        .iter()
+                        .filter_map(|name| {
+                            batch.column_by_name(name).map(|a| {
+                                let a = datafusion::arrow::compute::cast(a, &DataType::Utf8)
+                                    .unwrap_or_else(|_| a.clone());
+                                (name.clone(), a)
+                            })
+                        })
+                        .collect();
+
+                    let mut adds: Vec<Add> = Vec::with_capacity(batch.num_rows());
+                    for row in 0..batch.num_rows() {
+                        if path_arr.is_null(row) {
+                            return Err(DataFusionError::Plan(format!(
+                                "DeltaDiscoveryExec input '{PATH_COLUMN}' cannot be null"
+                            )));
+                        }
+                        let path = path_arr.value(row);
+                        let size = size_arr.map(|a| a.value(row)).unwrap_or_default();
+                        let modification_time =
+                            mod_time_arr.map(|a| a.value(row)).unwrap_or_default();
+
+                        let mut partition_values: HashMap<String, Option<String>> =
+                            HashMap::with_capacity(part_arrays.len());
+                        for (name, arr) in &part_arrays {
+                            let v = if arr.is_null(row) {
+                                None
+                            } else if let Some(s) = arr
+                                .as_any()
+                                .downcast_ref::<datafusion::arrow::array::StringArray>()
+                            {
+                                Some(s.value(row).to_string())
+                            } else {
+                                datafusion::arrow::util::display::array_value_to_string(
+                                    arr.as_ref(),
+                                    row,
+                                )
+                                .ok()
+                            };
+                            partition_values.insert(name.clone(), v);
+                        }
+
+                        adds.push(Add {
+                            path: path.to_string(),
+                            partition_values,
+                            size,
+                            modification_time,
+                            data_change: true,
+                            stats: None,
+                            tags: None,
+                            deletion_vector: None,
+                            base_row_id: None,
+                            default_row_commit_version: None,
+                            clustering_provider: None,
+                        });
+                    }
+
+                    if adds.is_empty() {
+                        return Ok(None);
+                    }
+
+                    let exec_actions: Vec<ExecAction> =
+                        adds.into_iter().map(|add| add.into()).collect();
+                    let action_batch = encode_actions(exec_actions)?;
+                    let scan_array =
+                        Arc::new(BooleanArray::from(vec![true; action_batch.num_rows()]));
+                    let mut cols = action_batch.columns().to_vec();
+                    cols.push(scan_array);
+                    let out = RecordBatch::try_new(schema, cols)
+                        .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+                    Ok(Some(out))
+                }
+            });
+
+            return Ok(Box::pin(RecordBatchStreamAdapter::new(schema, s)));
+        }
+
+        if partition != 0 {
+            return internal_err!("DeltaDiscoveryExec can only be executed in a single partition");
+        }
+
         let future = async move {
-            let mut stream = input.execute(0, context.clone())?;
+            let input_partitions = input.output_partitioning().partition_count().max(1);
             let mut adds: Vec<Add> = Vec::new();
 
-            while let Some(batch) = stream.try_next().await? {
-                if batch.num_rows() == 0 {
-                    continue;
-                }
+            for input_partition in 0..input_partitions {
+                let mut stream = input.execute(input_partition, context.clone())?;
+                while let Some(batch) = stream.try_next().await? {
+                    if batch.num_rows() == 0 {
+                        continue;
+                    }
 
-                let path_arr = batch
-                    .column_by_name(PATH_COLUMN)
-                    .and_then(|c| {
-                        c.as_any()
-                            .downcast_ref::<datafusion::arrow::array::StringArray>()
-                    })
-                    .ok_or_else(|| {
-                        DataFusionError::Plan(format!(
-                            "DeltaDiscoveryExec input must have Utf8 column '{PATH_COLUMN}'"
-                        ))
-                    })?;
-
-                let size_arr = batch.column_by_name("size_bytes").and_then(|c| {
-                    c.as_any()
-                        .downcast_ref::<datafusion::arrow::array::Int64Array>()
-                });
-                let mod_time_arr = batch.column_by_name("modification_time").and_then(|c| {
-                    c.as_any()
-                        .downcast_ref::<datafusion::arrow::array::Int64Array>()
-                });
-
-                let part_arrays: Vec<(String, Arc<dyn Array>)> = partition_columns
-                    .iter()
-                    .filter_map(|name| {
-                        batch.column_by_name(name).map(|a| {
-                            let a = datafusion::arrow::compute::cast(a, &DataType::Utf8)
-                                .unwrap_or_else(|_| a.clone());
-                            (name.clone(), a)
+                    let path_arr = batch
+                        .column_by_name(PATH_COLUMN)
+                        .and_then(|c| {
+                            c.as_any()
+                                .downcast_ref::<datafusion::arrow::array::StringArray>()
                         })
-                    })
-                    .collect();
+                        .ok_or_else(|| {
+                            DataFusionError::Plan(format!(
+                                "DeltaDiscoveryExec input must have Utf8 column '{PATH_COLUMN}'"
+                            ))
+                        })?;
 
-                for row in 0..batch.num_rows() {
-                    if path_arr.is_null(row) {
-                        return Err(DataFusionError::Plan(format!(
-                            "DeltaDiscoveryExec input '{PATH_COLUMN}' cannot be null"
-                        )));
-                    }
-                    let path = path_arr.value(row);
-                    let size = size_arr.map(|a| a.value(row)).unwrap_or_default();
-                    let modification_time = mod_time_arr.map(|a| a.value(row)).unwrap_or_default();
-
-                    let mut partition_values: HashMap<String, Option<String>> =
-                        HashMap::with_capacity(part_arrays.len());
-                    for (name, arr) in &part_arrays {
-                        let v = if arr.is_null(row) {
-                            None
-                        } else if let Some(s) = arr
-                            .as_any()
-                            .downcast_ref::<datafusion::arrow::array::StringArray>()
-                        {
-                            Some(s.value(row).to_string())
-                        } else {
-                            datafusion::arrow::util::display::array_value_to_string(
-                                arr.as_ref(),
-                                row,
-                            )
-                            .ok()
-                        };
-                        partition_values.insert(name.clone(), v);
-                    }
-
-                    adds.push(Add {
-                        path: path.to_string(),
-                        partition_values,
-                        size,
-                        modification_time,
-                        data_change: true,
-                        stats: None,
-                        tags: None,
-                        deletion_vector: None,
-                        base_row_id: None,
-                        default_row_commit_version: None,
-                        clustering_provider: None,
+                    let size_arr = batch.column_by_name("size_bytes").and_then(|c| {
+                        c.as_any()
+                            .downcast_ref::<datafusion::arrow::array::Int64Array>()
                     });
+                    let mod_time_arr = batch.column_by_name("modification_time").and_then(|c| {
+                        c.as_any()
+                            .downcast_ref::<datafusion::arrow::array::Int64Array>()
+                    });
+
+                    let part_arrays: Vec<(String, Arc<dyn Array>)> = partition_columns
+                        .iter()
+                        .filter_map(|name| {
+                            batch.column_by_name(name).map(|a| {
+                                let a = datafusion::arrow::compute::cast(a, &DataType::Utf8)
+                                    .unwrap_or_else(|_| a.clone());
+                                (name.clone(), a)
+                            })
+                        })
+                        .collect();
+
+                    for row in 0..batch.num_rows() {
+                        if path_arr.is_null(row) {
+                            return Err(DataFusionError::Plan(format!(
+                                "DeltaDiscoveryExec input '{PATH_COLUMN}' cannot be null"
+                            )));
+                        }
+                        let path = path_arr.value(row);
+                        let size = size_arr.map(|a| a.value(row)).unwrap_or_default();
+                        let modification_time =
+                            mod_time_arr.map(|a| a.value(row)).unwrap_or_default();
+
+                        let mut partition_values: HashMap<String, Option<String>> =
+                            HashMap::with_capacity(part_arrays.len());
+                        for (name, arr) in &part_arrays {
+                            let v = if arr.is_null(row) {
+                                None
+                            } else if let Some(s) = arr
+                                .as_any()
+                                .downcast_ref::<datafusion::arrow::array::StringArray>()
+                            {
+                                Some(s.value(row).to_string())
+                            } else {
+                                datafusion::arrow::util::display::array_value_to_string(
+                                    arr.as_ref(),
+                                    row,
+                                )
+                                .ok()
+                            };
+                            partition_values.insert(name.clone(), v);
+                        }
+
+                        adds.push(Add {
+                            path: path.to_string(),
+                            partition_values,
+                            size,
+                            modification_time,
+                            data_change: true,
+                            stats: None,
+                            tags: None,
+                            deletion_vector: None,
+                            base_row_id: None,
+                            default_row_commit_version: None,
+                            clustering_provider: None,
+                        });
+                    }
                 }
             }
 

@@ -71,8 +71,8 @@ DeltaCommitExec(table_path=file://<tmp>/logscan_parallel/)
                                           ProjectionExec: expr=[id@0 as id, value@1 as value, __sail_file_path@2 as __sail_file_path, uuid() as __sail_merge_target_row_id]
                                             DataSourceExec: file_groups={3 groups: [[<tmp>/logscan_parallel/part-<id>.snappy.parquet], [<tmp>/logscan_parallel/part-<id>.snappy.parquet], [<tmp>/logscan_parallel/part-<id>.snappy.parquet]]}, projection=[id, value, __sail_file_path], file_type=parquet
       DeltaRemoveActionsExec
-        DeltaDiscoveryExec(table_path=file://<tmp>/logscan_parallel/)
-          CoalescePartitionsExec
+        CoalescePartitionsExec
+          DeltaDiscoveryExec(table_path=file://<tmp>/logscan_parallel/)
             CoalesceBatchesExec: target_batch_size=8192
               HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3]
                 CoalescePartitionsExec
@@ -98,9 +98,11 @@ DeltaCommitExec(table_path=file://<tmp>/logscan_parallel/)
                                               ProjectionExec: expr=[id@0 as id, value@1 as value, __sail_file_path@2 as __sail_file_path, __sail_merge_target_row_id@3 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
                                                 ProjectionExec: expr=[id@0 as id, value@1 as value, __sail_file_path@2 as __sail_file_path, uuid() as __sail_merge_target_row_id]
                                                   DataSourceExec: file_groups={3 groups: [[<tmp>/logscan_parallel/part-<id>.snappy.parquet], [<tmp>/logscan_parallel/part-<id>.snappy.parquet], [<tmp>/logscan_parallel/part-<id>.snappy.parquet]]}, projection=[id, value, __sail_file_path], file_type=parquet
-                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                  DeltaLogReplayExec(table_path=file://<tmp>/logscan_parallel/, version=2)
-                    CoalescePartitionsExec
-                      UnionExec
-                        DataSourceExec: file_groups={1 group: [[<tmp>/logscan_parallel/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
-                        DataSourceExec: file_groups={2 groups: [[<tmp>/logscan_parallel/_delta_log/00000000000000000001.json], [<tmp>/logscan_parallel/_delta_log/00000000000000000002.json]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=json
+                DeltaLogReplayExec(table_path=file://<tmp>/logscan_parallel/, version=2)
+                  CoalesceBatchesExec: target_batch_size=8192
+                    RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
+                      DeltaLogPathExtractExec
+                        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=3
+                          UnionExec
+                            DataSourceExec: file_groups={1 group: [[<tmp>/logscan_parallel/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+                            DataSourceExec: file_groups={2 groups: [[<tmp>/logscan_parallel/_delta_log/00000000000000000001.json], [<tmp>/logscan_parallel/_delta_log/00000000000000000002.json]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=json

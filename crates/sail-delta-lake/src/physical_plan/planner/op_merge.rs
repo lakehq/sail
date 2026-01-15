@@ -17,8 +17,9 @@ use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::union::UnionExec;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_common::{JoinType, NullEquality};
 use datafusion_physical_expr::expressions::{Column, IsNullExpr};
 use sail_common_datafusion::datasource::{
@@ -32,7 +33,8 @@ use crate::datasource::{DataFusionMixins, PATH_COLUMN};
 use crate::kernel::{DeltaOperation, MergePredicate};
 use crate::options::TableDeltaOptions;
 use crate::physical_plan::{
-    DeltaCommitExec, DeltaDiscoveryExec, DeltaLogReplayExec, DeltaRemoveActionsExec, DeltaWriterExec,
+    DeltaCommitExec, DeltaDiscoveryExec, DeltaLogPathExtractExec, DeltaLogReplayExec,
+    DeltaRemoveActionsExec, COL_REPLAY_PATH, DeltaWriterExec,
 };
 
 /// Entry point for MERGE execution. Expects the logical MERGE to be fully
@@ -260,8 +262,21 @@ async fn finalize_merge(
         // Union(DataSourceExec parquet/json) -> DeltaLogReplayExec -> ... -> DeltaDiscoveryExec.
         let (raw_scan, checkpoint_files, commit_files) =
             build_delta_log_datasource_union(ctx, checkpoint_files, commit_files).await?;
+        let log_scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaLogPathExtractExec::new(raw_scan)?);
+        let log_partitions = ctx.session().config().target_partitions().max(1);
+        let replay_path_idx = log_scan.schema().index_of(COL_REPLAY_PATH)?;
+        let replay_expr: Arc<dyn datafusion_physical_expr::PhysicalExpr> =
+            Arc::new(datafusion_physical_expr::expressions::Column::new(
+                COL_REPLAY_PATH,
+                replay_path_idx,
+            ));
+        let log_scan: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+            log_scan,
+            Partitioning::Hash(vec![replay_expr], log_partitions),
+        )?);
+
         let meta_scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaLogReplayExec::new(
-            raw_scan,
+            log_scan,
             table_url.clone(),
             version,
             partition_columns.clone(),

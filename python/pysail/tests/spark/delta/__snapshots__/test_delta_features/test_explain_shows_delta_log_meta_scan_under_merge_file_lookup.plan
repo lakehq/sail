@@ -71,8 +71,8 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_partition_pushdown/)
                                           ProjectionExec: expr=[id@0 as id, value@1 as value, year@2 as year, __sail_file_path@3 as __sail_file_path, uuid() as __sail_merge_target_row_id]
                                             DataSourceExec: file_groups={2 groups: [[<tmp>/merge_explain_partition_pushdown/year=2023/part-<id>.snappy.parquet], [<tmp>/merge_explain_partition_pushdown/year=2024/part-<id>.snappy.parquet]]}, projection=[id, value, year, __sail_file_path], file_type=parquet
       DeltaRemoveActionsExec
-        DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_partition_pushdown/)
-          CoalescePartitionsExec
+        CoalescePartitionsExec
+          DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_partition_pushdown/)
             CoalesceBatchesExec: target_batch_size=8192
               HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, year@4]
                 CoalescePartitionsExec
@@ -98,6 +98,9 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_partition_pushdown/)
                                               ProjectionExec: expr=[id@0 as id, value@1 as value, year@2 as year, __sail_file_path@3 as __sail_file_path, __sail_merge_target_row_id@4 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
                                                 ProjectionExec: expr=[id@0 as id, value@1 as value, year@2 as year, __sail_file_path@3 as __sail_file_path, uuid() as __sail_merge_target_row_id]
                                                   DataSourceExec: file_groups={2 groups: [[<tmp>/merge_explain_partition_pushdown/year=2023/part-<id>.snappy.parquet], [<tmp>/merge_explain_partition_pushdown/year=2024/part-<id>.snappy.parquet]]}, projection=[id, value, year, __sail_file_path], file_type=parquet
-                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                  DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_partition_pushdown/, version=0)
-                    DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_partition_pushdown/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+                DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_partition_pushdown/, version=0)
+                  CoalesceBatchesExec: target_batch_size=8192
+                    RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
+                      DeltaLogPathExtractExec
+                        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                          DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_partition_pushdown/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet

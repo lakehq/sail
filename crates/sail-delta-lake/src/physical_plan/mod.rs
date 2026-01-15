@@ -30,6 +30,7 @@ mod action_schema;
 mod commit_exec;
 pub mod discovery_exec;
 mod expr_adapter;
+mod log_path_extract_exec;
 mod log_replay_exec;
 mod log_scan_exec;
 mod remove_actions_exec;
@@ -43,6 +44,7 @@ pub use action_schema::{
 pub use commit_exec::DeltaCommitExec;
 pub use discovery_exec::DeltaDiscoveryExec;
 pub use expr_adapter::DeltaPhysicalExprAdapterFactory;
+pub use log_path_extract_exec::{DeltaLogPathExtractExec, COL_REPLAY_PATH};
 pub use log_replay_exec::DeltaLogReplayExec;
 pub use log_scan_exec::DeltaLogScanExec;
 pub mod planner;

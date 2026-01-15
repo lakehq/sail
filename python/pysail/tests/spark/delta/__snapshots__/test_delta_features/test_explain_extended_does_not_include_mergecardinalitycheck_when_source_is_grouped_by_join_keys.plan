@@ -125,8 +125,8 @@ DeltaCommitExec(table_path=file://<tmp>/merge_cardinality_skip/)
                                           ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                                             DataSourceExec: partitions=1, partition_sizes=[1]
       DeltaRemoveActionsExec
-        DeltaDiscoveryExec(table_path=file://<tmp>/merge_cardinality_skip/)
-          CoalescePartitionsExec
+        CoalescePartitionsExec
+          DeltaDiscoveryExec(table_path=file://<tmp>/merge_cardinality_skip/)
             CoalesceBatchesExec: target_batch_size=8192
               HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3]
                 CoalescePartitionsExec
@@ -147,6 +147,9 @@ DeltaCommitExec(table_path=file://<tmp>/merge_cardinality_skip/)
                                           AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[max(src.#3)]
                                             ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                                               DataSourceExec: partitions=1, partition_sizes=[1]
-                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                  DeltaLogReplayExec(table_path=file://<tmp>/merge_cardinality_skip/, version=0)
-                    DataSourceExec: file_groups={1 group: [[<tmp>/merge_cardinality_skip/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+                DeltaLogReplayExec(table_path=file://<tmp>/merge_cardinality_skip/, version=0)
+                  CoalesceBatchesExec: target_batch_size=8192
+                    RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
+                      DeltaLogPathExtractExec
+                        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                          DataSourceExec: file_groups={1 group: [[<tmp>/merge_cardinality_skip/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet

@@ -14,8 +14,8 @@ use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
-    SendableRecordBatchStream,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
+    PlanProperties, SendableRecordBatchStream,
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
@@ -23,6 +23,7 @@ use futures::{stream, TryStreamExt};
 use url::Url;
 
 use crate::datasource::PATH_COLUMN;
+use crate::physical_plan::COL_REPLAY_PATH;
 
 const COL_SIZE_BYTES: &str = "size_bytes";
 const COL_MODIFICATION_TIME: &str = "modification_time";
@@ -72,9 +73,10 @@ impl DeltaLogReplayExec {
         commit_files: Vec<String>,
     ) -> Self {
         let schema = Self::output_schema(&partition_columns);
+        let output_partitions = input.output_partitioning().partition_count().max(1);
         let cache = PlanProperties::new(
             EquivalenceProperties::new(schema),
-            Partitioning::UnknownPartitioning(1),
+            Partitioning::UnknownPartitioning(output_partitions),
             EmissionType::Final,
             Boundedness::Bounded,
         );
@@ -305,7 +307,22 @@ impl ExecutionPlan for DeltaLogReplayExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::SinglePartition]
+        // Log replay is only correct if all actions for the same `path` are co-located in the
+        // same partition. We express this as a required hash distribution over the derived
+        // `COL_REPLAY_PATH` column, which is expected to be produced by `DeltaLogPathExtractExec`.
+        //
+        // If the column isn't present (e.g. an unexpected upstream), fall back to single
+        // partition to preserve correctness.
+        let idx = match self.input.schema().index_of(COL_REPLAY_PATH) {
+            Ok(i) => i,
+            Err(_) => return vec![Distribution::SinglePartition],
+        };
+        let expr: Arc<dyn datafusion_physical_expr::PhysicalExpr> =
+            Arc::new(datafusion_physical_expr::expressions::Column::new(
+                COL_REPLAY_PATH,
+                idx,
+            ));
+        vec![Distribution::HashPartitioned(vec![expr])]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -334,16 +351,12 @@ impl ExecutionPlan for DeltaLogReplayExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if partition != 0 {
-            return internal_err!("DeltaLogReplayExec can only be executed in a single partition");
-        }
-
         let schema = self.schema();
         let input = Arc::clone(&self.input);
         let partition_columns = self.partition_columns.clone();
 
         let future = async move {
-            let mut stream = input.execute(0, context)?;
+            let mut stream = input.execute(partition, context)?;
             let mut active: HashMap<String, ActiveFile> = HashMap::new();
             let mut tombstones: HashSet<String> = HashSet::new();
 
