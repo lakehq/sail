@@ -6050,6 +6050,7 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-sql-analyzer",
+ "serde_json",
  "twox-hash",
  "url",
 ]

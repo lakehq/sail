@@ -429,7 +429,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_json"
+        "success": "ok"
       }
     },
     {
@@ -451,7 +451,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_json"
+        "success": "ok"
       }
     },
     {
@@ -473,7 +473,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_json"
+        "success": "ok"
       }
     },
     {
@@ -495,7 +495,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_json"
+        "success": "ok"
       }
     },
     {
@@ -517,7 +517,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_json"
+        "success": "ok"
       }
     },
     {
@@ -539,7 +539,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_json"
+        "success": "ok"
       }
     },
     {
@@ -561,7 +561,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_json"
+        "failure": "error in DataFusion: Error during planning: one value expected: [ScalarFunction(ScalarFunction { func: ScalarUDF { inner: NamedStructFunc { signature: Signature { type_signature: VariadicAny, volatility: Immutable, parameter_names: None } } }, args: [Literal(Utf8(\"time\"), None), ScalarFunction(ScalarFunction { func: ScalarUDF { inner: ToTimestampMicrosFunc { signature: Signature { type_signature: VariadicAny, volatility: Immutable, parameter_names: None } } }, args: [Literal(Utf8(\"2015-08-26\"), None), ScalarFunction(ScalarFunction { func: ScalarUDF { inner: SparkToChronoFmt { signature: Signature { type_signature: Coercible([Exact { desired_type: Native(LogicalType(Native(String), String)) }]), volatility: Immutable, parameter_names: None } } }, args: [Literal(Utf8(\"yyyy-MM-dd\"), None)] })] })] }), ScalarFunction(ScalarFunction { func: ScalarUDF { inner: MapFromArrays { signature: Signature { type_signature: Any(2), volatility: Immutable, parameter_names: None } } }, args: [ScalarFunction(ScalarFunction { func: ScalarUDF { inner: MakeArray { signature: Signature { type_signature: OneOf([Nullary, UserDefined]), volatility: Immutable, parameter_names: None }, aliases: [\"make_list\"] } }, args: [Literal(Utf8(\"timestampFormat\"), None)] }), ScalarFunction(ScalarFunction { func: ScalarUDF { inner: MakeArray { signature: Signature { type_signature: OneOf([Nullary, UserDefined]), volatility: Immutable, parameter_names: None }, aliases: [\"make_list\"] } }, args: [Literal(Utf8(\"dd/MM/yyyy\"), None)] })] })]"
       }
     }
   ]
