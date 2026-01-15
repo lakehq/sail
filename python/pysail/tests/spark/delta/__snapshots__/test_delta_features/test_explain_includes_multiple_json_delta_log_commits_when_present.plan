@@ -7,23 +7,23 @@ DeltaCommitExec(table_path=file://<tmp>/x/)
           CoalesceBatchesExec: target_batch_size=8192
             FilterExec: NOT year@3 = 2024 AND value@2 > 650
               DeltaScanByAddsExec(table_path=file://<tmp>/x/)
-                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                  DeltaDiscoveryExec(table_path=file://<tmp>/x/)
-                    DeltaLogReplayExec(table_path=file://<tmp>/x/, version=2)
-                      CoalesceBatchesExec: target_batch_size=8192
-                        RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
-                          DeltaLogPathExtractExec
-                            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=3
-                              UnionExec
-                                DataSourceExec: file_groups={1 group: [[<tmp>/x/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
-                                DataSourceExec: file_groups={2 groups: [[<tmp>/x/_delta_log/00000000000000000001.json], [<tmp>/x/_delta_log/00000000000000000002.json]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=json
+                DeltaDiscoveryExec(table_path=file://<tmp>/x/)
+                  DeltaLogReplayExec(table_path=file://<tmp>/x/, version=2)
+                    CoalesceBatchesExec: target_batch_size=8192
+                      RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
+                        DeltaLogPathExtractExec
+                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=3
+                            UnionExec
+                              DataSourceExec: file_groups={1 group: [[<tmp>/x/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+                              DataSourceExec: file_groups={2 groups: [[<tmp>/x/_delta_log/00000000000000000001.json], [<tmp>/x/_delta_log/00000000000000000002.json]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=json
       DeltaRemoveActionsExec
-        DeltaDiscoveryExec(table_path=file://<tmp>/x/)
-          DeltaLogReplayExec(table_path=file://<tmp>/x/, version=2)
-            CoalesceBatchesExec: target_batch_size=8192
-              RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
-                DeltaLogPathExtractExec
-                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=3
-                    UnionExec
-                      DataSourceExec: file_groups={1 group: [[<tmp>/x/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
-                      DataSourceExec: file_groups={2 groups: [[<tmp>/x/_delta_log/00000000000000000001.json], [<tmp>/x/_delta_log/00000000000000000002.json]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=json
+        CoalescePartitionsExec
+          DeltaDiscoveryExec(table_path=file://<tmp>/x/)
+            DeltaLogReplayExec(table_path=file://<tmp>/x/, version=2)
+              CoalesceBatchesExec: target_batch_size=8192
+                RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
+                  DeltaLogPathExtractExec
+                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=3
+                      UnionExec
+                        DataSourceExec: file_groups={1 group: [[<tmp>/x/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+                        DataSourceExec: file_groups={2 groups: [[<tmp>/x/_delta_log/00000000000000000001.json], [<tmp>/x/_delta_log/00000000000000000002.json]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=json

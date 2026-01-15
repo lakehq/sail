@@ -10,19 +10,19 @@ DeltaCommitExec(table_path=file://<tmp>/delta_overwrite/)
             CoalesceBatchesExec: target_batch_size=8192
               FilterExec: NOT id@0 >= CAST(0 AS Int64)
                 DeltaScanByAddsExec(table_path=file://<tmp>/delta_overwrite/)
-                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                    DeltaDiscoveryExec(table_path=file://<tmp>/delta_overwrite/)
-                      DeltaLogReplayExec(table_path=file://<tmp>/delta_overwrite/, version=0)
-                        CoalesceBatchesExec: target_batch_size=8192
-                          RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
-                            DeltaLogPathExtractExec
-                              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                DataSourceExec: file_groups={1 group: [[<tmp>/delta_overwrite/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+                  DeltaDiscoveryExec(table_path=file://<tmp>/delta_overwrite/)
+                    DeltaLogReplayExec(table_path=file://<tmp>/delta_overwrite/, version=0)
+                      CoalesceBatchesExec: target_batch_size=8192
+                        RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
+                          DeltaLogPathExtractExec
+                            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                              DataSourceExec: file_groups={1 group: [[<tmp>/delta_overwrite/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
       DeltaRemoveActionsExec
-        DeltaDiscoveryExec(table_path=file://<tmp>/delta_overwrite/)
-          DeltaLogReplayExec(table_path=file://<tmp>/delta_overwrite/, version=0)
-            CoalesceBatchesExec: target_batch_size=8192
-              RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
-                DeltaLogPathExtractExec
-                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                    DataSourceExec: file_groups={1 group: [[<tmp>/delta_overwrite/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+        CoalescePartitionsExec
+          DeltaDiscoveryExec(table_path=file://<tmp>/delta_overwrite/)
+            DeltaLogReplayExec(table_path=file://<tmp>/delta_overwrite/, version=0)
+              CoalesceBatchesExec: target_batch_size=8192
+                RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
+                  DeltaLogPathExtractExec
+                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                      DataSourceExec: file_groups={1 group: [[<tmp>/delta_overwrite/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet

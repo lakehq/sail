@@ -18,8 +18,11 @@ use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
+use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
+use datafusion::arrow::compute::SortOptions;
+use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_common::{JoinType, NullEquality};
 use datafusion_physical_expr::expressions::{Column, IsNullExpr};
 use sail_common_datafusion::datasource::{
@@ -274,6 +277,18 @@ async fn finalize_merge(
             log_scan,
             Partitioning::Hash(vec![replay_expr], log_partitions),
         )?);
+        // Ensure per-partition ordering on replay_path so DeltaLogReplayExec can stream without
+        // materializing the full active set in memory. SortExec can spill.
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new(COL_REPLAY_PATH, replay_path_idx)),
+            options: SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        }])
+        .expect("non-degenerate ordering");
+        let log_scan: Arc<dyn ExecutionPlan> =
+            Arc::new(SortExec::new(ordering, log_scan).with_preserve_partitioning(true));
 
         let meta_scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaLogReplayExec::new(
             log_scan,

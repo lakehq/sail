@@ -128,7 +128,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_cardinality_skip/)
         CoalescePartitionsExec
           DeltaDiscoveryExec(table_path=file://<tmp>/merge_cardinality_skip/)
             CoalesceBatchesExec: target_batch_size=8192
-              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3]
+              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, stats_json@4]
                 CoalescePartitionsExec
                   AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
                     CoalesceBatchesExec: target_batch_size=8192

@@ -4,32 +4,30 @@ use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{Array, BooleanArray};
+use datafusion::arrow::array::{Array, ArrayRef, BooleanArray};
+use datafusion::arrow::compute::filter_record_batch;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::datasource::TableProvider;
 use datafusion::execution::context::TaskContext;
-use datafusion::execution::SessionStateBuilder;
-use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
+use datafusion_common::pruning::PruningStatistics;
+use datafusion_common::scalar::ScalarValue;
+use datafusion_common::Column;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
-use futures::{stream, TryStreamExt};
+use futures::TryStreamExt;
 use url::Url;
 
-use crate::datasource::{
-    collect_physical_columns, DeltaScanConfigBuilder, DeltaTableProvider, PATH_COLUMN,
-};
+use crate::datasource::{collect_physical_columns, PATH_COLUMN};
 use crate::kernel::models::Add;
-use crate::physical_plan::{encode_actions, DeltaPhysicalExprAdapterFactory, ExecAction};
-use crate::storage::{get_object_store_from_context, StorageConfig};
-use crate::table::open_table_with_object_store;
+use crate::kernel::statistics::{ColumnCountStat, ColumnValueStat, Stats};
+
+const COL_STATS_JSON: &str = "stats_json";
 
 #[derive(Debug)]
 pub struct DeltaDiscoveryExec {
@@ -53,20 +51,14 @@ impl DeltaDiscoveryExec {
         partition_columns: Vec<String>,
         partition_scan: bool,
     ) -> Result<Self> {
-        let mut fields = crate::physical_plan::delta_action_schema()?
-            .fields()
-            .to_vec();
+        let mut fields = input.schema().fields().to_vec();
         fields.push(Arc::new(Field::new(
             "partition_scan",
             DataType::Boolean,
             false,
         )));
         let schema = Arc::new(Schema::new(fields));
-        let output_partitions = if partition_scan {
-            input.output_partitioning().partition_count().max(1)
-        } else {
-            1
-        };
+        let output_partitions = input.output_partitioning().partition_count().max(1);
         let cache = Self::compute_properties(schema, output_partitions);
         Ok(Self {
             table_url,
@@ -161,6 +153,303 @@ impl DeltaDiscoveryExec {
     pub fn input_partition_scan(&self) -> bool {
         self.input_partition_scan
     }
+
+    fn build_adds_from_meta_batch(
+        batch: &RecordBatch,
+        partition_columns: &[String],
+    ) -> Result<Vec<Add>> {
+        let path_arr = batch
+            .column_by_name(PATH_COLUMN)
+            .and_then(|c| c.as_any().downcast_ref::<datafusion::arrow::array::StringArray>())
+            .ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "DeltaDiscoveryExec input must have Utf8 column '{PATH_COLUMN}'"
+                ))
+            })?;
+
+        let size_arr = batch
+            .column_by_name("size_bytes")
+            .and_then(|c| c.as_any().downcast_ref::<datafusion::arrow::array::Int64Array>());
+        let mod_time_arr = batch
+            .column_by_name("modification_time")
+            .and_then(|c| c.as_any().downcast_ref::<datafusion::arrow::array::Int64Array>());
+
+        let stats_arr = batch.column_by_name(COL_STATS_JSON).map(|c| {
+            datafusion::arrow::compute::cast(c, &DataType::Utf8).unwrap_or_else(|_| c.clone())
+        });
+        let stats_arr = stats_arr
+            .as_ref()
+            .and_then(|c| c.as_any().downcast_ref::<datafusion::arrow::array::StringArray>());
+
+        let part_arrays: Vec<(String, Arc<dyn Array>)> = partition_columns
+            .iter()
+            .filter_map(|name| {
+                batch.column_by_name(name).map(|a| {
+                    let a =
+                        datafusion::arrow::compute::cast(a, &DataType::Utf8).unwrap_or_else(|_| {
+                            a.clone()
+                        });
+                    (name.clone(), a)
+                })
+            })
+            .collect();
+
+        let mut adds = Vec::with_capacity(batch.num_rows());
+        for row in 0..batch.num_rows() {
+            if path_arr.is_null(row) {
+                return Err(DataFusionError::Plan(format!(
+                    "DeltaDiscoveryExec input '{PATH_COLUMN}' cannot be null"
+                )));
+            }
+            let path = path_arr.value(row);
+            let size = size_arr.map(|a| a.value(row)).unwrap_or_default();
+            let modification_time = mod_time_arr.map(|a| a.value(row)).unwrap_or_default();
+            let stats = stats_arr.and_then(|a| {
+                if a.is_null(row) {
+                    None
+                } else {
+                    Some(a.value(row).to_string())
+                }
+            });
+
+            let mut partition_values: HashMap<String, Option<String>> =
+                HashMap::with_capacity(part_arrays.len());
+            for (name, arr) in &part_arrays {
+                let v = if arr.is_null(row) {
+                    None
+                } else if let Some(s) = arr
+                    .as_any()
+                    .downcast_ref::<datafusion::arrow::array::StringArray>()
+                {
+                    Some(s.value(row).to_string())
+                } else {
+                    datafusion::arrow::util::display::array_value_to_string(arr.as_ref(), row).ok()
+                };
+                partition_values.insert(name.clone(), v);
+            }
+
+            adds.push(Add {
+                path: path.to_string(),
+                partition_values,
+                size,
+                modification_time,
+                data_change: true,
+                stats,
+                tags: None,
+                deletion_vector: None,
+                base_row_id: None,
+                default_row_commit_version: None,
+                clustering_provider: None,
+            });
+        }
+        Ok(adds)
+    }
+
+    fn prune_mask_for_meta_batch(
+        batch: &RecordBatch,
+        predicate: &Arc<dyn PhysicalExpr>,
+        table_schema: &SchemaRef,
+        partition_columns: &[String],
+    ) -> Result<Vec<bool>> {
+        let adds = Self::build_adds_from_meta_batch(batch, partition_columns)?;
+        if adds.is_empty() {
+            return Ok(vec![]);
+        }
+        let referenced = collect_physical_columns(predicate);
+        let stats =
+            DeltaAddStatsPruningStatistics::try_new(table_schema.clone(), adds, referenced)?;
+        let pruning_predicate =
+            datafusion::physical_optimizer::pruning::PruningPredicate::try_new(
+                Arc::clone(predicate),
+                table_schema.clone(),
+            )?;
+        pruning_predicate.prune(&stats)
+    }
+}
+
+#[derive(Debug)]
+struct DeltaAddStatsPruningStatistics {
+    table_schema: SchemaRef,
+    adds: Vec<Add>,
+    stats: Vec<Option<Stats>>,
+    referenced_columns: std::collections::HashSet<String>,
+}
+
+impl DeltaAddStatsPruningStatistics {
+    fn try_new(
+        table_schema: SchemaRef,
+        adds: Vec<Add>,
+        referenced_columns: std::collections::HashSet<String>,
+    ) -> Result<Self> {
+        let mut stats = Vec::with_capacity(adds.len());
+        for a in &adds {
+            let parsed = a
+                .get_stats()
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            stats.push(parsed);
+        }
+        Ok(Self {
+            table_schema,
+            adds,
+            stats,
+            referenced_columns,
+        })
+    }
+
+    fn field_for(&self, column: &Column) -> Option<Arc<Field>> {
+        let name = column.name();
+        self.table_schema
+            .field_with_name(name)
+            .ok()
+            .cloned()
+            .map(Arc::new)
+    }
+
+    fn null_scalar(dt: &DataType) -> ScalarValue {
+        ScalarValue::try_from(dt).unwrap_or_else(|_| ScalarValue::Null)
+    }
+
+    fn scalar_from_json(dt: &DataType, v: &serde_json::Value) -> Option<ScalarValue> {
+        match v {
+            serde_json::Value::Null => Some(Self::null_scalar(dt)),
+            serde_json::Value::Bool(b) => ScalarValue::try_from_string(b.to_string(), dt).ok(),
+            serde_json::Value::Number(n) => ScalarValue::try_from_string(n.to_string(), dt).ok(),
+            serde_json::Value::String(s) => ScalarValue::try_from_string(s.clone(), dt).ok(),
+            other => ScalarValue::try_from_string(other.to_string(), dt).ok(),
+        }
+    }
+
+    fn scalar_from_partition_value(dt: &DataType, v: &Option<String>) -> ScalarValue {
+        match v {
+            None => Self::null_scalar(dt),
+            Some(s) => ScalarValue::try_from_string(s.clone(), dt).unwrap_or_else(|_| {
+                // If we can't parse the partition value into the target type, treat it as unknown.
+                Self::null_scalar(dt)
+            }),
+        }
+    }
+
+    fn lookup_value_stat<'a>(
+        map: &'a HashMap<String, ColumnValueStat>,
+        name: &str,
+    ) -> Option<&'a serde_json::Value> {
+        let mut parts = name.split('.');
+        let first = parts.next()?;
+        let mut cur = map.get(first)?;
+        for p in parts {
+            cur = cur.as_column()?.get(p)?;
+        }
+        cur.as_value()
+    }
+
+    fn lookup_count_stat<'a>(map: &'a HashMap<String, ColumnCountStat>, name: &str) -> Option<i64> {
+        let mut parts = name.split('.');
+        let first = parts.next()?;
+        let mut cur = map.get(first)?;
+        for p in parts {
+            cur = cur.as_column()?.get(p)?;
+        }
+        cur.as_value()
+    }
+
+    fn build_array(
+        &self,
+        column: &Column,
+        f: impl Fn(&Add, Option<&Stats>, &DataType) -> ScalarValue,
+    ) -> Option<ArrayRef> {
+        let field = self.field_for(column)?;
+        let dt = field.data_type();
+
+        // Only compute arrays for columns that are actually referenced by the predicate. This
+        // reduces repeated stats parsing work in `PruningPredicate`.
+        if !self.referenced_columns.contains(field.name()) {
+            return None;
+        }
+
+        let mut has_value = false;
+        let mut scalars = Vec::with_capacity(self.adds.len());
+        for (a, s) in self.adds.iter().zip(self.stats.iter()) {
+            let sv = f(a, s.as_ref(), dt);
+            has_value |= !sv.is_null();
+            scalars.push(sv);
+        }
+
+        if !has_value {
+            return None;
+        }
+        ScalarValue::iter_to_array(scalars.into_iter()).ok()
+    }
+}
+
+impl PruningStatistics for DeltaAddStatsPruningStatistics {
+    fn min_values(&self, column: &Column) -> Option<ArrayRef> {
+        self.build_array(column, |a, s, dt| {
+            let name = column.name();
+            if let Some(pv) = a.partition_values.get(name) {
+                return Self::scalar_from_partition_value(dt, pv);
+            }
+            if let Some(s) = s {
+                if let Some(v) = Self::lookup_value_stat(&s.min_values, name) {
+                    return Self::scalar_from_json(dt, v).unwrap_or_else(|| Self::null_scalar(dt));
+                }
+            }
+            Self::null_scalar(dt)
+        })
+    }
+
+    fn max_values(&self, column: &Column) -> Option<ArrayRef> {
+        self.build_array(column, |a, s, dt| {
+            let name = column.name();
+            if let Some(pv) = a.partition_values.get(name) {
+                return Self::scalar_from_partition_value(dt, pv);
+            }
+            if let Some(s) = s {
+                if let Some(v) = Self::lookup_value_stat(&s.max_values, name) {
+                    return Self::scalar_from_json(dt, v).unwrap_or_else(|| Self::null_scalar(dt));
+                }
+            }
+            Self::null_scalar(dt)
+        })
+    }
+
+    fn num_containers(&self) -> usize {
+        self.adds.len()
+    }
+
+    fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
+        self.build_array(column, |a, s, _dt| {
+            let name = column.name();
+            // Partition columns: all rows in file share same partition value.
+            if let Some(pv) = a.partition_values.get(name) {
+                let n = s.map(|s| s.num_records).unwrap_or(0);
+                let cnt = if pv.is_none() { n } else { 0 };
+                return ScalarValue::UInt64(Some(cnt.max(0) as u64));
+            }
+            if let Some(s) = s {
+                if let Some(v) = Self::lookup_count_stat(&s.null_count, name) {
+                    return ScalarValue::UInt64(Some(v.max(0) as u64));
+                }
+            }
+            ScalarValue::UInt64(None)
+        })
+    }
+
+    fn row_counts(&self, column: &Column) -> Option<ArrayRef> {
+        self.build_array(column, |_a, s, _dt| {
+            let Some(s) = s else {
+                return ScalarValue::UInt64(None);
+            };
+            ScalarValue::UInt64(Some(s.num_records.max(0) as u64))
+        })
+    }
+
+    fn contained(
+        &self,
+        _column: &Column,
+        _values: &std::collections::HashSet<ScalarValue>,
+    ) -> Option<BooleanArray> {
+        None
+    }
 }
 
 #[async_trait]
@@ -205,383 +494,54 @@ impl ExecutionPlan for DeltaDiscoveryExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let schema = self.schema();
-        let input = Arc::clone(&self.input);
-        let table_url = self.table_url.clone();
-        let version = self.version;
-        let predicate = self.predicate.clone();
-        let partition_columns = self.input_partition_columns.clone();
+        let input_stream = self.input.execute(partition, context)?;
+        let schema_for_stream = schema.clone();
+        let predicate_for_stream = self.predicate.clone();
+        let table_schema_for_stream = self.table_schema.clone();
+        let partition_columns_for_stream = self.input_partition_columns.clone();
         let partition_scan = self.input_partition_scan;
 
-        // Partition-only discovery can be streamed and parallelized across input partitions.
-        // This avoids forcing `CoalescePartitionsExec` above log replay, enabling parallel replay.
-        if partition_scan {
-            let input_stream = input.execute(partition, context)?;
-            let schema_for_stream = schema.clone();
-            let partition_columns_for_stream = partition_columns.clone();
-            let s = input_stream.try_filter_map(move |batch| {
-                let schema = schema_for_stream.clone();
-                let partition_columns = partition_columns_for_stream.clone();
-                async move {
-                    if batch.num_rows() == 0 {
-                        return Ok(None);
-                    }
-
-                    let path_arr = batch
-                        .column_by_name(PATH_COLUMN)
-                        .and_then(|c| {
-                            c.as_any()
-                                .downcast_ref::<datafusion::arrow::array::StringArray>()
-                        })
-                        .ok_or_else(|| {
-                            DataFusionError::Plan(format!(
-                                "DeltaDiscoveryExec input must have Utf8 column '{PATH_COLUMN}'"
-                            ))
-                        })?;
-
-                    let size_arr = batch.column_by_name("size_bytes").and_then(|c| {
-                        c.as_any()
-                            .downcast_ref::<datafusion::arrow::array::Int64Array>()
-                    });
-                    let mod_time_arr = batch.column_by_name("modification_time").and_then(|c| {
-                        c.as_any()
-                            .downcast_ref::<datafusion::arrow::array::Int64Array>()
-                    });
-
-                    let part_arrays: Vec<(String, Arc<dyn Array>)> = partition_columns
-                        .iter()
-                        .filter_map(|name| {
-                            batch.column_by_name(name).map(|a| {
-                                let a = datafusion::arrow::compute::cast(a, &DataType::Utf8)
-                                    .unwrap_or_else(|_| a.clone());
-                                (name.clone(), a)
-                            })
-                        })
-                        .collect();
-
-                    let mut adds: Vec<Add> = Vec::with_capacity(batch.num_rows());
-                    for row in 0..batch.num_rows() {
-                        if path_arr.is_null(row) {
-                            return Err(DataFusionError::Plan(format!(
-                                "DeltaDiscoveryExec input '{PATH_COLUMN}' cannot be null"
-                            )));
-                        }
-                        let path = path_arr.value(row);
-                        let size = size_arr.map(|a| a.value(row)).unwrap_or_default();
-                        let modification_time =
-                            mod_time_arr.map(|a| a.value(row)).unwrap_or_default();
-
-                        let mut partition_values: HashMap<String, Option<String>> =
-                            HashMap::with_capacity(part_arrays.len());
-                        for (name, arr) in &part_arrays {
-                            let v = if arr.is_null(row) {
-                                None
-                            } else if let Some(s) = arr
-                                .as_any()
-                                .downcast_ref::<datafusion::arrow::array::StringArray>()
-                            {
-                                Some(s.value(row).to_string())
-                            } else {
-                                datafusion::arrow::util::display::array_value_to_string(
-                                    arr.as_ref(),
-                                    row,
-                                )
-                                .ok()
-                            };
-                            partition_values.insert(name.clone(), v);
-                        }
-
-                        adds.push(Add {
-                            path: path.to_string(),
-                            partition_values,
-                            size,
-                            modification_time,
-                            data_change: true,
-                            stats: None,
-                            tags: None,
-                            deletion_vector: None,
-                            base_row_id: None,
-                            default_row_commit_version: None,
-                            clustering_provider: None,
-                        });
-                    }
-
-                    if adds.is_empty() {
-                        return Ok(None);
-                    }
-
-                    let exec_actions: Vec<ExecAction> =
-                        adds.into_iter().map(|add| add.into()).collect();
-                    let action_batch = encode_actions(exec_actions)?;
-                    let scan_array =
-                        Arc::new(BooleanArray::from(vec![true; action_batch.num_rows()]));
-                    let mut cols = action_batch.columns().to_vec();
-                    cols.push(scan_array);
-                    let out = RecordBatch::try_new(schema, cols)
-                        .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
-                    Ok(Some(out))
+        let s = input_stream.try_filter_map(move |batch| {
+            let schema = schema_for_stream.clone();
+            let predicate = predicate_for_stream.clone();
+            let table_schema = table_schema_for_stream.clone();
+            let partition_columns = partition_columns_for_stream.clone();
+            async move {
+                if batch.num_rows() == 0 {
+                    return Ok(None);
                 }
-            });
 
-            return Ok(Box::pin(RecordBatchStreamAdapter::new(schema, s)));
-        }
-
-        if partition != 0 {
-            return internal_err!("DeltaDiscoveryExec can only be executed in a single partition");
-        }
-
-        let future = async move {
-            let input_partitions = input.output_partitioning().partition_count().max(1);
-            let mut adds: Vec<Add> = Vec::new();
-
-            for input_partition in 0..input_partitions {
-                let mut stream = input.execute(input_partition, context.clone())?;
-                while let Some(batch) = stream.try_next().await? {
-                    if batch.num_rows() == 0 {
-                        continue;
-                    }
-
-                    let path_arr = batch
-                        .column_by_name(PATH_COLUMN)
-                        .and_then(|c| {
-                            c.as_any()
-                                .downcast_ref::<datafusion::arrow::array::StringArray>()
-                        })
-                        .ok_or_else(|| {
-                            DataFusionError::Plan(format!(
-                                "DeltaDiscoveryExec input must have Utf8 column '{PATH_COLUMN}'"
-                            ))
-                        })?;
-
-                    let size_arr = batch.column_by_name("size_bytes").and_then(|c| {
-                        c.as_any()
-                            .downcast_ref::<datafusion::arrow::array::Int64Array>()
-                    });
-                    let mod_time_arr = batch.column_by_name("modification_time").and_then(|c| {
-                        c.as_any()
-                            .downcast_ref::<datafusion::arrow::array::Int64Array>()
-                    });
-
-                    let part_arrays: Vec<(String, Arc<dyn Array>)> = partition_columns
-                        .iter()
-                        .filter_map(|name| {
-                            batch.column_by_name(name).map(|a| {
-                                let a = datafusion::arrow::compute::cast(a, &DataType::Utf8)
-                                    .unwrap_or_else(|_| a.clone());
-                                (name.clone(), a)
-                            })
-                        })
-                        .collect();
-
-                    for row in 0..batch.num_rows() {
-                        if path_arr.is_null(row) {
-                            return Err(DataFusionError::Plan(format!(
-                                "DeltaDiscoveryExec input '{PATH_COLUMN}' cannot be null"
-                            )));
+                let filtered = match (&predicate, &table_schema) {
+                    (Some(pred), Some(ts)) => {
+                        let mask = DeltaDiscoveryExec::prune_mask_for_meta_batch(
+                            &batch,
+                            pred,
+                            ts,
+                            &partition_columns,
+                        )?;
+                        if mask.is_empty() {
+                            batch.clone()
+                        } else {
+                            let b = BooleanArray::from(mask);
+                            filter_record_batch(&batch, &b).map_err(|e| {
+                                DataFusionError::ArrowError(Box::new(e), None)
+                            })?
                         }
-                        let path = path_arr.value(row);
-                        let size = size_arr.map(|a| a.value(row)).unwrap_or_default();
-                        let modification_time =
-                            mod_time_arr.map(|a| a.value(row)).unwrap_or_default();
-
-                        let mut partition_values: HashMap<String, Option<String>> =
-                            HashMap::with_capacity(part_arrays.len());
-                        for (name, arr) in &part_arrays {
-                            let v = if arr.is_null(row) {
-                                None
-                            } else if let Some(s) = arr
-                                .as_any()
-                                .downcast_ref::<datafusion::arrow::array::StringArray>()
-                            {
-                                Some(s.value(row).to_string())
-                            } else {
-                                datafusion::arrow::util::display::array_value_to_string(
-                                    arr.as_ref(),
-                                    row,
-                                )
-                                .ok()
-                            };
-                            partition_values.insert(name.clone(), v);
-                        }
-
-                        adds.push(Add {
-                            path: path.to_string(),
-                            partition_values,
-                            size,
-                            modification_time,
-                            data_change: true,
-                            stats: None,
-                            tags: None,
-                            deletion_vector: None,
-                            base_row_id: None,
-                            default_row_commit_version: None,
-                            clustering_provider: None,
-                        });
                     }
-                }
+                    _ => batch.clone(),
+                };
+
+                let scan_array =
+                    Arc::new(BooleanArray::from(vec![partition_scan; filtered.num_rows()]));
+                let mut cols = filtered.columns().to_vec();
+                cols.push(scan_array);
+                let out = RecordBatch::try_new(schema, cols)
+                    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+                Ok(Some(out))
             }
+        });
 
-            let (final_adds, is_partition_scan) = if let Some(pred) = predicate {
-                if !partition_scan {
-                    let object_store = get_object_store_from_context(&context, &table_url)?;
-                    let mut table =
-                        open_table_with_object_store(table_url, object_store, StorageConfig)
-                            .await
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                    table
-                        .load_version(version)
-                        .await
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                    let snapshot = table
-                        .snapshot()
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?
-                        .clone();
-                    let log_store = table.log_store();
-
-                    let mut candidate_map: HashMap<String, Add> = adds
-                        .into_iter()
-                        .map(|add| (add.path.clone(), add))
-                        .collect();
-
-                    let scan_config = DeltaScanConfigBuilder::new()
-                        .with_file_column(true)
-                        .build(&snapshot)
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                    let logical_schema = crate::datasource::df_logical_schema(
-                        &snapshot,
-                        &scan_config.file_column_name,
-                        None,
-                    )?;
-
-                    let mut used_columns = Vec::new();
-                    let referenced_columns = collect_physical_columns(&pred);
-                    for (i, field) in logical_schema.fields().iter().enumerate() {
-                        if referenced_columns.contains(field.name()) {
-                            used_columns.push(i);
-                        }
-                    }
-                    if let Some(file_column_name) = &scan_config.file_column_name {
-                        if let Ok(idx) = logical_schema.index_of(file_column_name) {
-                            if !used_columns.contains(&idx) {
-                                used_columns.push(idx);
-                            }
-                        }
-                    }
-                    if used_columns.is_empty() {
-                        for (i, _) in logical_schema.fields().iter().enumerate() {
-                            used_columns.push(i);
-                        }
-                    }
-
-                    let table_provider =
-                        DeltaTableProvider::try_new(snapshot, log_store, scan_config)
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                    let session_state = SessionStateBuilder::new()
-                        .with_runtime_env(context.runtime_env().clone())
-                        .with_config(context.session_config().clone())
-                        .build();
-
-                    let scan: Arc<dyn ExecutionPlan> = table_provider
-                        .scan(&session_state, Some(&used_columns), &[], None)
-                        .await?;
-
-                    let adapter_factory = Arc::new(DeltaPhysicalExprAdapterFactory {});
-                    let adapter =
-                        adapter_factory.create(Arc::clone(&logical_schema), scan.schema());
-                    let adapted_predicate = adapter.rewrite(pred)?;
-
-                    let filtered: Arc<dyn ExecutionPlan> =
-                        Arc::new(FilterExec::try_new(adapted_predicate, scan)?);
-
-                    let mut discovered_files = Vec::new();
-                    let mut seen_paths = std::collections::HashSet::new();
-
-                    for i in 0..filtered
-                        .properties()
-                        .output_partitioning()
-                        .partition_count()
-                    {
-                        let mut stream = filtered.execute(i, context.clone())?;
-                        while let Some(batch) = stream.try_next().await? {
-                            let path_column =
-                                batch.column_by_name(PATH_COLUMN).ok_or_else(|| {
-                                    DataFusionError::Plan(
-                                        "Missing path column in filtered results".to_string(),
-                                    )
-                                })?;
-
-                            let path_array = path_column
-                                .as_any()
-                                .downcast_ref::<datafusion::arrow::array::DictionaryArray<
-                                    datafusion::arrow::datatypes::UInt16Type,
-                                >>()
-                                .ok_or_else(|| {
-                                    DataFusionError::Plan(
-                                        "Path column is not a dictionary array".to_string(),
-                                    )
-                                })?;
-
-                            let string_values = path_array
-                                .values()
-                                .as_any()
-                                .downcast_ref::<datafusion::arrow::array::StringArray>()
-                                .ok_or_else(|| {
-                                    DataFusionError::Plan(
-                                        "Dictionary values are not strings".to_string(),
-                                    )
-                                })?;
-
-                            for idx in path_array.keys().iter().flatten() {
-                                let path = string_values.value(idx as usize);
-                                if !seen_paths.insert(path.to_string()) {
-                                    continue;
-                                }
-
-                                match candidate_map.remove(path) {
-                                    Some(action) => discovered_files.push(action),
-                                    None => {
-                                        return Err(DataFusionError::Plan(format!(
-                                            "File path '{}' not found in candidate actions",
-                                            path
-                                        )));
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    (discovered_files, false)
-                } else {
-                    (adds, partition_scan)
-                }
-            } else {
-                (adds, partition_scan)
-            };
-
-            if final_adds.is_empty() {
-                return Ok(RecordBatch::new_empty(schema));
-            }
-
-            let exec_actions: Vec<ExecAction> =
-                final_adds.into_iter().map(|add| add.into()).collect();
-            let action_batch = encode_actions(exec_actions)?;
-            let scan_array = Arc::new(datafusion::arrow::array::BooleanArray::from(
-                vec![is_partition_scan; action_batch.num_rows()],
-            ));
-
-            let mut cols = action_batch.columns().to_vec();
-            cols.push(scan_array);
-            RecordBatch::try_new(schema, cols)
-                .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
-        };
-
-        let stream = stream::once(future);
-        Ok(Box::pin(RecordBatchStreamAdapter::new(
-            self.schema(),
-            stream,
-        )))
+        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, s)))
     }
 }
 
