@@ -5834,6 +5834,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "sail-catalog-onelake"
+version = "0.4.6"
+dependencies = [
+ "arrow",
+ "async-trait",
+ "reqwest",
+ "sail-catalog",
+ "sail-common-datafusion",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "sail-catalog-unity"
 version = "0.4.6"
 dependencies = [
@@ -6289,6 +6303,7 @@ dependencies = [
  "sail-catalog",
  "sail-catalog-iceberg",
  "sail-catalog-memory",
+ "sail-catalog-onelake",
  "sail-catalog-unity",
  "sail-common",
  "sail-common-datafusion",

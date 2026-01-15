@@ -7,6 +7,7 @@ use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
 use sail_catalog::provider::{CatalogProvider, RuntimeAwareCatalogProvider};
 use sail_catalog_iceberg::IcebergRestCatalogProvider;
 use sail_catalog_memory::MemoryCatalogProvider;
+use sail_catalog_onelake::OneLakeCatalogProvider;
 use sail_catalog_unity::UnityCatalogProvider;
 use sail_common::config::{AppConfig, CatalogType};
 use sail_common::runtime::RuntimeHandle;
@@ -82,6 +83,42 @@ pub fn create_catalog_manager(
                 } => {
                     let runtime_aware = RuntimeAwareCatalogProvider::try_new(
                         || UnityCatalogProvider::new(name.to_string(), default_catalog, uri, token),
+                        runtime.io().clone(),
+                    )?;
+
+                    Ok((name.to_string(), Arc::new(runtime_aware)))
+                }
+                CatalogType::OneLake {
+                    name,
+                    url,
+                    bearer_token,
+                } => {
+                    // Parse URL format: workspace/item.type (e.g., "duckrun/data.lakehouse")
+                    let (workspace, item) = url
+                        .split_once('/')
+                        .ok_or_else(|| {
+                            plan_datafusion_err!(
+                                "Invalid OneLake URL format: expected 'workspace/item.type', got '{}'",
+                                url
+                            )
+                        })?;
+
+                    // Extract item name without the .type suffix
+                    let item_name = item
+                        .split_once('.')
+                        .map(|(name, _)| name)
+                        .unwrap_or(item);
+
+                    let token = bearer_token.as_ref().map(|t| t.expose_secret().to_string());
+                    let runtime_aware = RuntimeAwareCatalogProvider::try_new(
+                        || {
+                            Ok(OneLakeCatalogProvider::new(
+                                name.clone(),
+                                workspace.to_string(),
+                                item_name.to_string(),
+                                token.clone(),
+                            ))
+                        },
                         runtime.io().clone(),
                     )?;
 
