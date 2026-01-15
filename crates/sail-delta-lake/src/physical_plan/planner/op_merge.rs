@@ -32,7 +32,7 @@ use crate::datasource::{DataFusionMixins, PATH_COLUMN};
 use crate::kernel::{DeltaOperation, MergePredicate};
 use crate::options::TableDeltaOptions;
 use crate::physical_plan::{
-    DeltaCommitExec, DeltaDiscoveryExec, DeltaLogScanExec, DeltaRemoveActionsExec, DeltaWriterExec,
+    DeltaCommitExec, DeltaDiscoveryExec, DeltaLogReplayExec, DeltaRemoveActionsExec, DeltaWriterExec,
 };
 
 /// Entry point for MERGE execution. Expects the logical MERGE to be fully
@@ -256,11 +256,11 @@ async fn finalize_merge(
     let mut action_inputs: Vec<Arc<dyn ExecutionPlan>> = vec![writer.clone()];
 
     if let Some(touched_plan) = &touched_plan_opt {
-        // Build a log-side stream of Add rows using a visible log scan pipeline:
-        // Union(DataSourceExec parquet/json) -> DeltaLogScanExec -> ... -> DeltaDiscoveryExec.
+        // Build a log-side stream of active Add rows using a visible log replay pipeline:
+        // Union(DataSourceExec parquet/json) -> DeltaLogReplayExec -> ... -> DeltaDiscoveryExec.
         let (raw_scan, checkpoint_files, commit_files) =
             build_delta_log_datasource_union(ctx, checkpoint_files, commit_files).await?;
-        let meta_scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaLogScanExec::new(
+        let meta_scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaLogReplayExec::new(
             raw_scan,
             table_url.clone(),
             version,

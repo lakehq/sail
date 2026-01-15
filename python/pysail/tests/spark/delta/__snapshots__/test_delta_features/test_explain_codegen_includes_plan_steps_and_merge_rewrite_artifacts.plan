@@ -510,7 +510,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                                       ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3]
                                         FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
                                           DataSourceExec: partitions=1, partition_sizes=[1]
-            DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
+            DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
               DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
@@ -616,7 +616,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/), statistics=[Row
                                       ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3], statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(0)),(Col[1]: Null=Inexact(0)),(Col[2]: Null=Inexact(0)),(Col[3]: Null=Inexact(0))]]
                                         FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4), statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(0)),(Col[1]: Null=Inexact(0)),(Col[2]: Null=Inexact(0)),(Col[3]: Null=Inexact(0))]]
                                           DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(3), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(0))]]
-            DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:)]]
+            DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:)]]
               DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
 
 
@@ -722,7 +722,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/), schema=[count:U
                                       ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3], schema=[#0:Int32;N, #1:Utf8;N, #2:Int32;N, #3:Utf8;N]
                                         FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4), schema=[column1:Int32;N, column2:Utf8;N, column3:Int32;N, column4:Utf8;N]
                                           DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32;N, column2:Utf8;N, column3:Int32;N, column4:Utf8;N]
-            DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0), schema=[__sail_file_path:Utf8, size_bytes:Int64, modification_time:Int64]
+            DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0), schema=[__sail_file_path:Utf8, size_bytes:Int64, modification_time:Int64]
               DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet, schema=[add:Struct([Field { name: "path", data_type: Utf8 }, Field { name: "partitionValues", data_type: Map(Field { name: "key_value", data_type: Struct([Field { name: "key", data_type: Utf8 }, Field { name: "value", data_type: Utf8, nullable: true }]) }, false) }, Field { name: "size", data_type: Int64 }, Field { name: "modificationTime", data_type: Int64 }, Field { name: "dataChange", data_type: Boolean }, Field { name: "stats", data_type: Utf8, nullable: true }, Field { name: "tags", data_type: Map(Field { name: "key_value", data_type: Struct([Field { name: "key", data_type: Utf8 }, Field { name: "value", data_type: Utf8, nullable: true }]) }, false), nullable: true }, Field { name: "deletionVector", data_type: Struct([Field { name: "storageType", data_type: Utf8 }, Field { name: "pathOrInlineDv", data_type: Utf8 }, Field { name: "offset", data_type: Int32, nullable: true }, Field { name: "sizeInBytes", data_type: Int32 }, Field { name: "cardinality", data_type: Int64 }]), nullable: true }, Field { name: "baseRowId", data_type: Int64, nullable: true }, Field { name: "defaultRowCommitVersion", data_type: Int64, nullable: true }, Field { name: "clusteringProvider", data_type: Utf8, nullable: true }]);N, remove:Struct([Field { name: "path", data_type: Utf8 }, Field { name: "deletionTimestamp", data_type: Int64, nullable: true }, Field { name: "dataChange", data_type: Boolean }, Field { name: "extendedFileMetadata", data_type: Boolean, nullable: true }, Field { name: "partitionValues", data_type: Map(Field { name: "key_value", data_type: Struct([Field { name: "key", data_type: Utf8 }, Field { name: "value", data_type: Utf8 }]) }, false), nullable: true }, Field { name: "size", data_type: Int64, nullable: true }, Field { name: "stats", data_type: Utf8, nullable: true }, Field { name: "tags", data_type: Map(Field { name: "key_value", data_type: Struct([Field { name: "key", data_type: Utf8 }, Field { name: "value", data_type: Utf8 }]) }, false), nullable: true }, Field { name: "deletionVector", data_type: Struct([Field { name: "storageType", data_type: Utf8 }, Field { name: "pathOrInlineDv", data_type: Utf8 }, Field { name: "offset", data_type: Int32, nullable: true }, Field { name: "sizeInBytes", data_type: Int32 }, Field { name: "cardinality", data_type: Int64 }]), nullable: true }, Field { name: "baseRowId", data_type: Int64, nullable: true }, Field { name: "defaultRowCommitVersion", data_type: Int64, nullable: true }]);N, metaData:Struct([Field { name: "id", data_type: Utf8 }, Field { name: "name", data_type: Utf8, nullable: true }, Field { name: "description", data_type: Utf8, nullable: true }, Field { name: "format", data_type: Struct([Field { name: "provider", data_type: Utf8 }, Field { name: "options", data_type: Map(Field { name: "key_value", data_type: Struct([Field { name: "key", data_type: Utf8 }, Field { name: "value", data_type: Utf8 }]) }, false) }]) }, Field { name: "schemaString", data_type: Utf8 }, Field { name: "partitionColumns", data_type: List(Field { name: "element", data_type: Utf8 }) }, Field { name: "createdTime", data_type: Int64, nullable: true }, Field { name: "configuration", data_type: Map(Field { name: "key_value", data_type: Struct([Field { name: "key", data_type: Utf8 }, Field { name: "value", data_type: Utf8 }]) }, false) }]);N, protocol:Struct([Field { name: "minReaderVersion", data_type: Int32 }, Field { name: "minWriterVersion", data_type: Int32 }, Field { name: "readerFeatures", data_type: List(Field { name: "element", data_type: Utf8 }), nullable: true }, Field { name: "writerFeatures", data_type: List(Field { name: "element", data_type: Utf8 }), nullable: true }]);N, txn:Struct([Field { name: "appId", data_type: Utf8 }, Field { name: "version", data_type: Int64 }, Field { name: "lastUpdated", data_type: Int64, nullable: true }]);N, sidecar:Struct([Field { name: "path", data_type: Utf8 }, Field { name: "sizeInBytes", data_type: Int64 }, Field { name: "modificationTime", data_type: Int64 }, Field { name: "tags", data_type: Map(Field { name: "key_value", data_type: Struct([Field { name: "key", data_type: Utf8 }, Field { name: "value", data_type: Utf8 }]) }, false), nullable: true }]);N]
 
 
@@ -829,7 +829,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                         ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3]
                                           FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
                                             DataSourceExec: partitions=1, partition_sizes=[1]
-              DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
+              DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                 DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
@@ -943,7 +943,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                   ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
                                     ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
                                       DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
-              DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
+              DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                 DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
@@ -1062,7 +1062,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                     ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
                                       ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
                                         DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
-              DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
+              DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                 DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
@@ -1183,7 +1183,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                     ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
                                       ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
                                         DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
-              DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
+              DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                 DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
@@ -1319,8 +1319,8 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                                 ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
                                                   ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
                                                     DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
-                  DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
-                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                    DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                       DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
@@ -1428,8 +1428,8 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                         ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id]
                                           ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
                                             DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
-                DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
-                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                  DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                     DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
@@ -1552,8 +1552,8 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                                   ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id]
                                                     ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
                                                       DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
-                  DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
-                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                    DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                       DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
@@ -1678,8 +1678,8 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                                                 ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id]
                                                   ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
                                                     DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
-                DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
-                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                  DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                     DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
@@ -1806,8 +1806,8 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                                               ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
                                                 ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id]
                                                   DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
-                DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
-                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                  DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                     DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
@@ -1937,8 +1937,8 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                                               ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
                                                 ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id]
                                                   DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
-                DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
-                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                  DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                     DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
@@ -2056,6 +2056,6 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                                               ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
                                                 ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id]
                                                   DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
-                DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
-                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                  DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                     DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet

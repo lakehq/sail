@@ -28,7 +28,7 @@ use crate::datasource::schema::DataFusionMixins;
 use crate::datasource::PredicateProperties;
 use crate::kernel::DeltaOperation;
 use crate::physical_plan::{
-    DeltaCommitExec, DeltaDiscoveryExec, DeltaLogScanExec, DeltaRemoveActionsExec,
+    DeltaCommitExec, DeltaDiscoveryExec, DeltaLogReplayExec, DeltaRemoveActionsExec,
     DeltaScanByAddsExec, DeltaWriterExec,
 };
 
@@ -71,7 +71,7 @@ pub async fn build_delete_plan(
     // Build the raw log scan (DataSourceExec parquet/json + Union), then transform to file rows.
     let (raw_scan, checkpoint_files, commit_files) =
         build_delta_log_datasource_union(ctx, checkpoint_files, commit_files).await?;
-    let meta_scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaLogScanExec::new(
+    let meta_scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaLogReplayExec::new(
         raw_scan,
         ctx.table_url().clone(),
         version,
