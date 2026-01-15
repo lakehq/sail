@@ -5839,6 +5839,7 @@ version = "0.4.6"
 dependencies = [
  "async-trait",
  "datafusion",
+ "educe",
  "lazy_static",
  "prettyplease",
  "proc-macro2",
@@ -5846,7 +5847,10 @@ dependencies = [
  "regex",
  "sail-catalog",
  "sail-common-datafusion",
+ "sail-plan",
+ "sail-sql-analyzer",
  "serde",
+ "serde_arrow",
  "serde_yaml",
  "syn 2.0.114",
 ]
@@ -6204,7 +6208,6 @@ dependencies = [
  "datafusion-expr-common",
  "datafusion-functions",
  "datafusion-functions-nested",
- "datafusion-physical-expr",
  "datafusion-spark",
  "either",
  "half",
@@ -6220,7 +6223,6 @@ dependencies = [
  "sail-function",
  "sail-logical-plan",
  "sail-physical-plan",
- "sail-plan-lakehouse",
  "sail-python-udf",
  "sail-sql-analyzer",
  "serde",
@@ -6299,7 +6301,11 @@ dependencies = [
 name = "sail-session"
 version = "0.4.6"
 dependencies = [
+ "async-trait",
  "datafusion",
+ "datafusion-common",
+ "datafusion-expr",
+ "datafusion-physical-expr",
  "fastrace",
  "log",
  "readonly",
@@ -6316,8 +6322,10 @@ dependencies = [
  "sail-execution",
  "sail-iceberg",
  "sail-logical-optimizer",
+ "sail-logical-plan",
  "sail-object-store",
  "sail-physical-optimizer",
+ "sail-physical-plan",
  "sail-plan",
  "sail-plan-lakehouse",
  "sail-server",

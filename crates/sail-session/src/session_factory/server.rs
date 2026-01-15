@@ -25,12 +25,12 @@ use sail_physical_optimizer::{get_physical_optimizers, PhysicalOptimizerOptions}
 use sail_plan::function::{
     BUILT_IN_GENERATOR_FUNCTIONS, BUILT_IN_SCALAR_FUNCTIONS, BUILT_IN_TABLE_FUNCTIONS,
 };
-use sail_plan::planner::new_query_planner;
 use sail_server::actor::ActorSystem;
 
 use crate::catalog::create_catalog_manager;
 use crate::formats::create_table_format_registry;
 use crate::optimizer::{default_analyzer_rules, default_optimizer_rules};
+use crate::planner::new_query_planner;
 use crate::session_factory::{SessionFactory, WorkerSessionFactory};
 
 pub trait ServerSessionMutator<I>: Send {

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use datafusion::common::DFSchema;
-use datafusion::logical_expr::{EmptyRelation, LogicalPlan};
+use datafusion::common::{DFSchema, TableReference};
+use datafusion::logical_expr::{LogicalPlan, TableScan};
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::provider::{
     CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewOptions,
@@ -10,6 +10,7 @@ use sail_catalog::provider::{
 use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
 
 use crate::gen::catalog::{SystemCatalog, SystemDatabase, SystemTable};
+use crate::table_source::SystemTableSource;
 
 pub const SYSTEM_CATALOG_NAME: &str = "system";
 
@@ -32,7 +33,7 @@ impl SystemCatalogProvider {
     fn get_table_status(
         database: &Namespace,
         table: &str,
-        t: &SystemTable,
+        t: SystemTable,
     ) -> CatalogResult<TableStatus> {
         let schema = t.schema()?;
         let columns = t
@@ -56,9 +57,18 @@ impl SystemCatalogProvider {
             database: database.clone().into(),
             name: table.to_string(),
             kind: TableKind::TemporaryView {
-                plan: Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
-                    produce_one_row: false,
-                    schema: Arc::new(DFSchema::try_from(schema)?),
+                plan: Arc::new(LogicalPlan::TableScan(TableScan {
+                    table_name: TableReference::Full {
+                        catalog: Arc::from(SYSTEM_CATALOG_NAME),
+                        // The tail of the namespace is always empty for system databases.
+                        schema: database.head.clone(),
+                        table: Arc::from(t.name()),
+                    },
+                    source: Arc::new(SystemTableSource::try_new(t)?),
+                    projection: None,
+                    projected_schema: Arc::new(DFSchema::try_from(schema)?),
+                    filters: vec![],
+                    fetch: None,
                 })),
                 columns,
                 comment: Some(t.description().to_string()),
@@ -140,7 +150,7 @@ impl CatalogProvider for SystemCatalogProvider {
             if let Some(db) = SystemDatabase::get(head) {
                 for t in db.tables() {
                     if table.eq_ignore_ascii_case(t.name()) {
-                        return Self::get_table_status(database, table, t);
+                        return Self::get_table_status(database, table, *t);
                     }
                 }
                 return Err(CatalogError::NotFound("table", table.to_string()));
@@ -155,7 +165,7 @@ impl CatalogProvider for SystemCatalogProvider {
             if let Some(db) = SystemDatabase::get(head) {
                 let mut result = vec![];
                 for t in db.tables() {
-                    let status = Self::get_table_status(database, t.name(), t)?;
+                    let status = Self::get_table_status(database, t.name(), *t)?;
                     result.push(status);
                 }
                 return Ok(result);
@@ -211,5 +221,41 @@ impl CatalogProvider for SystemCatalogProvider {
         Err(CatalogError::NotSupported(
             "drop view in system catalog".to_string(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion::prelude::SessionContext;
+    use sail_plan::config::PlanConfig;
+    use sail_plan::resolver::PlanResolver;
+    use sail_sql_analyzer::data_type::from_ast_data_type;
+    use sail_sql_analyzer::parser::parse_data_type;
+
+    use crate::gen::catalog::SystemCatalog;
+
+    #[test]
+    fn test_table_schema_validity() -> Result<(), Box<dyn std::error::Error>> {
+        let session = SessionContext::new();
+        let resolver = PlanResolver::new(&session, Arc::new(PlanConfig::default()));
+        for db in SystemCatalog::databases() {
+            for t in db.tables() {
+                let schema = t.schema()?;
+                let columns = t.columns();
+                assert_eq!(schema.fields.len(), columns.len());
+                for (field, col) in schema.fields().iter().zip(columns.iter()) {
+                    // In the table definition YAML file, we have a SQL string for the data type
+                    // of each column (for documentation purposes). Here we ensure that the SQL
+                    // data type string matches the actual Arrow data type (derived from the table
+                    // row struct via `serde_arrow`).
+                    let data_type = parse_data_type(col.sql_type).and_then(from_ast_data_type)?;
+                    let data_type = resolver.resolve_data_type_for_plan(&data_type)?;
+                    assert_eq!(&data_type, field.data_type());
+                }
+            }
+        }
+        Ok(())
     }
 }
