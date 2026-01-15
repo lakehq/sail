@@ -1,0 +1,37 @@
+name: session
+description: The database containing user session data.
+tables:
+  - name: sessions
+    row_name: session
+    description: The table containing user session information.
+    columns:
+      - name: session_id
+        description: The unique identifier for the session.
+        rust_type: String
+        sql_type: STRING
+        sql_nullable: false
+      - name: user
+        description: The user associated with the session.
+        rust_type: Option<String>
+        sql_type: STRING
+        sql_nullable: true
+      - name: status
+        description: The current status of the session.
+        rust_type: String
+        sql_type: STRING
+        sql_nullable: false
+#      - name: created_at
+#        description: The timestamp when the session was created.
+#        rust_type: std::time::Instant
+#        sql_type: TIMESTAMP_LTZ(6)
+#        sql_nullable: false
+#      - name: active_at
+#        description: The timestamp when the session was last active.
+#        rust_type: std::time::Instant
+#        sql_type: TIMESTAMP_LTZ(6)
+#        sql_nullable: false
+#      - name: deleted_at
+#        description: The timestamp when the session was deleted.
+#        rust_type: Option<std::time::Instant>
+#        sql_type: TIMESTAMP_LTZ(6)
+#        sql_nullable: true

@@ -5834,6 +5834,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "sail-catalog-system"
+version = "0.4.6"
+dependencies = [
+ "async-trait",
+ "datafusion",
+ "lazy_static",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "regex",
+ "sail-catalog",
+ "sail-common-datafusion",
+ "serde",
+ "serde_yaml",
+ "syn 2.0.114",
+]
+
+[[package]]
 name = "sail-catalog-unity"
 version = "0.4.6"
 dependencies = [
@@ -6289,6 +6307,7 @@ dependencies = [
  "sail-catalog",
  "sail-catalog-iceberg",
  "sail-catalog-memory",
+ "sail-catalog-system",
  "sail-catalog-unity",
  "sail-common",
  "sail-common-datafusion",
