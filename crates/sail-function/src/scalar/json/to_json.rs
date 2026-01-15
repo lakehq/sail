@@ -8,13 +8,16 @@ use datafusion::arrow::array::{
     StringBuilder, StructArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::Result;
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,
 };
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 use serde_json::{Map, Value};
+
+use crate::functions_nested_utils::opt_downcast_arg;
+use crate::functions_utils::make_scalar_function;
 
 /// Macro to simplify downcasting arrays and extracting values as JSON
 macro_rules! downcast_and_convert {
@@ -133,43 +136,7 @@ impl ScalarUDFImpl for SparkToJson {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        if args.args.is_empty() || args.args.len() > 2 {
-            return Err(datafusion_common::DataFusionError::Plan(
-                "to_json requires 1 or 2 arguments".to_string(),
-            ));
-        }
-
-        // Parse options from second argument if present
-        let options = if args.args.len() == 2 {
-            match &args.args[1] {
-                ColumnarValue::Scalar(ScalarValue::Map(map_array)) => {
-                    ToJsonOptions::from_map(map_array.as_ref())
-                }
-                ColumnarValue::Array(arr) => {
-                    if let Some(map_array) = arr.as_any().downcast_ref::<MapArray>() {
-                        ToJsonOptions::from_map(map_array)
-                    } else {
-                        ToJsonOptions::default()
-                    }
-                }
-                _ => ToJsonOptions::default(),
-            }
-        } else {
-            ToJsonOptions::default()
-        };
-
-        match &args.args[0] {
-            ColumnarValue::Array(array) => {
-                let result = array_to_json_strings(array, &options)?;
-                Ok(ColumnarValue::Array(result))
-            }
-            ColumnarValue::Scalar(scalar) => {
-                let json_value = scalar_to_json(scalar, &options)?;
-                let json_string = serde_json::to_string(&json_value)
-                    .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
-                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(json_string))))
-            }
-        }
+        make_scalar_function(to_json_inner, vec![])(&args.args)
     }
 }
 
@@ -178,6 +145,32 @@ pub fn to_json_udf() -> Arc<ScalarUDF> {
     STATIC_TO_JSON
         .get_or_init(|| Arc::new(ScalarUDF::new_from_impl(SparkToJson::new())))
         .clone()
+}
+
+/// Core implementation of the `to_json` function logic.
+///
+/// # Parameters
+/// - `args`: An array of input arrays, where:
+///   - `args[0]` is the value to convert to JSON (struct, map, array, etc.)
+///   - `args[1]` (optional) is a `MapArray` of options like timestampFormat, dateFormat, etc.
+fn to_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.is_empty() || args.len() > 2 {
+        return Err(datafusion_common::DataFusionError::Plan(
+            "to_json requires 1 or 2 arguments".to_string(),
+        ));
+    }
+
+    let options = if let Some(opts_array) = args.get(1) {
+        if let Some(map_array) = opt_downcast_arg!(opts_array, MapArray) {
+            ToJsonOptions::from_map(map_array)
+        } else {
+            ToJsonOptions::default()
+        }
+    } else {
+        ToJsonOptions::default()
+    };
+
+    array_to_json_strings(&args[0], &options)
 }
 
 fn array_to_json_strings(array: &ArrayRef, options: &ToJsonOptions) -> Result<ArrayRef> {
@@ -367,89 +360,6 @@ fn map_to_json(map_array: &MapArray, index: usize, options: &ToJsonOptions) -> R
     }
 
     Ok(Value::Object(map))
-}
-
-/// Macro to simplify scalar to JSON conversion for numeric types
-macro_rules! scalar_number {
-    ($v:expr) => {
-        Ok(Value::Number((*$v).into()))
-    };
-}
-
-fn scalar_to_json(scalar: &ScalarValue, options: &ToJsonOptions) -> Result<Value> {
-    match scalar {
-        ScalarValue::Null => Ok(Value::Null),
-        ScalarValue::Boolean(Some(v)) => Ok(Value::Bool(*v)),
-        ScalarValue::Boolean(None) => Ok(Value::Null),
-        ScalarValue::Int8(Some(v)) => scalar_number!(v),
-        ScalarValue::Int8(None) => Ok(Value::Null),
-        ScalarValue::Int16(Some(v)) => scalar_number!(v),
-        ScalarValue::Int16(None) => Ok(Value::Null),
-        ScalarValue::Int32(Some(v)) => scalar_number!(v),
-        ScalarValue::Int32(None) => Ok(Value::Null),
-        ScalarValue::Int64(Some(v)) => scalar_number!(v),
-        ScalarValue::Int64(None) => Ok(Value::Null),
-        ScalarValue::UInt8(Some(v)) => scalar_number!(v),
-        ScalarValue::UInt8(None) => Ok(Value::Null),
-        ScalarValue::UInt16(Some(v)) => scalar_number!(v),
-        ScalarValue::UInt16(None) => Ok(Value::Null),
-        ScalarValue::UInt32(Some(v)) => scalar_number!(v),
-        ScalarValue::UInt32(None) => Ok(Value::Null),
-        ScalarValue::UInt64(Some(v)) => scalar_number!(v),
-        ScalarValue::UInt64(None) => Ok(Value::Null),
-        ScalarValue::Float32(Some(v)) => Ok(number_from_f64(*v as f64)),
-        ScalarValue::Float32(None) => Ok(Value::Null),
-        ScalarValue::Float64(Some(v)) => Ok(number_from_f64(*v)),
-        ScalarValue::Float64(None) => Ok(Value::Null),
-        ScalarValue::Utf8(Some(v))
-        | ScalarValue::LargeUtf8(Some(v))
-        | ScalarValue::Utf8View(Some(v)) => Ok(Value::String(v.clone())),
-        ScalarValue::Utf8(None) | ScalarValue::LargeUtf8(None) | ScalarValue::Utf8View(None) => {
-            Ok(Value::Null)
-        }
-        ScalarValue::Date32(Some(days)) => {
-            Ok(Value::String(format_date(*days, &options.date_format)))
-        }
-        ScalarValue::Date32(None) => Ok(Value::Null),
-        ScalarValue::TimestampMicrosecond(Some(v), tz) => Ok(Value::String(format_timestamp(
-            *v,
-            tz.as_ref().map(|s| s.as_ref()),
-            &options.timestamp_format,
-        ))),
-        ScalarValue::TimestampMicrosecond(None, _) => Ok(Value::Null),
-        ScalarValue::Decimal128(Some(value), _precision, scale) => {
-            Ok(Value::String(format_decimal(*value, *scale)))
-        }
-        ScalarValue::Decimal128(None, _, _) => Ok(Value::Null),
-        ScalarValue::Struct(struct_array) => {
-            if struct_array.is_empty() {
-                return Ok(Value::Null);
-            }
-            struct_to_json(struct_array.as_ref(), 0, options)
-        }
-        ScalarValue::List(list_array) => {
-            if list_array.is_empty() {
-                return Ok(Value::Array(vec![]));
-            }
-            let values = list_array.value(0);
-            let mut json_values = Vec::with_capacity(values.len());
-            for i in 0..values.len() {
-                let value = array_value_to_json(&values, i, options)?;
-                json_values.push(value);
-            }
-            Ok(Value::Array(json_values))
-        }
-        ScalarValue::Map(map_array) => {
-            if map_array.is_empty() {
-                return Ok(Value::Object(Map::new()));
-            }
-            map_to_json(map_array.as_ref(), 0, options)
-        }
-        _ => Err(datafusion_common::DataFusionError::NotImplemented(format!(
-            "to_json does not support scalar type: {:?}",
-            scalar
-        ))),
-    }
 }
 
 fn format_timestamp(value: i64, tz: Option<&str>, format: &str) -> String {
