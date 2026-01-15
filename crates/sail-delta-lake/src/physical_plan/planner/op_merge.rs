@@ -358,7 +358,7 @@ async fn finalize_merge(
     };
 
     let commit = Arc::new(DeltaCommitExec::new(
-        commit_input,
+        Arc::new(CoalescePartitionsExec::new(commit_input)),
         table_url,
         partition_columns,
         true, // table exists

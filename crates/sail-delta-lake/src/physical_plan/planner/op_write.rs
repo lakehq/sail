@@ -18,6 +18,7 @@ use datafusion::common::{DataFusionError, Result};
 use datafusion::physical_expr::expressions::{Column, NotExpr};
 use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
@@ -74,8 +75,9 @@ async fn build_full_overwrite_plan(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let input_schema = input.schema();
 
+    let target_partitions = ctx.session().config().target_partitions().max(1);
     let plan = create_projection(input, ctx.partition_columns().to_vec())?;
-    let plan = create_repartition(plan, ctx.partition_columns().to_vec())?;
+    let plan = create_repartition(plan, ctx.partition_columns().to_vec(), target_partitions)?;
     let plan = create_sort(plan, ctx.partition_columns().to_vec(), sort_order)?;
 
     let writer_schema = plan.schema();
@@ -163,7 +165,7 @@ async fn build_full_overwrite_plan(
     };
 
     Ok(Arc::new(DeltaCommitExec::new(
-        commit_input,
+        Arc::new(CoalescePartitionsExec::new(commit_input)),
         ctx.table_url().clone(),
         ctx.partition_columns().to_vec(),
         ctx.table_exists(),
@@ -193,8 +195,11 @@ async fn build_overwrite_if_plan(
     let old_data_plan =
         build_old_data_plan(ctx, condition.expr.clone(), version, table_schema.clone()).await?;
 
+    let target_partitions = ctx.session().config().target_partitions().max(1);
     let new_plan = create_projection(Arc::clone(&input), ctx.partition_columns().to_vec())
-        .and_then(|plan| create_repartition(plan, ctx.partition_columns().to_vec()))
+        .and_then(|plan| {
+            create_repartition(plan, ctx.partition_columns().to_vec(), target_partitions)
+        })
         .and_then(|plan| create_sort(plan, ctx.partition_columns().to_vec(), sort_order))?;
 
     let (aligned_new, aligned_old) = align_schemas_for_union(new_plan, old_data_plan)?;
@@ -300,7 +305,7 @@ async fn build_overwrite_if_plan(
     let union_actions = UnionExec::try_new(vec![writer, remove_plan])?;
 
     Ok(Arc::new(DeltaCommitExec::new(
-        union_actions,
+        Arc::new(CoalescePartitionsExec::new(union_actions)),
         ctx.table_url().clone(),
         ctx.partition_columns().to_vec(),
         ctx.table_exists(),

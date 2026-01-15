@@ -17,6 +17,7 @@ use datafusion::common::{DataFusionError, Result};
 use datafusion::physical_expr::expressions::{Column, NotExpr};
 use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
@@ -171,7 +172,7 @@ pub async fn build_delete_plan(
     let union_exec = UnionExec::try_new(vec![writer_exec, remove_exec])?;
 
     Ok(Arc::new(DeltaCommitExec::new(
-        union_exec,
+        Arc::new(CoalescePartitionsExec::new(union_exec)),
         ctx.table_url().clone(),
         partition_columns,
         ctx.table_exists(),

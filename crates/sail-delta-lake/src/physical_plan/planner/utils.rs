@@ -16,6 +16,7 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result};
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::{LexRequirement, PhysicalExpr};
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
@@ -32,8 +33,9 @@ pub fn build_standard_write_layers(
     sort_order: Option<LexRequirement>,
     original_schema: SchemaRef,
 ) -> Result<Arc<dyn ExecutionPlan>> {
+    let target_partitions = ctx.session().config().target_partitions().max(1);
     let plan = create_projection(Arc::clone(&input), ctx.partition_columns().to_vec())?;
-    let plan = create_repartition(plan, ctx.partition_columns().to_vec())?;
+    let plan = create_repartition(plan, ctx.partition_columns().to_vec(), target_partitions)?;
     let plan = create_sort(plan, ctx.partition_columns().to_vec(), sort_order)?;
 
     let writer_schema = plan.schema();
@@ -47,6 +49,9 @@ pub fn build_standard_write_layers(
         writer_schema,
         None,
     )?);
+
+    // DeltaCommitExec is single-partition; gather writer partitions first.
+    let writer: Arc<dyn ExecutionPlan> = Arc::new(CoalescePartitionsExec::new(writer));
 
     Ok(Arc::new(DeltaCommitExec::new(
         writer,
