@@ -414,14 +414,16 @@ def discover_entry_points(group: str = "sail.datasources") -> List[Tuple[str, ty
 # Re-exports for convenience
 # ============================================================================
 
-# Import PySpark compatibility function from compat module
-from .compat import install_pyspark_shim  # noqa: E402
+# Import PySpark compatibility functions from compat module
+from .compat import install_pyspark_shim, is_shim_installed  # noqa: E402
 
 # Legacy alias for backward compatibility
 setup_pyspark_compat_shim = install_pyspark_shim
 
-# Auto-install the shim when this module is imported
-install_pyspark_shim()
+# NOTE: The shim is NOT auto-installed on import. This is intentional.
+# - Server-side: unpickle_datasource_class() installs the shim automatically
+# - Client-side: Users who need the shim (e.g., for testing without PySpark)
+#   should call install_pyspark_shim() explicitly
 
 
 __all__ = [
@@ -456,4 +458,5 @@ __all__ = [
     # PySpark compatibility
     "setup_pyspark_compat_shim",
     "install_pyspark_shim",
+    "is_shim_installed",
 ]

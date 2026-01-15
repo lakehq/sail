@@ -626,32 +626,26 @@ pub(crate) async fn handle_execute_register_datasource(
         }
     };
 
-    // Register in the global datasource registry and TableFormatRegistry
+    // Register in the session-scoped TableFormatRegistry with embedded pickled bytes
     #[cfg(feature = "python")]
     {
         use std::sync::Arc;
 
         use sail_common_datafusion::datasource::TableFormatRegistry;
-        use sail_data_source::python_datasource::{
-            DataSourceEntry, PythonTableFormat, DATASOURCE_REGISTRY,
-        };
+        use sail_data_source::python_datasource::PythonTableFormat;
 
-        // Store pickled class in global registry
-        let entry = DataSourceEntry {
-            name: name.clone(),
-            pickled_class: command,
-            module_path: "client_registered".to_string(),
-        };
-        DATASOURCE_REGISTRY.register(entry);
-
-        // Also register format in TableFormatRegistry so spark.read.format() works
+        // Register format in session's TableFormatRegistry with embedded pickled class
+        // This provides session isolation - the format is only visible to this session
         if let Ok(registry) = ctx.extension::<TableFormatRegistry>() {
-            let format = Arc::new(PythonTableFormat::new(name.clone()));
-            // Ignore error if already registered
+            let format = Arc::new(PythonTableFormat::with_pickled_class(name.clone(), command));
+            // Ignore error if already registered (allows re-registration to update)
             let _ = registry.register(format);
+            log::info!("Registered session-scoped datasource: {}", name);
+        } else {
+            return Err(SparkError::internal(
+                "TableFormatRegistry not found in session context",
+            ));
         }
-
-        log::info!("Registered client-side datasource: {}", name);
     }
 
     #[cfg(not(feature = "python"))]

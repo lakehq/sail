@@ -19,16 +19,38 @@ use super::python_table_provider::PythonTableProvider;
 ///
 /// Each registered Python datasource gets its own PythonTableFormat instance,
 /// keyed by the datasource name.
+///
+/// For session-registered datasources, the pickled class bytes are embedded directly
+/// in the format instance. For entry-point discovered datasources, the bytes are
+/// looked up from the global registry.
 #[derive(Debug)]
 pub struct PythonTableFormat {
     /// The name of the Python datasource
     name: String,
+    /// Pickled datasource class bytes (None = lookup from global registry)
+    pickled_class: Option<Vec<u8>>,
 }
 
 impl PythonTableFormat {
-    /// Create a new PythonTableFormat for the given datasource name.
+    /// Create a new PythonTableFormat for an entry-point discovered datasource.
+    ///
+    /// The pickled class will be looked up from the global `DATASOURCE_REGISTRY`.
     pub fn new(name: String) -> Self {
-        Self { name }
+        Self {
+            name,
+            pickled_class: None,
+        }
+    }
+
+    /// Create a PythonTableFormat with embedded pickled class bytes.
+    ///
+    /// Used for session-registered datasources where the pickled bytes are stored
+    /// directly in the format instance for session isolation.
+    pub fn with_pickled_class(name: String, pickled_class: Vec<u8>) -> Self {
+        Self {
+            name,
+            pickled_class: Some(pickled_class),
+        }
     }
 
     /// Register all discovered Python datasources with the TableFormatRegistry.
@@ -67,13 +89,20 @@ impl PythonTableFormat {
 
     /// Create PythonDataSource from options.
     fn create_datasource(&self, options: &[HashMap<String, String>]) -> Result<PythonDataSource> {
-        // Get the datasource entry from registry
-        let entry = DATASOURCE_REGISTRY.get(&self.name).ok_or_else(|| {
-            datafusion_common::DataFusionError::Plan(format!(
-                "Python datasource '{}' not found in registry",
-                self.name
-            ))
-        })?;
+        // Get pickled class bytes: prefer embedded (session-scoped) over global registry
+        let pickled_class = match &self.pickled_class {
+            Some(bytes) => bytes.clone(),
+            None => {
+                // Lookup from global registry for entry-point discovered datasources
+                let entry = DATASOURCE_REGISTRY.get(&self.name).ok_or_else(|| {
+                    datafusion_common::DataFusionError::Plan(format!(
+                        "Python datasource '{}' not found in registry",
+                        self.name
+                    ))
+                })?;
+                entry.pickled_class
+            }
+        };
 
         // Merge options
         let merged_options: HashMap<String, String> = options
@@ -83,7 +112,7 @@ impl PythonTableFormat {
             .collect();
 
         // Create datasource instance with options
-        self.instantiate_datasource(&entry.pickled_class, merged_options)
+        self.instantiate_datasource(&pickled_class, merged_options)
     }
 
     /// Instantiate a Python datasource with the given options.
