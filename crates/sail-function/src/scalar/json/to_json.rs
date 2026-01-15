@@ -42,8 +42,8 @@ struct ToJsonOptions {
 impl ToJsonOptions {
     pub const TIMESTAMP_FORMAT_OPTION: &'static str = "timestampFormat";
     pub const DATE_FORMAT_OPTION: &'static str = "dateFormat";
-    // Default ISO 8601 format
-    pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = "%Y-%m-%dT%H:%M:%S%.6fZ";
+    // Default ISO 8601 format with timezone offset (not Z)
+    pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = "%Y-%m-%dT%H:%M:%S%.6f%:z";
     pub const DATE_FORMAT_DEFAULT: &'static str = "%Y-%m-%d";
 
     /// Build ToJsonOptions from a DataFusion MapArray of key-value pairs.
@@ -88,18 +88,18 @@ impl Default for ToJsonOptions {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct ToJson {
+pub struct SparkToJson {
     signature: Signature,
     aliases: [String; 1],
 }
 
-impl Default for ToJson {
+impl Default for SparkToJson {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ToJson {
+impl SparkToJson {
     pub fn new() -> Self {
         Self {
             signature: Signature::new(
@@ -111,7 +111,7 @@ impl ToJson {
     }
 }
 
-impl ScalarUDFImpl for ToJson {
+impl ScalarUDFImpl for SparkToJson {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -176,7 +176,7 @@ impl ScalarUDFImpl for ToJson {
 pub fn to_json_udf() -> Arc<ScalarUDF> {
     static STATIC_TO_JSON: OnceLock<Arc<ScalarUDF>> = OnceLock::new();
     STATIC_TO_JSON
-        .get_or_init(|| Arc::new(ScalarUDF::new_from_impl(ToJson::new())))
+        .get_or_init(|| Arc::new(ScalarUDF::new_from_impl(SparkToJson::new())))
         .clone()
 }
 
@@ -259,6 +259,11 @@ fn array_value_to_json(array: &ArrayRef, index: usize, options: &ToJsonOptions) 
             let days = arr.value(index);
             Ok(Value::String(format_date(days, &options.date_format)))
         }
+        DataType::Decimal128(_, scale) => {
+            let arr = array.as_primitive::<datafusion::arrow::datatypes::Decimal128Type>();
+            let value = arr.value(index);
+            Ok(Value::String(format_decimal(value, *scale)))
+        }
         DataType::Timestamp(_, tz) => {
             let arr =
                 array.as_primitive::<datafusion::arrow::datatypes::TimestampMicrosecondType>();
@@ -314,8 +319,11 @@ fn struct_to_json(
 
     let mut map = Map::new();
     for (field, column) in fields.iter().zip(columns.iter()) {
-        let value = array_value_to_json(column, index, options)?;
-        map.insert(field.name().clone(), value);
+        // Skip NULL values - PySpark doesn't include them in JSON output
+        if !column.is_null(index) {
+            let value = array_value_to_json(column, index, options)?;
+            map.insert(field.name().clone(), value);
+        }
     }
 
     Ok(Value::Object(map))
@@ -409,6 +417,10 @@ fn scalar_to_json(scalar: &ScalarValue, options: &ToJsonOptions) -> Result<Value
             &options.timestamp_format,
         ))),
         ScalarValue::TimestampMicrosecond(None, _) => Ok(Value::Null),
+        ScalarValue::Decimal128(Some(value), _precision, scale) => {
+            Ok(Value::String(format_decimal(*value, *scale)))
+        }
+        ScalarValue::Decimal128(None, _, _) => Ok(Value::Null),
         ScalarValue::Struct(struct_array) => {
             if struct_array.is_empty() {
                 return Ok(Value::Null);
@@ -440,7 +452,18 @@ fn scalar_to_json(scalar: &ScalarValue, options: &ToJsonOptions) -> Result<Value
     }
 }
 
-fn format_timestamp(value: i64, _tz: Option<&str>, format: &str) -> String {
+fn format_timestamp(value: i64, tz: Option<&str>, format: &str) -> String {
+    if let Some(tz_str) = tz {
+        // Try to parse the timezone and format with offset
+        if let Ok(tz) = tz_str.parse::<chrono_tz::Tz>() {
+            if let Some(dt_utc) = Utc.timestamp_micros(value).single() {
+                let local_dt = dt_utc.with_timezone(&tz);
+                return local_dt.format(format).to_string();
+            }
+        }
+    }
+
+    // Fallback to UTC
     Utc.timestamp_micros(value)
         .single()
         .map(|ts| ts.format(format).to_string())
@@ -451,6 +474,24 @@ fn format_date(days: i32, format: &str) -> String {
     chrono::DateTime::from_timestamp(days as i64 * 24 * 3600, 0)
         .map(|date| date.format(format).to_string())
         .unwrap_or_else(|| days.to_string())
+}
+
+fn format_decimal(value: i128, scale: i8) -> String {
+    if scale <= 0 {
+        return value.to_string();
+    }
+
+    let scale = scale as u32;
+    let divisor = 10_i128.pow(scale);
+    let integer_part = value / divisor;
+    let fractional_part = (value % divisor).abs();
+
+    format!(
+        "{}.{:0width$}",
+        integer_part,
+        fractional_part,
+        width = scale as usize
+    )
 }
 
 fn number_from_f64(value: f64) -> Value {
