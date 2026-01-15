@@ -5905,6 +5905,7 @@ dependencies = [
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
+ "datafusion-physical-expr",
  "either",
  "futures",
  "lexical-core",

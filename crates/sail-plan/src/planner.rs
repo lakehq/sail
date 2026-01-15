@@ -14,10 +14,6 @@ use sail_catalog::manager::CatalogManager;
 use sail_common_datafusion::catalog::TableKind;
 use sail_common_datafusion::datasource::{SourceInfo, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
-use sail_common_datafusion::streaming::event::schema::{
-    to_flow_event_field_names, to_flow_event_projection,
-};
 use sail_logical_plan::file_delete::FileDeleteNode;
 use sail_logical_plan::file_write::FileWriteNode;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
@@ -225,23 +221,16 @@ Ensure expand_merge is enabled; MERGE is currently only supported for Delta tabl
             };
             Arc::new(StreamSourceAdapterExec::new(input.clone()))
         } else if let Some(node) = node.as_any().downcast_ref::<StreamSourceWrapperNode>() {
-            let plan = node
-                .source()
+            let data_schema = node.data_schema().clone();
+            node.source()
                 .scan(
                     session_state,
+                    data_schema,
                     node.projection(),
                     node.filters(),
                     node.fetch(),
                 )
-                .await?;
-            match node.names() {
-                Some(names) => {
-                    let names = to_flow_event_field_names(names);
-                    let projection = node.projection().map(|x| to_flow_event_projection(x));
-                    rename_projected_physical_plan(plan, &names, projection.as_ref())?
-                }
-                None => plan,
-            }
+                .await?
         } else if let Some(node) = node.as_any().downcast_ref::<StreamLimitNode>() {
             let [input] = physical_inputs else {
                 return internal_err!("StreamLimitExec requires exactly one physical input");

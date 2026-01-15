@@ -12,7 +12,6 @@ use sail_common_datafusion::catalog::TableKind;
 use sail_common_datafusion::datasource::{SourceInfo, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
-use sail_common_datafusion::rename::table_provider::RenameTableProvider;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
@@ -259,13 +258,12 @@ impl PlanResolver<'_> {
             let mut seen = HashSet::new();
             schema.fields().iter().any(|f| !seen.insert(f.name()))
         };
-
-        let table_provider = if has_duplicates {
-            let names = state.register_fields(schema.fields());
-            Arc::new(RenameTableProvider::try_new(table_provider, names)?)
-        } else {
-            table_provider
-        };
+        if has_duplicates {
+            return Err(PlanError::from(datafusion_common::DataFusionError::Plan(
+                "duplicate field names in table schema are not supported without physical renaming"
+                    .to_string(),
+            )));
+        }
 
         let table_scan = LogicalPlan::TableScan(TableScan::try_new(
             table_reference,
