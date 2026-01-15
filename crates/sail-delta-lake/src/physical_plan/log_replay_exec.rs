@@ -6,10 +6,12 @@ use async_trait::async_trait;
 use datafusion::arrow::array::{
     Array, ArrayRef, Int64Builder, MapArray, StringArray, StringBuilder, StructArray,
 };
-use datafusion::arrow::compute::cast;
+use datafusion::arrow::compute::{cast, SortOptions};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
+use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::{LexOrdering, OrderingRequirements, PhysicalSortExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
@@ -507,6 +509,27 @@ impl ExecutionPlan for DeltaLogReplayExec {
         vec![Distribution::HashPartitioned(vec![expr])]
     }
 
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
+        // The streaming replay logic relies on all rows for the same `COL_REPLAY_PATH`
+        // being adjacent within each partition, so we require a local ordering by
+        // `COL_REPLAY_PATH`.
+        let idx = match self.input.schema().index_of(COL_REPLAY_PATH) {
+            Ok(i) => i,
+            Err(_) => return vec![None],
+        };
+
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new(COL_REPLAY_PATH, idx)),
+            options: SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        }])
+        .expect("non-degenerate ordering");
+
+        vec![Some(OrderingRequirements::from(ordering))]
+    }
+
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
     }
@@ -721,12 +744,16 @@ mod tests {
             struct_array_with_validity(remove_fields, vec![rm_path], vec![false, true, false]);
 
         let schema = Arc::new(Schema::new(vec![
+            Field::new(COL_REPLAY_PATH, DataType::Utf8, false),
             Field::new("add", add_struct.data_type().clone(), true),
             Field::new("remove", remove_struct.data_type().clone(), true),
         ]));
+        let replay_path =
+            Arc::new(StringArray::from(vec![Some("a"), Some("a"), Some("b")])) as ArrayRef;
         let batch = RecordBatch::try_new(
             schema,
             vec![
+                replay_path,
                 Arc::new(add_struct) as ArrayRef,
                 Arc::new(remove_struct) as ArrayRef,
             ],

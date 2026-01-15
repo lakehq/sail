@@ -148,8 +148,9 @@ DeltaCommitExec(table_path=file://<tmp>/merge_cardinality_skip/)
                                             ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                                               DataSourceExec: partitions=1, partition_sizes=[1]
                 DeltaLogReplayExec(table_path=file://<tmp>/merge_cardinality_skip/, version=0)
-                  CoalesceBatchesExec: target_batch_size=8192
-                    RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
-                      DeltaLogPathExtractExec
-                        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                          DataSourceExec: file_groups={1 group: [[<tmp>/merge_cardinality_skip/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+                  SortExec: expr=[__sail_delta_replay_path@6 ASC NULLS LAST], preserve_partitioning=[true]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
+                        DeltaLogPathExtractExec
+                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                            DataSourceExec: file_groups={1 group: [[<tmp>/merge_cardinality_skip/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet

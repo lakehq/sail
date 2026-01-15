@@ -205,20 +205,22 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
               DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
                 DeltaDiscoveryExec(table_path=file://<tmp>/delete_explain_codegen/)
                   DeltaLogReplayExec(table_path=file://<tmp>/delete_explain_codegen/, version=0)
-                    RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
-                      SortExec: expr=[__sail_delta_replay_path@6 ASC NULLS LAST], preserve_partitioning=[true]
-                        DeltaLogPathExtractExec
-                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                            DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+                    SortExec: expr=[__sail_delta_replay_path@6 ASC NULLS LAST], preserve_partitioning=[true]
+                      RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
+                        SortExec: expr=[__sail_delta_replay_path@6 ASC NULLS LAST], preserve_partitioning=[true]
+                          DeltaLogPathExtractExec
+                            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                              DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
         DeltaRemoveActionsExec
           CoalescePartitionsExec
             DeltaDiscoveryExec(table_path=file://<tmp>/delete_explain_codegen/)
               DeltaLogReplayExec(table_path=file://<tmp>/delete_explain_codegen/, version=0)
-                RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
-                  SortExec: expr=[__sail_delta_replay_path@6 ASC NULLS LAST], preserve_partitioning=[true]
-                    DeltaLogPathExtractExec
-                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                        DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+                SortExec: expr=[__sail_delta_replay_path@6 ASC NULLS LAST], preserve_partitioning=[true]
+                  RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
+                    SortExec: expr=[__sail_delta_replay_path@6 ASC NULLS LAST], preserve_partitioning=[true]
+                      DeltaLogPathExtractExec
+                        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                          DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
 physical_plan after CombinePartialFinalAggregate:
@@ -235,18 +237,20 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
               DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
                 DeltaDiscoveryExec(table_path=file://<tmp>/delete_explain_codegen/)
                   DeltaLogReplayExec(table_path=file://<tmp>/delete_explain_codegen/, version=0)
-                    RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
-                      DeltaLogPathExtractExec
-                        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                          DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+                    SortExec: expr=[__sail_delta_replay_path@6 ASC NULLS LAST], preserve_partitioning=[true]
+                      RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
+                        DeltaLogPathExtractExec
+                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                            DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
         DeltaRemoveActionsExec
           CoalescePartitionsExec
             DeltaDiscoveryExec(table_path=file://<tmp>/delete_explain_codegen/)
               DeltaLogReplayExec(table_path=file://<tmp>/delete_explain_codegen/, version=0)
-                RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
-                  DeltaLogPathExtractExec
-                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                      DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+                SortExec: expr=[__sail_delta_replay_path@6 ASC NULLS LAST], preserve_partitioning=[true]
+                  RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
+                    DeltaLogPathExtractExec
+                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                        DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
 physical_plan after OptimizeAggregateOrder:
@@ -267,20 +271,22 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                 DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
                   DeltaDiscoveryExec(table_path=file://<tmp>/delete_explain_codegen/)
                     DeltaLogReplayExec(table_path=file://<tmp>/delete_explain_codegen/, version=0)
-                      CoalesceBatchesExec: target_batch_size=8192
-                        RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
-                          DeltaLogPathExtractExec
-                            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                              DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+                      SortExec: expr=[__sail_delta_replay_path@6 ASC NULLS LAST], preserve_partitioning=[true]
+                        CoalesceBatchesExec: target_batch_size=8192
+                          RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
+                            DeltaLogPathExtractExec
+                              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
         DeltaRemoveActionsExec
           CoalescePartitionsExec
             DeltaDiscoveryExec(table_path=file://<tmp>/delete_explain_codegen/)
               DeltaLogReplayExec(table_path=file://<tmp>/delete_explain_codegen/, version=0)
-                CoalesceBatchesExec: target_batch_size=8192
-                  RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
-                    DeltaLogPathExtractExec
-                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                        DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+                SortExec: expr=[__sail_delta_replay_path@6 ASC NULLS LAST], preserve_partitioning=[true]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
+                      DeltaLogPathExtractExec
+                        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                          DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
 physical_plan after coalesce_async_exec_input:
@@ -297,20 +303,22 @@ DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
               DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
                 DeltaDiscoveryExec(table_path=file://<tmp>/delete_explain_codegen/)
                   DeltaLogReplayExec(table_path=file://<tmp>/delete_explain_codegen/, version=0)
-                    CoalesceBatchesExec: target_batch_size=8192
-                      RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
-                        DeltaLogPathExtractExec
-                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                            DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+                    SortExec: expr=[__sail_delta_replay_path@6 ASC NULLS LAST], preserve_partitioning=[true]
+                      CoalesceBatchesExec: target_batch_size=8192
+                        RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
+                          DeltaLogPathExtractExec
+                            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                              DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
       DeltaRemoveActionsExec
         CoalescePartitionsExec
           DeltaDiscoveryExec(table_path=file://<tmp>/delete_explain_codegen/)
             DeltaLogReplayExec(table_path=file://<tmp>/delete_explain_codegen/, version=0)
-              CoalesceBatchesExec: target_batch_size=8192
-                RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
-                  DeltaLogPathExtractExec
-                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                      DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+              SortExec: expr=[__sail_delta_replay_path@6 ASC NULLS LAST], preserve_partitioning=[true]
+                CoalesceBatchesExec: target_batch_size=8192
+                  RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
+                    DeltaLogPathExtractExec
+                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                        DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
 physical_plan after LimitAggregation:
@@ -348,20 +356,22 @@ DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
               DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
                 DeltaDiscoveryExec(table_path=file://<tmp>/delete_explain_codegen/)
                   DeltaLogReplayExec(table_path=file://<tmp>/delete_explain_codegen/, version=0)
-                    CoalesceBatchesExec: target_batch_size=8192
-                      RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
-                        DeltaLogPathExtractExec
-                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                            DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+                    SortExec: expr=[__sail_delta_replay_path@6 ASC NULLS LAST], preserve_partitioning=[true]
+                      CoalesceBatchesExec: target_batch_size=8192
+                        RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
+                          DeltaLogPathExtractExec
+                            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                              DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
       DeltaRemoveActionsExec
         CoalescePartitionsExec
           DeltaDiscoveryExec(table_path=file://<tmp>/delete_explain_codegen/)
             DeltaLogReplayExec(table_path=file://<tmp>/delete_explain_codegen/, version=0)
-              CoalesceBatchesExec: target_batch_size=8192
-                RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
-                  DeltaLogPathExtractExec
-                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                      DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+              SortExec: expr=[__sail_delta_replay_path@6 ASC NULLS LAST], preserve_partitioning=[true]
+                CoalesceBatchesExec: target_batch_size=8192
+                  RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
+                    DeltaLogPathExtractExec
+                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                        DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
 == Physical Plan ==
@@ -375,17 +385,19 @@ DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
               DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
                 DeltaDiscoveryExec(table_path=file://<tmp>/delete_explain_codegen/)
                   DeltaLogReplayExec(table_path=file://<tmp>/delete_explain_codegen/, version=0)
-                    CoalesceBatchesExec: target_batch_size=8192
-                      RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
-                        DeltaLogPathExtractExec
-                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                            DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+                    SortExec: expr=[__sail_delta_replay_path@6 ASC NULLS LAST], preserve_partitioning=[true]
+                      CoalesceBatchesExec: target_batch_size=8192
+                        RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
+                          DeltaLogPathExtractExec
+                            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                              DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
       DeltaRemoveActionsExec
         CoalescePartitionsExec
           DeltaDiscoveryExec(table_path=file://<tmp>/delete_explain_codegen/)
             DeltaLogReplayExec(table_path=file://<tmp>/delete_explain_codegen/, version=0)
-              CoalesceBatchesExec: target_batch_size=8192
-                RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
-                  DeltaLogPathExtractExec
-                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                      DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+              SortExec: expr=[__sail_delta_replay_path@6 ASC NULLS LAST], preserve_partitioning=[true]
+                CoalesceBatchesExec: target_batch_size=8192
+                  RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
+                    DeltaLogPathExtractExec
+                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                        DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
