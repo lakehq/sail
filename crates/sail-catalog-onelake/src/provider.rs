@@ -67,6 +67,8 @@ struct ListSchemasResponse {
 #[derive(Debug, Deserialize)]
 struct SchemaInfo {
     name: Option<String>,
+    #[allow(dead_code)]
+    catalog_name: Option<String>,
     comment: Option<String>,
 }
 
@@ -79,7 +81,11 @@ struct ListTablesResponse {
 #[derive(Debug, Deserialize)]
 struct TableInfo {
     name: Option<String>,
+    #[allow(dead_code)]
+    catalog_name: Option<String>,
     schema_name: Option<String>,
+    #[allow(dead_code)]
+    table_type: Option<String>,
     data_source_format: Option<String>,
     storage_location: Option<String>,
     columns: Option<Vec<ColumnInfo>>,
@@ -89,6 +95,8 @@ struct TableInfo {
 #[derive(Debug, Deserialize)]
 struct ColumnInfo {
     name: Option<String>,
+    #[allow(dead_code)]
+    type_name: Option<String>,
     type_text: Option<String>,
     nullable: Option<bool>,
     comment: Option<String>,

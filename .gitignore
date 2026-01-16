@@ -99,6 +99,5 @@ docs/.vitepress/.temp
 
 # Claude Code settings
 .claude/
-pr_comments.json
 
 CLAUDE.md
