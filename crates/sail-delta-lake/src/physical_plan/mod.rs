@@ -33,7 +33,6 @@ mod expr_adapter;
 mod log_action_decode;
 mod log_path_extract_exec;
 mod log_replay_exec;
-mod log_scan_exec;
 mod meta_adds;
 mod remove_actions_exec;
 mod scan_by_adds_exec;
@@ -48,7 +47,6 @@ pub use discovery_exec::DeltaDiscoveryExec;
 pub use expr_adapter::DeltaPhysicalExprAdapterFactory;
 pub use log_path_extract_exec::{DeltaLogPathExtractExec, COL_REPLAY_PATH};
 pub use log_replay_exec::DeltaLogReplayExec;
-pub use log_scan_exec::DeltaLogScanExec;
 pub mod planner;
 pub use planner::{
     plan_delete, plan_merge, plan_update, DeltaPhysicalPlanner, DeltaTableConfig, PlannerContext,
