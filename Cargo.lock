@@ -5843,7 +5843,6 @@ dependencies = [
  "sail-catalog",
  "sail-common-datafusion",
  "serde",
- "serde_json",
  "tokio",
 ]
 
