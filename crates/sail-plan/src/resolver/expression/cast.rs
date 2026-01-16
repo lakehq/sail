@@ -100,14 +100,27 @@ impl PlanResolver<'_> {
                 DataType::Interval(IntervalUnit::MonthDayNano),
                 _,
             ) => ScalarUDF::new_from_impl(SparkCalendarInterval::new()).call(vec![expr]),
-            (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View, DataType::Date32, _) => {
-                ScalarUDF::new_from_impl(SparkDate::new()).call(vec![expr])
+            (
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+                DataType::Date32,
+                false,
+            ) => ScalarUDF::new_from_impl(SparkDate::new()).call(vec![expr]),
+            (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View, DataType::Date32, true) => {
+                ScalarUDF::new_from_impl(SparkDate::new_try_cast()).call(vec![expr])
             }
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Timestamp(TimeUnit::Microsecond, tz),
-                _,
+                false,
             ) => Arc::new(ScalarUDF::new_from_impl(SparkTimestamp::try_new(tz)?)).call(vec![expr]),
+            (
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+                DataType::Timestamp(TimeUnit::Microsecond, tz),
+                true,
+            ) => Arc::new(ScalarUDF::new_from_impl(SparkTimestamp::try_new_try_cast(
+                tz,
+            )?))
+            .call(vec![expr]),
             (_, DataType::Utf8, _) if override_string_cast => {
                 ScalarUDF::new_from_impl(SparkToUtf8::new()).call(vec![expr])
             }
