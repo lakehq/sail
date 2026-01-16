@@ -84,6 +84,11 @@ def test_try_cast_invalid_date(spark):
 
     See: https://github.com/lakehq/sail/issues/1192
     """
+    # try_cast was added in Spark 4.0
+    col = F.col("x")
+    if not callable(getattr(col, "try_cast", None)):
+        pytest.skip("try_cast not available in this Spark version")
+
     df = spark.createDataFrame(
         schema="id STRING, some_date STRING",
         data=[("a", "2025-99-99")],
