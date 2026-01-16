@@ -12,6 +12,21 @@ use crate::execution::physical_plan::TracingExec;
 use crate::metrics::MetricRegistry;
 use crate::TracingExecOptions;
 
+fn format_raw_metrics(plan: &dyn ExecutionPlan) -> String {
+    let Some(metrics) = plan.metrics() else {
+        return "[]".to_string();
+    };
+    let mut out = vec![];
+    for m in metrics.iter() {
+        out.push(format!(
+            "{{ partition: {:?}, value: {:?} }}",
+            m.partition(),
+            m.value(),
+        ));
+    }
+    format!("[{}]", out.join(", "))
+}
+
 /// A utility for metric emitter unit tests.
 /// This tester executes a given plan and examines the emitted metrics
 /// collected by an in-memory exporter.
@@ -112,7 +127,10 @@ impl MetricEmitterTester {
             return plan_err!("missing expected metrics: {missing_metrics:?}");
         }
         if !actual_unexpected_metrics.is_empty() {
-            return plan_err!("found unexpected metrics: {actual_unexpected_metrics:?}");
+            return plan_err!(
+                "found unexpected metrics: {actual_unexpected_metrics:?}\nraw datafusion metrics: {}",
+                format_raw_metrics(plan.as_ref())
+            );
         }
         Ok(())
     }

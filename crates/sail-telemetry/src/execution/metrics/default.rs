@@ -106,10 +106,13 @@ impl MetricEmitter for DefaultMetricEmitter {
                 // but they're not "unknown" in the sense that they're expected.
                 // Let specific emitters handle the ones they care about.
             }
-            MetricValue::PruningMetrics { .. }
-            | MetricValue::Ratio { .. }
-            | MetricValue::Custom { .. } => {
-                // These metric types are not yet handled by any emitter
+            MetricValue::Ratio { .. } => {
+                // Ratio metrics are legitimate operator-specific metrics (e.g. selectivity,
+                // probe_hit_rate, avg_fanout). Specific emitters can map ones they care about.
+                // We intentionally do not treat them as "unknown".
+            }
+            MetricValue::PruningMetrics { .. } | MetricValue::Custom { .. } => {
+                // These metric types are not yet handled by any emitter.
                 #[cfg(debug_assertions)]
                 registry.execution_unknown_metric_count.adder(1u64).emit();
             }
