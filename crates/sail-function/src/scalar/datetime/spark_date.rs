@@ -17,12 +17,6 @@ pub struct SparkDate {
     is_try: bool,
 }
 
-impl Default for SparkDate {
-    fn default() -> Self {
-        Self::new(false)
-    }
-}
-
 impl SparkDate {
     /// Creates a SparkDate.
     ///
@@ -38,6 +32,10 @@ impl SparkDate {
             ),
             is_try,
         }
+    }
+
+    pub fn is_try(&self) -> bool {
+        self.is_try
     }
 
     fn string_to_date32(value: &str, is_try: bool) -> Result<Option<i32>> {

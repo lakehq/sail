@@ -100,6 +100,10 @@ impl SparkTimestamp {
     pub fn timezone(&self) -> Option<&str> {
         self.timezone.as_deref()
     }
+
+    pub fn is_try(&self) -> bool {
+        self.is_try
+    }
 }
 
 impl ScalarUDFImpl for SparkTimestamp {
