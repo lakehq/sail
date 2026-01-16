@@ -10,7 +10,7 @@ use tokio::sync::oneshot;
 
 use crate::error::{SessionError, SessionResult};
 pub(crate) use crate::session_manager::actor::SessionManagerActor;
-use crate::session_manager::event::SessionManagerEvent;
+pub(crate) use crate::session_manager::event::SessionManagerEvent;
 pub use crate::session_manager::options::SessionManagerOptions;
 
 pub struct SessionManager {

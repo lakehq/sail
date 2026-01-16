@@ -6,11 +6,14 @@ use datafusion::common::{exec_err, plan_err, Result};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
 };
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 
 use crate::gen::catalog::SystemTable;
+use crate::querier::SystemQuerierService;
 
 #[derive(Debug)]
 pub struct SystemTableExec {
@@ -101,6 +104,19 @@ impl ExecutionPlan for SystemTableExec {
                 partition
             );
         }
-        todo!()
+        let table = self.table;
+        let projection = self.projection.clone();
+        let filters = self.filters.clone();
+        let fetch = self.fetch;
+        let stream = futures::stream::once(async move {
+            context
+                .extension::<SystemQuerierService>()?
+                .execute(table, projection, filters, fetch)
+                .await
+        });
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            self.schema(),
+            stream,
+        )))
     }
 }

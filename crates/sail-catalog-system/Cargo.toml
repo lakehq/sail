@@ -17,6 +17,8 @@ async-trait = { workspace = true }
 serde = { workspace = true }
 serde_arrow = { workspace = true }
 educe = { workspace = true }
+futures = { workspace = true }
+lazy_static = { workspace = true }
 
 [build-dependencies]
 serde = { workspace = true }

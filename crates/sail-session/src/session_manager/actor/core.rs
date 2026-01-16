@@ -38,6 +38,9 @@ impl Actor for SessionManagerActor {
             SessionManagerEvent::DeleteSession { session_id, result } => {
                 self.handle_delete_session(ctx, session_id, result)
             }
+            SessionManagerEvent::QuerySessions { result } => {
+                self.handle_query_sessions(ctx, result)
+            }
         }
     }
 }

@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 
 use datafusion::prelude::SessionContext;
+use sail_catalog_system::querier::SessionRow;
 use sail_telemetry::common::{SpanAssociation, SpanAttribute};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
@@ -23,6 +24,9 @@ pub enum SessionManagerEvent {
         session_id: String,
         result: oneshot::Sender<SessionResult<()>>,
     },
+    QuerySessions {
+        result: oneshot::Sender<SessionResult<Vec<SessionRow>>>,
+    },
 }
 
 impl SpanAssociation for SessionManagerEvent {
@@ -31,6 +35,7 @@ impl SpanAssociation for SessionManagerEvent {
             SessionManagerEvent::GetOrCreateSession { .. } => "GetOrCreateSession",
             SessionManagerEvent::ProbeIdleSession { .. } => "ProbeIdleSession",
             SessionManagerEvent::DeleteSession { .. } => "DeleteSession",
+            SessionManagerEvent::QuerySessions { .. } => "QuerySessions",
         };
         name.into()
     }
@@ -53,6 +58,7 @@ impl SpanAssociation for SessionManagerEvent {
             } => {
                 p.push((SpanAttribute::SESSION_ID, session_id.to_string()));
             }
+            SessionManagerEvent::QuerySessions { result: _ } => {}
         }
         p.into_iter().map(|(k, v)| (k.into(), v.into()))
     }

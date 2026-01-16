@@ -10,11 +10,14 @@ tables:
         rust_type: String
         sql_type: STRING
         sql_nullable: false
-      - name: user
-        description: The user associated with the session.
-        rust_type: Option<String>
+      - name: user_id
+        description: |
+          The identifier for the user associated with the session.
+          This can be an arbitrary string that identifies the user,
+          or empty if the user is not known.
+        rust_type: String
         sql_type: STRING
-        sql_nullable: true
+        sql_nullable: false
       - name: status
         description: The current status of the session.
         rust_type: String

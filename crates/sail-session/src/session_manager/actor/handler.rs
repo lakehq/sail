@@ -4,6 +4,7 @@ use datafusion::prelude::SessionContext;
 use fastrace::collector::SpanContext;
 use fastrace::Span;
 use log::info;
+use sail_catalog_system::querier::SessionRow;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::{ActivityTracker, JobService};
 use sail_server::actor::{ActorAction, ActorContext};
@@ -104,6 +105,24 @@ impl SessionManagerActor {
             )))
         };
         let _ = result.send(output);
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_query_sessions(
+        &mut self,
+        _ctx: &mut ActorContext<Self>,
+        result: oneshot::Sender<SessionResult<Vec<SessionRow>>>,
+    ) -> ActorAction {
+        let sessions = self
+            .sessions
+            .keys()
+            .map(|session_id| SessionRow {
+                session_id: session_id.clone(),
+                user_id: "".to_string(),
+                status: "ACTIVE".to_string(),
+            })
+            .collect();
+        let _ = result.send(Ok(sessions));
         ActorAction::Continue
     }
 }

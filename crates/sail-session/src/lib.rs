@@ -3,5 +3,6 @@ pub mod error;
 pub mod formats;
 pub mod optimizer;
 pub mod planner;
+pub mod querier;
 pub mod session_factory;
 pub mod session_manager;

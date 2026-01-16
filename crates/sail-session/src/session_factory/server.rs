@@ -12,6 +12,7 @@ use log::debug;
 use sail_cache::file_listing_cache::MokaFileListingCache;
 use sail_cache::file_metadata_cache::MokaFileMetadataCache;
 use sail_cache::file_statistics_cache::MokaFileStatisticsCache;
+use sail_catalog_system::querier::SystemQuerierService;
 use sail_common::config::{AppConfig, CacheType, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::session::{ActivityTracker, JobRunner, JobService};
@@ -31,6 +32,7 @@ use crate::catalog::create_catalog_manager;
 use crate::formats::create_table_format_registry;
 use crate::optimizer::{default_analyzer_rules, default_optimizer_rules};
 use crate::planner::new_query_planner;
+use crate::querier::session::SessionManagerSessionQuerier;
 use crate::session_factory::{SessionFactory, WorkerSessionFactory};
 use crate::session_manager::SessionManagerActor;
 
@@ -193,7 +195,8 @@ impl ServerSessionFactory {
                 self.runtime.clone(),
             )?))
             .with_extension(Arc::new(ActivityTracker::new()))
-            .with_extension(Arc::new(JobService::new(job_runner)));
+            .with_extension(Arc::new(JobService::new(job_runner)))
+            .with_extension(Arc::new(self.create_system_querier(info)?));
         self.apply_execution_config(&mut config);
         self.apply_execution_parquet_config(&mut config);
         let config = self.mutator.mutate_config(config, info)?;
@@ -271,6 +274,14 @@ impl ServerSessionFactory {
             }
         };
         Ok(job_runner)
+    }
+
+    fn create_system_querier(&self, info: &ServerSessionInfo) -> Result<SystemQuerierService> {
+        Ok(SystemQuerierService {
+            session: Box::new(SessionManagerSessionQuerier::new(
+                info.session_manager.clone(),
+            )),
+        })
     }
 
     fn apply_execution_config(&mut self, config: &mut SessionConfig) {

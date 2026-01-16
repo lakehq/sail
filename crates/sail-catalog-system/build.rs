@@ -386,10 +386,7 @@ fn build_tables(databases: &[DatabaseEntry]) -> Result<(), Box<dyn std::error::E
             }
 
             pub fn schema(&self) -> datafusion::common::Result<datafusion::arrow::datatypes::SchemaRef> {
-                let options = serde_arrow::schema::TracingOptions::default()
-                    .sequence_as_large_list(false)
-                    .strings_as_large_utf8(false)
-                    .bytes_as_large_binary(false);
+                let options = crate::SYSTEM_TRACING_OPTIONS.clone();
                 let serializer = sail_common_datafusion::array::serde::ArrowSerializer::new(options);
                 match self {
                     #(#table_schema_match_arms)*

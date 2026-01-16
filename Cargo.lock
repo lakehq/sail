@@ -5840,6 +5840,7 @@ dependencies = [
  "async-trait",
  "datafusion",
  "educe",
+ "futures",
  "lazy_static",
  "prettyplease",
  "proc-macro2",
