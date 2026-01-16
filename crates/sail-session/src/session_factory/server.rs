@@ -25,37 +25,55 @@ use sail_physical_optimizer::{get_physical_optimizers, PhysicalOptimizerOptions}
 use sail_plan::function::{
     BUILT_IN_GENERATOR_FUNCTIONS, BUILT_IN_SCALAR_FUNCTIONS, BUILT_IN_TABLE_FUNCTIONS,
 };
-use sail_server::actor::ActorSystem;
+use sail_server::actor::{ActorHandle, ActorSystem};
 
 use crate::catalog::create_catalog_manager;
 use crate::formats::create_table_format_registry;
 use crate::optimizer::{default_analyzer_rules, default_optimizer_rules};
 use crate::planner::new_query_planner;
 use crate::session_factory::{SessionFactory, WorkerSessionFactory};
+use crate::session_manager::SessionManagerActor;
 
-pub trait ServerSessionMutator<I>: Send {
-    fn mutate_config(&self, config: SessionConfig, info: &I) -> Result<SessionConfig>;
-    fn mutate_state(&self, builder: SessionStateBuilder, info: &I) -> Result<SessionStateBuilder>;
-    fn mutate_runtime_env(&self, builder: RuntimeEnvBuilder, info: &I)
-        -> Result<RuntimeEnvBuilder>;
+pub struct ServerSessionInfo {
+    pub session_id: String,
+    pub user_id: String,
+    pub session_manager: ActorHandle<SessionManagerActor>,
 }
 
-pub struct ServerSessionFactory<I> {
+pub trait ServerSessionMutator: Send {
+    fn mutate_config(
+        &self,
+        config: SessionConfig,
+        info: &ServerSessionInfo,
+    ) -> Result<SessionConfig>;
+    fn mutate_state(
+        &self,
+        builder: SessionStateBuilder,
+        info: &ServerSessionInfo,
+    ) -> Result<SessionStateBuilder>;
+    fn mutate_runtime_env(
+        &self,
+        builder: RuntimeEnvBuilder,
+        info: &ServerSessionInfo,
+    ) -> Result<RuntimeEnvBuilder>;
+}
+
+pub struct ServerSessionFactory {
     config: Arc<AppConfig>,
     runtime: RuntimeHandle,
     system: Arc<Mutex<ActorSystem>>,
-    mutator: Box<dyn ServerSessionMutator<I>>,
+    mutator: Box<dyn ServerSessionMutator>,
     global_file_listing_cache: Option<Arc<MokaFileListingCache>>,
     global_file_statistics_cache: Option<Arc<MokaFileStatisticsCache>>,
     global_file_metadata_cache: Option<Arc<MokaFileMetadataCache>>,
 }
 
-impl<I> ServerSessionFactory<I> {
+impl ServerSessionFactory {
     pub fn new(
         config: Arc<AppConfig>,
         runtime: RuntimeHandle,
         system: Arc<Mutex<ActorSystem>>,
-        mutator: Box<dyn ServerSessionMutator<I>>,
+        mutator: Box<dyn ServerSessionMutator>,
     ) -> Self {
         Self {
             config,
@@ -69,8 +87,8 @@ impl<I> ServerSessionFactory<I> {
     }
 }
 
-impl<I> SessionFactory<I> for ServerSessionFactory<I> {
-    fn create(&mut self, info: I) -> Result<SessionContext> {
+impl SessionFactory<ServerSessionInfo> for ServerSessionFactory {
+    fn create(&mut self, info: ServerSessionInfo) -> Result<SessionContext> {
         let state = self.create_session_state(&info)?;
         let context = SessionContext::new_with_state(state);
 
@@ -91,7 +109,7 @@ impl<I> SessionFactory<I> for ServerSessionFactory<I> {
     }
 }
 
-impl<I> ServerSessionFactory<I> {
+impl ServerSessionFactory {
     fn create_file_statistics_cache(&mut self) -> Option<FileStatisticsCache> {
         let ttl = self.config.parquet.file_statistics_cache.ttl;
         let max_entries = self.config.parquet.file_statistics_cache.max_entries;
@@ -163,7 +181,7 @@ impl<I> ServerSessionFactory<I> {
         }
     }
 
-    fn create_session_config(&mut self, info: &I) -> Result<SessionConfig> {
+    fn create_session_config(&mut self, info: &ServerSessionInfo) -> Result<SessionConfig> {
         let job_runner = self.create_job_runner()?;
         let mut config = SessionConfig::new()
             // We do not use the DataFusion catalog and schema since we manage catalogs ourselves.
@@ -182,7 +200,7 @@ impl<I> ServerSessionFactory<I> {
         Ok(config)
     }
 
-    fn create_runtime_env(&mut self, info: &I) -> Result<Arc<RuntimeEnv>> {
+    fn create_runtime_env(&mut self, info: &ServerSessionInfo) -> Result<Arc<RuntimeEnv>> {
         let registry = DynamicObjectStoreRegistry::new(self.runtime.clone());
         let cache_config = CacheManagerConfig::default()
             .with_files_statistics_cache(self.create_file_statistics_cache())
@@ -195,7 +213,7 @@ impl<I> ServerSessionFactory<I> {
         Ok(Arc::new(builder.build()?))
     }
 
-    fn create_session_state(&mut self, info: &I) -> Result<SessionState> {
+    fn create_session_state(&mut self, info: &ServerSessionInfo) -> Result<SessionState> {
         let config = self.create_session_config(info)?;
         let runtime = self.create_runtime_env(info)?;
         let builder = SessionStateBuilder::new()

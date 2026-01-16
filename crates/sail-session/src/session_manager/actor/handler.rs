@@ -11,30 +11,36 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use crate::error::{SessionError, SessionResult};
+use crate::session_factory::ServerSessionInfo;
 use crate::session_manager::actor::SessionManagerActor;
 use crate::session_manager::event::SessionManagerEvent;
-use crate::session_manager::SessionKey;
 
-impl<K: SessionKey> SessionManagerActor<K> {
+impl SessionManagerActor {
     pub(super) fn handle_get_or_create_session(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        key: K,
+        session_id: String,
+        user_id: String,
         result: oneshot::Sender<SessionResult<SessionContext>>,
     ) -> ActorAction {
-        let context = if let Some(context) = self.sessions.get(&key) {
+        let context = if let Some(context) = self.sessions.get(&session_id) {
             Ok(context.clone())
         } else {
-            let key = key.clone();
-            info!("creating session {key}");
+            let session_id = session_id.clone();
+            info!("creating session {session_id}");
             let span = Span::root(
                 "SessionManagerActor::create_session_context",
                 SpanContext::random(),
             );
             let _guard = span.set_local_parent();
-            match self.factory.create(key.clone()) {
+            let info = ServerSessionInfo {
+                session_id: session_id.clone(),
+                user_id,
+                session_manager: ctx.handle().clone(),
+            };
+            match self.factory.create(info) {
                 Ok(context) => {
-                    self.sessions.insert(key, context.clone());
+                    self.sessions.insert(session_id, context.clone());
                     Ok(context)
                 }
                 Err(e) => Err(e.into()),
@@ -47,7 +53,7 @@ impl<K: SessionKey> SessionManagerActor<K> {
             {
                 ctx.send_with_delay(
                     SessionManagerEvent::ProbeIdleSession {
-                        key,
+                        session_id,
                         instant: active_at,
                     },
                     Duration::from_secs(self.options.config.spark.session_timeout_secs),
@@ -61,18 +67,18 @@ impl<K: SessionKey> SessionManagerActor<K> {
     pub(super) fn handle_probe_idle_session(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        key: K,
+        session_id: String,
         instant: Instant,
     ) -> ActorAction {
-        let context = self.sessions.get(&key);
+        let context = self.sessions.get(&session_id);
         if let Some(context) = context {
             if let Ok(tracker) = context.extension::<ActivityTracker>() {
                 if tracker.active_at().is_ok_and(|x| x <= instant) {
-                    info!("removing idle session {key}");
+                    info!("removing idle session {session_id}");
                     if let Ok(service) = context.extension::<JobService>() {
                         ctx.spawn(async move { service.runner().stop().await });
                     }
-                    self.sessions.remove(&key);
+                    self.sessions.remove(&session_id);
                 }
             }
         }
@@ -82,18 +88,20 @@ impl<K: SessionKey> SessionManagerActor<K> {
     pub(super) fn handle_delete_session(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        key: K,
+        session_id: String,
         result: oneshot::Sender<SessionResult<()>>,
     ) -> ActorAction {
-        let context = self.sessions.remove(&key);
+        let context = self.sessions.remove(&session_id);
         let output = if let Some(context) = context {
-            info!("removing session {key}");
+            info!("removing session {session_id}");
             if let Ok(service) = context.extension::<JobService>() {
                 ctx.spawn(async move { service.runner().stop().await });
             }
             Ok(())
         } else {
-            Err(SessionError::invalid(format!("session not found: {key}")))
+            Err(SessionError::invalid(format!(
+                "session not found: {session_id}"
+            )))
         };
         let _ = result.send(output);
         ActorAction::Continue
