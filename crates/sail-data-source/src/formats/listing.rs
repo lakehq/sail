@@ -308,7 +308,12 @@ impl ExecutionPlan for InvalidateListFilesCacheExec {
         if children.len() != 1 {
             return plan_err!("{} should have exactly one child", self.name());
         }
-        let input = children.pop().unwrap();
+        let input = children.pop().ok_or_else(|| {
+            datafusion_common::DataFusionError::Plan(format!(
+                "{} should have exactly one child",
+                self.name()
+            ))
+        })?;
         Ok(Arc::new(Self::new(
             input,
             Arc::clone(&self.cache),
