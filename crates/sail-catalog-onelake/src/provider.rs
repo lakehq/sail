@@ -47,8 +47,8 @@ async fn get_azure_cli_token() -> CatalogResult<String> {
 }
 
 /// Converts OneLake https:// URL to abfss:// URL for Delta Lake access
-/// From: https://onelake.dfs.fabric.microsoft.com/workspace/lakehouse.Lakehouse/Tables/schema/table
-/// To:   abfss://workspace@onelake.dfs.fabric.microsoft.com/lakehouse.Lakehouse/Tables/schema/table
+/// From: https://onelake.dfs.fabric.microsoft.com/workspace/item.ItemType/Tables/schema/table
+/// To:   abfss://workspace@onelake.dfs.fabric.microsoft.com/item.ItemType/Tables/schema/table
 fn convert_to_abfss_url(https_url: &str) -> Option<String> {
     let url = https_url.strip_prefix("https://onelake.dfs.fabric.microsoft.com/")?;
     let (workspace, rest) = url.split_once('/')?;
@@ -65,7 +65,6 @@ struct ListSchemasResponse {
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct SchemaInfo {
     name: Option<String>,
     catalog_name: Option<String>,
@@ -79,7 +78,6 @@ struct ListTablesResponse {
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct TableInfo {
     name: Option<String>,
     catalog_name: Option<String>,
@@ -92,7 +90,6 @@ struct TableInfo {
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct ColumnInfo {
     name: Option<String>,
     type_name: Option<String>,
@@ -105,7 +102,8 @@ struct ColumnInfo {
 #[derive(Debug, Clone)]
 pub struct OneLakeCatalogConfig {
     pub workspace: String,
-    pub lakehouse: String,
+    pub item_name: String,
+    pub item_type: String,
     pub bearer_token: Option<String>,
 }
 
@@ -120,12 +118,19 @@ pub struct OneLakeCatalogProvider {
 }
 
 impl OneLakeCatalogProvider {
-    pub fn new(name: String, workspace: String, lakehouse: String, bearer_token: Option<String>) -> Self {
+    pub fn new(
+        name: String,
+        workspace: String,
+        item_name: String,
+        item_type: String,
+        bearer_token: Option<String>,
+    ) -> Self {
         Self {
             name,
             config: OneLakeCatalogConfig {
                 workspace,
-                lakehouse,
+                item_name,
+                item_type,
                 bearer_token,
             },
             client: OnceCell::new(),
@@ -134,13 +139,16 @@ impl OneLakeCatalogProvider {
 
     fn base_url(&self) -> String {
         format!(
-            "{}/{}/{}.Lakehouse",
-            ONELAKE_TABLE_API_BASE, self.config.workspace, self.config.lakehouse
+            "{}/{}/{}.{}",
+            ONELAKE_TABLE_API_BASE,
+            self.config.workspace,
+            self.config.item_name,
+            self.config.item_type
         )
     }
 
     fn catalog_name(&self) -> String {
-        format!("{}.Lakehouse", self.config.lakehouse)
+        format!("{}.{}", self.config.item_name, self.config.item_type)
     }
 
     async fn get_client(&self) -> CatalogResult<&Arc<Client>> {
@@ -159,17 +167,18 @@ impl OneLakeCatalogProvider {
                 };
 
                 let mut headers = reqwest::header::HeaderMap::new();
-                let header_value =
-                    reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
-                        .map_err(|e| {
-                            CatalogError::External(format!("Invalid bearer token: {e}"))
-                        })?;
+                let header_value = reqwest::header::HeaderValue::from_str(&format!(
+                    "Bearer {token}"
+                ))
+                .map_err(|e| CatalogError::External(format!("Invalid bearer token: {e}")))?;
                 headers.insert(reqwest::header::AUTHORIZATION, header_value);
 
                 let client = Client::builder()
                     .default_headers(headers)
                     .build()
-                    .map_err(|e| CatalogError::External(format!("Failed to build HTTP client: {e}")))?;
+                    .map_err(|e| {
+                        CatalogError::External(format!("Failed to build HTTP client: {e}"))
+                    })?;
 
                 Ok(Arc::new(client))
             })
@@ -242,6 +251,7 @@ impl OneLakeCatalogProvider {
 }
 
 /// Simple type text parser - converts Unity Catalog type strings to Arrow DataType
+// TODO: Add support for complex types (array, map, struct) if OneLake returns them in JSON format.
 fn parse_type_text(type_text: &str) -> arrow::datatypes::DataType {
     use arrow::datatypes::DataType;
 
@@ -256,7 +266,9 @@ fn parse_type_text(type_text: &str) -> arrow::datatypes::DataType {
         "string" | "varchar" | "text" => DataType::Utf8,
         "binary" => DataType::Binary,
         "date" => DataType::Date32,
-        "timestamp" | "timestamp_ntz" => DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None),
+        "timestamp" | "timestamp_ntz" => {
+            DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None)
+        }
         _ => DataType::Utf8, // Default to string for unknown types
     }
 }
@@ -317,6 +329,7 @@ impl CatalogProvider for OneLakeCatalogProvider {
     ) -> CatalogResult<Vec<DatabaseStatus>> {
         let client = self.get_client().await?;
 
+        // TODO: Use Url methods to construct URLs in case catalog/schema/table names contain special characters.
         let url = format!(
             "{}/api/2.1/unity-catalog/schemas?catalog_name={}",
             self.base_url(),
@@ -336,10 +349,9 @@ impl CatalogProvider for OneLakeCatalogProvider {
             )));
         }
 
-        let list_response: ListSchemasResponse = response
-            .json()
-            .await
-            .map_err(|e| CatalogError::External(format!("Failed to parse schemas response: {e}")))?;
+        let list_response: ListSchemasResponse = response.json().await.map_err(|e| {
+            CatalogError::External(format!("Failed to parse schemas response: {e}"))
+        })?;
 
         Ok(list_response
             .schemas

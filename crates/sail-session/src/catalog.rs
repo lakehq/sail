@@ -93,21 +93,21 @@ pub fn create_catalog_manager(
                     url,
                     bearer_token,
                 } => {
-                    // Parse URL format: workspace/item.type (e.g., "duckrun/data.lakehouse")
-                    let (workspace, item) = url
-                        .split_once('/')
-                        .ok_or_else(|| {
-                            plan_datafusion_err!(
-                                "Invalid OneLake URL format: expected 'workspace/item.type', got '{}'",
-                                url
-                            )
-                        })?;
+                    // Parse URL format: workspace/item.type (e.g., "duckrun/data.lakehouse", "duckrun/data.datawarehouse")
+                    let (workspace, item) = url.split_once('/').ok_or_else(|| {
+                        plan_datafusion_err!(
+                            "Invalid OneLake URL format: expected 'workspace/item.type', got '{}'",
+                            url
+                        )
+                    })?;
 
-                    // Extract item name without the .type suffix
-                    let item_name = item
-                        .split_once('.')
-                        .map(|(name, _)| name)
-                        .unwrap_or(item);
+                    // Extract item name and type (e.g., "data.Lakehouse" -> name="data", type="Lakehouse")
+                    let (item_name, item_type) = item.split_once('.').ok_or_else(|| {
+                        plan_datafusion_err!(
+                            "Invalid OneLake item format: expected 'name.type', got '{}'",
+                            item
+                        )
+                    })?;
 
                     let token = bearer_token.as_ref().map(|t| t.expose_secret().to_string());
                     let runtime_aware = RuntimeAwareCatalogProvider::try_new(
@@ -116,6 +116,7 @@ pub fn create_catalog_manager(
                                 name.clone(),
                                 workspace.to_string(),
                                 item_name.to_string(),
+                                item_type.to_string(),
                                 token.clone(),
                             ))
                         },
