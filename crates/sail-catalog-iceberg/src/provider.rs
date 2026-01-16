@@ -415,10 +415,10 @@ impl IcebergRestCatalogProvider {
         let properties: Vec<_> = properties.into_iter().collect();
 
         Ok(TableStatus {
+            catalog: Some(self.name.clone()),
+            database: database.clone().into(),
             name: table_name.to_string(),
             kind: TableKind::Table {
-                catalog: self.name.clone(),
-                database: database.clone().into(),
                 columns,
                 comment,
                 constraints,
@@ -518,10 +518,10 @@ impl IcebergRestCatalogProvider {
         let properties: Vec<_> = properties.into_iter().collect();
 
         Ok(TableStatus {
+            catalog: Some(self.name.clone()),
+            database: database.clone().into(),
             name: view_name.to_string(),
             kind: TableKind::View {
-                catalog: self.name.clone(),
-                database: database.clone().into(),
                 definition,
                 columns,
                 comment,
@@ -918,10 +918,10 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .unwrap_or_default()
             .into_iter()
             .map(|identifier| TableStatus {
+                catalog: Some(self.name.clone()),
+                database: identifier.namespace,
                 name: identifier.name,
                 kind: TableKind::Table {
-                    catalog: self.name.clone(),
-                    database: identifier.namespace,
                     columns: Vec::new(),
                     comment: None,
                     constraints: Vec::new(),
@@ -1127,10 +1127,10 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .unwrap_or_default()
             .into_iter()
             .map(|identifier| TableStatus {
+                catalog: Some(catalog.clone()),
+                database: identifier.namespace,
                 name: identifier.name,
                 kind: TableKind::View {
-                    catalog: catalog.clone(),
-                    database: identifier.namespace,
                     definition: String::new(),
                     columns: Vec::new(),
                     comment: None,
@@ -1825,10 +1825,10 @@ mod tests {
         let result = ctx.catalog.get_table(&namespace, "table1").await.unwrap();
 
         assert_eq!(result.name, "table1");
+        assert_eq!(result.catalog, Some(ctx.name));
+        assert_eq!(result.database, vec!["db1".to_string()]);
         match result.kind {
             TableKind::Table {
-                catalog,
-                database,
                 columns,
                 comment,
                 constraints,
@@ -1839,8 +1839,6 @@ mod tests {
                 properties,
                 ..
             } => {
-                assert_eq!(catalog, ctx.name);
-                assert_eq!(database, vec!["db1".to_string()]);
                 assert_eq!(columns.len(), 3);
 
                 assert_eq!(columns[0].name, "id");
@@ -1962,17 +1960,15 @@ mod tests {
         let result = ctx.catalog.get_view(&namespace, "view1").await.unwrap();
 
         assert_eq!(result.name, "view1");
+        assert_eq!(result.catalog, Some(ctx.name));
+        assert_eq!(result.database, vec!["db1".to_string()]);
         match result.kind {
             TableKind::View {
-                catalog,
-                database,
                 definition,
                 columns,
                 comment,
                 properties,
             } => {
-                assert_eq!(catalog, ctx.name);
-                assert_eq!(database, vec!["db1".to_string()]);
                 assert_eq!(definition, "SELECT id, data FROM table1 WHERE id > 100");
 
                 assert_eq!(columns.len(), 2);

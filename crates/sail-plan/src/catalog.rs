@@ -197,8 +197,8 @@ impl CatalogObjectDisplay for SparkCatalogObjectDisplay {
         };
         Self::Table {
             name: status.name,
-            catalog: status.kind.catalog(),
-            namespace: status.kind.database(),
+            catalog: status.catalog,
+            namespace: status.database,
             description: status.kind.comment(),
             table_type: table_type.to_string(),
             is_temporary,

@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::fmt;
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -9,7 +8,6 @@ use datafusion::logical_expr::StringifiedPlan;
 use sail_common::datetime::get_system_timezone;
 use sail_common_datafusion::extension::SessionExtension;
 use sail_plan::config::PlanConfig;
-use sail_session::session_manager::SessionKey;
 
 use crate::config::{ConfigKeyValue, SparkRuntimeConfig};
 use crate::error::{SparkError, SparkResult, SparkThrowable};
@@ -20,20 +18,6 @@ use crate::streaming::{
     StreamingQueryManager, StreamingQueryStatus,
 };
 
-#[derive(Eq, PartialEq, Hash, Clone, Debug)]
-pub struct SparkSessionKey {
-    pub user_id: String,
-    pub session_id: String,
-}
-
-impl fmt::Display for SparkSessionKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}@{}", self.user_id, self.session_id)
-    }
-}
-
-impl SessionKey for SparkSessionKey {}
-
 #[derive(Debug, Clone)]
 pub(crate) struct SparkSessionOptions {
     pub execution_heartbeat_interval: Duration,
@@ -43,8 +27,8 @@ pub(crate) struct SparkSessionOptions {
 ///
 /// [`SessionContext`]: datafusion::prelude::SessionContext
 pub(crate) struct SparkSession {
-    user_id: String,
     session_id: String,
+    user_id: String,
     options: SparkSessionOptions,
     state: Mutex<SparkSessionState>,
 }
@@ -52,8 +36,8 @@ pub(crate) struct SparkSession {
 impl Debug for SparkSession {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SparkSession")
-            .field("user_id", &self.user_id)
             .field("session_id", &self.session_id)
+            .field("user_id", &self.user_id)
             .field("options", &self.options)
             .finish()
     }
@@ -67,13 +51,13 @@ impl SessionExtension for SparkSession {
 
 impl SparkSession {
     pub(crate) fn try_new(
-        user_id: String,
         session_id: String,
+        user_id: String,
         options: SparkSessionOptions,
     ) -> SparkResult<Self> {
         let extension = Self {
-            user_id,
             session_id,
+            user_id,
             options,
             state: Mutex::new(SparkSessionState::new()),
         };

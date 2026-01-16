@@ -202,10 +202,10 @@ impl CatalogProvider for MemoryCatalogProvider {
             })
             .collect();
         let status = TableStatus {
+            catalog: Some(self.name.clone()),
+            database: database.clone().into(),
             name: table.to_string(),
             kind: TableKind::Table {
-                catalog: self.name.clone(),
-                database: database.clone().into(),
                 columns,
                 comment,
                 constraints,
@@ -315,10 +315,10 @@ impl CatalogProvider for MemoryCatalogProvider {
             })
             .collect();
         let status = TableStatus {
+            catalog: Some(self.name.clone()),
+            database: database.clone().into(),
             name: view.to_string(),
             kind: TableKind::View {
-                catalog: self.name.clone(),
-                database: database.clone().into(),
                 columns,
                 definition,
                 comment,

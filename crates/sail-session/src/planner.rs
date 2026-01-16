@@ -11,9 +11,12 @@ use datafusion_common::{internal_datafusion_err, internal_err, DFSchema, ToDFSch
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
 use datafusion_physical_expr::{create_physical_sort_exprs, Partitioning};
 use sail_catalog::manager::CatalogManager;
+use sail_catalog_system::logical_rewriter::RewriteSystemTableSource;
+use sail_catalog_system::planner::SystemTablePhysicalPlanner;
 use sail_common_datafusion::catalog::TableKind;
 use sail_common_datafusion::datasource::{SourceInfo, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::logical_rewriter::LogicalRewriter;
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
 use sail_common_datafusion::streaming::event::schema::{
     to_flow_event_field_names, to_flow_event_projection,
@@ -44,7 +47,7 @@ use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
 use sail_plan_lakehouse::new_lakehouse_extension_planners;
 
 #[derive(Debug)]
-pub(crate) struct ExtensionQueryPlanner {}
+pub struct ExtensionQueryPlanner {}
 
 #[async_trait]
 impl QueryPlanner for ExtensionQueryPlanner {
@@ -53,16 +56,23 @@ impl QueryPlanner for ExtensionQueryPlanner {
         logical_plan: &LogicalPlan,
         session_state: &SessionState,
     ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
+        // TODO: show rewriters and the final logical plan in `EXPLAIN`
+        let rewriters = vec![RewriteSystemTableSource];
+        let mut logical_plan = logical_plan.clone();
+        for rewriter in rewriters {
+            logical_plan = rewriter.rewrite(logical_plan)?.data
+        }
         let mut extension_planners = new_lakehouse_extension_planners();
-        extension_planners.push(Arc::new(ExtensionPhysicalPlanner {}));
+        extension_planners.push(Arc::new(SystemTablePhysicalPlanner));
+        extension_planners.push(Arc::new(ExtensionPhysicalPlanner));
         let planner = DefaultPhysicalPlanner::with_extension_planners(extension_planners);
         planner
-            .create_physical_plan(logical_plan, session_state)
+            .create_physical_plan(&logical_plan, session_state)
             .await
     }
 }
 
-pub(crate) struct ExtensionPhysicalPlanner {}
+pub struct ExtensionPhysicalPlanner;
 
 #[async_trait]
 impl ExtensionPlanner for ExtensionPhysicalPlanner {

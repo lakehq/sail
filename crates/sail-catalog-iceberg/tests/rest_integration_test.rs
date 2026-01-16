@@ -600,8 +600,6 @@ async fn test_create_table() {
         .unwrap();
 
     let TableKind::Table {
-        catalog,
-        database,
         columns,
         comment,
         constraints,
@@ -668,8 +666,8 @@ async fn test_create_table() {
         .any(|(k, v)| k == "metadata.table-uuid" && !v.is_empty()));
 
     assert_eq!(table.name, "t1".to_string());
-    assert_eq!(catalog, "test".to_string());
-    assert_eq!(database, Vec::<String>::from(ns.clone()));
+    assert_eq!(table.catalog, Some("test".to_string()));
+    assert_eq!(table.database, Vec::<String>::from(ns.clone()));
     assert_eq!(comment, Some("peow".to_string()));
     assert_eq!(constraints, vec![]);
     assert_eq!(
@@ -804,8 +802,6 @@ async fn test_create_table() {
         .unwrap();
 
     let TableKind::Table {
-        catalog,
-        database,
         columns,
         comment,
         constraints,
@@ -822,8 +818,8 @@ async fn test_create_table() {
     };
 
     assert_eq!(table.name, "t2".to_string());
-    assert_eq!(catalog, "test".to_string());
-    assert_eq!(database, Vec::<String>::from(ns.clone()));
+    assert_eq!(table.catalog, Some("test".to_string()));
+    assert_eq!(table.database, Vec::<String>::from(ns.clone()));
     assert_eq!(comment, Some("test table".to_string()));
     assert_eq!(constraints.len(), 1);
     assert!(matches!(
@@ -987,8 +983,6 @@ async fn test_get_table() {
 
     let table = rest_catalog.get_table(&ns, "t2").await.unwrap();
     let TableKind::Table {
-        catalog,
-        database,
         columns,
         comment,
         constraints,
@@ -1057,8 +1051,8 @@ async fn test_get_table() {
         .any(|(k, v)| k == "metadata.table-uuid" && !v.is_empty()));
 
     assert_eq!(table.name, "t2".to_string());
-    assert_eq!(catalog, "test".to_string());
-    assert_eq!(database, Vec::<String>::from(ns.clone()));
+    assert_eq!(table.catalog, Some("test".to_string()));
+    assert_eq!(table.database, Vec::<String>::from(ns.clone()));
     assert_eq!(comment, Some("test table".to_string()));
     assert_eq!(constraints.len(), 1);
     assert!(matches!(
@@ -1205,17 +1199,11 @@ async fn test_list_tables() {
     assert!(tables.iter().any(|t| t.name == "table1"));
     assert!(tables.iter().any(|t| t.name == "table2"));
     for table in &tables {
-        let TableKind::Table {
-            catalog,
-            database,
-            format,
-            ..
-        } = &table.kind
-        else {
+        let TableKind::Table { format, .. } = &table.kind else {
             panic!("Expected TableKind::Table");
         };
-        assert_eq!(catalog, "test");
-        assert_eq!(database, &vec!["test_list_tables".to_string()]);
+        assert_eq!(table.catalog, Some("test".to_string()));
+        assert_eq!(table.database, vec!["test_list_tables".to_string()]);
         assert_eq!(format, "iceberg");
     }
 }
@@ -1406,8 +1394,6 @@ async fn test_create_view() {
         .unwrap();
 
     let TableKind::View {
-        catalog,
-        database,
         columns,
         comment,
         properties,
@@ -1444,8 +1430,8 @@ async fn test_create_view() {
     assert_eq!(static_properties, expected_properties);
 
     assert_eq!(view.name, "view1".to_string());
-    assert_eq!(catalog, "test".to_string());
-    assert_eq!(database, Vec::<String>::from(ns.clone()));
+    assert_eq!(view.catalog, Some("test".to_string()));
+    assert_eq!(view.database, Vec::<String>::from(ns.clone()));
     assert_eq!(comment, Some("test view".to_string()));
     assert_eq!(definition, "SELECT * FROM table1".to_string());
     assert_eq!(columns.len(), 2);
@@ -1524,8 +1510,6 @@ async fn test_create_view() {
         .unwrap();
 
     let TableKind::View {
-        catalog,
-        database,
         columns,
         comment,
         properties,
@@ -1536,8 +1520,8 @@ async fn test_create_view() {
     };
 
     assert_eq!(view.name, "view2".to_string());
-    assert_eq!(catalog, "test".to_string());
-    assert_eq!(database, Vec::<String>::from(ns.clone()));
+    assert_eq!(view.catalog, Some("test".to_string()));
+    assert_eq!(view.database, Vec::<String>::from(ns.clone()));
     assert_eq!(columns.len(), 2);
     assert!(columns.contains(&TableColumnStatus {
         name: "col1".to_string(),
@@ -1627,8 +1611,6 @@ async fn test_get_view() {
     let view = rest_catalog.get_view(&ns, "view1").await.unwrap();
 
     let TableKind::View {
-        catalog,
-        database,
         columns,
         comment,
         properties,
@@ -1639,8 +1621,8 @@ async fn test_get_view() {
     };
 
     assert_eq!(view.name, "view1".to_string());
-    assert_eq!(catalog, "test".to_string());
-    assert_eq!(database, Vec::<String>::from(ns.clone()));
+    assert_eq!(view.catalog, Some("test".to_string()));
+    assert_eq!(view.database, Vec::<String>::from(ns.clone()));
     assert_eq!(comment, Some("test view".to_string()));
     assert_eq!(definition, "SELECT foo, bar FROM source_table".to_string());
     assert_eq!(columns.len(), 2);
@@ -1741,14 +1723,11 @@ async fn test_list_views() {
     assert!(views.iter().any(|v| v.name == "view2"));
 
     for view in &views {
-        let TableKind::View {
-            catalog, database, ..
-        } = &view.kind
-        else {
+        let TableKind::View { .. } = &view.kind else {
             panic!("Expected TableKind::View");
         };
-        assert_eq!(catalog, "test");
-        assert_eq!(database, &vec!["test_list_views".to_string()]);
+        assert_eq!(view.catalog, Some("test".to_string()));
+        assert_eq!(view.database, vec!["test_list_views".to_string()]);
     }
 }
 

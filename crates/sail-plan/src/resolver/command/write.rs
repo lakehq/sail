@@ -426,8 +426,6 @@ impl PlanResolver<'_> {
         };
         match status.kind {
             TableKind::Table {
-                catalog: _,
-                database: _,
                 columns,
                 comment: _,
                 constraints: _,

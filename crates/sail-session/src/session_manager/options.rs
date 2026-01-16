@@ -4,22 +4,22 @@ use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
 use sail_server::actor::ActorSystem;
 
-use crate::session_factory::SessionFactory;
+use crate::session_factory::{ServerSessionInfo, SessionFactory};
 
 #[readonly::make]
-pub struct SessionManagerOptions<I> {
+pub struct SessionManagerOptions {
     pub config: Arc<AppConfig>,
     pub runtime: RuntimeHandle,
     pub system: Arc<Mutex<ActorSystem>>,
-    pub factory: Box<dyn Fn() -> Box<dyn SessionFactory<I>> + Send>,
+    pub factory: Box<dyn Fn() -> Box<dyn SessionFactory<ServerSessionInfo>> + Send>,
 }
 
-impl<I> SessionManagerOptions<I> {
+impl SessionManagerOptions {
     pub fn new(
         config: Arc<AppConfig>,
         runtime: RuntimeHandle,
         system: Arc<Mutex<ActorSystem>>,
-        factory: Box<dyn Fn() -> Box<dyn SessionFactory<I>> + Send>,
+        factory: Box<dyn Fn() -> Box<dyn SessionFactory<ServerSessionInfo>> + Send>,
     ) -> Self {
         Self {
             config,
