@@ -103,22 +103,14 @@ impl PlanResolver<'_> {
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Date32,
-                false,
-            ) => ScalarUDF::new_from_impl(SparkDate::new()).call(vec![expr]),
-            (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View, DataType::Date32, true) => {
-                ScalarUDF::new_from_impl(SparkDate::new_try_cast()).call(vec![expr])
-            }
+                is_try,
+            ) => ScalarUDF::new_from_impl(SparkDate::new(is_try)).call(vec![expr]),
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Timestamp(TimeUnit::Microsecond, tz),
-                false,
-            ) => Arc::new(ScalarUDF::new_from_impl(SparkTimestamp::try_new(tz)?)).call(vec![expr]),
-            (
-                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
-                DataType::Timestamp(TimeUnit::Microsecond, tz),
-                true,
-            ) => Arc::new(ScalarUDF::new_from_impl(SparkTimestamp::try_new_try_cast(
-                tz,
+                is_try,
+            ) => Arc::new(ScalarUDF::new_from_impl(SparkTimestamp::try_new(
+                tz, is_try,
             )?))
             .call(vec![expr]),
             (_, DataType::Utf8, _) if override_string_cast => {

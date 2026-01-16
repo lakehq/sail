@@ -19,22 +19,16 @@ pub struct SparkDate {
 
 impl Default for SparkDate {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
 impl SparkDate {
-    /// Creates a SparkDate that throws on invalid input (default behavior).
-    pub fn new() -> Self {
-        Self::with_try_cast(false)
-    }
-
-    /// Creates a SparkDate for try_cast that returns NULL on invalid input.
-    pub fn new_try_cast() -> Self {
-        Self::with_try_cast(true)
-    }
-
-    fn with_try_cast(is_try: bool) -> Self {
+    /// Creates a SparkDate.
+    ///
+    /// When `is_try` is true, returns NULL on invalid input (for try_cast).
+    /// When `is_try` is false, throws an error on invalid input (for cast).
+    pub fn new(is_try: bool) -> Self {
         Self {
             signature: Signature::coercible(
                 vec![Coercion::new_exact(TypeSignatureClass::Native(

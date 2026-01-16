@@ -1346,7 +1346,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
             UdfKind::SparkTimestamp(gen::SparkTimestampUdf { timezone }) => {
-                let udf = SparkTimestamp::try_new(timezone.map(Arc::from))?;
+                let udf = SparkTimestamp::try_new(timezone.map(Arc::from), false)?;
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
         };
@@ -1448,7 +1448,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_elt" | "elt" => Ok(Arc::new(ScalarUDF::from(SparkElt::new()))),
             "spark_decode" | "decode" => Ok(Arc::new(ScalarUDF::from(SparkDecode::new()))),
             "spark_bin" | "bin" => Ok(Arc::new(ScalarUDF::from(SparkBin::new()))),
-            "spark_date" => Ok(Arc::new(ScalarUDF::from(SparkDate::new()))),
+            "spark_date" => Ok(Arc::new(ScalarUDF::from(SparkDate::new(false)))),
             "spark_year_month_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkYearMonthInterval::new())))
             }

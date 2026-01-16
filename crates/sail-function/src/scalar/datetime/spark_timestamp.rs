@@ -72,17 +72,11 @@ pub struct SparkTimestamp {
 }
 
 impl SparkTimestamp {
-    /// Creates a SparkTimestamp that throws on invalid input (default behavior).
-    pub fn try_new(timezone: Option<Arc<str>>) -> Result<Self> {
-        Self::try_new_with_try_cast(timezone, false)
-    }
-
-    /// Creates a SparkTimestamp for try_cast that returns NULL on invalid input.
-    pub fn try_new_try_cast(timezone: Option<Arc<str>>) -> Result<Self> {
-        Self::try_new_with_try_cast(timezone, true)
-    }
-
-    fn try_new_with_try_cast(timezone: Option<Arc<str>>, is_try: bool) -> Result<Self> {
+    /// Creates a SparkTimestamp.
+    ///
+    /// When `is_try` is true, returns NULL on invalid input (for try_cast).
+    /// When `is_try` is false, throws an error on invalid input (for cast).
+    pub fn try_new(timezone: Option<Arc<str>>, is_try: bool) -> Result<Self> {
         let parser = if let Some(ref timezone) = timezone {
             TimestampParser::Ltz {
                 default_timezone: timezone.as_ref().to_string(),
