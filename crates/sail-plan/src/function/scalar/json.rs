@@ -2,7 +2,9 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::{cast, expr, lit, when};
 use datafusion_functions::unicode::expr_fn as unicode_fn;
-use sail_function::scalar::json::{json_as_text_udf, json_length_udf, json_object_keys_udf};
+use sail_function::scalar::json::{
+    json_as_text_udf, json_length_udf, json_object_keys_udf, SchemaOfJson,
+};
 
 use crate::error::PlanResult;
 use crate::function::common::ScalarFunction;
@@ -45,7 +47,7 @@ pub(super) fn list_built_in_json_functions() -> Vec<(&'static str, ScalarFunctio
         ("json_array_length", F::unary(json_array_length)),
         ("json_object_keys", F::unary(json_object_keys)),
         ("json_tuple", F::unknown("json_tuple")),
-        ("schema_of_json", F::unknown("schema_of_json")),
+        ("schema_of_json", F::udf(SchemaOfJson::new())),
         ("to_json", F::unknown("to_json")),
     ]
 }

@@ -385,7 +385,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: schema_of_json"
+        "success": "ok"
       }
     },
     {
@@ -407,7 +407,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: schema_of_json"
+        "success": "ok"
       }
     },
     {
