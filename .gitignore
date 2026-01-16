@@ -101,7 +101,4 @@ docs/.vitepress/.temp
 .claude/
 pr_comments.json
 
-# Ad-hoc test scripts
-python/pysail/tests/spark/catalog/test_onelake_catalog.py
-
 CLAUDE.md
