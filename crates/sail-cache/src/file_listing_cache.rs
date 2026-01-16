@@ -3,11 +3,9 @@ use std::mem::size_of;
 use std::sync::Arc;
 use std::time::Duration;
 
-use datafusion::common::Result as DataFusionResult;
-use datafusion::common::TableReference;
+use datafusion::common::{Result as DataFusionResult, TableReference};
 use datafusion::execution::cache::cache_manager::ListFilesCache;
-use datafusion::execution::cache::CacheAccessor;
-use datafusion::execution::cache::{ListFilesEntry, TableScopedPath};
+use datafusion::execution::cache::{CacheAccessor, ListFilesEntry, TableScopedPath};
 use log::debug;
 use moka::sync::Cache;
 use object_store::path::Path;
