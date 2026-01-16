@@ -1,15 +1,20 @@
+use std::collections::HashMap;
+use std::mem::size_of;
 use std::sync::Arc;
 use std::time::Duration;
 
+use datafusion::common::Result as DataFusionResult;
+use datafusion::common::TableReference;
 use datafusion::execution::cache::cache_manager::ListFilesCache;
 use datafusion::execution::cache::CacheAccessor;
+use datafusion::execution::cache::{ListFilesEntry, TableScopedPath};
 use log::debug;
 use moka::sync::Cache;
 use object_store::path::Path;
 use object_store::ObjectMeta;
 
 pub struct MokaFileListingCache {
-    objects: Cache<Path, Arc<Vec<ObjectMeta>>>,
+    objects: Cache<TableScopedPath, Arc<Vec<ObjectMeta>>>,
     ttl: Option<Duration>,
     max_entries: Option<u64>,
 }
@@ -41,56 +46,81 @@ impl MokaFileListingCache {
     }
 }
 
-impl CacheAccessor<Path, Arc<Vec<ObjectMeta>>> for MokaFileListingCache {
-    type Extra = Option<Path>;
+/// Calculates the number of bytes an [`ObjectMeta`] occupies in the heap.
+fn meta_heap_bytes(object_meta: &ObjectMeta) -> usize {
+    let mut size = object_meta.location.as_ref().len();
 
-    fn get(&self, k: &Path) -> Option<Arc<Vec<ObjectMeta>>> {
-        self.objects.get(k)
+    if let Some(e) = &object_meta.e_tag {
+        size += e.len();
+    }
+    if let Some(v) = &object_meta.version {
+        size += v.len();
     }
 
-    fn get_with_extra(&self, k: &Path, e: &Self::Extra) -> Option<Arc<Vec<ObjectMeta>>> {
-        match e {
-            None => self.get(k),
-            Some(prefix) => {
-                let objects = self.get(k)?;
+    size
+}
 
-                let base = k.to_string();
-                let prefix_str = prefix.to_string();
-                let full_prefix = if prefix_str.starts_with(&base) || base.is_empty() {
-                    prefix_str
-                } else {
-                    format!("{base}/{}", prefix_str.trim_start_matches('/'))
-                };
+impl CacheAccessor<TableScopedPath, Arc<Vec<ObjectMeta>>> for MokaFileListingCache {
+    type Extra = Option<Path>;
 
-                let filtered = objects
-                    .iter()
-                    .filter(|meta| meta.location.to_string().starts_with(&full_prefix))
-                    .cloned()
-                    .collect::<Vec<_>>();
-                Some(Arc::new(filtered))
-            }
+    fn get(&self, k: &TableScopedPath) -> Option<Arc<Vec<ObjectMeta>>> {
+        self.get_with_extra(k, &None)
+    }
+
+    fn get_with_extra(
+        &self,
+        k: &TableScopedPath,
+        prefix: &Self::Extra,
+    ) -> Option<Arc<Vec<ObjectMeta>>> {
+        let objects = self.objects.get(k)?;
+
+        let Some(prefix) = prefix else {
+            return Some(objects);
+        };
+
+        // Build full prefix: table_base/prefix
+        let table_base = &k.path;
+        let mut parts: Vec<_> = table_base.parts().collect();
+        parts.extend(prefix.parts());
+        let full_prefix = Path::from_iter(parts);
+        let full_prefix_str = full_prefix.as_ref();
+
+        let filtered = objects
+            .iter()
+            .filter(|meta| meta.location.as_ref().starts_with(full_prefix_str))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if filtered.is_empty() {
+            None
+        } else {
+            Some(Arc::new(filtered))
         }
     }
 
-    fn put(&self, key: &Path, value: Arc<Vec<ObjectMeta>>) -> Option<Arc<Vec<ObjectMeta>>> {
+    fn put(
+        &self,
+        key: &TableScopedPath,
+        value: Arc<Vec<ObjectMeta>>,
+    ) -> Option<Arc<Vec<ObjectMeta>>> {
         self.objects.insert(key.clone(), value);
         None
     }
 
     fn put_with_extra(
         &self,
-        key: &Path,
+        key: &TableScopedPath,
         value: Arc<Vec<ObjectMeta>>,
         _e: &Self::Extra,
     ) -> Option<Arc<Vec<ObjectMeta>>> {
         self.put(key, value)
     }
 
-    fn remove(&self, k: &Path) -> Option<Arc<Vec<ObjectMeta>>> {
+    fn remove(&self, k: &TableScopedPath) -> Option<Arc<Vec<ObjectMeta>>> {
         self.objects.remove(k)
     }
 
-    fn contains_key(&self, k: &Path) -> bool {
+    fn contains_key(&self, k: &TableScopedPath) -> bool {
         self.objects.contains_key(k)
     }
 
@@ -125,13 +155,46 @@ impl ListFilesCache for MokaFileListingCache {
     fn update_cache_ttl(&self, _ttl: Option<Duration>) {
         // TODO: support dynamic update of cache ttl
     }
+
+    fn list_entries(&self) -> HashMap<TableScopedPath, ListFilesEntry> {
+        self.objects
+            .iter()
+            .map(|(table_scoped_path, metas)| {
+                let metas = Arc::clone(&metas);
+                let size_bytes = (metas.capacity() * size_of::<ObjectMeta>())
+                    + metas.iter().map(meta_heap_bytes).sum::<usize>();
+                (
+                    (*table_scoped_path).clone(),
+                    ListFilesEntry {
+                        metas,
+                        size_bytes,
+                        // moka handles expiration; we don't have per-entry expiration time
+                        expires: None,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    fn drop_table_entries(&self, table_ref: &Option<TableReference>) -> DataFusionResult<()> {
+        let keys_to_drop: Vec<TableScopedPath> = self
+            .objects
+            .iter()
+            .filter_map(|(k, _v)| (k.table == *table_ref).then_some((*k).clone()))
+            .collect();
+
+        for key in keys_to_drop {
+            self.objects.invalidate(&key);
+        }
+
+        Ok(())
+    }
 }
 
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use chrono::DateTime;
-    use object_store::path::Path;
     use object_store::ObjectMeta;
 
     use super::*;
@@ -149,11 +212,15 @@ mod tests {
         };
 
         let cache = MokaFileListingCache::new(None, None);
-        assert!(cache.get(&meta.location).is_none());
+        let key = TableScopedPath {
+            table: None,
+            path: meta.location.clone(),
+        };
+        assert!(cache.get(&key).is_none());
 
-        cache.put(&meta.location, vec![meta.clone()].into());
+        cache.put(&key, vec![meta.clone()].into());
         assert_eq!(
-            cache.get(&meta.location).unwrap().first().unwrap().clone(),
+            cache.get(&key).unwrap().first().unwrap().clone(),
             meta.clone()
         );
     }
