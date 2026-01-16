@@ -3,8 +3,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{Array, ArrayRef, StringArray, StringBuilder, StructArray};
-use datafusion::arrow::compute::cast;
+use datafusion::arrow::array::{ArrayRef, StringBuilder};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
@@ -18,11 +17,12 @@ use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use futures::TryStreamExt;
 
+use crate::physical_plan::log_action_decode;
+
 pub const COL_REPLAY_PATH: &str = "__sail_delta_replay_path";
 
 const COL_ADD: &str = "add";
 const COL_REMOVE: &str = "remove";
-const COL_PATH: &str = "path";
 
 /// A unary node that materializes a top-level `replay_path` column from raw delta log actions.
 ///
@@ -55,46 +55,7 @@ impl DeltaLogPathExtractExec {
         Ok(Self { input, cache })
     }
 
-    fn get_struct_column(batch: &RecordBatch, col: &str) -> Result<Option<Arc<StructArray>>> {
-        let Some(arr) = batch.column_by_name(col) else {
-            return Ok(None);
-        };
-        let s = arr.as_any().downcast_ref::<StructArray>().ok_or_else(|| {
-            DataFusionError::Plan(format!(
-                "DeltaLogPathExtractExec input column '{col}' must be a Struct"
-            ))
-        })?;
-        Ok(Some(Arc::new(s.clone())))
-    }
-
-    fn struct_field<'a>(s: &'a StructArray, name: &str) -> Option<&'a ArrayRef> {
-        s.column_by_name(name)
-    }
-
-    fn parse_path_from_struct(s: &StructArray, row: usize) -> Result<Option<String>> {
-        if s.is_null(row) {
-            return Ok(None);
-        }
-        let path = Self::struct_field(s, COL_PATH).ok_or_else(|| {
-            DataFusionError::Plan("DeltaLogPathExtractExec action missing 'path'".to_string())
-        })?;
-        let casted = cast(path.as_ref(), &DataType::Utf8)
-            .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
-        let path = casted
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or_else(|| {
-                DataFusionError::Plan(
-                    "DeltaLogPathExtractExec action.path must be Utf8".to_string(),
-                )
-            })?;
-        if path.is_null(row) {
-            return Err(DataFusionError::Plan(
-                "DeltaLogPathExtractExec action.path cannot be null".to_string(),
-            ));
-        }
-        Ok(Some(path.value(row).to_string()))
-    }
+    // Struct decoding helpers live in `physical_plan::log_action_decode`.
 }
 
 #[async_trait]
@@ -145,18 +106,34 @@ impl ExecutionPlan for DeltaLogPathExtractExec {
                     return Ok(Some(RecordBatch::new_empty(schema)));
                 }
 
-                let add = Self::get_struct_column(&batch, COL_ADD)?;
-                let remove = Self::get_struct_column(&batch, COL_REMOVE)?;
+                let add = log_action_decode::get_struct_column(
+                    &batch,
+                    COL_ADD,
+                    "DeltaLogPathExtractExec",
+                )?;
+                let remove = log_action_decode::get_struct_column(
+                    &batch,
+                    COL_REMOVE,
+                    "DeltaLogPathExtractExec",
+                )?;
 
                 let mut b = StringBuilder::new();
                 for row in 0..batch.num_rows() {
                     let mut p: Option<String> = None;
                     if let Some(add) = &add {
-                        p = Self::parse_path_from_struct(add.as_ref(), row)?;
+                        p = log_action_decode::parse_path_from_struct(
+                            add.as_ref(),
+                            row,
+                            "DeltaLogPathExtractExec",
+                        )?;
                     }
                     if p.is_none() {
                         if let Some(remove) = &remove {
-                            p = Self::parse_path_from_struct(remove.as_ref(), row)?;
+                            p = log_action_decode::parse_path_from_struct(
+                                remove.as_ref(),
+                                row,
+                                "DeltaLogPathExtractExec",
+                            )?;
                         }
                     }
                     if let Some(v) = p {

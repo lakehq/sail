@@ -12,31 +12,29 @@
 
 use std::sync::Arc;
 
-use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result};
-use datafusion::physical_expr::expressions::{Column, NotExpr};
-use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr};
+use datafusion::physical_expr::expressions::NotExpr;
+use datafusion::physical_expr::{LexRequirement, PhysicalExpr};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
-use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::physical_expr::PhysicalExprWithSource;
 
 use super::context::PlannerContext;
-use super::log_scan::build_delta_log_datasource_union;
-use super::utils::{align_schemas_for_union, build_standard_write_layers};
+use super::utils::{
+    align_schemas_for_union, build_log_replay_pipeline, build_standard_write_layers,
+};
 use crate::datasource::schema::DataFusionMixins;
 use crate::datasource::PredicateProperties;
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::physical_plan::{
     create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaDiscoveryExec,
-    DeltaLogPathExtractExec, DeltaLogReplayExec, DeltaRemoveActionsExec, DeltaScanByAddsExec,
-    DeltaWriterExec, COL_REPLAY_PATH,
+    DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
 };
 
 pub async fn build_write_plan(
@@ -116,39 +114,15 @@ async fn build_full_overwrite_plan(
             .map(|p| p.filename.clone())
             .collect::<Vec<_>>();
 
-        let (raw_scan, checkpoint_files, commit_files) =
-            build_delta_log_datasource_union(ctx, checkpoint_files, commit_files).await?;
-        let log_scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaLogPathExtractExec::new(raw_scan)?);
-        let log_partitions = ctx.session().config().target_partitions().max(1);
-        let replay_path_idx = log_scan.schema().index_of(COL_REPLAY_PATH)?;
-        let replay_expr: Arc<dyn datafusion_physical_expr::PhysicalExpr> = Arc::new(
-            datafusion_physical_expr::expressions::Column::new(COL_REPLAY_PATH, replay_path_idx),
-        );
-        let log_scan: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
-            log_scan,
-            Partitioning::Hash(vec![replay_expr], log_partitions),
-        )?);
-        // Ensure per-partition ordering on replay_path so DeltaLogReplayExec can stream without
-        // materializing the full active set in memory. SortExec can spill.
-        let ordering = LexOrdering::new(vec![PhysicalSortExpr {
-            expr: Arc::new(Column::new(COL_REPLAY_PATH, replay_path_idx)),
-            options: SortOptions {
-                descending: false,
-                nulls_first: false,
-            },
-        }])
-        .expect("non-degenerate ordering");
-        let log_scan: Arc<dyn ExecutionPlan> =
-            Arc::new(SortExec::new(ordering, log_scan).with_preserve_partitioning(true));
-
-        let meta_scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaLogReplayExec::new(
-            log_scan,
+        let meta_scan: Arc<dyn ExecutionPlan> = build_log_replay_pipeline(
+            ctx,
             ctx.table_url().clone(),
             version,
             partition_columns.clone(),
             checkpoint_files,
             commit_files,
-        ));
+        )
+        .await?;
 
         let all_adds: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::from_log_scan(
             meta_scan,
@@ -246,39 +220,15 @@ async fn build_overwrite_if_plan(
         .map(|p| p.filename.clone())
         .collect::<Vec<_>>();
 
-    let (raw_scan, checkpoint_files, commit_files) =
-        build_delta_log_datasource_union(ctx, checkpoint_files, commit_files).await?;
-    let log_scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaLogPathExtractExec::new(raw_scan)?);
-    let log_partitions = ctx.session().config().target_partitions().max(1);
-    let replay_path_idx = log_scan.schema().index_of(COL_REPLAY_PATH)?;
-    let replay_expr: Arc<dyn datafusion_physical_expr::PhysicalExpr> = Arc::new(
-        datafusion_physical_expr::expressions::Column::new(COL_REPLAY_PATH, replay_path_idx),
-    );
-    let log_scan: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
-        log_scan,
-        Partitioning::Hash(vec![replay_expr], log_partitions),
-    )?);
-    // Ensure per-partition ordering on replay_path so DeltaLogReplayExec can stream without
-    // materializing the full active set in memory. SortExec can spill.
-    let ordering = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: Arc::new(Column::new(COL_REPLAY_PATH, replay_path_idx)),
-        options: SortOptions {
-            descending: false,
-            nulls_first: false,
-        },
-    }])
-    .expect("non-degenerate ordering");
-    let log_scan: Arc<dyn ExecutionPlan> =
-        Arc::new(SortExec::new(ordering, log_scan).with_preserve_partitioning(true));
-
-    let meta_scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaLogReplayExec::new(
-        log_scan,
+    let meta_scan: Arc<dyn ExecutionPlan> = build_log_replay_pipeline(
+        ctx,
         ctx.table_url().clone(),
         version,
         partition_columns.clone(),
         checkpoint_files,
         commit_files,
-    ));
+    )
+    .await?;
 
     let meta_scan: Arc<dyn ExecutionPlan> = if expr_props.partition_only {
         let adapter_factory = Arc::new(crate::physical_plan::DeltaPhysicalExprAdapterFactory {});
@@ -345,39 +295,15 @@ async fn build_old_data_plan(
         .map(|p| p.filename.clone())
         .collect::<Vec<_>>();
 
-    let (raw_scan, checkpoint_files, commit_files) =
-        build_delta_log_datasource_union(ctx, checkpoint_files, commit_files).await?;
-    let log_scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaLogPathExtractExec::new(raw_scan)?);
-    let log_partitions = ctx.session().config().target_partitions().max(1);
-    let replay_path_idx = log_scan.schema().index_of(COL_REPLAY_PATH)?;
-    let replay_expr: Arc<dyn datafusion_physical_expr::PhysicalExpr> = Arc::new(
-        datafusion_physical_expr::expressions::Column::new(COL_REPLAY_PATH, replay_path_idx),
-    );
-    let log_scan: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
-        log_scan,
-        Partitioning::Hash(vec![replay_expr], log_partitions),
-    )?);
-    // Ensure per-partition ordering on replay_path so DeltaLogReplayExec can stream without
-    // materializing the full active set in memory. SortExec can spill.
-    let ordering = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: Arc::new(Column::new(COL_REPLAY_PATH, replay_path_idx)),
-        options: SortOptions {
-            descending: false,
-            nulls_first: false,
-        },
-    }])
-    .expect("non-degenerate ordering");
-    let log_scan: Arc<dyn ExecutionPlan> =
-        Arc::new(SortExec::new(ordering, log_scan).with_preserve_partitioning(true));
-
-    let meta_scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaLogReplayExec::new(
-        log_scan,
+    let meta_scan: Arc<dyn ExecutionPlan> = build_log_replay_pipeline(
+        ctx,
         ctx.table_url().clone(),
         version,
         ctx.partition_columns().to_vec(),
         checkpoint_files,
         commit_files,
-    ));
+    )
+    .await?;
     let meta_scan: Arc<dyn ExecutionPlan> = if expr_props.partition_only {
         let adapter_factory = Arc::new(crate::physical_plan::DeltaPhysicalExprAdapterFactory {});
         let adapter = adapter_factory.create(table_schema.clone(), meta_scan.schema());

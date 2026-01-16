@@ -24,7 +24,7 @@ use futures::{stream, TryStreamExt};
 use url::Url;
 
 use crate::datasource::PATH_COLUMN;
-use crate::physical_plan::COL_REPLAY_PATH;
+use crate::physical_plan::{log_action_decode, COL_REPLAY_PATH};
 
 const COL_SIZE_BYTES: &str = "size_bytes";
 const COL_MODIFICATION_TIME: &str = "modification_time";
@@ -135,33 +135,7 @@ impl DeltaLogReplayExec {
         Arc::new(Schema::new(fields))
     }
 
-    fn struct_field<'a>(s: &'a StructArray, name: &str) -> Option<&'a ArrayRef> {
-        s.column_by_name(name)
-    }
-
-    fn get_struct_column(batch: &RecordBatch, col: &str) -> Result<Option<Arc<StructArray>>> {
-        let Some(arr) = batch.column_by_name(col) else {
-            return Ok(None);
-        };
-        let s = arr.as_any().downcast_ref::<StructArray>().ok_or_else(|| {
-            DataFusionError::Plan(format!(
-                "DeltaLogReplayExec input column '{col}' must be a Struct"
-            ))
-        })?;
-        Ok(Some(Arc::new(s.clone())))
-    }
-
-    fn as_string_array(a: &ArrayRef, name: &str) -> Result<Arc<StringArray>> {
-        let casted = cast(a.as_ref(), &DataType::Utf8)
-            .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
-        let s = casted
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or_else(|| {
-                DataFusionError::Plan(format!("DeltaLogReplayExec '{name}' must be Utf8"))
-            })?;
-        Ok(Arc::new(s.clone()))
-    }
+    // Struct decoding helpers live in `physical_plan::log_action_decode`.
 
     fn as_i64_array(a: &ArrayRef, name: &str) -> Result<Arc<datafusion::arrow::array::Int64Array>> {
         let casted = cast(a.as_ref(), &DataType::Int64)
@@ -228,10 +202,10 @@ impl DeltaLogReplayExec {
             return Ok(None);
         }
 
-        let path = Self::struct_field(add, COL_PATH).ok_or_else(|| {
+        let path = log_action_decode::struct_field(add, COL_PATH).ok_or_else(|| {
             DataFusionError::Plan("DeltaLogReplayExec add missing 'path'".to_string())
         })?;
-        let path = Self::as_string_array(path, "add.path")?;
+        let path = log_action_decode::as_string_array(path, "add.path", "DeltaLogReplayExec")?;
         if path.is_null(row) {
             return Err(DataFusionError::Plan(
                 "DeltaLogReplayExec add.path cannot be null".to_string(),
@@ -239,7 +213,7 @@ impl DeltaLogReplayExec {
         }
         let path_s = path.value(row).to_string();
 
-        let size = Self::struct_field(add, "size").ok_or_else(|| {
+        let size = log_action_decode::struct_field(add, "size").ok_or_else(|| {
             DataFusionError::Plan("DeltaLogReplayExec add missing 'size'".to_string())
         })?;
         let size = Self::as_i64_array(size, "add.size")?;
@@ -249,8 +223,8 @@ impl DeltaLogReplayExec {
             size.value(row)
         };
 
-        let mod_time = Self::struct_field(add, COL_MODIFICATION_TIME_CAMEL)
-            .or_else(|| Self::struct_field(add, COL_MODIFICATION_TIME_SNAKE))
+        let mod_time = log_action_decode::struct_field(add, COL_MODIFICATION_TIME_CAMEL)
+            .or_else(|| log_action_decode::struct_field(add, COL_MODIFICATION_TIME_SNAKE))
             .ok_or_else(|| {
                 DataFusionError::Plan(
                     "DeltaLogReplayExec add missing modification time".to_string(),
@@ -263,8 +237,8 @@ impl DeltaLogReplayExec {
             mod_time.value(row)
         };
 
-        let part_values = Self::struct_field(add, COL_PARTITION_VALUES_CAMEL)
-            .or_else(|| Self::struct_field(add, COL_PARTITION_VALUES_SNAKE))
+        let part_values = log_action_decode::struct_field(add, COL_PARTITION_VALUES_CAMEL)
+            .or_else(|| log_action_decode::struct_field(add, COL_PARTITION_VALUES_SNAKE))
             .and_then(|a| a.as_any().downcast_ref::<MapArray>().cloned());
 
         let mut partitions = Vec::with_capacity(partition_columns.len());
@@ -276,9 +250,11 @@ impl DeltaLogReplayExec {
             }
         }
 
-        let stats = Self::struct_field(add, COL_STATS)
-            .or_else(|| Self::struct_field(add, COL_STATS_JSON_IN))
-            .and_then(|a| Self::as_string_array(a, "add.stats").ok());
+        let stats = log_action_decode::struct_field(add, COL_STATS)
+            .or_else(|| log_action_decode::struct_field(add, COL_STATS_JSON_IN))
+            .and_then(|a| {
+                log_action_decode::as_string_array(a, "add.stats", "DeltaLogReplayExec").ok()
+            });
         let stats_json = stats.and_then(|s| {
             if s.is_null(row) {
                 None
@@ -302,10 +278,10 @@ impl DeltaLogReplayExec {
         if remove.is_null(row) {
             return Ok(None);
         }
-        let path = Self::struct_field(remove, COL_PATH).ok_or_else(|| {
+        let path = log_action_decode::struct_field(remove, COL_PATH).ok_or_else(|| {
             DataFusionError::Plan("DeltaLogReplayExec remove missing 'path'".to_string())
         })?;
-        let path = Self::as_string_array(path, "remove.path")?;
+        let path = log_action_decode::as_string_array(path, "remove.path", "DeltaLogReplayExec")?;
         if path.is_null(row) {
             return Err(DataFusionError::Plan(
                 "DeltaLogReplayExec remove.path cannot be null".to_string(),
@@ -431,8 +407,10 @@ impl ReplayState {
                 ))
             })?;
 
-        let add_struct = DeltaLogReplayExec::get_struct_column(batch, COL_ADD)?;
-        let remove_struct = DeltaLogReplayExec::get_struct_column(batch, COL_REMOVE)?;
+        let add_struct =
+            log_action_decode::get_struct_column(batch, COL_ADD, "DeltaLogReplayExec")?;
+        let remove_struct =
+            log_action_decode::get_struct_column(batch, COL_REMOVE, "DeltaLogReplayExec")?;
 
         for row in 0..batch.num_rows() {
             if replay_path.is_null(row) {

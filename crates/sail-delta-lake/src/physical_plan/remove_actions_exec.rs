@@ -17,8 +17,6 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{Array, Int64Array, StringArray};
-use datafusion::arrow::datatypes::DataType;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
@@ -27,7 +25,7 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     SendableRecordBatchStream,
 };
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{internal_err, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use futures::stream::{self, StreamExt};
 use serde_json::Value;
@@ -35,7 +33,7 @@ use serde_json::Value;
 use crate::kernel::models::{Add, Remove, RemoveOptions};
 use crate::physical_plan::{
     current_timestamp_millis, decode_adds_from_batch, delta_action_schema, encode_actions,
-    CommitMeta, ExecAction, COL_ACTION,
+    meta_adds, CommitMeta, ExecAction, COL_ACTION,
 };
 
 /// Physical execution node to convert Add actions (from FindFiles) into Remove actions
@@ -78,99 +76,6 @@ impl DeltaRemoveActionsExec {
                 )
             })
             .collect())
-    }
-
-    fn decode_adds_from_meta_batch(
-        batch: &datafusion::arrow::record_batch::RecordBatch,
-    ) -> Result<Vec<Add>> {
-        let path_arr = batch
-            .column_by_name(crate::datasource::PATH_COLUMN)
-            .and_then(|c| c.as_any().downcast_ref::<StringArray>())
-            .ok_or_else(|| {
-                DataFusionError::Plan(format!(
-                    "DeltaRemoveActionsExec input must have Utf8 column '{}'",
-                    crate::datasource::PATH_COLUMN
-                ))
-            })?;
-
-        let size_arr = batch
-            .column_by_name("size_bytes")
-            .and_then(|c| c.as_any().downcast_ref::<Int64Array>());
-        let mod_time_arr = batch
-            .column_by_name("modification_time")
-            .and_then(|c| c.as_any().downcast_ref::<Int64Array>());
-
-        // Partition columns are all remaining columns (excluding known meta columns)
-        let reserved: std::collections::HashSet<&str> = [
-            crate::datasource::PATH_COLUMN,
-            "size_bytes",
-            "modification_time",
-            "stats_json",
-            "partition_scan",
-        ]
-        .into_iter()
-        .collect();
-        let partition_columns = batch
-            .schema()
-            .fields()
-            .iter()
-            .map(|f| f.name().as_str())
-            .filter(|n| !reserved.contains(n))
-            .map(|s| s.to_string())
-            .collect::<Vec<_>>();
-
-        let part_arrays: Vec<(String, Arc<dyn Array>)> = partition_columns
-            .iter()
-            .filter_map(|name| {
-                batch.column_by_name(name).map(|a| {
-                    let a = datafusion::arrow::compute::cast(a, &DataType::Utf8)
-                        .unwrap_or_else(|_| a.clone());
-                    (name.clone(), a)
-                })
-            })
-            .collect();
-
-        let mut adds = Vec::with_capacity(batch.num_rows());
-        for row in 0..batch.num_rows() {
-            if path_arr.is_null(row) {
-                return Err(DataFusionError::Plan(format!(
-                    "DeltaRemoveActionsExec input '{}' cannot be null",
-                    crate::datasource::PATH_COLUMN
-                )));
-            }
-            let path = path_arr.value(row);
-            let size = size_arr.map(|a| a.value(row)).unwrap_or_default();
-            let modification_time = mod_time_arr.map(|a| a.value(row)).unwrap_or_default();
-
-            let mut partition_values: HashMap<String, Option<String>> =
-                HashMap::with_capacity(part_arrays.len());
-            for (name, arr) in &part_arrays {
-                let v = if arr.is_null(row) {
-                    None
-                } else if let Some(s) = arr.as_any().downcast_ref::<StringArray>() {
-                    Some(s.value(row).to_string())
-                } else {
-                    datafusion::arrow::util::display::array_value_to_string(arr.as_ref(), row).ok()
-                };
-                partition_values.insert(name.clone(), v);
-            }
-
-            adds.push(Add {
-                path: path.to_string(),
-                partition_values,
-                size,
-                modification_time,
-                data_change: true,
-                stats: None,
-                tags: None,
-                deletion_vector: None,
-                base_row_id: None,
-                default_row_commit_version: None,
-                clustering_provider: None,
-            });
-        }
-
-        Ok(adds)
     }
 }
 
@@ -256,7 +161,7 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
                         adds_to_remove.push(add);
                     }
                 } else {
-                    let adds = DeltaRemoveActionsExec::decode_adds_from_meta_batch(&batch)?;
+                    let adds = meta_adds::decode_adds_from_meta_batch(&batch, None)?;
                     for add in adds {
                         num_removed_bytes = num_removed_bytes
                             .saturating_add(u64::try_from(add.size).unwrap_or_default());
