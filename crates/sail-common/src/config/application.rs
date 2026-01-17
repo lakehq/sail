@@ -308,6 +308,12 @@ pub enum CatalogType {
         default_catalog: Option<String>,
         token: Option<SecretString>,
     },
+    #[serde(alias = "onelake")]
+    OneLake {
+        name: String,
+        url: String,
+        bearer_token: Option<SecretString>,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize)]
