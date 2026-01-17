@@ -14,13 +14,16 @@ const ONELAKE_TABLE_API_BASE: &str = "https://onelake.table.fabric.microsoft.com
 
 /// Fetches Azure access token using Azure CLI
 async fn get_azure_cli_token() -> CatalogResult<String> {
-    // Use az.cmd on Windows, az on other platforms
-    let az_cmd = if cfg!(target_os = "windows") {
-        "az.cmd"
+    // On Windows, az is a batch file (.cmd) and must be run through cmd.exe
+    // See: https://doc.rust-lang.org/nightly/std/process/struct.Command.html
+    let (program, extra_args): (&str, &[&str]) = if cfg!(target_os = "windows") {
+        ("cmd", &["/C", "az"])
     } else {
-        "az"
+        ("az", &[])
     };
-    let output = tokio::process::Command::new(az_cmd)
+
+    let output = tokio::process::Command::new(program)
+        .args(extra_args)
         .args([
             "account",
             "get-access-token",

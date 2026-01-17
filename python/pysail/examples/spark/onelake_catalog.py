@@ -22,7 +22,7 @@ def main():
 
     # Set up environment with the token
     os.environ["AZURE_STORAGE_TOKEN"] = token
-    os.environ["SAIL_CATALOG__LIST"] = '[{type="onelake", name="onelake", url="duckrun/data.lakehouse"}]'
+    os.environ["SAIL_CATALOG__LIST"] = '[{type="onelake", name="onelake", url="duckrun/data.Lakehouse"}]'
     os.environ["SAIL_CATALOG__DEFAULT_CATALOG"] = "onelake"
 
     # Start Sail server
