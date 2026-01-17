@@ -1,9 +1,8 @@
-
 import os
 import subprocess
 
-from pyspark.sql import SparkSession
 from pysail.spark import SparkConnectServer
+from pyspark.sql import SparkSession
 
 def main():
     # Get Azure access token - use environment variable if set, otherwise use Azure CLI
@@ -11,7 +10,7 @@ def main():
     if not token:
         print("AZURE_STORAGE_TOKEN not set, fetching from Azure CLI...")
         result = subprocess.run(
-            ["az.cmd", "account", "get-access-token", "--resource", "https://storage.azure.com/", "--query", "accessToken", "-o", "tsv"],
+            ["az.cmd", "account", "get-access-token", "--resource", "https://storage.azure.com/", "--query", "accessToken", "-o", "tsv"],  # noqa: S607
             capture_output=True,
             text=True,
             check=True
@@ -35,8 +34,6 @@ def main():
     try:
         # Connect via PySpark
         spark = SparkSession.builder.remote(f"sc://localhost:{port}").getOrCreate()
-
-      
 
         # Test: Show schemas in OneLake
         print("\n=== SHOW SCHEMAS ===")
