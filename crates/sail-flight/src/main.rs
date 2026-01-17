@@ -1,16 +1,34 @@
+mod config;
 mod service;
 mod session;
 
 use arrow_flight::flight_service_server::FlightServiceServer;
 use clap::{Parser, Subcommand};
+use config::FlightSqlServerConfig;
 use log::{error, info};
 use service::SailFlightSqlService;
 use tonic::transport::Server;
 
 #[derive(Parser)]
 #[command(name = "sail-flight")]
-#[command(about = "Sail Arrow Flight SQL Server")]
+#[command(about = "Sail Arrow Flight SQL Server - Apache Arrow Flight SQL interface for Sail")]
 #[command(version)]
+#[command(long_about = r#"
+Sail Arrow Flight SQL Server
+
+This server provides an Apache Arrow Flight SQL interface to Sail's query engine.
+It follows the same execution pipeline as spark-connect but exposes it via
+the standard Arrow Flight SQL protocol.
+
+Connection examples:
+  - JDBC: jdbc:arrow-flight-sql://localhost:32010
+  - Python (ADBC): adbc_driver_flightsql.dbapi.connect("grpc://localhost:32010")
+  - DBeaver: Use Arrow Flight SQL driver
+
+References:
+  - Arrow Flight SQL: https://arrow.apache.org/docs/format/FlightSql.html
+  - Issue #520: https://github.com/lakehq/sail/issues/520
+"#)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -39,7 +57,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match &cli.command {
         Commands::Server { port, host } => {
-            if let Err(e) = run_flight_server(host, *port).await {
+            let mut config = FlightSqlServerConfig::default();
+            config.server.host = host.clone();
+            config.server.port = *port;
+
+            if let Err(e) = run_flight_server(config).await {
                 error!("Server error: {}", e);
                 return Err(e);
             }
@@ -49,14 +71,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn run_flight_server(host: &str, port: u16) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_flight_server(
+    config: FlightSqlServerConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
     info!("Starting Sail Arrow Flight SQL Server...");
+    info!("Configuration:");
+    info!("  Host: {}", config.server.host);
+    info!("  Port: {}", config.server.port);
 
-    let addr = format!("{}:{}", host, port).parse()?;
+    let addr = config.bind_address()?;
     let service = SailFlightSqlService::new();
 
-    info!("Server listening on {}", addr);
-    info!("JDBC connection: jdbc:arrow-flight-sql://{}:{}", host, port);
+    info!("✓ Server listening on {}", addr);
+    info!("Connection strings:");
+    info!("  JDBC: jdbc:arrow-flight-sql://{}", addr);
+    info!(
+        "  Python: adbc_driver_flightsql.dbapi.connect(\"grpc://{}\")",
+        addr
+    );
+    info!("");
+    info!("Press Ctrl+C to stop the server");
 
     Server::builder()
         .add_service(FlightServiceServer::new(service))

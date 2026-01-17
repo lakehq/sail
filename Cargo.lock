@@ -6061,6 +6061,7 @@ dependencies = [
  "sail-plan",
  "sail-session",
  "sail-sql-analyzer",
+ "serde",
  "tokio",
  "tonic",
  "tonic-build",

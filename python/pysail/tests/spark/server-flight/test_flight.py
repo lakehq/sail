@@ -59,14 +59,15 @@ def flight_server(host="127.0.0.1", port=32010):
         pass  # Server not running, we'll start it
 
     # Start the server process
-    # Note: Adjust the command based on how your server is started
-    # This assumes you have a binary or can run with cargo
+    # Use the dedicated sail-flight binary
+    workspace_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
     process = subprocess.Popen(
-        ["cargo", "run", "--bin", "sail", "--", "spark", "--flight", "--flight-port", str(port)],
+        ["cargo", "run", "--bin", "sail-flight", "--", "server", "--port", str(port), "--host", host],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
+        cwd=workspace_root,
+        env={**os.environ, "RUST_LOG": "info"}
     )
 
     # Wait for server to be ready

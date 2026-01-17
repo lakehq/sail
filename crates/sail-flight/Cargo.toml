@@ -35,6 +35,9 @@ clap = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
 
+# Serialization
+serde = { workspace = true }
+
 # Config
 figment = { workspace = true }
 

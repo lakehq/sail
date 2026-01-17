@@ -39,6 +39,36 @@ use tonic::{Request, Response, Status, Streaming};
 
 use crate::session::create_sail_session_context;
 
+/// Sail Flight SQL Service implementation
+///
+/// This service provides an Arrow Flight SQL server that executes queries using Sail's
+/// full SQL pipeline: parsing → resolution → optimization → execution.
+///
+/// # Architecture
+///
+/// Uses the **same Sail crates** as `sail-spark-connect` for query processing:
+/// 1. Parse SQL using `sail-sql-analyzer` (shared)
+/// 2. Convert AST to `spec::Plan` (shared)
+/// 3. Resolve plan using `PlanResolver` (shared - handles Spark semantics)
+/// 4. Execute via DataFusion (shared)
+///
+/// # Differences with sail-spark-connect
+///
+/// - **NO SessionManager**: We use a simple shared `SessionContext` instead of
+///   the actor-based multi-session manager (overkill for Flight SQL)
+/// - **NO SparkSession extension**: No job tracking, streaming queries, or heartbeats
+/// - **Simpler session model**: Flight SQL requests are typically stateless
+///
+/// # Current Limitations
+///
+/// - **Streaming**: Results are collected into memory before returning.
+///   TODO: Stream RecordBatches incrementally for large result sets
+///
+/// # Shared components with sail-spark-connect
+///
+/// - `sail_plan`: PlanResolver, PlanConfig, execute_logical_plan
+/// - `sail_sql_analyzer`: SQL parser and AST conversion
+/// - `sail_session`: Optimizer and analyzer rules
 pub struct SailFlightSqlService {
     ctx: Arc<RwLock<SessionContext>>,
     config: Arc<PlanConfig>,
@@ -55,6 +85,27 @@ impl SailFlightSqlService {
     }
 
     /// Execute SQL using Sail's full pipeline (parser + resolver + executor)
+    ///
+    /// # Execution Pipeline (shared with sail-spark-connect)
+    ///
+    /// 1. **Parse SQL** → AST using `sail-sql-analyzer::parse_one_statement()`
+    /// 2. **Convert AST** → `spec::Plan` using `from_ast_statement()`
+    /// 3. **Resolve Plan** → Logical plan using `PlanResolver` (handles Spark semantics)
+    /// 4. **Execute** → Via DataFusion's execution engine
+    ///    ///
+    /// # Arguments
+    ///
+    /// * `query` - SQL query string to execute
+    ///
+    /// # Returns
+    ///
+    /// A single `RecordBatch` containing the query results (first batch only).
+    ///
+    /// # TODO
+    ///
+    /// - Use `sail-plan::resolve_and_execute_plan()` directly instead of manual steps
+    /// - Stream results instead of collecting into memory
+    /// - Support multiple result batches
     async fn execute_sql(&self, query: &str) -> Result<RecordBatch, Status> {
         info!("Executing SQL query: {}", query);
 
@@ -253,7 +304,16 @@ impl FlightSqlService for SailFlightSqlService {
         Ok(Response::new(info))
     }
 
-    // Unimplemented methods
+    // ========================================================================
+    // Unimplemented Flight SQL Operations (Future Work)
+    // ========================================================================
+    //
+    // The following methods are part of the Arrow Flight SQL specification
+    // but are not yet implemented. They return Status::unimplemented() to
+    // indicate to clients that these operations are not supported.
+    //
+    // See ARCHITECTURE.md for implementation roadmap.
+
     async fn get_flight_info_substrait_plan(
         &self,
         _query: CommandStatementSubstraitPlan,
