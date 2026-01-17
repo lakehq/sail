@@ -232,11 +232,15 @@ impl SailFlightSqlService {
         Ok(Arc::new(arrow_schema))
     }
 
+    /// Create an empty batch for DDL statements (no result set expected)
+    ///
+    /// DDL statements (CREATE TABLE, DROP TABLE, etc.) should return 0 rows
+    /// according to JDBC/Flight SQL standards. Clients like DBeaver expect
+    /// either an empty result set or an update count, not a result table.
     fn create_success_batch(&self) -> Result<RecordBatch, Status> {
-        let schema = Schema::new(vec![Field::new("status", DataType::Utf8, false)]);
-        let array = StringArray::from(vec!["OK"]);
-        RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)])
-            .map_err(|e| Status::internal(format!("Failed to create batch: {}", e)))
+        // Return empty schema with 0 rows - this is the standard for DDL
+        let schema = Arc::new(Schema::empty());
+        Ok(RecordBatch::new_empty(schema))
     }
 
     fn create_demo_batch(&self) -> Result<RecordBatch, Status> {
@@ -670,10 +674,35 @@ impl FlightSqlService for SailFlightSqlService {
 
     async fn do_put_prepared_statement_update(
         &self,
-        _query: CommandPreparedStatementUpdate,
+        query: CommandPreparedStatementUpdate,
         _request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
-        Err(Status::unimplemented("do_put_prepared_statement_update"))
+        let sql = String::from_utf8_lossy(&query.prepared_statement_handle).to_string();
+        info!("do_put_prepared_statement_update: SQL = {}", sql);
+
+        // Check if this is a DDL statement that was already executed in do_action_create_prepared_statement
+        if let Some(entry) = self.prepared_cache.get(&sql).await {
+            if entry.was_executed {
+                info!(
+                    "✓ CACHE HIT: DDL already executed in prepare phase, returning success: {}",
+                    sql
+                );
+                // Return 0 for DDL (standard JDBC behavior - no rows affected)
+                return Ok(0);
+            }
+        }
+
+        // If not cached or not executed, execute now
+        info!("Executing update statement: {}", sql);
+        let _batch = self.execute_sql(&sql).await?;
+
+        // Cache the result
+        let schema = Arc::new(Schema::empty());
+        let entry = CacheEntry::new(schema, true);
+        self.prepared_cache.insert(sql.clone(), entry).await;
+
+        // Return 0 for DDL statements (standard JDBC behavior)
+        Ok(0)
     }
 
     async fn do_put_substrait_plan(
@@ -727,13 +756,15 @@ impl FlightSqlService for SailFlightSqlService {
         let is_ddl = Self::is_ddl_statement(&query.query);
 
         // Strategy depends on query type:
-        // - DDL: Execute now (creates table), return success schema
+        // - DDL: Execute now (creates table), return empty schema (DDL has no result set)
         // - SELECT: Only resolve to get schema (don't execute yet)
         let schema = if is_ddl {
             // DDL: Execute now and cache that it's done
             info!("DDL detected, executing immediately: {}", query.query);
-            let batch = self.execute_sql(&query.query).await?;
-            batch.schema()
+            // Execute the DDL statement
+            let _batch = self.execute_sql(&query.query).await?;
+            // DDL statements return empty schema (no result set)
+            Arc::new(Schema::empty())
         } else {
             // SELECT: Only resolve plan to get schema (don't execute)
             info!(
