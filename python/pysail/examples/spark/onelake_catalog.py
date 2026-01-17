@@ -1,8 +1,10 @@
 import os
 import subprocess
 
-from pysail.spark import SparkConnectServer
 from pyspark.sql import SparkSession
+
+from pysail.spark import SparkConnectServer
+
 
 def main():
     # Get Azure access token - use environment variable if set, otherwise use Azure CLI
