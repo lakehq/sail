@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -38,12 +37,8 @@ use sail_sql_analyzer::statement::from_ast_statement;
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status, Streaming};
 
+use crate::cache::{CacheEntry, PreparedStatementCache};
 use crate::session::create_sail_session_context;
-
-/// Type alias for the prepared statement cache.
-///
-/// Key: SQL query, Value: (schema, was_executed flag)
-type PreparedCache = Arc<RwLock<HashMap<String, (Arc<Schema>, bool)>>>;
 
 /// Sail Flight SQL Service implementation
 ///
@@ -79,17 +74,23 @@ pub struct SailFlightSqlService {
     ctx: Arc<RwLock<SessionContext>>,
     config: Arc<PlanConfig>,
     /// Cache for prepared statement results to avoid re-executing DDL statements
-    prepared_cache: PreparedCache,
+    prepared_cache: Arc<PreparedStatementCache>,
 }
 
 impl SailFlightSqlService {
-    pub fn new() -> Self {
+    /// Create a new service with the given cache configuration
+    pub fn new(max_cache_size_bytes: usize, enable_cache_stats: bool) -> Self {
         let ctx = create_sail_session_context();
         let config = Arc::new(PlanConfig::default());
+        let prepared_cache = Arc::new(PreparedStatementCache::new(
+            max_cache_size_bytes,
+            enable_cache_stats,
+        ));
+
         SailFlightSqlService {
             ctx: Arc::new(RwLock::new(ctx)),
             config,
-            prepared_cache: Arc::new(RwLock::new(HashMap::new())),
+            prepared_cache,
         }
     }
 
@@ -180,6 +181,55 @@ impl SailFlightSqlService {
             batch.num_rows()
         );
         Ok(batch)
+    }
+
+    /// Resolve SQL plan to get schema without executing
+    ///
+    /// This is used for prepared statements to get the result schema
+    /// without actually executing the query.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - SQL query string to analyze
+    ///
+    /// # Returns
+    ///
+    /// The schema that would be returned by executing this query
+    async fn get_query_schema(&self, query: &str) -> Result<Arc<Schema>, Status> {
+        info!("Resolving schema WITHOUT executing: {}", query);
+
+        // Step 1: Parse SQL to AST
+        let statement = parse_one_statement(query).map_err(|e| {
+            error!("Parse error for query '{}': {}", query, e);
+            Status::invalid_argument(format!("Parse error: {}", e))
+        })?;
+
+        // Step 2: Convert AST to spec::Plan
+        let plan = from_ast_statement(statement).map_err(|e| {
+            error!("AST conversion error for query '{}': {}", query, e);
+            Status::internal(format!("AST conversion error: {}", e))
+        })?;
+
+        // Step 3: Resolve the plan to get logical plan (and schema)
+        let ctx = self.ctx.read().await;
+        let resolver = PlanResolver::new(&ctx, self.config.clone());
+        let NamedPlan {
+            plan: logical_plan,
+            fields: _,
+        } = resolver.resolve_named_plan(plan).await.map_err(|e| {
+            error!("Plan resolution error for query '{}': {}", query, e);
+            Status::internal(format!("Plan resolution error: {}", e))
+        })?;
+
+        // ✅ Extract schema from logical plan WITHOUT executing
+        let schema = logical_plan.schema();
+        let arrow_schema = schema.inner().as_ref().clone();
+
+        info!(
+            "Schema resolved successfully (NOT executed): {:?}",
+            arrow_schema
+        );
+        Ok(Arc::new(arrow_schema))
     }
 
     fn create_success_batch(&self) -> Result<RecordBatch, Status> {
@@ -354,18 +404,21 @@ impl FlightSqlService for SailFlightSqlService {
         };
         let ticket_bytes = ticket.as_any().encode_to_vec();
 
-        // Check if we already have this cached (for DDL statements)
-        let schema = {
-            let cache = self.prepared_cache.read().await;
-            if let Some((cached_schema, _)) = cache.get(&sql) {
-                debug!("Using cached schema for: {}", sql);
-                cached_schema.clone()
-            } else {
-                drop(cache);
-                // Execute to get schema
-                let batch = self.execute_sql(&sql).await?;
-                batch.schema()
-            }
+        // Check if we already have this cached (should always be the case after do_action_create_prepared_statement)
+        let schema = if let Some(entry) = self.prepared_cache.get(&sql).await {
+            info!(
+                "✓ CACHE HIT in get_flight_info: Using cached schema (was_executed={}) for: {}",
+                entry.was_executed, sql
+            );
+            entry.schema
+        } else {
+            // This shouldn't happen normally, but handle it gracefully
+            // ⚠️ Important: Only resolve schema, never execute here (could be DDL)
+            warn!(
+                "✗ CACHE MISS in get_flight_info: Resolving schema only for: {}",
+                sql
+            );
+            self.get_query_schema(&sql).await?
         };
 
         let endpoint = FlightEndpoint {
@@ -474,10 +527,35 @@ impl FlightSqlService for SailFlightSqlService {
         let sql = String::from_utf8_lossy(&ticket.statement_handle).to_string();
         debug!("do_get_statement: SQL = {}", sql);
 
-        let batch = if sql.trim().eq_ignore_ascii_case("SELECT 1") {
-            self.create_one_batch()?
+        // Check if this is a DDL statement that was already executed
+        let batch = if let Some(entry) = self.prepared_cache.get(&sql).await {
+            if entry.was_executed {
+                info!(
+                    "✓ CACHE HIT in do_get: DDL already executed, returning success batch for: {}",
+                    sql
+                );
+                self.create_success_batch()?
+            } else {
+                info!(
+                    "✓ CACHE HIT in do_get: SELECT query, executing now: {}",
+                    sql
+                );
+                if sql.trim().eq_ignore_ascii_case("SELECT 1") {
+                    self.create_one_batch()?
+                } else {
+                    self.execute_sql(&sql).await?
+                }
+            }
         } else {
-            self.execute_sql(&sql).await?
+            info!(
+                "✗ CACHE MISS in do_get: No cached info, executing query: {}",
+                sql
+            );
+            if sql.trim().eq_ignore_ascii_case("SELECT 1") {
+                self.create_one_batch()?
+            } else {
+                self.execute_sql(&sql).await?
+            }
         };
 
         debug!("do_get_statement: returning {} rows", batch.num_rows());
@@ -613,18 +691,63 @@ impl FlightSqlService for SailFlightSqlService {
     ) -> Result<ActionCreatePreparedStatementResult, Status> {
         info!("do_action_create_prepared_statement: SQL = {}", query.query);
 
+        // Check if already in cache
+        if let Some(entry) = self.prepared_cache.get(&query.query).await {
+            info!(
+                "✓ CACHE HIT: Using cached schema for '{}' (was_executed={})",
+                query.query, entry.was_executed
+            );
+
+            // Return early with cached schema
+            let handle = query.query.clone().into_bytes();
+            let options = IpcWriteOptions::default();
+            let dataset_schema_data = arrow_flight::IpcMessage::try_from(
+                arrow_flight::SchemaAsIpc::new(&entry.schema, &options),
+            )
+            .map_err(|e| Status::internal(format!("Schema conversion error: {}", e)))?;
+
+            let empty_schema = Schema::empty();
+            let param_schema_data = arrow_flight::IpcMessage::try_from(
+                arrow_flight::SchemaAsIpc::new(&empty_schema, &options),
+            )
+            .map_err(|e| Status::internal(format!("Schema conversion error: {}", e)))?;
+
+            return Ok(ActionCreatePreparedStatementResult {
+                prepared_statement_handle: handle.into(),
+                dataset_schema: dataset_schema_data.0,
+                parameter_schema: param_schema_data.0,
+            });
+        }
+
+        info!(
+            "✗ CACHE MISS: Processing new prepared statement for '{}'",
+            query.query
+        );
+
         let is_ddl = Self::is_ddl_statement(&query.query);
 
-        // Execute the query to get schema
-        let batch = self.execute_sql(&query.query).await?;
-        let schema = batch.schema();
+        // Strategy depends on query type:
+        // - DDL: Execute now (creates table), return success schema
+        // - SELECT: Only resolve to get schema (don't execute yet)
+        let schema = if is_ddl {
+            // DDL: Execute now and cache that it's done
+            info!("DDL detected, executing immediately: {}", query.query);
+            let batch = self.execute_sql(&query.query).await?;
+            batch.schema()
+        } else {
+            // SELECT: Only resolve plan to get schema (don't execute)
+            info!(
+                "SELECT detected, resolving plan for schema only: {}",
+                query.query
+            );
+            self.get_query_schema(&query.query).await?
+        };
 
-        // For DDL statements, cache that we already executed it
-        if is_ddl {
-            let mut cache = self.prepared_cache.write().await;
-            cache.insert(query.query.clone(), (schema.clone(), true));
-            debug!("Cached DDL statement as already executed: {}", query.query);
-        }
+        // Cache the schema and execution status
+        // - DDL: was_executed=true (don't re-execute in do_get_statement)
+        // - SELECT: was_executed=false (will execute in do_get_statement)
+        let entry = CacheEntry::new(schema.clone(), is_ddl);
+        self.prepared_cache.insert(query.query.clone(), entry).await;
 
         // Use the query as the prepared statement handle
         let handle = query.query.clone().into_bytes();

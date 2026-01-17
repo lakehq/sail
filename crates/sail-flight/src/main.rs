@@ -1,3 +1,4 @@
+mod cache;
 mod config;
 mod service;
 mod session;
@@ -49,6 +50,14 @@ enum Commands {
         /// Host to bind to
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
+
+        /// Maximum cache size in MB (default: 1024 = 1 GB)
+        #[arg(long, default_value = "1024")]
+        cache_size_mb: usize,
+
+        /// Disable cache statistics logging
+        #[arg(long, default_value = "false")]
+        disable_cache_stats: bool,
     },
 }
 
@@ -64,10 +73,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Server { port, host } => {
+        Commands::Server {
+            port,
+            host,
+            cache_size_mb,
+            disable_cache_stats,
+        } => {
             let mut config = FlightSqlServerConfig::default();
             config.server.host = host.clone();
             config.server.port = *port;
+            config.cache.max_size_bytes = cache_size_mb * 1024 * 1024; // Convert MB to bytes
+            config.cache.enable_stats = !disable_cache_stats;
 
             if let Err(e) = run_flight_server(config).await {
                 error!("Server error: {}", e);
@@ -87,9 +103,21 @@ async fn run_flight_server(
     info!("Configuration:");
     info!("  Host: {}", config.server.host);
     info!("  Port: {}", config.server.port);
+    info!(
+        "  Cache max size: {} MB",
+        config.cache.max_size_bytes / (1024 * 1024)
+    );
+    info!(
+        "  Cache stats: {}",
+        if config.cache.enable_stats {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
 
     let addr = config.bind_address()?;
-    let service = SailFlightSqlService::new();
+    let service = SailFlightSqlService::new(config.cache.max_size_bytes, config.cache.enable_stats);
 
     info!("✓ Server listening on {}", addr);
     info!("Connection strings:");

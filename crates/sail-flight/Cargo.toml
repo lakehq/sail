@@ -44,5 +44,8 @@ serde = { workspace = true }
 # Config
 figment = { workspace = true }
 
+# Cache
+lru = "0.12"
+
 [build-dependencies]
 tonic-build = { workspace = true }
