@@ -40,6 +40,11 @@ use tonic::{Request, Response, Status, Streaming};
 
 use crate::session::create_sail_session_context;
 
+/// Type alias for the prepared statement cache.
+///
+/// Key: SQL query, Value: (schema, was_executed flag)
+type PreparedCache = Arc<RwLock<HashMap<String, (Arc<Schema>, bool)>>>;
+
 /// Sail Flight SQL Service implementation
 ///
 /// This service provides an Arrow Flight SQL server that executes queries using Sail's
@@ -74,8 +79,7 @@ pub struct SailFlightSqlService {
     ctx: Arc<RwLock<SessionContext>>,
     config: Arc<PlanConfig>,
     /// Cache for prepared statement results to avoid re-executing DDL statements
-    /// Key: SQL query, Value: (schema, was_executed flag)
-    prepared_cache: Arc<RwLock<HashMap<String, (Arc<Schema>, bool)>>>,
+    prepared_cache: PreparedCache,
 }
 
 impl SailFlightSqlService {
