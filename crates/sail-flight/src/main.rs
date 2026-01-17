@@ -3,6 +3,7 @@ mod session;
 
 use arrow_flight::flight_service_server::FlightServiceServer;
 use clap::{Parser, Subcommand};
+use log::{error, info};
 use service::SailFlightSqlService;
 use tonic::transport::Server;
 
@@ -31,11 +32,17 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize env_logger with default level INFO
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
     let cli = Cli::parse();
 
     match &cli.command {
         Commands::Server { port, host } => {
-            run_flight_server(host, *port).await?;
+            if let Err(e) = run_flight_server(host, *port).await {
+                error!("Server error: {}", e);
+                return Err(e);
+            }
         }
     }
 
@@ -43,13 +50,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn run_flight_server(host: &str, port: u16) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Starting Sail Arrow Flight SQL Server...");
+    info!("Starting Sail Arrow Flight SQL Server...");
 
     let addr = format!("{}:{}", host, port).parse()?;
     let service = SailFlightSqlService::new();
 
-    println!("Server listening on {}", addr);
-    println!("JDBC connection: jdbc:arrow-flight-sql://{}:{}", host, port);
+    info!("Server listening on {}", addr);
+    info!("JDBC connection: jdbc:arrow-flight-sql://{}:{}", host, port);
 
     Server::builder()
         .add_service(FlightServiceServer::new(service))

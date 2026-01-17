@@ -26,6 +26,7 @@ use arrow_flight::{
 };
 use datafusion::prelude::SessionContext;
 use futures::{stream, Stream, StreamExt};
+use log::{debug, error, info, warn};
 use prost::Message;
 use sail_plan::config::PlanConfig;
 use sail_plan::execute_logical_plan;
@@ -55,43 +56,61 @@ impl SailFlightSqlService {
 
     /// Execute SQL using Sail's full pipeline (parser + resolver + executor)
     async fn execute_sql(&self, query: &str) -> Result<RecordBatch, Status> {
-        println!("Executing SQL (Sail): {}", query);
+        info!("Executing SQL query: {}", query);
 
         // Step 1: Parse SQL to AST using Sail's parser
-        let statement = parse_one_statement(query)
-            .map_err(|e| Status::internal(format!("Parse error: {}", e)))?;
+        let statement = parse_one_statement(query).map_err(|e| {
+            error!("Parse error for query '{}': {}", query, e);
+            Status::invalid_argument(format!("Parse error: {}", e))
+        })?;
 
         // Step 2: Convert AST to spec::Plan
-        let plan = from_ast_statement(statement)
-            .map_err(|e| Status::internal(format!("AST conversion error: {}", e)))?;
+        let plan = from_ast_statement(statement).map_err(|e| {
+            error!("AST conversion error for query '{}': {}", query, e);
+            Status::internal(format!("AST conversion error: {}", e))
+        })?;
 
         // Step 3: Resolve the plan using PlanResolver
         let ctx = self.ctx.read().await;
         let resolver = PlanResolver::new(&ctx, self.config.clone());
-        let NamedPlan { plan: logical_plan, fields: _ } = resolver
-            .resolve_named_plan(plan)
-            .await
-            .map_err(|e| Status::internal(format!("Plan resolution error: {}", e)))?;
+        let NamedPlan {
+            plan: logical_plan,
+            fields: _,
+        } = resolver.resolve_named_plan(plan).await.map_err(|e| {
+            error!("Plan resolution error for query '{}': {}", query, e);
+            Status::internal(format!("Plan resolution error: {}", e))
+        })?;
 
         // Step 4: Execute the logical plan
         let df = execute_logical_plan(&ctx, logical_plan)
             .await
-            .map_err(|e| Status::internal(format!("Execution error: {}", e)))?;
+            .map_err(|e| {
+                error!("Execution error for query '{}': {}", query, e);
+                Status::internal(format!("Execution error: {}", e))
+            })?;
 
         // Step 5: Collect results
-        let batches = df
-            .collect()
-            .await
-            .map_err(|e| Status::internal(format!("Collection error: {}", e)))?;
+        let batches = df.collect().await.map_err(|e| {
+            error!("Collection error for query '{}': {}", query, e);
+            Status::internal(format!("Collection error: {}", e))
+        })?;
 
         if batches.is_empty() {
+            debug!("Query returned no rows, returning success batch");
             return self.create_success_batch();
         }
 
-        Ok(batches.into_iter().next().unwrap_or_else(|| {
+        let batch = batches.into_iter().next().unwrap_or_else(|| {
+            warn!("Empty batch iterator, returning success batch");
             self.create_success_batch()
                 .unwrap_or_else(|_| RecordBatch::new_empty(Arc::new(Schema::empty())))
-        }))
+        });
+
+        info!(
+            "Query executed successfully, returning {} rows",
+            batch.num_rows()
+        );
+        Ok(batch)
     }
 
     fn create_success_batch(&self) -> Result<RecordBatch, Status> {
@@ -142,7 +161,7 @@ impl FlightSqlService for SailFlightSqlService {
         Response<Pin<Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send>>>,
         Status,
     > {
-        println!("Handshake received");
+        debug!("Handshake received from client");
         let response = HandshakeResponse {
             protocol_version: 0,
             payload: Default::default(),
@@ -157,7 +176,7 @@ impl FlightSqlService for SailFlightSqlService {
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
         let sql = query.query.clone();
-        println!("get_flight_info_statement: SQL = {}", sql);
+        debug!("get_flight_info_statement: SQL = {}", sql);
 
         // Create ticket containing the SQL query
         let ticket = TicketStatementQuery {
@@ -194,7 +213,7 @@ impl FlightSqlService for SailFlightSqlService {
         _request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         let sql = String::from_utf8_lossy(&ticket.statement_handle).to_string();
-        println!("do_get_statement: SQL = {}", sql);
+        debug!("do_get_statement: SQL = {}", sql);
 
         let batch = if sql.trim().eq_ignore_ascii_case("SELECT 1") {
             self.create_one_batch()?
@@ -202,7 +221,7 @@ impl FlightSqlService for SailFlightSqlService {
             self.execute_sql(&sql).await?
         };
 
-        println!("do_get_statement: returning {} rows", batch.num_rows());
+        debug!("do_get_statement: returning {} rows", batch.num_rows());
 
         let schema = batch.schema();
         let batches = vec![Ok(batch)];
@@ -222,11 +241,11 @@ impl FlightSqlService for SailFlightSqlService {
         _message: Any,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         let ticket_data = request.into_inner().ticket;
-        println!("do_get_fallback: ticket_data len = {}", ticket_data.len());
+        debug!("do_get_fallback: ticket_data len = {}", ticket_data.len());
 
         if let Ok(ticket) = TicketStatementQuery::decode(ticket_data.as_ref()) {
             let sql = String::from_utf8_lossy(&ticket.statement_handle).to_string();
-            println!("do_get_fallback: decoded SQL = {}", sql);
+            debug!("do_get_fallback: decoded SQL = {}", sql);
 
             let batch = if sql.trim().eq_ignore_ascii_case("SELECT 1") {
                 self.create_one_batch()?
@@ -248,7 +267,7 @@ impl FlightSqlService for SailFlightSqlService {
             return Ok(Response::new(Box::pin(flight_data_stream)));
         }
 
-        println!("do_get_fallback: using demo data");
+        debug!("do_get_fallback: using demo data");
         let batch = self.create_demo_batch()?;
         let schema = batch.schema();
         let batches = vec![Ok(batch)];
@@ -277,7 +296,7 @@ impl FlightSqlService for SailFlightSqlService {
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
         let sql = String::from_utf8_lossy(&cmd.prepared_statement_handle).to_string();
-        println!("get_flight_info_prepared_statement: SQL = {}", sql);
+        debug!("get_flight_info_prepared_statement: SQL = {}", sql);
 
         // Create ticket for do_get
         let ticket = TicketStatementQuery {
@@ -504,7 +523,10 @@ impl FlightSqlService for SailFlightSqlService {
         query: ActionCreatePreparedStatementRequest,
         _request: Request<Action>,
     ) -> Result<ActionCreatePreparedStatementResult, Status> {
-        println!("do_action_create_prepared_statement: SQL = {}", query.query);
+        info!(
+            "do_action_create_prepared_statement: SQL = {}",
+            query.query
+        );
 
         // Execute the query to get schema
         let batch = self.execute_sql(&query.query).await?;
@@ -537,7 +559,7 @@ impl FlightSqlService for SailFlightSqlService {
         _request: Request<Action>,
     ) -> Result<(), Status> {
         let sql = String::from_utf8_lossy(&query.prepared_statement_handle).to_string();
-        println!("do_action_close_prepared_statement: SQL = {}", sql);
+        debug!("do_action_close_prepared_statement: SQL = {}", sql);
         // Nothing to clean up in this simple implementation
         Ok(())
     }
