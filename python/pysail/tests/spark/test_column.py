@@ -77,3 +77,27 @@ def test_get_item_nested_map(spark):
     assert df.select(df.a.getItem("b").getItem(1)).collect() == [Row(**{"a.b[1]": 2})]
     df = spark.sql("SELECT map('b', map(1, 2)) AS a")
     assert df.select(df.a.getItem("b").getItem(1)).collect() == [Row(**{"a[b][1]": 2})]
+
+
+def test_try_cast_invalid_date(spark):
+    """Test that try_cast returns NULL for invalid date/timestamp values.
+
+    See: https://github.com/lakehq/sail/issues/1192
+    """
+    # try_cast was added in Spark 4.0
+    col = F.col("x")
+    if not callable(getattr(col, "try_cast", None)):
+        pytest.skip("try_cast not available in this Spark version")
+
+    df = spark.createDataFrame(
+        schema="id STRING, some_date STRING",
+        data=[("a", "2025-99-99")],
+    )
+    result = df.select(
+        F.col("id").try_cast("integer").alias("id"),
+        F.col("some_date").try_cast("date").alias("date_col"),
+        F.col("some_date").try_cast("timestamp").alias("ts_col"),
+        F.col("some_date").try_cast("timestamp_ntz").alias("ts_ntz_col"),
+    ).collect()
+
+    assert result == [Row(id=None, date_col=None, ts_col=None, ts_ntz_col=None)]

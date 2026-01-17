@@ -21,25 +21,43 @@ enum TimestampParser {
 }
 
 impl TimestampParser {
-    fn string_to_microseconds(&self, value: &str) -> Result<i64> {
+    fn string_to_microseconds(&self, value: &str, is_try: bool) -> Result<Option<i64>> {
         match self {
             TimestampParser::Ltz { default_timezone } => {
-                let (datetime, timezone) = parse_timestamp(value)
-                    .and_then(|x| x.into_naive())
-                    .map_err(|e| exec_datafusion_err!("{e}"))?;
-                let timezone: Tz = if timezone.is_empty() {
-                    default_timezone.parse()?
-                } else {
-                    timezone.parse()?
+                let parsed = parse_timestamp(value).and_then(|x| x.into_naive());
+                let (datetime, timezone) = match parsed {
+                    Ok(v) => v,
+                    Err(e) if is_try => return Ok(None),
+                    Err(e) => return Err(exec_datafusion_err!("{e}")),
                 };
-                let datetime = localize_with_fallback(&timezone, &datetime)?;
-                Ok(datetime.timestamp_micros())
+                let timezone: Tz = if timezone.is_empty() {
+                    match default_timezone.parse() {
+                        Ok(v) => v,
+                        Err(e) if is_try => return Ok(None),
+                        Err(e) => return Err(e.into()),
+                    }
+                } else {
+                    match timezone.parse() {
+                        Ok(v) => v,
+                        Err(e) if is_try => return Ok(None),
+                        Err(e) => return Err(e.into()),
+                    }
+                };
+                let datetime = match localize_with_fallback(&timezone, &datetime) {
+                    Ok(v) => v,
+                    Err(e) if is_try => return Ok(None),
+                    Err(e) => return Err(e),
+                };
+                Ok(Some(datetime.timestamp_micros()))
             }
             TimestampParser::Ntz => {
-                let (datetime, _timezone) = parse_timestamp(value)
-                    .and_then(|x| x.into_naive())
-                    .map_err(|e| exec_datafusion_err!("{e}"))?;
-                Ok(datetime.and_utc().timestamp_micros())
+                let parsed = parse_timestamp(value).and_then(|x| x.into_naive());
+                let (datetime, _timezone) = match parsed {
+                    Ok(v) => v,
+                    Err(e) if is_try => return Ok(None),
+                    Err(e) => return Err(exec_datafusion_err!("{e}")),
+                };
+                Ok(Some(datetime.and_utc().timestamp_micros()))
             }
         }
     }
@@ -50,10 +68,15 @@ pub struct SparkTimestamp {
     timezone: Option<Arc<str>>,
     parser: TimestampParser,
     signature: Signature,
+    is_try: bool,
 }
 
 impl SparkTimestamp {
-    pub fn try_new(timezone: Option<Arc<str>>) -> Result<Self> {
+    /// Creates a SparkTimestamp.
+    ///
+    /// When `is_try` is true, returns NULL on invalid input (for try_cast).
+    /// When `is_try` is false, throws an error on invalid input (for cast).
+    pub fn try_new(timezone: Option<Arc<str>>, is_try: bool) -> Result<Self> {
         let parser = if let Some(ref timezone) = timezone {
             TimestampParser::Ltz {
                 default_timezone: timezone.as_ref().to_string(),
@@ -70,11 +93,16 @@ impl SparkTimestamp {
                 ))],
                 Volatility::Immutable,
             ),
+            is_try,
         })
     }
 
     pub fn timezone(&self) -> Option<&str> {
         self.timezone.as_deref()
+    }
+
+    pub fn is_try(&self) -> bool {
+        self.is_try
     }
 }
 
@@ -101,20 +129,33 @@ impl ScalarUDFImpl for SparkTimestamp {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
         let arg = args.one()?;
+        let is_try = self.is_try;
         match arg {
             ColumnarValue::Array(array) => {
                 let array: PrimitiveArray<TimestampMicrosecondType> = match array.data_type() {
                     DataType::Utf8 => as_string_array(&array)?
                         .iter()
-                        .map(|x| x.map(|x| self.parser.string_to_microseconds(x)).transpose())
+                        .map(|x| {
+                            x.map(|v| self.parser.string_to_microseconds(v, is_try))
+                                .transpose()
+                                .map(|opt| opt.flatten())
+                        })
                         .collect::<Result<_>>()?,
                     DataType::LargeUtf8 => as_large_string_array(&array)?
                         .iter()
-                        .map(|x| x.map(|x| self.parser.string_to_microseconds(x)).transpose())
+                        .map(|x| {
+                            x.map(|v| self.parser.string_to_microseconds(v, is_try))
+                                .transpose()
+                                .map(|opt| opt.flatten())
+                        })
                         .collect::<Result<_>>()?,
                     DataType::Utf8View => as_string_view_array(&array)?
                         .iter()
-                        .map(|x| x.map(|x| self.parser.string_to_microseconds(x)).transpose())
+                        .map(|x| {
+                            x.map(|v| self.parser.string_to_microseconds(v, is_try))
+                                .transpose()
+                                .map(|opt| opt.flatten())
+                        })
                         .collect::<Result<_>>()?,
                     _ => return exec_err!("expected string array for `timestamp`"),
                 };
@@ -124,8 +165,9 @@ impl ScalarUDFImpl for SparkTimestamp {
             ColumnarValue::Scalar(scalar) => {
                 let value = match scalar.try_as_str() {
                     Some(x) => x
-                        .map(|x| self.parser.string_to_microseconds(x))
-                        .transpose()?,
+                        .map(|v| self.parser.string_to_microseconds(v, is_try))
+                        .transpose()?
+                        .flatten(),
                     _ => {
                         return exec_err!("expected string scalar for `timestamp`");
                     }
