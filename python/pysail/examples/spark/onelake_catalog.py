@@ -12,10 +12,20 @@ def main():
     if not token:
         print("AZURE_STORAGE_TOKEN not set, fetching from Azure CLI...")
         result = subprocess.run(
-            ["az.cmd", "account", "get-access-token", "--resource", "https://storage.azure.com/", "--query", "accessToken", "-o", "tsv"],  # noqa: S607
+            [
+                "az.cmd",
+                "account",
+                "get-access-token",
+                "--resource",
+                "https://storage.azure.com/",
+                "--query",
+                "accessToken",
+                "-o",
+                "tsv",
+            ],  # noqa: S607
             capture_output=True,
             text=True,
-            check=True
+            check=True,
         )
         token = result.stdout.strip()
     else:
