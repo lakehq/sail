@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -72,6 +73,9 @@ use crate::session::create_sail_session_context;
 pub struct SailFlightSqlService {
     ctx: Arc<RwLock<SessionContext>>,
     config: Arc<PlanConfig>,
+    /// Cache for prepared statement results to avoid re-executing DDL statements
+    /// Key: SQL query, Value: (schema, was_executed flag)
+    prepared_cache: Arc<RwLock<HashMap<String, (Arc<Schema>, bool)>>>,
 }
 
 impl SailFlightSqlService {
@@ -81,7 +85,17 @@ impl SailFlightSqlService {
         SailFlightSqlService {
             ctx: Arc::new(RwLock::new(ctx)),
             config,
+            prepared_cache: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Check if a SQL statement is DDL (Data Definition Language)
+    fn is_ddl_statement(sql: &str) -> bool {
+        let upper = sql.trim().to_uppercase();
+        upper.starts_with("CREATE ")
+            || upper.starts_with("DROP ")
+            || upper.starts_with("ALTER ")
+            || upper.starts_with("TRUNCATE ")
     }
 
     /// Execute SQL using Sail's full pipeline (parser + resolver + executor)
@@ -336,9 +350,19 @@ impl FlightSqlService for SailFlightSqlService {
         };
         let ticket_bytes = ticket.as_any().encode_to_vec();
 
-        // Execute to get schema
-        let batch = self.execute_sql(&sql).await?;
-        let schema = batch.schema();
+        // Check if we already have this cached (for DDL statements)
+        let schema = {
+            let cache = self.prepared_cache.read().await;
+            if let Some((cached_schema, _)) = cache.get(&sql) {
+                debug!("Using cached schema for: {}", sql);
+                cached_schema.clone()
+            } else {
+                drop(cache);
+                // Execute to get schema
+                let batch = self.execute_sql(&sql).await?;
+                batch.schema()
+            }
+        };
 
         let endpoint = FlightEndpoint {
             ticket: Some(Ticket {
@@ -585,9 +609,18 @@ impl FlightSqlService for SailFlightSqlService {
     ) -> Result<ActionCreatePreparedStatementResult, Status> {
         info!("do_action_create_prepared_statement: SQL = {}", query.query);
 
+        let is_ddl = Self::is_ddl_statement(&query.query);
+
         // Execute the query to get schema
         let batch = self.execute_sql(&query.query).await?;
         let schema = batch.schema();
+
+        // For DDL statements, cache that we already executed it
+        if is_ddl {
+            let mut cache = self.prepared_cache.write().await;
+            cache.insert(query.query.clone(), (schema.clone(), true));
+            debug!("Cached DDL statement as already executed: {}", query.query);
+        }
 
         // Use the query as the prepared statement handle
         let handle = query.query.clone().into_bytes();

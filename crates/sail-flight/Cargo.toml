@@ -13,9 +13,12 @@ path = "src/main.rs"
 # Sail crates
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-catalog = { path = "../sail-catalog" }
+sail-catalog-memory = { path = "../sail-catalog-memory" }
 sail-plan = { path = "../sail-plan" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 sail-session = { path = "../sail-session" }
+sail-telemetry = { path = "../sail-telemetry" }
 
 # Arrow / DataFusion
 arrow = { workspace = true }

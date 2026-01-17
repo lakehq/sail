@@ -2,10 +2,14 @@ mod config;
 mod service;
 mod session;
 
+use std::sync::Arc;
+
 use arrow_flight::flight_service_server::FlightServiceServer;
 use clap::{Parser, Subcommand};
 use config::FlightSqlServerConfig;
 use log::{error, info};
+use sail_common::config::AppConfig;
+use sail_telemetry::telemetry::{init_telemetry, shutdown_telemetry, ResourceOptions};
 use service::SailFlightSqlService;
 use tonic::transport::Server;
 
@@ -50,8 +54,12 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize env_logger with default level INFO
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    // Initialize telemetry/tracing
+    let app_config = Arc::new(AppConfig::load()?);
+    let resource = ResourceOptions {
+        kind: "flight-server",
+    };
+    init_telemetry(&app_config.telemetry, resource)?;
 
     let cli = Cli::parse();
 
@@ -68,6 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    shutdown_telemetry();
     Ok(())
 }
 
@@ -97,5 +106,6 @@ async fn run_flight_server(
         .serve(addr)
         .await?;
 
+    info!("Server stopped.");
     Ok(())
 }
