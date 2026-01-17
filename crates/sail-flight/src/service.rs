@@ -1,6 +1,5 @@
 use std::pin::Pin;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 use arrow::array::{Int32Array, Int64Array, Float64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
@@ -28,46 +27,71 @@ use arrow_flight::{
 use datafusion::prelude::SessionContext;
 use futures::{stream, Stream, StreamExt};
 use prost::Message;
+use sail_plan::config::PlanConfig;
+use sail_plan::execute_logical_plan;
+use sail_plan::resolver::plan::NamedPlan;
+use sail_plan::resolver::PlanResolver;
+use sail_sql_analyzer::parser::parse_one_statement;
+use sail_sql_analyzer::statement::from_ast_statement;
+use tokio::sync::RwLock;
 use tonic::{Request, Response, Status, Streaming};
+
+use crate::session::create_sail_session_context;
 
 pub struct SailFlightSqlService {
     ctx: Arc<RwLock<SessionContext>>,
+    config: Arc<PlanConfig>,
 }
 
 impl SailFlightSqlService {
     pub fn new() -> Self {
-        let ctx = SessionContext::new();
+        let ctx = create_sail_session_context();
+        let config = Arc::new(PlanConfig::default());
         SailFlightSqlService {
             ctx: Arc::new(RwLock::new(ctx)),
+            config,
         }
     }
 
+    /// Execute SQL using Sail's full pipeline (parser + resolver + executor)
     async fn execute_sql(&self, query: &str) -> Result<RecordBatch, Status> {
-        println!("Executing SQL: {}", query);
+        println!("Executing SQL (Sail): {}", query);
 
+        // Step 1: Parse SQL to AST using Sail's parser
+        let statement = parse_one_statement(query)
+            .map_err(|e| Status::internal(format!("Parse error: {}", e)))?;
+
+        // Step 2: Convert AST to spec::Plan
+        let plan = from_ast_statement(statement)
+            .map_err(|e| Status::internal(format!("AST conversion error: {}", e)))?;
+
+        // Step 3: Resolve the plan using PlanResolver
         let ctx = self.ctx.read().await;
-        match ctx.sql(query).await {
-            Ok(df) => {
-                let batches = df
-                    .collect()
-                    .await
-                    .map_err(|e| Status::internal(format!("Query execution failed: {}", e)))?;
+        let resolver = PlanResolver::new(&ctx, self.config.clone());
+        let NamedPlan { plan: logical_plan, fields: _ } = resolver
+            .resolve_named_plan(plan)
+            .await
+            .map_err(|e| Status::internal(format!("Plan resolution error: {}", e)))?;
 
-                if batches.is_empty() {
-                    // DDL commands return empty results - this is OK
-                    return self.create_success_batch();
-                }
+        // Step 4: Execute the logical plan
+        let df = execute_logical_plan(&ctx, logical_plan)
+            .await
+            .map_err(|e| Status::internal(format!("Execution error: {}", e)))?;
 
-                Ok(batches.into_iter().next().unwrap_or_else(|| {
-                    self.create_success_batch()
-                        .unwrap_or_else(|_| RecordBatch::new_empty(Arc::new(Schema::empty())))
-                }))
-            }
-            Err(e) => {
-                println!("DataFusion error: {}", e);
-                Err(Status::internal(format!("SQL error: {}", e)))
-            }
+        // Step 5: Collect results
+        let batches = df
+            .collect()
+            .await
+            .map_err(|e| Status::internal(format!("Collection error: {}", e)))?;
+
+        if batches.is_empty() {
+            return self.create_success_batch();
         }
+
+        Ok(batches.into_iter().next().unwrap_or_else(|| {
+            self.create_success_batch()
+                .unwrap_or_else(|_| RecordBatch::new_empty(Arc::new(Schema::empty())))
+        }))
     }
 
     fn create_success_batch(&self) -> Result<RecordBatch, Status> {

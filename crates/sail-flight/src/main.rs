@@ -1,4 +1,5 @@
 mod service;
+mod session;
 
 use arrow_flight::flight_service_server::FlightServiceServer;
 use clap::{Parser, Subcommand};
