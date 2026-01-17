@@ -20,6 +20,14 @@ except ImportError:
     ADBC_AVAILABLE = False
     dbapi = None
 
+# Import pyarrow.flight for low-level Flight operations
+try:
+    import pyarrow.flight as flight
+    PYARROW_FLIGHT_AVAILABLE = True
+except ImportError:
+    PYARROW_FLIGHT_AVAILABLE = False
+    flight = None
+
 
 pytestmark = pytest.mark.skipif(
     not ADBC_AVAILABLE,
@@ -166,6 +174,23 @@ def test_flight_error_handling(flight_connection):
     with pytest.raises(Exception):  # Should raise some kind of error
         cur.execute("SELECT * FROM nonexistent_table_12345")
         cur.fetchall()
+
+    cur.close()
+
+
+def test_flight_not_implemented_function(flight_connection):
+    """Test that unimplemented SQL functions return proper error."""
+    cur = flight_connection.cursor()
+
+    # json_tuple is not yet implemented
+    with pytest.raises(Exception) as exc_info:
+        cur.execute("SELECT json_tuple('{\"a\":1,\"b\":2}', 'a', 'b')")
+        cur.fetchall()
+
+    # Verify the error message indicates the function is not implemented
+    error_message = str(exc_info.value).lower()
+    assert "not" in error_message and ("implemented" in error_message or "found" in error_message), \
+        f"Expected function not implemented error, but got: {exc_info.value}"
 
     cur.close()
 

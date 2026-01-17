@@ -1,7 +1,7 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
-use arrow::array::{Int32Array, Int64Array, Float64Array, StringArray};
+use arrow::array::{Float64Array, Int32Array, Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ipc::writer::IpcWriteOptions;
 use arrow::record_batch::RecordBatch;
@@ -170,71 +170,6 @@ impl FlightSqlService for SailFlightSqlService {
         Ok(Response::new(Box::pin(stream)))
     }
 
-    async fn get_flight_info_statement(
-        &self,
-        query: CommandStatementQuery,
-        request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        let sql = query.query.clone();
-        debug!("get_flight_info_statement: SQL = {}", sql);
-
-        // Create ticket containing the SQL query
-        let ticket = TicketStatementQuery {
-            statement_handle: sql.clone().into_bytes().into(),
-        };
-        let ticket_bytes = ticket.as_any().encode_to_vec();
-
-        // Execute to get schema
-        let batch = self.execute_sql(&sql).await?;
-        let schema = batch.schema();
-
-        let endpoint = FlightEndpoint {
-            ticket: Some(Ticket {
-                ticket: ticket_bytes.into(),
-            }),
-            location: vec![],
-            expiration_time: None,
-            app_metadata: Default::default(),
-        };
-
-        // Use the builder pattern which handles schema encoding
-        let info = FlightInfo::new()
-            .with_endpoint(endpoint)
-            .with_descriptor(request.into_inner())
-            .try_with_schema(&schema)
-            .map_err(|e| Status::internal(format!("Schema error: {}", e)))?;
-
-        Ok(Response::new(info))
-    }
-
-    async fn do_get_statement(
-        &self,
-        ticket: TicketStatementQuery,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        let sql = String::from_utf8_lossy(&ticket.statement_handle).to_string();
-        debug!("do_get_statement: SQL = {}", sql);
-
-        let batch = if sql.trim().eq_ignore_ascii_case("SELECT 1") {
-            self.create_one_batch()?
-        } else {
-            self.execute_sql(&sql).await?
-        };
-
-        debug!("do_get_statement: returning {} rows", batch.num_rows());
-
-        let schema = batch.schema();
-        let batches = vec![Ok(batch)];
-        let batch_stream = futures::stream::iter(batches);
-
-        let flight_data_stream = FlightDataEncoderBuilder::new()
-            .with_schema(schema)
-            .build(batch_stream)
-            .map(|result| result.map_err(|e| Status::internal(format!("Encoding error: {}", e))));
-
-        Ok(Response::new(Box::pin(flight_data_stream)))
-    }
-
     async fn do_get_fallback(
         &self,
         request: Request<Ticket>,
@@ -279,6 +214,43 @@ impl FlightSqlService for SailFlightSqlService {
             .map(|result| result.map_err(|e| Status::internal(format!("Encoding error: {}", e))));
 
         Ok(Response::new(Box::pin(flight_data_stream)))
+    }
+
+    async fn get_flight_info_statement(
+        &self,
+        query: CommandStatementQuery,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        let sql = query.query.clone();
+        debug!("get_flight_info_statement: SQL = {}", sql);
+
+        // Create ticket containing the SQL query
+        let ticket = TicketStatementQuery {
+            statement_handle: sql.clone().into_bytes().into(),
+        };
+        let ticket_bytes = ticket.as_any().encode_to_vec();
+
+        // Execute to get schema
+        let batch = self.execute_sql(&sql).await?;
+        let schema = batch.schema();
+
+        let endpoint = FlightEndpoint {
+            ticket: Some(Ticket {
+                ticket: ticket_bytes.into(),
+            }),
+            location: vec![],
+            expiration_time: None,
+            app_metadata: Default::default(),
+        };
+
+        // Use the builder pattern which handles schema encoding
+        let info = FlightInfo::new()
+            .with_endpoint(endpoint)
+            .with_descriptor(request.into_inner())
+            .try_with_schema(&schema)
+            .map_err(|e| Status::internal(format!("Schema error: {}", e)))?;
+
+        Ok(Response::new(info))
     }
 
     // Unimplemented methods
@@ -406,6 +378,34 @@ impl FlightSqlService for SailFlightSqlService {
         Err(Status::unimplemented("get_flight_info_xdbc_type_info"))
     }
 
+    async fn do_get_statement(
+        &self,
+        ticket: TicketStatementQuery,
+        _request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        let sql = String::from_utf8_lossy(&ticket.statement_handle).to_string();
+        debug!("do_get_statement: SQL = {}", sql);
+
+        let batch = if sql.trim().eq_ignore_ascii_case("SELECT 1") {
+            self.create_one_batch()?
+        } else {
+            self.execute_sql(&sql).await?
+        };
+
+        debug!("do_get_statement: returning {} rows", batch.num_rows());
+
+        let schema = batch.schema();
+        let batches = vec![Ok(batch)];
+        let batch_stream = futures::stream::iter(batches);
+
+        let flight_data_stream = FlightDataEncoderBuilder::new()
+            .with_schema(schema)
+            .build(batch_stream)
+            .map(|result| result.map_err(|e| Status::internal(format!("Encoding error: {}", e))));
+
+        Ok(Response::new(Box::pin(flight_data_stream)))
+    }
+
     async fn do_get_catalogs(
         &self,
         _query: CommandGetCatalogs,
@@ -494,14 +494,6 @@ impl FlightSqlService for SailFlightSqlService {
         Err(Status::unimplemented("do_put_statement_update"))
     }
 
-    async fn do_put_substrait_plan(
-        &self,
-        _ticket: CommandStatementSubstraitPlan,
-        _request: Request<PeekableFlightDataStream>,
-    ) -> Result<i64, Status> {
-        Err(Status::unimplemented("do_put_substrait_plan"))
-    }
-
     async fn do_put_prepared_statement_query(
         &self,
         _query: CommandPreparedStatementQuery,
@@ -518,15 +510,20 @@ impl FlightSqlService for SailFlightSqlService {
         Err(Status::unimplemented("do_put_prepared_statement_update"))
     }
 
+    async fn do_put_substrait_plan(
+        &self,
+        _ticket: CommandStatementSubstraitPlan,
+        _request: Request<PeekableFlightDataStream>,
+    ) -> Result<i64, Status> {
+        Err(Status::unimplemented("do_put_substrait_plan"))
+    }
+
     async fn do_action_create_prepared_statement(
         &self,
         query: ActionCreatePreparedStatementRequest,
         _request: Request<Action>,
     ) -> Result<ActionCreatePreparedStatementResult, Status> {
-        info!(
-            "do_action_create_prepared_statement: SQL = {}",
-            query.query
-        );
+        info!("do_action_create_prepared_statement: SQL = {}", query.query);
 
         // Execute the query to get schema
         let batch = self.execute_sql(&query.query).await?;
@@ -537,14 +534,16 @@ impl FlightSqlService for SailFlightSqlService {
 
         // Convert schema to IPC bytes
         let options = IpcWriteOptions::default();
-        let dataset_schema_data = arrow_flight::IpcMessage::try_from(
-            arrow_flight::SchemaAsIpc::new(&schema, &options)
-        ).map_err(|e| Status::internal(format!("Schema conversion error: {}", e)))?;
+        let dataset_schema_data =
+            arrow_flight::IpcMessage::try_from(arrow_flight::SchemaAsIpc::new(&schema, &options))
+                .map_err(|e| Status::internal(format!("Schema conversion error: {}", e)))?;
 
         let empty_schema = Schema::empty();
-        let param_schema_data = arrow_flight::IpcMessage::try_from(
-            arrow_flight::SchemaAsIpc::new(&empty_schema, &options)
-        ).map_err(|e| Status::internal(format!("Schema conversion error: {}", e)))?;
+        let param_schema_data = arrow_flight::IpcMessage::try_from(arrow_flight::SchemaAsIpc::new(
+            &empty_schema,
+            &options,
+        ))
+        .map_err(|e| Status::internal(format!("Schema conversion error: {}", e)))?;
 
         Ok(ActionCreatePreparedStatementResult {
             prepared_statement_handle: handle.into(),
