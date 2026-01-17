@@ -158,7 +158,7 @@ jiter = { version = "0.11.1" }
 arrow = { version = "57.1.0", features = ["chrono-tz"] }
 arrow-buffer = { version = "57.1.0" }
 arrow-schema = { version = "57.1.0", features = ["serde"] }
-arrow-flight = { version = "57.1.0" }
+arrow-flight = { version = "57.1.0", features = ["flight-sql-experimental"] }
 arrow-pyarrow = { version = "57.1.0" }
 parquet = { version = "57.1.0" }
 serde_arrow = { version = "0.13.7", features = ["arrow-57"] }

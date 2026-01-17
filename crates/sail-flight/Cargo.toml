@@ -1,0 +1,36 @@
+[package]
+name = "sail-flight"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Arrow Flight SQL server for Sail"
+
+[[bin]]
+name = "sail-flight"
+path = "src/main.rs"
+
+[dependencies]
+# Sail crates
+sail-common = { path = "../sail-common" }
+sail-plan = { path = "../sail-plan" }
+sail-sql-analyzer = { path = "../sail-sql-analyzer" }
+
+# Arrow / DataFusion
+arrow = { workspace = true }
+arrow-flight = { workspace = true }
+datafusion = { workspace = true }
+
+# Async / Server
+tokio = { workspace = true }
+tonic = { workspace = true }
+futures = { workspace = true }
+prost = { workspace = true }
+
+# CLI
+clap = { version = "4.0", features = ["derive"] }
+
+# Logging
+log = { workspace = true }
+
+[build-dependencies]
+tonic-build = "0.12"
