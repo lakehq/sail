@@ -1,5 +1,6 @@
 use std::pin::Pin;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 use arrow::array::{Int32Array, Int64Array, Float64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
@@ -30,19 +31,22 @@ use prost::Message;
 use tonic::{Request, Response, Status, Streaming};
 
 pub struct SailFlightSqlService {
-    ctx: SessionContext,
+    ctx: Arc<RwLock<SessionContext>>,
 }
 
 impl SailFlightSqlService {
     pub fn new() -> Self {
         let ctx = SessionContext::new();
-        SailFlightSqlService { ctx }
+        SailFlightSqlService {
+            ctx: Arc::new(RwLock::new(ctx)),
+        }
     }
 
     async fn execute_sql(&self, query: &str) -> Result<RecordBatch, Status> {
         println!("Executing SQL: {}", query);
 
-        match self.ctx.sql(query).await {
+        let ctx = self.ctx.read().await;
+        match ctx.sql(query).await {
             Ok(df) => {
                 let batches = df
                     .collect()
@@ -50,19 +54,27 @@ impl SailFlightSqlService {
                     .map_err(|e| Status::internal(format!("Query execution failed: {}", e)))?;
 
                 if batches.is_empty() {
-                    return self.create_empty_batch();
+                    // DDL commands return empty results - this is OK
+                    return self.create_success_batch();
                 }
 
                 Ok(batches.into_iter().next().unwrap_or_else(|| {
-                    self.create_empty_batch()
+                    self.create_success_batch()
                         .unwrap_or_else(|_| RecordBatch::new_empty(Arc::new(Schema::empty())))
                 }))
             }
             Err(e) => {
-                println!("DataFusion error: {}, returning demo data", e);
-                self.create_demo_batch()
+                println!("DataFusion error: {}", e);
+                Err(Status::internal(format!("SQL error: {}", e)))
             }
         }
+    }
+
+    fn create_success_batch(&self) -> Result<RecordBatch, Status> {
+        let schema = Schema::new(vec![Field::new("status", DataType::Utf8, false)]);
+        let array = StringArray::from(vec!["OK"]);
+        RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)])
+            .map_err(|e| Status::internal(format!("Failed to create batch: {}", e)))
     }
 
     fn create_demo_batch(&self) -> Result<RecordBatch, Status> {
@@ -85,13 +97,6 @@ impl SailFlightSqlService {
             ],
         )
         .map_err(|e| Status::internal(format!("Failed to create batch: {}", e)))
-    }
-
-    fn create_empty_batch(&self) -> Result<RecordBatch, Status> {
-        let schema = Schema::new(vec![Field::new("result", DataType::Utf8, true)]);
-        let array = StringArray::from(vec!["OK"]);
-        RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)])
-            .map_err(|e| Status::internal(format!("Failed to create batch: {}", e)))
     }
 
     fn create_one_batch(&self) -> Result<RecordBatch, Status> {
