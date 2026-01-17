@@ -9,4 +9,3 @@ Or set the SAIL_FLIGHT_URI environment variable and run:
 
     SAIL_FLIGHT_URI=grpc://localhost:32010 pytest python/pysail/tests/spark/server-flight/
 """
-

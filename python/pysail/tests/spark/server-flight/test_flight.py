@@ -5,33 +5,24 @@ using the ADBC Flight SQL driver, which is the recommended way to interact with 
 servers in Python.
 """
 
+import logging
 import os
+import shutil
 import subprocess
 import time
 from contextlib import contextmanager
 
+import adbc_driver_manager
 import pytest
+from adbc_driver_flightsql import dbapi
 
-# Try to import ADBC Flight SQL driver
-try:
-    import adbc_driver_flightsql.dbapi as dbapi
-    ADBC_AVAILABLE = True
-except ImportError:
-    ADBC_AVAILABLE = False
-    dbapi = None
-
-# Import pyarrow.flight for low-level Flight operations
-try:
-    import pyarrow.flight as flight
-    PYARROW_FLIGHT_AVAILABLE = True
-except ImportError:
-    PYARROW_FLIGHT_AVAILABLE = False
-    flight = None
+ADBC_AVAILABLE = True
+PYARROW_FLIGHT_AVAILABLE = True
 
 
 pytestmark = pytest.mark.skipif(
     not ADBC_AVAILABLE,
-    reason="ADBC Flight SQL driver not available. Install with: pip install adbc-driver-flightsql adbc-driver-manager"
+    reason="ADBC Flight SQL driver not available. Install with: pip install adbc-driver-flightsql adbc-driver-manager",
 )
 
 
@@ -46,28 +37,36 @@ def flight_server(host="127.0.0.1", port=32010):
     Yields:
         str: The URI where the server is listening (e.g., "grpc://127.0.0.1:32010").
     """
-    # Check if server is already running (for manual testing)
+    logger = logging.getLogger(__name__)
     uri = f"grpc://{host}:{port}"
+
+    # Check if server is already running
     try:
         conn = dbapi.connect(uri)
         conn.close()
-        # Server already running
-        print(f"Using existing Flight SQL server at {uri}")
+        logger.info("Using existing Flight SQL server at %s", uri)
+    except ConnectionRefusedError:
+        logger.info("Server not running at %s, starting new instance", uri)
+    except OSError as e:
+        logger.warning("Unexpected error checking server: %s", e)
+    else:
         yield uri
         return
-    except Exception:
-        pass  # Server not running, we'll start it
 
     # Start the server process
-    # Use the dedicated sail-flight binary
     workspace_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
+    cargo_path = shutil.which("cargo")
+    if not cargo_path:
+        msg = "cargo command not found in PATH"
+        raise RuntimeError(msg)
+
     process = subprocess.Popen(
-        ["cargo", "run", "--bin", "sail-flight", "--", "server", "--port", str(port), "--host", host],
+        [cargo_path, "run", "--bin", "sail-flight", "--", "server", "--port", str(port), "--host", host],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         cwd=workspace_root,
-        env={**os.environ, "RUST_LOG": "info"}
+        env={**os.environ, "RUST_LOG": "info"},
     )
 
     # Wait for server to be ready
@@ -79,7 +78,8 @@ def flight_server(host="127.0.0.1", port=32010):
         if process.poll() is not None:
             # Process died
             stdout, stderr = process.communicate()
-            raise RuntimeError(f"Server process died. stdout: {stdout}, stderr: {stderr}")
+            msg = f"Server process died. stdout: {stdout}, stderr: {stderr}"
+            raise RuntimeError(msg)
 
         time.sleep(0.5)
 
@@ -89,15 +89,15 @@ def flight_server(host="127.0.0.1", port=32010):
             conn.close()
             ready = True
             break
-        except Exception:
+        except OSError:
+            # Server not ready yet, continue waiting
             continue
 
     if not ready:
         process.kill()
         stdout, stderr = process.communicate()
-        raise RuntimeError(
-            f"Server did not become ready in {max_wait}s. stdout: {stdout}, stderr: {stderr}"
-        )
+        msg = f"Server did not become ready in {max_wait}s. stdout: {stdout}, stderr: {stderr}"
+        raise RuntimeError(msg)
 
     try:
         yield uri
@@ -150,9 +150,11 @@ def test_flight_execute_simple_query(flight_connection):
     cur.execute("SELECT * FROM (VALUES (1), (2)) AS t(one)")
     rows = cur.fetchall()
 
-    assert len(rows) == 2
+    expected_row_count = 2
+    assert len(rows) == expected_row_count
     assert rows[0] == (1,)
     assert rows[1] == (2,)
+    cur.close()
     cur.close()
 
 
@@ -171,10 +173,9 @@ def test_flight_error_handling(flight_connection):
     """Test that errors are properly handled and reported."""
     cur = flight_connection.cursor()
 
-    # Try an invalid query
-    with pytest.raises(Exception):  # Should raise some kind of error
+    # Try an invalid query - nonexistent table should raise an error
+    with pytest.raises(adbc_driver_manager.ProgrammingError, match="nonexistent_table"):
         cur.execute("SELECT * FROM nonexistent_table_12345")
-        cur.fetchall()
 
     cur.close()
 
@@ -184,20 +185,21 @@ def test_flight_not_implemented_function(flight_connection):
     cur = flight_connection.cursor()
 
     # json_tuple is not yet implemented
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises((adbc_driver_manager.ProgrammingError, adbc_driver_manager.OperationalError)) as exc_info:
         cur.execute("SELECT json_tuple('{\"a\":1,\"b\":2}', 'a', 'b')")
-        cur.fetchall()
 
     # Verify the error message indicates the function is not implemented
     error_message = str(exc_info.value).lower()
-    assert "not" in error_message and ("implemented" in error_message or "found" in error_message), \
-        f"Expected function not implemented error, but got: {exc_info.value}"
+    assert "not" in error_message, f"Expected 'not' in error, got: {exc_info.value}"
+    assert "implemented" in error_message or "found" in error_message, (
+        f"Expected 'implemented' or 'found' in error, got: {exc_info.value}"
+    )
 
     cur.close()
 
 
 @pytest.mark.parametrize(
-    "query,expected_cols",
+    ("query", "expected_cols"),
     [
         ("SELECT 1 AS a", 1),
         ("SELECT 1 AS a, 2 AS b", 2),
@@ -219,7 +221,7 @@ def test_flight_column_count(flight_connection, query, expected_cols):
 
 
 @pytest.mark.parametrize(
-    "query,expected_result",
+    ("query", "expected_result"),
     [
         ("SELECT concat_ws('-', 'hello', 'world') AS result", "hello-world"),
         ("SELECT concat_ws(',', 'a', 'b', 'c') AS result", "a,b,c"),
@@ -296,20 +298,25 @@ def test_flight_cursor_reuse(flight_connection):
     """Test that we can reuse a cursor for multiple queries."""
     cur = flight_connection.cursor()
 
+    # Expected values
+    expected_first = 1
+    expected_second = 2
+    expected_third = 3
+
     # First query
     cur.execute("SELECT 1 AS first")
     rows1 = cur.fetchall()
-    assert rows1[0][0] == 1
+    assert rows1[0][0] == expected_first
 
     # Second query with same cursor
     cur.execute("SELECT 2 AS second")
     rows2 = cur.fetchall()
-    assert rows2[0][0] == 2
+    assert rows2[0][0] == expected_second
 
     # Third query
     cur.execute("SELECT 3 AS third")
     rows3 = cur.fetchall()
-    assert rows3[0][0] == 3
+    assert rows3[0][0] == expected_third
 
     cur.close()
 
@@ -319,6 +326,9 @@ def test_flight_multiple_cursors(flight_connection):
     cur1 = flight_connection.cursor()
     cur2 = flight_connection.cursor()
 
+    expected_val1 = 1
+    expected_val2 = 2
+
     # Execute different queries on different cursors
     cur1.execute("SELECT 1 AS result")
     cur2.execute("SELECT 2 AS result")
@@ -326,9 +336,8 @@ def test_flight_multiple_cursors(flight_connection):
     rows1 = cur1.fetchall()
     rows2 = cur2.fetchall()
 
-    assert rows1[0][0] == 1
-    assert rows2[0][0] == 2
+    assert rows1[0][0] == expected_val1
+    assert rows2[0][0] == expected_val2
 
     cur1.close()
     cur2.close()
-
