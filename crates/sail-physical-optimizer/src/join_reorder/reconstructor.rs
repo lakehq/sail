@@ -9,7 +9,9 @@ use datafusion::physical_expr::utils::collect_columns;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
-use datafusion::physical_plan::joins::{CrossJoinExec, HashJoinExec, PartitionMode};
+use datafusion::physical_plan::joins::{
+    CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode,
+};
 use datafusion::physical_plan::ExecutionPlan;
 
 use crate::join_reorder::builder::{ColumnMap, ColumnMapEntry};
@@ -185,10 +187,17 @@ impl<'a> PlanReconstructor<'a> {
         // If there are no connecting edges, this is a cartesian product. HashJoinExec does not
         // support empty join keys; use CrossJoinExec instead to avoid optimizer-stage crashes.
         if on_conditions.is_empty() {
-            if join_filter.is_some() {
-                return Err(DataFusionError::NotImplemented(
-                    "Cartesian join with non-equi join filter is not supported".to_string(),
-                ));
+            if let Some(join_filter) = join_filter {
+                // Theta join: no equi-join pairs were reconstructed, but we have a join predicate.
+                // Use NestedLoopJoinExec which supports joins without equi-keys.
+                let join_plan = Arc::new(NestedLoopJoinExec::try_new(
+                    left_plan,
+                    right_plan,
+                    Some(join_filter),
+                    &join_type,
+                    None, // projection
+                )?);
+                return Ok((join_plan, join_output_map));
             }
             let join_plan = Arc::new(CrossJoinExec::new(left_plan, right_plan));
             return Ok((join_plan, join_output_map));
@@ -221,6 +230,8 @@ impl<'a> PlanReconstructor<'a> {
     ) -> Result<JoinConditionPairs> {
         let mut on_conditions = vec![];
 
+        let mut has_any_equi_pair = false;
+
         // Directly iterate over the edges that the DP solver told us connect these subplans
         for &edge_index in edge_indices {
             let edge = self.query_graph.edges.get(edge_index).ok_or_else(|| {
@@ -229,6 +240,7 @@ impl<'a> PlanReconstructor<'a> {
 
             // Process each equi-join pair in this edge
             for (col1_stable, col2_stable) in &edge.equi_pairs {
+                has_any_equi_pair = true;
                 // Try to locate these two columns in the left and right maps
                 let col1_left_idx = find_physical_index(col1_stable, left_map);
                 let col1_right_idx = find_physical_index(col1_stable, right_map);
@@ -263,8 +275,12 @@ impl<'a> PlanReconstructor<'a> {
             }
         }
 
-        // Verify that connecting edges produce join conditions
-        if on_conditions.is_empty() && !edge_indices.is_empty() {
+        // If the solver says these subsets are connected by edges that contain equi-join pairs,
+        // we must be able to reconstruct at least one equi join condition. Otherwise, it's a bug.
+        //
+        // If there are no equi-join pairs at all (e.g. complex join keys or pure theta join),
+        // it's expected that `on_conditions` is empty.
+        if on_conditions.is_empty() && has_any_equi_pair {
             return Err(DataFusionError::Internal(
                 "Failed to reconstruct any 'on' conditions for a join that should have them"
                     .to_string(),
@@ -971,6 +987,65 @@ mod tests {
         let mut reconstructor = PlanReconstructor::new(&dp_table, &graph);
         let (plan, _map) = reconstructor.reconstruct(&join012)?;
         assert_eq!(plan.name(), "CrossJoinExec");
+        Ok(())
+    }
+
+    #[test]
+    fn test_reconstruct_theta_join_uses_nested_loop_join_exec() -> Result<()> {
+        // Build a graph with 2 relations and a join edge that has *no equi_pairs* but does have
+        // a join predicate (theta join). Reconstructor should materialize NestedLoopJoinExec.
+
+        use datafusion::logical_expr::{JoinType, Operator};
+        use datafusion::physical_expr::expressions::{BinaryExpr, Column};
+
+        use crate::join_reorder::dp_plan::PlanType;
+        use crate::join_reorder::graph::JoinEdge;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col1",
+            DataType::Int32,
+            false,
+        )]));
+
+        let mut graph = QueryGraph::new();
+        for i in 0..2 {
+            let plan = Arc::new(EmptyExec::new(schema.clone()));
+            let relation = RelationNode::new(plan, i, 1000.0, Statistics::new_unknown(&schema));
+            graph.add_relation(relation);
+        }
+
+        // Join predicate: R0.C0 < R1.C0 (no equi_pairs recorded).
+        let join_set_01 = JoinSet::from_iter([0usize, 1usize])?;
+        let filter = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("R0.C0", 0)),
+            Operator::Lt,
+            Arc::new(Column::new("R1.C0", 0)),
+        )) as Arc<dyn PhysicalExpr>;
+        // Use a non-inner join type to ensure we support theta join beyond inner joins.
+        graph.add_edge(JoinEdge::new(join_set_01, filter, JoinType::Left, vec![]))?;
+
+        // DP table with leaves and the join using the single edge at index 0.
+        let mut dp_table: HashMap<JoinSet, Arc<DPPlan>> = HashMap::new();
+        let leaf0 = Arc::new(DPPlan::new_leaf(0, 1000.0)?);
+        let leaf1 = Arc::new(DPPlan::new_leaf(1, 1000.0)?);
+        dp_table.insert(leaf0.join_set, Arc::clone(&leaf0));
+        dp_table.insert(leaf1.join_set, Arc::clone(&leaf1));
+
+        let join01 = Arc::new(DPPlan {
+            join_set: JoinSet::from_iter([0usize, 1usize])?,
+            plan_type: PlanType::Join {
+                left_set: leaf0.join_set,
+                right_set: leaf1.join_set,
+                edge_indices: vec![0],
+            },
+            cost: 0.0,
+            cardinality: 1000.0,
+        });
+        dp_table.insert(join01.join_set, Arc::clone(&join01));
+
+        let mut reconstructor = PlanReconstructor::new(&dp_table, &graph);
+        let (plan, _map) = reconstructor.reconstruct(&join01)?;
+        assert_eq!(plan.name(), "NestedLoopJoinExec");
         Ok(())
     }
 }

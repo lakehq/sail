@@ -347,8 +347,8 @@ mod tests {
     use datafusion::common::NullEquality;
     use datafusion::logical_expr::{JoinType, Operator};
     use datafusion::physical_expr::expressions::{BinaryExpr, Column};
-    use datafusion::physical_expr::PhysicalExpr;
     use datafusion::physical_expr::utils::collect_columns;
+    use datafusion::physical_expr::PhysicalExpr;
     use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
@@ -768,7 +768,7 @@ mod tests {
             &target_map,
             &["result".to_string()],
         )?;
-
+        #[allow(clippy::expect_used)]
         let proj = plan
             .as_any()
             .downcast_ref::<ProjectionExec>()
