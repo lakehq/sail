@@ -9,7 +9,7 @@ use datafusion::physical_expr::utils::collect_columns;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
-use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
+use datafusion::physical_plan::joins::{CrossJoinExec, HashJoinExec, PartitionMode};
 use datafusion::physical_plan::ExecutionPlan;
 
 use crate::join_reorder::builder::{ColumnMap, ColumnMapEntry};
@@ -178,7 +178,23 @@ impl<'a> PlanReconstructor<'a> {
             right_set,
         )?;
 
-        // Create HashJoinExec
+        // Merge left and right ColumnMap to create output ColumnMap for new Join plan
+        let mut join_output_map = left_map;
+        join_output_map.extend(right_map);
+
+        // If there are no connecting edges, this is a cartesian product. HashJoinExec does not
+        // support empty join keys; use CrossJoinExec instead to avoid optimizer-stage crashes.
+        if on_conditions.is_empty() {
+            if join_filter.is_some() {
+                return Err(DataFusionError::NotImplemented(
+                    "Cartesian join with non-equi join filter is not supported".to_string(),
+                ));
+            }
+            let join_plan = Arc::new(CrossJoinExec::new(left_plan, right_plan));
+            return Ok((join_plan, join_output_map));
+        }
+
+        // Otherwise, create HashJoinExec
         let join_plan = Arc::new(HashJoinExec::try_new(
             left_plan,
             right_plan,
@@ -190,10 +206,6 @@ impl<'a> PlanReconstructor<'a> {
             NullEquality::NullEqualsNothing, // TODO: Skip the optimizer completely
                                  // if NullEquality is something else in the input region.
         )?);
-
-        // Merge left and right ColumnMap to create output ColumnMap for new Join plan
-        let mut join_output_map = left_map;
-        join_output_map.extend(right_map);
 
         Ok((join_plan, join_output_map))
     }
@@ -874,5 +886,91 @@ mod tests {
 
         reconstructor.clear_cache();
         assert!(reconstructor.plan_cache.is_empty());
+    }
+
+    #[test]
+    fn test_reconstruct_cartesian_product_uses_cross_join_exec() -> Result<()> {
+        // Build a graph with 3 relations, but only one join edge between (0,1).
+        // Greedy solver will introduce a cartesian join to connect relation 2.
+
+        use datafusion::logical_expr::JoinType;
+        use datafusion::physical_expr::expressions::Column;
+
+        use crate::join_reorder::dp_plan::PlanType;
+        use crate::join_reorder::graph::{JoinEdge, StableColumn};
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col1",
+            DataType::Int32,
+            false,
+        )]));
+
+        let mut graph = QueryGraph::new();
+        for i in 0..3 {
+            let plan = Arc::new(EmptyExec::new(schema.clone()));
+            let relation = RelationNode::new(plan, i, 1000.0, Statistics::new_unknown(&schema));
+            graph.add_relation(relation);
+        }
+
+        // One edge connecting relations 0 and 1.
+        let join_set_01 = JoinSet::from_iter([0usize, 1usize])?;
+        let filter = Arc::new(Column::new("R0.C0", 0)) as Arc<dyn PhysicalExpr>;
+        graph.add_edge(JoinEdge::new(
+            join_set_01,
+            filter,
+            JoinType::Inner,
+            vec![(
+                StableColumn {
+                    relation_id: 0,
+                    column_index: 0,
+                    name: "col1".to_string(),
+                },
+                StableColumn {
+                    relation_id: 1,
+                    column_index: 0,
+                    name: "col1".to_string(),
+                },
+            )],
+        ))?;
+
+        // DP table with leaves and a cartesian join.
+        let mut dp_table: HashMap<JoinSet, Arc<DPPlan>> = HashMap::new();
+        let leaf0 = Arc::new(DPPlan::new_leaf(0, 1000.0)?);
+        let leaf1 = Arc::new(DPPlan::new_leaf(1, 1000.0)?);
+        let leaf2 = Arc::new(DPPlan::new_leaf(2, 1000.0)?);
+        dp_table.insert(leaf0.join_set, Arc::clone(&leaf0));
+        dp_table.insert(leaf1.join_set, Arc::clone(&leaf1));
+        dp_table.insert(leaf2.join_set, Arc::clone(&leaf2));
+
+        // First join (0,1) with the single edge at index 0.
+        let join01 = Arc::new(DPPlan {
+            join_set: JoinSet::from_iter([0usize, 1usize])?,
+            plan_type: PlanType::Join {
+                left_set: leaf0.join_set,
+                right_set: leaf1.join_set,
+                edge_indices: vec![0],
+            },
+            cost: 0.0,
+            cardinality: 1000.0,
+        });
+        dp_table.insert(join01.join_set, Arc::clone(&join01));
+
+        // Then cartesian join between (0,1) and 2 (no connecting edges).
+        let join012 = Arc::new(DPPlan {
+            join_set: JoinSet::from_iter([0usize, 1usize, 2usize])?,
+            plan_type: PlanType::Join {
+                left_set: join01.join_set,
+                right_set: leaf2.join_set,
+                edge_indices: vec![],
+            },
+            cost: 0.0,
+            cardinality: 1_000_000.0,
+        });
+        dp_table.insert(join012.join_set, Arc::clone(&join012));
+
+        let mut reconstructor = PlanReconstructor::new(&dp_table, &graph);
+        let (plan, _map) = reconstructor.reconstruct(&join012)?;
+        assert_eq!(plan.name(), "CrossJoinExec");
+        Ok(())
     }
 }
