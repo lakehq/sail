@@ -1,7 +1,7 @@
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use datafusion::common::tree_node::TreeNode;
+use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::config::ConfigOptions;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_expr::expressions::Column;
@@ -224,54 +224,12 @@ impl JoinReorder {
                     ));
                 }
                 ColumnMapEntry::Expression { expr, input_map } => {
-                    // Complex case: use expression rewriter to replace old column references
-                    // with new physical plan column references.
-                    let transformed = expr.clone().transform(|node| {
-                        // Check if current node in expression tree is a Column
-                        if let Some(col) = node.as_any().downcast_ref::<Column>() {
-                            // Use input_map to find column's stable identity
-                            let original_entry = input_map.get(col.index()).ok_or_else(|| {
-                                DataFusionError::Internal(format!(
-                                    "Expression column index {} out of bounds for its input_map (len {})",
-                                    col.index(),
-                                    input_map.len()
-                                ))
-                            })?;
-
-                            if let ColumnMapEntry::Stable { relation_id, column_index } = original_entry {
-                                let stable_target = StableColumn {
-                                    relation_id: *relation_id,
-                                    column_index: *column_index,
-                                    name: col.name().to_string(),
-                                };
-
-                                // Now, find the new physical index of this stable column in the
-                                // output of the reordered join plan (`final_map`).
-                                let new_physical_idx = find_physical_index(&stable_target, final_map)
-                                    .ok_or_else(|| DataFusionError::Internal(format!(
-                                        "Failed to find rewritten physical index for stable column R{}.C{}",
-                                        relation_id, column_index
-                                    )))?;
-
-                                // Get the column name from the new plan's schema.
-                                let new_name = input_plan.schema().field(new_physical_idx).name().to_string();
-
-                                // Create a new Column expression pointing to the correct new location.
-                                let new_col = Column::new(&new_name, new_physical_idx);
-                                // Return the transformed node.
-                                return Ok(datafusion::common::tree_node::Transformed::yes(Arc::new(new_col)));
-                            } else {
-                                // TODO: Support nested complex expressions
-                                return Err(DataFusionError::NotImplemented(
-                                    "Rewriting nested complex expressions is not supported".to_string(),
-                                ));
-                            }
-                        }
-                        // Continue traversing expression tree without changes
-                        Ok(datafusion::common::tree_node::Transformed::no(node))
-                    })?;
-
-                    let rewritten_expr = transformed.data;
+                    let rewritten_expr = self.rewrite_expr_to_final_map(
+                        Arc::clone(expr),
+                        input_map,
+                        final_map,
+                        &input_plan,
+                    )?;
                     let output_name = target_names
                         .get(output_idx)
                         .cloned()
@@ -286,6 +244,81 @@ impl JoinReorder {
             projection_exprs,
             input_plan,
         )?))
+    }
+
+    fn rewrite_expr_to_final_map(
+        &self,
+        expr: Arc<dyn datafusion::physical_expr::PhysicalExpr>,
+        input_map: &ColumnMap,
+        final_map: &ColumnMap,
+        input_plan: &Arc<dyn ExecutionPlan>,
+    ) -> Result<Arc<dyn datafusion::physical_expr::PhysicalExpr>> {
+        use std::collections::HashMap;
+
+        let mut rewritten_cache: HashMap<usize, Arc<dyn datafusion::physical_expr::PhysicalExpr>> =
+            HashMap::new();
+
+        let transformed = expr.transform(|node| {
+            if let Some(col) = node.as_any().downcast_ref::<Column>() {
+                let original_entry = input_map.get(col.index()).ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                        "Expression column index {} out of bounds for its input_map (len {})",
+                        col.index(),
+                        input_map.len()
+                    ))
+                })?;
+
+                match original_entry {
+                    ColumnMapEntry::Stable {
+                        relation_id,
+                        column_index,
+                    } => {
+                        let stable_target = StableColumn {
+                            relation_id: *relation_id,
+                            column_index: *column_index,
+                            name: col.name().to_string(),
+                        };
+
+                        let new_physical_idx =
+                            find_physical_index(&stable_target, final_map).ok_or_else(|| {
+                                DataFusionError::Internal(format!(
+                                    "Failed to find rewritten physical index for stable column R{}.C{}",
+                                    relation_id, column_index
+                                ))
+                            })?;
+
+                        let new_name = input_plan
+                            .schema()
+                            .field(new_physical_idx)
+                            .name()
+                            .to_string();
+                        let new_col = Column::new(&new_name, new_physical_idx);
+                        return Ok(Transformed::yes(Arc::new(new_col)));
+                    }
+                    ColumnMapEntry::Expression {
+                        expr: nested_expr,
+                        input_map: nested_input_map,
+                    } => {
+                        if let Some(cached) = rewritten_cache.get(&col.index()) {
+                            return Ok(Transformed::yes(Arc::clone(cached)));
+                        }
+
+                        // Inline nested derived expression by rewriting it against the final join schema.
+                        let rewritten_nested = self.rewrite_expr_to_final_map(
+                            Arc::clone(nested_expr),
+                            nested_input_map,
+                            final_map,
+                            input_plan,
+                        )?;
+                        rewritten_cache.insert(col.index(), Arc::clone(&rewritten_nested));
+                        return Ok(Transformed::yes(rewritten_nested));
+                    }
+                }
+            }
+            Ok(Transformed::no(node))
+        })?;
+
+        Ok(transformed.data)
     }
 }
 
@@ -315,6 +348,7 @@ mod tests {
     use datafusion::logical_expr::{JoinType, Operator};
     use datafusion::physical_expr::expressions::{BinaryExpr, Column};
     use datafusion::physical_expr::PhysicalExpr;
+    use datafusion::physical_expr::utils::collect_columns;
     use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
@@ -649,6 +683,105 @@ mod tests {
         assert_eq!(optimized_plan.schema().field(1).name(), "c_name");
 
         // The test passes if we reach here without panicking or returning an error
+        Ok(())
+    }
+
+    #[test]
+    fn test_build_final_projection_rewrites_nested_derived_expressions() -> Result<()> {
+        // Simulate:
+        // - inner projection defines `new_uid_val = uid + inc`
+        // - outer projection uses it again: `result = new_uid_val + extra`
+        //
+        // This used to error with:
+        //   "Rewriting nested complex expressions is not supported"
+
+        let join_output_schema = Arc::new(Schema::new(vec![
+            Field::new("uid", DataType::Int32, false),
+            Field::new("inc", DataType::Int32, false),
+            Field::new("extra", DataType::Int32, false),
+        ]));
+        let input_plan: Arc<dyn datafusion::physical_plan::ExecutionPlan> =
+            Arc::new(EmptyExec::new(join_output_schema));
+
+        // Final join output columns map to stable ids.
+        let final_map: ColumnMap = vec![
+            ColumnMapEntry::Stable {
+                relation_id: 0,
+                column_index: 0,
+            }, // uid
+            ColumnMapEntry::Stable {
+                relation_id: 1,
+                column_index: 0,
+            }, // inc
+            ColumnMapEntry::Stable {
+                relation_id: 2,
+                column_index: 0,
+            }, // extra
+        ];
+
+        // Nested derived expression: uid + inc (refers to nested_input_map indices 0 and 1).
+        let nested_input_map: ColumnMap = vec![
+            ColumnMapEntry::Stable {
+                relation_id: 0,
+                column_index: 0,
+            },
+            ColumnMapEntry::Stable {
+                relation_id: 1,
+                column_index: 0,
+            },
+        ];
+        let nested_expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("uid", 0)),
+            Operator::Plus,
+            Arc::new(Column::new("inc", 1)),
+        ));
+
+        // Outer projection input schema has 2 cols: [new_uid_val, extra].
+        // new_uid_val is Expression (nested), extra is Stable.
+        let outer_input_map: ColumnMap = vec![
+            ColumnMapEntry::Expression {
+                expr: Arc::clone(&nested_expr),
+                input_map: nested_input_map,
+            },
+            ColumnMapEntry::Stable {
+                relation_id: 2,
+                column_index: 0,
+            },
+        ];
+
+        // Outer expression: new_uid_val + extra (refers to outer_input_map indices 0 and 1).
+        let outer_expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("new_uid_val", 0)),
+            Operator::Plus,
+            Arc::new(Column::new("extra", 1)),
+        ));
+
+        let target_map: ColumnMap = vec![ColumnMapEntry::Expression {
+            expr: outer_expr,
+            input_map: outer_input_map,
+        }];
+
+        let join_reorder = JoinReorder::new();
+        let plan = join_reorder.build_final_projection(
+            Arc::clone(&input_plan),
+            &final_map,
+            &target_map,
+            &["result".to_string()],
+        )?;
+
+        let proj = plan
+            .as_any()
+            .downcast_ref::<ProjectionExec>()
+            .expect("expected ProjectionExec");
+        assert_eq!(proj.schema().fields().len(), 1);
+        assert_eq!(proj.schema().field(0).name(), "result");
+
+        let cols = collect_columns(&proj.expr()[0].expr);
+        let mut indices: Vec<usize> = cols.iter().map(|c| c.index()).collect();
+        indices.sort_unstable();
+        indices.dedup();
+        assert_eq!(indices, vec![0, 1, 2]);
+
         Ok(())
     }
 }
