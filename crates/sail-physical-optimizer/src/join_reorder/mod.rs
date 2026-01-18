@@ -7,7 +7,7 @@ use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::{displayable, ExecutionPlan};
-use log::trace;
+use log::{trace, warn};
 
 use crate::join_reorder::builder::{ColumnMap, ColumnMapEntry, GraphBuilder};
 use crate::join_reorder::enumerator::PlanEnumerator;
@@ -66,67 +66,17 @@ impl JoinReorder {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         trace!("find_and_optimize_regions: Processing {}", plan.name());
 
-        // Attempt to build a query graph starting from the current node.
-        // The GraphBuilder will traverse downwards to find a complete reorderable region.
-        let mut graph_builder = GraphBuilder::new();
-        if let Some((query_graph, target_column_map)) = graph_builder.build(plan.clone())? {
-            // A reorderable region was found. Optimize it if it has more than 2 relations.
-            if query_graph.relation_count() > 2 {
-                trace!(
-                    "JoinReorder: Found reorderable region. Graph has {} relations and {} edges.",
-                    query_graph.relation_count(),
-                    query_graph.edges.len()
+        // Soft fallback: if join reordering fails for any reason, log a warning and
+        // continue optimizing children under the original plan.
+        match self.try_optimize_region(plan.clone()) {
+            Ok(Some(new_plan)) => return Ok(new_plan),
+            Ok(None) => {}
+            Err(e) => {
+                warn!(
+                    "JoinReorder: Optimization failed for region rooted at {} (fallback to original plan): {}",
+                    plan.name(),
+                    e
                 );
-
-                let mut enumerator = PlanEnumerator::new(query_graph);
-                let best_plan = match enumerator.solve()? {
-                    Some(plan) => {
-                        trace!("JoinReorder: DP optimization completed successfully");
-                        plan
-                    }
-                    None => {
-                        trace!("JoinReorder: DP optimization exceeded threshold, falling back to greedy algorithm");
-                        enumerator.solve_greedy()?
-                    }
-                };
-                trace!(
-                    "JoinReorder: Optimal plan found with cost {:.2} and estimated cardinality {:.2}. Reconstructing plan.",
-                    best_plan.cost, best_plan.cardinality
-                );
-                trace!("JoinReorder: Optimal DPPlan structure:\n{:#?}", best_plan);
-
-                let mut reconstructor =
-                    PlanReconstructor::new(&enumerator.dp_table, &enumerator.query_graph);
-                let (join_tree, final_map) = reconstructor.reconstruct(&best_plan)?;
-
-                trace!(
-                    "JoinReorder: Reconstructed join tree (before final projection):\n{}",
-                    displayable(join_tree.as_ref()).indent(true)
-                );
-
-                // Preserve original output column names from the region root
-                let target_names: Vec<String> = (0..plan.schema().fields().len())
-                    .map(|i| plan.schema().field(i).name().clone())
-                    .collect();
-
-                let final_plan = self.build_final_projection(
-                    join_tree,
-                    &final_map,
-                    &target_column_map,
-                    &target_names,
-                )?;
-
-                trace!(
-                    "JoinReorder: Optimization successful at current level. Returning new plan."
-                );
-                trace!(
-                    "JoinReorder: Optimized plan:\n{}",
-                    displayable(final_plan.as_ref()).indent(true)
-                );
-
-                // The entire region has been optimized and replaced. Return the new plan.
-                // TODO: Recursively optimizing descendant regions.
-                return Ok(final_plan);
             }
         }
 
@@ -150,6 +100,75 @@ impl JoinReorder {
         } else {
             plan.with_new_children(optimized_children)
         }
+    }
+
+    /// Attempt to optimize a reorderable region rooted at `plan`.
+    /// Returns Ok(Some(new_plan)) if a region was optimized and replaced.
+    /// Returns Ok(None) if no reorderable region is rooted at this node (or it is too small).
+    fn try_optimize_region(&self, plan: Arc<dyn ExecutionPlan>) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // Attempt to build a query graph starting from the current node.
+        // The GraphBuilder will traverse downwards to find a complete reorderable region.
+        let mut graph_builder = GraphBuilder::new();
+        let Some((query_graph, target_column_map)) = graph_builder.build(plan.clone())? else {
+            return Ok(None);
+        };
+
+        // Only optimize if it has more than 2 relations.
+        if query_graph.relation_count() <= 2 {
+            return Ok(None);
+        }
+
+        trace!(
+            "JoinReorder: Found reorderable region. Graph has {} relations and {} edges.",
+            query_graph.relation_count(),
+            query_graph.edges.len()
+        );
+
+        let mut enumerator = PlanEnumerator::new(query_graph);
+        let best_plan = match enumerator.solve()? {
+            Some(plan) => {
+                trace!("JoinReorder: DP optimization completed successfully");
+                plan
+            }
+            None => {
+                trace!("JoinReorder: DP optimization exceeded threshold, falling back to greedy algorithm");
+                enumerator.solve_greedy()?
+            }
+        };
+
+        trace!(
+            "JoinReorder: Optimal plan found with cost {:.2} and estimated cardinality {:.2}. Reconstructing plan.",
+            best_plan.cost, best_plan.cardinality
+        );
+        trace!("JoinReorder: Optimal DPPlan structure:\n{:#?}", best_plan);
+
+        let mut reconstructor = PlanReconstructor::new(&enumerator.dp_table, &enumerator.query_graph);
+        let (join_tree, final_map) = reconstructor.reconstruct(&best_plan)?;
+
+        trace!(
+            "JoinReorder: Reconstructed join tree (before final projection):\n{}",
+            displayable(join_tree.as_ref()).indent(true)
+        );
+
+        // Preserve original output column names from the region root
+        let target_names: Vec<String> = (0..plan.schema().fields().len())
+            .map(|i| plan.schema().field(i).name().clone())
+            .collect();
+
+        let final_plan = self.build_final_projection(
+            join_tree,
+            &final_map,
+            &target_column_map,
+            &target_names,
+        )?;
+
+        trace!("JoinReorder: Optimization successful at current level. Returning new plan.");
+        trace!(
+            "JoinReorder: Optimized plan:\n{}",
+            displayable(final_plan.as_ref()).indent(true)
+        );
+
+        Ok(Some(final_plan))
     }
 
     fn build_final_projection(
