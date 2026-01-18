@@ -2,7 +2,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Instant;
 
-use arrow::array::{Float64Array, Int32Array, Int64Array, StringArray};
+use arrow::array::{Array, Float64Array, Int32Array, Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ipc::writer::IpcWriteOptions;
 use arrow::record_batch::RecordBatch;
@@ -226,9 +226,10 @@ impl SailFlightSqlService {
             return self.create_success_batch();
         }
 
-        Ok(batches.into_iter().next().unwrap_or_else(|| {
-            RecordBatch::new_empty(Arc::new(Schema::empty()))
-        }))
+        Ok(batches
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| RecordBatch::new_empty(Arc::new(Schema::empty()))))
     }
 
     /// Resolve SQL plan to get schema without executing
@@ -364,10 +365,7 @@ impl FlightSqlService for SailFlightSqlService {
                 .map(|b| b.schema())
                 .unwrap_or_else(|| Arc::new(Schema::empty()));
 
-            debug!(
-                "do_get_fallback: streaming {} batches",
-                batches.len()
-            );
+            debug!("do_get_fallback: streaming {} batches", batches.len());
 
             let batch_stream = futures::stream::iter(batches.into_iter().map(Ok));
 
@@ -500,34 +498,125 @@ impl FlightSqlService for SailFlightSqlService {
 
     async fn get_flight_info_catalogs(
         &self,
-        _query: CommandGetCatalogs,
-        _request: Request<FlightDescriptor>,
+        query: CommandGetCatalogs,
+        request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented("get_flight_info_catalogs"))
+        debug!("get_flight_info_catalogs");
+        // Schema: catalog_name (utf8)
+        let schema = Schema::new(vec![Field::new("catalog_name", DataType::Utf8, false)]);
+
+        let ticket_bytes = query.as_any().encode_to_vec();
+        let endpoint = FlightEndpoint {
+            ticket: Some(Ticket {
+                ticket: ticket_bytes.into(),
+            }),
+            location: vec![],
+            expiration_time: None,
+            app_metadata: Default::default(),
+        };
+
+        let info = FlightInfo::new()
+            .with_endpoint(endpoint)
+            .with_descriptor(request.into_inner())
+            .try_with_schema(&schema)
+            .map_err(|e| Status::internal(format!("Schema error: {}", e)))?;
+
+        Ok(Response::new(info))
     }
 
     async fn get_flight_info_schemas(
         &self,
-        _query: CommandGetDbSchemas,
-        _request: Request<FlightDescriptor>,
+        query: CommandGetDbSchemas,
+        request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented("get_flight_info_schemas"))
+        debug!("get_flight_info_schemas: catalog={:?}", query.catalog);
+        // Schema: catalog_name (utf8), db_schema_name (utf8)
+        let schema = Schema::new(vec![
+            Field::new("catalog_name", DataType::Utf8, true),
+            Field::new("db_schema_name", DataType::Utf8, false),
+        ]);
+
+        let ticket_bytes = query.as_any().encode_to_vec();
+        let endpoint = FlightEndpoint {
+            ticket: Some(Ticket {
+                ticket: ticket_bytes.into(),
+            }),
+            location: vec![],
+            expiration_time: None,
+            app_metadata: Default::default(),
+        };
+
+        let info = FlightInfo::new()
+            .with_endpoint(endpoint)
+            .with_descriptor(request.into_inner())
+            .try_with_schema(&schema)
+            .map_err(|e| Status::internal(format!("Schema error: {}", e)))?;
+
+        Ok(Response::new(info))
     }
 
     async fn get_flight_info_tables(
         &self,
-        _query: CommandGetTables,
-        _request: Request<FlightDescriptor>,
+        query: CommandGetTables,
+        request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented("get_flight_info_tables"))
+        debug!(
+            "get_flight_info_tables: catalog={:?}, schema={:?}",
+            query.catalog, query.db_schema_filter_pattern
+        );
+        // Schema for GetTables (without table_schema column for simplicity)
+        let schema = Schema::new(vec![
+            Field::new("catalog_name", DataType::Utf8, true),
+            Field::new("db_schema_name", DataType::Utf8, true),
+            Field::new("table_name", DataType::Utf8, false),
+            Field::new("table_type", DataType::Utf8, false),
+        ]);
+
+        let ticket_bytes = query.as_any().encode_to_vec();
+        let endpoint = FlightEndpoint {
+            ticket: Some(Ticket {
+                ticket: ticket_bytes.into(),
+            }),
+            location: vec![],
+            expiration_time: None,
+            app_metadata: Default::default(),
+        };
+
+        let info = FlightInfo::new()
+            .with_endpoint(endpoint)
+            .with_descriptor(request.into_inner())
+            .try_with_schema(&schema)
+            .map_err(|e| Status::internal(format!("Schema error: {}", e)))?;
+
+        Ok(Response::new(info))
     }
 
     async fn get_flight_info_table_types(
         &self,
-        _query: CommandGetTableTypes,
-        _request: Request<FlightDescriptor>,
+        query: CommandGetTableTypes,
+        request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented("get_flight_info_table_types"))
+        debug!("get_flight_info_table_types");
+        // Schema: table_type (utf8)
+        let schema = Schema::new(vec![Field::new("table_type", DataType::Utf8, false)]);
+
+        let ticket_bytes = query.as_any().encode_to_vec();
+        let endpoint = FlightEndpoint {
+            ticket: Some(Ticket {
+                ticket: ticket_bytes.into(),
+            }),
+            location: vec![],
+            expiration_time: None,
+            app_metadata: Default::default(),
+        };
+
+        let info = FlightInfo::new()
+            .with_endpoint(endpoint)
+            .with_descriptor(request.into_inner())
+            .try_with_schema(&schema)
+            .map_err(|e| Status::internal(format!("Schema error: {}", e)))?;
+
+        Ok(Response::new(info))
     }
 
     async fn get_flight_info_sql_info(
@@ -646,23 +735,129 @@ impl FlightSqlService for SailFlightSqlService {
         _query: CommandGetCatalogs,
         _request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("do_get_catalogs"))
+        debug!("do_get_catalogs");
+
+        // Return the default catalog "sail"
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "catalog_name",
+            DataType::Utf8,
+            false,
+        )]));
+        let catalog_array = StringArray::from(vec!["sail"]);
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(catalog_array)])
+            .map_err(|e| Status::internal(format!("Failed to create batch: {}", e)))?;
+
+        let batch_stream = futures::stream::iter(vec![Ok(batch)]);
+        let flight_data_stream = FlightDataEncoderBuilder::new()
+            .with_schema(schema)
+            .build(batch_stream)
+            .map(|result| result.map_err(|e| Status::internal(format!("Encoding error: {}", e))));
+
+        Ok(Response::new(Box::pin(flight_data_stream)))
     }
 
     async fn do_get_schemas(
         &self,
-        _query: CommandGetDbSchemas,
+        query: CommandGetDbSchemas,
         _request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("do_get_schemas"))
+        debug!("do_get_schemas: catalog={:?}", query.catalog);
+
+        // Return the default schema "default"
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("catalog_name", DataType::Utf8, true),
+            Field::new("db_schema_name", DataType::Utf8, false),
+        ]));
+
+        let catalog_array = StringArray::from(vec![Some("sail")]);
+        let schema_array = StringArray::from(vec!["default"]);
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(catalog_array), Arc::new(schema_array)],
+        )
+        .map_err(|e| Status::internal(format!("Failed to create batch: {}", e)))?;
+
+        let batch_stream = futures::stream::iter(vec![Ok(batch)]);
+        let flight_data_stream = FlightDataEncoderBuilder::new()
+            .with_schema(schema)
+            .build(batch_stream)
+            .map(|result| result.map_err(|e| Status::internal(format!("Encoding error: {}", e))));
+
+        Ok(Response::new(Box::pin(flight_data_stream)))
     }
 
     async fn do_get_tables(
         &self,
-        _query: CommandGetTables,
+        query: CommandGetTables,
         _request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("do_get_tables"))
+        debug!(
+            "do_get_tables: catalog={:?}, schema={:?}",
+            query.catalog, query.db_schema_filter_pattern
+        );
+
+        // Execute SHOW TABLES to get the list of tables
+        let batches = self.execute_sql_batches("SHOW TABLES").await?;
+
+        // Convert to Flight SQL schema format
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("catalog_name", DataType::Utf8, true),
+            Field::new("db_schema_name", DataType::Utf8, true),
+            Field::new("table_name", DataType::Utf8, false),
+            Field::new("table_type", DataType::Utf8, false),
+        ]));
+
+        // If SHOW TABLES returned results, transform them
+        let result_batch = if !batches.is_empty() {
+            let source_batch = &batches[0];
+
+            // SHOW TABLES returns: database, tableName, isTemporary
+            // We need: catalog_name, db_schema_name, table_name, table_type
+            let num_rows = source_batch.num_rows();
+
+            if num_rows > 0 {
+                // Extract table names from the result
+                let table_names: Vec<&str> =
+                    if let Some(col) = source_batch.column_by_name("tableName") {
+                        if let Some(arr) = col.as_any().downcast_ref::<StringArray>() {
+                            (0..num_rows).filter_map(|i| arr.value(i).into()).collect()
+                        } else {
+                            vec![]
+                        }
+                    } else {
+                        vec![]
+                    };
+
+                let catalog_array = StringArray::from(vec![Some("sail"); table_names.len()]);
+                let schema_array = StringArray::from(vec![Some("default"); table_names.len()]);
+                let table_array = StringArray::from(table_names);
+                let type_array = StringArray::from(vec!["TABLE"; table_array.len()]);
+
+                RecordBatch::try_new(
+                    schema.clone(),
+                    vec![
+                        Arc::new(catalog_array),
+                        Arc::new(schema_array),
+                        Arc::new(table_array),
+                        Arc::new(type_array),
+                    ],
+                )
+                .map_err(|e| Status::internal(format!("Failed to create batch: {}", e)))?
+            } else {
+                RecordBatch::new_empty(schema.clone())
+            }
+        } else {
+            RecordBatch::new_empty(schema.clone())
+        };
+
+        let batch_stream = futures::stream::iter(vec![Ok(result_batch)]);
+        let flight_data_stream = FlightDataEncoderBuilder::new()
+            .with_schema(schema)
+            .build(batch_stream)
+            .map(|result| result.map_err(|e| Status::internal(format!("Encoding error: {}", e))));
+
+        Ok(Response::new(Box::pin(flight_data_stream)))
     }
 
     async fn do_get_table_types(
@@ -670,7 +865,25 @@ impl FlightSqlService for SailFlightSqlService {
         _query: CommandGetTableTypes,
         _request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("do_get_table_types"))
+        debug!("do_get_table_types");
+
+        // Return supported table types
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "table_type",
+            DataType::Utf8,
+            false,
+        )]));
+        let type_array = StringArray::from(vec!["TABLE", "VIEW", "TEMPORARY VIEW"]);
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(type_array)])
+            .map_err(|e| Status::internal(format!("Failed to create batch: {}", e)))?;
+
+        let batch_stream = futures::stream::iter(vec![Ok(batch)]);
+        let flight_data_stream = FlightDataEncoderBuilder::new()
+            .with_schema(schema)
+            .build(batch_stream)
+            .map(|result| result.map_err(|e| Status::internal(format!("Encoding error: {}", e))));
+
+        Ok(Response::new(Box::pin(flight_data_stream)))
     }
 
     async fn do_get_sql_info(
