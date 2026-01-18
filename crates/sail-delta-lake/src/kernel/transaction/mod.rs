@@ -245,13 +245,16 @@ impl CommitData {
     }
 
     pub fn get_bytes(&self) -> Result<Bytes, TransactionError> {
-        let mut jsons = Vec::<String>::new();
-        for action in &self.actions {
-            let json = serde_json::to_string(action)
+        // Write newline-delimited JSON without building intermediate Strings.
+        let mut buf: Vec<u8> = Vec::new();
+        for (i, action) in self.actions.iter().enumerate() {
+            if i > 0 {
+                buf.push(b'\n');
+            }
+            serde_json::to_writer(&mut buf, action)
                 .map_err(|e| TransactionError::SerializeLogJson { json_err: e })?;
-            jsons.push(json);
         }
-        Ok(Bytes::from(jsons.join("\n")))
+        Ok(Bytes::from(buf))
     }
 
     fn is_blind_append(actions: &[Action], operation: &DeltaOperation) -> bool {

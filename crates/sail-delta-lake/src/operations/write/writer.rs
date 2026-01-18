@@ -23,10 +23,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use datafusion::arrow::array::{ArrayRef, RecordBatch, UInt32Array};
-use datafusion::arrow::compute;
+use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
-use datafusion::arrow::row::{RowConverter, SortField};
 use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;
 use object_store::path::Path;
@@ -39,6 +37,7 @@ use parquet::schema::types::ColumnPath;
 use uuid::Uuid;
 
 use super::async_utils::AsyncShareableBuffer;
+pub use super::partitioning::PartitionResult;
 use super::stats::create_add;
 use crate::kernel::models::{Add, ScalarExt};
 use crate::kernel::DeltaTableError;
@@ -206,7 +205,7 @@ impl DeltaWriter {
         &self,
         batch: &RecordBatch,
     ) -> Result<Vec<PartitionResult>, DeltaTableError> {
-        divide_by_partition_values(
+        super::partitioning::divide_by_partition_values(
             arrow_schema_without_partitions(
                 &self.config.table_schema,
                 &self.config.physical_partition_columns,
@@ -228,13 +227,6 @@ impl DeltaWriter {
 
         Ok(all_actions)
     }
-}
-
-/// Result of partitioning a record batch
-#[derive(Debug)]
-pub struct PartitionResult {
-    pub record_batch: RecordBatch,
-    pub partition_values: IndexMap<String, Scalar>,
 }
 
 /// Configuration for partition writers
@@ -512,105 +504,4 @@ fn arrow_schema_without_partitions(
             .cloned()
             .collect::<Vec<_>>(),
     ))
-}
-
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/writer/record_batch.rs>
-/// Partition a RecordBatch along partition columns
-pub(crate) fn divide_by_partition_values(
-    arrow_schema: ArrowSchemaRef,
-    logical_partition_columns: Vec<String>,
-    physical_partition_columns: Vec<String>,
-    values: &RecordBatch,
-) -> Result<Vec<PartitionResult>, DeltaTableError> {
-    let mut partitions = Vec::new();
-
-    if logical_partition_columns.is_empty() {
-        partitions.push(PartitionResult {
-            partition_values: IndexMap::new(),
-            record_batch: values.clone(),
-        });
-        return Ok(partitions);
-    }
-
-    let schema = values.schema();
-    let partition_indices: Vec<usize> = physical_partition_columns
-        .iter()
-        .map(|name| {
-            schema.index_of(name).map_err(|_| {
-                DeltaTableError::schema(format!("Partition column '{name}' not found in batch"))
-            })
-        })
-        .collect::<Result<_, _>>()?;
-
-    let sort_columns = values
-        .project(&partition_indices)
-        .map_err(|e| DeltaTableError::generic(e.to_string()))?;
-
-    let indices = lexsort_to_indices(sort_columns.columns());
-    let sorted_partition_columns = partition_indices
-        .iter()
-        .map(|&idx| {
-            let col = values.column(idx);
-            compute::take(col, &indices, None).map_err(|e| DeltaTableError::generic(e.to_string()))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let partition_ranges =
-        datafusion::arrow::compute::partition(sorted_partition_columns.as_slice())
-            .map_err(|e| DeltaTableError::generic(e.to_string()))?;
-
-    for range in partition_ranges.ranges().iter() {
-        // get row indices for current partition
-        let idx: UInt32Array = (range.start..range.end)
-            .map(|i| Some(indices.value(i)))
-            .collect();
-
-        let partition_key_iter = sorted_partition_columns
-            .iter()
-            .map(|col| {
-                Scalar::from_array(&col.slice(range.start, range.end - range.start), 0)
-                    .ok_or_else(|| DeltaTableError::generic("failed to parse partition value"))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let partition_values = logical_partition_columns
-            .clone()
-            .into_iter()
-            .zip(partition_key_iter)
-            .collect();
-        let batch_data = arrow_schema
-            .fields()
-            .iter()
-            .map(|f| {
-                let col_idx = schema.index_of(f.name()).map_err(|_| {
-                    DeltaTableError::schema(format!("Column {} not found in batch", f.name()))
-                })?;
-                let col = values.column(col_idx);
-                compute::take(col.as_ref(), &idx, None)
-                    .map_err(|e| DeltaTableError::generic(e.to_string()))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        partitions.push(PartitionResult {
-            partition_values,
-            record_batch: RecordBatch::try_new(arrow_schema.clone(), batch_data)
-                .map_err(|e| DeltaTableError::generic(e.to_string()))?,
-        });
-    }
-
-    Ok(partitions)
-}
-
-fn lexsort_to_indices(arrays: &[ArrayRef]) -> UInt32Array {
-    let fields = arrays
-        .iter()
-        .map(|a| SortField::new(a.data_type().clone()))
-        .collect();
-    #[allow(clippy::unwrap_used)]
-    let converter = RowConverter::new(fields).unwrap();
-    #[allow(clippy::unwrap_used)]
-    let rows = converter.convert_columns(arrays).unwrap();
-    let mut sort: Vec<_> = rows.iter().enumerate().collect();
-    sort.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
-    UInt32Array::from_iter_values(sort.iter().map(|(i, _)| *i as u32))
 }

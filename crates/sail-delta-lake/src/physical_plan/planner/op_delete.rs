@@ -15,6 +15,7 @@ use std::sync::Arc;
 use datafusion::common::{DataFusionError, Result};
 use datafusion::physical_expr::expressions::NotExpr;
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::union::UnionExec;
@@ -23,13 +24,13 @@ use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::physical_expr::PhysicalExprWithSource;
 
 use super::context::PlannerContext;
-use super::log_scan::build_delta_log_datasource_union;
+use super::utils::build_log_replay_pipeline;
 use crate::datasource::schema::DataFusionMixins;
 use crate::datasource::PredicateProperties;
 use crate::kernel::DeltaOperation;
 use crate::physical_plan::{
-    DeltaCommitExec, DeltaDiscoveryExec, DeltaLogScanExec, DeltaRemoveActionsExec,
-    DeltaScanByAddsExec, DeltaWriterExec,
+    DeltaCommitExec, DeltaDiscoveryExec, DeltaRemoveActionsExec, DeltaScanByAddsExec,
+    DeltaWriterExec,
 };
 
 pub async fn build_delete_plan(
@@ -68,17 +69,16 @@ pub async fn build_delete_plan(
         .map(|p| p.filename.clone())
         .collect::<Vec<_>>();
 
-    // Build the raw log scan (DataSourceExec parquet/json + Union), then transform to file rows.
-    let (raw_scan, checkpoint_files, commit_files) =
-        build_delta_log_datasource_union(ctx, checkpoint_files, commit_files).await?;
-    let meta_scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaLogScanExec::new(
-        raw_scan,
+    // Build a visible metadata pipeline over the Delta log.
+    let meta_scan: Arc<dyn ExecutionPlan> = build_log_replay_pipeline(
+        ctx,
         ctx.table_url().clone(),
         version,
         partition_columns.clone(),
         checkpoint_files,
         commit_files,
-    ));
+    )
+    .await?;
 
     // If this is a partition-only predicate, add a visible FilterExec over the meta table.
     let meta_scan: Arc<dyn ExecutionPlan> = if expr_props.partition_only {
@@ -145,7 +145,7 @@ pub async fn build_delete_plan(
     let union_exec = UnionExec::try_new(vec![writer_exec, remove_exec])?;
 
     Ok(Arc::new(DeltaCommitExec::new(
-        union_exec,
+        Arc::new(CoalescePartitionsExec::new(union_exec)),
         ctx.table_url().clone(),
         partition_columns,
         ctx.table_exists(),

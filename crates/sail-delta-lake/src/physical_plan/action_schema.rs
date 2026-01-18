@@ -148,6 +148,11 @@ pub fn encode_actions(actions: Vec<ExecAction>) -> Result<RecordBatch> {
         .map_err(|e| DataFusionError::External(Box::new(e)))
 }
 
+pub fn encode_add_actions(adds: Vec<Add>) -> Result<RecordBatch> {
+    let actions: Vec<ExecAction> = adds.into_iter().map(ExecAction::from).collect();
+    encode_actions(actions)
+}
+
 impl From<Add> for ExecAction {
     fn from(add: Add) -> Self {
         ExecAction::Add(AddAction {

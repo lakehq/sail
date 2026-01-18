@@ -30,19 +30,23 @@ mod action_schema;
 mod commit_exec;
 pub mod discovery_exec;
 mod expr_adapter;
-mod log_scan_exec;
+mod log_action_decode;
+mod log_path_extract_exec;
+mod log_replay_exec;
+mod meta_adds;
 mod remove_actions_exec;
 mod scan_by_adds_exec;
 mod writer_exec;
 
 pub use action_schema::{
     decode_actions_and_meta_from_batch, decode_adds_from_batch, delta_action_schema,
-    encode_actions, CommitMeta, ExecAction, COL_ACTION,
+    encode_actions, encode_add_actions, CommitMeta, ExecAction, COL_ACTION,
 };
 pub use commit_exec::DeltaCommitExec;
 pub use discovery_exec::DeltaDiscoveryExec;
 pub use expr_adapter::DeltaPhysicalExprAdapterFactory;
-pub use log_scan_exec::DeltaLogScanExec;
+pub use log_path_extract_exec::{DeltaLogPathExtractExec, COL_REPLAY_PATH};
+pub use log_replay_exec::DeltaLogReplayExec;
 pub mod planner;
 pub use planner::{
     plan_delete, plan_merge, plan_update, DeltaPhysicalPlanner, DeltaTableConfig, PlannerContext,
@@ -147,11 +151,12 @@ pub fn create_sort(
 pub fn create_repartition(
     input: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
+    num_partitions: usize,
 ) -> Result<Arc<RepartitionExec>> {
+    let num_partitions = num_partitions.max(1);
     let partitioning = if partition_columns.is_empty() {
         // No partition columns, ensure some parallelism
-        // TODO: Make partition count configurable
-        Partitioning::RoundRobinBatch(4)
+        Partitioning::RoundRobinBatch(num_partitions)
     } else {
         // Since create_projection moves partition columns to the end, we can rely on their positions.
         let schema = input.schema();
@@ -176,8 +181,6 @@ pub fn create_repartition(
             .map(|(idx, name)| Arc::new(PhysicalColumn::new(name, idx)) as Arc<dyn PhysicalExpr>)
             .collect();
 
-        // TODO: Partition count should be configurable
-        let num_partitions = 4;
         Partitioning::Hash(partition_exprs, num_partitions)
     };
 
