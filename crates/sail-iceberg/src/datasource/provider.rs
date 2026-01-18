@@ -12,6 +12,7 @@
 
 use std::any::Any;
 use std::borrow::Cow;
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -51,6 +52,17 @@ use crate::spec::{
 };
 use crate::utils::conversions::primitive_to_scalar_default;
 use crate::utils::get_object_store_from_session;
+
+fn cmp_partition_values(a: &[ScalarValue], b: &[ScalarValue]) -> Ordering {
+    for (val_a, val_b) in a.iter().zip(b.iter()) {
+        match val_a.partial_cmp(val_b) {
+            Some(Ordering::Equal) => continue,
+            Some(ordering) => return ordering,
+            None => continue,
+        }
+    }
+    a.len().cmp(&b.len())
+}
 
 #[derive(Debug, Clone)]
 struct IcebergDeleteAttachment {
@@ -319,7 +331,23 @@ impl IcebergTableProvider {
                 .push(file);
         }
 
-        file_groups.into_values().map(FileGroup::from).collect()
+        // Ensure deterministic file group ordering for stable EXPLAIN snapshots.
+        // `HashMap` iteration order is not stable, so we sort by partition values, and then
+        // sort files within each group by path.
+        let mut sorted_groups: Vec<_> = file_groups.into_iter().collect();
+        sorted_groups.sort_by(|(a, _), (b, _)| cmp_partition_values(a, b));
+        sorted_groups
+            .into_iter()
+            .map(|(_, mut files)| {
+                files.sort_by(|a, b| {
+                    a.object_meta
+                        .location
+                        .as_ref()
+                        .cmp(b.object_meta.location.as_ref())
+                });
+                FileGroup::from(files)
+            })
+            .collect()
     }
 
     /// Aggregate table-level statistics from a list of Iceberg data files
