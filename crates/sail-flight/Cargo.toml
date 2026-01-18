@@ -34,7 +34,7 @@ prost = { workspace = true }
 # CLI
 clap = { workspace = true }
 
-# Logging
+# Logging & Tracing
 log = { workspace = true }
 env_logger = { workspace = true }
 

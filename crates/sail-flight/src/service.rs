@@ -1,5 +1,6 @@
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Instant;
 
 use arrow::array::{Float64Array, Int32Array, Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
@@ -94,13 +95,34 @@ impl SailFlightSqlService {
         }
     }
 
+    /// Remove SQL comments (-- style) from the beginning of a query
+    fn strip_sql_comments(sql: &str) -> String {
+        sql.lines()
+            .filter(|line| !line.trim().starts_with("--"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim()
+            .to_string()
+    }
+
     /// Check if a SQL statement is DDL (Data Definition Language)
     fn is_ddl_statement(sql: &str) -> bool {
-        let upper = sql.trim().to_uppercase();
+        let cleaned = Self::strip_sql_comments(sql);
+        let upper = cleaned.to_uppercase();
         upper.starts_with("CREATE ")
             || upper.starts_with("DROP ")
             || upper.starts_with("ALTER ")
             || upper.starts_with("TRUNCATE ")
+    }
+
+    /// Check if a SQL statement is DML (INSERT/UPDATE/DELETE)
+    fn is_dml_statement(sql: &str) -> bool {
+        let cleaned = Self::strip_sql_comments(sql);
+        let upper = cleaned.to_uppercase();
+        upper.starts_with("INSERT ")
+            || upper.starts_with("UPDATE ")
+            || upper.starts_with("DELETE ")
+            || upper.starts_with("MERGE ")
     }
 
     /// Execute SQL using Sail's full pipeline (parser + resolver + executor)
@@ -126,21 +148,30 @@ impl SailFlightSqlService {
     /// - Stream results instead of collecting into memory
     /// - Support multiple result batches
     async fn execute_sql(&self, query: &str) -> Result<RecordBatch, Status> {
+        let total_start = Instant::now();
         info!("Executing SQL query: {}", query);
 
         // Step 1: Parse SQL to AST using Sail's parser
+        let parse_start = Instant::now();
         let statement = parse_one_statement(query).map_err(|e| {
             error!("Parse error for query '{}': {}", query, e);
             Status::invalid_argument(format!("Parse error: {}", e))
         })?;
+        debug!("  [parse_sql] completed in {:?}", parse_start.elapsed());
 
         // Step 2: Convert AST to spec::Plan
+        let convert_start = Instant::now();
         let plan = from_ast_statement(statement).map_err(|e| {
             error!("AST conversion error for query '{}': {}", query, e);
             Status::internal(format!("AST conversion error: {}", e))
         })?;
+        debug!(
+            "  [convert_ast_to_plan] completed in {:?}",
+            convert_start.elapsed()
+        );
 
         // Step 3: Resolve the plan using PlanResolver
+        let resolve_start = Instant::now();
         let ctx = self.ctx.read().await;
         let resolver = PlanResolver::new(&ctx, self.config.clone());
         let NamedPlan {
@@ -150,25 +181,41 @@ impl SailFlightSqlService {
             error!("Plan resolution error for query '{}': {}", query, e);
             Status::internal(format!("Plan resolution error: {}", e))
         })?;
+        debug!(
+            "  [resolve_plan] completed in {:?}",
+            resolve_start.elapsed()
+        );
 
         // Step 4: Execute the logical plan
+        let exec_start = Instant::now();
         let df = execute_logical_plan(&ctx, logical_plan)
             .await
             .map_err(|e| {
                 error!("Execution error for query '{}': {}", query, e);
                 Status::internal(format!("Execution error: {}", e))
             })?;
+        debug!("  [execute_plan] completed in {:?}", exec_start.elapsed());
 
         // Step 5: Collect results
+        let collect_start = Instant::now();
         let batches = df.collect().await.map_err(|e| {
             error!("Collection error for query '{}': {}", query, e);
             Status::internal(format!("Collection error: {}", e))
         })?;
+        debug!(
+            "  [collect_results] completed in {:?}",
+            collect_start.elapsed()
+        );
 
         if batches.is_empty() {
             debug!("Query returned no rows, returning success batch");
             return self.create_success_batch();
         }
+
+        // Calculate statistics across all batches
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        let total_bytes: usize = batches.iter().map(|b| b.get_array_memory_size()).sum();
+        let num_batches = batches.len();
 
         let batch = batches.into_iter().next().unwrap_or_else(|| {
             warn!("Empty batch iterator, returning success batch");
@@ -177,8 +224,11 @@ impl SailFlightSqlService {
         });
 
         info!(
-            "Query executed successfully, returning {} rows",
-            batch.num_rows()
+            "Query completed: time={:?}, rows={}, batches={}, memory={:.2} KB",
+            total_start.elapsed(),
+            total_rows,
+            num_batches,
+            total_bytes as f64 / 1024.0
         );
         Ok(batch)
     }
@@ -754,16 +804,21 @@ impl FlightSqlService for SailFlightSqlService {
         );
 
         let is_ddl = Self::is_ddl_statement(&query.query);
+        let is_dml = Self::is_dml_statement(&query.query);
 
         // Strategy depends on query type:
         // - DDL: Execute now (creates table), return empty schema (DDL has no result set)
+        // - DML: Execute now (INSERT/UPDATE/DELETE), return empty schema
         // - SELECT: Only resolve to get schema (don't execute yet)
         let schema = if is_ddl {
             // DDL: Execute now and cache that it's done
             info!("DDL detected, executing immediately: {}", query.query);
-            // Execute the DDL statement
             let _batch = self.execute_sql(&query.query).await?;
-            // DDL statements return empty schema (no result set)
+            Arc::new(Schema::empty())
+        } else if is_dml {
+            // DML: Execute now (INSERT/UPDATE/DELETE)
+            info!("DML detected, executing immediately: {}", query.query);
+            let _batch = self.execute_sql(&query.query).await?;
             Arc::new(Schema::empty())
         } else {
             // SELECT: Only resolve plan to get schema (don't execute)
@@ -775,9 +830,10 @@ impl FlightSqlService for SailFlightSqlService {
         };
 
         // Cache the schema and execution status
-        // - DDL: was_executed=true (don't re-execute in do_get_statement)
+        // - DDL/DML: was_executed=true (don't re-execute in do_get_statement)
         // - SELECT: was_executed=false (will execute in do_get_statement)
-        let entry = CacheEntry::new(schema.clone(), is_ddl);
+        let was_executed = is_ddl || is_dml;
+        let entry = CacheEntry::new(schema.clone(), was_executed);
         self.prepared_cache.insert(query.query.clone(), entry).await;
 
         // Use the query as the prepared statement handle
