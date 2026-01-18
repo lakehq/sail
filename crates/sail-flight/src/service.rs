@@ -133,21 +133,15 @@ impl SailFlightSqlService {
     /// 2. **Convert AST** → `spec::Plan` using `from_ast_statement()`
     /// 3. **Resolve Plan** → Logical plan using `PlanResolver` (handles Spark semantics)
     /// 4. **Execute** → Via DataFusion's execution engine
-    ///    ///
+    ///
     /// # Arguments
     ///
     /// * `query` - SQL query string to execute
     ///
     /// # Returns
     ///
-    /// A single `RecordBatch` containing the query results (first batch only).
-    ///
-    /// # TODO
-    ///
-    /// - Use `sail-plan::resolve_and_execute_plan()` directly instead of manual steps
-    /// - Stream results instead of collecting into memory
-    /// - Support multiple result batches
-    async fn execute_sql(&self, query: &str) -> Result<RecordBatch, Status> {
+    /// All `RecordBatch`es containing the query results.
+    async fn execute_sql_batches(&self, query: &str) -> Result<Vec<RecordBatch>, Status> {
         let total_start = Instant::now();
         info!("Executing SQL query: {}", query);
 
@@ -207,21 +201,10 @@ impl SailFlightSqlService {
             collect_start.elapsed()
         );
 
-        if batches.is_empty() {
-            debug!("Query returned no rows, returning success batch");
-            return self.create_success_batch();
-        }
-
         // Calculate statistics across all batches
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         let total_bytes: usize = batches.iter().map(|b| b.get_array_memory_size()).sum();
         let num_batches = batches.len();
-
-        let batch = batches.into_iter().next().unwrap_or_else(|| {
-            warn!("Empty batch iterator, returning success batch");
-            self.create_success_batch()
-                .unwrap_or_else(|_| RecordBatch::new_empty(Arc::new(Schema::empty())))
-        });
 
         info!(
             "Query completed: time={:?}, rows={}, batches={}, memory={:.2} KB",
@@ -230,7 +213,22 @@ impl SailFlightSqlService {
             num_batches,
             total_bytes as f64 / 1024.0
         );
-        Ok(batch)
+
+        Ok(batches)
+    }
+
+    /// Execute SQL and return a single batch (for backwards compatibility)
+    async fn execute_sql(&self, query: &str) -> Result<RecordBatch, Status> {
+        let batches = self.execute_sql_batches(query).await?;
+
+        if batches.is_empty() {
+            debug!("Query returned no rows, returning success batch");
+            return self.create_success_batch();
+        }
+
+        Ok(batches.into_iter().next().unwrap_or_else(|| {
+            RecordBatch::new_empty(Arc::new(Schema::empty()))
+        }))
     }
 
     /// Resolve SQL plan to get schema without executing
@@ -355,15 +353,23 @@ impl FlightSqlService for SailFlightSqlService {
             let sql = String::from_utf8_lossy(&ticket.statement_handle).to_string();
             debug!("do_get_fallback: decoded SQL = {}", sql);
 
-            let batch = if sql.trim().eq_ignore_ascii_case("SELECT 1") {
-                self.create_one_batch()?
+            let batches = if sql.trim().eq_ignore_ascii_case("SELECT 1") {
+                vec![self.create_one_batch()?]
             } else {
-                self.execute_sql(&sql).await?
+                self.execute_sql_batches(&sql).await?
             };
 
-            let schema = batch.schema();
-            let batches = vec![Ok(batch)];
-            let batch_stream = futures::stream::iter(batches);
+            let schema = batches
+                .first()
+                .map(|b| b.schema())
+                .unwrap_or_else(|| Arc::new(Schema::empty()));
+
+            debug!(
+                "do_get_fallback: streaming {} batches",
+                batches.len()
+            );
+
+            let batch_stream = futures::stream::iter(batches.into_iter().map(Ok));
 
             let flight_data_stream = FlightDataEncoderBuilder::new()
                 .with_schema(schema)
@@ -378,8 +384,7 @@ impl FlightSqlService for SailFlightSqlService {
         debug!("do_get_fallback: using demo data");
         let batch = self.create_demo_batch()?;
         let schema = batch.schema();
-        let batches = vec![Ok(batch)];
-        let batch_stream = futures::stream::iter(batches);
+        let batch_stream = futures::stream::iter(vec![Ok(batch)]);
 
         let flight_data_stream = FlightDataEncoderBuilder::new()
             .with_schema(schema)
@@ -582,22 +587,22 @@ impl FlightSqlService for SailFlightSqlService {
         debug!("do_get_statement: SQL = {}", sql);
 
         // Check if this is a DDL statement that was already executed
-        let batch = if let Some(entry) = self.prepared_cache.get(&sql).await {
+        let batches = if let Some(entry) = self.prepared_cache.get(&sql).await {
             if entry.was_executed {
                 info!(
                     "✓ CACHE HIT in do_get: DDL already executed, returning success batch for: {}",
                     sql
                 );
-                self.create_success_batch()?
+                vec![self.create_success_batch()?]
             } else {
                 info!(
                     "✓ CACHE HIT in do_get: SELECT query, executing now: {}",
                     sql
                 );
                 if sql.trim().eq_ignore_ascii_case("SELECT 1") {
-                    self.create_one_batch()?
+                    vec![self.create_one_batch()?]
                 } else {
-                    self.execute_sql(&sql).await?
+                    self.execute_sql_batches(&sql).await?
                 }
             }
         } else {
@@ -606,17 +611,27 @@ impl FlightSqlService for SailFlightSqlService {
                 sql
             );
             if sql.trim().eq_ignore_ascii_case("SELECT 1") {
-                self.create_one_batch()?
+                vec![self.create_one_batch()?]
             } else {
-                self.execute_sql(&sql).await?
+                self.execute_sql_batches(&sql).await?
             }
         };
 
-        debug!("do_get_statement: returning {} rows", batch.num_rows());
+        // Get schema from first batch or create empty schema
+        let schema = batches
+            .first()
+            .map(|b| b.schema())
+            .unwrap_or_else(|| Arc::new(Schema::empty()));
 
-        let schema = batch.schema();
-        let batches = vec![Ok(batch)];
-        let batch_stream = futures::stream::iter(batches);
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        debug!(
+            "do_get_statement: streaming {} batches with {} total rows",
+            batches.len(),
+            total_rows
+        );
+
+        // Stream all batches to the client
+        let batch_stream = futures::stream::iter(batches.into_iter().map(Ok));
 
         let flight_data_stream = FlightDataEncoderBuilder::new()
             .with_schema(schema)
