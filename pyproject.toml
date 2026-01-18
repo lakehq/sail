@@ -95,6 +95,9 @@ dependencies = [
     "jedi>=0.19.2,<0.20",
     "jsonpath-ng>=1.6,<2",
     "PyYAML>=6.0,<7",
+    "pyarrow>=19.0,<20",
+    "adbc-driver-flightsql>=1.0,<2",
+    "adbc-driver-manager>=1.0,<2",
 ]
 path = ".venvs/default"
 
@@ -141,6 +144,11 @@ dependencies = [
     "jedi>=0.19.2,<0.20",
     "jsonpath-ng>=1.6,<2",
     "PyYAML>=6.0,<7",
+    # try not failing tests due to pyarrow version mismatch
+    # need to see
+    "pyarrow>=19.0,<20",
+    "adbc-driver-flightsql>=1.0,<2",
+    "adbc-driver-manager>=1.0,<2",
 ]
 
 [[tool.hatch.envs.test.matrix]]
@@ -239,6 +247,8 @@ line-length = 120
 
 [tool.pytest.ini_options]
 testpaths = ["python"]
+# Exclude server-flight tests by default (they require a running server)
+addopts = "--ignore=python/pysail/tests/spark/server-flight"
 # Do not add configuration here to modify the test behavior.
 # Instead, add the configuration using a hook in `conftest.py`.
 # The `pyproject.toml` file is not part of the installed package,

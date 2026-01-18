@@ -359,14 +359,22 @@ version = "57.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b5f57c3d39d1b1b7c1376a772ea86a131e7da310aed54ebea9363124bb885e3"
 dependencies = [
+ "arrow-arith",
  "arrow-array",
  "arrow-buffer",
  "arrow-cast",
+ "arrow-data",
  "arrow-ipc",
+ "arrow-ord",
+ "arrow-row",
  "arrow-schema",
+ "arrow-select",
+ "arrow-string",
  "base64 0.22.1",
  "bytes",
  "futures",
+ "once_cell",
+ "paste",
  "prost",
  "prost-types",
  "tonic",
@@ -4026,6 +4034,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
+name = "lru"
+version = "0.12.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "234cf4f4a04dc1f57e24b96cc0cd600cf2af460d4161ac5ecdd0af8e1f3b2a38"
+dependencies = [
+ "hashbrown 0.15.5",
+]
+
+[[package]]
 name = "lru-slab"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6033,6 +6050,34 @@ dependencies = [
  "tonic-types",
  "tower",
  "url",
+]
+
+[[package]]
+name = "sail-flight"
+version = "0.4.6"
+dependencies = [
+ "arrow",
+ "arrow-flight",
+ "clap",
+ "datafusion",
+ "env_logger",
+ "figment",
+ "futures",
+ "log",
+ "lru",
+ "prost",
+ "sail-catalog",
+ "sail-catalog-memory",
+ "sail-common",
+ "sail-common-datafusion",
+ "sail-plan",
+ "sail-session",
+ "sail-sql-analyzer",
+ "sail-telemetry",
+ "serde",
+ "tokio",
+ "tonic",
+ "tonic-build",
 ]
 
 [[package]]
