@@ -10,7 +10,8 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{EmptyRelation, Extension, LogicalPlan, UserDefinedLogicalNodeCore};
 use sail_common::spec;
-use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
+use sail_common_datafusion::rename::exec::RenameExec;
+use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_logical_plan::precondition::WithPreconditionsNode;
 
 use crate::catalog::CatalogCommandNode;
@@ -167,7 +168,18 @@ async fn collect_plan_with(
     ctx: &SessionContext,
     plan_future: impl Future<Output = PlanResult<(LogicalPlan, Option<Vec<String>>)>>,
 ) -> PlanResult<CollectedPlan> {
-    let (plan, fields) = plan_future.await?;
+    let (mut plan, fields) = plan_future.await?;
+    let can_rename_logical = fields.as_ref().is_some_and(|names| {
+        let mut seen = std::collections::HashSet::new();
+        names.iter().all(|n| seen.insert(n.to_ascii_lowercase()))
+    });
+    // Prefer logical renames when the names are unique; otherwise keep opaque field ids
+    // and apply names at the physical output boundary (supports duplicates).
+    if can_rename_logical {
+        if let Some(fields) = fields.as_ref() {
+            plan = rename_logical_plan(plan, fields).map_err(PlanError::from)?;
+        }
+    }
     let initial_logical = plan.clone();
     let mut stringified = vec![initial_logical.to_stringified(PlanType::InitialLogicalPlan)];
 
@@ -281,22 +293,17 @@ async fn collect_plan_with(
             }
         }
 
-        let plan = match fields {
-            Some(fields) => {
-                match rename_physical_plan(Arc::clone(&optimized_physical_plan), &fields) {
-                    Ok(plan) => Some(plan),
-                    Err(err) => {
-                        let msg = err.to_string();
-                        stringified.push(StringifiedPlan::new(
-                            PlanType::PhysicalPlanError,
-                            msg.clone(),
-                        ));
-                        physical_error = Some(msg);
-                        None
-                    }
-                }
+        let plan: Option<Arc<dyn ExecutionPlan>> = if !can_rename_logical {
+            if let Some(fields) = fields.clone() {
+                Some(
+                    Arc::new(RenameExec::try_new(optimized_physical_plan, fields)?)
+                        as Arc<dyn ExecutionPlan>,
+                )
+            } else {
+                Some(optimized_physical_plan)
             }
-            None => Some(optimized_physical_plan),
+        } else {
+            Some(optimized_physical_plan)
         };
 
         if let Some(plan) = plan {

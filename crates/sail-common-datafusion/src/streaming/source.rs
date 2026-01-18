@@ -33,11 +33,15 @@ pub trait StreamSource: Send + Sync + fmt::Debug {
     }
 
     /// Creates an execution plan that will scan the source.
+    ///
     /// An encoded flow event stream is returned from execution.
-    /// The schema of the scan is the flow event schema derived from the data schema.
+    ///
+    /// `projected_data_schema` is the (possibly renamed/projected) data schema **without**
+    /// flow event fields. The scan output schema must be the flow event schema derived from it.
     async fn scan(
         &self,
         state: &dyn Session,
+        projected_data_schema: SchemaRef,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,

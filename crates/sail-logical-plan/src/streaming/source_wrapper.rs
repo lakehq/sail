@@ -16,6 +16,7 @@ use sail_common_datafusion::streaming::source::StreamSource;
 pub struct StreamSourceWrapperNode {
     source: Arc<dyn StreamSource>,
     names: Option<Vec<String>>,
+    data_schema: datafusion::arrow::datatypes::SchemaRef,
     schema: DFSchemaRef,
     projection: Option<Vec<usize>>,
     filters: Vec<Expr>,
@@ -78,16 +79,18 @@ impl StreamSourceWrapperNode {
         filters: Vec<Expr>,
         fetch: Option<usize>,
     ) -> Result<Self> {
-        let schema = match &names {
+        let data_schema = match &names {
             Some(names) => rename_schema(&source.data_schema(), names)?,
             None => source.data_schema(),
         };
-        let schema = match &projection {
-            Some(projection) => Arc::new(schema.project(projection)?),
-            None => schema,
+        let projected_data_schema = match &projection {
+            Some(projection) => Arc::new(data_schema.project(projection)?),
+            None => Arc::clone(&data_schema),
         };
-        let schema =
-            DFSchema::try_from_qualified_schema(table_name, &to_flow_event_schema(&schema))?;
+        let schema = DFSchema::try_from_qualified_schema(
+            table_name,
+            &to_flow_event_schema(&projected_data_schema),
+        )?;
         let filters = match &names {
             Some(names) => {
                 let source_schema = source.data_schema();
@@ -101,6 +104,7 @@ impl StreamSourceWrapperNode {
         Ok(Self {
             source,
             names,
+            data_schema,
             schema: Arc::new(schema),
             projection,
             filters,
@@ -118,6 +122,10 @@ impl StreamSourceWrapperNode {
 
     pub fn projection(&self) -> Option<&Vec<usize>> {
         self.projection.as_ref()
+    }
+
+    pub fn data_schema(&self) -> &datafusion::arrow::datatypes::SchemaRef {
+        &self.data_schema
     }
 
     pub fn filters(&self) -> &Vec<Expr> {

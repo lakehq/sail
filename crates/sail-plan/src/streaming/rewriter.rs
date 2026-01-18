@@ -9,7 +9,6 @@ use datafusion_expr::{
     col, or, Explain, FetchType, Filter, Projection, SkipType, SubqueryAlias, TableScan, Union,
     UserDefinedLogicalNode,
 };
-use sail_common_datafusion::rename::table_provider::RenameTableProvider;
 use sail_common_datafusion::streaming::event::schema::{
     is_flow_event_schema, MARKER_FIELD_NAME, RETRACTED_FIELD_NAME,
 };
@@ -176,13 +175,7 @@ impl TreeNodeRewriter for StreamingRewriter {
 }
 
 fn is_streaming_table_provider(provider: &dyn TableProvider) -> bool {
-    if provider.as_any().is::<StreamSourceTableProvider>() {
-        true
-    } else if let Some(rename) = provider.as_any().downcast_ref::<RenameTableProvider>() {
-        is_streaming_table_provider(rename.inner().as_ref())
-    } else {
-        false
-    }
+    provider.as_any().is::<StreamSourceTableProvider>()
 }
 
 struct NamedStreamSource {
@@ -191,33 +184,13 @@ struct NamedStreamSource {
 }
 
 fn get_stream_source_opt(provider: &dyn TableProvider) -> Option<NamedStreamSource> {
-    if let Some(stream) = provider
+    provider
         .as_any()
         .downcast_ref::<StreamSourceTableProvider>()
-    {
-        Some(NamedStreamSource {
+        .map(|stream| NamedStreamSource {
             source: stream.source().clone(),
             names: None,
         })
-    } else if let Some(rename) = provider.as_any().downcast_ref::<RenameTableProvider>() {
-        if let Some(stream) = get_stream_source_opt(rename.inner().as_ref()) {
-            Some(NamedStreamSource {
-                source: stream.source,
-                names: Some(
-                    rename
-                        .schema()
-                        .fields()
-                        .iter()
-                        .map(|f| f.name().clone())
-                        .collect(),
-                ),
-            })
-        } else {
-            None
-        }
-    } else {
-        None
-    }
 }
 
 pub fn is_streaming_plan(plan: &LogicalPlan) -> Result<bool> {

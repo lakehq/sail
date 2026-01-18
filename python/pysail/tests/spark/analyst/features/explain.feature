@@ -48,3 +48,19 @@ Feature: EXPLAIN statement returns Spark-style plan text
       EXPLAIN VERBOSE SELECT k, SUM(v) FROM VALUES (1, 2), (1, 3) t(k, v) GROUP BY k
       """
     Then query plan matches snapshot
+
+  Scenario: EXPLAIN uses RenameExec when output has duplicate column names
+    When query
+      """
+      EXPLAIN SELECT 1 AS value, 1 AS value
+      """
+    Then query plan matches snapshot
+
+  Scenario: Queries with duplicate output column names execute successfully
+    When query
+      """
+      SELECT 1 AS value, 2 AS value
+      """
+    Then query result ordered
+      | value | value |
+      | 1     | 2     |
