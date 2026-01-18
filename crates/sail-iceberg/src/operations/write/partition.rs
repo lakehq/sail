@@ -10,6 +10,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike};
 use datafusion::arrow::array::{ArrayRef, UInt32Array};
 use datafusion::arrow::compute;
 use datafusion::arrow::record_batch::RecordBatch;
@@ -41,19 +42,25 @@ pub fn field_name_from_id(schema: &IcebergSchema, field_id: i32) -> Option<Strin
 
 pub fn build_partition_dir(
     spec: &PartitionSpec,
-    _iceberg_schema: &IcebergSchema,
+    iceberg_schema: &IcebergSchema,
     values: &[Option<Literal>],
 ) -> String {
     if spec.fields.is_empty() {
         return String::new();
     }
+    #[allow(clippy::unwrap_used)]
+    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
     let mut segs = Vec::new();
     for (i, f) in spec.fields.iter().enumerate() {
+        let field_type = iceberg_schema
+            .field_by_id(f.source_id)
+            .map(|nf| nf.field_type.as_ref())
+            .unwrap_or(&Type::Primitive(PrimitiveType::String));
         // Use already-transformed values to build partition directories.
         // This ensures bucket paths are simple integers like `number_bucket=4`
         // instead of verbose strings like `bucket[8](4)`.
         let val = values.get(i).cloned().flatten();
-        let human = match val {
+        let base_human = match val.as_ref() {
             None => "null".to_string(),
             Some(Literal::Primitive(p)) => match p {
                 PrimitiveLiteral::Boolean(v) => v.to_string(),
@@ -62,25 +69,82 @@ pub fn build_partition_dir(
                 PrimitiveLiteral::Float(v) => v.0.to_string(),
                 PrimitiveLiteral::Double(v) => v.0.to_string(),
                 PrimitiveLiteral::Int128(v) => v.to_string(),
-                PrimitiveLiteral::String(s) => s,
+                PrimitiveLiteral::String(s) => s.clone(),
                 PrimitiveLiteral::UInt128(v) => v.to_string(),
                 PrimitiveLiteral::Binary(b) => {
                     // hex-encode binary values for stability
                     let mut s = String::with_capacity(b.len() * 2 + 2);
                     s.push_str("0x");
-                    for byte in &b {
+                    for byte in b.iter() {
                         use std::fmt::Write as _;
                         let _ = write!(&mut s, "{:02x}", byte);
                     }
                     s
                 }
             },
-            #[allow(clippy::unwrap_used)]
-            Some(Literal::Struct(_)) | Some(Literal::List(_)) | Some(Literal::Map(_)) => {
+            Some(l @ (Literal::Struct(_) | Literal::List(_) | Literal::Map(_))) => {
                 // Fallback debug formatting for complex types
-                format!("{:?}", val.unwrap())
+                format!("{l:?}")
             }
         };
+
+        // Human-readable partition path formatting for temporal transforms:
+        // - years(date)  => YYYY
+        // - months(date) => YYYY-MM
+        // - days(date)   => YYYY-MM-DD
+        // - hours(ts)    => YYYY-MM-DD-HH
+        let human = match (f.transform, field_type, val.as_ref()) {
+            (
+                crate::spec::transform::Transform::Year,
+                _,
+                Some(Literal::Primitive(PrimitiveLiteral::Int(v))),
+            ) => {
+                // current apply_transform returns years since 1970; format actual year.
+                (1970 + *v).to_string()
+            }
+            (
+                crate::spec::transform::Transform::Month,
+                _,
+                Some(Literal::Primitive(PrimitiveLiteral::Int(v))),
+            ) => {
+                // months since 1970-01 (0-based)
+                let y = 1970 + v.div_euclid(12);
+                let m0 = v.rem_euclid(12);
+                format!("{:04}-{:02}", y, m0 + 1)
+            }
+            (
+                crate::spec::transform::Transform::Day,
+                _,
+                Some(Literal::Primitive(PrimitiveLiteral::Int(v))),
+            ) => {
+                // days since epoch
+                let date = epoch + chrono::Duration::days(i64::from(*v));
+                format!("{:04}-{:02}-{:02}", date.year(), date.month(), date.day())
+            }
+            (
+                crate::spec::transform::Transform::Hour,
+                _,
+                Some(Literal::Primitive(PrimitiveLiteral::Int(v))),
+            ) => {
+                // hours since epoch
+                let secs = i64::from(*v) * 3600;
+                let dt = chrono::DateTime::from_timestamp(secs, 0)
+                    .map(|dt| dt.naive_utc())
+                    .unwrap_or_else(|| {
+                        #[allow(clippy::unwrap_used)]
+                        NaiveDateTime::new(epoch, chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap())
+                    });
+                format!(
+                    "{:04}-{:02}-{:02}-{:02}",
+                    dt.year(),
+                    dt.month(),
+                    dt.day(),
+                    dt.hour()
+                )
+            }
+            _ => base_human,
+        };
+
         segs.push(format!("{}={}", f.name, human));
     }
     segs.join("/")

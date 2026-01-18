@@ -81,7 +81,7 @@ pub enum Statement {
         columns: Option<ColumnDefinitionList>,
         like: Option<(Like, ObjectName)>,
         using: Option<(Using, Ident)>,
-        #[parser(function = |(_, _, _, d), o| compose(d, o))]
+        #[parser(function = |(_, q, e, d), o| compose((e, q, d), o))]
         clauses: Vec<CreateTableClause>,
         #[parser(function = |(_, q, _, _), o| compose(q, o))]
         r#as: Option<AsQueryClause>,
@@ -93,7 +93,7 @@ pub enum Statement {
         #[parser(function = |(_, _, e, d), o| compose((e, d), o))]
         columns: Option<ColumnDefinitionList>,
         using: Option<(Using, Ident)>,
-        #[parser(function = |(_, _, _, d), o| compose(d, o))]
+        #[parser(function = |(_, q, e, d), o| compose((e, q, d), o))]
         clauses: Vec<CreateTableClause>,
         #[parser(function = |(_, q, _, _), o| compose(q, o))]
         r#as: Option<AsQueryClause>,
@@ -443,20 +443,21 @@ pub struct ColumnTypeDefinition {
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
-#[parser(dependency = "DataType")]
+#[parser(dependency = "(Expr, Query, DataType)")]
 #[allow(clippy::large_enum_variant)]
-pub enum PartitionColumn {
-    // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
-    Typed(#[parser(function = |d, o| compose(d, o))] ColumnTypeDefinition),
-    Name(Ident),
+pub enum PartitionByItem {
+    /// Hive-style typed partition column definition: `col_name <data_type>`
+    ColumnDefinition(#[parser(function = |(_, _, d), o| compose(d, o))] ColumnTypeDefinition),
+    /// DataSource partition expression: `years(ts)`, `bucket(16, b)`, `ts`, ...
+    Expression(#[parser(function = |(e, q, d), o| compose((e, q, d), o))] Expr),
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
-#[parser(dependency = "DataType")]
-pub struct PartitionColumnList {
+#[parser(dependency = "(Expr, Query, DataType)")]
+pub struct PartitionByList {
     pub left: LeftParenthesis,
-    #[parser(function = |d, o| sequence(compose(d, o), unit(o)))]
-    pub columns: Sequence<PartitionColumn, Comma>,
+    #[parser(function = |(e, q, d), o| sequence(compose((e, q, d), o), unit(o)))]
+    pub columns: Sequence<PartitionByItem, Comma>,
     pub right: RightParenthesis,
 }
 
@@ -493,13 +494,13 @@ pub enum CreateDatabaseClause {
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
-#[parser(dependency = "DataType")]
+#[parser(dependency = "(Expr, Query, DataType)")]
 pub enum CreateTableClause {
     /// The `PARTITIONED BY` clause for table.
     PartitionedBy(
         Partitioned,
         By,
-        #[parser(function = |d, o| compose(d, o))] PartitionColumnList,
+        #[parser(function = |(e, q, d), o| compose((e, q, d), o))] PartitionByList,
     ),
     /// The `CLUSTERED BY ... SORTED BY ... INTO ... BUCKETS` clause for table.
     /// In Flink, `DISTRIBUTED BY ... INTO ... BUCKETS` seems to have a similar semantic.

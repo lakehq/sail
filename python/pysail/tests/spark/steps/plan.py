@@ -43,9 +43,17 @@ def normalize_plan_text(plan_text: str) -> str:
     def normalize_path(path: str) -> str:
         path = path.replace("\\", "/")
         path = pytest_tmp_prefix.sub(lambda m: f"{m.group(1)}<tmp>/", path)
-        return re.sub(
+        # Normalize Delta Lake parquet files: part-<number>-<UUID>-c<number>.snappy.parquet
+        path = re.sub(
             r"part-\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-c\d+\.snappy\.parquet",
             "part-<id>.snappy.parquet",
+            path,
+            flags=re.IGNORECASE,
+        )
+        # Normalize Iceberg parquet files: part-<UUID>-<sequence>.parquet, keeping the sequence number
+        return re.sub(
+            r"part-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-(\d+)\.parquet",
+            r"part-<uuid>-\1.parquet",
             path,
             flags=re.IGNORECASE,
         )
@@ -61,9 +69,17 @@ def normalize_plan_text(plan_text: str) -> str:
         text,
     )
     text = pytest_tmp_prefix.sub(lambda m: f"{m.group(1)}<tmp>/", text)
+    # Normalize Delta Lake parquet files: part-<number>-<UUID>-c<number>.snappy.parquet
     text = re.sub(
         r"part-\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-c\d+\.snappy\.parquet",
         "part-<id>.snappy.parquet",
+        text,
+        flags=re.IGNORECASE,
+    )
+    # Normalize Iceberg parquet files: part-<UUID>-<sequence>.parquet, keeping the sequence number
+    text = re.sub(
+        r"part-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-(\d+)\.parquet",
+        r"part-<uuid>-\1.parquet",
         text,
         flags=re.IGNORECASE,
     )

@@ -1,0 +1,10 @@
+== Physical Plan ==
+ProjectionExec: expr=[#3@0 as category, #4@1 as cnt]
+  ProjectionExec: expr=[#2@0 as #3, count(Int64(1))@1 as #4]
+    AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
+      CoalesceBatchesExec: target_batch_size=8192
+        RepartitionExec: partitioning=Hash([#2@0], <partitions>), input_partitions=<partitions>
+          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+            AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
+              ProjectionExec: expr=[category@0 as #2]
+                DataSourceExec: file_groups={2 groups: [[<tmp>/iceberg_explain_agg/data/category=1/part-<uuid>-00000000000000000000.parquet], [<tmp>/iceberg_explain_agg/data/category=2/part-<uuid>-00000000000000000001.parquet]]}, projection=[category], file_type=parquet

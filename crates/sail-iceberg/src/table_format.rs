@@ -29,6 +29,7 @@ use crate::options::TableIcebergOptions;
 use crate::physical_plan::plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
 use crate::spec::{PartitionSpec, Schema, Snapshot};
 use crate::table::{find_latest_metadata_file, Table};
+use crate::utils::partition_transform::format_partition_expr;
 
 /// Iceberg implementation of [`TableFormat`].
 #[derive(Debug, Default)]
@@ -116,7 +117,7 @@ impl TableFormat for IcebergTableFormat {
             _ => {}
         }
 
-        // Get existing partition columns if table exists
+        // Get existing partition spec (encoded as partition expressions) if table exists
         let existing_partition_columns = if table_exists {
             let table = Table::load(ctx, table_url.clone()).await?;
             Some(Self::partition_columns_from_metadata(&table)?)
@@ -251,7 +252,7 @@ impl IcebergTableFormat {
                         field.source_id
                     ))
                 })?;
-            columns.push(col_name);
+            columns.push(format_partition_expr(&col_name, field.transform));
         }
 
         Ok(columns)

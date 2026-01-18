@@ -11,6 +11,7 @@
 // limitations under the License.
 
 pub mod conversions;
+pub mod partition_transform;
 pub mod snapshot_id;
 pub mod timestamp;
 pub mod transform;
