@@ -5,6 +5,7 @@ use datafusion_common::parsers::CompressionTypeVariant;
 
 use crate::formats::text::TableTextOptions;
 use crate::options::{load_default_options, load_options, TextReadOptions, TextWriteOptions};
+use crate::utils::char_to_u8;
 
 fn apply_text_read_options(
     from: TextReadOptions,
@@ -45,6 +46,9 @@ pub fn resolve_text_read_options(
     for opt in options {
         apply_text_read_options(load_options(opt)?, &mut text_options)?;
     }
+    if let Some(line_sep) = text_options.line_sep {
+        let _ = char_to_u8(line_sep, "line_sep")?;
+    }
     Ok(text_options)
 }
 
@@ -55,6 +59,9 @@ pub fn resolve_text_write_options(
     apply_text_write_options(load_default_options()?, &mut text_options)?;
     for opt in options {
         apply_text_write_options(load_options(opt)?, &mut text_options)?;
+    }
+    if let Some(line_sep) = text_options.line_sep {
+        let _ = char_to_u8(line_sep, "line_sep")?;
     }
     Ok(text_options)
 }

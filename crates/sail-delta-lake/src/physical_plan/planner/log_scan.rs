@@ -6,8 +6,7 @@ use datafusion::datasource::file_format::json::JsonFormat;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, FileSource as _};
-use datafusion::datasource::schema_adapter::DefaultSchemaAdapterFactory;
+use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, FileSource};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
@@ -193,20 +192,22 @@ pub async fn build_delta_log_datasource_union(
     let target_partitions = ctx.session().config().target_partitions();
 
     if !checkpoint_metas.is_empty() {
-        let source = datafusion::datasource::physical_plan::ParquetSource::default()
-            .with_schema_adapter_factory(Arc::new(DefaultSchemaAdapterFactory {}))?;
+        let source: Arc<dyn FileSource> = Arc::new(
+            datafusion::datasource::physical_plan::ParquetSource::new(Arc::clone(&merged)),
+        );
         let groups = to_file_groups(checkpoint_metas, target_partitions);
-        let conf =
-            FileScanConfigBuilder::new(object_store_url.clone(), Arc::clone(&merged), source)
-                .with_file_groups(groups)
-                .build();
+        let conf = FileScanConfigBuilder::new(object_store_url.clone(), source)
+            .with_file_groups(groups)
+            .build();
         inputs.push(DataSourceExec::from_data_source(conf));
     }
 
     if !commit_metas.is_empty() {
-        let source = Arc::new(datafusion::datasource::physical_plan::JsonSource::new());
+        let source: Arc<dyn FileSource> = Arc::new(
+            datafusion::datasource::physical_plan::JsonSource::new(Arc::clone(&merged)),
+        );
         let groups = to_file_groups(commit_metas, target_partitions);
-        let conf = FileScanConfigBuilder::new(object_store_url, Arc::clone(&merged), source)
+        let conf = FileScanConfigBuilder::new(object_store_url.clone(), source)
             .with_file_groups(groups)
             .build();
         inputs.push(DataSourceExec::from_data_source(conf));

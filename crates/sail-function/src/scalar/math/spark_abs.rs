@@ -182,10 +182,10 @@ impl ScalarUDFImpl for SparkAbs {
         }
         let zero_point = Interval::make_zero(&range.lower().data_type())?;
 
-        if range.gt_eq(&zero_point)? == Interval::CERTAINLY_TRUE {
+        if range.gt_eq(&zero_point)? == Interval::TRUE {
             // Non-decreasing for x ≥ 0
             Ok(arg.sort_properties)
-        } else if range.lt_eq(&zero_point)? == Interval::CERTAINLY_TRUE {
+        } else if range.lt_eq(&zero_point)? == Interval::TRUE {
             // Non-increasing for x ≤ 0. E.g., [-5, -3, -1] -> [5, 3, 1]
             Ok(-arg.sort_properties)
         } else {

@@ -13,13 +13,14 @@
 use std::sync::Arc;
 
 use datafusion::arrow::compute::can_cast_types;
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema as ArrowSchema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef};
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::{exec_err, Result, ScalarValue};
 use datafusion::functions::core::getfield::GetFieldFunc;
-use datafusion::physical_expr::expressions::{self, Column, Literal};
+use datafusion::physical_expr::expressions::{self, CastColumnExpr, Column, Literal};
 use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use datafusion::physical_expr_adapter::{PhysicalExprAdapter, PhysicalExprAdapterFactory};
+use datafusion_common::nested_struct::validate_struct_compatibility;
 
 #[derive(Debug)]
 pub struct IcebergPhysicalExprAdapterFactory {}
@@ -36,7 +37,6 @@ impl PhysicalExprAdapterFactory for IcebergPhysicalExprAdapterFactory {
         Arc::new(IcebergPhysicalExprAdapter {
             logical_file_schema,
             physical_file_schema,
-            partition_values: Vec::new(),
             column_mapping,
             default_values,
         })
@@ -77,11 +77,10 @@ fn create_column_mapping(
     (column_mapping, default_values)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct IcebergPhysicalExprAdapter {
     logical_file_schema: SchemaRef,
     physical_file_schema: SchemaRef,
-    partition_values: Vec<(FieldRef, ScalarValue)>,
     column_mapping: Vec<Option<usize>>,
     default_values: Vec<Option<ScalarValue>>,
 }
@@ -91,44 +90,17 @@ impl PhysicalExprAdapter for IcebergPhysicalExprAdapter {
         let rewriter = IcebergPhysicalExprRewriter {
             logical_file_schema: &self.logical_file_schema,
             physical_file_schema: &self.physical_file_schema,
-            partition_values: &self.partition_values,
             column_mapping: &self.column_mapping,
             default_values: &self.default_values,
         };
         expr.transform(|expr| rewriter.rewrite_expr(Arc::clone(&expr)))
             .data()
     }
-
-    fn with_partition_values(
-        &self,
-        partition_values: Vec<(FieldRef, ScalarValue)>,
-    ) -> Arc<dyn PhysicalExprAdapter> {
-        Arc::new(IcebergPhysicalExprAdapter {
-            logical_file_schema: Arc::clone(&self.logical_file_schema),
-            physical_file_schema: Arc::clone(&self.physical_file_schema),
-            partition_values,
-            column_mapping: self.column_mapping.clone(),
-            default_values: self.default_values.clone(),
-        })
-    }
-}
-
-impl Clone for IcebergPhysicalExprAdapter {
-    fn clone(&self) -> Self {
-        Self {
-            logical_file_schema: Arc::clone(&self.logical_file_schema),
-            physical_file_schema: Arc::clone(&self.physical_file_schema),
-            partition_values: self.partition_values.clone(),
-            column_mapping: self.column_mapping.clone(),
-            default_values: self.default_values.clone(),
-        }
-    }
 }
 
 struct IcebergPhysicalExprRewriter<'a> {
     logical_file_schema: &'a ArrowSchema,
     physical_file_schema: &'a ArrowSchema,
-    partition_values: &'a [(FieldRef, ScalarValue)],
     column_mapping: &'a [Option<usize>],
     default_values: &'a [Option<ScalarValue>],
 }
@@ -222,10 +194,6 @@ impl<'a> IcebergPhysicalExprRewriter<'a> {
         expr: Arc<dyn PhysicalExpr>,
         column: &Column,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-        if let Some(partition_value) = self.get_partition_value(column.name()) {
-            return Ok(Transformed::yes(Arc::new(Literal::new(partition_value))));
-        }
-
         let logical_field_index = match self.logical_file_schema.index_of(column.name()) {
             Ok(index) => index,
             Err(_) => {
@@ -307,26 +275,27 @@ impl<'a> IcebergPhysicalExprRewriter<'a> {
         logical_field: &Field,
         physical_field: &Field,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-        if !can_cast_types(physical_field.data_type(), logical_field.data_type()) {
-            return exec_err!(
-                "Cannot cast column '{}' from '{}' (physical) to '{}' (logical)",
-                logical_field.name(),
-                physical_field.data_type(),
-                logical_field.data_type()
-            );
+        match (physical_field.data_type(), logical_field.data_type()) {
+            (DataType::Struct(physical_fields), DataType::Struct(logical_fields)) => {
+                validate_struct_compatibility(physical_fields, logical_fields)?;
+            }
+            _ => {
+                if !can_cast_types(physical_field.data_type(), logical_field.data_type()) {
+                    return exec_err!(
+                        "Cannot cast column '{}' from '{}' (physical) to '{}' (logical)",
+                        logical_field.name(),
+                        physical_field.data_type(),
+                        logical_field.data_type()
+                    );
+                }
+            }
         }
-        let cast_expr = datafusion::physical_expr::expressions::CastExpr::new(
-            column_expr,
-            logical_field.data_type().clone(),
-            None,
-        );
-        Ok(Transformed::yes(Arc::new(cast_expr)))
-    }
 
-    fn get_partition_value(&self, column_name: &str) -> Option<ScalarValue> {
-        self.partition_values
-            .iter()
-            .find(|(field, _)| field.name() == column_name)
-            .map(|(_, value)| value.clone())
+        Ok(Transformed::yes(Arc::new(CastColumnExpr::new(
+            column_expr,
+            Arc::new(physical_field.clone()),
+            Arc::new(logical_field.clone()),
+            None,
+        ))))
     }
 }
