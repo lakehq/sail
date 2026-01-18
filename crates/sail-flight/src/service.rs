@@ -76,11 +76,18 @@ pub struct SailFlightSqlService {
     config: Arc<PlanConfig>,
     /// Cache for prepared statement results to avoid re-executing DDL statements
     prepared_cache: Arc<PreparedStatementCache>,
+    /// Maximum rows to return per query (0 = unlimited)
+    max_rows: usize,
 }
 
 impl SailFlightSqlService {
-    /// Create a new service with the given cache configuration
-    pub fn new(max_cache_size_bytes: usize, enable_cache_stats: bool) -> Self {
+    /// Create a new service with the given configuration
+    ///
+    /// # Arguments
+    /// * `max_cache_size_bytes` - Maximum cache size for prepared statements
+    /// * `enable_cache_stats` - Enable cache statistics logging
+    /// * `max_rows` - Maximum rows to return per query (0 = unlimited)
+    pub fn new(max_cache_size_bytes: usize, enable_cache_stats: bool, max_rows: usize) -> Self {
         let ctx = create_sail_session_context();
         let config = Arc::new(PlanConfig::default());
         let prepared_cache = Arc::new(PreparedStatementCache::new(
@@ -92,6 +99,7 @@ impl SailFlightSqlService {
             ctx: Arc::new(RwLock::new(ctx)),
             config,
             prepared_cache,
+            max_rows,
         }
     }
 
@@ -206,10 +214,48 @@ impl SailFlightSqlService {
         let total_bytes: usize = batches.iter().map(|b| b.get_array_memory_size()).sum();
         let num_batches = batches.len();
 
+        // Apply max_rows limit if configured (0 = unlimited)
+        let (batches, was_truncated) = if self.max_rows > 0 && total_rows > self.max_rows {
+            let mut limited_batches = Vec::new();
+            let mut rows_remaining = self.max_rows;
+
+            for batch in batches {
+                if rows_remaining == 0 {
+                    break;
+                }
+                if batch.num_rows() <= rows_remaining {
+                    rows_remaining -= batch.num_rows();
+                    limited_batches.push(batch);
+                } else {
+                    // Slice the batch to fit the limit
+                    let sliced = batch.slice(0, rows_remaining);
+                    limited_batches.push(sliced);
+                    rows_remaining = 0;
+                }
+            }
+            (limited_batches, true)
+        } else {
+            (batches, false)
+        };
+
+        let final_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+
+        if was_truncated {
+            warn!(
+                "Query results truncated: {} rows returned (limit: {}), original: {} rows",
+                final_rows, self.max_rows, total_rows
+            );
+        }
+
         info!(
-            "Query completed: time={:?}, rows={}, batches={}, memory={:.2} KB",
+            "Query completed: time={:?}, rows={}{}, batches={}, memory={:.2} KB",
             total_start.elapsed(),
-            total_rows,
+            final_rows,
+            if was_truncated {
+                format!(" (truncated from {})", total_rows)
+            } else {
+                String::new()
+            },
             num_batches,
             total_bytes as f64 / 1024.0
         );

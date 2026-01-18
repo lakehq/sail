@@ -58,6 +58,10 @@ enum Commands {
         /// Disable cache statistics logging
         #[arg(long, default_value = "false")]
         disable_cache_stats: bool,
+
+        /// Maximum rows to return per query (0 = unlimited, default: 0)
+        #[arg(long, default_value = "0")]
+        max_rows: usize,
     },
 }
 
@@ -78,12 +82,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             host,
             cache_size_mb,
             disable_cache_stats,
+            max_rows,
         } => {
             let mut config = FlightSqlServerConfig::default();
             config.server.host = host.clone();
             config.server.port = *port;
             config.cache.max_size_bytes = cache_size_mb * 1024 * 1024; // Convert MB to bytes
             config.cache.enable_stats = !disable_cache_stats;
+            config.limits.max_rows = *max_rows;
 
             if let Err(e) = run_flight_server(config).await {
                 error!("Server error: {}", e);
@@ -115,9 +121,21 @@ async fn run_flight_server(
             "disabled"
         }
     );
+    info!(
+        "  Max rows: {}",
+        if config.limits.max_rows == 0 {
+            "unlimited".to_string()
+        } else {
+            config.limits.max_rows.to_string()
+        }
+    );
 
     let addr = config.bind_address()?;
-    let service = SailFlightSqlService::new(config.cache.max_size_bytes, config.cache.enable_stats);
+    let service = SailFlightSqlService::new(
+        config.cache.max_size_bytes,
+        config.cache.enable_stats,
+        config.limits.max_rows,
+    );
 
     info!("✓ Server listening on {}", addr);
     info!("Connection strings:");

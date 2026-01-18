@@ -22,6 +22,10 @@ pub struct FlightSqlServerConfig {
     /// Prepared statement cache configuration
     #[serde(default)]
     pub cache: CacheConfig,
+
+    /// Query execution limits
+    #[serde(default)]
+    pub limits: QueryLimitsConfig,
 }
 
 /// Server binding configuration
@@ -58,6 +62,21 @@ pub struct CacheConfig {
     /// Enable cache statistics logging
     #[serde(default = "default_cache_stats")]
     pub enable_stats: bool,
+}
+
+/// Query execution limits configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryLimitsConfig {
+    /// Maximum number of rows to return (0 = unlimited, default: 0)
+    /// If a query returns more rows, results will be truncated with a warning
+    #[serde(default)]
+    pub max_rows: usize,
+}
+
+impl Default for QueryLimitsConfig {
+    fn default() -> Self {
+        Self { max_rows: 0 } // 0 = unlimited
+    }
 }
 
 impl Default for CacheConfig {
