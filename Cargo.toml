@@ -75,15 +75,15 @@ num-traits = "0.2.19"
 log = "0.4.29"
 env_logger = "0.11.8"
 fastrace = { version = "0.7.16", features = ["enable"] }
-fastrace-opentelemetry = "0.14.0"
+fastrace-opentelemetry = "0.15.1"
 fastrace-futures = "0.7.16"
 opentelemetry = "0.31.0"
 opentelemetry_sdk = { version = "0.31.0", features = ["testing"] }
 opentelemetry-otlp = { version = "0.31.0", features = ["tls", "tls-roots", "grpc-tonic"] }
 opentelemetry-appender-log = "0.31.0"
 figment = { version = "0.10.19", features = ["toml", "env"] }
-kube = "2.0.1"
-k8s-openapi = { version = "0.26.1", features = ["latest"] }
+kube = "3.0.0"
+k8s-openapi = { version = "0.27.0", features = ["latest"] }
 twox-hash = "2.1.2"
 murmur3 = "0.5.2"
 aes = "0.8.4"
@@ -95,7 +95,7 @@ crc32fast = "1.5.0"
 sha1 = "0.10.6"
 half = { version = "2.7.1", features = ["serde", "num-traits", "zerocopy"] }
 iana-time-zone = "0.1.64"
-chumsky = { version = "0.11.2", default-features = false, features = ["pratt"] }
+chumsky = { version = "0.12.0", default-features = false, features = ["pratt"] }
 num = "0.4.3"
 hf-hub = { version = "0.4.3", default-features = false, features = ["tokio"] }
 reqwest = { version = "0.12.27", default-features = false, features = ["rustls-tls", "json", "multipart", "stream"] }
@@ -164,10 +164,10 @@ parquet = { version = "57.1.0" }
 serde_arrow = { version = "0.13.7", features = ["arrow-57"] }
 # The `object_store` version must match the one used in DataFusion.
 object_store = { version = "0.12.4", features = ["aws", "gcp", "azure", "http"] }
-hdfs-native-object-store = "0.15.0"
+hdfs-native-object-store = "0.16.0"
 
 # Lakehouse
-delta_kernel = { version = "0.18.2", features = ["arrow-57", "default-engine-rustls", "internal-api"] }
+delta_kernel = { version = "0.19.0", features = ["arrow-57", "default-engine-rustls", "internal-api"] }
 ######
 # This is the end of the manually managed dependencies.
 # Do not add more dependencies below.
