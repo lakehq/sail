@@ -66,8 +66,8 @@ use sail_data_source::formats::socket::{SocketSourceExec, TableSocketOptions};
 use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
 use sail_delta_lake::physical_plan::{
-    DeltaCommitExec, DeltaDiscoveryExec, DeltaLogPathExtractExec, DeltaLogReplayExec,
-    DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
+    DeltaCommitExec, DeltaDiscoveryExec, DeltaLogReplayExec, DeltaRemoveActionsExec,
+    DeltaScanByAddsExec, DeltaWriterExec,
 };
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
@@ -603,10 +603,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let input = self.try_decode_plan(&input, ctx)?;
                 Ok(Arc::new(DeltaRemoveActionsExec::new(input)?))
             }
-            NodeKind::DeltaLogPathExtract(gen::DeltaLogPathExtractExecNode { input }) => {
-                let input = self.try_decode_plan(&input, ctx)?;
-                Ok(Arc::new(DeltaLogPathExtractExec::new(input)?))
-            }
             NodeKind::DeltaLogReplay(gen::DeltaLogReplayExecNode {
                 input,
                 table_url,
@@ -1077,11 +1073,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         {
             let input = self.try_encode_plan(delta_remove_actions_exec.children()[0].clone())?;
             NodeKind::DeltaRemoveActions(gen::DeltaRemoveActionsExecNode { input })
-        } else if let Some(delta_log_path_extract_exec) =
-            node.as_any().downcast_ref::<DeltaLogPathExtractExec>()
-        {
-            let input = self.try_encode_plan(delta_log_path_extract_exec.children()[0].clone())?;
-            NodeKind::DeltaLogPathExtract(gen::DeltaLogPathExtractExecNode { input })
         } else if let Some(delta_log_replay_exec) =
             node.as_any().downcast_ref::<DeltaLogReplayExec>()
         {

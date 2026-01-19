@@ -14,9 +14,11 @@ use std::sync::Arc;
 
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::common::{DataFusionError, Result};
-use datafusion::physical_expr::expressions::Column;
-use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr};
+use datafusion::common::{DataFusionError, Result, ScalarValue};
+use datafusion::physical_expr::expressions::{Column, Literal};
+use datafusion::physical_expr::{
+    LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr, ScalarFunctionExpr,
+};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
@@ -29,8 +31,8 @@ use url::Url;
 use super::context::PlannerContext;
 use super::log_scan::build_delta_log_datasource_union;
 use crate::physical_plan::{
-    create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaLogPathExtractExec,
-    DeltaLogReplayExec, DeltaWriterExec, COL_REPLAY_PATH,
+    create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaLogReplayExec,
+    DeltaWriterExec, COL_REPLAY_PATH,
 };
 
 pub fn build_standard_write_layers(
@@ -118,8 +120,8 @@ pub fn align_schemas_for_union(
 }
 
 /// Build the standard log replay pipeline:
-/// `Union(DataSourceExec)` -> `DeltaLogPathExtractExec` -> `Repartition(Hash replay_path)`
-/// -> `Sort(replay_path, preserve_partitioning)` -> `DeltaLogReplayExec`.
+/// `Union(DataSourceExec)` -> `Projection(replay_path)` -> `Repartition(Hash replay_path)` ->
+/// `Sort(replay_path, preserve_partitioning)` -> `DeltaLogReplayExec`.
 pub async fn build_log_replay_pipeline(
     ctx: &PlannerContext<'_>,
     table_url: Url,
@@ -130,7 +132,52 @@ pub async fn build_log_replay_pipeline(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let (raw_scan, checkpoint_files, commit_files) =
         build_delta_log_datasource_union(ctx, checkpoint_files, commit_files).await?;
-    let log_scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaLogPathExtractExec::new(raw_scan)?);
+
+    // Append a derived `replay_path` column using standard expressions:
+    // replay_path = coalesce(get_field(add, 'path'), get_field(remove, 'path'))
+    let input_schema = raw_scan.schema();
+    let mut projection_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
+        Vec::with_capacity(input_schema.fields().len() + 1);
+    for (i, field) in input_schema.fields().iter().enumerate() {
+        projection_exprs.push((
+            Arc::new(Column::new(field.name(), i)) as Arc<dyn PhysicalExpr>,
+            field.name().clone(),
+        ));
+    }
+
+    let add_idx = input_schema.index_of("add")?;
+    let remove_idx = input_schema.index_of("remove")?;
+
+    let path_lit: Arc<dyn PhysicalExpr> =
+        Arc::new(Literal::new(ScalarValue::Utf8(Some("path".to_string()))));
+    let add_col: Arc<dyn PhysicalExpr> = Arc::new(Column::new("add", add_idx));
+    let remove_col: Arc<dyn PhysicalExpr> = Arc::new(Column::new("remove", remove_idx));
+
+    let config_options = Arc::new(ctx.session().config_options().clone());
+
+    let add_path: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::try_new(
+        datafusion::functions::core::get_field(),
+        vec![add_col, Arc::clone(&path_lit)],
+        input_schema.as_ref(),
+        Arc::clone(&config_options),
+    )?);
+    let remove_path: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::try_new(
+        datafusion::functions::core::get_field(),
+        vec![remove_col, Arc::clone(&path_lit)],
+        input_schema.as_ref(),
+        Arc::clone(&config_options),
+    )?);
+
+    let replay_path: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::try_new(
+        datafusion::functions::core::coalesce(),
+        vec![add_path, remove_path],
+        input_schema.as_ref(),
+        Arc::clone(&config_options),
+    )?);
+    projection_exprs.push((replay_path, COL_REPLAY_PATH.to_string()));
+
+    let log_scan: Arc<dyn ExecutionPlan> =
+        Arc::new(ProjectionExec::try_new(projection_exprs, raw_scan)?);
 
     let log_partitions = ctx.session().config().target_partitions().max(1);
     let replay_path_idx = log_scan.schema().index_of(COL_REPLAY_PATH)?;

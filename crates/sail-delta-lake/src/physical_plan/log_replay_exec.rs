@@ -389,8 +389,8 @@ impl ReplayState {
             return Ok(());
         }
 
-        // The planner is expected to place `DeltaLogPathExtractExec` under this node to
-        // materialize `COL_REPLAY_PATH` for distribution/sorting.
+        // The planner is expected to materialize `COL_REPLAY_PATH` (via a projection)
+        // for distribution/sorting.
         let replay_path = batch.column_by_name(COL_REPLAY_PATH).ok_or_else(|| {
             DataFusionError::Plan(format!(
                 "DeltaLogReplayExec input must have Utf8 column '{COL_REPLAY_PATH}'"
@@ -473,7 +473,7 @@ impl ExecutionPlan for DeltaLogReplayExec {
     fn required_input_distribution(&self) -> Vec<Distribution> {
         // Log replay is only correct if all actions for the same `path` are co-located in the
         // same partition. We express this as a required hash distribution over the derived
-        // `COL_REPLAY_PATH` column, which is expected to be produced by `DeltaLogPathExtractExec`.
+        // `COL_REPLAY_PATH` column, which is expected to be produced by the planner.
         //
         // If the column isn't present (e.g. an unexpected upstream), fall back to single
         // partition to preserve correctness.

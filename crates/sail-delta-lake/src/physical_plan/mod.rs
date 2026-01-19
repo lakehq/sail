@@ -31,7 +31,6 @@ mod commit_exec;
 pub mod discovery_exec;
 mod expr_adapter;
 mod log_action_decode;
-mod log_path_extract_exec;
 mod log_replay_exec;
 mod meta_adds;
 mod remove_actions_exec;
@@ -45,7 +44,6 @@ pub use action_schema::{
 pub use commit_exec::DeltaCommitExec;
 pub use discovery_exec::DeltaDiscoveryExec;
 pub use expr_adapter::DeltaPhysicalExprAdapterFactory;
-pub use log_path_extract_exec::{DeltaLogPathExtractExec, COL_REPLAY_PATH};
 pub use log_replay_exec::DeltaLogReplayExec;
 pub mod planner;
 pub use planner::{
@@ -54,6 +52,9 @@ pub use planner::{
 pub use remove_actions_exec::DeltaRemoveActionsExec;
 pub use scan_by_adds_exec::DeltaScanByAddsExec;
 pub use writer_exec::DeltaWriterExec;
+
+/// Top-level derived column used to co-locate log actions by file path for parallel replay.
+pub const COL_REPLAY_PATH: &str = "__sail_delta_replay_path";
 
 /// Create a `ProjectionExec` instance that reorders columns so that partition columns
 /// are placed at the end of the `RecordBatch`.
