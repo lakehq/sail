@@ -553,8 +553,9 @@ mod tests {
     use object_store::ObjectStore;
 
     use super::{DeltaWriter, WriterConfig};
+    use crate::kernel::DeltaTableError;
 
-    fn make_batch(values: Vec<i32>, parts: Vec<&str>) -> RecordBatch {
+    fn make_batch(values: Vec<i32>, parts: Vec<&str>) -> Result<RecordBatch, DeltaTableError> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("value", DataType::Int32, false),
             Field::new("part", DataType::Utf8, false),
@@ -562,14 +563,16 @@ mod tests {
         let value_arr: ArrayRef = Arc::new(Int32Array::from(values));
         let part_arr: ArrayRef = Arc::new(StringArray::from(parts));
 
-        RecordBatch::try_new(schema, vec![value_arr, part_arr]).expect("batch build")
+        RecordBatch::try_new(schema, vec![value_arr, part_arr]).map_err(|e| {
+            DeltaTableError::generic(format!("Failed to build test record batch: {e}"))
+        })
     }
 
-    fn make_writer() -> DeltaWriter {
+    fn make_writer() -> Result<DeltaWriter, DeltaTableError> {
         let object_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let table_path = Path::from("delta_table");
 
-        let schema = make_batch(vec![1], vec!["a"]).schema();
+        let schema = make_batch(vec![1], vec!["a"])?.schema();
         let config = WriterConfig::new(
             schema,
             vec!["part".to_string()],
@@ -581,51 +584,55 @@ mod tests {
             None,
         );
 
-        DeltaWriter::new(object_store, table_path, config)
+        Ok(DeltaWriter::new(object_store, table_path, config))
     }
 
     #[tokio::test]
-    async fn streaming_writer_splits_by_partition_ranges() {
-        let mut writer = make_writer();
-        let batch = make_batch(vec![1, 2, 3, 4, 5], vec!["a", "a", "b", "b", "c"]);
-        writer.write(&batch).await.expect("write");
+    async fn streaming_writer_splits_by_partition_ranges() -> Result<(), DeltaTableError> {
+        let mut writer = make_writer()?;
+        let batch = make_batch(vec![1, 2, 3, 4, 5], vec!["a", "a", "b", "b", "c"])?;
+        writer.write(&batch).await?;
 
-        let adds = writer.close().await.expect("close");
+        let adds = writer.close().await?;
         assert_eq!(adds.len(), 3);
 
         let paths = adds.iter().map(|a| a.path.as_str()).collect::<Vec<_>>();
         assert!(paths.iter().any(|p| p.contains("part=a/")));
         assert!(paths.iter().any(|p| p.contains("part=b/")));
         assert!(paths.iter().any(|p| p.contains("part=c/")));
+        Ok(())
     }
 
     #[tokio::test]
-    async fn streaming_writer_keeps_partition_open_across_batches() {
-        let mut writer = make_writer();
+    async fn streaming_writer_keeps_partition_open_across_batches() -> Result<(), DeltaTableError> {
+        let mut writer = make_writer()?;
 
-        let batch1 = make_batch(vec![1, 2], vec!["a", "a"]);
-        writer.write(&batch1).await.expect("write batch1");
+        let batch1 = make_batch(vec![1, 2], vec!["a", "a"])?;
+        writer.write(&batch1).await?;
 
         // batch2 starts with the same partition, then switches.
-        let batch2 = make_batch(vec![3, 4], vec!["a", "b"]);
-        writer.write(&batch2).await.expect("write batch2");
+        let batch2 = make_batch(vec![3, 4], vec!["a", "b"])?;
+        writer.write(&batch2).await?;
 
-        let adds = writer.close().await.expect("close");
+        let adds = writer.close().await?;
         assert_eq!(adds.len(), 2);
 
         let paths = adds.iter().map(|a| a.path.as_str()).collect::<Vec<_>>();
         assert!(paths.iter().any(|p| p.contains("part=a/")));
         assert!(paths.iter().any(|p| p.contains("part=b/")));
+        Ok(())
     }
 
     #[cfg(debug_assertions)]
     #[tokio::test]
     #[should_panic(expected = "input violated partition grouping contract")]
     async fn debug_contract_panics_on_partition_key_regression() {
-        let mut writer = make_writer();
+        #[allow(clippy::unwrap_used)]
+        let mut writer = make_writer().unwrap();
 
         // Key re-appears after switching away: a -> b -> a
-        let batch = make_batch(vec![1, 2, 3], vec!["a", "b", "a"]);
+        #[allow(clippy::unwrap_used)]
+        let batch = make_batch(vec![1, 2, 3], vec!["a", "b", "a"]).unwrap();
         let _ = writer.write(&batch).await;
     }
 }

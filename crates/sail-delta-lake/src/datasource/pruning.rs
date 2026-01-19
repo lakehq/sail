@@ -236,8 +236,8 @@ impl AddStatsPruningStatistics {
         cur.as_value()
     }
 
-    fn lookup_count_stat<'a>(
-        map: &'a std::collections::HashMap<String, ColumnCountStat>,
+    fn lookup_count_stat(
+        map: &std::collections::HashMap<String, ColumnCountStat>,
         name: &str,
     ) -> Option<i64> {
         let mut parts = name.split('.');
@@ -274,7 +274,7 @@ impl AddStatsPruningStatistics {
         if !has_value {
             return None;
         }
-        ScalarValue::iter_to_array(scalars.into_iter()).ok()
+        ScalarValue::iter_to_array(scalars).ok()
     }
 }
 

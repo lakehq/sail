@@ -199,7 +199,9 @@ pub async fn build_log_replay_pipeline(
             nulls_first: false,
         },
     }])
-    .expect("non-degenerate ordering");
+    .ok_or_else(|| {
+        DataFusionError::Internal("failed to create replay_path ordering requirement".to_string())
+    })?;
     let log_scan: Arc<dyn ExecutionPlan> =
         Arc::new(SortExec::new(ordering, log_scan).with_preserve_partitioning(true));
 

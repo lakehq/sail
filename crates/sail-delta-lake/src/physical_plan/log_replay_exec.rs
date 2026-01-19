@@ -380,8 +380,8 @@ impl ReplayState {
         cols.push(Arc::new(self.out_stats.finish()) as ArrayRef);
 
         self.out_rows = 0;
-        Ok(RecordBatch::try_new(Arc::clone(&self.output_schema), cols)
-            .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?)
+        RecordBatch::try_new(Arc::clone(&self.output_schema), cols)
+            .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
     }
 
     fn process_batch(&mut self, batch: &RecordBatch) -> Result<()> {
@@ -496,14 +496,15 @@ impl ExecutionPlan for DeltaLogReplayExec {
             Err(_) => return vec![None],
         };
 
-        let ordering = LexOrdering::new(vec![PhysicalSortExpr {
+        let Some(ordering) = LexOrdering::new(vec![PhysicalSortExpr {
             expr: Arc::new(Column::new(COL_REPLAY_PATH, idx)),
             options: SortOptions {
                 descending: false,
                 nulls_first: false,
             },
-        }])
-        .expect("non-degenerate ordering");
+        }]) else {
+            return vec![None];
+        };
 
         vec![Some(OrderingRequirements::from(ordering))]
     }
@@ -741,6 +742,7 @@ mod tests {
         let input: Arc<dyn ExecutionPlan> = Arc::new(OneBatchExec::new(batch));
         let exec = Arc::new(DeltaLogReplayExec::new(
             input,
+            #[allow(clippy::unwrap_used)]
             Url::parse("file:///tmp/delta").unwrap(),
             0,
             vec![],
@@ -750,8 +752,9 @@ mod tests {
 
         let ctx = Arc::new(TaskContext::default());
         let mut stream = exec.execute(0, ctx)?;
+        #[allow(clippy::unwrap_used)]
         let out = stream.try_next().await?.unwrap();
-
+        #[allow(clippy::unwrap_used)]
         let path_col = out
             .column(0)
             .as_any()

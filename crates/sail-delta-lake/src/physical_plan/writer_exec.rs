@@ -247,7 +247,9 @@ impl ExecutionPlan for DeltaWriterExec {
             });
         }
 
-        let ordering = LexOrdering::new(sort_exprs).expect("non-degenerate ordering");
+        let Some(ordering) = LexOrdering::new(sort_exprs) else {
+            return vec![None];
+        };
         vec![Some(OrderingRequirements::from(ordering))]
     }
 
@@ -317,7 +319,6 @@ impl DeltaWriterExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-
         let output_rows = MetricBuilder::new(&self.metrics).output_rows(partition);
         let output_bytes = MetricBuilder::new(&self.metrics).output_bytes(partition);
         let elapsed_compute = MetricBuilder::new(&self.metrics).elapsed_compute(partition);
@@ -365,9 +366,8 @@ impl DeltaWriterExec {
             )
             .await;
 
-            #[allow(clippy::unwrap_used)]
             let table = if table_exists {
-                Some(table_result.unwrap())
+                Some(table_result.map_err(|e| DataFusionError::External(Box::new(e)))?)
             } else {
                 None
             };
@@ -498,14 +498,13 @@ impl DeltaWriterExec {
                         writer_features.push("timestampNtz");
                     }
 
-                    #[allow(clippy::unwrap_used)]
                     let protocol: Protocol = serde_json::from_value(serde_json::json!({
                         "minReaderVersion": 3,
                         "minWriterVersion": 7,
                         "readerFeatures": reader_features,
                         "writerFeatures": writer_features
                     }))
-                    .unwrap();
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                     let mut configuration = HashMap::new();
                     let mode_str = match effective_mode {
@@ -516,18 +515,16 @@ impl DeltaWriterExec {
                     configuration
                         .insert("delta.columnMapping.mode".to_string(), mode_str.to_string());
                     // Set maxColumnId for new tables
-                    #[allow(clippy::unwrap_used)]
-                    let max_id = compute_max_column_id(annotated_schema_opt.as_ref().unwrap());
+                    let max_id = compute_max_column_id(&annotated_schema);
                     configuration.insert(
                         "delta.columnMapping.maxColumnId".to_string(),
                         max_id.to_string(),
                     );
 
-                    #[allow(clippy::unwrap_used)]
                     let metadata = Metadata::try_new(
                         None,
                         None,
-                        annotated_schema_opt.as_ref().unwrap().clone(),
+                        annotated_schema.clone(),
                         partition_columns.clone(),
                         Utc::now().timestamp_millis(),
                         configuration,
@@ -549,14 +546,13 @@ impl DeltaWriterExec {
                         metadata,
                     });
                 } else if has_timestamp_ntz {
-                    #[allow(clippy::unwrap_used)]
                     let protocol: Protocol = serde_json::from_value(serde_json::json!({
                         "minReaderVersion": 3,
                         "minWriterVersion": 7,
                         "readerFeatures": ["timestampNtz"],
                         "writerFeatures": ["timestampNtz"]
                     }))
-                    .unwrap();
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                     let metadata = Metadata::try_new(
                         None,
@@ -587,8 +583,6 @@ impl DeltaWriterExec {
                 ColumnMappingModeOption::Name | ColumnMappingModeOption::Id
             ) {
                 // Determine logical kernel schema (annotated for new tables; from snapshot for existing tables)
-                #[allow(clippy::unwrap_used)]
-                #[allow(clippy::expect_used)]
                 let logical_kernel: StructType = if let Some(meta_action_schema) = schema_actions
                     .iter()
                     .find_map(|a| match a {
@@ -602,18 +596,25 @@ impl DeltaWriterExec {
                 {
                     meta_action_schema
                 } else if table_exists {
+                    let table = table.as_ref().ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "table exists but was not loaded for column-mapped write planning"
+                                .to_string(),
+                        )
+                    })?;
                     table
-                        .as_ref()
-                        .unwrap()
                         .snapshot()
                         .map_err(|e| DataFusionError::External(Box::new(e)))?
                         .snapshot()
                         .schema()
                         .clone()
                 } else {
-                    annotated_schema_opt
-                        .clone()
-                        .expect("annotated schema should exist for new table with column mapping")
+                    annotated_schema_opt.clone().ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "annotated schema missing for new table with column mapping"
+                                .to_string(),
+                        )
+                    })?
                 };
 
                 // Build physical Arrow schema enriched with PARQUET:field_id
@@ -927,11 +928,15 @@ impl DeltaWriterExec {
         }
 
         // Build merged fields in the correct order
-        #[allow(clippy::unwrap_used)]
-        let merged_fields: Vec<Field> = field_order
-            .into_iter()
-            .map(|name| field_map.remove(&name).unwrap())
-            .collect();
+        let mut merged_fields: Vec<Field> = Vec::with_capacity(field_order.len());
+        for name in field_order {
+            let f = field_map.remove(&name).ok_or_else(|| {
+                DataFusionError::Internal(format!(
+                    "schema merge invariant violated: field '{name}' missing from map"
+                ))
+            })?;
+            merged_fields.push(f);
+        }
 
         Ok(std::sync::Arc::new(Schema::new(merged_fields)))
     }
