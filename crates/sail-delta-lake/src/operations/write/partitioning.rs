@@ -1,5 +1,4 @@
 use datafusion::arrow::array::{ArrayRef, RecordBatch};
-use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use datafusion::arrow::row::{RowConverter, SortField};
 use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;
@@ -7,20 +6,24 @@ use indexmap::IndexMap;
 use crate::kernel::models::ScalarExt;
 use crate::kernel::DeltaTableError;
 
-/// Result of partitioning a record batch.
+/// A contiguous range of rows that share the same partition values.
 #[derive(Debug)]
-pub struct PartitionResult {
-    pub record_batch: RecordBatch,
+pub struct PartitionRange {
+    pub start: usize,
+    pub end: usize,
     pub partition_values: IndexMap<String, Scalar>,
 }
 
-/// Partition a RecordBatch along partition columns.
-pub(crate) fn divide_by_partition_values(
-    arrow_schema: ArrowSchemaRef,
-    logical_partition_columns: Vec<String>,
-    physical_partition_columns: Vec<String>,
+/// Detect contiguous partition ranges from an input batch.
+///
+/// The input is expected to be grouped by `physical_partition_columns` (typically guaranteed by
+/// the planner via `SortExec` on partition columns). This function does **not** sort; it only
+/// detects boundaries where the partition key changes.
+pub(crate) fn partition_ranges(
+    logical_partition_columns: &[String],
+    physical_partition_columns: &[String],
     values: &RecordBatch,
-) -> Result<Vec<PartitionResult>, DeltaTableError> {
+) -> Result<Vec<PartitionRange>, DeltaTableError> {
     let mut partitions = Vec::new();
 
     if values.num_rows() == 0 {
@@ -28,9 +31,10 @@ pub(crate) fn divide_by_partition_values(
     }
 
     if logical_partition_columns.is_empty() {
-        partitions.push(PartitionResult {
+        partitions.push(PartitionRange {
+            start: 0,
+            end: values.num_rows(),
             partition_values: IndexMap::new(),
-            record_batch: values.clone(),
         });
         return Ok(partitions);
     }
@@ -60,17 +64,6 @@ pub(crate) fn divide_by_partition_values(
         DeltaTableError::generic(format!("failed to convert partition columns: {e}"))
     })?;
 
-    // Pre-compute indices for non-partition columns, as described by `arrow_schema`.
-    let data_indices: Vec<usize> = arrow_schema
-        .fields()
-        .iter()
-        .map(|f| {
-            schema.index_of(f.name()).map_err(|_| {
-                DeltaTableError::schema(format!("Column {} not found in batch", f.name()))
-            })
-        })
-        .collect::<Result<_, _>>()?;
-
     let mut start = 0usize;
     let mut prev = rows.row(0);
     for i in 1..rows.num_rows() {
@@ -79,10 +72,8 @@ pub(crate) fn divide_by_partition_values(
             push_partition_range(
                 &mut partitions,
                 values,
-                &logical_partition_columns,
+                logical_partition_columns,
                 &partition_indices,
-                &data_indices,
-                arrow_schema.clone(),
                 start,
                 i,
             )?;
@@ -93,10 +84,8 @@ pub(crate) fn divide_by_partition_values(
     push_partition_range(
         &mut partitions,
         values,
-        &logical_partition_columns,
+        logical_partition_columns,
         &partition_indices,
-        &data_indices,
-        arrow_schema,
         start,
         rows.num_rows(),
     )?;
@@ -105,12 +94,10 @@ pub(crate) fn divide_by_partition_values(
 }
 
 fn push_partition_range(
-    out: &mut Vec<PartitionResult>,
+    out: &mut Vec<PartitionRange>,
     values: &RecordBatch,
     logical_partition_columns: &[String],
     partition_indices: &[usize],
-    data_indices: &[usize],
-    arrow_schema: ArrowSchemaRef,
     start: usize,
     end: usize,
 ) -> Result<(), DeltaTableError> {
@@ -135,18 +122,10 @@ fn push_partition_range(
         .zip(partition_key_iter)
         .collect();
 
-    // Slice is zero-copy; projection preserves order and avoids per-row take/sort.
-    let slice = values.slice(start, len);
-    let projected = slice
-        .project(data_indices)
-        .map_err(|e| DeltaTableError::generic(format!("Failed to project record batch: {e}")))?;
-
-    let record_batch = RecordBatch::try_new(arrow_schema, projected.columns().to_vec())
-        .map_err(|e| DeltaTableError::generic(format!("Failed to build record batch: {e}")))?;
-
-    out.push(PartitionResult {
+    out.push(PartitionRange {
+        start,
+        end,
         partition_values,
-        record_batch,
     });
 
     Ok(())

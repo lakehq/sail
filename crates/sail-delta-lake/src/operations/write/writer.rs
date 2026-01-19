@@ -19,7 +19,6 @@
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/writer.rs>
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/writer/record_batch.rs>
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -37,7 +36,7 @@ use parquet::schema::types::ColumnPath;
 use uuid::Uuid;
 
 use super::async_utils::AsyncShareableBuffer;
-pub use super::partitioning::PartitionResult;
+use super::partitioning::partition_ranges;
 use super::stats::create_add;
 use crate::kernel::models::{Add, ScalarExt};
 use crate::kernel::DeltaTableError;
@@ -131,8 +130,15 @@ pub struct DeltaWriter {
     table_path: Path,
     /// Writer configuration
     config: WriterConfig,
-    /// Partition writers for individual partitions
-    partition_writers: HashMap<String, PartitionWriter>,
+    /// Current active partition key (hive partition path)
+    current_partition_key: Option<String>,
+    /// Current active writer (at most one open writer per task)
+    current_writer: Option<PartitionWriter>,
+    /// Actions produced by completed partition writers
+    completed_actions: Vec<Add>,
+    /// Partition keys that have been closed (debug-only contract enforcement)
+    #[cfg(debug_assertions)]
+    closed_partition_keys: std::collections::HashSet<String>,
 }
 
 impl DeltaWriter {
@@ -141,91 +147,125 @@ impl DeltaWriter {
             object_store,
             table_path,
             config,
-            partition_writers: HashMap::new(),
+            current_partition_key: None,
+            current_writer: None,
+            completed_actions: Vec::new(),
+            #[cfg(debug_assertions)]
+            closed_partition_keys: std::collections::HashSet::new(),
         }
     }
 
     /// Write a record batch to the appropriate partition
     pub async fn write(&mut self, batch: &RecordBatch) -> Result<(), DeltaTableError> {
-        // Divide the batch by partition values
-        let partition_results = self.divide_by_partition_values(batch)?;
-
-        for result in partition_results {
-            self.write_partition(result.record_batch, &result.partition_values)
-                .await?;
+        if batch.num_rows() == 0 {
+            return Ok(());
         }
 
-        Ok(())
-    }
+        let file_schema = self.config.file_schema();
+        let data_indices: Vec<usize> = file_schema
+            .fields()
+            .iter()
+            .map(|f| {
+                batch.schema().index_of(f.name()).map_err(|_| {
+                    DeltaTableError::schema(format!("Column {} not found in batch", f.name()))
+                })
+            })
+            .collect::<Result<_, _>>()?;
 
-    /// Write a batch to a specific partition
-    async fn write_partition(
-        &mut self,
-        record_batch: RecordBatch,
-        partition_values: &IndexMap<String, Scalar>,
-    ) -> Result<(), DeltaTableError> {
-        let partition_key = partition_values.hive_partition_path();
-
-        let record_batch = record_batch_without_partitions(
-            &record_batch,
+        let ranges = partition_ranges(
+            &self.config.partition_columns,
             &self.config.physical_partition_columns,
+            batch,
         )?;
 
-        match self.partition_writers.get_mut(&partition_key) {
-            Some(writer) => {
-                writer.write(&record_batch).await?;
+        for range in ranges {
+            let len = range.end.saturating_sub(range.start);
+            if len == 0 {
+                continue;
             }
-            None => {
-                let config = PartitionWriterConfig::new(
-                    self.table_path.clone(),
-                    self.config.file_schema(),
-                    partition_values.clone(),
-                    self.config.writer_properties.clone(),
-                    self.config.target_file_size,
-                    self.config.write_batch_size,
-                );
 
-                let mut writer = PartitionWriter::try_with_config(
-                    self.object_store.clone(),
-                    config,
-                    self.config.num_indexed_cols,
-                    self.config.stats_columns.clone(),
-                )?;
+            let partition_key = range.partition_values.hive_partition_path();
+            self.switch_partition_if_needed(partition_key, range.partition_values)
+                .await?;
 
+            let slice = batch.slice(range.start, len);
+            let record_batch = record_batch_without_partitions_projected(
+                &slice,
+                file_schema.clone(),
+                &data_indices,
+            )?;
+
+            if let Some(writer) = self.current_writer.as_mut() {
                 writer.write(&record_batch).await?;
-                self.partition_writers.insert(partition_key, writer);
+            } else {
+                return Err(DeltaTableError::generic(
+                    "internal error: current writer not initialized".to_string(),
+                ));
             }
         }
 
         Ok(())
     }
 
-    /// Divide record batch by partition values
-    fn divide_by_partition_values(
-        &self,
-        batch: &RecordBatch,
-    ) -> Result<Vec<PartitionResult>, DeltaTableError> {
-        super::partitioning::divide_by_partition_values(
-            arrow_schema_without_partitions(
-                &self.config.table_schema,
-                &self.config.physical_partition_columns,
-            ),
-            self.config.partition_columns.clone(),
-            self.config.physical_partition_columns.clone(),
-            batch,
-        )
+    async fn switch_partition_if_needed(
+        &mut self,
+        partition_key: String,
+        partition_values: IndexMap<String, Scalar>,
+    ) -> Result<(), DeltaTableError> {
+        if self.current_partition_key.as_deref() == Some(partition_key.as_str())
+            && self.current_writer.is_some()
+        {
+            return Ok(());
+        }
+
+        // Close current writer if any
+        if let Some(writer) = self.current_writer.take() {
+            let actions = writer.close().await?;
+            self.completed_actions.extend(actions);
+
+            if let Some(old_key) = self.current_partition_key.take() {
+                #[cfg(debug_assertions)]
+                self.closed_partition_keys.insert(old_key);
+            }
+        }
+
+        #[cfg(debug_assertions)]
+        debug_assert!(
+            self.config.partition_columns.is_empty()
+                || !self.closed_partition_keys.contains(&partition_key),
+            "input violated partition grouping contract: partition key re-appeared after being closed: {partition_key}"
+        );
+
+        self.current_partition_key = Some(partition_key);
+
+        let config = PartitionWriterConfig::new(
+            self.table_path.clone(),
+            self.config.file_schema(),
+            partition_values,
+            self.config.writer_properties.clone(),
+            self.config.target_file_size,
+            self.config.write_batch_size,
+        );
+
+        let writer = PartitionWriter::try_with_config(
+            self.object_store.clone(),
+            config,
+            self.config.num_indexed_cols,
+            self.config.stats_columns.clone(),
+        )?;
+
+        self.current_writer = Some(writer);
+        Ok(())
     }
 
     /// Close the writer and get the Add actions
-    pub async fn close(self) -> Result<Vec<Add>, DeltaTableError> {
-        let mut all_actions = Vec::new();
-
-        for (_, writer) in self.partition_writers.into_iter() {
+    pub async fn close(mut self) -> Result<Vec<Add>, DeltaTableError> {
+        if let Some(writer) = self.current_writer.take() {
             let actions = writer.close().await?;
-            all_actions.extend(actions);
+            self.completed_actions.extend(actions);
         }
 
-        Ok(all_actions)
+        Ok(self.completed_actions)
     }
 }
 
@@ -473,22 +513,17 @@ impl PartitionWriter {
     }
 }
 
-/// Remove partition columns from a record batch
-fn record_batch_without_partitions(
+fn record_batch_without_partitions_projected(
     record_batch: &RecordBatch,
-    partition_columns: &[String],
+    file_schema: ArrowSchemaRef,
+    data_indices: &[usize],
 ) -> Result<RecordBatch, DeltaTableError> {
-    let mut non_partition_columns = Vec::new();
+    let projected = record_batch
+        .project(data_indices)
+        .map_err(|e| DeltaTableError::generic(format!("Failed to project record batch: {e}")))?;
 
-    for (i, field) in record_batch.schema().fields().iter().enumerate() {
-        if !partition_columns.contains(field.name()) {
-            non_partition_columns.push(i);
-        }
-    }
-
-    record_batch
-        .project(&non_partition_columns)
-        .map_err(|e| DeltaTableError::generic(format!("Failed to project record batch: {e}")))
+    RecordBatch::try_new(file_schema, projected.columns().to_vec())
+        .map_err(|e| DeltaTableError::generic(format!("Failed to build record batch: {e}")))
 }
 
 /// Create Arrow schema without partition columns
@@ -504,4 +539,93 @@ fn arrow_schema_without_partitions(
             .cloned()
             .collect::<Vec<_>>(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::array::{ArrayRef, Int32Array, StringArray};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::arrow::record_batch::RecordBatch;
+    use object_store::memory::InMemory;
+    use object_store::path::Path;
+    use object_store::ObjectStore;
+
+    use super::{DeltaWriter, WriterConfig};
+
+    fn make_batch(values: Vec<i32>, parts: Vec<&str>) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("value", DataType::Int32, false),
+            Field::new("part", DataType::Utf8, false),
+        ]));
+        let value_arr: ArrayRef = Arc::new(Int32Array::from(values));
+        let part_arr: ArrayRef = Arc::new(StringArray::from(parts));
+
+        RecordBatch::try_new(schema, vec![value_arr, part_arr]).expect("batch build")
+    }
+
+    fn make_writer() -> DeltaWriter {
+        let object_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let table_path = Path::from("delta_table");
+
+        let schema = make_batch(vec![1], vec!["a"]).schema();
+        let config = WriterConfig::new(
+            schema,
+            vec!["part".to_string()],
+            vec!["part".to_string()],
+            None,
+            1024 * 1024,
+            1024,
+            32,
+            None,
+        );
+
+        DeltaWriter::new(object_store, table_path, config)
+    }
+
+    #[tokio::test]
+    async fn streaming_writer_splits_by_partition_ranges() {
+        let mut writer = make_writer();
+        let batch = make_batch(vec![1, 2, 3, 4, 5], vec!["a", "a", "b", "b", "c"]);
+        writer.write(&batch).await.expect("write");
+
+        let adds = writer.close().await.expect("close");
+        assert_eq!(adds.len(), 3);
+
+        let paths = adds.iter().map(|a| a.path.as_str()).collect::<Vec<_>>();
+        assert!(paths.iter().any(|p| p.contains("part=a/")));
+        assert!(paths.iter().any(|p| p.contains("part=b/")));
+        assert!(paths.iter().any(|p| p.contains("part=c/")));
+    }
+
+    #[tokio::test]
+    async fn streaming_writer_keeps_partition_open_across_batches() {
+        let mut writer = make_writer();
+
+        let batch1 = make_batch(vec![1, 2], vec!["a", "a"]);
+        writer.write(&batch1).await.expect("write batch1");
+
+        // batch2 starts with the same partition, then switches.
+        let batch2 = make_batch(vec![3, 4], vec!["a", "b"]);
+        writer.write(&batch2).await.expect("write batch2");
+
+        let adds = writer.close().await.expect("close");
+        assert_eq!(adds.len(), 2);
+
+        let paths = adds.iter().map(|a| a.path.as_str()).collect::<Vec<_>>();
+        assert!(paths.iter().any(|p| p.contains("part=a/")));
+        assert!(paths.iter().any(|p| p.contains("part=b/")));
+    }
+
+    #[cfg(debug_assertions)]
+    #[tokio::test]
+    #[should_panic(expected = "input violated partition grouping contract")]
+    async fn debug_contract_panics_on_partition_key_regression() {
+        let mut writer = make_writer();
+
+        // Key re-appears after switching away: a -> b -> a
+        let batch = make_batch(vec![1, 2, 3], vec!["a", "b", "a"]);
+        let _ = writer.write(&batch).await;
+    }
 }

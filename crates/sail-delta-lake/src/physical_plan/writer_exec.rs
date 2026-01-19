@@ -26,12 +26,15 @@ use std::time::Instant;
 use async_trait::async_trait;
 use chrono::Utc;
 use datafusion::arrow::array::{ArrayRef, PrimitiveArray};
+use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::{
     ArrowTimestampType, DataType, Field, Schema, SchemaRef, TimeUnit, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
+use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::{LexOrdering, OrderingRequirements, PhysicalSortExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -191,7 +194,54 @@ impl ExecutionPlan for DeltaWriterExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::UnspecifiedDistribution]
+        if self.partition_columns.is_empty() {
+            return vec![Distribution::UnspecifiedDistribution];
+        }
+
+        // TODO(optimizer): Reduce the cost of meeting this distribution requirement.
+        // Goal: avoid unnecessary `RepartitionExec(Hash(...))` while keeping write correctness,
+        // ideally by reusing existing upstream partitioning or applying smarter heuristics.
+        let mut exprs: Vec<Arc<dyn datafusion_physical_expr::PhysicalExpr>> =
+            Vec::with_capacity(self.partition_columns.len());
+        for name in &self.partition_columns {
+            let idx = match self.input.schema().index_of(name) {
+                Ok(i) => i,
+                Err(_) => return vec![Distribution::UnspecifiedDistribution],
+            };
+            exprs.push(Arc::new(
+                datafusion_physical_expr::expressions::Column::new(name, idx),
+            ));
+        }
+
+        vec![Distribution::HashPartitioned(exprs)]
+    }
+
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
+        if self.partition_columns.is_empty() {
+            return vec![None];
+        }
+
+        // TODO(optimizer): Reduce the cost of meeting this ordering requirement.
+        // Goal: avoid unnecessary `SortExec` when we can prove the input is already ordered
+        // (or sufficiently grouped) by the partition key.
+        let mut sort_exprs: Vec<PhysicalSortExpr> =
+            Vec::with_capacity(self.partition_columns.len());
+        for name in &self.partition_columns {
+            let idx = match self.input.schema().index_of(name) {
+                Ok(i) => i,
+                Err(_) => return vec![None],
+            };
+            sort_exprs.push(PhysicalSortExpr {
+                expr: Arc::new(Column::new(name, idx)),
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                },
+            });
+        }
+
+        let ordering = LexOrdering::new(sort_exprs).expect("non-degenerate ordering");
+        vec![Some(OrderingRequirements::from(ordering))]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
