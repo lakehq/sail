@@ -240,8 +240,6 @@ async fn finalize_merge(
         writer_input
     };
 
-    // DeltaWriterExec requires single partition input.
-    let writer_input: Arc<dyn ExecutionPlan> = Arc::new(CoalescePartitionsExec::new(writer_input));
     let writer = Arc::new(DeltaWriterExec::new(
         writer_input,
         table_url.clone(),

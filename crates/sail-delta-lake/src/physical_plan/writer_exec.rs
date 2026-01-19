@@ -117,11 +117,7 @@ impl DeltaWriterExec {
         operation_override: Option<DeltaOperation>,
     ) -> Result<Self> {
         let schema = delta_action_schema()?;
-        let output_partitions = if partition_columns.is_empty() {
-            1
-        } else {
-            input.output_partitioning().partition_count().max(1)
-        };
+        let output_partitions = input.output_partitioning().partition_count().max(1);
         let cache = Self::compute_properties(schema, output_partitions);
         Ok(Self {
             input,
@@ -198,10 +194,9 @@ impl ExecutionPlan for DeltaWriterExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        // For non-partitioned tables, force a single writer task. This keeps Delta commit
-        // metrics (file counts/sizes) stable and matches the historical behavior in snapshots.
         if self.partition_columns.is_empty() {
-            return vec![Distribution::SinglePartition];
+            // Upstream repartitioning controls file counts and small-file behavior.
+            return vec![Distribution::UnspecifiedDistribution];
         }
 
         // For partitioned tables, require grouping by the partition key so that each task can
@@ -287,21 +282,6 @@ impl ExecutionPlan for DeltaWriterExec {
             return internal_err!("DeltaWriterExec requires at least one input partition");
         }
 
-        // Non-partitioned tables: enforce a single writer partition for stable commit metrics.
-        if self.partition_columns.is_empty() {
-            if partition != 0 {
-                return internal_err!("DeltaWriterExec can only be executed in a single partition");
-            }
-            if input_partitions != 1 {
-                return internal_err!(
-                    "DeltaWriterExec requires exactly one input partition, got {input_partitions}"
-                );
-            }
-            let stream = self.input.execute(0, Arc::clone(&context))?;
-            return self.execute_stream(stream, partition, context);
-        }
-
-        // Partitioned tables: run in parallel across partitions.
         if partition >= input_partitions {
             return internal_err!(
                 "DeltaWriterExec invalid partition {partition} (input partitions: {input_partitions})"
