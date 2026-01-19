@@ -117,7 +117,11 @@ impl DeltaWriterExec {
         operation_override: Option<DeltaOperation>,
     ) -> Result<Self> {
         let schema = delta_action_schema()?;
-        let output_partitions = input.output_partitioning().partition_count().max(1);
+        let output_partitions = if partition_columns.is_empty() {
+            1
+        } else {
+            input.output_partitioning().partition_count().max(1)
+        };
         let cache = Self::compute_properties(schema, output_partitions);
         Ok(Self {
             input,
@@ -194,13 +198,16 @@ impl ExecutionPlan for DeltaWriterExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
+        // For non-partitioned tables, force a single writer task. This keeps Delta commit
+        // metrics (file counts/sizes) stable and matches the historical behavior in snapshots.
         if self.partition_columns.is_empty() {
-            return vec![Distribution::UnspecifiedDistribution];
+            return vec![Distribution::SinglePartition];
         }
 
+        // For partitioned tables, require grouping by the partition key so that each task can
+        // write its partitions correctly without opening many writers concurrently.
+        //
         // TODO(optimizer): Reduce the cost of meeting this distribution requirement.
-        // Goal: avoid unnecessary `RepartitionExec(Hash(...))` while keeping write correctness,
-        // ideally by reusing existing upstream partitioning or applying smarter heuristics.
         let mut exprs: Vec<Arc<dyn datafusion_physical_expr::PhysicalExpr>> =
             Vec::with_capacity(self.partition_columns.len());
         for name in &self.partition_columns {
@@ -277,13 +284,39 @@ impl ExecutionPlan for DeltaWriterExec {
         if input_partitions == 0 {
             return internal_err!("DeltaWriterExec requires at least one input partition");
         }
+
+        // Non-partitioned tables: enforce a single writer partition for stable commit metrics.
+        if self.partition_columns.is_empty() {
+            if partition != 0 {
+                return internal_err!("DeltaWriterExec can only be executed in a single partition");
+            }
+            if input_partitions != 1 {
+                return internal_err!(
+                    "DeltaWriterExec requires exactly one input partition, got {input_partitions}"
+                );
+            }
+            let stream = self.input.execute(0, Arc::clone(&context))?;
+            return self.execute_stream(stream, partition, context);
+        }
+
+        // Partitioned tables: run in parallel across partitions.
         if partition >= input_partitions {
             return internal_err!(
                 "DeltaWriterExec invalid partition {partition} (input partitions: {input_partitions})"
             );
         }
-
         let stream = self.input.execute(partition, Arc::clone(&context))?;
+        self.execute_stream(stream, partition, context)
+    }
+}
+
+impl DeltaWriterExec {
+    fn execute_stream(
+        &self,
+        stream: SendableRecordBatchStream,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
 
         let output_rows = MetricBuilder::new(&self.metrics).output_rows(partition);
         let output_bytes = MetricBuilder::new(&self.metrics).output_bytes(partition);
