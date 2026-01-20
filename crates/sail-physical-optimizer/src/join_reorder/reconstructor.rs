@@ -1031,8 +1031,7 @@ mod tests {
         // Regression test: name-based fallback in join filter reconstruction must not silently
         // bind to the wrong side when a column name exists in both left and right inputs.
 
-        use datafusion::logical_expr::JoinType;
-        use datafusion::logical_expr::Operator;
+        use datafusion::logical_expr::{JoinType, Operator};
         use datafusion::physical_expr::expressions::{BinaryExpr, Column};
 
         use crate::join_reorder::graph::{JoinEdge, StableColumn};
@@ -1055,11 +1054,7 @@ mod tests {
 
         // Edge: equi pair R0.C0 = R1.C0 plus a non-equi filter (id > id) with non-stable names.
         let mut graph = QueryGraph::new();
-        let dummy_schema = Arc::new(Schema::new(vec![Field::new(
-            "col",
-            DataType::Int32,
-            false,
-        )]));
+        let dummy_schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Int32, false)]));
         let dummy_plan: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(dummy_schema.clone()));
         graph.add_relation(RelationNode::new(
             dummy_plan.clone(),
@@ -1103,7 +1098,12 @@ mod tests {
             Operator::And,
             non_equi,
         ));
-        graph.add_edge(JoinEdge::new(join_set_01, filter, JoinType::Inner, equi_pairs))?;
+        graph.add_edge(JoinEdge::new(
+            join_set_01,
+            filter,
+            JoinType::Inner,
+            equi_pairs,
+        ))?;
 
         let dp_table = HashMap::new();
         let mut reconstructor = PlanReconstructor::new(&dp_table, &graph);

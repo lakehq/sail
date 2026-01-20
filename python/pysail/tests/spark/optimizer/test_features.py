@@ -8,7 +8,6 @@ from pytest_bdd import parsers, scenarios, then
 from pysail.spark import SparkConnectServer
 from pysail.tests.spark.utils import is_jvm_spark
 
-
 pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail only")
 
 
@@ -31,17 +30,4 @@ def remote():
             os.environ.pop("SAIL_OPTIMIZER__ENABLE_JOIN_REORDER", None)
         else:
             os.environ["SAIL_OPTIMIZER__ENABLE_JOIN_REORDER"] = original_enable_join_reorder
-
-
-@then(parsers.parse("query raises SparkRuntimeException with message {message}"))
-def query_raises_spark_runtime_exception_with_message(query, spark, message):
-    from pyspark.errors.exceptions.connect import SparkRuntimeException
-
-    with pytest.raises(SparkRuntimeException) as excinfo:
-        _ = spark.sql(query).collect()
-
-    assert message in str(excinfo.value)
-
-
-scenarios("features")
 

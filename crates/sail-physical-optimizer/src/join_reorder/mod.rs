@@ -105,7 +105,10 @@ impl JoinReorder {
     /// Attempt to optimize a reorderable region rooted at `plan`.
     /// Returns Ok(Some(new_plan)) if a region was optimized and replaced.
     /// Returns Ok(None) if no reorderable region is rooted at this node (or it is too small).
-    fn try_optimize_region(&self, plan: Arc<dyn ExecutionPlan>) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    fn try_optimize_region(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         // Attempt to build a query graph starting from the current node.
         // The GraphBuilder will traverse downwards to find a complete reorderable region.
         let mut graph_builder = GraphBuilder::new();
@@ -142,7 +145,8 @@ impl JoinReorder {
         );
         trace!("JoinReorder: Optimal DPPlan structure:\n{:#?}", best_plan);
 
-        let mut reconstructor = PlanReconstructor::new(&enumerator.dp_table, &enumerator.query_graph);
+        let mut reconstructor =
+            PlanReconstructor::new(&enumerator.dp_table, &enumerator.query_graph);
         let (join_tree, final_map) = reconstructor.reconstruct(&best_plan)?;
 
         trace!(
@@ -155,12 +159,8 @@ impl JoinReorder {
             .map(|i| plan.schema().field(i).name().clone())
             .collect();
 
-        let final_plan = self.build_final_projection(
-            join_tree,
-            &final_map,
-            &target_column_map,
-            &target_names,
-        )?;
+        let final_plan =
+            self.build_final_projection(join_tree, &final_map, &target_column_map, &target_names)?;
 
         trace!("JoinReorder: Optimization successful at current level. Returning new plan.");
         trace!(
