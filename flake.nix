@@ -23,8 +23,8 @@
         # If you prefer "latest nightly pinned only by flake.lock", use:
         # rustToolchain = fenix.packages.${system}.latest.toolchain;
 
-        py = pkgs.python312;
-        pyp = pkgs.python312Packages;
+        py = pkgs.python313;
+        pyp = pkgs.python313Packages;
       in {
         devShells.default = pkgs.mkShell {
           buildInputs =
@@ -74,6 +74,8 @@
               export JAVA_HOME=${pkgs.jdk17}
 
               export PYTHONPATH="$PWD/python:$PYTHONPATH"
+	      export PYO3_PYTHON="$(which python)"
+
 
               # Accept `cargo +nightly ...` even without rustup (we're already on nightly via Nix)
               cargo() {
