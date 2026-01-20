@@ -3,11 +3,9 @@ use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{
-    Array, ArrayRef, BooleanArray, Int64Array, StringArray, StructArray,
-};
+use datafusion::arrow::array::{Array, ArrayRef, BooleanArray, Int64Array, StringArray};
 use datafusion::arrow::compute::{cast, concat, SortOptions};
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_expr::expressions::Column;
@@ -25,16 +23,15 @@ use url::Url;
 
 use crate::physical_plan::{COL_LOG_IS_REMOVE, COL_LOG_VERSION, COL_REPLAY_PATH};
 
-const COL_ADD: &str = "add";
-
 const OUTPUT_BATCH_ROWS: usize = 8192;
 
-/// A unary node that filters raw Delta log rows into the active **Add** set (tombstone replay).
+/// A unary node that filters Delta log rows into the active set (tombstone replay).
 ///
 /// Input:
-/// - `add` (Struct): raw Add action payload
 /// - `__sail_delta_replay_path` (Utf8): derived file path key
 /// - `__sail_delta_is_remove` (Boolean): derived marker for `remove(path)`
+/// - `__sail_delta_log_version` (Int64): derived log version from `_delta_log` filename prefix
+/// - payload columns: any additional columns carried through for the winning `add` row
 ///
 /// Notes:
 /// - We replay actions in **newest-first** order (by `__sail_delta_log_version`) within each
@@ -104,25 +101,33 @@ impl DeltaLogReplayExec {
     }
 
     fn output_schema(input_schema: &SchemaRef) -> SchemaRef {
-        let add_type = input_schema
-            .field_with_name(COL_ADD)
-            .map(|f| f.data_type().clone())
-            .unwrap_or(DataType::Null);
-        Arc::new(Schema::new(vec![Field::new(COL_ADD, add_type, true)]))
+        let mut fields = Vec::with_capacity(input_schema.fields().len());
+        for f in input_schema.fields() {
+            if f.name() == COL_REPLAY_PATH
+                || f.name() == COL_LOG_IS_REMOVE
+                || f.name() == COL_LOG_VERSION
+            {
+                continue;
+            }
+            fields.push(f.as_ref().clone());
+        }
+        Arc::new(Schema::new(fields))
     }
 }
 
 struct ReplayState {
     input: SendableRecordBatchStream,
     output_schema: SchemaRef,
+    output_col_indices: Vec<usize>,
 
     // current group state (per replay_path)
     current_path: Option<String>,
     current_removed: bool,
-    current_add: Option<ArrayRef>,
+    current_row: Option<Vec<ArrayRef>>,
 
     // output builders for the next RecordBatch
-    out_add_slices: Vec<ArrayRef>,
+    out_col_slices: Vec<Vec<ArrayRef>>,
+    out_rows: usize,
     finished: bool,
 }
 
@@ -132,32 +137,62 @@ impl ReplayState {
         output_schema: SchemaRef,
         _partition_columns: Vec<String>,
     ) -> Self {
+        let input_schema = input.schema();
+        let mut output_col_indices = Vec::with_capacity(input_schema.fields().len());
+        for (i, f) in input_schema.fields().iter().enumerate() {
+            if f.name() == COL_REPLAY_PATH
+                || f.name() == COL_LOG_IS_REMOVE
+                || f.name() == COL_LOG_VERSION
+            {
+                continue;
+            }
+            output_col_indices.push(i);
+        }
+        let out_cols = output_schema.fields().len();
         Self {
             input,
+            out_col_slices: vec![Vec::new(); out_cols],
             output_schema,
+            out_rows: 0,
+            output_col_indices,
             current_path: None,
             current_removed: false,
-            current_add: None,
-            out_add_slices: Vec::new(),
+            current_row: None,
             finished: false,
         }
     }
 
     fn flush_current_group(&mut self) {
-        if let Some(add) = self.current_add.take() {
-            self.out_add_slices.push(add);
+        if let Some(row) = self.current_row.take() {
+            for (i, col) in row.into_iter().enumerate() {
+                // Safety: current_row is created with exactly `out_col_slices.len()` columns.
+                if let Some(dst) = self.out_col_slices.get_mut(i) {
+                    dst.push(col);
+                }
+            }
+            self.out_rows += 1;
         }
         self.current_removed = false;
     }
 
     fn take_output_batch(&mut self) -> Result<RecordBatch> {
-        if self.out_add_slices.is_empty() {
+        if self.out_rows == 0 {
             return internal_err!("DeltaLogReplayExec produced an empty output batch");
         }
-        let parts: Vec<&dyn Array> = self.out_add_slices.iter().map(|a| a.as_ref()).collect();
-        let add = concat(&parts).map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
-        self.out_add_slices.clear();
-        RecordBatch::try_new(Arc::clone(&self.output_schema), vec![add])
+        let mut cols = Vec::with_capacity(self.out_col_slices.len());
+        for slices in &mut self.out_col_slices {
+            if slices.is_empty() {
+                return internal_err!(
+                    "DeltaLogReplayExec produced an incomplete output batch (missing column slices)"
+                );
+            }
+            let parts: Vec<&dyn Array> = slices.iter().map(|a| a.as_ref()).collect();
+            let col = concat(&parts).map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+            slices.clear();
+            cols.push(col);
+        }
+        self.out_rows = 0;
+        RecordBatch::try_new(Arc::clone(&self.output_schema), cols)
             .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
     }
 
@@ -217,15 +252,6 @@ impl ReplayState {
                 ))
             })?;
 
-        let add = batch.column_by_name(COL_ADD).ok_or_else(|| {
-            DataFusionError::Plan(format!(
-                "DeltaLogReplayExec input must have Struct column '{COL_ADD}'"
-            ))
-        })?;
-        let add = add.as_any().downcast_ref::<StructArray>().ok_or_else(|| {
-            DataFusionError::Plan(format!("DeltaLogReplayExec '{COL_ADD}' must be Struct"))
-        })?;
-
         for row in 0..batch.num_rows() {
             if replay_path.is_null(row) {
                 continue;
@@ -246,7 +272,7 @@ impl ReplayState {
             //
             // Input is expected to be sorted by (replay_path ASC, log_version DESC), so the first
             // decision we make for a given path must be final (older actions cannot override it).
-            if self.current_removed || self.current_add.is_some() {
+            if self.current_removed || self.current_row.is_some() {
                 continue;
             }
 
@@ -255,10 +281,12 @@ impl ReplayState {
                 continue;
             }
 
-            // Keep the first non-null add we see for the current path (newest add wins).
-            if self.current_add.is_none() && !add.is_null(row) {
-                self.current_add = Some(Arc::new(add.slice(row, 1)) as ArrayRef);
+            // Capture the first non-remove row's payload (newest add wins).
+            let mut out = Vec::with_capacity(self.output_col_indices.len());
+            for idx in &self.output_col_indices {
+                out.push(batch.column(*idx).slice(row, 1));
             }
+            self.current_row = Some(out);
         }
 
         Ok(())
@@ -365,7 +393,7 @@ impl ExecutionPlan for DeltaLogReplayExec {
 
         let s = stream::try_unfold(state, |mut st| async move {
             loop {
-                if st.out_add_slices.len() >= OUTPUT_BATCH_ROWS {
+                if st.out_rows >= OUTPUT_BATCH_ROWS {
                     let out = st.take_output_batch()?;
                     return Ok(Some((out, st)));
                 }
@@ -373,7 +401,7 @@ impl ExecutionPlan for DeltaLogReplayExec {
                 if st.finished {
                     // Final flush.
                     st.flush_current_group();
-                    if !st.out_add_slices.is_empty() {
+                    if st.out_rows > 0 {
                         let out = st.take_output_batch()?;
                         return Ok(Some((out, st)));
                     }
@@ -425,8 +453,8 @@ impl DisplayAs for DeltaLogReplayExec {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::arrow::array::{Int64Array, NullBufferBuilder};
-    use datafusion::arrow::datatypes::Fields;
+    use datafusion::arrow::array::{Int64Array, NullBufferBuilder, StructArray};
+    use datafusion::arrow::datatypes::{Field, Fields};
     use futures::TryStreamExt;
 
     use super::*;
