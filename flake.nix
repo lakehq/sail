@@ -31,6 +31,9 @@
               procps
               ripgrep
 
+              # Use Nix-provided uv (avoids NixOS stub-ld issues)
+              uv
+
               # Rust toolchain
               rustc
               cargo
@@ -41,7 +44,7 @@
               # Java for Spark
               jdk17
 
-              # Python + helpers (pip only for venvs; hatch via pipx)
+              # Python + helpers (hatch via pipx)
               py
               pyp.virtualenv
               pyp.setuptools
@@ -66,6 +69,9 @@
 
               export PIPX_HOME="$HOME/.local/pipx"
               export PIPX_BIN_DIR="$HOME/.local/bin"
+
+              # Make sure Nix-provided uv wins over any pipx-provided uv
+              export PATH=${pkgs.uv}/bin:$PATH
               export PATH="$PIPX_BIN_DIR:$PATH"
             ''
             + lib.optionalString isLinux ''
