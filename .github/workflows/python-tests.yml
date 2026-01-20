@@ -1,23 +1,25 @@
-name: Python Build
+name: Python Tests
 
 on:
   workflow_call:
+    inputs:
+      spark_version:
+        description: The Spark version to test
+        type: string
+        required: true
     secrets:
       CODECOV_TOKEN:
         required: false
 
 jobs:
-  python-build:
-    name: Python Build
+  test:
+    name: Test
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        spark-version: ["3.5.7", "4.0.1", "4.1.1"]
     env:
-      HATCH_ENV: "test.spark-${{ matrix.spark-version }}"
+      HATCH_ENV: "test.spark-${{ inputs.spark_version }}"
       # Coverage environment variables
       RUSTC_WORKSPACE_WRAPPER: ${{ github.workspace }}/.github/scripts/rustc-workspace-wrapper.sh
-      LLVM_PROFILE_FILE: ${{ github.workspace }}/target/sail-python-${{ matrix.spark-version }}-%p-%m.profraw
+      LLVM_PROFILE_FILE: ${{ github.workspace }}/target/sail-python-${{ inputs.spark_version }}-%p-%m.profraw
     steps:
       - uses: actions/checkout@v4
 
@@ -73,14 +75,14 @@ jobs:
           grcov target --binary-path "$BINARY_PATH" -s . \
             --llvm-path "$LLVM_PATH" \
             -t lcov --branch --ignore-not-existing \
-            -o coverage-python-${{ matrix.spark-version }}.info
+            -o coverage-python-${{ inputs.spark_version }}.info
 
       - name: Upload Python coverage to Codecov
         if: ${{ github.actor != 'dependabot[bot]' }}
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage-python-${{ matrix.spark-version }}.info
+          files: coverage-python-${{ inputs.spark_version }}.info
           flags: python-unit-tests
           name: python-unit-tests
           fail_ci_if_error: true

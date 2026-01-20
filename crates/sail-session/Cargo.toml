@@ -13,6 +13,7 @@ sail-catalog = { path = "../sail-catalog" }
 sail-catalog-memory = { path = "../sail-catalog-memory" }
 sail-catalog-iceberg = { path = "../sail-catalog-iceberg" }
 sail-catalog-unity = { path = "../sail-catalog-unity" }
+sail-catalog-onelake = { path = "../sail-catalog-onelake" }
 sail-data-source = { path = "../sail-data-source" }
 sail-delta-lake = { path = "../sail-delta-lake" }
 sail-iceberg = { path = "../sail-iceberg" }

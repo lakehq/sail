@@ -33,3 +33,4 @@ num = { workspace = true }
 half = { workspace = true }
 url = { workspace = true }
 percent-encoding = { workspace = true }
+jiter = { workspace = true }

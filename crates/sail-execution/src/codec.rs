@@ -18,13 +18,13 @@ use datafusion::functions::core::greatest::GreatestFunc;
 use datafusion::functions::core::least::LeastFunc;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl};
-use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalSortExpr};
+use datafusion::physical_expr::{LexOrdering, LexRequirement, Partitioning, PhysicalSortExpr};
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::SortMergeJoinExec;
 use datafusion::physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion::physical_plan::sorts::partial_sort::PartialSortExec;
 use datafusion::physical_plan::work_table::WorkTableExec;
-use datafusion::physical_plan::{ExecutionPlan, Partitioning};
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
 use datafusion_proto::physical_plan::from_proto::{
     parse_physical_expr, parse_physical_sort_exprs, parse_protobuf_file_scan_config,
@@ -54,7 +54,6 @@ use datafusion_spark::function::math::width_bucket::SparkWidthBucket;
 use datafusion_spark::function::string::elt::SparkElt;
 use datafusion_spark::function::string::format_string::FormatStringFunc;
 use datafusion_spark::function::string::luhn_check::SparkLuhnCheck;
-use prost::bytes::BytesMut;
 use prost::Message;
 use sail_common_datafusion::array::record_batch::{read_record_batches, write_record_batches};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
@@ -73,6 +72,7 @@ use sail_delta_lake::physical_plan::{
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
+use sail_function::aggregate::percentile_disc::PercentileDisc;
 use sail_function::aggregate::skewness::SkewnessFunc;
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::aggregate::try_sum::TrySumFunction;
@@ -172,9 +172,7 @@ use crate::plan::gen::extended_stream_udf::StreamUdfKind;
 use crate::plan::gen::{
     ExtendedAggregateUdf, ExtendedPhysicalPlanNode, ExtendedScalarUdf, ExtendedStreamUdf,
 };
-use crate::plan::{gen, ShuffleConsumption, ShuffleReadExec, ShuffleWriteExec};
-use crate::stream::reader::TaskReadLocation;
-use crate::stream::writer::{LocalStreamStorage, TaskWriteLocation};
+use crate::plan::{gen, StageInputExec};
 
 pub struct RemoteExecutionCodec;
 
@@ -233,6 +231,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     Arc::new(schema),
                 )))
             }
+            NodeKind::StageInput(gen::StageInputExecNode {
+                input,
+                schema,
+                partitioning,
+            }) => {
+                let schema = self.try_decode_schema(&schema)?;
+                let partitioning = self.try_decode_partitioning(&partitioning, &schema, ctx)?;
+                let node = StageInputExec::new(input as usize, Arc::new(schema), partitioning);
+                Ok(Arc::new(node))
+            }
             NodeKind::SchemaPivot(gen::SchemaPivotExecNode {
                 input,
                 names,
@@ -255,41 +263,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     self.try_decode_stream_udf(udf)?,
                     Arc::new(schema),
                 )))
-            }
-            NodeKind::ShuffleRead(gen::ShuffleReadExecNode {
-                stage,
-                schema,
-                partitioning,
-                locations,
-            }) => {
-                let schema = self.try_decode_schema(&schema)?;
-                let partitioning = self.try_decode_partitioning(&partitioning, &schema, ctx)?;
-                let locations = locations
-                    .into_iter()
-                    .map(|x| self.try_decode_task_read_location_list(x))
-                    .collect::<Result<_>>()?;
-                let node = ShuffleReadExec::new(stage as usize, Arc::new(schema), partitioning);
-                let node = node.with_locations(locations);
-                Ok(Arc::new(node))
-            }
-            NodeKind::ShuffleWrite(gen::ShuffleWriteExecNode {
-                stage,
-                plan,
-                partitioning,
-                consumption,
-                locations,
-            }) => {
-                let plan = self.try_decode_plan(&plan, ctx)?;
-                let partitioning =
-                    self.try_decode_partitioning(&partitioning, &plan.schema(), ctx)?;
-                let consumption = self.try_decode_shuffle_consumption(consumption)?;
-                let locations = locations
-                    .into_iter()
-                    .map(|x| self.try_decode_task_write_location_list(x))
-                    .collect::<Result<_>>()?;
-                let node = ShuffleWriteExec::new(stage as usize, plan, partitioning, consumption);
-                let node = node.with_locations(locations);
-                Ok(Arc::new(node))
             }
             NodeKind::Memory(gen::MemoryExecNode {
                 partitions,
@@ -847,6 +820,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 truncate: show_string.format().truncate() as u64,
                 schema,
             })
+        } else if let Some(stage_input) = node.as_any().downcast_ref::<StageInputExec<usize>>() {
+            let schema = self.try_encode_schema(stage_input.schema().as_ref())?;
+            let partitioning =
+                self.try_encode_partitioning(stage_input.properties().output_partitioning())?;
+            NodeKind::StageInput(gen::StageInputExecNode {
+                input: *stage_input.input() as u64,
+                schema,
+                partitioning,
+            })
         } else if let Some(schema_pivot) = node.as_any().downcast_ref::<SchemaPivotExec>() {
             let schema = self.try_encode_schema(schema_pivot.schema().as_ref())?;
             NodeKind::SchemaPivot(gen::SchemaPivotExecNode {
@@ -861,37 +843,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input: self.try_encode_plan(map_partitions.input().clone())?,
                 udf: Some(udf),
                 schema,
-            })
-        } else if let Some(shuffle_read) = node.as_any().downcast_ref::<ShuffleReadExec>() {
-            let schema = self.try_encode_schema(shuffle_read.schema().as_ref())?;
-            let partitioning = self.try_encode_partitioning(shuffle_read.partitioning())?;
-            let locations = shuffle_read
-                .locations()
-                .iter()
-                .map(|x| self.try_encode_task_read_location_list(x))
-                .collect::<Result<_>>()?;
-            NodeKind::ShuffleRead(gen::ShuffleReadExecNode {
-                stage: shuffle_read.stage() as u64,
-                schema,
-                partitioning,
-                locations,
-            })
-        } else if let Some(shuffle_write) = node.as_any().downcast_ref::<ShuffleWriteExec>() {
-            let plan = self.try_encode_plan(shuffle_write.plan().clone())?;
-            let partitioning =
-                self.try_encode_partitioning(shuffle_write.shuffle_partitioning())?;
-            let consumption = self.try_encode_shuffle_consumption(shuffle_write.consumption())?;
-            let locations = shuffle_write
-                .locations()
-                .iter()
-                .map(|x| self.try_encode_task_write_location_list(x))
-                .collect::<Result<_>>()?;
-            NodeKind::ShuffleWrite(gen::ShuffleWriteExecNode {
-                stage: shuffle_write.stage() as u64,
-                plan,
-                partitioning,
-                consumption,
-                locations,
             })
         } else if let Some(work_table) = node.as_any().downcast_ref::<WorkTableExec>() {
             let name = work_table.name().to_string();
@@ -1394,9 +1345,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = TimestampNow::new(Arc::from(timezone), time_unit);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
-            UdfKind::SparkTimestamp(gen::SparkTimestampUdf { timezone }) => {
-                let udf = SparkTimestamp::try_new(timezone.map(Arc::from))?;
+            UdfKind::SparkTimestamp(gen::SparkTimestampUdf { timezone, is_try }) => {
+                let udf = SparkTimestamp::try_new(timezone.map(Arc::from), is_try)?;
                 return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::SparkDate(gen::SparkDateUdf { is_try }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkDate::new(is_try))));
             }
         };
         match name {
@@ -1438,8 +1392,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_sha1" | "sha" | "sha1" => Ok(Arc::new(ScalarUDF::from(SparkSha1::new()))),
             "crc32" => Ok(Arc::new(ScalarUDF::from(SparkCrc32::new()))),
             "overlay" => Ok(Arc::new(ScalarUDF::from(OverlayFunc::new()))),
-            "json_length" | "json_len" => Ok(datafusion_functions_json::udfs::json_length_udf()),
-            "json_as_text" => Ok(datafusion_functions_json::udfs::json_as_text_udf()),
+            "json_length" | "json_len" => Ok(sail_function::scalar::json::json_length_udf()),
+            "json_as_text" => Ok(sail_function::scalar::json::json_as_text_udf()),
+            "json_object_keys" | "json_keys" => {
+                Ok(sail_function::scalar::json::json_object_keys_udf())
+            }
             "spark_base64" | "base64" => Ok(Arc::new(ScalarUDF::from(SparkBase64::new()))),
             "spark_bround" | "bround" => Ok(Arc::new(ScalarUDF::from(SparkBRound::new()))),
             "spark_interval_div" => Ok(Arc::new(ScalarUDF::from(SparkIntervalDiv::new()))),
@@ -1494,7 +1451,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_elt" | "elt" => Ok(Arc::new(ScalarUDF::from(SparkElt::new()))),
             "spark_decode" | "decode" => Ok(Arc::new(ScalarUDF::from(SparkDecode::new()))),
             "spark_bin" | "bin" => Ok(Arc::new(ScalarUDF::from(SparkBin::new()))),
-            "spark_date" => Ok(Arc::new(ScalarUDF::from(SparkDate::new()))),
             "spark_year_month_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkYearMonthInterval::new())))
             }
@@ -1575,7 +1531,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkConcat>()
             || node_inner.is::<SparkConv>()
             || node_inner.is::<SparkCrc32>()
-            || node_inner.is::<SparkDate>()
             || node_inner.is::<SparkDayTimeInterval>()
             || node_inner.is::<SparkDecode>()
             || node_inner.is::<SparkElt>()
@@ -1700,7 +1655,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkTimestamp>() {
             let timezone = func.timezone().map(|x| x.to_string());
-            UdfKind::SparkTimestamp(gen::SparkTimestampUdf { timezone })
+            let is_try = func.is_try();
+            UdfKind::SparkTimestamp(gen::SparkTimestampUdf { timezone, is_try })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkDate>() {
+            let is_try = func.is_try();
+            UdfKind::SparkDate(gen::SparkDateUdf { is_try })
         } else {
             return Ok(());
         };
@@ -1721,6 +1680,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 "max_by" => Ok(Arc::new(AggregateUDF::from(MaxByFunction::new()))),
                 "min_by" => Ok(Arc::new(AggregateUDF::from(MinByFunction::new()))),
                 "mode" => Ok(Arc::new(AggregateUDF::from(ModeFunction::new()))),
+                "percentile_disc" => Ok(Arc::new(AggregateUDF::from(PercentileDisc::new()))),
                 "skewness" => Ok(Arc::new(AggregateUDF::from(SkewnessFunc::new()))),
                 "try_avg" => Ok(Arc::new(AggregateUDF::from(TryAvgFunction::new()))),
                 "try_sum" => Ok(Arc::new(AggregateUDF::from(TrySumFunction::new()))),
@@ -1806,6 +1766,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<MaxByFunction>()
             || node.inner().as_any().is::<MinByFunction>()
             || node.inner().as_any().is::<ModeFunction>()
+            || node.inner().as_any().is::<PercentileDisc>()
             || node.inner().as_any().is::<SkewnessFunc>()
             || node.inner().as_any().is::<TryAvgFunction>()
             || node.inner().as_any().is::<TrySumFunction>()
@@ -2255,44 +2216,6 @@ impl RemoteExecutionCodec {
         Ok(config)
     }
 
-    fn try_decode_shuffle_consumption(&self, consumption: i32) -> Result<ShuffleConsumption> {
-        let consumption = gen::ShuffleConsumption::try_from(consumption)
-            .map_err(|e| plan_datafusion_err!("failed to decode shuffle consumption: {e}"))?;
-        let consumption = match consumption {
-            gen::ShuffleConsumption::Single => ShuffleConsumption::Single,
-            gen::ShuffleConsumption::Multiple => ShuffleConsumption::Multiple,
-        };
-        Ok(consumption)
-    }
-
-    fn try_encode_shuffle_consumption(&self, consumption: ShuffleConsumption) -> Result<i32> {
-        let consumption = match consumption {
-            ShuffleConsumption::Single => gen::ShuffleConsumption::Single,
-            ShuffleConsumption::Multiple => gen::ShuffleConsumption::Multiple,
-        };
-        Ok(consumption as i32)
-    }
-
-    fn try_decode_local_stream_storage(&self, storage: i32) -> Result<LocalStreamStorage> {
-        let storage = gen::LocalStreamStorage::try_from(storage)
-            .map_err(|e| plan_datafusion_err!("failed to decode local stream storage: {e}"))?;
-        let storage = match storage {
-            gen::LocalStreamStorage::Ephemeral => LocalStreamStorage::Ephemeral,
-            gen::LocalStreamStorage::Memory => LocalStreamStorage::Memory,
-            gen::LocalStreamStorage::Disk => LocalStreamStorage::Disk,
-        };
-        Ok(storage)
-    }
-
-    fn try_encode_local_stream_storage(&self, storage: LocalStreamStorage) -> Result<i32> {
-        let storage = match storage {
-            LocalStreamStorage::Ephemeral => gen::LocalStreamStorage::Ephemeral,
-            LocalStreamStorage::Memory => gen::LocalStreamStorage::Memory,
-            LocalStreamStorage::Disk => gen::LocalStreamStorage::Disk,
-        };
-        Ok(storage as i32)
-    }
-
     fn try_decode_file_compression_type(&self, variant: i32) -> Result<FileCompressionType> {
         Ok(self.try_decode_compression_type_variant(variant)?.into())
     }
@@ -2337,10 +2260,7 @@ impl RemoteExecutionCodec {
 
     fn try_encode_plan(&self, plan: Arc<dyn ExecutionPlan>) -> Result<Vec<u8>> {
         let plan = PhysicalPlanNode::try_from_physical_plan(plan, self)?;
-        let mut buffer = BytesMut::new();
-        plan.encode(&mut buffer)
-            .map_err(|e| plan_datafusion_err!("failed to encode plan: {e}"))?;
-        Ok(buffer.freeze().into())
+        Ok(plan.encode_to_vec())
     }
 
     fn try_decode_partitioning(
@@ -2357,136 +2277,6 @@ impl RemoteExecutionCodec {
     fn try_encode_partitioning(&self, partitioning: &Partitioning) -> Result<Vec<u8>> {
         let partitioning = serialize_partitioning(partitioning, self)?;
         self.try_encode_message(partitioning)
-    }
-
-    fn try_decode_task_read_location(
-        &self,
-        location: gen::TaskReadLocation,
-    ) -> Result<TaskReadLocation> {
-        let gen::TaskReadLocation { location } = location;
-        let location = match location {
-            Some(gen::task_read_location::Location::Worker(gen::TaskReadLocationWorker {
-                worker_id,
-                channel,
-            })) => TaskReadLocation::Worker {
-                worker_id: worker_id.into(),
-                channel: channel.into(),
-            },
-            Some(gen::task_read_location::Location::Remote(gen::TaskReadLocationRemote {
-                uri,
-            })) => TaskReadLocation::Remote { uri },
-            None => return plan_err!("no shuffle read location found"),
-        };
-        Ok(location)
-    }
-
-    fn try_encode_task_read_location(
-        &self,
-        location: &TaskReadLocation,
-    ) -> Result<gen::TaskReadLocation> {
-        let location = match location {
-            TaskReadLocation::Worker { worker_id, channel } => gen::TaskReadLocation {
-                location: Some(gen::task_read_location::Location::Worker(
-                    gen::TaskReadLocationWorker {
-                        worker_id: (*worker_id).into(),
-                        channel: channel.clone().into(),
-                    },
-                )),
-            },
-            TaskReadLocation::Remote { uri } => gen::TaskReadLocation {
-                location: Some(gen::task_read_location::Location::Remote(
-                    gen::TaskReadLocationRemote { uri: uri.clone() },
-                )),
-            },
-        };
-        Ok(location)
-    }
-
-    fn try_decode_task_read_location_list(
-        &self,
-        locations: gen::TaskReadLocationList,
-    ) -> Result<Vec<TaskReadLocation>> {
-        let gen::TaskReadLocationList { locations } = locations;
-        locations
-            .into_iter()
-            .map(|location| self.try_decode_task_read_location(location))
-            .collect()
-    }
-
-    fn try_encode_task_read_location_list(
-        &self,
-        locations: &[TaskReadLocation],
-    ) -> Result<gen::TaskReadLocationList> {
-        let locations = locations
-            .iter()
-            .map(|location| self.try_encode_task_read_location(location))
-            .collect::<Result<_>>()?;
-        Ok(gen::TaskReadLocationList { locations })
-    }
-
-    fn try_decode_task_write_location(
-        &self,
-        location: gen::TaskWriteLocation,
-    ) -> Result<TaskWriteLocation> {
-        let gen::TaskWriteLocation { location } = location;
-        let location = match location {
-            Some(gen::task_write_location::Location::Local(gen::TaskWriteLocationLocal {
-                channel,
-                storage,
-            })) => TaskWriteLocation::Local {
-                channel: channel.into(),
-                storage: self.try_decode_local_stream_storage(storage)?,
-            },
-            Some(gen::task_write_location::Location::Remote(gen::TaskWriteLocationRemote {
-                uri,
-            })) => TaskWriteLocation::Remote { uri },
-            None => return plan_err!("no shuffle write location found"),
-        };
-        Ok(location)
-    }
-
-    fn try_encode_task_write_location(
-        &self,
-        location: &TaskWriteLocation,
-    ) -> Result<gen::TaskWriteLocation> {
-        let location = match location {
-            TaskWriteLocation::Local { channel, storage } => gen::TaskWriteLocation {
-                location: Some(gen::task_write_location::Location::Local(
-                    gen::TaskWriteLocationLocal {
-                        channel: channel.clone().into(),
-                        storage: self.try_encode_local_stream_storage(*storage)?,
-                    },
-                )),
-            },
-            TaskWriteLocation::Remote { uri } => gen::TaskWriteLocation {
-                location: Some(gen::task_write_location::Location::Remote(
-                    gen::TaskWriteLocationRemote { uri: uri.clone() },
-                )),
-            },
-        };
-        Ok(location)
-    }
-
-    fn try_decode_task_write_location_list(
-        &self,
-        locations: gen::TaskWriteLocationList,
-    ) -> Result<Vec<TaskWriteLocation>> {
-        let gen::TaskWriteLocationList { locations } = locations;
-        locations
-            .into_iter()
-            .map(|location| self.try_decode_task_write_location(location))
-            .collect()
-    }
-
-    fn try_encode_task_write_location_list(
-        &self,
-        locations: &[TaskWriteLocation],
-    ) -> Result<gen::TaskWriteLocationList> {
-        let locations = locations
-            .iter()
-            .map(|location| self.try_encode_task_write_location(location))
-            .collect::<Result<_>>()?;
-        Ok(gen::TaskWriteLocationList { locations })
     }
 
     fn try_decode_data_type(&self, buf: &[u8]) -> Result<DataType> {
@@ -2520,10 +2310,6 @@ impl RemoteExecutionCodec {
     where
         M: Message,
     {
-        let mut buffer = BytesMut::new();
-        message
-            .encode(&mut buffer)
-            .map_err(|e| plan_datafusion_err!("failed to encode message: {e}"))?;
-        Ok(buffer.freeze().into())
+        Ok(message.encode_to_vec())
     }
 }
