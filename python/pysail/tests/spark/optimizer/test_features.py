@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 
 import pytest
-from pytest_bdd import parsers, scenarios, then
+from pytest_bdd import scenarios
 
 from pysail.spark import SparkConnectServer
 from pysail.tests.spark.utils import is_jvm_spark
@@ -31,3 +31,5 @@ def remote():
         else:
             os.environ["SAIL_OPTIMIZER__ENABLE_JOIN_REORDER"] = original_enable_join_reorder
 
+
+scenarios("features")
