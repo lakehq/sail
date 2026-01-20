@@ -13,9 +13,9 @@
 use std::sync::Arc;
 
 use datafusion::arrow::compute::SortOptions;
-use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::common::{DataFusionError, Result, ScalarValue};
-use datafusion::physical_expr::expressions::{Column, Literal};
+use datafusion::physical_expr::expressions::{CastExpr, Column, Literal};
 use datafusion::physical_expr::{
     LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr, ScalarFunctionExpr,
 };
@@ -24,15 +24,18 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
-use datafusion_physical_expr::expressions::Column as PhysicalColumn;
+use datafusion_functions_nested::extract::array_element_udf;
+use datafusion_functions_nested::map_extract::map_extract_udf;
+use datafusion_physical_expr::expressions::{Column as PhysicalColumn, IsNotNullExpr};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
 use super::context::PlannerContext;
 use super::log_scan::build_delta_log_datasource_union;
+use crate::datasource::PATH_COLUMN;
 use crate::physical_plan::{
     create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaLogReplayExec,
-    DeltaWriterExec, COL_REPLAY_PATH,
+    DeltaWriterExec, COL_LOG_IS_REMOVE, COL_REPLAY_PATH,
 };
 
 pub fn build_standard_write_layers(
@@ -133,48 +136,54 @@ pub async fn build_log_replay_pipeline(
     let (raw_scan, checkpoint_files, commit_files) =
         build_delta_log_datasource_union(ctx, checkpoint_files, commit_files).await?;
 
-    // Append a derived `replay_path` column using standard expressions:
-    // replay_path = coalesce(get_field(add, 'path'), get_field(remove, 'path'))
+    // Projection#1: build a minimal log scan schema for streaming replay.
+    //
+    // - keep only `add` payload
+    // - replay_path = coalesce(get_field(add, 'path'), get_field(remove, 'path'))
+    // - is_remove  = is_not_null(get_field(remove, 'path'))
     let input_schema = raw_scan.schema();
-    let mut projection_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
-        Vec::with_capacity(input_schema.fields().len() + 1);
-    for (i, field) in input_schema.fields().iter().enumerate() {
-        projection_exprs.push((
-            Arc::new(Column::new(field.name(), i)) as Arc<dyn PhysicalExpr>,
-            field.name().clone(),
-        ));
-    }
-
     let add_idx = input_schema.index_of("add")?;
     let remove_idx = input_schema.index_of("remove")?;
 
+    let config_options = Arc::new(ctx.session().config_options().clone());
     let path_lit: Arc<dyn PhysicalExpr> =
         Arc::new(Literal::new(ScalarValue::Utf8(Some("path".to_string()))));
-    let add_col: Arc<dyn PhysicalExpr> = Arc::new(Column::new("add", add_idx));
-    let remove_col: Arc<dyn PhysicalExpr> = Arc::new(Column::new("remove", remove_idx));
-
-    let config_options = Arc::new(ctx.session().config_options().clone());
+    let add_col_in: Arc<dyn PhysicalExpr> = Arc::new(Column::new("add", add_idx));
+    let remove_col_in: Arc<dyn PhysicalExpr> = Arc::new(Column::new("remove", remove_idx));
 
     let add_path: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::try_new(
         datafusion::functions::core::get_field(),
-        vec![add_col, Arc::clone(&path_lit)],
+        vec![Arc::clone(&add_col_in), Arc::clone(&path_lit)],
         input_schema.as_ref(),
         Arc::clone(&config_options),
     )?);
     let remove_path: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::try_new(
         datafusion::functions::core::get_field(),
-        vec![remove_col, Arc::clone(&path_lit)],
+        vec![Arc::clone(&remove_col_in), Arc::clone(&path_lit)],
         input_schema.as_ref(),
         Arc::clone(&config_options),
     )?);
-
     let replay_path: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::try_new(
         datafusion::functions::core::coalesce(),
-        vec![add_path, remove_path],
+        vec![add_path, remove_path.clone()],
         input_schema.as_ref(),
         Arc::clone(&config_options),
     )?);
-    projection_exprs.push((replay_path, COL_REPLAY_PATH.to_string()));
+    // NOTE: `get_field(struct, 'child')` does not apply the parent struct's
+    // null buffer to the returned child array. Using `is_not_null(get_field(remove,'path'))`
+    // can therefore produce spurious TRUE values on rows where `remove` is NULL.
+    //
+    // Instead, mark tombstones using the struct's own validity.
+    let is_remove: Arc<dyn PhysicalExpr> = Arc::new(IsNotNullExpr::new(remove_col_in));
+
+    let projection_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![
+        (
+            Arc::new(Column::new("add", add_idx)) as Arc<dyn PhysicalExpr>,
+            "add".to_string(),
+        ),
+        (replay_path, COL_REPLAY_PATH.to_string()),
+        (is_remove, COL_LOG_IS_REMOVE.to_string()),
+    ];
 
     let log_scan: Arc<dyn ExecutionPlan> =
         Arc::new(ProjectionExec::try_new(projection_exprs, raw_scan)?);
@@ -205,12 +214,117 @@ pub async fn build_log_replay_pipeline(
     let log_scan: Arc<dyn ExecutionPlan> =
         Arc::new(SortExec::new(ordering, log_scan).with_preserve_partitioning(true));
 
-    Ok(Arc::new(DeltaLogReplayExec::new(
+    let replay: Arc<dyn ExecutionPlan> = Arc::new(DeltaLogReplayExec::new(
         log_scan,
         table_url,
         version,
-        partition_columns,
+        partition_columns.clone(),
         checkpoint_files,
         commit_files,
-    )))
+    ));
+
+    // Projection#2: extract a stable "metadata table" schema from `add`.
+    let replay_schema = replay.schema();
+    let add_idx = replay_schema.index_of("add")?;
+    let add_col: Arc<dyn PhysicalExpr> = Arc::new(Column::new("add", add_idx));
+
+    let add_field = replay_schema.field_with_name("add")?;
+    let add_struct_fields = match add_field.data_type() {
+        DataType::Struct(fields) => fields,
+        other => {
+            return Err(DataFusionError::Plan(format!(
+                "log replay expects 'add' to be Struct, got {other}"
+            )))
+        }
+    };
+    let has_add_field = |name: &str| add_struct_fields.iter().any(|f| f.name() == name);
+    let mod_time_field = if has_add_field("modificationTime") {
+        "modificationTime"
+    } else {
+        "modification_time"
+    };
+    let part_values_field = if has_add_field("partitionValues") {
+        "partitionValues"
+    } else {
+        "partition_values"
+    };
+    let stats_field = if has_add_field("stats") {
+        "stats"
+    } else {
+        "stats_json"
+    };
+
+    let lit_str = |s: &str| -> Arc<dyn PhysicalExpr> {
+        Arc::new(Literal::new(ScalarValue::Utf8(Some(s.to_string()))))
+    };
+    let lit_i64 =
+        |v: i64| -> Arc<dyn PhysicalExpr> { Arc::new(Literal::new(ScalarValue::Int64(Some(v)))) };
+
+    let get_add_field = |field_name: &str| -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(Arc::new(ScalarFunctionExpr::try_new(
+            datafusion::functions::core::get_field(),
+            vec![Arc::clone(&add_col), lit_str(field_name)],
+            replay_schema.as_ref(),
+            Arc::clone(&config_options),
+        )?))
+    };
+
+    let path_expr: Arc<dyn PhysicalExpr> =
+        Arc::new(CastExpr::new(get_add_field("path")?, DataType::Utf8, None));
+
+    let size_expr_i64: Arc<dyn PhysicalExpr> =
+        Arc::new(CastExpr::new(get_add_field("size")?, DataType::Int64, None));
+    let size_expr: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::try_new(
+        datafusion::functions::core::coalesce(),
+        vec![size_expr_i64, lit_i64(0)],
+        replay_schema.as_ref(),
+        Arc::clone(&config_options),
+    )?);
+
+    let mod_time_expr_i64: Arc<dyn PhysicalExpr> = Arc::new(CastExpr::new(
+        get_add_field(mod_time_field)?,
+        DataType::Int64,
+        None,
+    ));
+    let mod_time_expr: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::try_new(
+        datafusion::functions::core::coalesce(),
+        vec![mod_time_expr_i64, lit_i64(0)],
+        replay_schema.as_ref(),
+        Arc::clone(&config_options),
+    )?);
+
+    let stats_expr: Arc<dyn PhysicalExpr> = Arc::new(CastExpr::new(
+        get_add_field(stats_field)?,
+        DataType::Utf8,
+        None,
+    ));
+
+    let part_values = get_add_field(part_values_field)?;
+    let part_expr_for = |key: &str| -> Result<Arc<dyn PhysicalExpr>> {
+        let extracted: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::try_new(
+            map_extract_udf(),
+            vec![Arc::clone(&part_values), lit_str(key)],
+            replay_schema.as_ref(),
+            Arc::clone(&config_options),
+        )?);
+        let elem: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::try_new(
+            array_element_udf(),
+            vec![extracted, lit_i64(1)],
+            replay_schema.as_ref(),
+            Arc::clone(&config_options),
+        )?);
+        Ok(Arc::new(CastExpr::new(elem, DataType::Utf8, None)))
+    };
+
+    let mut meta_proj_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
+        Vec::with_capacity(4 + partition_columns.len());
+    meta_proj_exprs.push((path_expr, PATH_COLUMN.to_string()));
+    meta_proj_exprs.push((size_expr, "size_bytes".to_string()));
+    meta_proj_exprs.push((mod_time_expr, "modification_time".to_string()));
+    for col in &partition_columns {
+        meta_proj_exprs.push((part_expr_for(col)?, col.clone()));
+    }
+    meta_proj_exprs.push((stats_expr, "stats_json".to_string()));
+
+    Ok(Arc::new(ProjectionExec::try_new(meta_proj_exprs, replay)?))
 }

@@ -27,6 +27,7 @@ delta_kernel = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-physical-expr = { workspace = true }
+datafusion-functions-nested = { workspace = true }
 
 # Arrow dependencies
 arrow-schema = { workspace = true }

@@ -3,10 +3,8 @@ use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{
-    Array, ArrayRef, Int64Builder, MapArray, StringArray, StringBuilder, StructArray,
-};
-use datafusion::arrow::compute::{cast, SortOptions};
+use datafusion::arrow::array::{Array, ArrayRef, BooleanArray, StringArray, StructArray};
+use datafusion::arrow::compute::{cast, concat, SortOptions};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
@@ -23,41 +21,22 @@ use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use futures::{stream, TryStreamExt};
 use url::Url;
 
-use crate::datasource::PATH_COLUMN;
-use crate::physical_plan::{log_action_decode, COL_REPLAY_PATH};
-
-const COL_SIZE_BYTES: &str = "size_bytes";
-const COL_MODIFICATION_TIME: &str = "modification_time";
-const COL_STATS_JSON: &str = "stats_json";
+use crate::physical_plan::{COL_LOG_IS_REMOVE, COL_REPLAY_PATH};
 
 const COL_ADD: &str = "add";
-const COL_REMOVE: &str = "remove";
-const COL_PATH: &str = "path";
-const COL_STATS: &str = "stats";
-const COL_STATS_JSON_IN: &str = "stats_json";
-const COL_PARTITION_VALUES_CAMEL: &str = "partitionValues";
-const COL_PARTITION_VALUES_SNAKE: &str = "partition_values";
-const COL_MODIFICATION_TIME_CAMEL: &str = "modificationTime";
-const COL_MODIFICATION_TIME_SNAKE: &str = "modification_time";
-
-#[derive(Debug, Clone)]
-struct ActiveFile {
-    size_bytes: i64,
-    modification_time: i64,
-    partition_values: Vec<Option<String>>,
-    stats_json: Option<String>,
-}
 
 const OUTPUT_BATCH_ROWS: usize = 8192;
 
-/// A unary node that replays raw Delta log Add/Remove actions into the active file set.
+/// A unary node that filters raw Delta log rows into the active **Add** set (tombstone replay).
 ///
-/// Input: raw log rows (checkpoint parquet + commit json via DataSourceExec/Union)
-/// Output: per-file metadata table (path/size/modification_time + partition columns)
+/// Input:
+/// - `add` (Struct): raw Add action payload
+/// - `__sail_delta_replay_path` (Utf8): derived file path key
+/// - `__sail_delta_is_remove` (Boolean): derived marker for `remove(path)`
 ///
 /// Notes:
-/// - We treat `remove(path)` as a tombstone for `path` and ignore any `add` for the same path.
-///   This matches the (common) Delta invariant that data file paths are unique and not re-used.
+/// - We treat **any** `remove(path)` as a tombstone for `path` and ignore all `add` for the same
+///   path. This matches the (common) Delta invariant that data file paths are unique and not re-used.
 /// - This exec is designed to be **spill-friendly** by requiring the input to be hash-partitioned
 ///   and sorted by `__sail_delta_replay_path`, enabling streaming replay without materializing the
 ///   full active set in memory.
@@ -82,7 +61,7 @@ impl DeltaLogReplayExec {
         checkpoint_files: Vec<String>,
         commit_files: Vec<String>,
     ) -> Self {
-        let schema = Self::output_schema(&partition_columns);
+        let schema = Self::output_schema(&input.schema());
         let output_partitions = input.output_partitioning().partition_count().max(1);
         let cache = PlanProperties::new(
             EquivalenceProperties::new(schema),
@@ -121,193 +100,26 @@ impl DeltaLogReplayExec {
         &self.commit_files
     }
 
-    fn output_schema(partition_columns: &[String]) -> SchemaRef {
-        // Partition values are typed by the kernel evaluator, so we mark them nullable here.
-        let mut fields = vec![
-            Arc::new(Field::new(PATH_COLUMN, DataType::Utf8, false)),
-            Arc::new(Field::new(COL_SIZE_BYTES, DataType::Int64, false)),
-            Arc::new(Field::new(COL_MODIFICATION_TIME, DataType::Int64, false)),
-        ];
-        for col in partition_columns {
-            fields.push(Arc::new(Field::new(col, DataType::Utf8, true)));
-        }
-        fields.push(Arc::new(Field::new(COL_STATS_JSON, DataType::Utf8, true)));
-        Arc::new(Schema::new(fields))
-    }
-
-    // Struct decoding helpers live in `physical_plan::log_action_decode`.
-
-    fn as_i64_array(a: &ArrayRef, name: &str) -> Result<Arc<datafusion::arrow::array::Int64Array>> {
-        let casted = cast(a.as_ref(), &DataType::Int64)
-            .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
-        let n = casted
-            .as_any()
-            .downcast_ref::<datafusion::arrow::array::Int64Array>()
-            .ok_or_else(|| {
-                DataFusionError::Plan(format!("DeltaLogReplayExec '{name}' must be Int64"))
-            })?;
-        Ok(Arc::new(n.clone()))
-    }
-
-    fn map_lookup_string_value(map: &MapArray, row: usize, key: &str) -> Result<Option<String>> {
-        if map.is_null(row) {
-            return Ok(None);
-        }
-        let entries = map.entries();
-        let entries = entries
-            .as_any()
-            .downcast_ref::<StructArray>()
-            .ok_or_else(|| {
-                DataFusionError::Plan("partitionValues map entries must be Struct".into())
-            })?;
-        let keys = entries
-            .column_by_name("keys")
-            .or_else(|| entries.column_by_name("key"))
-            .ok_or_else(|| DataFusionError::Plan("partitionValues map missing keys".into()))?;
-        let values = entries
-            .column_by_name("values")
-            .or_else(|| entries.column_by_name("value"))
-            .ok_or_else(|| DataFusionError::Plan("partitionValues map missing values".into()))?;
-        let keys = keys
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or_else(|| DataFusionError::Plan("partitionValues keys must be Utf8".into()))?;
-        let values = values
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or_else(|| DataFusionError::Plan("partitionValues values must be Utf8".into()))?;
-
-        let start = map.value_offsets()[row] as usize;
-        let end = map.value_offsets()[row + 1] as usize;
-        for i in start..end {
-            if keys.is_null(i) {
-                continue;
-            }
-            if keys.value(i) == key {
-                if values.is_null(i) {
-                    return Ok(None);
-                }
-                return Ok(Some(values.value(i).to_string()));
-            }
-        }
-        Ok(None)
-    }
-
-    fn parse_add_row(
-        add: &StructArray,
-        row: usize,
-        partition_columns: &[String],
-    ) -> Result<Option<(String, ActiveFile)>> {
-        if add.is_null(row) {
-            return Ok(None);
-        }
-
-        let path = log_action_decode::struct_field(add, COL_PATH).ok_or_else(|| {
-            DataFusionError::Plan("DeltaLogReplayExec add missing 'path'".to_string())
-        })?;
-        let path = log_action_decode::as_string_array(path, "add.path", "DeltaLogReplayExec")?;
-        if path.is_null(row) {
-            return Err(DataFusionError::Plan(
-                "DeltaLogReplayExec add.path cannot be null".to_string(),
-            ));
-        }
-        let path_s = path.value(row).to_string();
-
-        let size = log_action_decode::struct_field(add, "size").ok_or_else(|| {
-            DataFusionError::Plan("DeltaLogReplayExec add missing 'size'".to_string())
-        })?;
-        let size = Self::as_i64_array(size, "add.size")?;
-        let size_bytes = if size.is_null(row) {
-            0
-        } else {
-            size.value(row)
-        };
-
-        let mod_time = log_action_decode::struct_field(add, COL_MODIFICATION_TIME_CAMEL)
-            .or_else(|| log_action_decode::struct_field(add, COL_MODIFICATION_TIME_SNAKE))
-            .ok_or_else(|| {
-                DataFusionError::Plan(
-                    "DeltaLogReplayExec add missing modification time".to_string(),
-                )
-            })?;
-        let mod_time = Self::as_i64_array(mod_time, "add.modificationTime")?;
-        let modification_time = if mod_time.is_null(row) {
-            0
-        } else {
-            mod_time.value(row)
-        };
-
-        let part_values = log_action_decode::struct_field(add, COL_PARTITION_VALUES_CAMEL)
-            .or_else(|| log_action_decode::struct_field(add, COL_PARTITION_VALUES_SNAKE))
-            .and_then(|a| a.as_any().downcast_ref::<MapArray>().cloned());
-
-        let mut partitions = Vec::with_capacity(partition_columns.len());
-        for col in partition_columns {
-            if let Some(map) = &part_values {
-                partitions.push(Self::map_lookup_string_value(map, row, col)?);
-            } else {
-                partitions.push(None);
-            }
-        }
-
-        let stats = log_action_decode::struct_field(add, COL_STATS)
-            .or_else(|| log_action_decode::struct_field(add, COL_STATS_JSON_IN))
-            .and_then(|a| {
-                log_action_decode::as_string_array(a, "add.stats", "DeltaLogReplayExec").ok()
-            });
-        let stats_json = stats.and_then(|s| {
-            if s.is_null(row) {
-                None
-            } else {
-                Some(s.value(row).to_string())
-            }
-        });
-
-        Ok(Some((
-            path_s.clone(),
-            ActiveFile {
-                size_bytes,
-                modification_time,
-                partition_values: partitions,
-                stats_json,
-            },
-        )))
-    }
-
-    fn parse_remove_row(remove: &StructArray, row: usize) -> Result<Option<String>> {
-        if remove.is_null(row) {
-            return Ok(None);
-        }
-        let path = log_action_decode::struct_field(remove, COL_PATH).ok_or_else(|| {
-            DataFusionError::Plan("DeltaLogReplayExec remove missing 'path'".to_string())
-        })?;
-        let path = log_action_decode::as_string_array(path, "remove.path", "DeltaLogReplayExec")?;
-        if path.is_null(row) {
-            return Err(DataFusionError::Plan(
-                "DeltaLogReplayExec remove.path cannot be null".to_string(),
-            ));
-        }
-        Ok(Some(path.value(row).to_string()))
+    fn output_schema(input_schema: &SchemaRef) -> SchemaRef {
+        let add_type = input_schema
+            .field_with_name(COL_ADD)
+            .map(|f| f.data_type().clone())
+            .unwrap_or(DataType::Null);
+        Arc::new(Schema::new(vec![Field::new(COL_ADD, add_type, true)]))
     }
 }
 
 struct ReplayState {
     input: SendableRecordBatchStream,
     output_schema: SchemaRef,
-    partition_columns: Vec<String>,
 
     // current group state (per replay_path)
     current_path: Option<String>,
     current_removed: bool,
-    current_file: Option<ActiveFile>,
+    current_add: Option<ArrayRef>,
 
     // output builders for the next RecordBatch
-    out_rows: usize,
-    out_path: StringBuilder,
-    out_size: Int64Builder,
-    out_mod_time: Int64Builder,
-    out_parts: Vec<StringBuilder>,
-    out_stats: StringBuilder,
+    out_add_slices: Vec<ArrayRef>,
     finished: bool,
 }
 
@@ -315,72 +127,38 @@ impl ReplayState {
     fn new(
         input: SendableRecordBatchStream,
         output_schema: SchemaRef,
-        partition_columns: Vec<String>,
+        _partition_columns: Vec<String>,
     ) -> Self {
-        let out_parts = partition_columns
-            .iter()
-            .map(|_| StringBuilder::new())
-            .collect();
         Self {
             input,
             output_schema,
-            partition_columns,
             current_path: None,
             current_removed: false,
-            current_file: None,
-            out_rows: 0,
-            out_path: StringBuilder::new(),
-            out_size: Int64Builder::new(),
-            out_mod_time: Int64Builder::new(),
-            out_parts,
-            out_stats: StringBuilder::new(),
+            current_add: None,
+            out_add_slices: Vec::new(),
             finished: false,
         }
     }
 
     fn flush_current_group(&mut self) {
-        if let (Some(path), false, Some(file)) = (
-            self.current_path.take(),
-            self.current_removed,
-            self.current_file.take(),
-        ) {
-            self.append_output_row(path, file);
+        if !self.current_removed {
+            if let Some(add) = self.current_add.take() {
+                self.out_add_slices.push(add);
+            }
         } else {
-            self.current_path.take();
-            self.current_file.take();
+            self.current_add.take();
         }
         self.current_removed = false;
     }
 
-    fn append_output_row(&mut self, path: String, file: ActiveFile) {
-        self.out_path.append_value(path);
-        self.out_size.append_value(file.size_bytes);
-        self.out_mod_time.append_value(file.modification_time);
-        for (i, v) in file.partition_values.into_iter().enumerate() {
-            match v {
-                Some(s) => self.out_parts[i].append_value(s),
-                None => self.out_parts[i].append_null(),
-            }
-        }
-        match file.stats_json {
-            Some(s) => self.out_stats.append_value(s),
-            None => self.out_stats.append_null(),
-        }
-        self.out_rows += 1;
-    }
-
     fn take_output_batch(&mut self) -> Result<RecordBatch> {
-        let mut cols: Vec<ArrayRef> = Vec::with_capacity(4 + self.out_parts.len());
-        cols.push(Arc::new(self.out_path.finish()) as ArrayRef);
-        cols.push(Arc::new(self.out_size.finish()) as ArrayRef);
-        cols.push(Arc::new(self.out_mod_time.finish()) as ArrayRef);
-        for b in self.out_parts.iter_mut() {
-            cols.push(Arc::new(b.finish()) as ArrayRef);
+        if self.out_add_slices.is_empty() {
+            return internal_err!("DeltaLogReplayExec produced an empty output batch");
         }
-        cols.push(Arc::new(self.out_stats.finish()) as ArrayRef);
-
-        self.out_rows = 0;
-        RecordBatch::try_new(Arc::clone(&self.output_schema), cols)
+        let parts: Vec<&dyn Array> = self.out_add_slices.iter().map(|a| a.as_ref()).collect();
+        let add = concat(&parts).map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+        self.out_add_slices.clear();
+        RecordBatch::try_new(Arc::clone(&self.output_schema), vec![add])
             .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
     }
 
@@ -389,8 +167,8 @@ impl ReplayState {
             return Ok(());
         }
 
-        // The planner is expected to materialize `COL_REPLAY_PATH` (via a projection)
-        // for distribution/sorting.
+        // The planner is expected to materialize `COL_REPLAY_PATH` and `COL_LOG_IS_REMOVE`
+        // (via a projection) for distribution/sorting and tombstone logic.
         let replay_path = batch.column_by_name(COL_REPLAY_PATH).ok_or_else(|| {
             DataFusionError::Plan(format!(
                 "DeltaLogReplayExec input must have Utf8 column '{COL_REPLAY_PATH}'"
@@ -407,10 +185,30 @@ impl ReplayState {
                 ))
             })?;
 
-        let add_struct =
-            log_action_decode::get_struct_column(batch, COL_ADD, "DeltaLogReplayExec")?;
-        let remove_struct =
-            log_action_decode::get_struct_column(batch, COL_REMOVE, "DeltaLogReplayExec")?;
+        let is_remove = batch.column_by_name(COL_LOG_IS_REMOVE).ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "DeltaLogReplayExec input must have Boolean column '{COL_LOG_IS_REMOVE}'"
+            ))
+        })?;
+        let is_remove = cast(is_remove.as_ref(), &DataType::Boolean)
+            .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+        let is_remove = is_remove
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "DeltaLogReplayExec '{COL_LOG_IS_REMOVE}' must be Boolean"
+                ))
+            })?;
+
+        let add = batch.column_by_name(COL_ADD).ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "DeltaLogReplayExec input must have Struct column '{COL_ADD}'"
+            ))
+        })?;
+        let add = add.as_any().downcast_ref::<StructArray>().ok_or_else(|| {
+            DataFusionError::Plan(format!("DeltaLogReplayExec '{COL_ADD}' must be Struct"))
+        })?;
 
         for row in 0..batch.num_rows() {
             if replay_path.is_null(row) {
@@ -428,27 +226,19 @@ impl ReplayState {
                 _ => {}
             }
 
-            // Apply remove first (tombstone).
-            if let Some(remove) = &remove_struct {
-                if let Some(_rm) = DeltaLogReplayExec::parse_remove_row(remove.as_ref(), row)? {
-                    self.current_removed = true;
-                    self.current_file = None;
-                }
-            }
-
-            if self.current_removed {
+            // Apply tombstone first (remove).
+            if !is_remove.is_null(row) && is_remove.value(row) {
+                self.current_removed = true;
+                self.current_add = None;
                 continue;
             }
 
-            if let Some(add) = &add_struct {
-                if let Some((_path, file)) =
-                    DeltaLogReplayExec::parse_add_row(add.as_ref(), row, &self.partition_columns)?
-                {
-                    // Under the path uniqueness assumption, the first add we see is sufficient.
-                    if self.current_file.is_none() {
-                        self.current_file = Some(file);
-                    }
-                }
+            // Keep the first non-null add we see for the current path.
+            if self.current_removed {
+                continue;
+            }
+            if self.current_add.is_none() && !add.is_null(row) {
+                self.current_add = Some(Arc::new(add.slice(row, 1)) as ArrayRef);
             }
         }
 
@@ -543,7 +333,7 @@ impl ExecutionPlan for DeltaLogReplayExec {
 
         let s = stream::try_unfold(state, |mut st| async move {
             loop {
-                if st.out_rows >= OUTPUT_BATCH_ROWS {
+                if st.out_add_slices.len() >= OUTPUT_BATCH_ROWS {
                     let out = st.take_output_batch()?;
                     return Ok(Some((out, st)));
                 }
@@ -551,7 +341,7 @@ impl ExecutionPlan for DeltaLogReplayExec {
                 if st.finished {
                     // Final flush.
                     st.flush_current_group();
-                    if st.out_rows > 0 {
+                    if !st.out_add_slices.is_empty() {
                         let out = st.take_output_batch()?;
                         return Ok(Some((out, st)));
                     }
@@ -717,25 +507,17 @@ mod tests {
             vec![true, false, true],
         );
 
-        let remove_fields: Fields = vec![Arc::new(Field::new("path", DataType::Utf8, true))].into();
-        let rm_path = Arc::new(StringArray::from(vec![None, Some("a"), None])) as ArrayRef;
-        let remove_struct =
-            struct_array_with_validity(remove_fields, vec![rm_path], vec![false, true, false]);
-
         let schema = Arc::new(Schema::new(vec![
-            Field::new(COL_REPLAY_PATH, DataType::Utf8, false),
             Field::new("add", add_struct.data_type().clone(), true),
-            Field::new("remove", remove_struct.data_type().clone(), true),
+            Field::new(COL_REPLAY_PATH, DataType::Utf8, false),
+            Field::new(COL_LOG_IS_REMOVE, DataType::Boolean, true),
         ]));
         let replay_path =
             Arc::new(StringArray::from(vec![Some("a"), Some("a"), Some("b")])) as ArrayRef;
+        let is_remove = Arc::new(BooleanArray::from(vec![false, true, false])) as ArrayRef;
         let batch = RecordBatch::try_new(
             schema,
-            vec![
-                replay_path,
-                Arc::new(add_struct) as ArrayRef,
-                Arc::new(remove_struct) as ArrayRef,
-            ],
+            vec![Arc::new(add_struct) as ArrayRef, replay_path, is_remove],
         )
         .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
 
@@ -755,8 +537,15 @@ mod tests {
         #[allow(clippy::unwrap_used)]
         let out = stream.try_next().await?.unwrap();
         #[allow(clippy::unwrap_used)]
-        let path_col = out
+        let add = out
             .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        #[allow(clippy::unwrap_used)]
+        let path_col = add
+            .column_by_name("path")
+            .unwrap()
             .as_any()
             .downcast_ref::<StringArray>()
             .unwrap();

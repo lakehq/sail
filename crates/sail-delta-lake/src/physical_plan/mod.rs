@@ -30,7 +30,6 @@ mod action_schema;
 mod commit_exec;
 pub mod discovery_exec;
 mod expr_adapter;
-mod log_action_decode;
 mod log_replay_exec;
 mod meta_adds;
 mod remove_actions_exec;
@@ -55,6 +54,12 @@ pub use writer_exec::DeltaWriterExec;
 
 /// Top-level derived column used to co-locate log actions by file path for parallel replay.
 pub const COL_REPLAY_PATH: &str = "__sail_delta_replay_path";
+
+/// Derived boolean marker indicating whether a log row is a `remove(path)` action.
+///
+/// This is computed by the planner and consumed by `DeltaLogReplayExec` to avoid decoding the
+/// `remove` struct during streaming replay.
+pub const COL_LOG_IS_REMOVE: &str = "__sail_delta_is_remove";
 
 /// Create a `ProjectionExec` instance that reorders columns so that partition columns
 /// are placed at the end of the `RecordBatch`.

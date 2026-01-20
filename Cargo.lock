@@ -5959,6 +5959,7 @@ dependencies = [
  "chrono",
  "datafusion",
  "datafusion-common",
+ "datafusion-functions-nested",
  "datafusion-physical-expr",
  "delta_kernel",
  "futures",
