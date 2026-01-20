@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::Schema;
-use datafusion::common::{DataFusionError, Result};
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::common::{DataFusionError, Result, ScalarValue};
 use datafusion::datasource::file_format::json::JsonFormat;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
@@ -17,6 +17,7 @@ use object_store::{ObjectMeta, ObjectStore};
 
 use super::context::PlannerContext;
 use crate::datasource::create_object_store_url;
+use crate::physical_plan::COL_LOG_VERSION;
 
 const DELTA_LOG_DIR: &str = "_delta_log";
 
@@ -69,24 +70,38 @@ async fn head_many(
         .await
 }
 
-fn to_partitioned_files(metas: Vec<ObjectMeta>) -> Vec<PartitionedFile> {
+fn to_partitioned_files(metas: Vec<ObjectMeta>) -> Result<Vec<PartitionedFile>> {
     metas
         .into_iter()
-        .map(|m| PartitionedFile {
-            object_meta: m,
-            partition_values: vec![],
-            range: None,
-            statistics: None,
-            extensions: None,
-            metadata_size_hint: None,
+        .map(|m| {
+            let loc = m.location.as_ref();
+            let filename = loc.rsplit(DELIMITER).next().unwrap_or(loc);
+            let ver = parse_log_version_prefix(filename).ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "failed to parse delta log version from file '{filename}'"
+                ))
+            })?;
+            let ver = i64::try_from(ver).map_err(|_| {
+                DataFusionError::Plan(format!(
+                    "delta log version '{ver}' does not fit into Int64 for file '{filename}'"
+                ))
+            })?;
+            Ok(PartitionedFile {
+                object_meta: m,
+                partition_values: vec![ScalarValue::Int64(Some(ver))],
+                range: None,
+                statistics: None,
+                extensions: None,
+                metadata_size_hint: None,
+            })
         })
         .collect()
 }
 
-fn to_file_groups(metas: Vec<ObjectMeta>, target_partitions: usize) -> Vec<FileGroup> {
+fn to_file_groups(metas: Vec<ObjectMeta>, target_partitions: usize) -> Result<Vec<FileGroup>> {
     let target_partitions = target_partitions.max(1);
     if metas.is_empty() {
-        return vec![];
+        return Ok(vec![]);
     }
 
     // Ensure deterministic file group ordering for stable EXPLAIN snapshots.
@@ -95,7 +110,7 @@ fn to_file_groups(metas: Vec<ObjectMeta>, target_partitions: usize) -> Vec<FileG
     let mut metas = metas;
     metas.sort_by(|a, b| a.location.as_ref().cmp(b.location.as_ref()));
 
-    let mut files = to_partitioned_files(metas);
+    let mut files = to_partitioned_files(metas)?;
     let num_groups = std::cmp::min(target_partitions, files.len());
     let chunk_size = files.len().div_ceil(num_groups);
 
@@ -109,7 +124,7 @@ fn to_file_groups(metas: Vec<ObjectMeta>, target_partitions: usize) -> Vec<FileG
         groups.push(FileGroup::from(std::mem::take(&mut files)));
         files = rest;
     }
-    groups
+    Ok(groups)
 }
 
 /// Build a `UnionExec` over `_delta_log` checkpoint parquet + commit json files using DataFusion's
@@ -195,9 +210,14 @@ pub async fn build_delta_log_datasource_union(
     if !checkpoint_metas.is_empty() {
         let source = datafusion::datasource::physical_plan::ParquetSource::default()
             .with_schema_adapter_factory(Arc::new(DefaultSchemaAdapterFactory {}))?;
-        let groups = to_file_groups(checkpoint_metas, target_partitions);
+        let groups = to_file_groups(checkpoint_metas, target_partitions)?;
         let conf =
             FileScanConfigBuilder::new(object_store_url.clone(), Arc::clone(&merged), source)
+                .with_table_partition_cols(vec![Field::new(
+                    COL_LOG_VERSION,
+                    DataType::Int64,
+                    false,
+                )])
                 .with_file_groups(groups)
                 .build();
         inputs.push(DataSourceExec::from_data_source(conf));
@@ -205,8 +225,9 @@ pub async fn build_delta_log_datasource_union(
 
     if !commit_metas.is_empty() {
         let source = Arc::new(datafusion::datasource::physical_plan::JsonSource::new());
-        let groups = to_file_groups(commit_metas, target_partitions);
+        let groups = to_file_groups(commit_metas, target_partitions)?;
         let conf = FileScanConfigBuilder::new(object_store_url, Arc::clone(&merged), source)
+            .with_table_partition_cols(vec![Field::new(COL_LOG_VERSION, DataType::Int64, false)])
             .with_file_groups(groups)
             .build();
         inputs.push(DataSourceExec::from_data_source(conf));

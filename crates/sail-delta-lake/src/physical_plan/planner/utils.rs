@@ -35,7 +35,7 @@ use super::log_scan::build_delta_log_datasource_union;
 use crate::datasource::PATH_COLUMN;
 use crate::physical_plan::{
     create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaLogReplayExec,
-    DeltaWriterExec, COL_LOG_IS_REMOVE, COL_REPLAY_PATH,
+    DeltaWriterExec, COL_LOG_IS_REMOVE, COL_LOG_VERSION, COL_REPLAY_PATH,
 };
 
 pub fn build_standard_write_layers(
@@ -141,9 +141,11 @@ pub async fn build_log_replay_pipeline(
     // - keep only `add` payload
     // - replay_path = coalesce(get_field(add, 'path'), get_field(remove, 'path'))
     // - is_remove  = is_not_null(get_field(remove, 'path'))
+    // - __sail_delta_log_version is passed through from the scan as a partition column
     let input_schema = raw_scan.schema();
     let add_idx = input_schema.index_of("add")?;
     let remove_idx = input_schema.index_of("remove")?;
+    let log_version_idx = input_schema.index_of(COL_LOG_VERSION)?;
 
     let config_options = Arc::new(ctx.session().config_options().clone());
     let path_lit: Arc<dyn PhysicalExpr> =
@@ -183,6 +185,10 @@ pub async fn build_log_replay_pipeline(
         ),
         (replay_path, COL_REPLAY_PATH.to_string()),
         (is_remove, COL_LOG_IS_REMOVE.to_string()),
+        (
+            Arc::new(Column::new(COL_LOG_VERSION, log_version_idx)) as Arc<dyn PhysicalExpr>,
+            COL_LOG_VERSION.to_string(),
+        ),
     ];
 
     let log_scan: Arc<dyn ExecutionPlan> =
@@ -190,6 +196,7 @@ pub async fn build_log_replay_pipeline(
 
     let log_partitions = ctx.session().config().target_partitions().max(1);
     let replay_path_idx = log_scan.schema().index_of(COL_REPLAY_PATH)?;
+    let log_version_idx = log_scan.schema().index_of(COL_LOG_VERSION)?;
 
     // Hash partition by replay_path so all actions for the same path are co-located.
     let replay_expr: Arc<dyn datafusion_physical_expr::PhysicalExpr> =
@@ -199,15 +206,24 @@ pub async fn build_log_replay_pipeline(
         Partitioning::Hash(vec![replay_expr], log_partitions),
     )?);
 
-    // Ensure per-partition ordering on replay_path so DeltaLogReplayExec can stream without
-    // materializing the full active set in memory. SortExec can spill.
-    let ordering = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: Arc::new(Column::new(COL_REPLAY_PATH, replay_path_idx)),
-        options: SortOptions {
-            descending: false,
-            nulls_first: false,
+    // Ensure per-partition ordering on (replay_path, log_version desc) so DeltaLogReplayExec can
+    // stream without materializing the full active set in memory. SortExec can spill.
+    let ordering = LexOrdering::new(vec![
+        PhysicalSortExpr {
+            expr: Arc::new(Column::new(COL_REPLAY_PATH, replay_path_idx)),
+            options: SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
         },
-    }])
+        PhysicalSortExpr {
+            expr: Arc::new(Column::new(COL_LOG_VERSION, log_version_idx)),
+            options: SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        },
+    ])
     .ok_or_else(|| {
         DataFusionError::Internal("failed to create replay_path ordering requirement".to_string())
     })?;

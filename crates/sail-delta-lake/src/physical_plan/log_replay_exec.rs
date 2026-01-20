@@ -3,7 +3,9 @@ use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{Array, ArrayRef, BooleanArray, StringArray, StructArray};
+use datafusion::arrow::array::{
+    Array, ArrayRef, BooleanArray, Int64Array, StringArray, StructArray,
+};
 use datafusion::arrow::compute::{cast, concat, SortOptions};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
@@ -21,7 +23,7 @@ use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use futures::{stream, TryStreamExt};
 use url::Url;
 
-use crate::physical_plan::{COL_LOG_IS_REMOVE, COL_REPLAY_PATH};
+use crate::physical_plan::{COL_LOG_IS_REMOVE, COL_LOG_VERSION, COL_REPLAY_PATH};
 
 const COL_ADD: &str = "add";
 
@@ -35,8 +37,9 @@ const OUTPUT_BATCH_ROWS: usize = 8192;
 /// - `__sail_delta_is_remove` (Boolean): derived marker for `remove(path)`
 ///
 /// Notes:
-/// - We treat **any** `remove(path)` as a tombstone for `path` and ignore all `add` for the same
-///   path. This matches the (common) Delta invariant that data file paths are unique and not re-used.
+/// - We replay actions in **newest-first** order (by `__sail_delta_log_version`) within each
+///   `__sail_delta_replay_path`. The first action we observe for a path decides the final state
+///   (newer actions override older ones).
 /// - This exec is designed to be **spill-friendly** by requiring the input to be hash-partitioned
 ///   and sorted by `__sail_delta_replay_path`, enabling streaming replay without materializing the
 ///   full active set in memory.
@@ -141,12 +144,8 @@ impl ReplayState {
     }
 
     fn flush_current_group(&mut self) {
-        if !self.current_removed {
-            if let Some(add) = self.current_add.take() {
-                self.out_add_slices.push(add);
-            }
-        } else {
-            self.current_add.take();
+        if let Some(add) = self.current_add.take() {
+            self.out_add_slices.push(add);
         }
         self.current_removed = false;
     }
@@ -167,8 +166,8 @@ impl ReplayState {
             return Ok(());
         }
 
-        // The planner is expected to materialize `COL_REPLAY_PATH` and `COL_LOG_IS_REMOVE`
-        // (via a projection) for distribution/sorting and tombstone logic.
+        // The planner is expected to materialize `COL_REPLAY_PATH`, `COL_LOG_IS_REMOVE`, and
+        // `COL_LOG_VERSION` (via a projection) for distribution/sorting and tombstone logic.
         let replay_path = batch.column_by_name(COL_REPLAY_PATH).ok_or_else(|| {
             DataFusionError::Plan(format!(
                 "DeltaLogReplayExec input must have Utf8 column '{COL_REPLAY_PATH}'"
@@ -201,6 +200,23 @@ impl ReplayState {
                 ))
             })?;
 
+        // Require a log version column so the planner can enforce newest-first replay semantics.
+        let log_version = batch.column_by_name(COL_LOG_VERSION).ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "DeltaLogReplayExec input must have Int64 column '{COL_LOG_VERSION}'"
+            ))
+        })?;
+        let log_version = cast(log_version.as_ref(), &DataType::Int64)
+            .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+        let _log_version = log_version
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "DeltaLogReplayExec '{COL_LOG_VERSION}' must be Int64"
+                ))
+            })?;
+
         let add = batch.column_by_name(COL_ADD).ok_or_else(|| {
             DataFusionError::Plan(format!(
                 "DeltaLogReplayExec input must have Struct column '{COL_ADD}'"
@@ -227,16 +243,19 @@ impl ReplayState {
             }
 
             // Apply tombstone first (remove).
-            if !is_remove.is_null(row) && is_remove.value(row) {
-                self.current_removed = true;
-                self.current_add = None;
+            //
+            // Input is expected to be sorted by (replay_path ASC, log_version DESC), so the first
+            // decision we make for a given path must be final (older actions cannot override it).
+            if self.current_removed || self.current_add.is_some() {
                 continue;
             }
 
-            // Keep the first non-null add we see for the current path.
-            if self.current_removed {
+            if !is_remove.is_null(row) && is_remove.value(row) {
+                self.current_removed = true;
                 continue;
             }
+
+            // Keep the first non-null add we see for the current path (newest add wins).
             if self.current_add.is_none() && !add.is_null(row) {
                 self.current_add = Some(Arc::new(add.slice(row, 1)) as ArrayRef);
             }
@@ -280,19 +299,32 @@ impl ExecutionPlan for DeltaLogReplayExec {
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         // The streaming replay logic relies on all rows for the same `COL_REPLAY_PATH`
         // being adjacent within each partition, so we require a local ordering by
-        // `COL_REPLAY_PATH`.
-        let idx = match self.input.schema().index_of(COL_REPLAY_PATH) {
+        // (COL_REPLAY_PATH ASC, COL_LOG_VERSION DESC).
+        let replay_idx = match self.input.schema().index_of(COL_REPLAY_PATH) {
+            Ok(i) => i,
+            Err(_) => return vec![None],
+        };
+        let version_idx = match self.input.schema().index_of(COL_LOG_VERSION) {
             Ok(i) => i,
             Err(_) => return vec![None],
         };
 
-        let Some(ordering) = LexOrdering::new(vec![PhysicalSortExpr {
-            expr: Arc::new(Column::new(COL_REPLAY_PATH, idx)),
-            options: SortOptions {
-                descending: false,
-                nulls_first: false,
+        let Some(ordering) = LexOrdering::new(vec![
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new(COL_REPLAY_PATH, replay_idx)),
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                },
             },
-        }]) else {
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new(COL_LOG_VERSION, version_idx)),
+                options: SortOptions {
+                    descending: true,
+                    nulls_first: false,
+                },
+            },
+        ]) else {
             return vec![None];
         };
 
@@ -487,8 +519,9 @@ mod tests {
 
     #[tokio::test]
     async fn replay_add_and_remove_produces_active_set() -> Result<()> {
-        // Row0: add a
-        // Row1: remove a
+        // Newest-first within a path:
+        // Row0: remove a (v1)
+        // Row1: add a (v0)  -> should be ignored due to tombstone at v1
         // Row2: add b
 
         let add_fields: Fields = vec![
@@ -498,26 +531,33 @@ mod tests {
         ]
         .into();
 
-        let add_path = Arc::new(StringArray::from(vec![Some("a"), None, Some("b")])) as ArrayRef;
-        let add_size = Arc::new(Int64Array::from(vec![Some(1), None, Some(2)])) as ArrayRef;
-        let add_mod = Arc::new(Int64Array::from(vec![Some(10), None, Some(20)])) as ArrayRef;
+        let add_path = Arc::new(StringArray::from(vec![None, Some("a"), Some("b")])) as ArrayRef;
+        let add_size = Arc::new(Int64Array::from(vec![None, Some(1), Some(2)])) as ArrayRef;
+        let add_mod = Arc::new(Int64Array::from(vec![None, Some(10), Some(20)])) as ArrayRef;
         let add_struct = struct_array_with_validity(
             add_fields,
             vec![add_path, add_size, add_mod],
-            vec![true, false, true],
+            vec![false, true, true],
         );
 
         let schema = Arc::new(Schema::new(vec![
             Field::new("add", add_struct.data_type().clone(), true),
             Field::new(COL_REPLAY_PATH, DataType::Utf8, false),
             Field::new(COL_LOG_IS_REMOVE, DataType::Boolean, true),
+            Field::new(COL_LOG_VERSION, DataType::Int64, false),
         ]));
         let replay_path =
             Arc::new(StringArray::from(vec![Some("a"), Some("a"), Some("b")])) as ArrayRef;
-        let is_remove = Arc::new(BooleanArray::from(vec![false, true, false])) as ArrayRef;
+        let is_remove = Arc::new(BooleanArray::from(vec![true, false, false])) as ArrayRef;
+        let log_version = Arc::new(Int64Array::from(vec![1, 0, 2])) as ArrayRef;
         let batch = RecordBatch::try_new(
             schema,
-            vec![Arc::new(add_struct) as ArrayRef, replay_path, is_remove],
+            vec![
+                Arc::new(add_struct) as ArrayRef,
+                replay_path,
+                is_remove,
+                log_version,
+            ],
         )
         .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
 
@@ -551,6 +591,81 @@ mod tests {
             .unwrap();
         assert_eq!(out.num_rows(), 1);
         assert_eq!(path_col.value(0), "b");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn replay_path_reuse_add_after_remove_is_active() -> Result<()> {
+        // Newest-first within a path:
+        // Row0: add a (v2)    -> should win
+        // Row1: remove a (v1) -> must be ignored (older)
+
+        let add_fields: Fields = vec![
+            Arc::new(Field::new("path", DataType::Utf8, true)),
+            Arc::new(Field::new("size", DataType::Int64, true)),
+            Arc::new(Field::new("modificationTime", DataType::Int64, true)),
+        ]
+        .into();
+
+        let add_path = Arc::new(StringArray::from(vec![Some("a"), None])) as ArrayRef;
+        let add_size = Arc::new(Int64Array::from(vec![Some(1), None])) as ArrayRef;
+        let add_mod = Arc::new(Int64Array::from(vec![Some(10), None])) as ArrayRef;
+        let add_struct = struct_array_with_validity(
+            add_fields,
+            vec![add_path, add_size, add_mod],
+            vec![true, false],
+        );
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("add", add_struct.data_type().clone(), true),
+            Field::new(COL_REPLAY_PATH, DataType::Utf8, false),
+            Field::new(COL_LOG_IS_REMOVE, DataType::Boolean, true),
+            Field::new(COL_LOG_VERSION, DataType::Int64, false),
+        ]));
+        let replay_path = Arc::new(StringArray::from(vec![Some("a"), Some("a")])) as ArrayRef;
+        let is_remove = Arc::new(BooleanArray::from(vec![false, true])) as ArrayRef;
+        let log_version = Arc::new(Int64Array::from(vec![2, 1])) as ArrayRef;
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(add_struct) as ArrayRef,
+                replay_path,
+                is_remove,
+                log_version,
+            ],
+        )
+        .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+
+        let input: Arc<dyn ExecutionPlan> = Arc::new(OneBatchExec::new(batch));
+        let exec = Arc::new(DeltaLogReplayExec::new(
+            input,
+            #[allow(clippy::unwrap_used)]
+            Url::parse("file:///tmp/delta").unwrap(),
+            0,
+            vec![],
+            vec![],
+            vec![],
+        ));
+
+        let ctx = Arc::new(TaskContext::default());
+        let mut stream = exec.execute(0, ctx)?;
+        #[allow(clippy::unwrap_used)]
+        let out = stream.try_next().await?.unwrap();
+        #[allow(clippy::unwrap_used)]
+        let add = out
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        #[allow(clippy::unwrap_used)]
+        let path_col = add
+            .column_by_name("path")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(out.num_rows(), 1);
+        assert_eq!(path_col.value(0), "a");
         Ok(())
     }
 }

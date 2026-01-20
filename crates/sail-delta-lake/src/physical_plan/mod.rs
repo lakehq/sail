@@ -61,6 +61,12 @@ pub const COL_REPLAY_PATH: &str = "__sail_delta_replay_path";
 /// `remove` struct during streaming replay.
 pub const COL_LOG_IS_REMOVE: &str = "__sail_delta_is_remove";
 
+/// Derived log row version (from the 20-digit `_delta_log` filename prefix).
+///
+/// The planner attaches this as a partition column during log scanning so downstream nodes can
+/// order actions deterministically for replay.
+pub const COL_LOG_VERSION: &str = "__sail_delta_log_version";
+
 /// Create a `ProjectionExec` instance that reorders columns so that partition columns
 /// are placed at the end of the `RecordBatch`.
 pub fn create_projection(

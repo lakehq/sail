@@ -12,24 +12,24 @@ DeltaCommitExec(table_path=file://<tmp>/x/)
                     DeltaDiscoveryExec(table_path=file://<tmp>/x/)
                       ProjectionExec: expr=[CAST(get_field(add@0, path) AS Utf8) as __sail_file_path, coalesce(CAST(get_field(add@0, size) AS Int64), 0) as size_bytes, coalesce(CAST(get_field(add@0, modificationTime) AS Int64), 0) as modification_time, CAST(array_element(map_extract(get_field(add@0, partitionValues), year), 1) AS Utf8) as year, CAST(array_element(map_extract(get_field(add@0, partitionValues), month), 1) AS Utf8) as month, CAST(get_field(add@0, stats) AS Utf8) as stats_json]
                         DeltaLogReplayExec(table_path=file://<tmp>/x/, version=1)
-                          SortExec: expr=[__sail_delta_replay_path@1 ASC NULLS LAST], preserve_partitioning=[true]
+                          SortExec: expr=[__sail_delta_replay_path@1 ASC NULLS LAST, __sail_delta_log_version@3 DESC NULLS LAST], preserve_partitioning=[true]
                             CoalesceBatchesExec: target_batch_size=8192
                               RepartitionExec: partitioning=Hash([__sail_delta_replay_path@1], 4), input_partitions=4
-                                ProjectionExec: expr=[add@0 as add, coalesce(get_field(add@0, path), get_field(remove@1, path)) as __sail_delta_replay_path, remove@1 IS NOT NULL as __sail_delta_is_remove]
+                                ProjectionExec: expr=[add@0 as add, coalesce(get_field(add@0, path), get_field(remove@1, path)) as __sail_delta_replay_path, remove@1 IS NOT NULL as __sail_delta_is_remove, __sail_delta_log_version@6 as __sail_delta_log_version]
                                   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
                                     UnionExec
-                                      DataSourceExec: file_groups={1 group: [[<tmp>/x/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
-                                      DataSourceExec: file_groups={1 group: [[<tmp>/x/_delta_log/00000000000000000001.json]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=json
+                                      DataSourceExec: file_groups={1 group: [[<tmp>/x/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar, __sail_delta_log_version], file_type=parquet
+                                      DataSourceExec: file_groups={1 group: [[<tmp>/x/_delta_log/00000000000000000001.json]]}, projection=[add, remove, metaData, protocol, txn, sidecar, __sail_delta_log_version], file_type=json
       DeltaRemoveActionsExec
         CoalescePartitionsExec
           DeltaDiscoveryExec(table_path=file://<tmp>/x/)
             ProjectionExec: expr=[CAST(get_field(add@0, path) AS Utf8) as __sail_file_path, coalesce(CAST(get_field(add@0, size) AS Int64), 0) as size_bytes, coalesce(CAST(get_field(add@0, modificationTime) AS Int64), 0) as modification_time, CAST(array_element(map_extract(get_field(add@0, partitionValues), year), 1) AS Utf8) as year, CAST(array_element(map_extract(get_field(add@0, partitionValues), month), 1) AS Utf8) as month, CAST(get_field(add@0, stats) AS Utf8) as stats_json]
               DeltaLogReplayExec(table_path=file://<tmp>/x/, version=1)
-                SortExec: expr=[__sail_delta_replay_path@1 ASC NULLS LAST], preserve_partitioning=[true]
+                SortExec: expr=[__sail_delta_replay_path@1 ASC NULLS LAST, __sail_delta_log_version@3 DESC NULLS LAST], preserve_partitioning=[true]
                   CoalesceBatchesExec: target_batch_size=8192
                     RepartitionExec: partitioning=Hash([__sail_delta_replay_path@1], 4), input_partitions=4
-                      ProjectionExec: expr=[add@0 as add, coalesce(get_field(add@0, path), get_field(remove@1, path)) as __sail_delta_replay_path, remove@1 IS NOT NULL as __sail_delta_is_remove]
+                      ProjectionExec: expr=[add@0 as add, coalesce(get_field(add@0, path), get_field(remove@1, path)) as __sail_delta_replay_path, remove@1 IS NOT NULL as __sail_delta_is_remove, __sail_delta_log_version@6 as __sail_delta_log_version]
                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
                           UnionExec
-                            DataSourceExec: file_groups={1 group: [[<tmp>/x/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
-                            DataSourceExec: file_groups={1 group: [[<tmp>/x/_delta_log/00000000000000000001.json]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=json
+                            DataSourceExec: file_groups={1 group: [[<tmp>/x/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar, __sail_delta_log_version], file_type=parquet
+                            DataSourceExec: file_groups={1 group: [[<tmp>/x/_delta_log/00000000000000000001.json]]}, projection=[add, remove, metaData, protocol, txn, sidecar, __sail_delta_log_version], file_type=json
