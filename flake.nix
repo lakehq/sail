@@ -82,6 +82,13 @@
                 fi
                 command cargo "$@"
               }  
+
+              # Pretty powerline prompt (Sail ⛵)
+              if [ -z "$_NIX_OLD_PS1" ]; then
+                 export _NIX_OLD_PS1="$PS1"
+              fi
+              export PS1="\[\e[48;5;24m\]\[\e[38;5;231m\]  ⛵ sail  \[\e[0m\] \[\e[38;5;75m\]\w\[\e[0m\] \$ "
+  
             ''
             + lib.optionalString isLinux ''
               export ARROW_LIB_DIR=${pkgs.arrow-cpp}/lib
