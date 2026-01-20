@@ -355,6 +355,10 @@ impl GraphBuilder {
                         relation_ids.push(*relation_id);
                     }
                     ColumnMapEntry::Expression { .. } => {
+                        // FIXME: Support join keys / predicates that reference derived columns by
+                        // recursively walking the expression's input_map and collecting all base
+                        // relation_ids it depends on (similar to predicate dependency analysis).
+
                         // This column comes from a complex expression (e.g., aggregate output)
                         // We cannot resolve it to a *specific base relation* for join condition purposes.
                         // If a join condition relies on a column that is an aggregate output,
