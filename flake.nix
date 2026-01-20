@@ -42,7 +42,7 @@
 
               # Rust (nightly, reproducible)
               rustToolchain
-
+	      cargo-nextest
               # Some Rust build helpers often needed by crates
               pkg-config
 
@@ -90,12 +90,12 @@
                  export _NIX_OLD_PS1="$PS1"
               fi
               export PS1="\[\e[48;5;24m\]\[\e[38;5;231m\]  ⛵ sail  \[\e[0m\] \[\e[38;5;75m\]\w\[\e[0m\] \$ "
-  
-            ''
-            + lib.optionalString isLinux ''
-              export ARROW_LIB_DIR=${pkgs.arrow-cpp}/lib
-              export LD_LIBRARY_PATH=${pkgs.stdenv.cc.cc.lib}/lib:${pkgs.arrow-cpp}/lib:${pkgs.openssl}/lib:$LD_LIBRARY_PATH
-            '';
+              ''
+              + lib.optionalString isLinux ''
+                export ARROW_LIB_DIR=${pkgs.arrow-cpp}/lib
+                export LD_LIBRARY_PATH=${py}/lib:${pkgs.stdenv.cc.cc.lib}/lib:${pkgs.arrow-cpp}/lib:${pkgs.openssl}/lib:$LD_LIBRARY_PATH
+              '';
+
         };
       }
     );
