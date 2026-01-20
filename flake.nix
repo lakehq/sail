@@ -30,6 +30,7 @@
           buildInputs =
             (with pkgs; [
               # Shell utils commonly assumed by scripts
+ 	      fzf
               bashInteractive
               coreutils
               findutils
@@ -90,6 +91,15 @@
                  export _NIX_OLD_PS1="$PS1"
               fi
               export PS1="\[\e[48;5;24m\]\[\e[38;5;231m\]  ⛵ sail  \[\e[0m\] \[\e[38;5;75m\]\w\[\e[0m\] \$ "
+              # Enable fzf keybindings (Ctrl-R, Ctrl-T, Alt-C)
+if [ -e "${pkgs.fzf}/share/fzf/key-bindings.bash" ]; then
+  source "${pkgs.fzf}/share/fzf/key-bindings.bash"
+fi
+
+if [ -e "${pkgs.fzf}/share/fzf/completion.bash" ]; then
+  source "${pkgs.fzf}/share/fzf/completion.bash"
+fi
+
               ''
               + lib.optionalString isLinux ''
                 export ARROW_LIB_DIR=${pkgs.arrow-cpp}/lib
