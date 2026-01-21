@@ -15,7 +15,7 @@ jobs:
   report:
     name: Report
     if: github.event.workflow_run.event == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@v4
 

@@ -1355,9 +1355,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = TimestampNow::new(Arc::from(timezone), time_unit);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
-            UdfKind::SparkTimestamp(gen::SparkTimestampUdf { timezone }) => {
-                let udf = SparkTimestamp::try_new(timezone.map(Arc::from))?;
+            UdfKind::SparkTimestamp(gen::SparkTimestampUdf { timezone, is_try }) => {
+                let udf = SparkTimestamp::try_new(timezone.map(Arc::from), is_try)?;
                 return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::SparkDate(gen::SparkDateUdf { is_try }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkDate::new(is_try))));
             }
         };
         match name {
@@ -1458,7 +1461,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_elt" | "elt" => Ok(Arc::new(ScalarUDF::from(SparkElt::new()))),
             "spark_decode" | "decode" => Ok(Arc::new(ScalarUDF::from(SparkDecode::new()))),
             "spark_bin" | "bin" => Ok(Arc::new(ScalarUDF::from(SparkBin::new()))),
-            "spark_date" => Ok(Arc::new(ScalarUDF::from(SparkDate::new()))),
             "spark_year_month_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkYearMonthInterval::new())))
             }
@@ -1539,7 +1541,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkConcat>()
             || node_inner.is::<SparkConv>()
             || node_inner.is::<SparkCrc32>()
-            || node_inner.is::<SparkDate>()
             || node_inner.is::<SparkDayTimeInterval>()
             || node_inner.is::<SparkDecode>()
             || node_inner.is::<SparkElt>()
@@ -1664,7 +1665,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkTimestamp>() {
             let timezone = func.timezone().map(|x| x.to_string());
-            UdfKind::SparkTimestamp(gen::SparkTimestampUdf { timezone })
+            let is_try = func.is_try();
+            UdfKind::SparkTimestamp(gen::SparkTimestampUdf { timezone, is_try })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkDate>() {
+            let is_try = func.is_try();
+            UdfKind::SparkDate(gen::SparkDateUdf { is_try })
         } else {
             return Ok(());
         };
