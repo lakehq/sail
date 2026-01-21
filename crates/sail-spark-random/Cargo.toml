@@ -1,0 +1,10 @@
+[package]
+name = "sail-spark-random"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+# No external dependencies - pure Rust implementation
