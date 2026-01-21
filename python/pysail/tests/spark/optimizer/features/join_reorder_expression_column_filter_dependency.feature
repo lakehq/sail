@@ -1,3 +1,4 @@
+@sail_env_SAIL_OPTIMIZER__ENABLE_JOIN_REORDER__true
 Feature: Join reorder preserves join filters referencing derived columns
 
   Scenario: Join filter depends on derived projection column and must not be pushed too early

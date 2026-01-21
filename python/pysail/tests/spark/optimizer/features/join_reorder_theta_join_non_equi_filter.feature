@@ -1,3 +1,4 @@
+@sail_env_SAIL_OPTIMIZER__ENABLE_JOIN_REORDER__true
 Feature: Join reorder supports theta joins (non-equi filter without equi keys)
 
   Scenario: Complex join key prevents equi-pair reconstruction but query should still run

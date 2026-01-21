@@ -1,3 +1,4 @@
+@sail_env_SAIL_OPTIMIZER__ENABLE_JOIN_REORDER__true
 Feature: Join reorder greedy solver handles cartesian products
 
   Scenario: Disconnected join graph requires cartesian join but should not crash

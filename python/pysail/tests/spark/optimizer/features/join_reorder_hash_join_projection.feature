@@ -1,3 +1,4 @@
+@sail_env_SAIL_OPTIMIZER__ENABLE_JOIN_REORDER__true
 Feature: Join reorder respects HashJoinExec projection
 
   Scenario: Join reorder preserves correct column mapping when a join has projection
