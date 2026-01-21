@@ -14,13 +14,18 @@ use crate::spec::{
 
 pub const COL_ACTION: &str = "action";
 
-static ACTION_FIELDS: LazyLock<std::result::Result<Vec<FieldRef>, String>> =
-    LazyLock::new(iceberg_action_fields_build);
-static ACTION_SCHEMA: LazyLock<std::result::Result<SchemaRef, String>> =
-    LazyLock::new(|| match (*ACTION_FIELDS).as_ref() {
-        Ok(fields) => Ok(Arc::new(Schema::new(fields.clone()))),
-        Err(msg) => Err(msg.clone()),
-    });
+static ACTION_FIELDS: LazyLock<Vec<FieldRef>> = LazyLock::new(|| {
+    #[expect(
+        clippy::unwrap_used,
+        reason = "ACTION_FIELDS is a process-global constant."
+    )]
+    let fields = iceberg_action_fields_build()
+        .map_err(|msg| format!("iceberg action fields initialization failed: {msg}"))
+        .unwrap();
+    fields
+});
+static ACTION_SCHEMA: LazyLock<SchemaRef> =
+    LazyLock::new(|| Arc::new(Schema::new((*ACTION_FIELDS).clone())));
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CommitMeta {
@@ -143,21 +148,11 @@ fn iceberg_action_fields_build() -> std::result::Result<Vec<FieldRef>, String> {
 }
 
 fn iceberg_action_fields() -> Result<&'static Vec<FieldRef>> {
-    match (*ACTION_FIELDS).as_ref() {
-        Ok(v) => Ok(v),
-        Err(msg) => Err(DataFusionError::Internal(format!(
-            "iceberg action fields initialization failed: {msg}"
-        ))),
-    }
+    Ok(&*ACTION_FIELDS)
 }
 
 pub fn iceberg_action_schema() -> Result<SchemaRef> {
-    match &*ACTION_SCHEMA {
-        Ok(schema) => Ok(Arc::clone(schema)),
-        Err(msg) => Err(DataFusionError::Internal(format!(
-            "iceberg action schema initialization failed: {msg}"
-        ))),
-    }
+    Ok(Arc::clone(&*ACTION_SCHEMA))
 }
 
 fn parse_operation(s: &str) -> Result<Operation> {
@@ -241,9 +236,9 @@ impl TryFrom<DataFile> for AddFileAction {
             .collect::<Result<Vec<_>>>()?;
 
         Ok(AddFileAction {
-            content: format!("{:?}", df.content),
+            content: df.content.as_action_str().to_string(),
             file_path: df.file_path,
-            file_format: format!("{:?}", df.file_format),
+            file_format: df.file_format.as_action_str().to_string(),
             partition,
             record_count: df.record_count,
             file_size_in_bytes: df.file_size_in_bytes,
