@@ -64,6 +64,15 @@ impl UserDefinedLogicalNodeCore for SortWithinPartitionsNode {
     }
 
     fn with_exprs_and_inputs(&self, exprs: Vec<Expr>, inputs: Vec<LogicalPlan>) -> Result<Self> {
+        // Validate that expressions length matches
+        if exprs.len() != self.sort_expr.len() {
+            return Err(datafusion_common::DataFusionError::Internal(format!(
+                "SortWithinPartitionsNode: expected {} expressions, got {}",
+                self.sort_expr.len(),
+                exprs.len()
+            )));
+        }
+
         // Rebuild sort_expr using new expressions but keeping same asc/nulls_first
         let sort_expr = self
             .sort_expr

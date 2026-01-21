@@ -6051,7 +6051,6 @@ dependencies = [
  "regex",
  "sail-common",
  "sail-common-datafusion",
- "sail-spark-random",
  "sail-sql-analyzer",
  "twox-hash",
  "url",
@@ -6354,10 +6353,6 @@ dependencies = [
  "tonic-types",
  "uuid",
 ]
-
-[[package]]
-name = "sail-spark-random"
-version = "0.4.6"
 
 [[package]]
 name = "sail-sql-analyzer"
