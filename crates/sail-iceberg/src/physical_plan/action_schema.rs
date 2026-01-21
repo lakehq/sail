@@ -314,6 +314,7 @@ impl TryFrom<AddFileAction> for DataFile {
 }
 
 pub fn encode_actions(rows: Vec<ActionRow>) -> Result<RecordBatch> {
+    // TODO: consolidate the logic once we have corresponding utility functions.
     if rows.is_empty() {
         return Ok(RecordBatch::new_empty(iceberg_action_schema()?));
     }
