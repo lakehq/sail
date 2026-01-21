@@ -2,8 +2,8 @@
 ///
 /// This module defines the configuration options for the Flight SQL server:
 /// - Server binding (host/port)
-/// - Session management options (future)
-/// - Execution options (future)
+/// - Prepared statement cache settings
+/// - Query execution limits
 use std::net::SocketAddr;
 
 use serde::{Deserialize, Serialize};
@@ -14,10 +14,6 @@ pub struct FlightSqlServerConfig {
     /// Server binding configuration
     #[serde(default)]
     pub server: ServerConfig,
-
-    /// Session management configuration (future)
-    #[serde(default)]
-    pub session: SessionConfig,
 
     /// Prepared statement cache configuration
     #[serde(default)]
@@ -40,18 +36,6 @@ pub struct ServerConfig {
     pub port: u16,
 }
 
-/// Session management configuration
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct SessionConfig {
-    /// Session timeout in seconds (0 = no timeout)
-    #[serde(default)]
-    pub timeout_secs: u64,
-
-    /// Maximum number of concurrent sessions (0 = unlimited)
-    #[serde(default)]
-    pub max_sessions: usize,
-}
-
 /// Prepared statement cache configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CacheConfig {
@@ -65,18 +49,12 @@ pub struct CacheConfig {
 }
 
 /// Query execution limits configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct QueryLimitsConfig {
     /// Maximum number of rows to return (0 = unlimited, default: 0)
     /// If a query returns more rows, results will be truncated with a warning
     #[serde(default)]
     pub max_rows: usize,
-}
-
-impl Default for QueryLimitsConfig {
-    fn default() -> Self {
-        Self { max_rows: 0 } // 0 = unlimited
-    }
 }
 
 impl Default for CacheConfig {
