@@ -1,10 +1,7 @@
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::{DataType, Schema};
@@ -12,11 +9,8 @@ use datafusion::catalog::{Session, TableProvider};
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::datasource::physical_plan::FileSinkConfig;
-use datafusion::execution::cache::cache_manager::ListFilesCache;
-use datafusion::execution::cache::TableScopedPath;
-use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::logical_expr::dml::InsertOp;
-use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties, RecordBatchStream};
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{internal_err, not_impl_err, plan_err, GetExt, Result};
 use datafusion_datasource::file_compression_type::FileCompressionType;
@@ -219,7 +213,6 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             format!("{path}{}", object_store::path::DELIMITER)
         };
         let table_paths = crate::url::resolve_listing_urls(ctx, vec![path.clone()]).await?;
-        let cache_key_path = table_paths.first().map(|url| url.prefix().clone());
         let object_store_url = if let Some(path) = table_paths.first() {
             path.object_store()
         } else {
@@ -273,145 +266,8 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             keep_partition_by_columns: false,
             file_extension,
         };
-        let plan = format
+        format
             .create_writer_physical_plan(input, ctx, conf, sort_order)
-            .await?;
-
-        // The list-files cache can become stale after we write new files into an existing
-        // directory (append/create). Invalidate the cache entry for this base path when the
-        // write plan finishes, so subsequent reads pick up newly written files.
-        let cache = ctx.runtime_env().cache_manager.get_list_files_cache();
-        if let (Some(cache), Some(path)) = (cache, cache_key_path) {
-            let key = TableScopedPath { table: None, path };
-            Ok(Arc::new(InvalidateListFilesCacheExec::new(
-                plan, cache, key,
-            )))
-        } else {
-            Ok(plan)
-        }
-    }
-}
-
-#[derive(Debug)]
-struct InvalidateListFilesCacheExec {
-    input: Arc<dyn ExecutionPlan>,
-    properties: PlanProperties,
-    cache: Arc<dyn ListFilesCache>,
-    cache_key: TableScopedPath,
-}
-
-impl InvalidateListFilesCacheExec {
-    fn new(
-        input: Arc<dyn ExecutionPlan>,
-        cache: Arc<dyn ListFilesCache>,
-        cache_key: TableScopedPath,
-    ) -> Self {
-        Self {
-            properties: input.properties().clone(),
-            input,
-            cache,
-            cache_key,
-        }
-    }
-}
-
-impl DisplayAs for InvalidateListFilesCacheExec {
-    fn fmt_as(
-        &self,
-        _t: datafusion::physical_plan::DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        write!(f, "InvalidateListFilesCacheExec")
-    }
-}
-
-impl ExecutionPlan for InvalidateListFilesCacheExec {
-    fn name(&self) -> &str {
-        "InvalidateListFilesCacheExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
-        &self.properties
-    }
-
-    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![&self.input]
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        if children.len() != 1 {
-            return plan_err!("{} should have exactly one child", self.name());
-        }
-        let input = children.pop().ok_or_else(|| {
-            datafusion_common::DataFusionError::Plan(format!(
-                "{} should have exactly one child",
-                self.name()
-            ))
-        })?;
-        Ok(Arc::new(Self::new(
-            input,
-            Arc::clone(&self.cache),
-            self.cache_key.clone(),
-        )))
-    }
-
-    fn execute(
-        &self,
-        partition: usize,
-        context: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream> {
-        let stream = self.input.execute(partition, context)?;
-        Ok(Box::pin(InvalidateListFilesCacheStream::new(
-            stream,
-            Arc::clone(&self.cache),
-            self.cache_key.clone(),
-        )))
-    }
-}
-
-struct InvalidateListFilesCacheStream {
-    inner: SendableRecordBatchStream,
-    cache: Arc<dyn ListFilesCache>,
-    cache_key: TableScopedPath,
-}
-
-impl InvalidateListFilesCacheStream {
-    fn new(
-        inner: SendableRecordBatchStream,
-        cache: Arc<dyn ListFilesCache>,
-        cache_key: TableScopedPath,
-    ) -> Self {
-        Self {
-            inner,
-            cache,
-            cache_key,
-        }
-    }
-}
-
-impl Drop for InvalidateListFilesCacheStream {
-    fn drop(&mut self) {
-        self.cache.remove(&self.cache_key);
-    }
-}
-
-impl futures::Stream for InvalidateListFilesCacheStream {
-    type Item = datafusion_common::Result<datafusion::arrow::record_batch::RecordBatch>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        Pin::new(&mut self.inner).poll_next(cx)
-    }
-}
-
-impl RecordBatchStream for InvalidateListFilesCacheStream {
-    fn schema(&self) -> datafusion::arrow::datatypes::SchemaRef {
-        self.inner.schema()
+            .await
     }
 }
