@@ -168,7 +168,6 @@ python = "3.11"
 installer = "pip"
 skip-install = true
 dependencies = [
-    "pandas<3",
     "pytest>=8.4,<9",
     "pytest-xdist>=3.7,<4",
     "pytest-timeout>=2.4,<3",
@@ -179,7 +178,7 @@ dependencies = [
 spark = ["3.5.7", "4.1.1"]
 
 [tool.hatch.envs.test-spark.extra-scripts]
-install-pyspark = "\"{env:HATCH_UV}\" pip install --force-reinstall 'pyspark[connect] @ opt/spark/python/dist/pyspark-{matrix:spark}.tar.gz'"
+install-pyspark = "\"{env:HATCH_UV}\" pip install --force-reinstall 'pyspark[connect] @ opt/spark/python/dist/pyspark-{matrix:spark}.tar.gz' 'pandas<3'"
 
 [tool.hatch.envs.test-spark.overrides]
 matrix.spark.path = [
@@ -193,7 +192,6 @@ python = "3.11"
 installer = "pip"
 skip-install = true
 dependencies = [
-    "pandas<3",
     "pyspark[connect]==3.5.7",
     "ibis-framework[pyspark]>=11,<12",
     # The test dependencies are borrowed from `pyproject.toml` of the Ibis project.
