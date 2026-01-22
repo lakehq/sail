@@ -31,12 +31,34 @@ use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
 use super::context::PlannerContext;
-use super::log_scan::build_delta_log_datasource_union;
+use super::log_scan::{build_delta_log_datasource_union_with_options, LogScanOptions};
 use crate::datasource::PATH_COLUMN;
 use crate::physical_plan::{
     create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaLogReplayExec,
     DeltaWriterExec, COL_LOG_IS_REMOVE, COL_LOG_VERSION, COL_REPLAY_PATH,
 };
+
+/// Options that control what the log replay pipeline materializes as payload columns.
+///
+/// This is intentionally kept small: it is primarily used to avoid scanning/transporting
+/// `stats_json` unless downstream pruning (data skipping) actually needs it.
+#[derive(Debug, Clone, Copy)]
+pub struct LogReplayOptions {
+    /// Whether to include `stats_json` in the replay output (as a Utf8 column).
+    pub include_stats_json: bool,
+    /// Optional inclusive log version range for commit JSON files.
+    pub commit_version_range: Option<(i64, i64)>,
+}
+
+impl Default for LogReplayOptions {
+    fn default() -> Self {
+        Self {
+            // Preserve current behavior: always project stats.
+            include_stats_json: true,
+            commit_version_range: None,
+        }
+    }
+}
 
 pub fn build_standard_write_layers(
     ctx: &PlannerContext<'_>,
@@ -133,8 +155,39 @@ pub async fn build_log_replay_pipeline(
     checkpoint_files: Vec<String>,
     commit_files: Vec<String>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let (raw_scan, checkpoint_files, commit_files) =
-        build_delta_log_datasource_union(ctx, checkpoint_files, commit_files).await?;
+    build_log_replay_pipeline_with_options(
+        ctx,
+        table_url,
+        version,
+        partition_columns,
+        checkpoint_files,
+        commit_files,
+        LogReplayOptions::default(),
+    )
+    .await
+}
+
+/// Same as [`build_log_replay_pipeline`], but allows controlling projected payload columns.
+pub async fn build_log_replay_pipeline_with_options(
+    ctx: &PlannerContext<'_>,
+    table_url: Url,
+    version: i64,
+    partition_columns: Vec<String>,
+    checkpoint_files: Vec<String>,
+    commit_files: Vec<String>,
+    options: LogReplayOptions,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let log_scan_options = LogScanOptions {
+        projection: Some(vec!["add".to_string(), "remove".to_string()]),
+        commit_version_range: options.commit_version_range,
+    };
+    let (raw_scan, checkpoint_files, commit_files) = build_delta_log_datasource_union_with_options(
+        ctx,
+        checkpoint_files,
+        commit_files,
+        log_scan_options,
+    )
+    .await?;
 
     // Projection#1: build a compact log scan schema for streaming replay.
     //
@@ -274,11 +327,15 @@ pub async fn build_log_replay_pipeline(
         Arc::clone(&config_options),
     )?);
 
-    let stats_expr: Arc<dyn PhysicalExpr> = Arc::new(CastExpr::new(
-        guard_add(get_add_field(stats_field)?)?,
-        DataType::Utf8,
-        None,
-    ));
+    let stats_expr: Option<Arc<dyn PhysicalExpr>> = if options.include_stats_json {
+        Some(Arc::new(CastExpr::new(
+            guard_add(get_add_field(stats_field)?)?,
+            DataType::Utf8,
+            None,
+        )))
+    } else {
+        None
+    };
 
     let part_values = guard_add(get_add_field(part_values_field)?)?;
     let part_expr_for = |key: &str| -> Result<Arc<dyn PhysicalExpr>> {
@@ -307,7 +364,9 @@ pub async fn build_log_replay_pipeline(
     for col in &partition_columns {
         final_proj.push((part_expr_for(col)?, col.clone()));
     }
-    final_proj.push((stats_expr, "stats_json".to_string()));
+    if let Some(stats_expr) = stats_expr {
+        final_proj.push((stats_expr, "stats_json".to_string()));
+    }
 
     // Replay key columns (consumed by replay; stripped from replay output schema).
     final_proj.push((replay_path, COL_REPLAY_PATH.to_string()));

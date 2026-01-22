@@ -21,6 +21,25 @@ use crate::physical_plan::COL_LOG_VERSION;
 
 const DELTA_LOG_DIR: &str = "_delta_log";
 
+#[derive(Debug, Clone)]
+pub struct LogScanOptions {
+    /// Optional projection of top-level log columns (e.g. ["add", "remove", "metaData"]).
+    ///
+    /// When set, the scan will only read these columns plus any required partition columns.
+    pub projection: Option<Vec<String>>,
+    /// Optional inclusive log version range for commit JSON files.
+    pub commit_version_range: Option<(i64, i64)>,
+}
+
+impl Default for LogScanOptions {
+    fn default() -> Self {
+        Self {
+            projection: None,
+            commit_version_range: None,
+        }
+    }
+}
+
 fn parse_log_version_prefix(filename: &str) -> Option<u64> {
     // Delta log files are typically named with a 20-digit version prefix:
     // - commits:     00000000000000000010.json
@@ -59,10 +78,9 @@ async fn head_many(
             let store = Arc::clone(store);
             let p = log_file_path(table_root_path, &f);
             async move {
-                store
-                    .head(&p)
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))
+                store.head(&p).await.map_err(|e| {
+                    DataFusionError::External(Box::<dyn std::error::Error + Send + Sync>::from(e))
+                })
             }
         })
         .buffer_unordered(concurrency)
@@ -134,10 +152,26 @@ pub async fn build_delta_log_datasource_union(
     checkpoint_files: Vec<String>,
     commit_files: Vec<String>,
 ) -> Result<(Arc<dyn ExecutionPlan>, Vec<String>, Vec<String>)> {
+    build_delta_log_datasource_union_with_options(
+        ctx,
+        checkpoint_files,
+        commit_files,
+        LogScanOptions::default(),
+    )
+    .await
+}
+
+pub async fn build_delta_log_datasource_union_with_options(
+    ctx: &PlannerContext<'_>,
+    checkpoint_files: Vec<String>,
+    commit_files: Vec<String>,
+    options: LogScanOptions,
+) -> Result<(Arc<dyn ExecutionPlan>, Vec<String>, Vec<String>)> {
     let store = ctx.object_store()?;
     let log_store = ctx.log_store()?;
-    let object_store_url = create_object_store_url(&log_store.config().location)
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let object_store_url = create_object_store_url(&log_store.config().location).map_err(|e| {
+        DataFusionError::External(Box::<dyn std::error::Error + Send + Sync>::from(e))
+    })?;
 
     // Avoid double-counting actions that are already materialized into the checkpoint:
     // only scan commit JSONs strictly newer than the latest checkpoint version.
@@ -152,6 +186,19 @@ pub async fn build_delta_log_datasource_union(
                 parse_log_version_prefix(f)
                     .map(|v| v > cp_ver)
                     .unwrap_or(true)
+            })
+            .collect::<Vec<_>>()
+    } else {
+        commit_files
+    };
+    let commit_files = if let Some((start, end)) = options.commit_version_range {
+        commit_files
+            .into_iter()
+            .filter(|f| {
+                parse_log_version_prefix(f).map(|v| {
+                    let v = i64::try_from(v).unwrap_or(i64::MAX);
+                    v >= start && v <= end
+                }) == Some(true)
             })
             .collect::<Vec<_>>()
     } else {
@@ -204,6 +251,30 @@ pub async fn build_delta_log_datasource_union(
         }
     };
 
+    let projection_indices = if let Some(projection) = &options.projection {
+        let mut projection = projection.clone();
+        if !projection.iter().any(|col| col == COL_LOG_VERSION) {
+            projection.push(COL_LOG_VERSION.to_string());
+        }
+        let file_schema_len = merged.fields().len();
+        let mut indices = Vec::with_capacity(projection.len());
+        for col in &projection {
+            if col == COL_LOG_VERSION {
+                indices.push(file_schema_len);
+                continue;
+            }
+            let idx = merged.index_of(col).map_err(|_| {
+                DataFusionError::Plan(format!(
+                    "log scan projection column '{col}' not found in merged schema"
+                ))
+            })?;
+            indices.push(idx);
+        }
+        Some(indices)
+    } else {
+        None
+    };
+
     let mut inputs: Vec<Arc<dyn ExecutionPlan>> = Vec::new();
     let target_partitions = ctx.session().config().target_partitions();
 
@@ -219,6 +290,7 @@ pub async fn build_delta_log_datasource_union(
                     false,
                 )])
                 .with_file_groups(groups)
+                .with_projection_indices(projection_indices.clone())
                 .build();
         inputs.push(DataSourceExec::from_data_source(conf));
     }
@@ -229,6 +301,7 @@ pub async fn build_delta_log_datasource_union(
         let conf = FileScanConfigBuilder::new(object_store_url, Arc::clone(&merged), source)
             .with_table_partition_cols(vec![Field::new(COL_LOG_VERSION, DataType::Int64, false)])
             .with_file_groups(groups)
+            .with_projection_indices(projection_indices)
             .build();
         inputs.push(DataSourceExec::from_data_source(conf));
     }
