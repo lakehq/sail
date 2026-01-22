@@ -51,7 +51,7 @@ impl WorkerPool {
             messages: vec![],
             peers: HashSet::new(),
             created_at: Utc::now(),
-            completed_at: None,
+            stopped_at: None,
         };
         self.workers.insert(worker_id, descriptor);
         ctx.send_with_delay(
@@ -122,8 +122,8 @@ impl WorkerPool {
             WorkerState::Running { .. } => Err(ExecutionError::InternalError(format!(
                 "worker {worker_id} is already running"
             ))),
-            WorkerState::Stopped => Err(ExecutionError::InternalError(format!(
-                "worker {worker_id} has stopped"
+            WorkerState::Completed => Err(ExecutionError::InternalError(format!(
+                "worker {worker_id} has completed"
             ))),
             WorkerState::Failed => Err(ExecutionError::InternalError(format!(
                 "worker {worker_id} has failed"
@@ -144,8 +144,8 @@ impl WorkerPool {
         match worker.state {
             WorkerState::Pending => {
                 warn!("trying to stop pending worker {worker_id}");
-                worker.state = WorkerState::Stopped;
-                worker.completed_at = Some(Utc::now());
+                worker.state = WorkerState::Completed;
+                worker.stopped_at = Some(Utc::now());
                 worker.messages.extend(reason);
             }
             WorkerState::Running { .. } => {
@@ -155,7 +155,7 @@ impl WorkerPool {
                     Err(e) => {
                         error!("failed to stop worker {worker_id}: {e}");
                         worker.state = WorkerState::Failed;
-                        worker.completed_at = Some(Utc::now());
+                        worker.stopped_at = Some(Utc::now());
                         return;
                     }
                 };
@@ -164,11 +164,11 @@ impl WorkerPool {
                         error!("failed to stop worker {worker_id}: {e}");
                     }
                 });
-                worker.state = WorkerState::Stopped;
-                worker.completed_at = Some(Utc::now());
+                worker.state = WorkerState::Completed;
+                worker.stopped_at = Some(Utc::now());
                 worker.messages.extend(reason);
             }
-            WorkerState::Stopped | WorkerState::Failed => {}
+            WorkerState::Completed | WorkerState::Failed => {}
         }
     }
 

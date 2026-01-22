@@ -1,6 +1,6 @@
 pub mod observable;
 pub mod predicate;
-pub(crate) mod types;
+pub mod types;
 
 pub mod catalog {
     use std::sync::Arc;

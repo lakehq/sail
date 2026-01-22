@@ -8,9 +8,10 @@ use datafusion::prelude::SessionContext;
 use tokio::sync::oneshot;
 
 use crate::extension::SessionExtension;
-use crate::system::catalog::{JobRow, WorkerRow};
+use crate::system::catalog::{JobRow, StageRow, TaskRow, WorkerRow};
 use crate::system::observable::{JobRunnerObserver, StateObservable};
 use crate::system::predicate::PredicateExt;
+use crate::system::types::StageInput;
 
 #[tonic::async_trait]
 pub trait JobRunner: StateObservable<JobRunnerObserver> + Send + Sync + 'static {
@@ -26,6 +27,8 @@ pub trait JobRunner: StateObservable<JobRunnerObserver> + Send + Sync + 'static 
 
 pub struct JobRunnerHistory {
     pub jobs: Vec<JobSnapshot>,
+    pub stages: Vec<StageSnapshot>,
+    pub tasks: Vec<TaskSnapshot>,
     pub workers: Vec<WorkerSnapshot>,
 }
 
@@ -34,17 +37,105 @@ pub struct JobSnapshot {
     pub job_id: u64,
     pub status: String,
     pub created_at: DateTime<Utc>,
-    pub completed_at: Option<DateTime<Utc>>,
+    pub stopped_at: Option<DateTime<Utc>>,
 }
 
 impl JobSnapshot {
     pub fn into_row(self, session_id: String) -> JobRow {
+        let Self {
+            job_id,
+            status,
+            created_at,
+            stopped_at,
+        } = self;
         JobRow {
             session_id,
-            job_id: self.job_id,
-            status: self.status,
-            created_at: self.created_at,
-            completed_at: self.completed_at,
+            job_id,
+            status,
+            created_at,
+            stopped_at,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct StageSnapshot {
+    pub job_id: u64,
+    pub stage: u64,
+    pub partitions: u64,
+    pub inputs: Vec<StageInput>,
+    pub group: String,
+    pub mode: String,
+    pub distribution: String,
+    pub placement: String,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+    pub stopped_at: Option<DateTime<Utc>>,
+}
+
+impl StageSnapshot {
+    pub fn into_row(self, session_id: String) -> StageRow {
+        let Self {
+            job_id,
+            stage,
+            partitions,
+            inputs,
+            group,
+            mode,
+            distribution,
+            placement,
+            status,
+            created_at,
+            stopped_at,
+        } = self;
+        StageRow {
+            session_id,
+            job_id,
+            stage,
+            partitions,
+            inputs,
+            group,
+            mode,
+            distribution,
+            placement,
+            status,
+            created_at,
+            stopped_at,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct TaskSnapshot {
+    pub job_id: u64,
+    pub stage: u64,
+    pub partition: u64,
+    pub attempt: u64,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+    pub stopped_at: Option<DateTime<Utc>>,
+}
+
+impl TaskSnapshot {
+    pub fn into_row(self, session_id: String) -> TaskRow {
+        let Self {
+            job_id,
+            stage,
+            partition,
+            attempt,
+            status,
+            created_at,
+            stopped_at,
+        } = self;
+        TaskRow {
+            session_id,
+            job_id,
+            stage,
+            partition,
+            attempt,
+            status,
+            created_at,
+            stopped_at,
         }
     }
 }
@@ -56,19 +147,27 @@ pub struct WorkerSnapshot {
     pub port: Option<u16>,
     pub status: String,
     pub created_at: DateTime<Utc>,
-    pub completed_at: Option<DateTime<Utc>>,
+    pub stopped_at: Option<DateTime<Utc>>,
 }
 
 impl WorkerSnapshot {
     pub fn into_row(self, session_id: String) -> WorkerRow {
+        let Self {
+            worker_id,
+            host,
+            port,
+            status,
+            created_at,
+            stopped_at,
+        } = self;
         WorkerRow {
             session_id,
-            worker_id: self.worker_id,
-            host: self.host,
-            port: self.port,
-            status: self.status,
-            created_at: self.created_at,
-            completed_at: self.completed_at,
+            worker_id,
+            host,
+            port,
+            status,
+            created_at,
+            stopped_at,
         }
     }
 }
@@ -90,6 +189,42 @@ impl StateObservable<JobRunnerObserver> for JobRunnerHistory {
                         job_id,
                         |&job| &job.job_id,
                         |job| job.clone().into_row(session_id.clone()),
+                    )
+                    .fetch(fetch)
+                    .collect();
+                let _ = result.send(output);
+            }
+            JobRunnerObserver::Stages {
+                session_id,
+                job_id,
+                fetch,
+                result,
+            } => {
+                let output = self
+                    .stages
+                    .iter()
+                    .predicate_filter_map(
+                        job_id,
+                        |&stage| &stage.job_id,
+                        |stage| stage.clone().into_row(session_id.clone()),
+                    )
+                    .fetch(fetch)
+                    .collect();
+                let _ = result.send(output);
+            }
+            JobRunnerObserver::Tasks {
+                session_id,
+                job_id,
+                fetch,
+                result,
+            } => {
+                let output = self
+                    .tasks
+                    .iter()
+                    .predicate_filter_map(
+                        job_id,
+                        |&task| &task.job_id,
+                        |task| task.clone().into_row(session_id.clone()),
                     )
                     .fetch(fetch)
                     .collect();

@@ -56,6 +56,27 @@ pub trait PredicateExt: Sized {
         }
     }
 
+    fn predicate_filter_flat_map<T, U, K, V, S>(
+        self,
+        predicate: Predicate<T>,
+        key: K,
+        value: V,
+    ) -> PredicateFilterFlatMap<Self, T, K, V, S::IntoIter>
+    where
+        K: Fn(&Self::Item) -> &T,
+        V: Fn(Self::Item) -> S,
+        S: IntoIterator<Item = U>,
+    {
+        PredicateFilterFlatMap {
+            input: self,
+            predicate,
+            key,
+            value,
+            fetch: usize::MAX,
+            current: None,
+        }
+    }
+
     fn predicate_filter_async_flat_map<T, U, K, V>(
         self,
         predicate: Predicate<T>,
@@ -114,6 +135,61 @@ where
                 Ok(true) => {
                     self.fetch -= 1;
                     return Some(Ok((self.value)(item)));
+                }
+                Ok(false) => continue,
+                Err(e) => return Some(Err(e)),
+            }
+        }
+        None
+    }
+}
+
+pub struct PredicateFilterFlatMap<I, T, K, V, C> {
+    input: I,
+    predicate: Predicate<T>,
+    key: K,
+    value: V,
+    fetch: usize,
+    current: Option<C>,
+}
+
+impl<I, T, K, V, C> PredicateFilterFlatMap<I, T, K, V, C> {
+    pub fn fetch(mut self, fetch: usize) -> Self {
+        self.fetch = fetch;
+        self
+    }
+}
+
+impl<I, T, K, V, U, S> Iterator for PredicateFilterFlatMap<I, T, K, V, S::IntoIter>
+where
+    I: Iterator,
+    K: Fn(&I::Item) -> &T,
+    V: Fn(I::Item) -> S,
+    S: IntoIterator<Item = U>,
+{
+    type Item = Result<U>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.fetch == 0 {
+            return None;
+        }
+        if let Some(current) = &mut self.current {
+            if let Some(item) = current.next() {
+                self.fetch -= 1;
+                return Some(Ok(item));
+            } else {
+                self.current = None;
+            }
+        }
+        for item in self.input.by_ref() {
+            match (self.predicate)((self.key)(&item)) {
+                Ok(true) => {
+                    let mut iter = (self.value)(item).into_iter();
+                    if let Some(v) = iter.next() {
+                        self.fetch -= 1;
+                        self.current = Some(iter);
+                        return Some(Ok(v));
+                    }
                 }
                 Ok(false) => continue,
                 Err(e) => return Some(Err(e)),

@@ -31,11 +31,11 @@ impl SessionManagerActor {
         result: oneshot::Sender<SessionResult<SessionContext>>,
     ) -> ActorAction {
         let context = if let Some(session) = self.sessions.get(&session_id) {
-            if let ServerSessionState::Active { context } = &session.state {
+            if let ServerSessionState::Running { context } = &session.state {
                 Ok(context.clone())
             } else {
                 Err(SessionError::invalid(format!(
-                    "session {session_id} is not active"
+                    "session {session_id} is not running"
                 )))
             }
         } else {
@@ -57,7 +57,7 @@ impl SessionManagerActor {
                         user_id,
                         created_at: Utc::now(),
                         deleted_at: None,
-                        state: ServerSessionState::Active {
+                        state: ServerSessionState::Running {
                             context: context.clone(),
                         },
                     };
@@ -93,7 +93,7 @@ impl SessionManagerActor {
     ) -> ActorAction {
         let session = self.sessions.get_mut(&session_id);
         if let Some(session) = session {
-            if let ServerSessionState::Active { context } = &mut session.state {
+            if let ServerSessionState::Running { context } = &mut session.state {
                 if let Ok(tracker) = context.extension::<ActivityTracker>() {
                     if tracker.active_at().is_ok_and(|x| x <= instant) {
                         info!("removing idle session {session_id}");
@@ -115,7 +115,7 @@ impl SessionManagerActor {
     ) -> ActorAction {
         let session = self.sessions.get_mut(&session_id);
         let output = if let Some(session) = session {
-            if let ServerSessionState::Active { context } = &mut session.state {
+            if let ServerSessionState::Running { context } = &mut session.state {
                 info!("removing session {session_id}");
                 Self::delete_session(ctx, session_id, context);
                 session.deleted_at = Some(Utc::now());
@@ -123,7 +123,7 @@ impl SessionManagerActor {
                 Ok(())
             } else {
                 Err(SessionError::invalid(format!(
-                    "session {session_id} is not active"
+                    "session {session_id} is not running"
                 )))
             }
         } else {
@@ -188,6 +188,58 @@ impl SessionManagerActor {
                         |&(k, _)| k,
                         |(k, v)| {
                             v.observe_job_runner(|tx| JobRunnerObserver::Jobs {
+                                session_id: k.clone(),
+                                job_id: job_id.clone(),
+                                fetch,
+                                result: tx,
+                            })
+                        },
+                    )
+                    .into_task();
+                ctx.spawn(async move {
+                    let _ = result.send(task.fetch(fetch).collect().await);
+                });
+            }
+            SessionManagerObserver::Stages {
+                session_id,
+                job_id,
+                fetch,
+                result,
+            } => {
+                let task = self
+                    .sessions
+                    .iter()
+                    .predicate_filter_async_flat_map(
+                        session_id,
+                        |&(k, _)| k,
+                        |(k, v)| {
+                            v.observe_job_runner(|tx| JobRunnerObserver::Stages {
+                                session_id: k.clone(),
+                                job_id: job_id.clone(),
+                                fetch,
+                                result: tx,
+                            })
+                        },
+                    )
+                    .into_task();
+                ctx.spawn(async move {
+                    let _ = result.send(task.fetch(fetch).collect().await);
+                });
+            }
+            SessionManagerObserver::Tasks {
+                session_id,
+                job_id,
+                fetch,
+                result,
+            } => {
+                let task = self
+                    .sessions
+                    .iter()
+                    .predicate_filter_async_flat_map(
+                        session_id,
+                        |&(k, _)| k,
+                        |(k, v)| {
+                            v.observe_job_runner(|tx| JobRunnerObserver::Tasks {
                                 session_id: k.clone(),
                                 job_id: job_id.clone(),
                                 fetch,

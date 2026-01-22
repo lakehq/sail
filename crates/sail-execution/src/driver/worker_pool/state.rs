@@ -17,7 +17,7 @@ pub struct WorkerDescriptor {
     /// when propagating worker locations when running tasks.
     pub peers: HashSet<WorkerId>,
     pub created_at: DateTime<Utc>,
-    pub completed_at: Option<DateTime<Utc>>,
+    pub stopped_at: Option<DateTime<Utc>>,
 }
 
 impl WorkerDescriptor {
@@ -32,7 +32,7 @@ impl WorkerDescriptor {
             port,
             status: self.state.status().to_string(),
             created_at: self.created_at,
-            completed_at: self.completed_at,
+            stopped_at: self.stopped_at,
         }
     }
 }
@@ -47,7 +47,7 @@ pub enum WorkerState {
         /// The gRPC client to communicate with the worker if the connection is established.
         client: Option<WorkerClientSet>,
     },
-    Stopped,
+    Completed,
     Failed,
 }
 
@@ -56,7 +56,7 @@ impl WorkerState {
         match self {
             WorkerState::Pending => "PENDING",
             WorkerState::Running { .. } => "RUNNING",
-            WorkerState::Stopped => "STOPPED",
+            WorkerState::Completed => "COMPLETED",
             WorkerState::Failed => "FAILED",
         }
     }

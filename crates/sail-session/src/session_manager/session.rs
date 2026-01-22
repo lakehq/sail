@@ -32,7 +32,7 @@ impl ServerSession {
     {
         let (tx, rx) = oneshot::channel();
         let observer = observer(tx);
-        if let ServerSessionState::Active { context } = &self.state {
+        if let ServerSessionState::Running { context } = &self.state {
             if let Ok(service) = context.extension::<JobService>() {
                 async move {
                     service.runner().observe(observer).await;
@@ -63,7 +63,7 @@ impl ServerSession {
 }
 
 pub enum ServerSessionState {
-    Active { context: SessionContext },
+    Running { context: SessionContext },
     Deleting,
     Deleted { history: Arc<SessionHistory> },
     Failed,
@@ -72,7 +72,7 @@ pub enum ServerSessionState {
 impl ServerSessionState {
     pub fn status(&self) -> &'static str {
         match self {
-            ServerSessionState::Active { .. } => "ACTIVE",
+            ServerSessionState::Running { .. } => "RUNNING",
             ServerSessionState::Deleting => "DELETING",
             ServerSessionState::Deleted { .. } => "DELETED",
             ServerSessionState::Failed => "FAILED",

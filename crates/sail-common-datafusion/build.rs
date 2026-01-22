@@ -141,12 +141,6 @@ impl SystemTableColumnEntry {
                 format!("invalid column name: {}", self.name),
             ))?;
         }
-        if self.sql_type.to_uppercase() != self.sql_type {
-            Err(syn::Error::new(
-                proc_macro2::Span::call_site(),
-                format!("SQL type must be uppercase: {}", self.sql_type),
-            ))?;
-        }
         Ok(())
     }
 }

@@ -68,6 +68,8 @@ impl JobRunner for LocalJobRunner {
         self.stopped.store(true, Ordering::Relaxed);
         let _ = history.send(JobRunnerHistory {
             jobs: vec![],
+            stages: vec![],
+            tasks: vec![],
             workers: vec![],
         });
     }

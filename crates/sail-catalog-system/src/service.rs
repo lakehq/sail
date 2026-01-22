@@ -53,6 +53,44 @@ impl SystemTableService {
                 )
                 .await?
             }
+            SystemTable::Stages => {
+                let session_id = filters
+                    .extract("session_id")?
+                    .unwrap_or_else(Predicates::always_true);
+                let job_id = filters
+                    .extract("job_id")?
+                    .unwrap_or_else(Predicates::always_true);
+                filters.finalize()?;
+                self.observe_system_manager(
+                    |tx| SessionManagerObserver::Stages {
+                        session_id,
+                        job_id,
+                        fetch,
+                        result: tx,
+                    },
+                    schema,
+                )
+                .await?
+            }
+            SystemTable::Tasks => {
+                let session_id = filters
+                    .extract("session_id")?
+                    .unwrap_or_else(Predicates::always_true);
+                let job_id = filters
+                    .extract("job_id")?
+                    .unwrap_or_else(Predicates::always_true);
+                filters.finalize()?;
+                self.observe_system_manager(
+                    |tx| SessionManagerObserver::Tasks {
+                        session_id,
+                        job_id,
+                        fetch,
+                        result: tx,
+                    },
+                    schema,
+                )
+                .await?
+            }
             SystemTable::Sessions => {
                 let session_id = filters
                     .extract("session_id")?

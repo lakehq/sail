@@ -42,6 +42,8 @@ mod tests {
     use sail_sql_analyzer::data_type::from_ast_data_type;
     use sail_sql_analyzer::parser::parse_data_type;
 
+    // This test is defined in this crate so that `sail-catalog-system` or `sail-common-datafusion`
+    // does not need to depend on `sail-plan` or `sail-sql-analyzer`.
     #[test]
     fn test_system_table_schema_validity() -> Result<(), Box<dyn std::error::Error>> {
         let session = SessionContext::new();

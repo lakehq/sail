@@ -3,7 +3,7 @@ use datafusion::common::Result;
 use datafusion_common::DataFusionError;
 use tokio::sync::oneshot;
 
-use crate::system::catalog::{JobRow, SessionRow, WorkerRow};
+use crate::system::catalog::{JobRow, SessionRow, StageRow, TaskRow, WorkerRow};
 use crate::system::predicate::Predicate;
 
 /// A trait for observing the state of a component.
@@ -37,6 +37,18 @@ pub enum SessionManagerObserver {
         fetch: usize,
         result: oneshot::Sender<Result<Vec<JobRow>>>,
     },
+    Stages {
+        session_id: Predicate<String>,
+        job_id: Predicate<u64>,
+        fetch: usize,
+        result: oneshot::Sender<Result<Vec<StageRow>>>,
+    },
+    Tasks {
+        session_id: Predicate<String>,
+        job_id: Predicate<u64>,
+        fetch: usize,
+        result: oneshot::Sender<Result<Vec<TaskRow>>>,
+    },
     Sessions {
         session_id: Predicate<String>,
         fetch: usize,
@@ -56,6 +68,12 @@ impl Observer for SessionManagerObserver {
             SessionManagerObserver::Jobs { result, .. } => {
                 let _ = result.send(Ok(vec![]));
             }
+            SessionManagerObserver::Stages { result, .. } => {
+                let _ = result.send(Ok(vec![]));
+            }
+            SessionManagerObserver::Tasks { result, .. } => {
+                let _ = result.send(Ok(vec![]));
+            }
             SessionManagerObserver::Sessions { result, .. } => {
                 let _ = result.send(Ok(vec![]));
             }
@@ -68,6 +86,12 @@ impl Observer for SessionManagerObserver {
     fn fail(self, e: DataFusionError) {
         match self {
             SessionManagerObserver::Jobs { result, .. } => {
+                let _ = result.send(Err(e));
+            }
+            SessionManagerObserver::Stages { result, .. } => {
+                let _ = result.send(Err(e));
+            }
+            SessionManagerObserver::Tasks { result, .. } => {
                 let _ = result.send(Err(e));
             }
             SessionManagerObserver::Sessions { result, .. } => {
@@ -88,6 +112,18 @@ pub enum JobRunnerObserver {
         fetch: usize,
         result: oneshot::Sender<Result<Vec<JobRow>>>,
     },
+    Stages {
+        session_id: String,
+        job_id: Predicate<u64>,
+        fetch: usize,
+        result: oneshot::Sender<Result<Vec<StageRow>>>,
+    },
+    Tasks {
+        session_id: String,
+        job_id: Predicate<u64>,
+        fetch: usize,
+        result: oneshot::Sender<Result<Vec<TaskRow>>>,
+    },
     Workers {
         session_id: String,
         worker_id: Predicate<u64>,
@@ -102,6 +138,12 @@ impl Observer for JobRunnerObserver {
             JobRunnerObserver::Jobs { result, .. } => {
                 let _ = result.send(Ok(vec![]));
             }
+            JobRunnerObserver::Stages { result, .. } => {
+                let _ = result.send(Ok(vec![]));
+            }
+            JobRunnerObserver::Tasks { result, .. } => {
+                let _ = result.send(Ok(vec![]));
+            }
             JobRunnerObserver::Workers { result, .. } => {
                 let _ = result.send(Ok(vec![]));
             }
@@ -111,6 +153,12 @@ impl Observer for JobRunnerObserver {
     fn fail(self, e: DataFusionError) {
         match self {
             JobRunnerObserver::Jobs { result, .. } => {
+                let _ = result.send(Err(e));
+            }
+            JobRunnerObserver::Stages { result, .. } => {
+                let _ = result.send(Err(e));
+            }
+            JobRunnerObserver::Tasks { result, .. } => {
                 let _ = result.send(Err(e));
             }
             JobRunnerObserver::Workers { result, .. } => {

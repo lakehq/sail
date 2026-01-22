@@ -37,7 +37,9 @@ impl TableSource for SystemTableSource {
         filters: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
         let columns: &[&str] = match self.table {
-            SystemTable::Jobs => &["session_id", "job_id"],
+            SystemTable::Jobs | SystemTable::Stages | SystemTable::Tasks => {
+                &["session_id", "job_id"]
+            }
             SystemTable::Sessions => &["session_id"],
             SystemTable::Workers => &["session_id", "worker_id"],
         };

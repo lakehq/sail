@@ -361,6 +361,28 @@ impl DriverActor {
                 let output = self.job_scheduler.observe_jobs(&session_id, job_id, fetch);
                 let _ = result.send(output);
             }
+            JobRunnerObserver::Stages {
+                session_id,
+                job_id,
+                fetch,
+                result,
+            } => {
+                let job_id = Predicates::transform(job_id, |x: &JobId| u64::from(*x));
+                let output = self
+                    .job_scheduler
+                    .observe_stages(&session_id, job_id, fetch);
+                let _ = result.send(output);
+            }
+            JobRunnerObserver::Tasks {
+                session_id,
+                job_id,
+                fetch,
+                result,
+            } => {
+                let job_id = Predicates::transform(job_id, |x: &JobId| u64::from(*x));
+                let output = self.job_scheduler.observe_tasks(&session_id, job_id, fetch);
+                let _ = result.send(output);
+            }
             JobRunnerObserver::Workers {
                 session_id,
                 worker_id,
@@ -533,6 +555,8 @@ impl DriverActor {
     pub(super) fn build_history(&self) -> JobRunnerHistory {
         JobRunnerHistory {
             jobs: self.job_scheduler.observe_job_snapshots(),
+            stages: self.job_scheduler.observe_stage_snapshots(),
+            tasks: self.job_scheduler.observe_task_snapshots(),
             workers: self.worker_pool.observe_worker_snapshots(),
         }
     }
