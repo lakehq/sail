@@ -75,7 +75,6 @@ jobs:
       - name: Set Up Hatch Environment
         run: |
           hatch run install-pysail
-          pip list
 
       - name: Install grpc_health_probe
         run: |
