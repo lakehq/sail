@@ -49,6 +49,7 @@ jobs:
       - name: Set Up Hatch Environment
         run: |
           hatch run install-pysail
+          pip list
 
       - name: Verify Package Version
         run: |

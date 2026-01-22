@@ -114,6 +114,7 @@ jobs:
         run: |
           hatch run install-pyspark
           hatch run install-pysail
+          pip list
 
       - name: Run Spark Connect Server
         run: |
