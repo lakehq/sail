@@ -33,6 +33,16 @@ pub enum DataContentType {
     EqualityDeletes,
 }
 
+impl DataContentType {
+    pub const fn as_action_str(self) -> &'static str {
+        match self {
+            Self::Data => "Data",
+            Self::PositionDeletes => "PositionDeletes",
+            Self::EqualityDeletes => "EqualityDeletes",
+        }
+    }
+}
+
 /// File format of a data file.
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
@@ -41,6 +51,17 @@ pub enum DataFileFormat {
     Orc,
     Parquet,
     Puffin,
+}
+
+impl DataFileFormat {
+    pub const fn as_action_str(self) -> &'static str {
+        match self {
+            Self::Avro => "Avro",
+            Self::Orc => "Orc",
+            Self::Parquet => "Parquet",
+            Self::Puffin => "Puffin",
+        }
+    }
 }
 
 /// A data file in Iceberg.

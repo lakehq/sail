@@ -50,6 +50,11 @@ jobs:
         run: |
           hatch run install-pysail
 
+      - name: List Python packages
+        continue-on-error: true
+        run: |
+          hatch run uv pip freeze || hatch run python -m pip freeze
+
       - name: Verify Package Version
         run: |
           declared_version="$(hatch version)"
