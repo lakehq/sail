@@ -40,22 +40,21 @@ impl SpanAttribute {
     pub const OBJECT_STORE_SIZES: &'static str = "object_store.sizes";
     pub const EXCEPTION_MESSAGE: &'static str = "exception.message";
     pub const EXCEPTION_TYPE: &'static str = "exception.type";
-    pub const EXECUTION_PARTITION: &'static str = "execution.partition";
     pub const RETRY_ATTEMPT: &'static str = "retry.attempt";
     pub const CLUSTER_DRIVER_PORT: &'static str = "cluster.driver.port";
     pub const CLUSTER_WORKER_ID: &'static str = "cluster.worker.id";
     pub const CLUSTER_WORKER_HOST: &'static str = "cluster.worker.host";
     pub const CLUSTER_WORKER_PORT: &'static str = "cluster.worker.port";
-    pub const CLUSTER_JOB_ID: &'static str = "cluster.job.id";
-    pub const CLUSTER_TASK_ID: &'static str = "cluster.task.id";
-    pub const CLUSTER_TASK_ATTEMPT: &'static str = "cluster.task.attempt";
-    pub const CLUSTER_TASK_STATUS: &'static str = "cluster.task.status";
-    pub const CLUSTER_TASK_MESSAGE: &'static str = "cluster.task.message";
-    pub const CLUSTER_TASK_ERROR_CAUSE: &'static str = "cluster.task.error_cause";
-    pub const CLUSTER_CHANNEL_NAME: &'static str = "cluster.channel.name";
-    pub const CLUSTER_CHANNEL_PREFIX: &'static str = "cluster.channel.prefix";
-    pub const CLUSTER_STREAM_LOCAL_STORAGE: &'static str = "cluster.stream.local.storage";
-    pub const CLUSTER_STREAM_REMOTE_URI: &'static str = "cluster.stream.remote.uri";
+    pub const EXECUTION_JOB_ID: &'static str = "execution.job.id";
+    pub const EXECUTION_STAGE: &'static str = "execution.stage";
+    pub const EXECUTION_PARTITION: &'static str = "execution.partition";
+    pub const EXECUTION_ATTEMPT: &'static str = "execution.attempt";
+    pub const EXECUTION_CHANNEL: &'static str = "execution.channel";
+    pub const EXECUTION_TASK_STATUS: &'static str = "execution.task.status";
+    pub const EXECUTION_TASK_MESSAGE: &'static str = "execution.task.message";
+    pub const EXECUTION_TASK_ERROR_CAUSE: &'static str = "execution.task.error_cause";
+    pub const EXECUTION_STREAM_LOCAL_STORAGE: &'static str = "execution.stream.local.storage";
+    pub const EXECUTION_STREAM_REMOTE_URI: &'static str = "execution.stream.remote.uri";
     pub const SESSION_KEY: &'static str = "session.key";
 }
 

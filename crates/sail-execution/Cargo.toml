@@ -30,7 +30,6 @@ prost = { workspace = true }
 datafusion = { workspace = true }
 datafusion-proto = { workspace = true }
 datafusion-spark = { workspace = true }
-datafusion-functions-json = { workspace = true }
 arrow-flight = { workspace = true }
 log = { workspace = true }
 futures = { workspace = true }
@@ -40,6 +39,7 @@ k8s-openapi = { workspace = true }
 rand = { workspace = true }
 url = { workspace = true }
 readonly = { workspace = true }
+indexmap = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }

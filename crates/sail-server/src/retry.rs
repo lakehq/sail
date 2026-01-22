@@ -49,7 +49,6 @@ impl RetryStrategy {
         let mut delay = self.delay();
         let mut attempt = 0;
         loop {
-            attempt += 1;
             let span = Span::enter_with_local_parent("RetryStrategy::run")
                 .with_property(|| (SpanAttribute::RETRY_ATTEMPT, attempt.to_string()));
             let result = f().in_span_with_recorder(span, record_error).await;
@@ -64,6 +63,7 @@ impl RetryStrategy {
                     }
                 }
             }
+            attempt += 1;
         }
     }
 

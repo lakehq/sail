@@ -72,6 +72,8 @@ impl<'a> ProtoBuilder<'a> {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=build.rs");
     ProtoBuilder::new("plan", &["physical.proto"]).build()?;
+    ProtoBuilder::new("stream", &["common.proto"]).build()?;
+    ProtoBuilder::new("task", &["common.proto"]).build()?;
     ProtoBuilder::new("driver", &["service.proto"])
         .with_service()
         .build()?;

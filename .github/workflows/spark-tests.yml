@@ -14,7 +14,7 @@ on:
 jobs:
   setup:
     name: Setup
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       run_tests: ${{ ((github.event_name == 'pull_request' && (github.event.action == 'opened' || steps.match.outputs.result == 'true' || steps.label.outputs.has_label == 'true')) || github.event_name == 'push') && 'true' || 'false' }}
     steps:
@@ -115,6 +115,11 @@ jobs:
           hatch run install-pyspark
           hatch run install-pysail
 
+      - name: List Python packages
+        continue-on-error: true
+        run: |
+          hatch run uv pip freeze || hatch run python -m pip freeze
+
       - name: Run Spark Connect Server
         run: |
           nohup hatch run scripts/spark-tests/run-server.sh > /dev/null 2>&1 < /dev/null &
@@ -135,7 +140,7 @@ jobs:
           hatch run scripts/spark-tests/run-tests.sh
 
       - name: Shutdown Spark Connect Server
-        if: always()
+        if: ${{ !cancelled() }}
         run: |
           scripts/spark-tests/stop-server.sh
 
@@ -164,6 +169,7 @@ jobs:
           env_vars: OS
 
       - name: Upload Test Logs
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: spark-${{ inputs.spark_version }}-test-logs
@@ -172,7 +178,7 @@ jobs:
 
   analyze:
     name: Analyze
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     needs:
       - test
     steps:

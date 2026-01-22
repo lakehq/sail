@@ -17,7 +17,7 @@ pub(crate) fn cast_to_date(input: ScalarFunctionInput) -> PlanResult<expr::Expr>
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
     ) {
         Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-            func: Arc::new(ScalarUDF::from(SparkDate::new())),
+            func: Arc::new(ScalarUDF::from(SparkDate::new(false))),
             args: vec![arg],
         }))
     } else {
@@ -36,9 +36,10 @@ fn cast_to_timestamp(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
     ) {
         Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-            func: Arc::new(ScalarUDF::from(SparkTimestamp::try_new(Some(
-                input.function_context.plan_config.session_timezone.clone(),
-            ))?)),
+            func: Arc::new(ScalarUDF::from(SparkTimestamp::try_new(
+                Some(input.function_context.plan_config.session_timezone.clone()),
+                false,
+            )?)),
             args: vec![arg],
         }))
     } else {

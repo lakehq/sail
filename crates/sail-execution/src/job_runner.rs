@@ -47,8 +47,8 @@ impl JobRunner for LocalJobRunner {
         let options = TracingExecOptions {
             metric_registry: global_metric_registry(),
             job_id: Some(job_id),
-            task_id: None,
-            task_attempt: None,
+            stage: None,
+            attempt: None,
             operator_id: None,
         };
         let plan = trace_execution_plan(plan, options)?;
@@ -76,13 +76,16 @@ impl JobRunner for ClusterJobRunner {
     /// Executes a plan on the cluster. This is where the cool stuff happens.
     async fn execute(
         &self,
-        // TODO: propagate session context from the driver to the worker
-        _ctx: &SessionContext,
+        ctx: &SessionContext,
         plan: Arc<dyn ExecutionPlan>,
     ) -> Result<SendableRecordBatchStream> {
         let (tx, rx) = oneshot::channel();
         self.driver
-            .send(DriverEvent::ExecuteJob { plan, result: tx })
+            .send(DriverEvent::ExecuteJob {
+                plan,
+                context: ctx.task_ctx(),
+                result: tx,
+            })
             .await
             .map_err(|e| internal_datafusion_err!("{e}"))?;
         rx.await
