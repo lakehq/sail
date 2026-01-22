@@ -1,3 +1,4 @@
+use std::convert::TryInto;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
@@ -18,7 +19,9 @@ use datafusion::functions::core::greatest::GreatestFunc;
 use datafusion::functions::core::least::LeastFunc;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl};
-use datafusion::physical_expr::{LexOrdering, LexRequirement, Partitioning, PhysicalSortExpr};
+use datafusion::physical_expr::{
+    LexOrdering, LexRequirement, Partitioning, PhysicalExpr, PhysicalSortExpr,
+};
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::SortMergeJoinExec;
 use datafusion::physical_plan::recursive_query::RecursiveQueryExec;
@@ -66,8 +69,8 @@ use sail_data_source::formats::socket::{SocketSourceExec, TableSocketOptions};
 use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
 use sail_delta_lake::physical_plan::{
-    DeltaCommitExec, DeltaDiscoveryExec, DeltaLogScanExec, DeltaRemoveActionsExec,
-    DeltaScanByAddsExec, DeltaWriterExec,
+    DeltaCastColumnExpr, DeltaCommitExec, DeltaDiscoveryExec, DeltaLogScanExec,
+    DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
 };
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
@@ -175,6 +178,8 @@ use crate::plan::gen::{
 use crate::plan::{gen, StageInputExec};
 
 pub struct RemoteExecutionCodec;
+
+const DELTA_CAST_COLUMN_EXPR_TAG: &[u8] = b"DeltaCastColumnExpr";
 
 impl Debug for RemoteExecutionCodec {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -1843,6 +1848,87 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         };
         node.encode(buf)
             .map_err(|e| plan_datafusion_err!("failed to encode udaf: {e}"))
+    }
+
+    fn try_decode_expr(
+        &self,
+        buf: &[u8],
+        inputs: &[Arc<dyn PhysicalExpr>],
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        if !buf.starts_with(DELTA_CAST_COLUMN_EXPR_TAG) {
+            return plan_err!("unsupported physical expr extension");
+        }
+        if inputs.len() != 1 {
+            return plan_err!(
+                "DeltaCastColumnExpr expects exactly one input, got {}",
+                inputs.len()
+            );
+        }
+
+        let mut offset = DELTA_CAST_COLUMN_EXPR_TAG.len();
+        fn read_len_prefixed<'a>(buf: &'a [u8], offset: &mut usize) -> Result<&'a [u8]> {
+            if *offset + 4 > buf.len() {
+                return plan_err!("DeltaCastColumnExpr missing length prefix");
+            }
+            let len = u32::from_le_bytes(
+                buf[*offset..*offset + 4]
+                    .try_into()
+                    .map_err(|_| plan_datafusion_err!("invalid length prefix"))?,
+            ) as usize;
+            *offset += 4;
+            if *offset + len > buf.len() {
+                return plan_err!("DeltaCastColumnExpr length out of bounds");
+            }
+            let slice = &buf[*offset..*offset + len];
+            *offset += len;
+            Ok(slice)
+        }
+
+        let input_schema_buf = read_len_prefixed(buf, &mut offset)?;
+        let target_schema_buf = read_len_prefixed(buf, &mut offset)?;
+
+        let input_schema = self.try_decode_schema(input_schema_buf)?;
+        let target_schema = self.try_decode_schema(target_schema_buf)?;
+
+        let input_field = input_schema
+            .fields()
+            .first()
+            .ok_or_else(|| plan_datafusion_err!("DeltaCastColumnExpr missing input field"))?
+            .as_ref()
+            .clone();
+        let target_field = target_schema
+            .fields()
+            .first()
+            .ok_or_else(|| plan_datafusion_err!("DeltaCastColumnExpr missing target field"))?
+            .as_ref()
+            .clone();
+
+        Ok(Arc::new(DeltaCastColumnExpr::new(
+            inputs[0].clone(),
+            Arc::new(input_field),
+            Arc::new(target_field),
+            None,
+        )))
+    }
+
+    fn try_encode_expr(&self, node: &Arc<dyn PhysicalExpr>, buf: &mut Vec<u8>) -> Result<()> {
+        let Some(delta_cast) = node.as_any().downcast_ref::<DeltaCastColumnExpr>() else {
+            return plan_err!("unsupported physical expr extension");
+        };
+
+        buf.extend_from_slice(DELTA_CAST_COLUMN_EXPR_TAG);
+
+        let input_schema = Schema::new(vec![delta_cast.input_field().as_ref().clone()]);
+        let input_schema_buf = self.try_encode_schema(&input_schema)?;
+        buf.extend_from_slice(&(input_schema_buf.len() as u32).to_le_bytes());
+        buf.extend_from_slice(&input_schema_buf);
+
+        let target_schema = Schema::new(vec![delta_cast.target_field().as_ref().clone()]);
+        let target_schema_buf = self.try_encode_schema(&target_schema)?;
+        buf.extend_from_slice(&(target_schema_buf.len() as u32).to_le_bytes());
+        buf.extend_from_slice(&target_schema_buf);
+
+        Ok(())
     }
 }
 

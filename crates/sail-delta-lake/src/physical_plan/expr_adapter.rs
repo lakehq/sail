@@ -343,7 +343,7 @@ fn can_cast_types_with_schema_evolution(from_type: &DataType, to_type: &DataType
 }
 
 #[derive(Debug, Clone, Eq)]
-struct DeltaCastColumnExpr {
+pub struct DeltaCastColumnExpr {
     expr: Arc<dyn PhysicalExpr>,
     input_field: Arc<Field>,
     target_field: Arc<Field>,
@@ -380,7 +380,7 @@ impl std::fmt::Display for DeltaCastColumnExpr {
 }
 
 impl DeltaCastColumnExpr {
-    fn new(
+    pub fn new(
         expr: Arc<dyn PhysicalExpr>,
         input_field: Arc<Field>,
         target_field: Arc<Field>,
@@ -392,6 +392,14 @@ impl DeltaCastColumnExpr {
             target_field,
             cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS),
         }
+    }
+
+    pub fn input_field(&self) -> &Arc<Field> {
+        &self.input_field
+    }
+
+    pub fn target_field(&self) -> &Arc<Field> {
+        &self.target_field
     }
 }
 
