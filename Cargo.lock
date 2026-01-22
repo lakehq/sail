@@ -6090,6 +6090,7 @@ dependencies = [
  "sail-common-datafusion",
  "sail-data-source",
  "serde",
+ "serde_arrow",
  "serde_json",
  "url",
  "uuid",
