@@ -287,8 +287,7 @@ fn gen_sequence_date(args: &[ArrayRef]) -> Result<ArrayRef> {
                 // Check if the interval is at least 1 day
                 // Note: interval can be represented as days OR as nanoseconds (86400000000000 ns = 1 day)
                 let nanos_per_day = 86_400_000_000_000i64;
-                let total_nanos = nanoseconds;
-                if months == 0 && days == 0 && total_nanos.abs() < nanos_per_day {
+                if months == 0 && days == 0 && nanoseconds.abs() < nanos_per_day {
                     return exec_err!(
                         "Spark `sequence` function cannot generate date range less than 1 day."
                     );
@@ -338,7 +337,7 @@ fn gen_sequence_date(args: &[ArrayRef]) -> Result<ArrayRef> {
                 list_builder.append_value(values);
             }
         }
-        None => {
+        _ => {
             for _index in 0..stop_array.len() {
                 list_builder.append_null()
             }
