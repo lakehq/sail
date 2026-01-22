@@ -8,4 +8,3 @@ from pysail.tests.spark.utils import is_jvm_spark
 pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail only")
 
 scenarios("features")
-

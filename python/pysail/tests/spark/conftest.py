@@ -174,12 +174,12 @@ def pytest_collection_modifyitems(session, config, items):  # noqa: ARG001
             module_id = getattr(module_node, "nodeid", str(module_node))
             message = (
                 "Multiple different `sail_env` configurations were found within the same test module.\n"
-                "Module: {module}\n"
-                "Config A: {a}\n"
-                "Config B: {b}\n"
+                f"Module: {module_id}\n"
+                f"Config A: {existing}\n"
+                f"Config B: {item_cfg}\n"
                 "Please split these tests into separate modules, or make their `sail_env` consistent."
-            ).format(module=module_id, a=existing, b=item_cfg)
-            raise pytest.UsageError(message)  # noqa: TRY003
+            )
+            raise pytest.UsageError(message)
 
     for module_node, cfg in per_module.items():
         module_node.sail_env_config = cfg
