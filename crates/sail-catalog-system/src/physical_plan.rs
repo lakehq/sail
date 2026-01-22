@@ -11,9 +11,9 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::system::catalog::SystemTable;
 
-use crate::gen::catalog::SystemTable;
-use crate::querier::SystemQuerierService;
+use crate::service::SystemTableService;
 
 #[derive(Debug)]
 pub struct SystemTableExec {
@@ -32,9 +32,9 @@ impl SystemTableExec {
         fetch: Option<usize>,
     ) -> Result<Self> {
         let schema = if let Some(projection) = &projection {
-            Arc::new(table.schema()?.project(projection)?)
+            Arc::new(table.schema().project(projection)?)
         } else {
-            table.schema()?
+            table.schema()
         };
         let properties = PlanProperties::new(
             EquivalenceProperties::new(schema),
@@ -49,6 +49,22 @@ impl SystemTableExec {
             fetch,
             properties,
         })
+    }
+
+    pub fn table(&self) -> SystemTable {
+        self.table
+    }
+
+    pub fn projection(&self) -> Option<&[usize]> {
+        self.projection.as_deref()
+    }
+
+    pub fn filters(&self) -> &[Arc<dyn PhysicalExpr>] {
+        self.filters.as_slice()
+    }
+
+    pub fn fetch(&self) -> Option<usize> {
+        self.fetch
     }
 }
 
@@ -110,8 +126,8 @@ impl ExecutionPlan for SystemTableExec {
         let fetch = self.fetch;
         let stream = futures::stream::once(async move {
             context
-                .extension::<SystemQuerierService>()?
-                .execute(table, projection, filters, fetch)
+                .extension::<SystemTableService>()?
+                .read(table, projection, filters, fetch)
                 .await
         });
         Ok(Box::pin(RecordBatchStreamAdapter::new(

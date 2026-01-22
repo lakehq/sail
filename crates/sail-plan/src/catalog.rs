@@ -15,7 +15,7 @@ use sail_catalog::utils::quote_names_if_needed;
 use sail_common_datafusion::catalog::display::CatalogObjectDisplay;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::session::PlanFormatter;
+use sail_common_datafusion::session::plan::PlanFormatter;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::formatter::SparkPlanFormatter;

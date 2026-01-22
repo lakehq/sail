@@ -1,0 +1,135 @@
+- name: cluster
+  description: The database containing cluster information.
+  tables:
+    - name: workers
+      row_name: worker
+      description: The table containing information about cluster workers.
+      columns:
+        - name: session_id
+          description: The identifier for the session associated with the worker.
+          rust_type: String
+          sql_type: STRING
+          arrow_type: crate::system::types::string()
+          nullable: false
+        - name: worker_id
+          description: The unique identifier for the worker.
+          rust_type: u64
+          sql_type: UNSIGNED LONG
+          arrow_type: crate::system::types::numeric::<u64>()
+          nullable: false
+        - name: host
+          description: |
+            The hostname or IP address of the worker,
+            if the worker is running.
+          rust_type: Option<String>
+          sql_type: STRING
+          arrow_type: crate::system::types::string()
+          nullable: true
+        - name: port
+          description: |
+            The port number the worker is listening on,
+            if the worker is running.
+          rust_type: Option<u16>
+          sql_type: UNSIGNED SHORT
+          arrow_type: crate::system::types::numeric::<u16>()
+          nullable: true
+        - name: status
+          description: The current status of the worker.
+          rust_type: String
+          sql_type: STRING
+          arrow_type: crate::system::types::string()
+          nullable: false
+        - name: created_at
+          description: |
+            The timestamp when the worker was created.
+            This is the time when the worker is defined in the driver.
+          rust_type: chrono::DateTime<chrono::Utc>
+          sql_type: TIMESTAMP_LTZ(6)
+          arrow_type: crate::system::types::timestamp()
+          nullable: false
+        - name: completed_at
+          description: |
+            The timestamp when the worker was stopped or marked as failed.
+          rust_type: Option<chrono::DateTime<chrono::Utc>>
+          sql_type: TIMESTAMP_LTZ(6)
+          arrow_type: crate::system::types::timestamp()
+          nullable: true
+
+- name: execution
+  description: The database containing execution data.
+  tables:
+    - name: jobs
+      row_name: job
+      description: The table containing job execution information.
+      columns:
+        - name: session_id
+          description: The identifier for the session associated with the job.
+          rust_type: String
+          sql_type: STRING
+          arrow_type: crate::system::types::string()
+          nullable: false
+        - name: job_id
+          description: The unique identifier for the job.
+          rust_type: u64
+          sql_type: UNSIGNED LONG
+          arrow_type: crate::system::types::numeric::<u64>()
+          nullable: false
+        - name: status
+          description: The current status of the job.
+          rust_type: String
+          sql_type: STRING
+          arrow_type: crate::system::types::string()
+          nullable: false
+        - name: created_at
+          description: The timestamp when the job was created.
+          rust_type: chrono::DateTime<chrono::Utc>
+          sql_type: TIMESTAMP_LTZ(6)
+          arrow_type: crate::system::types::timestamp()
+          nullable: false
+        - name: completed_at
+          description: The timestamp when the job completed execution.
+          rust_type: Option<chrono::DateTime<chrono::Utc>>
+          sql_type: TIMESTAMP_LTZ(6)
+          arrow_type: crate::system::types::timestamp()
+          nullable: true
+
+- name: session
+  description: The database containing user session data.
+  tables:
+    - name: sessions
+      row_name: session
+      description: The table containing user session information.
+      columns:
+        - name: session_id
+          description: The unique identifier for the session.
+          rust_type: String
+          sql_type: STRING
+          arrow_type: crate::system::types::string()
+          nullable: false
+        - name: user_id
+          description: |
+            The identifier for the user associated with the session.
+            This can be an arbitrary string that identifies the user,
+            or empty if the user is not known.
+          rust_type: String
+          sql_type: STRING
+          arrow_type: crate::system::types::string()
+          nullable: false
+        - name: status
+          description: The current status of the session.
+          rust_type: String
+          sql_type: STRING
+          arrow_type: crate::system::types::string()
+          nullable: false
+        - name: created_at
+          description: The timestamp when the session was created.
+          rust_type: chrono::DateTime<chrono::Utc>
+          sql_type: TIMESTAMP_LTZ(6)
+          arrow_type: crate::system::types::timestamp()
+          nullable: false
+        - name: deleted_at
+          description: The timestamp when the session was deleted.
+          rust_type: Option<chrono::DateTime<chrono::Utc>>
+          sql_type: TIMESTAMP_LTZ(6)
+          arrow_type: crate::system::types::timestamp()
+          nullable: true

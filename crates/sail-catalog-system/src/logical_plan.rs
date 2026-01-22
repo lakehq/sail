@@ -4,8 +4,7 @@ use std::sync::Arc;
 use datafusion::common::{plan_err, DFSchema, DFSchemaRef, Result, TableReference};
 use datafusion::logical_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use educe::Educe;
-
-use crate::gen::catalog::SystemTable;
+use sail_common_datafusion::system::catalog::SystemTable;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Educe)]
 #[educe(PartialOrd)]
@@ -28,7 +27,7 @@ impl SystemTableNode {
         filters: Vec<Expr>,
         fetch: Option<usize>,
     ) -> Result<Self> {
-        let original_schema = table.schema()?;
+        let original_schema = table.schema();
         let projected_schema = if let Some(projection) = &projection {
             Arc::new(original_schema.project(projection)?)
         } else {

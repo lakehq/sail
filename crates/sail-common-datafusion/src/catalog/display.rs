@@ -75,7 +75,7 @@ where
 
     fn to_record_batch(&self, items: Vec<T>) -> Result<RecordBatch> {
         let items = items.into_iter().map(&self.mapper).collect::<Vec<_>>();
-        self.serializer.to_record_batch(&items)
+        self.serializer.build_record_batch(&items)
     }
 }
 

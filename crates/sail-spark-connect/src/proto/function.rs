@@ -10,7 +10,7 @@ mod tests {
     use sail_common::runtime::RuntimeManager;
     use sail_common::tests::test_gold_set;
     use sail_common_datafusion::extension::SessionExtensionAccessor;
-    use sail_common_datafusion::session::JobService;
+    use sail_common_datafusion::session::job::JobService;
     use sail_plan::resolve_and_execute_plan;
     use serde::{Deserialize, Serialize};
 

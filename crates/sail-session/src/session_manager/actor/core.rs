@@ -1,5 +1,4 @@
-use std::collections::HashMap;
-
+use indexmap::IndexMap;
 use sail_server::actor::{Actor, ActorAction, ActorContext};
 
 use crate::session_manager::actor::SessionManagerActor;
@@ -20,7 +19,7 @@ impl Actor for SessionManagerActor {
         Self {
             options,
             factory,
-            sessions: HashMap::new(),
+            sessions: IndexMap::new(),
         }
     }
 
@@ -38,8 +37,15 @@ impl Actor for SessionManagerActor {
             SessionManagerEvent::DeleteSession { session_id, result } => {
                 self.handle_delete_session(ctx, session_id, result)
             }
-            SessionManagerEvent::QuerySessions { result } => {
-                self.handle_query_sessions(ctx, result)
+            SessionManagerEvent::SetSessionHistory {
+                session_id,
+                history,
+            } => self.handle_set_session_history(ctx, session_id, history),
+            SessionManagerEvent::SetSessionFailure { session_id } => {
+                self.handle_set_session_failure(ctx, session_id)
+            }
+            SessionManagerEvent::ObserveState { observer } => {
+                self.handle_observe_state(ctx, observer)
             }
         }
     }

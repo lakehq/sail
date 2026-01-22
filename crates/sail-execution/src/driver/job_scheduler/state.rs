@@ -1,12 +1,15 @@
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use datafusion::execution::TaskContext;
 use datafusion::physical_plan::ExecutionPlanProperties;
 use sail_common_datafusion::error::CommonErrorCause;
+use sail_common_datafusion::session::job::JobSnapshot;
 
 use crate::driver::job_scheduler::topology::JobTopology;
 use crate::driver::output::JobOutputManager;
 use crate::error::ExecutionResult;
+use crate::id::JobId;
 use crate::job_graph::JobGraph;
 
 pub struct JobDescriptor {
@@ -15,6 +18,8 @@ pub struct JobDescriptor {
     pub stages: Vec<StageDescriptor>,
     pub regions: Vec<TaskRegionDescriptor>,
     pub state: JobState,
+    pub created_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
 }
 
 pub enum JobState {
@@ -26,6 +31,18 @@ pub enum JobState {
     Succeeded,
     Failed,
     Canceled,
+}
+
+impl JobState {
+    pub fn status(&self) -> &'static str {
+        match self {
+            JobState::Running { .. } => "RUNNING",
+            JobState::Draining => "DRAINING",
+            JobState::Succeeded => "SUCCEEDED",
+            JobState::Failed => "FAILED",
+            JobState::Canceled => "CANCELED",
+        }
+    }
 }
 
 impl JobDescriptor {
@@ -53,7 +70,18 @@ impl JobDescriptor {
             stages,
             regions,
             state,
+            created_at: Utc::now(),
+            completed_at: None,
         })
+    }
+
+    pub fn snapshot(&self, job_id: JobId) -> JobSnapshot {
+        JobSnapshot {
+            job_id: job_id.into(),
+            status: self.state.status().to_string(),
+            created_at: self.created_at,
+            completed_at: self.completed_at,
+        }
     }
 }
 

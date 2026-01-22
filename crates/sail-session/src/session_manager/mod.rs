@@ -1,6 +1,7 @@
 mod actor;
 mod event;
 mod options;
+mod session;
 
 use std::fmt;
 

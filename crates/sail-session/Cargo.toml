@@ -28,6 +28,7 @@ sail-plan-lakehouse = { path = "../sail-plan-lakehouse" }
 sail-server = { path = "../sail-server" }
 sail-cache = { path = "../sail-cache" }
 sail-telemetry = { path = "../sail-telemetry" }
+sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 
 async-trait = { workspace = true }
 readonly = { workspace = true }
@@ -41,3 +42,6 @@ datafusion-physical-expr = { workspace = true }
 secrecy = { workspace = true }
 tonic = { workspace = true }
 tokio = { workspace = true }
+chrono = { workspace = true }
+indexmap = { workspace = true }
+futures = { workspace = true }

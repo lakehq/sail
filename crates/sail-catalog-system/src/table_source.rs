@@ -1,11 +1,11 @@
 use std::any::Any;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion::common::{Column, Result};
+use datafusion::common::Result;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableSource};
+use sail_common_datafusion::system::catalog::SystemTable;
 
-use crate::gen::catalog::SystemTable;
+use crate::predicate::is_column_logical_predicate;
 
 pub struct SystemTableSource {
     schema: SchemaRef,
@@ -13,9 +13,9 @@ pub struct SystemTableSource {
 }
 
 impl SystemTableSource {
-    pub fn try_new(table: SystemTable) -> Result<Self> {
-        let schema = table.schema()?;
-        Ok(Self { schema, table })
+    pub fn new(table: SystemTable) -> Self {
+        let schema = table.schema();
+        Self { schema, table }
     }
 
     pub fn table(&self) -> SystemTable {
@@ -36,14 +36,16 @@ impl TableSource for SystemTableSource {
         &self,
         filters: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
-        let columns = match self.table {
-            SystemTable::Sessions => ["session_id"],
+        let columns: &[&str] = match self.table {
+            SystemTable::Jobs => &["session_id", "job_id"],
+            SystemTable::Sessions => &["session_id"],
+            SystemTable::Workers => &["session_id", "worker_id"],
         };
         filters
             .iter()
             .map(|filter| {
-                for col in &columns {
-                    if is_single_column_predicate(filter, col)? {
+                for col in columns {
+                    if is_column_logical_predicate(filter, col)? {
                         return Ok(TableProviderFilterPushDown::Exact);
                     }
                 }
@@ -51,18 +53,4 @@ impl TableSource for SystemTableSource {
             })
             .collect()
     }
-}
-
-fn is_single_column_predicate(expr: &Expr, column: &str) -> Result<bool> {
-    let mut valid = true;
-    expr.apply(|e| {
-        if let Expr::Column(Column { name, .. }) = e {
-            if name != column {
-                valid = false;
-                return Ok(TreeNodeRecursion::Stop);
-            }
-        }
-        Ok(TreeNodeRecursion::Continue)
-    })?;
-    Ok(valid)
 }

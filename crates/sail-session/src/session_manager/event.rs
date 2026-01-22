@@ -1,14 +1,14 @@
 use std::borrow::Cow;
 
 use datafusion::prelude::SessionContext;
-use sail_catalog_system::querier::SessionRow;
+use sail_common_datafusion::session::job::JobRunnerHistory;
+use sail_common_datafusion::system::observable::SessionManagerObserver;
 use sail_telemetry::common::{SpanAssociation, SpanAttribute};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use crate::error::SessionResult;
 
-#[expect(clippy::enum_variant_names)]
 pub enum SessionManagerEvent {
     GetOrCreateSession {
         session_id: String,
@@ -24,9 +24,20 @@ pub enum SessionManagerEvent {
         session_id: String,
         result: oneshot::Sender<SessionResult<()>>,
     },
-    QuerySessions {
-        result: oneshot::Sender<SessionResult<Vec<SessionRow>>>,
+    SetSessionHistory {
+        session_id: String,
+        history: SessionHistory,
     },
+    SetSessionFailure {
+        session_id: String,
+    },
+    ObserveState {
+        observer: SessionManagerObserver,
+    },
+}
+
+pub struct SessionHistory {
+    pub job_runner: JobRunnerHistory,
 }
 
 impl SpanAssociation for SessionManagerEvent {
@@ -35,7 +46,9 @@ impl SpanAssociation for SessionManagerEvent {
             SessionManagerEvent::GetOrCreateSession { .. } => "GetOrCreateSession",
             SessionManagerEvent::ProbeIdleSession { .. } => "ProbeIdleSession",
             SessionManagerEvent::DeleteSession { .. } => "DeleteSession",
-            SessionManagerEvent::QuerySessions { .. } => "QuerySessions",
+            SessionManagerEvent::SetSessionHistory { .. } => "SetSessionHistory",
+            SessionManagerEvent::SetSessionFailure { .. } => "SetSessionFailure",
+            SessionManagerEvent::ObserveState { .. } => "ObserveState",
         };
         name.into()
     }
@@ -55,10 +68,15 @@ impl SpanAssociation for SessionManagerEvent {
             | SessionManagerEvent::DeleteSession {
                 session_id,
                 result: _,
-            } => {
+            }
+            | SessionManagerEvent::SetSessionHistory {
+                session_id,
+                history: _,
+            }
+            | SessionManagerEvent::SetSessionFailure { session_id } => {
                 p.push((SpanAttribute::SESSION_ID, session_id.to_string()));
             }
-            SessionManagerEvent::QuerySessions { result: _ } => {}
+            SessionManagerEvent::ObserveState { observer: _ } => {}
         }
         p.into_iter().map(|(k, v)| (k.into(), v.into()))
     }

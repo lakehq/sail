@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use chrono::Utc;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
@@ -144,6 +145,7 @@ impl JobScheduler {
                 })
             }
             job.state = JobState::Failed;
+            job.completed_at = Some(Utc::now());
             return actions;
         }
 
@@ -487,6 +489,7 @@ impl JobScheduler {
         } else {
             job.state = JobState::Canceled;
         }
+        job.completed_at = Some(Utc::now());
         actions
     }
 

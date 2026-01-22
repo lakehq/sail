@@ -9,23 +9,10 @@ workspace = true
 [dependencies]
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-catalog = { path = "../sail-catalog" }
-sail-sql-analyzer = { path = "../sail-sql-analyzer" }
-sail-plan = { path = "../sail-plan" }
 
+serde = { workspace = true }
 datafusion = { workspace = true }
 async-trait = { workspace = true }
-serde = { workspace = true }
-serde_arrow = { workspace = true }
 educe = { workspace = true }
 futures = { workspace = true }
-lazy_static = { workspace = true }
-
-[build-dependencies]
-serde = { workspace = true }
-serde_yaml = { workspace = true }
-syn = { workspace = true }
-prettyplease = { workspace = true }
-regex = { workspace = true }
-quote = { workspace = true }
-proc-macro2 = { workspace = true }
-lazy_static = { workspace = true }
+tokio = { workspace = true }
