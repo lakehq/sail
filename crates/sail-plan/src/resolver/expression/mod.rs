@@ -82,6 +82,11 @@ impl NamedExpr {
 
 impl PlanResolver<'_> {
     #[async_recursion]
+    /// Resolves a Sail spec expression into a named expression.
+    ///
+    /// Dispatches to type-specific resolvers based on the expression variant (e.g., Cast, Literal,
+    /// Function). Returns a `NamedExpr` containing the resolved expression and display name(s)
+    /// for projection/aliasing.
     pub(super) async fn resolve_named_expression(
         &self,
         expr: spec::Expr,

@@ -61,6 +61,7 @@ message ExtendedScalarUdf {
     UpdateStructFieldUdf update_struct_field = 8;
     TimestampNowUdf timestamp_now = 9;
     SparkTimestampUdf spark_timestamp = 10;
+    SparkDateUdf spark_date = 11;
   }
 }
 
@@ -132,6 +133,11 @@ message TimestampNowUdf {
 
 message SparkTimestampUdf {
   optional string timezone = 1;
+  bool is_try = 2;
+}
+
+message SparkDateUdf {
+  bool is_try = 1;
 }
 
 message StandardUdaf {}

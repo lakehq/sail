@@ -97,4 +97,7 @@ docs/.vitepress/.temp
 # LLVM coverage files
 *.profraw
 
+# Claude Code settings
+.claude/
+
 CLAUDE.md
