@@ -33,6 +33,7 @@ impl Predicates {
     }
 }
 
+/// An extension trait for iterators to support predicate-based filtering and mapping.
 pub trait PredicateExt: Sized {
     type Item;
 

@@ -22,13 +22,13 @@ pub struct ServerSession {
 }
 
 impl ServerSession {
-    pub fn observe_job_runner<T, O>(
+    pub fn observe_job_runner<T, F>(
         &self,
-        observer: O,
+        observer: F,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<T>>> + Send>>
     where
         T: Send + 'static,
-        O: FnOnce(oneshot::Sender<Result<Vec<T>>>) -> JobRunnerObserver,
+        F: FnOnce(oneshot::Sender<Result<Vec<T>>>) -> JobRunnerObserver,
     {
         let (tx, rx) = oneshot::channel();
         let observer = observer(tx);
