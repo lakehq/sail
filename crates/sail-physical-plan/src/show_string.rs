@@ -14,7 +14,6 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{exec_err, internal_datafusion_err, DataFusionError, Result};
 use futures::{Stream, StreamExt};
-use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_logical_plan::show_string::ShowStringFormat;
 
@@ -132,10 +131,10 @@ impl ExecutionPlan for ShowStringExec {
         if self.input.output_partitioning().partition_count() != 1 {
             return exec_err!("ShowStringExec should have one input partition");
         }
-        let input = rename_physical_plan(self.input.clone(), &self.names)?;
-        let stream = input.execute(partition, context)?;
+        let stream = self.input.execute(partition, context)?;
         Ok(Box::pin(ShowStringStream::new(
             stream,
+            self.names.clone(),
             self.limit,
             self.format.clone(),
             self.schema.clone(),
@@ -147,6 +146,7 @@ struct ShowStringStream {
     input: Option<SendableRecordBatchStream>,
     limit: usize,
     format: ShowStringFormat,
+    names: Vec<String>,
     input_schema: SchemaRef,
     output_schema: SchemaRef,
     data: Vec<RecordBatch>,
@@ -163,6 +163,7 @@ enum ShowStringState {
 impl ShowStringStream {
     pub fn new(
         input: SendableRecordBatchStream,
+        names: Vec<String>,
         limit: usize,
         format: ShowStringFormat,
         schema: SchemaRef,
@@ -172,6 +173,7 @@ impl ShowStringStream {
             input: Some(input),
             limit,
             format,
+            names,
             input_schema,
             output_schema: schema,
             data: vec![],
@@ -181,6 +183,21 @@ impl ShowStringStream {
 
     fn show(&self) -> Result<RecordBatch> {
         let batch = concat_batches(&self.input_schema, &self.data)?;
+        // For display purposes, rename the batch schema (no-op on arrays) instead of inserting
+        // a physical ProjectionExec into the plan.
+        let batch = if batch.schema().fields().len() == self.names.len() {
+            let fields = batch
+                .schema()
+                .fields()
+                .iter()
+                .zip(self.names.iter())
+                .map(|(f, name)| f.as_ref().clone().with_name(name.clone()))
+                .collect::<Vec<_>>();
+            let renamed_schema = Arc::new(datafusion::arrow::datatypes::Schema::new(fields));
+            RecordBatch::try_new(renamed_schema, batch.columns().to_vec())?
+        } else {
+            batch
+        };
         let table = self.format.show(&batch, self.has_more_data)?;
         let array = StringArray::from(vec![table]);
         let batch = RecordBatch::try_new(self.output_schema.clone(), vec![Arc::new(array)])?;

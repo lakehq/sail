@@ -1,25 +1,25 @@
 == Parsed Logical Plan ==
-Projection: t.#2 AS #4, sum(t.#3) AS #5
-  Aggregate: groupBy=[[t.#2]], aggr=[[sum(t.#3)]]
-    SubqueryAlias: t
-      Projection: #0 AS #2, #1 AS #3
-        Projection: column1 AS #0, column2 AS #1
-          Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
+Projection: #4 AS k, #5 AS SUM(v)
+  Projection: t.#2 AS #4, sum(t.#3) AS #5
+    Aggregate: groupBy=[[t.#2]], aggr=[[sum(t.#3)]]
+      SubqueryAlias: t
+        Projection: #0 AS #2, #1 AS #3
+          Projection: column1 AS #0, column2 AS #1
+            Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
 
 == Analyzed Logical Plan ==
-Projection: t.#2 AS #4, sum(t.#3) AS #5
+Projection: t.#2 AS k, sum(t.#3) AS SUM(v)
   Aggregate: groupBy=[[t.#2]], aggr=[[sum(CAST(t.#3 AS Int64))]]
     SubqueryAlias: t
       Projection: column1 AS #2, column2 AS #3
         Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
 
 == Physical Plan ==
-ProjectionExec: expr=[#4@0 as k, #5@1 as SUM(v)]
-  ProjectionExec: expr=[#2@0 as #4, sum(t.#3)@1 as #5]
-    AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(t.#3)]
-      CoalesceBatchesExec: target_batch_size=8192
-        RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=4
-          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-            AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)]
-              ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
-                DataSourceExec: partitions=1, partition_sizes=[1]
+ProjectionExec: expr=[#2@0 as k, sum(t.#3)@1 as SUM(v)]
+  AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(t.#3)]
+    CoalesceBatchesExec: target_batch_size=8192
+      RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=4
+        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+          AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)]
+            ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
+              DataSourceExec: partitions=1, partition_sizes=[1]

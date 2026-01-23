@@ -8,7 +8,8 @@ use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::Result;
 use datafusion_expr::{Extension, LogicalPlan};
 use sail_common::spec;
-use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
+use sail_common_datafusion::rename::exec::RenameExec;
+use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_logical_plan::precondition::WithPreconditionsNode;
 
 use crate::catalog::CatalogCommandNode;
@@ -60,6 +61,20 @@ pub async fn resolve_and_execute_plan(
     let mut info = vec![];
     let resolver = PlanResolver::new(ctx, config);
     let NamedPlan { plan, fields } = resolver.resolve_named_plan(plan).await?;
+    let can_rename_logical = fields.as_ref().is_some_and(|names| {
+        let mut seen = std::collections::HashSet::new();
+        names.iter().all(|n| seen.insert(n.to_ascii_lowercase()))
+    });
+    let plan = if can_rename_logical {
+        // Safe: logical plan schemas require unique (unqualified) field names.
+        if let Some(fields) = fields.as_ref() {
+            rename_logical_plan(plan, fields)?
+        } else {
+            plan
+        }
+    } else {
+        plan
+    };
     info.push(plan.to_stringified(PlanType::InitialLogicalPlan));
     let df = execute_logical_plan(ctx, plan).await?;
     let (session_state, plan) = df.into_parts();
@@ -74,8 +89,12 @@ pub async fn resolve_and_execute_plan(
         .query_planner()
         .create_physical_plan(&plan, &session_state)
         .await?;
-    let plan = if let Some(fields) = fields {
-        rename_physical_plan(plan, &fields)?
+    let plan: Arc<dyn ExecutionPlan> = if !can_rename_logical {
+        if let Some(fields) = fields {
+            Arc::new(RenameExec::try_new(plan, fields)?)
+        } else {
+            plan
+        }
     } else {
         plan
     };

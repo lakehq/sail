@@ -1,0 +1,4 @@
+== Physical Plan ==
+RenameExec
+  ProjectionExec: expr=[1 as #0, 1 as #1]
+    PlaceholderRowExec

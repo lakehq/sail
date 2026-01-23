@@ -61,16 +61,17 @@ impl StreamSource for SocketStreamSource {
     async fn scan(
         &self,
         _state: &dyn Session,
+        projected_data_schema: SchemaRef,
         projection: Option<&Vec<usize>>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let projection = projection
             .cloned()
-            .unwrap_or_else(|| (0..self.schema.fields.len()).collect());
+            .unwrap_or_else(|| (0..projected_data_schema.fields.len()).collect());
         Ok(Arc::new(SocketSourceExec::try_new(
             self.options.clone(),
-            Arc::clone(&self.schema),
+            projected_data_schema,
             projection,
         )?))
     }
