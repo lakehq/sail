@@ -243,18 +243,20 @@ fn extract_json_values(json_str: Option<&str>, keys: &[String]) -> Vec<Option<St
 
     loop {
         // Check if this key matches any of our target keys
+        let mut extracted = false;
         for (i, target_key) in keys.iter().enumerate() {
             if current_key == target_key.as_str() && results[i].is_none() {
                 // Extract the value
                 if let Ok(peek) = jiter.peek() {
                     results[i] = extract_value_as_string(jiter, peek);
+                    extracted = true;
                 }
                 break;
             }
         }
 
-        // Skip the value if we didn't extract it
-        if jiter.next_skip().is_err() {
+        // Skip the value only if we didn't extract it
+        if !extracted && jiter.next_skip().is_err() {
             break;
         }
 
