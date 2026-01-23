@@ -155,7 +155,7 @@ fn infer_type_from_peek(jiter: &mut Jiter, peek: Peek) -> String {
     match peek {
         Peek::Null => {
             let _ = jiter.known_null();
-            "VOID".to_string()
+            "STRING".to_string()
         }
         Peek::True | Peek::False => {
             let _ = jiter.known_bool(peek);
@@ -252,6 +252,8 @@ fn infer_struct_type(jiter: &mut Jiter) -> String {
     if fields.is_empty() {
         "STRUCT<>".to_string()
     } else {
+        // Sort fields alphabetically by field name (Spark behavior)
+        fields.sort();
         format!("STRUCT<{}>", fields.join(", "))
     }
 }
