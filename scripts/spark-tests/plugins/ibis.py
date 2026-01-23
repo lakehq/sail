@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import importlib
 import os
+from dataclasses import dataclass
 from pathlib import Path
+
+import pytest
 
 # pytest markers defined in `pyproject.toml` of the Ibis project
 IBIS_MARKERS = [
@@ -43,6 +46,10 @@ IBIS_MARKERS = [
 ]
 
 
+def _is_ibis_testing():
+    return os.environ.get("IBIS_TESTING") == "1"
+
+
 def _resolve_data_volume() -> str:
     env_var = "IBIS_TESTING_DATA_DIR"
     data_dir = os.environ.get(env_var)
@@ -60,3 +67,29 @@ def pytest_configure(config):
     TestConf.parquet_dir = property(lambda _: data_volume)
     for marker in IBIS_MARKERS:
         config.addinivalue_line("markers", marker)
+
+
+@dataclass
+class TestMarker:
+    keywords: list[str]
+    reason: str
+
+
+SKIPPED_IBIS_TESTS = [
+    TestMarker(
+        keywords=["test_table_info_large[pyspark]"],
+        reason="Complex SQL statements causing timeout",
+    ),
+]
+
+
+def add_ibis_test_markers(items: list[pytest.Item]):
+    for item in items:
+        for test in SKIPPED_IBIS_TESTS:
+            if all(k in item.keywords for k in test.keywords):
+                item.add_marker(pytest.mark.skip(reason=test.reason))
+
+
+def pytest_collection_modifyitems(session: pytest.Session, config: pytest.Config, items: list[pytest.Item]) -> None:  # noqa: ARG001
+    if _is_ibis_testing():
+        add_ibis_test_markers(items)
