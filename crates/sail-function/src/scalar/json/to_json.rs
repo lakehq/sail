@@ -255,7 +255,7 @@ fn array_value_to_json(array: &ArrayRef, index: usize, options: &ToJsonOptions) 
         DataType::Decimal128(_, scale) => {
             let arr = array.as_primitive::<datafusion::arrow::datatypes::Decimal128Type>();
             let value = arr.value(index);
-            Ok(Value::String(format_decimal(value, *scale)))
+            Ok(decimal_to_json_number(value, *scale))
         }
         DataType::Timestamp(_, tz) => {
             let arr =
@@ -350,16 +350,61 @@ fn map_to_json(map_array: &MapArray, index: usize, options: &ToJsonOptions) -> R
 
     let mut map = Map::new();
     for i in 0..keys.len() {
-        let key = array_value_to_json(keys, i, options)?;
+        // For map keys, Spark serializes structs as arrays of values (without field names)
+        // e.g., named_struct('a', 1) becomes [1] instead of {"a":1}
+        let key = map_key_to_json(keys, i, options)?;
         let key_str = match key {
             Value::String(s) => s,
-            other => other.to_string(),
+            other => serde_json::to_string(&other)
+                .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?,
         };
         let value = array_value_to_json(values, i, options)?;
         map.insert(key_str, value);
     }
 
     Ok(Value::Object(map))
+}
+
+/// Converts a map key to JSON. For struct keys, Spark serializes them as arrays
+/// of values (without field names) rather than as objects.
+fn map_key_to_json(array: &ArrayRef, index: usize, options: &ToJsonOptions) -> Result<Value> {
+    if array.is_null(index) {
+        return Ok(Value::Null);
+    }
+
+    // For struct keys, serialize as array of values (Spark behavior)
+    if let DataType::Struct(_) = array.data_type() {
+        let struct_array = array
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| {
+                datafusion_common::DataFusionError::Internal(
+                    "Failed to downcast to StructArray".to_string(),
+                )
+            })?;
+        return struct_to_values_array(struct_array, index, options);
+    }
+
+    // For other types, use normal conversion
+    array_value_to_json(array, index, options)
+}
+
+/// Converts a struct to a JSON array of its values (without field names).
+/// This is used for map keys where Spark expects [value1, value2, ...] format.
+fn struct_to_values_array(
+    struct_array: &StructArray,
+    index: usize,
+    options: &ToJsonOptions,
+) -> Result<Value> {
+    let columns = struct_array.columns();
+    let mut json_values = Vec::with_capacity(columns.len());
+
+    for column in columns.iter() {
+        let value = array_value_to_json(column, index, options)?;
+        json_values.push(value);
+    }
+
+    Ok(Value::Array(json_values))
 }
 
 fn format_timestamp(value: i64, tz: Option<&str>, format: &str) -> String {
@@ -402,6 +447,13 @@ fn format_decimal(value: i128, scale: i8) -> String {
         fractional_part,
         width = scale as usize
     )
+}
+
+fn decimal_to_json_number(value: i128, scale: i8) -> Value {
+    let decimal_str = format_decimal(value, scale);
+    // Parse the formatted decimal string as a JSON number
+    // This preserves the exact decimal representation
+    serde_json::from_str(&decimal_str).unwrap_or(Value::String(decimal_str))
 }
 
 fn number_from_f64(value: f64) -> Value {
