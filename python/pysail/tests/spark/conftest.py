@@ -19,6 +19,8 @@ def pytest_configure(config):
     config.pluginmanager.import_plugin("pysail.tests.spark.steps.sql")
     config.pluginmanager.import_plugin("pysail.tests.spark.steps.plan")
     config.pluginmanager.import_plugin("pysail.tests.spark.steps.delta_log")
+    config.pluginmanager.import_plugin("pysail.tests.spark.steps.dataframe")
+    config.pluginmanager.import_plugin("pysail.tests.spark.steps.flight_sql")
 
 
 if TYPE_CHECKING:

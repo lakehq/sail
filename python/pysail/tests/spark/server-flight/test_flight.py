@@ -155,7 +155,6 @@ def test_flight_execute_simple_query(flight_connection):
     assert rows[0] == (1,)
     assert rows[1] == (2,)
     cur.close()
-    cur.close()
 
 
 def test_flight_multiple_columns(flight_connection):

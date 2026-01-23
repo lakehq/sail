@@ -24,6 +24,9 @@ pub struct CacheEntry {
 }
 
 impl CacheEntry {
+    /// Estimated overhead per field for Arc, metadata, and other internal structures
+    const FIELD_OVERHEAD_BYTES: usize = 64;
+
     pub fn new(schema: Arc<Schema>, was_executed: bool) -> Self {
         let size_bytes = Self::estimate_schema_size(&schema);
         Self {
@@ -42,8 +45,8 @@ impl CacheEntry {
         for field in schema.fields() {
             size += field.name().len();
             size += std::mem::size_of_val(field.data_type());
-            // Add some overhead for Arc, etc.
-            size += 64;
+            // Add overhead for Arc, metadata, and other internal structures
+            size += Self::FIELD_OVERHEAD_BYTES;
         }
 
         // Metadata

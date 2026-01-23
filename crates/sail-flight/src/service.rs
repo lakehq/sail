@@ -213,14 +213,49 @@ impl SailFlightSqlService {
             .to_string()
     }
 
+    /// Helper to convert schemas to IPC format for Flight SQL protocol
+    ///
+    /// Returns a tuple of (dataset_schema_bytes, parameter_schema_bytes)
+    fn schemas_to_ipc_bytes(
+        dataset_schema: &Schema,
+        param_schema: &Schema,
+    ) -> Result<(prost::bytes::Bytes, prost::bytes::Bytes), Status> {
+        let options = IpcWriteOptions::default();
+
+        let dataset_schema_data = arrow_flight::IpcMessage::try_from(
+            arrow_flight::SchemaAsIpc::new(dataset_schema, &options),
+        )
+        .map_err(|e| Status::internal(format!("Schema conversion error: {}", e)))?;
+
+        let param_schema_data = arrow_flight::IpcMessage::try_from(arrow_flight::SchemaAsIpc::new(
+            param_schema,
+            &options,
+        ))
+        .map_err(|e| Status::internal(format!("Schema conversion error: {}", e)))?;
+
+        Ok((dataset_schema_data.0, param_schema_data.0))
+    }
+
     /// Check if a SQL statement is DDL (Data Definition Language)
+    ///
+    /// This inspects the first SQL keyword (case-insensitive) to identify DDL statements.
+    /// Note: Handles common DDL types but may have false positives with CTEs or subqueries.
     fn is_ddl_statement(sql: &str) -> bool {
         let cleaned = Self::strip_sql_comments(sql);
-        let upper = cleaned.to_uppercase();
-        upper.starts_with("CREATE ")
-            || upper.starts_with("DROP ")
-            || upper.starts_with("ALTER ")
-            || upper.starts_with("TRUNCATE ")
+        let trimmed = cleaned.trim_start();
+
+        // Extract first token, handling leading parentheses
+        let first_token = trimmed
+            .split_whitespace()
+            .next()
+            .map(|tok| tok.trim_start_matches('('))
+            .unwrap_or("")
+            .to_uppercase();
+
+        matches!(
+            first_token.as_str(),
+            "CREATE" | "DROP" | "ALTER" | "TRUNCATE" | "RENAME" | "COMMENT"
+        )
     }
 
     /// Check if a SQL statement is DML (INSERT/UPDATE/DELETE)
@@ -478,10 +513,8 @@ impl SailFlightSqlService {
             return self.create_success_batch();
         }
 
-        Ok(batches
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| RecordBatch::new_empty(Arc::new(Schema::empty()))))
+        // Safety: We just checked that batches is not empty
+        Ok(batches.into_iter().next().expect("batches is not empty"))
     }
 
     /// Resolve SQL plan to get schema without executing
@@ -1276,22 +1309,14 @@ impl FlightSqlService for SailFlightSqlService {
 
             // Return early with cached schema
             let handle = query.query.clone().into_bytes();
-            let options = IpcWriteOptions::default();
-            let dataset_schema_data = arrow_flight::IpcMessage::try_from(
-                arrow_flight::SchemaAsIpc::new(&entry.schema, &options),
-            )
-            .map_err(|e| Status::internal(format!("Schema conversion error: {}", e)))?;
-
             let empty_schema = Schema::empty();
-            let param_schema_data = arrow_flight::IpcMessage::try_from(
-                arrow_flight::SchemaAsIpc::new(&empty_schema, &options),
-            )
-            .map_err(|e| Status::internal(format!("Schema conversion error: {}", e)))?;
+            let (dataset_schema, parameter_schema) =
+                Self::schemas_to_ipc_bytes(&entry.schema, &empty_schema)?;
 
             return Ok(ActionCreatePreparedStatementResult {
                 prepared_statement_handle: handle.into(),
-                dataset_schema: dataset_schema_data.0,
-                parameter_schema: param_schema_data.0,
+                dataset_schema,
+                parameter_schema,
             });
         }
 
@@ -1338,22 +1363,14 @@ impl FlightSqlService for SailFlightSqlService {
         let handle = query.query.clone().into_bytes();
 
         // Convert schema to IPC bytes
-        let options = IpcWriteOptions::default();
-        let dataset_schema_data =
-            arrow_flight::IpcMessage::try_from(arrow_flight::SchemaAsIpc::new(&schema, &options))
-                .map_err(|e| Status::internal(format!("Schema conversion error: {}", e)))?;
-
         let empty_schema = Schema::empty();
-        let param_schema_data = arrow_flight::IpcMessage::try_from(arrow_flight::SchemaAsIpc::new(
-            &empty_schema,
-            &options,
-        ))
-        .map_err(|e| Status::internal(format!("Schema conversion error: {}", e)))?;
+        let (dataset_schema, parameter_schema) =
+            Self::schemas_to_ipc_bytes(&schema, &empty_schema)?;
 
         Ok(ActionCreatePreparedStatementResult {
             prepared_statement_handle: handle.into(),
-            dataset_schema: dataset_schema_data.0,
-            parameter_schema: param_schema_data.0,
+            dataset_schema,
+            parameter_schema,
         })
     }
 
