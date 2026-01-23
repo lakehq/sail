@@ -1,35 +1,31 @@
 """Step definitions for Arrow Flight SQL tests."""
 
+import contextlib
 import os
-import re
-from contextlib import contextmanager
 
-import adbc_driver_manager
 import pytest
 from adbc_driver_flightsql import dbapi
 from pytest_bdd import given, parsers, then, when
 
 
-@contextmanager
 def get_flight_uri():
     """Get the URI for the Flight SQL server."""
     # Allow overriding with environment variable
-    if "SAIL_FLIGHT_URI" in os.environ:
-        yield os.environ["SAIL_FLIGHT_URI"]
-    else:
-        # Default URI
-        yield "grpc://127.0.0.1:32010"
+    return os.environ.get("SAIL_FLIGHT_URI", "grpc://127.0.0.1:32010")
 
 
 @given("a running Flight SQL server", target_fixture="flight_connection")
 def running_flight_server():
     """Ensure Flight SQL server is running and return a connection."""
-    with get_flight_uri() as uri:
-        try:
-            conn = dbapi.connect(uri)
-            return conn
-        except Exception as e:
-            pytest.skip(f"Flight SQL server not available at {uri}: {e}")
+    uri = get_flight_uri()
+    try:
+        conn = dbapi.connect(uri)
+        yield conn
+        # Cleanup: close the connection after the scenario
+        with contextlib.suppress(Exception):
+            conn.close()
+    except Exception as e:  # noqa: BLE001
+        pytest.skip(f"Flight SQL server not available at {uri}: {e}")
 
 
 @when("I connect to the Flight SQL server", target_fixture="connection_result")
@@ -61,11 +57,12 @@ def try_execute_query(flight_connection, query):
     try:
         cur.execute(query)
         rows = cur.fetchall()
-        cur.close()
-        return {"rows": rows, "error": None}
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         cur.close()
         return {"rows": None, "error": e}
+    else:
+        cur.close()
+        return {"rows": rows, "error": None}
 
 
 @then(parsers.parse("I should get {count:d} row"))
@@ -107,17 +104,6 @@ def check_error_contains(query_result, text):
     assert text.lower() in error_msg, f"Expected '{text}' in error: {query_result['error']}"
 
 
-@then(parsers.parse('I should get an error containing "{text1}" and "{text2}" or "{text3}"'))
-def check_error_contains_multiple(query_result, text1, text2, text3):
-    """Verify the error message contains specific text combinations."""
-    assert query_result["error"] is not None
-    error_msg = str(query_result["error"]).lower()
-    assert text1.lower() in error_msg, f"Expected '{text1}' in error: {query_result['error']}"
-    assert (text2.lower() in error_msg or text3.lower() in error_msg), (
-        f"Expected '{text2}' or '{text3}' in error: {query_result['error']}"
-    )
-
-
 @then(parsers.parse("row {row:d} column {col:d} should equal {value:d}"))
 def check_cell_value(query_result, row, col, value):
     """Verify a specific cell value."""
@@ -125,6 +111,7 @@ def check_cell_value(query_result, row, col, value):
 
 
 # Cursor management steps
+
 
 @when("I create a cursor", target_fixture="current_cursor")
 def create_cursor(flight_connection):
