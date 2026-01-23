@@ -20,10 +20,13 @@ ADBC_AVAILABLE = True
 PYARROW_FLIGHT_AVAILABLE = True
 
 
-pytestmark = pytest.mark.skipif(
-    not ADBC_AVAILABLE,
-    reason="ADBC Flight SQL driver not available. Install with: pip install adbc-driver-flightsql adbc-driver-manager",
-)
+pytestmark = [
+    pytest.mark.flight_sql,
+    pytest.mark.skipif(
+        not ADBC_AVAILABLE,
+        reason="ADBC Flight SQL driver not available. Install with: pip install adbc-driver-flightsql adbc-driver-manager",
+    ),
+]
 
 
 @contextmanager
