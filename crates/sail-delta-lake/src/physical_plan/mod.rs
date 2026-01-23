@@ -32,7 +32,6 @@ pub mod discovery_exec;
 mod expr_adapter;
 mod log_replay_exec;
 mod meta_adds;
-mod metadata_agg_exec;
 mod remove_actions_exec;
 mod scan_by_adds_exec;
 mod writer_exec;
