@@ -127,7 +127,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_cardinality_skip/)
         CoalescePartitionsExec
           DeltaDiscoveryExec(table_path=file://<tmp>/merge_cardinality_skip/)
             CoalesceBatchesExec: target_batch_size=8192
-              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, stats_json@4]
+              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6]
                 CoalescePartitionsExec
                   AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
                     CoalesceBatchesExec: target_batch_size=8192
@@ -147,9 +147,9 @@ DeltaCommitExec(table_path=file://<tmp>/merge_cardinality_skip/)
                                             ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                                               DataSourceExec: partitions=1, partition_sizes=[1]
                 DeltaLogReplayExec(table_path=file://<tmp>/merge_cardinality_skip/, version=0)
-                  SortExec: expr=[__sail_delta_replay_path@4 ASC NULLS LAST, __sail_delta_log_version@6 DESC NULLS LAST], preserve_partitioning=[true]
+                  SortExec: expr=[__sail_delta_replay_path@6 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST], preserve_partitioning=[true]
                     CoalesceBatchesExec: target_batch_size=8192
-                      RepartitionExec: partitioning=Hash([__sail_delta_replay_path@4], 4), input_partitions=4
-                        ProjectionExec: expr=[CAST(CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END AS Utf8) as __sail_file_path, coalesce(CAST(CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END AS Int64), 0) as size_bytes, coalesce(CAST(CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END AS Int64), 0) as modification_time, CAST(CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, stats) END AS Utf8) as stats_json, coalesce(CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END, CASE WHEN remove@1 IS NOT NULL THEN get_field(remove@1, path) END) as __sail_delta_replay_path, remove@1 IS NOT NULL as __sail_delta_is_remove, __sail_delta_log_version@2 as __sail_delta_log_version]
+                      RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
+                        ProjectionExec: expr=[CAST(CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END AS Utf8) as __sail_file_path, coalesce(CAST(CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END AS Int64), 0) as size_bytes, coalesce(CAST(CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END AS Int64), 0) as modification_time, __sail_delta_log_version@2 as _commit_version, coalesce(CAST(CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END AS Int64), 0) as _commit_timestamp, CAST(CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, stats) END AS Utf8) as stats_json, coalesce(CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END, CASE WHEN remove@1 IS NOT NULL THEN get_field(remove@1, path) END) as __sail_delta_replay_path, remove@1 IS NOT NULL as __sail_delta_is_remove, __sail_delta_log_version@2 as __sail_delta_log_version]
                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                             DataSourceExec: file_groups={1 group: [[<tmp>/merge_cardinality_skip/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, __sail_delta_log_version], file_type=parquet

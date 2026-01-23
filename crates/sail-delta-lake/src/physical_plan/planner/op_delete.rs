@@ -24,7 +24,7 @@ use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::physical_expr::PhysicalExprWithSource;
 
 use super::context::PlannerContext;
-use super::utils::build_log_replay_pipeline;
+use super::utils::{build_log_replay_pipeline_with_options, LogReplayFilter, LogReplayOptions};
 use crate::datasource::schema::DataFusionMixins;
 use crate::datasource::PredicateProperties;
 use crate::kernel::DeltaOperation;
@@ -70,27 +70,24 @@ pub async fn build_delete_plan(
         .collect::<Vec<_>>();
 
     // Build a visible metadata pipeline over the Delta log.
-    let meta_scan: Arc<dyn ExecutionPlan> = build_log_replay_pipeline(
+    let mut log_replay_options = LogReplayOptions::default();
+    if expr_props.partition_only {
+        log_replay_options.log_filter = Some(LogReplayFilter {
+            predicate: condition.expr.clone(),
+            table_schema: table_schema.clone(),
+        });
+    }
+
+    let meta_scan: Arc<dyn ExecutionPlan> = build_log_replay_pipeline_with_options(
         ctx,
         ctx.table_url().clone(),
         version,
         partition_columns.clone(),
         checkpoint_files,
         commit_files,
+        log_replay_options,
     )
     .await?;
-
-    // If this is a partition-only predicate, add a visible FilterExec over the meta table.
-    let meta_scan: Arc<dyn ExecutionPlan> = if expr_props.partition_only {
-        let adapter_factory = Arc::new(crate::physical_plan::DeltaPhysicalExprAdapterFactory {});
-        let adapter = adapter_factory.create(table_schema.clone(), meta_scan.schema());
-        let adapted = adapter
-            .rewrite(condition.expr.clone())
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        Arc::new(FilterExec::try_new(adapted, meta_scan)?)
-    } else {
-        meta_scan
-    };
 
     // Always wrap with DeltaDiscoveryExec so EXPLAIN shows the metadata pipeline.
     let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(

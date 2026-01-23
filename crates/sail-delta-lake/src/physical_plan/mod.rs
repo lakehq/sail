@@ -32,6 +32,7 @@ pub mod discovery_exec;
 mod expr_adapter;
 mod log_replay_exec;
 mod meta_adds;
+mod metadata_agg_exec;
 mod remove_actions_exec;
 mod scan_by_adds_exec;
 mod writer_exec;
@@ -44,6 +45,7 @@ pub use commit_exec::DeltaCommitExec;
 pub use discovery_exec::DeltaDiscoveryExec;
 pub use expr_adapter::DeltaPhysicalExprAdapterFactory;
 pub use log_replay_exec::DeltaLogReplayExec;
+pub use metadata_agg_exec::DeltaMetadataAggExec;
 pub mod planner;
 pub use planner::{
     plan_delete, plan_merge, plan_update, DeltaPhysicalPlanner, DeltaTableConfig, PlannerContext,

@@ -260,6 +260,8 @@ pub fn decode_actions_and_meta_from_batch(
                     base_row_id: None,
                     default_row_commit_version: None,
                     clustering_provider: None,
+                    commit_version: None,
+                    commit_timestamp: None,
                 }));
             }
             ExecAction::Remove(r) => {
@@ -326,6 +328,8 @@ mod tests {
             base_row_id: None,
             default_row_commit_version: None,
             clustering_provider: None,
+            commit_version: None,
+            commit_timestamp: None,
         }];
 
         let exec_actions: Vec<ExecAction> = adds.into_iter().map(|add| add.into()).collect();
@@ -350,6 +354,8 @@ mod tests {
             base_row_id: None,
             default_row_commit_version: None,
             clustering_provider: None,
+            commit_version: None,
+            commit_timestamp: None,
         }];
         let removes = vec![Remove {
             path: "a.parquet".to_string(),

@@ -10,6 +10,7 @@ use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, Fi
 use datafusion::datasource::schema_adapter::DefaultSchemaAdapterFactory;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::physical_plan::union::UnionExec;
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::ExecutionPlan;
 use futures::{stream, StreamExt, TryStreamExt};
 use object_store::path::{Path, DELIMITER};
@@ -29,6 +30,8 @@ pub struct LogScanOptions {
     pub projection: Option<Vec<String>>,
     /// Optional inclusive log version range for commit JSON files.
     pub commit_version_range: Option<(i64, i64)>,
+    /// Optional pushdown predicate for checkpoint parquet scans.
+    pub parquet_predicate: Option<Arc<dyn PhysicalExpr>>,
 }
 
 impl Default for LogScanOptions {
@@ -36,6 +39,7 @@ impl Default for LogScanOptions {
         Self {
             projection: None,
             commit_version_range: None,
+            parquet_predicate: None,
         }
     }
 }
@@ -279,8 +283,11 @@ pub async fn build_delta_log_datasource_union_with_options(
     let target_partitions = ctx.session().config().target_partitions();
 
     if !checkpoint_metas.is_empty() {
-        let source = datafusion::datasource::physical_plan::ParquetSource::default()
-            .with_schema_adapter_factory(Arc::new(DefaultSchemaAdapterFactory {}))?;
+        let mut source = datafusion::datasource::physical_plan::ParquetSource::default();
+        if let Some(predicate) = &options.parquet_predicate {
+            source = source.with_predicate(Arc::clone(predicate));
+        }
+        let source = source.with_schema_adapter_factory(Arc::new(DefaultSchemaAdapterFactory {}))?;
         let groups = to_file_groups(checkpoint_metas, target_partitions)?;
         let conf =
             FileScanConfigBuilder::new(object_store_url.clone(), Arc::clone(&merged), source)

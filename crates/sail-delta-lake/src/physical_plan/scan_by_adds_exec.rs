@@ -27,7 +27,7 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
-use futures::stream::{self, TryStreamExt};
+use futures::stream::{self, StreamExt, TryStreamExt};
 use url::Url;
 
 use crate::datasource::scan::FileScanParams;
@@ -193,30 +193,27 @@ impl ScanByAddsStreamState {
                 projection: None,
                 limit: None,
                 pushdown_filter: None,
+                sort_order: None,
             },
             session_state,
             file_schema,
         )
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-        // This exec is driven by upstream partitioning. Build a single-partition inner scan
-        // to ensure we don't drop data by only executing partition 0.
-        let mut file_scan_config = file_scan_config;
-        if file_scan_config.file_groups.len() > 1 {
-            let merged = file_scan_config
-                .file_groups
-                .into_iter()
-                .flat_map(|group| group.into_inner())
-                .collect::<Vec<_>>();
-            file_scan_config.file_groups =
-                vec![datafusion::datasource::physical_plan::FileGroup::new(
-                    merged,
-                )];
-        }
-
+        let partitions = file_scan_config.file_groups.len().max(1);
         let scan_exec =
             datafusion::datasource::source::DataSourceExec::from_data_source(file_scan_config);
-        self.current_scan = Some(scan_exec.execute(0, Arc::clone(&self.context))?);
+        let mut scans = Vec::with_capacity(partitions);
+        for partition in 0..partitions {
+            scans.push(scan_exec.execute(partition, Arc::clone(&self.context))?);
+        }
+        let combined = stream::iter(scans)
+            .map(|scan| Ok::<_, DataFusionError>(scan))
+            .try_flatten();
+        self.current_scan = Some(Box::pin(RecordBatchStreamAdapter::new(
+            Arc::clone(&self.output_schema),
+            combined,
+        )));
         Ok(())
     }
 

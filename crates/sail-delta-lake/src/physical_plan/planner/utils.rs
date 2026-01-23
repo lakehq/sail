@@ -19,7 +19,9 @@ use datafusion::physical_expr::expressions::{CastExpr, Column, Literal};
 use datafusion::physical_expr::{
     LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr, ScalarFunctionExpr,
 };
+use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
@@ -32,22 +34,33 @@ use url::Url;
 
 use super::context::PlannerContext;
 use super::log_scan::{build_delta_log_datasource_union_with_options, LogScanOptions};
-use crate::datasource::PATH_COLUMN;
+use crate::datasource::{COMMIT_TIMESTAMP_COLUMN, COMMIT_VERSION_COLUMN, PATH_COLUMN};
 use crate::physical_plan::{
-    create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaLogReplayExec,
-    DeltaWriterExec, COL_LOG_IS_REMOVE, COL_LOG_VERSION, COL_REPLAY_PATH,
+    create_projection, create_repartition, create_sort, DeltaCommitExec,
+    DeltaPhysicalExprAdapterFactory, DeltaLogReplayExec, DeltaWriterExec, COL_LOG_IS_REMOVE,
+    COL_LOG_VERSION, COL_REPLAY_PATH,
 };
 
 /// Options that control what the log replay pipeline materializes as payload columns.
 ///
 /// This is intentionally kept small: it is primarily used to avoid scanning/transporting
 /// `stats_json` unless downstream pruning (data skipping) actually needs it.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct LogReplayOptions {
     /// Whether to include `stats_json` in the replay output (as a Utf8 column).
     pub include_stats_json: bool,
     /// Optional inclusive log version range for commit JSON files.
     pub commit_version_range: Option<(i64, i64)>,
+    /// Optional metadata-stage filter applied after log replay.
+    pub log_filter: Option<LogReplayFilter>,
+    /// Optional predicate pushed down to checkpoint parquet scan.
+    pub parquet_predicate: Option<Arc<dyn PhysicalExpr>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LogReplayFilter {
+    pub predicate: Arc<dyn PhysicalExpr>,
+    pub table_schema: SchemaRef,
 }
 
 impl Default for LogReplayOptions {
@@ -56,6 +69,8 @@ impl Default for LogReplayOptions {
             // Preserve current behavior: always project stats.
             include_stats_json: true,
             commit_version_range: None,
+            log_filter: None,
+            parquet_predicate: None,
         }
     }
 }
@@ -180,6 +195,7 @@ pub async fn build_log_replay_pipeline_with_options(
     let log_scan_options = LogScanOptions {
         projection: Some(vec!["add".to_string(), "remove".to_string()]),
         commit_version_range: options.commit_version_range,
+        parquet_predicate: options.parquet_predicate,
     };
     let (raw_scan, checkpoint_files, commit_files) = build_delta_log_datasource_union_with_options(
         ctx,
@@ -360,7 +376,12 @@ pub async fn build_log_replay_pipeline_with_options(
     // Payload columns (the replay output schema).
     final_proj.push((path_expr, PATH_COLUMN.to_string()));
     final_proj.push((size_expr, "size_bytes".to_string()));
-    final_proj.push((mod_time_expr, "modification_time".to_string()));
+    final_proj.push((Arc::clone(&mod_time_expr), "modification_time".to_string()));
+    final_proj.push((
+        Arc::new(Column::new(COL_LOG_VERSION, log_version_idx)) as Arc<dyn PhysicalExpr>,
+        COMMIT_VERSION_COLUMN.to_string(),
+    ));
+    final_proj.push((Arc::clone(&mod_time_expr), COMMIT_TIMESTAMP_COLUMN.to_string()));
     for col in &partition_columns {
         final_proj.push((part_expr_for(col)?, col.clone()));
     }
@@ -422,6 +443,17 @@ pub async fn build_log_replay_pipeline_with_options(
         checkpoint_files,
         commit_files,
     ));
+
+    let replay: Arc<dyn ExecutionPlan> = if let Some(filter) = options.log_filter {
+        let adapter_factory = Arc::new(DeltaPhysicalExprAdapterFactory {});
+        let adapter = adapter_factory.create(filter.table_schema, replay.schema());
+        let adapted = adapter
+            .rewrite(filter.predicate)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        Arc::new(FilterExec::try_new(adapted, replay)?)
+    } else {
+        replay
+    };
 
     // Replay now outputs the extracted payload columns directly (replay keys are stripped).
     Ok(replay)

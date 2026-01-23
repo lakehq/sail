@@ -6,7 +6,7 @@ use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::{DataFusionError, Result};
 
-use crate::datasource::PATH_COLUMN;
+use crate::datasource::{COMMIT_TIMESTAMP_COLUMN, COMMIT_VERSION_COLUMN, PATH_COLUMN};
 use crate::kernel::models::Add;
 
 const COL_SIZE_BYTES: &str = "size_bytes";
@@ -14,12 +14,14 @@ const COL_MODIFICATION_TIME: &str = "modification_time";
 const COL_STATS_JSON: &str = "stats_json";
 const COL_PARTITION_SCAN: &str = "partition_scan";
 
-const RESERVED_META_COLUMNS: [&str; 5] = [
+const RESERVED_META_COLUMNS: [&str; 7] = [
     PATH_COLUMN,
     COL_SIZE_BYTES,
     COL_MODIFICATION_TIME,
     COL_STATS_JSON,
     COL_PARTITION_SCAN,
+    COMMIT_VERSION_COLUMN,
+    COMMIT_TIMESTAMP_COLUMN,
 ];
 
 /// Infer partition column names from a metadata batch schema by excluding known reserved columns.
@@ -58,6 +60,12 @@ pub fn decode_adds_from_meta_batch(
         .and_then(|c| c.as_any().downcast_ref::<Int64Array>());
     let mod_time_arr: Option<&Int64Array> = batch
         .column_by_name(COL_MODIFICATION_TIME)
+        .and_then(|c| c.as_any().downcast_ref::<Int64Array>());
+    let commit_version_arr: Option<&Int64Array> = batch
+        .column_by_name(COMMIT_VERSION_COLUMN)
+        .and_then(|c| c.as_any().downcast_ref::<Int64Array>());
+    let commit_timestamp_arr: Option<&Int64Array> = batch
+        .column_by_name(COMMIT_TIMESTAMP_COLUMN)
         .and_then(|c| c.as_any().downcast_ref::<Int64Array>());
 
     // stats_json may arrive as LargeUtf8 depending on upstream casts.
@@ -99,6 +107,20 @@ pub fn decode_adds_from_meta_batch(
         let modification_time = mod_time_arr
             .map(|a| if a.is_null(row) { 0 } else { a.value(row) })
             .unwrap_or_default();
+        let commit_version = commit_version_arr.and_then(|a| {
+            if a.is_null(row) {
+                None
+            } else {
+                Some(a.value(row))
+            }
+        });
+        let commit_timestamp = commit_timestamp_arr.and_then(|a| {
+            if a.is_null(row) {
+                None
+            } else {
+                Some(a.value(row))
+            }
+        });
 
         let stats = stats_arr.and_then(|a| {
             if a.is_null(row) {
@@ -133,8 +155,50 @@ pub fn decode_adds_from_meta_batch(
             base_row_id: None,
             default_row_commit_version: None,
             clustering_provider: None,
+            commit_version,
+            commit_timestamp,
         });
     }
 
     Ok(adds)
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::array::{Int64Array, StringArray};
+    use datafusion::arrow::datatypes::Field;
+
+    use super::*;
+
+    #[test]
+    fn decode_adds_extracts_commit_metadata() -> Result<()> {
+        let schema = Arc::new(datafusion::arrow::datatypes::Schema::new(vec![
+            Field::new(PATH_COLUMN, DataType::Utf8, false),
+            Field::new("size_bytes", DataType::Int64, true),
+            Field::new("modification_time", DataType::Int64, true),
+            Field::new(COL_STATS_JSON, DataType::Utf8, true),
+            Field::new(COMMIT_VERSION_COLUMN, DataType::Int64, true),
+            Field::new(COMMIT_TIMESTAMP_COLUMN, DataType::Int64, true),
+            Field::new("p", DataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![Some("file.parquet")])),
+                Arc::new(Int64Array::from(vec![Some(10)])),
+                Arc::new(Int64Array::from(vec![Some(20)])),
+                Arc::new(StringArray::from(vec![None])),
+                Arc::new(Int64Array::from(vec![Some(7)])),
+                Arc::new(Int64Array::from(vec![Some(42)])),
+                Arc::new(StringArray::from(vec![Some("p1")])),
+            ],
+        )
+        .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+
+        let adds = decode_adds_from_meta_batch(&batch, None)?;
+        assert_eq!(adds.len(), 1);
+        assert_eq!(adds[0].commit_version, Some(7));
+        assert_eq!(adds[0].commit_timestamp, Some(42));
+        Ok(())
+    }
 }
