@@ -59,11 +59,25 @@ jobs:
       - name: Install grcov
         uses: taiki-e/install-action@grcov
 
+      - name: Install protobuf compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+          protoc --version
+
       - name: Install grpc_health_probe
         run: |
           wget -q -O /usr/local/bin/grpc_health_probe "https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/v0.4.26/grpc_health_probe-linux-amd64"
           chmod +x /usr/local/bin/grpc_health_probe
           grpc_health_probe -version
+
+      - name: Build Rust workspace
+        env:
+          RUSTFLAGS: "-C instrument-coverage"
+        run: |
+          # Wait for background Rust toolchain installation to complete
+          wait
+          cargo build --workspace
 
       - name: Download Python Package
         uses: actions/download-artifact@v4
@@ -84,12 +98,6 @@ jobs:
         run: |
           hatch run uv pip freeze || hatch run python -m pip freeze
 
-      - name: Build Flight SQL server
-        env:
-          RUSTFLAGS: "-C instrument-coverage"
-        run: |
-          cargo build --bin sail-flight
-
       - name: Run Flight SQL Server
         run: |
           nohup scripts/flight-tests/run-server.sh > /dev/null 2>&1 < /dev/null &
@@ -105,7 +113,7 @@ jobs:
           TEST_RUN_GIT_COMMIT: ${{ github.sha }}
           TEST_RUN_GIT_REF: ${{ github.ref }}
         run: |
-          hatch run pytest python/pysail/tests/spark/server-flight/test_flight_features.py -v
+          hatch run pytest -m flight_sql -v
 
       - name: Shutdown Flight SQL Server
         if: ${{ !cancelled() }}

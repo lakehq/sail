@@ -251,7 +251,7 @@ line-length = 120
 [tool.pytest.ini_options]
 testpaths = ["python"]
 # Exclude server-flight tests by default (they require a running server)
-addopts = "--ignore=python/pysail/tests/spark/server-flight"
+addopts = "-m 'not flight_sql'"
 # Do not add configuration here to modify the test behavior.
 # Instead, add the configuration using a hook in `conftest.py`.
 # The `pyproject.toml` file is not part of the installed package,
