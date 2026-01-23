@@ -1,27 +1,23 @@
+import tempfile
 from typing import TYPE_CHECKING
 
 import pytest
-from pyiceberg.table import Table
-
-from pysail.tests.spark.iceberg.utils import create_sql_catalog
+from pyiceberg.catalog.sql import SqlCatalog
 
 if TYPE_CHECKING:
-    from pyiceberg.schema import Schema
+    from pyiceberg.catalog import Catalog
 
 
 @pytest.fixture
-def sql_catalog(tmp_path):
-    return create_sql_catalog(tmp_path)
+def sql_catalog() -> "Catalog":
+    """Create a SQL catalog for Iceberg tests using a temporary directory."""
 
-
-@pytest.fixture
-def iceberg_table(sql_catalog, request) -> Table:
-    params = request.param
-    schema: Schema = params["schema"]
-    identifier: str = params["identifier"]
-    partition_spec = params.get("partition_spec")
-    table = sql_catalog.create_table(identifier=identifier, schema=schema, partition_spec=partition_spec)
-    try:
-        yield table
-    finally:
-        sql_catalog.drop_table(identifier)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        catalog = SqlCatalog(
+            "test_catalog",
+            uri=f"sqlite:///{tmpdir}/pyiceberg_catalog.db",
+            warehouse=f"file://{tmpdir}/warehouse",
+        )
+        # Create default namespace
+        catalog.create_namespace("default")
+        yield catalog

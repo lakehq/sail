@@ -45,6 +45,7 @@ use crate::io::{
     load_manifest as io_load_manifest, load_manifest_list as io_load_manifest_list, StoreContext,
 };
 use crate::spec::manifest::DataContentType;
+use crate::spec::transform::Transform;
 use crate::spec::types::values::Literal;
 use crate::spec::{
     DataFile, ManifestContentType, ManifestList, ManifestStatus, PartitionSpec, Schema, Snapshot,
@@ -72,6 +73,9 @@ pub struct IcebergTableProvider {
     /// All partition specs referenced by the table
     #[allow(unused)]
     partition_specs: Vec<PartitionSpec>,
+    /// Default partition spec id (for schema ordering / partition metadata)
+    #[allow(unused)]
+    default_spec_id: i32,
     /// Arrow schema for DataFusion
     arrow_schema: Arc<ArrowSchema>,
 }
@@ -83,14 +87,21 @@ impl IcebergTableProvider {
         schema: Schema,
         snapshot: Snapshot,
         partition_specs: Vec<PartitionSpec>,
+        default_spec_id: i32,
     ) -> Result<Self> {
         let table_uri_str = table_uri.to_string();
         log::trace!("Creating table provider for: {}", table_uri_str);
 
-        let arrow_schema = Arc::new(iceberg_schema_to_arrow(&schema).map_err(|e| {
+        let arrow_schema = iceberg_schema_to_arrow(&schema).map_err(|e| {
             log::trace!("Failed to convert schema to Arrow: {:?}", e);
             e
-        })?);
+        })?;
+        let arrow_schema = Arc::new(Self::reorder_arrow_schema_for_identity_partitions(
+            &schema,
+            &partition_specs,
+            default_spec_id,
+            &arrow_schema,
+        ));
 
         log::trace!(
             "Converted schema to Arrow with {} fields",
@@ -102,8 +113,64 @@ impl IcebergTableProvider {
             schema,
             snapshot,
             partition_specs,
+            default_spec_id,
             arrow_schema,
         })
+    }
+
+    fn reorder_arrow_schema_for_identity_partitions(
+        schema: &Schema,
+        partition_specs: &[PartitionSpec],
+        default_spec_id: i32,
+        arrow_schema: &ArrowSchema,
+    ) -> ArrowSchema {
+        // BDD scenarios expect "data columns" first and identity-partition columns last (in spec order),
+        // but only for identity-only partition specs. For mixed transform specs (e.g. `years(x), y`)
+        // we keep the original schema order.
+        let Some(spec) = partition_specs
+            .iter()
+            .find(|s| s.spec_id() == default_spec_id)
+        else {
+            return arrow_schema.clone();
+        };
+        if spec
+            .fields()
+            .iter()
+            .any(|pf| !matches!(pf.transform, Transform::Identity))
+        {
+            return arrow_schema.clone();
+        }
+
+        let mut identity_cols: Vec<String> = Vec::new();
+        for pf in spec.fields().iter() {
+            if matches!(pf.transform, Transform::Identity) {
+                if let Some(field) = schema.field_by_id(pf.source_id) {
+                    identity_cols.push(field.name.clone());
+                }
+            }
+        }
+        if identity_cols.is_empty() {
+            return arrow_schema.clone();
+        }
+
+        let identity_set: std::collections::HashSet<&str> =
+            identity_cols.iter().map(|s| s.as_str()).collect();
+        let mut out_fields: Vec<datafusion::arrow::datatypes::FieldRef> = Vec::new();
+
+        // Keep non-partition columns in original order.
+        for f in arrow_schema.fields().iter() {
+            if !identity_set.contains(f.name().as_str()) {
+                out_fields.push(Arc::new((**f).clone()));
+            }
+        }
+        // Append identity partition columns in spec order.
+        for name in identity_cols {
+            if let Ok(idx) = arrow_schema.index_of(&name) {
+                out_fields.push(Arc::new(arrow_schema.field(idx).clone()));
+            }
+        }
+
+        ArrowSchema::new(out_fields)
     }
 
     /// Get the table URI
@@ -319,7 +386,23 @@ impl IcebergTableProvider {
                 .push(file);
         }
 
-        file_groups.into_values().map(FileGroup::from).collect()
+        // Sort by partition values to ensure stable output order
+        let mut sorted_groups: Vec<_> = file_groups.into_iter().collect();
+        sorted_groups.sort_by(|(a, _), (b, _)| {
+            for (val_a, val_b) in a.iter().zip(b.iter()) {
+                match val_a.partial_cmp(val_b) {
+                    Some(std::cmp::Ordering::Equal) => continue,
+                    Some(ordering) => return ordering,
+                    None => continue,
+                }
+            }
+            a.len().cmp(&b.len())
+        });
+
+        sorted_groups
+            .into_iter()
+            .map(|(_, files)| FileGroup::from(files))
+            .collect()
     }
 
     /// Aggregate table-level statistics from a list of Iceberg data files
@@ -686,6 +769,10 @@ impl IcebergTableProvider {
             match self.classify_pushdown_for_expr(f) {
                 TableProviderFilterPushDown::Exact => {
                     pruning_filters.push(f.clone());
+                    // Even if partition pruning is "exact", we still must apply the filter at scan
+                    // time. Pruning is an optimization and can be conservative when stats are
+                    // missing; correctness requires retaining the predicate.
+                    parquet_pushdown_filters.push(f.clone());
                 }
                 TableProviderFilterPushDown::Inexact => {
                     pruning_filters.push(f.clone());

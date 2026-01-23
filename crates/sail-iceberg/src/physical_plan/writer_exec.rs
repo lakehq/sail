@@ -45,6 +45,7 @@ use crate::spec::partition::{
 use crate::spec::schema::Schema as IcebergSchema;
 use crate::spec::{TableMetadata, TableRequirement};
 use crate::utils::get_object_store_from_context;
+use crate::utils::partition_transform::{format_partition_expr, parse_partition_field_expr};
 
 #[derive(Debug)]
 pub struct IcebergWriterExec {
@@ -71,7 +72,7 @@ impl IcebergWriterExec {
                         f.source_id
                     ))
                 })?;
-                cols.push(field.name.clone());
+                cols.push(format_partition_expr(&field.name, f.transform));
             }
             Ok(cols)
         } else {
@@ -338,15 +339,22 @@ impl ExecutionPlan for IcebergWriterExec {
                         if let Some(existing) = &default_spec {
                             builder = builder.with_spec_id(existing.spec_id());
                         }
-                        use crate::spec::transform::Transform;
                         for name in &partition_columns {
-                            let fid = current_schema.field_id_by_name(name).ok_or_else(|| {
+                            let pf = parse_partition_field_expr(name).map_err(|e| {
                                 DataFusionError::Plan(format!(
-                                    "Partition column mismatch: column '{}' not found in schema",
+                                    "Invalid partition transform expression '{}': {e}",
                                     name
                                 ))
                             })?;
-                            builder = builder.add_field(fid, name.clone(), Transform::Identity);
+                            let fid = current_schema
+                                .field_id_by_name(&pf.source_column)
+                                .ok_or_else(|| {
+                                    DataFusionError::Plan(format!(
+                                        "Partition column mismatch: column '{}' not found in schema",
+                                        pf.source_column
+                                    ))
+                                })?;
+                            builder = builder.add_field(fid, pf.field_name, pf.transform);
                         }
                         default_spec = Some(builder.build());
                     }
@@ -399,18 +407,29 @@ impl ExecutionPlan for IcebergWriterExec {
                     ));
                 }
                 for name in &partition_columns {
-                    if iceberg_schema.field_id_by_name(name).is_none() {
+                    let pf = parse_partition_field_expr(name).map_err(|e| {
+                        DataFusionError::Plan(format!(
+                            "Invalid partition transform expression '{}': {e}",
+                            name
+                        ))
+                    })?;
+                    if iceberg_schema.field_id_by_name(&pf.source_column).is_none() {
                         return Err(DataFusionError::Plan(format!(
                             "Partition column mismatch: column '{}' not found in schema",
-                            name
+                            pf.source_column
                         )));
                     }
                 }
                 let mut builder = crate::spec::partition::PartitionSpec::builder();
-                use crate::spec::transform::Transform;
                 for name in &partition_columns {
-                    if let Some(fid) = iceberg_schema.field_id_by_name(name) {
-                        builder = builder.add_field(fid, name.clone(), Transform::Identity);
+                    let pf = parse_partition_field_expr(name).map_err(|e| {
+                        DataFusionError::Plan(format!(
+                            "Invalid partition transform expression '{}': {e}",
+                            name
+                        ))
+                    })?;
+                    if let Some(fid) = iceberg_schema.field_id_by_name(&pf.source_column) {
+                        builder = builder.add_field(fid, pf.field_name, pf.transform);
                     }
                 }
                 let spec = builder.build();
