@@ -43,6 +43,7 @@ serde_yaml = "0.9.34"
 serde_with = { version = "3.16.1", default-features = false, features = ["base64", "std", "macros"] }
 monostate = "1.0.2"
 regex = "1.12.2"
+fancy-regex = "0.14.0"
 glob = "0.3.3"
 chrono = { version = "0.4.43", features = ["serde"] }
 chrono-tz = "0.10.4"

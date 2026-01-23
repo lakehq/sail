@@ -41,3 +41,4 @@ serde = { workspace = true }
 uuid = { workspace = true }
 indexmap = { workspace = true }
 log = { workspace = true }
+fancy-regex = { workspace = true }
