@@ -104,7 +104,6 @@ struct TableInfo {
 #[derive(Debug, Deserialize)]
 struct ColumnInfo {
     name: Option<String>,
-    #[allow(dead_code)]
     type_name: Option<String>,
     type_text: Option<String>,
     nullable: Option<bool>,
@@ -227,8 +226,12 @@ impl OneLakeCatalogProvider {
             .unwrap_or_default()
             .into_iter()
             .map(|col| {
-                let type_text = col.type_text.unwrap_or_else(|| "string".to_string());
-                let data_type = parse_type_text(&type_text);
+                // Prefer type_name over type_text (OneLake API often returns type_text as null)
+                let type_str = col
+                    .type_name
+                    .or(col.type_text)
+                    .unwrap_or_else(|| "string".to_string());
+                let data_type = parse_type_text(&type_str);
                 TableColumnStatus {
                     name: col.name.unwrap_or_default(),
                     data_type,
@@ -268,7 +271,28 @@ impl OneLakeCatalogProvider {
 fn parse_type_text(type_text: &str) -> arrow::datatypes::DataType {
     use arrow::datatypes::DataType;
 
-    match type_text.to_lowercase().as_str() {
+    let lower = type_text.to_lowercase();
+
+    // Handle decimal(precision, scale) format
+    if lower.starts_with("decimal") {
+        if let Some(params) = lower
+            .strip_prefix("decimal(")
+            .and_then(|s| s.strip_suffix(')'))
+        {
+            let parts: Vec<&str> = params.split(',').collect();
+            if parts.len() == 2 {
+                if let (Ok(precision), Ok(scale)) =
+                    (parts[0].trim().parse::<u8>(), parts[1].trim().parse::<i8>())
+                {
+                    return DataType::Decimal128(precision, scale);
+                }
+            }
+        }
+        // Default decimal if parsing fails
+        return DataType::Decimal128(38, 18);
+    }
+
+    match lower.as_str() {
         "boolean" | "bool" => DataType::Boolean,
         "byte" | "tinyint" => DataType::Int8,
         "short" | "smallint" => DataType::Int16,
@@ -306,10 +330,12 @@ impl CatalogProvider for OneLakeCatalogProvider {
         let schema_name = database.head_to_string();
         let client = self.get_client().await?;
 
+        // OneLake API requires full qualified schema name: catalog.schema
+        let full_schema_name = format!("{}.{}", self.catalog_name(), schema_name);
         let url = format!(
             "{}/api/2.1/unity-catalog/schemas/{}",
             self.base_url(),
-            schema_name
+            full_schema_name
         );
 
         let response = client
