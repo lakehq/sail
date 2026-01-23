@@ -14,14 +14,18 @@ use jiter::{Jiter, Peek};
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct JsonTuple {
     signature: Signature,
-    num_keys: usize,
+}
+
+impl Default for JsonTuple {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl JsonTuple {
-    pub fn new(num_keys: usize) -> Self {
+    pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
-            num_keys,
         }
     }
 }
@@ -39,8 +43,10 @@ impl ScalarUDFImpl for JsonTuple {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        let fields: Vec<Field> = (0..self.num_keys)
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        // First arg is JSON string, rest are keys
+        let num_keys = arg_types.len().saturating_sub(1);
+        let fields: Vec<Field> = (0..num_keys)
             .map(|i| Field::new(format!("c{i}"), DataType::Utf8, true))
             .collect();
         Ok(DataType::Struct(Fields::from(fields)))

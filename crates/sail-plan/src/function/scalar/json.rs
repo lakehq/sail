@@ -48,9 +48,7 @@ fn json_tuple(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             "json_tuple requires at least 2 arguments: json string and at least one key",
         ));
     }
-    // Number of keys is args.len() - 1 (first arg is the JSON string)
-    let num_keys = arguments.len() - 1;
-    let func = ScalarUDF::from(JsonTuple::new(num_keys));
+    let func = ScalarUDF::from(JsonTuple::new());
     Ok(func.call(arguments))
 }
 
