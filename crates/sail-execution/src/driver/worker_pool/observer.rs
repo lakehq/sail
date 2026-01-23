@@ -18,7 +18,7 @@ impl WorkerPool {
             .predicate_filter_map(
                 worker_id,
                 |&(w, _)| w,
-                |(w, worker)| worker.snapshot(*w).into_row(session_id.to_string()),
+                |(w, worker)| worker.worker_snapshot(*w).into_row(session_id.to_string()),
             )
             .fetch(fetch)
             .collect()
@@ -27,7 +27,7 @@ impl WorkerPool {
     pub fn observe_worker_snapshots(&self) -> Vec<WorkerSnapshot> {
         self.workers
             .iter()
-            .map(|(w, worker)| worker.snapshot(*w))
+            .map(|(w, worker)| worker.worker_snapshot(*w))
             .collect()
     }
 }

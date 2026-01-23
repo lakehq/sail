@@ -268,6 +268,7 @@ fn rewrite_inputs(
     Ok((result.data()?, inputs))
 }
 
+// TODO: support driver stage with inputs
 fn create_driver_stage(
     plan: &Arc<dyn ExecutionPlan>,
     graph: &mut JobGraph,

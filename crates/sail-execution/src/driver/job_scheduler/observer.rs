@@ -18,14 +18,17 @@ impl JobScheduler {
             .predicate_filter_map(
                 job_id,
                 |&(j, _)| j,
-                |(j, job)| job.snapshot(*j).into_row(session_id.to_string()),
+                |(j, job)| job.job_snapshot(*j).into_row(session_id.to_string()),
             )
             .fetch(fetch)
             .collect()
     }
 
     pub fn observe_job_snapshots(&self) -> Vec<JobSnapshot> {
-        self.jobs.iter().map(|(j, job)| job.snapshot(*j)).collect()
+        self.jobs
+            .iter()
+            .map(|(j, job)| job.job_snapshot(*j))
+            .collect()
     }
 
     pub fn observe_stages(

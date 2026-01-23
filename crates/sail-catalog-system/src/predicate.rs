@@ -190,3 +190,49 @@ impl_primitive_predicate_input!(u8, UInt8);
 impl_primitive_predicate_input!(u16, UInt16);
 impl_primitive_predicate_input!(u32, UInt32);
 impl_primitive_predicate_input!(u64, UInt64);
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion::logical_expr::Operator;
+    use datafusion::physical_expr::expressions::{BinaryExpr, Column, Literal};
+    use datafusion::physical_expr::PhysicalExpr;
+    use datafusion::scalar::ScalarValue;
+
+    use super::ArrowPredicateEvaluator;
+
+    #[test]
+    fn test_string_predicate_evaluator() {
+        let column: Arc<dyn PhysicalExpr> = Arc::new(Column::new("x", 42));
+        let literal: Arc<dyn PhysicalExpr> =
+            Arc::new(Literal::new(ScalarValue::Utf8(Some("test".to_string()))));
+        let predicate: Arc<dyn PhysicalExpr> =
+            Arc::new(BinaryExpr::new(column, Operator::Eq, literal));
+
+        let evaluator = ArrowPredicateEvaluator::<String>::try_new(predicate).unwrap();
+
+        let result = evaluator.evaluate(&"test".to_string()).unwrap();
+        assert!(result);
+
+        let result = evaluator.evaluate(&"other".to_string()).unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn test_primitive_predicate_evaluator() {
+        let column: Arc<dyn PhysicalExpr> = Arc::new(Column::new("x", 42));
+        let literal: Arc<dyn PhysicalExpr> = Arc::new(Literal::new(ScalarValue::Int32(Some(1))));
+        let predicate: Arc<dyn PhysicalExpr> =
+            Arc::new(BinaryExpr::new(column, Operator::Eq, literal));
+
+        let evaluator = ArrowPredicateEvaluator::<i32>::try_new(predicate).unwrap();
+
+        let result = evaluator.evaluate(&1).unwrap();
+        assert!(result);
+
+        let result = evaluator.evaluate(&3).unwrap();
+        assert!(!result);
+    }
+}

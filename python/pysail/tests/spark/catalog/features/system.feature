@@ -11,6 +11,14 @@ Feature: System catalog queries
 
     When query
       """
+      EXPLAIN SELECT * FROM system.session.sessions
+      WHERE session_id != '' AND session_id != 'x'
+      LIMIT 1
+      """
+    Then query plan matches snapshot
+
+    When query
+      """
       EXPLAIN SELECT * FROM system.execution.jobs
       WHERE session_id = '' AND job_id = 0
       LIMIT 1
@@ -54,6 +62,13 @@ Feature: System catalog queries
       """
       EXPLAIN SELECT * FROM system.execution.jobs
       WHERE session_id = '' OR job_id = 0
+      """
+    Then query plan matches snapshot
+
+  Scenario: Projection for system tables
+    When query
+      """
+      EXPLAIN SELECT session_id, status FROM system.session.sessions
       """
     Then query plan matches snapshot
 

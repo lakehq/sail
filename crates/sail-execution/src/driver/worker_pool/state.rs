@@ -21,7 +21,7 @@ pub struct WorkerDescriptor {
 }
 
 impl WorkerDescriptor {
-    pub fn snapshot(&self, worker_id: WorkerId) -> WorkerSnapshot {
+    pub fn worker_snapshot(&self, worker_id: WorkerId) -> WorkerSnapshot {
         let (host, port) = match &self.state {
             WorkerState::Running { host, port, .. } => (Some(host.clone()), Some(*port)),
             _ => (None, None),

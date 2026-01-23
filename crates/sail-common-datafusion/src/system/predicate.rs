@@ -248,7 +248,7 @@ impl<U> PredicateFilterAsyncFlatMapTask<U> {
         self
     }
 
-    pub async fn collect(&mut self) -> Result<Vec<U>> {
+    pub async fn collect(mut self) -> Result<Vec<U>> {
         let mut items = vec![];
 
         while let Some(task) = self.tasks.pop_front() {
@@ -263,5 +263,105 @@ impl<U> PredicateFilterAsyncFlatMapTask<U> {
             }
         }
         Ok(items)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion_common::{internal_err, Result};
+
+    use super::{Predicate, PredicateExt};
+
+    fn is_even() -> Predicate<i32> {
+        Arc::new(|x: &i32| Ok(x % 2 == 0))
+    }
+
+    fn error_on_three() -> Predicate<i32> {
+        Arc::new(|x: &i32| {
+            if *x == 3 {
+                internal_err!("error: {x}")
+            } else {
+                Ok(true)
+            }
+        })
+    }
+
+    #[test]
+    fn test_predicate_filter_map() {
+        let data = [1, 2, 3, 4, 5];
+
+        let filter_map = |predicate| {
+            data.iter()
+                .predicate_filter_map(predicate, |&x| x, |x| x * 10)
+        };
+
+        let result = filter_map(is_even()).fetch(2).collect::<Result<Vec<_>>>();
+        assert_eq!(result.ok(), Some(vec![20, 40]));
+
+        let result = filter_map(error_on_three())
+            .fetch(3)
+            .collect::<Result<Vec<_>>>();
+        assert!(result.is_err());
+
+        let result = filter_map(error_on_three())
+            .fetch(1)
+            .collect::<Result<Vec<_>>>();
+        assert_eq!(result.ok(), Some(vec![10]));
+    }
+
+    #[test]
+    fn test_predicate_filter_flat_map() {
+        let data = [1, 2, 3, 4, 5];
+
+        let filter_flat_map = |predicate| {
+            data.iter()
+                .predicate_filter_flat_map(predicate, |&x| x, |x| vec![*x; *x as usize])
+        };
+
+        let result = filter_flat_map(is_even())
+            .fetch(5)
+            .collect::<Result<Vec<_>>>();
+        assert_eq!(result.ok(), Some(vec![2, 2, 4, 4, 4]));
+
+        let result = filter_flat_map(error_on_three())
+            .fetch(4)
+            .collect::<Result<Vec<_>>>();
+        assert!(result.is_err());
+
+        let result = filter_flat_map(error_on_three())
+            .fetch(3)
+            .collect::<Result<Vec<_>>>();
+        assert_eq!(result.ok(), Some(vec![1, 2, 2]));
+    }
+
+    #[tokio::test]
+    async fn test_predicate_filter_async_flat_map() {
+        let data = [1, 2, 3, 4, 5];
+
+        let task = |predicate| {
+            data.iter()
+                .predicate_filter_async_flat_map(
+                    predicate,
+                    |&x| x,
+                    |x| {
+                        Box::pin({
+                            let x = *x;
+                            async move { Ok(vec![x; x as usize]) }
+                        })
+                    },
+                )
+                .into_task()
+        };
+
+        let result = task(is_even()).fetch(5).collect().await;
+        assert_eq!(result.ok(), Some(vec![2, 2, 4, 4, 4]));
+
+        let result = task(error_on_three()).fetch(4).collect().await;
+        assert!(result.is_err());
+
+        let result = task(error_on_three()).fetch(3).collect().await;
+        assert_eq!(result.ok(), Some(vec![1, 2, 2]));
     }
 }

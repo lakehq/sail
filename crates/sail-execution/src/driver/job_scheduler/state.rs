@@ -77,7 +77,7 @@ impl JobDescriptor {
         })
     }
 
-    pub fn snapshot(&self, job_id: JobId) -> JobSnapshot {
+    pub fn job_snapshot(&self, job_id: JobId) -> JobSnapshot {
         JobSnapshot {
             job_id: job_id.into(),
             status: self.state.status().to_string(),

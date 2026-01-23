@@ -35,14 +35,12 @@ impl SystemCatalogProvider {
         table: &str,
         t: SystemTable,
     ) -> CatalogResult<TableStatus> {
-        let schema = t.schema();
         let columns = t
             .columns()
             .iter()
-            .zip(schema.fields())
-            .map(|(col, field)| TableColumnStatus {
+            .map(|col| TableColumnStatus {
                 name: col.name.to_string(),
-                data_type: field.data_type().clone(),
+                data_type: col.arrow_type.clone(),
                 nullable: col.nullable,
                 comment: Some(col.description.to_string()),
                 default: None,
@@ -66,7 +64,7 @@ impl SystemCatalogProvider {
                     },
                     source: Arc::new(SystemTableSource::new(t)),
                     projection: None,
-                    projected_schema: Arc::new(DFSchema::try_from(schema)?),
+                    projected_schema: Arc::new(DFSchema::try_from(t.schema())?),
                     filters: vec![],
                     fetch: None,
                 })),
