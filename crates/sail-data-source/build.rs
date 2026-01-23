@@ -137,6 +137,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     build_options("ParquetWriteOptions", "parquet_write")?;
     build_options("DeltaReadOptions", "delta_read")?;
     build_options("DeltaWriteOptions", "delta_write")?;
+    build_options("DuckLakeReadOptions", "ducklake_read")?;
+    build_options("DuckLakeWriteOptions", "ducklake_write")?;
     build_options("IcebergReadOptions", "iceberg_read")?;
     build_options("IcebergWriteOptions", "iceberg_write")?;
     build_options("TextReadOptions", "text_read")?;

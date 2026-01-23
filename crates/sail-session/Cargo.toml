@@ -16,6 +16,7 @@ sail-catalog-unity = { path = "../sail-catalog-unity" }
 sail-catalog-onelake = { path = "../sail-catalog-onelake" }
 sail-data-source = { path = "../sail-data-source" }
 sail-delta-lake = { path = "../sail-delta-lake" }
+sail-duck-lake = { path = "../sail-duck-lake" }
 sail-iceberg = { path = "../sail-iceberg" }
 sail-logical-optimizer = { path = "../sail-logical-optimizer" }
 sail-physical-optimizer = { path = "../sail-physical-optimizer" }
