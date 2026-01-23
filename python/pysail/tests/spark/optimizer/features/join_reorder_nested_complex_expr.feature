@@ -1,3 +1,4 @@
+@sail_env_SAIL_OPTIMIZER__ENABLE_JOIN_REORDER__true
 Feature: Join reorder projection rewrite supports nested derived expressions
 
   Scenario: Derived alias from subquery participates in outer expression
