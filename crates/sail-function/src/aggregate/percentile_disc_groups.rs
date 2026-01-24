@@ -35,14 +35,17 @@ impl<T: ArrowNumericType + Send> PercentileDiscGroupsAccumulator<T> {
     /// This processes data in 64-element chunks, checking the null bitmap via
     /// bitwise operations rather than per-element validity calls. The pattern
     /// is borrowed from DataFusion's `percentile_cont` implementation.
-    #[allow(clippy::unwrap_used)]
     fn accumulate_with_nulls_chunked(
         &mut self,
         group_indices: &[usize],
         values: &PrimitiveArray<T>,
-    ) {
+    ) -> Result<()> {
         let data = values.values();
-        let nulls = values.nulls().unwrap();
+        let nulls = values.nulls().ok_or_else(|| {
+            DataFusionError::Internal(
+                "Expected null bitmap in accumulate_with_nulls_chunked".to_string(),
+            )
+        })?;
 
         let group_indices_chunks = group_indices.chunks_exact(64);
         let data_chunks = data.chunks_exact(64);
@@ -78,6 +81,8 @@ impl<T: ArrowNumericType + Send> PercentileDiscGroupsAccumulator<T> {
                     self.group_values[group_index].push(new_value);
                 }
             });
+
+        Ok(())
     }
 }
 
@@ -104,7 +109,7 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for PercentileDiscGroupsAccum
                 }
             }
             (true, None) => {
-                self.accumulate_with_nulls_chunked(group_indices, values);
+                self.accumulate_with_nulls_chunked(group_indices, values)?;
             }
             (false, Some(filter)) => {
                 assert_eq!(filter.len(), group_indices.len());

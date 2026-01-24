@@ -72,8 +72,11 @@ pub(super) struct DataFileSerde {
 }
 
 impl ManifestEntryV2 {
-    pub fn from_entry(entry: super::ManifestEntry, partition_type: &StructType) -> Self {
-        Self {
+    pub fn from_entry(
+        entry: super::ManifestEntry,
+        partition_type: &StructType,
+    ) -> Result<Self, String> {
+        Ok(Self {
             status: match entry.status {
                 super::ManifestStatus::Added => 1,
                 super::ManifestStatus::Deleted => 2,
@@ -82,8 +85,8 @@ impl ManifestEntryV2 {
             snapshot_id: entry.snapshot_id,
             sequence_number: entry.sequence_number,
             file_sequence_number: entry.file_sequence_number,
-            data_file: DataFileSerde::from_data_file(entry.data_file, partition_type),
-        }
+            data_file: DataFileSerde::from_data_file(entry.data_file, partition_type)?,
+        })
     }
 
     pub fn into_entry(
@@ -109,22 +112,28 @@ impl ManifestEntryV2 {
 
 #[allow(dead_code)]
 impl ManifestEntryV1 {
-    pub fn from_entry(entry: super::ManifestEntry, partition_type: &StructType) -> Self {
-        Self {
+    pub fn from_entry(
+        entry: super::ManifestEntry,
+        partition_type: &StructType,
+    ) -> Result<Self, String> {
+        Ok(Self {
             status: match entry.status {
                 super::ManifestStatus::Added => 1,
                 super::ManifestStatus::Deleted => 2,
                 super::ManifestStatus::Existing => 0,
             },
             snapshot_id: entry.snapshot_id.unwrap_or_default(),
-            data_file: DataFileSerde::from_data_file(entry.data_file, partition_type),
-        }
+            data_file: DataFileSerde::from_data_file(entry.data_file, partition_type)?,
+        })
     }
 }
 
 impl DataFileSerde {
-    pub fn from_data_file(df: super::DataFile, partition_type: &StructType) -> Self {
-        Self {
+    pub fn from_data_file(
+        df: super::DataFile,
+        partition_type: &StructType,
+    ) -> Result<Self, String> {
+        Ok(Self {
             content: match df.content {
                 DataContentType::Data => 0,
                 DataContentType::PositionDeletes => 1,
@@ -137,11 +146,10 @@ impl DataFileSerde {
                 DataFileFormat::Orc => "ORC".to_string(),
                 DataFileFormat::Puffin => "PUFFIN".to_string(),
             },
-            partition: Some(
-                #[allow(clippy::expect_used)]
-                RawLiteral::from_struct_values(&df.partition, partition_type)
-                    .expect("partition values must match partition spec"),
-            ),
+            partition: Some(RawLiteral::from_struct_values(
+                &df.partition,
+                partition_type,
+            )?),
             record_count: df.record_count as i64,
             file_size_in_bytes: df.file_size_in_bytes as i64,
             key_metadata: df.key_metadata,
@@ -160,7 +168,7 @@ impl DataFileSerde {
             referenced_data_file: df.referenced_data_file,
             content_offset: df.content_offset,
             content_size_in_bytes: df.content_size_in_bytes,
-        }
+        })
     }
 
     pub fn into_data_file(

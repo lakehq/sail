@@ -353,35 +353,33 @@ impl Literal {
 
         use crate::spec::types::{PrimitiveType, Type};
 
-        fn days_to_date_str(days: i32) -> String {
-            #[allow(clippy::unwrap_used)]
-            let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+        fn days_to_date_str(days: i32) -> Result<String, String> {
+            let epoch =
+                NaiveDate::from_ymd_opt(1970, 1, 1).ok_or_else(|| "Bad epoch".to_string())?;
             let d = epoch + chrono::Days::new(days as u64);
-            d.to_string()
+            Ok(d.to_string())
         }
-        fn micros_to_time_str(us: i64) -> String {
+        fn micros_to_time_str(us: i64) -> Result<String, String> {
             let secs = us.div_euclid(1_000_000);
-            let rem = (us.rem_euclid(1_000_000)) as u32;
-            #[allow(clippy::unwrap_used)]
+            let rem = us.rem_euclid(1_000_000) as u32;
             let t = NaiveTime::from_num_seconds_from_midnight_opt(secs as u32, rem * 1000)
-                .unwrap_or(NaiveTime::from_hms_opt(0, 0, 0).unwrap());
-            t.format("%H:%M:%S%.f").to_string()
+                .unwrap_or(NaiveTime::from_hms_opt(0, 0, 0).ok_or_else(|| "Bad time".to_string())?);
+            Ok(t.format("%H:%M:%S%.f").to_string())
         }
-        fn micros_to_datetime_str(us: i64) -> String {
+        fn micros_to_datetime_str(us: i64) -> Result<String, String> {
             let secs = us.div_euclid(1_000_000);
-            let rem = (us.rem_euclid(1_000_000)) as u32;
-            #[allow(clippy::unwrap_used)]
+            let rem = us.rem_euclid(1_000_000) as u32;
             let base = NaiveDate::from_ymd_opt(1970, 1, 1)
-                .unwrap()
+                .ok_or_else(|| "Bad epoch".to_string())?
                 .and_hms_nano_opt(0, 0, 0, 0)
-                .unwrap();
+                .ok_or_else(|| "Bad epoch".to_string())?;
             let dt = base
                 .checked_add_signed(chrono::Duration::seconds(secs))
                 .and_then(|d| {
                     d.checked_add_signed(chrono::Duration::nanoseconds((rem as i64) * 1000))
                 })
                 .unwrap_or(base);
-            dt.format("%Y-%m-%dT%H:%M:%S%.f").to_string()
+            Ok(dt.format("%Y-%m-%dT%H:%M:%S%.f").to_string())
         }
 
         match (self, data_type) {
@@ -400,22 +398,22 @@ impl Literal {
                     .map(JsonValue::Number)
                     .ok_or_else(|| "Invalid double".to_string()),
                 (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => {
-                    Ok(JsonValue::String(days_to_date_str(*v)))
+                    Ok(JsonValue::String(days_to_date_str(*v)?))
                 }
                 (PrimitiveType::Time, PrimitiveLiteral::Long(v)) => {
-                    Ok(JsonValue::String(micros_to_time_str(*v)))
+                    Ok(JsonValue::String(micros_to_time_str(*v)?))
                 }
                 (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => {
-                    Ok(JsonValue::String(micros_to_datetime_str(*v)))
+                    Ok(JsonValue::String(micros_to_datetime_str(*v)?))
                 }
                 (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(v)) => {
-                    Ok(JsonValue::String(micros_to_datetime_str(*v)))
+                    Ok(JsonValue::String(micros_to_datetime_str(*v)?))
                 }
                 (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(v)) => {
-                    Ok(JsonValue::String(micros_to_datetime_str(*v / 1000)))
+                    Ok(JsonValue::String(micros_to_datetime_str(*v / 1000)?))
                 }
                 (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(v)) => {
-                    Ok(JsonValue::String(micros_to_datetime_str(*v / 1000)))
+                    Ok(JsonValue::String(micros_to_datetime_str(*v / 1000)?))
                 }
                 (PrimitiveType::String, PrimitiveLiteral::String(s)) => {
                     Ok(JsonValue::String(s.clone()))
@@ -551,7 +549,7 @@ impl RawLiteral {
 }
 
 impl Serialize for RawLiteral {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
@@ -566,7 +564,7 @@ impl Serialize for RawLiteral {
 }
 
 impl<'de> Deserialize<'de> for RawLiteral {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
@@ -577,7 +575,7 @@ impl<'de> Deserialize<'de> for RawLiteral {
             fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
                 f.write_str("Avro record for RawLiteral")
             }
-            fn visit_map<M>(self, mut map: M) -> std::result::Result<Self::Value, M::Error>
+            fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
             where
                 M: MapAccess<'de>,
             {
@@ -668,8 +666,8 @@ mod tests {
         assert!(b > a);
         assert!(a <= b);
         assert!(b >= a);
-        assert!(a == a);
-        assert!(a != b);
+        assert_eq!(a, a);
+        assert_ne!(a, b);
     }
 
     #[test]

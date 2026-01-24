@@ -206,7 +206,7 @@ impl<I> ServerSessionFactory<I> {
             .with_optimizer_rules(default_optimizer_rules())
             .with_physical_optimizer_rules(get_physical_optimizers(PhysicalOptimizerOptions {
                 enable_join_reorder: self.config.optimizer.enable_join_reorder,
-            }))
+            })?)
             .with_query_planner(new_query_planner());
         let builder = self.mutator.mutate_state(builder, info)?;
         Ok(builder.build())

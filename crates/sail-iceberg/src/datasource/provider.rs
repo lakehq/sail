@@ -569,7 +569,9 @@ impl TableProvider for IcebergTableProvider {
             let logical_schema = self.rebuild_logical_schema_for_filters(projection, filters);
             let df_schema = logical_schema.to_dfschema()?;
             let pushdown_expr = conjunction(parquet_pushdown_filters);
-            pushdown_expr.map(|expr| simplify_expr(session, &df_schema, expr))
+            pushdown_expr
+                .map(|expr| simplify_expr(session, &df_schema, expr))
+                .transpose()?
         } else {
             None
         };

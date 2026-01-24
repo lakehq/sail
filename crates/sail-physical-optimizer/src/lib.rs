@@ -32,8 +32,8 @@ pub struct PhysicalOptimizerOptions {
     pub enable_join_reorder: bool,
 }
 
-#[expect(clippy::unwrap_used)]
-fn limit_push_past_windows() -> Arc<dyn PhysicalOptimizerRule + Send + Sync> {
+fn limit_push_past_windows(
+) -> datafusion::common::Result<Arc<dyn PhysicalOptimizerRule + Send + Sync>> {
     // TODO: remove this workaround after the rule is made public in DataFusion
     //   https://github.com/apache/datafusion/pull/17736
     PhysicalOptimizer::default()
@@ -41,12 +41,16 @@ fn limit_push_past_windows() -> Arc<dyn PhysicalOptimizerRule + Send + Sync> {
         .iter()
         .find(|rule| rule.name() == "LimitPushPastWindows")
         .cloned()
-        .unwrap()
+        .ok_or_else(|| {
+            datafusion::common::DataFusionError::Internal(
+                "LimitPushPastWindows optimizer rule not found".to_string(),
+            )
+        })
 }
 
 pub fn get_physical_optimizers(
     options: PhysicalOptimizerOptions,
-) -> Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> {
+) -> datafusion::common::Result<Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>> {
     let mut rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = vec![];
 
     rules.push(Arc::new(OutputRequirements::new_add_mode()));
@@ -67,7 +71,7 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(CoalesceAsyncExecInput::new()));
     rules.push(Arc::new(OutputRequirements::new_remove_mode()));
     rules.push(Arc::new(TopKAggregation::new()));
-    rules.push(limit_push_past_windows());
+    rules.push(limit_push_past_windows()?);
     rules.push(Arc::new(LimitPushdown::new()));
     rules.push(Arc::new(ProjectionPushdown::new()));
     rules.push(Arc::new(EnsureCooperative::new()));
@@ -75,7 +79,7 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(RewriteExplicitRepartition::new()));
     rules.push(Arc::new(SanityCheckPlan::new()));
 
-    rules
+    Ok(rules)
 }
 
 #[cfg(test)]
@@ -86,7 +90,7 @@ mod tests {
 
     #[test]
     fn test_optimizer_rules() -> datafusion::common::Result<()> {
-        let optimizers = get_physical_optimizers(Default::default());
+        let optimizers = get_physical_optimizers(Default::default())?;
         let datafusion_optimizers = PhysicalOptimizer::default().rules;
 
         let datafusion_optimizer_names: Vec<&str> =

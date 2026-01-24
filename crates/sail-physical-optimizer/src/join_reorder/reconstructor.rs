@@ -901,7 +901,7 @@ mod tests {
     fn test_reconstruct_leaf() -> Result<()> {
         let mut dp_table = HashMap::new();
         let graph = create_test_graph();
-        let leaf_plan = Arc::new(DPPlan::new_leaf(0, 1000.0).unwrap());
+        let leaf_plan = Arc::new(DPPlan::new_leaf(0, 1000.0)?);
         dp_table.insert(leaf_plan.join_set, leaf_plan.clone());
 
         let mut reconstructor = PlanReconstructor::new(&dp_table, &graph);
