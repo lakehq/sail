@@ -96,7 +96,7 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        use fancy_regex::Regex;
+        use regex::Regex;
         use sail_function::scalar::multi_expr::MultiExpr;
 
         // Remove backticks from the pattern if present
@@ -132,22 +132,16 @@ impl PlanResolver<'_> {
 
             // Check if the field name matches the pattern and plan_id
             let field_name = info.name();
-            if pattern
-                .is_match(field_name)
-                .map_err(|e| PlanError::invalid(format!("regex matching error: {}", e)))?
-                && info.matches(field_name, plan_id)
-            {
+            if pattern.is_match(field_name) && info.matches(field_name, plan_id) {
                 matching_columns.push(expr::Expr::Column(Column::new_unqualified(field.name())));
                 matching_names.push(field_name.to_string());
             }
         }
 
-        // If no columns match, return an error
+        // If no columns match, return empty MultiExpr (like Spark does)
         if matching_columns.is_empty() {
-            return Err(PlanError::AnalysisError(format!(
-                "cannot resolve regex '{}': no matching columns found",
-                col_name
-            )));
+            let multi_expr = ScalarUDF::from(MultiExpr::new()).call(matching_columns);
+            return Ok(NamedExpr::new(matching_names, multi_expr));
         }
 
         // If only one column matches, return it directly

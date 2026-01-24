@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from pytest_bdd import given, parsers, then, when
 
 
@@ -55,3 +56,9 @@ def dataframe_data_matches(datatable, result_df):
 
     for i, (expected, actual) in enumerate(zip(expected_rows, actual_data)):
         assert expected == actual, f"Row {i}: expected {expected}, got {actual}"
+
+
+@then("the resulting DataFrame has no columns")
+def dataframe_has_no_columns(result_df):
+    """Verify DataFrame has no columns."""
+    assert len(result_df.columns) == 0, f"Expected no columns, got {result_df.columns}"

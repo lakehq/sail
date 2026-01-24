@@ -3,13 +3,13 @@ Feature: Column selection using colRegex in PySpark
   I want to select columns from a DataFrame using a regular expression
   So that I can work with dynamic schemas flexibly
 
-  Scenario: Select columns excluding Col1 using colRegex
+  Scenario: Select columns not starting with Col1 using colRegex
     Given a DataFrame with columns "Col1, Col2" and data:
       | Col1 | Col2 |
       | a    | 1    |
       | b    | 2    |
       | c    | 3    |
-    When I select columns using colRegex "`(Col1)?+.+`"
+    When I select columns using colRegex "`Col[^1]`"
     Then the resulting DataFrame contains only columns "Col2"
     And the data is:
       | Col2 |
@@ -68,3 +68,10 @@ Feature: Column selection using colRegex in PySpark
     And the data is:
       | a | b | c |
       | 1 | 2 | 3 |
+
+  Scenario: No columns match the regex pattern returns empty DataFrame
+    Given a DataFrame with columns "col1, col2, col3" and data:
+      | col1 | col2 | col3 |
+      | 1    | 2    | 3    |
+    When I select columns using colRegex "`nonexistent.*`"
+    Then the resulting DataFrame has no columns
