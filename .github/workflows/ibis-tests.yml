@@ -95,6 +95,28 @@ jobs:
         run: |
           scripts/spark-tests/wait-for-server.sh
 
+      - name: Debug Ibis Data Paths
+        run: |
+          echo "=== Debugging Ibis Testing Data Paths ==="
+          echo "Project directory: $(pwd)"
+          echo ""
+          echo "--- Expected by run-tests.sh (IBIS_TESTING_DATA_DIR) ---"
+          echo "Path: $(pwd)/opt/ibis-testing-data"
+          ls -la $(pwd)/opt/ibis-testing-data/ 2>/dev/null || echo "Directory not found!"
+          ls -la $(pwd)/opt/ibis-testing-data/parquet/ 2>/dev/null | head -10 || echo "Parquet dir not found!"
+          echo ""
+          echo "--- Expected by Ibis data_dir fixture (ci/ibis-testing-data) ---"
+          IBIS_PKG=$(hatch run test-ibis:python -c "import ibis; import os; print(os.path.dirname(ibis.__file__))")
+          echo "Ibis package: $IBIS_PKG"
+          echo "Looking for: $IBIS_PKG/../ci/ibis-testing-data"
+          ls -la "$IBIS_PKG/../ci/ibis-testing-data/" 2>/dev/null || echo "Directory not found!"
+          echo ""
+          echo "--- Expected by pyspark remote (data_volume = /data) ---"
+          echo "Path: /data"
+          ls -la /data/ 2>/dev/null || echo "/data directory not found!"
+          echo ""
+          echo "=== End Debug ==="
+
       - name: Run Ibis Tests
         # We set a timeout to prevent the tests from hanging indefinitely,
         # which can happen occasionally for unknown reasons.
