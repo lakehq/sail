@@ -1,0 +1,33 @@
+[
+  {
+    "module": "pyspark.sql.functions",
+    "function": "broadcast",
+    "status": "not supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "call_function",
+    "status": "partially supported",
+    "info": "Creating a function via Spark SQL does not work yet"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "col",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "column",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "expr",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "lit",
+    "status": "supported"
+  }
+]

@@ -82,6 +82,11 @@ impl NamedExpr {
 
 impl PlanResolver<'_> {
     #[async_recursion]
+    /// Resolves a Sail spec expression into a named expression.
+    ///
+    /// Dispatches to type-specific resolvers based on the expression variant (e.g., Cast, Literal,
+    /// Function). Returns a `NamedExpr` containing the resolved expression and display name(s)
+    /// for projection/aliasing.
     pub(super) async fn resolve_named_expression(
         &self,
         expr: spec::Expr,
@@ -355,7 +360,7 @@ mod tests {
     use datafusion_expr::{BinaryExpr, Operator};
     use sail_common::spec;
     use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
-    use sail_common_datafusion::session::PlanService;
+    use sail_common_datafusion::session::plan::PlanService;
 
     use crate::catalog::SparkCatalogObjectDisplay;
     use crate::config::PlanConfig;

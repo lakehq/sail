@@ -1,0 +1,8 @@
+== Physical Plan ==
+ProjectionExec: expr=[#5@0 as session_id, #6@1 as job_id, #7@2 as status, #8@3 as created_at, #9@4 as stopped_at]
+  ProjectionExec: expr=[session_id@0 as #5, job_id@1 as #6, status@2 as #7, created_at@3 as #8, stopped_at@4 as #9]
+    CoalesceBatchesExec: target_batch_size=8192
+      FilterExec: session_id@0 =  OR job_id@1 = 0
+        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+          CooperativeExec
+            SystemTableExec: table=jobs, projection=Some([0, 1, 2, 3, 4]), filters=[], fetch=None

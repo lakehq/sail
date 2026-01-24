@@ -21,16 +21,18 @@ use datafusion::physical_optimizer::PhysicalOptimizerRule;
 
 use crate::explicit_repartition::RewriteExplicitRepartition;
 use crate::join_reorder::JoinReorder;
+use crate::rewrite_delta_collect_left::RewriteDeltaCollectLeft;
 
 mod explicit_repartition;
 mod join_reorder;
+mod rewrite_delta_collect_left;
 
 #[derive(Debug, Clone, Default)]
 pub struct PhysicalOptimizerOptions {
     pub enable_join_reorder: bool,
 }
 
-#[expect(clippy::unwrap_used)]
+#[expect(clippy::expect_used)]
 fn limit_push_past_windows() -> Arc<dyn PhysicalOptimizerRule + Send + Sync> {
     // TODO: remove this workaround after the rule is made public in DataFusion
     //   https://github.com/apache/datafusion/pull/17736
@@ -39,7 +41,8 @@ fn limit_push_past_windows() -> Arc<dyn PhysicalOptimizerRule + Send + Sync> {
         .iter()
         .find(|rule| rule.name() == "LimitPushPastWindows")
         .cloned()
-        .unwrap()
+        // A missing optimizer is catastrophic and should fail the entire program immediately.
+        .expect("LimitPushPastWindows optimizer rule not found")
 }
 
 pub fn get_physical_optimizers(
@@ -53,6 +56,7 @@ pub fn get_physical_optimizers(
         rules.push(Arc::new(JoinReorder::new()));
     }
     rules.push(Arc::new(JoinSelection::new()));
+    rules.push(Arc::new(RewriteDeltaCollectLeft::new()));
     rules.push(Arc::new(LimitedDistinctAggregation::new()));
     rules.push(Arc::new(FilterPushdown::new()));
     rules.push(Arc::new(EnforceDistribution::new()));

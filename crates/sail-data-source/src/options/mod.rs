@@ -8,7 +8,7 @@ pub use internal::{
 };
 #[cfg(test)]
 pub use loader::build_options;
-pub use loader::{load_default_options, load_options};
+pub use loader::{load_default_options, load_options, merge_options};
 
 pub(crate) mod internal {
     include!(concat!(env!("OUT_DIR"), "/options/binary_read.rs"));

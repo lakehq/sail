@@ -1,0 +1,5 @@
+== Physical Plan ==
+ProjectionExec: expr=[#5@0 as session_id, #6@1 as status]
+  ProjectionExec: expr=[session_id@0 as #5, status@1 as #6]
+    CooperativeExec
+      SystemTableExec: table=sessions, projection=Some([0, 2]), filters=[], fetch=None

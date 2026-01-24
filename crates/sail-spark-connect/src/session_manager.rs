@@ -8,29 +8,35 @@ use datafusion::prelude::SessionConfig;
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
-use sail_common_datafusion::session::PlanService;
+use sail_common_datafusion::session::plan::PlanService;
 use sail_plan::catalog::SparkCatalogObjectDisplay;
 use sail_plan::formatter::SparkPlanFormatter;
 use sail_server::actor::ActorSystem;
-use sail_session::session_factory::{ServerSessionFactory, ServerSessionMutator, SessionFactory};
+use sail_session::session_factory::{
+    ServerSessionFactory, ServerSessionInfo, ServerSessionMutator, SessionFactory,
+};
 use sail_session::session_manager::{SessionManager, SessionManagerOptions};
 
 use crate::error::SparkResult;
-use crate::session::{SparkSession, SparkSessionKey, SparkSessionOptions};
+use crate::session::{SparkSession, SparkSessionOptions};
 
 pub struct SparkSessionMutator {
     config: Arc<AppConfig>,
 }
 
-impl ServerSessionMutator<SparkSessionKey> for SparkSessionMutator {
-    fn mutate_config(&self, config: SessionConfig, key: &SparkSessionKey) -> Result<SessionConfig> {
+impl ServerSessionMutator for SparkSessionMutator {
+    fn mutate_config(
+        &self,
+        config: SessionConfig,
+        info: &ServerSessionInfo,
+    ) -> Result<SessionConfig> {
         let plan_service = PlanService::new(
             Box::new(DefaultCatalogDisplay::<SparkCatalogObjectDisplay>::default()),
             Box::new(SparkPlanFormatter),
         );
         let spark = SparkSession::try_new(
-            key.user_id.clone(),
-            key.session_id.clone(),
+            info.session_id.clone(),
+            info.user_id.clone(),
             SparkSessionOptions {
                 execution_heartbeat_interval: Duration::from_secs(
                     self.config.spark.execution_heartbeat_interval_secs,
@@ -46,7 +52,7 @@ impl ServerSessionMutator<SparkSessionKey> for SparkSessionMutator {
     fn mutate_state(
         &self,
         builder: SessionStateBuilder,
-        _key: &SparkSessionKey,
+        _info: &ServerSessionInfo,
     ) -> Result<SessionStateBuilder> {
         Ok(builder)
     }
@@ -54,7 +60,7 @@ impl ServerSessionMutator<SparkSessionKey> for SparkSessionMutator {
     fn mutate_runtime_env(
         &self,
         builder: RuntimeEnvBuilder,
-        _key: &SparkSessionKey,
+        _info: &ServerSessionInfo,
     ) -> Result<RuntimeEnvBuilder> {
         Ok(builder)
     }
@@ -64,7 +70,7 @@ fn create_spark_session_factory(
     config: Arc<AppConfig>,
     runtime: RuntimeHandle,
     system: Arc<Mutex<ActorSystem>>,
-) -> Box<dyn SessionFactory<SparkSessionKey>> {
+) -> Box<dyn SessionFactory<ServerSessionInfo>> {
     let mutator = Box::new(SparkSessionMutator {
         config: config.clone(),
     });
@@ -74,7 +80,7 @@ fn create_spark_session_factory(
 pub fn create_spark_session_manager(
     config: Arc<AppConfig>,
     runtime: RuntimeHandle,
-) -> SparkResult<SessionManager<SparkSessionKey>> {
+) -> SparkResult<SessionManager> {
     let system = Arc::new(Mutex::new(ActorSystem::new()));
     let factory = {
         let config = config.clone();
@@ -84,11 +90,6 @@ pub fn create_spark_session_manager(
             create_spark_session_factory(config.clone(), runtime.clone(), system.clone())
         })
     };
-    let options = SessionManagerOptions::<SparkSessionKey>::new(
-        config.clone(),
-        runtime.clone(),
-        system,
-        factory,
-    );
+    let options = SessionManagerOptions::new(config.clone(), runtime.clone(), system, factory);
     Ok(SessionManager::try_new(options)?)
 }

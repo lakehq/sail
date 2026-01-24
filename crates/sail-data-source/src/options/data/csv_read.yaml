@@ -85,7 +85,9 @@
     Infers the input schema automatically from data. It requires one extra pass over the data.
     Ignored if the schema is specified explicitly. If False, the schema must be specified explicitly.
     CSV built-in functions ignore this option.
-  supported: false
+  supported: true
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
 
 - key: schema_infer_max_records
   aliases:
@@ -122,6 +124,18 @@
       - `ZSTD` or `ZST`
       - `UNCOMPRESSED` or ""
   supported: true
+
+- key: allow_truncated_rows
+  aliases:
+    - allowTruncatedRows
+  default: "false"
+  description: |
+    Whether rows with fewer columns should be allowed.
+    If true, when parsing a row that has fewer columns than the schema requires, the
+    missing columns are filled with null values.
+  supported: true
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
 
 - key: encoding
   aliases:

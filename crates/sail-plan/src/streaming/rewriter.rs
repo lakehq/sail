@@ -223,9 +223,8 @@ fn get_stream_source_opt(provider: &dyn TableProvider) -> Option<NamedStreamSour
 pub fn is_streaming_plan(plan: &LogicalPlan) -> Result<bool> {
     plan.exists(|plan| {
         if let LogicalPlan::TableScan(scan) = plan {
-            Ok(is_streaming_table_provider(
-                source_as_provider(&scan.source)?.as_ref(),
-            ))
+            Ok(source_as_provider(&scan.source)
+                .is_ok_and(|p| is_streaming_table_provider(p.as_ref())))
         } else {
             Ok(false)
         }

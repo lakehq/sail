@@ -16,3 +16,4 @@ pub mod spark_try_subtract;
 pub mod spark_unhex;
 pub mod spark_uniform;
 mod utils;
+mod xorshift;

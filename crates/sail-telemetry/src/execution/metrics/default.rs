@@ -23,7 +23,10 @@ impl MetricEmitter for DefaultMetricEmitter {
                     .execution_output_row_count
                     .recorder(count)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
             }
             MetricValue::ElapsedCompute(time) => {
@@ -31,7 +34,10 @@ impl MetricEmitter for DefaultMetricEmitter {
                     .execution_elapsed_compute_time
                     .recorder(time)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
             }
             MetricValue::SpillCount(count) => {
@@ -39,7 +45,10 @@ impl MetricEmitter for DefaultMetricEmitter {
                     .execution_spill_count
                     .recorder(count)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
             }
             MetricValue::SpilledBytes(count) => {
@@ -47,7 +56,10 @@ impl MetricEmitter for DefaultMetricEmitter {
                     .execution_spill_size
                     .recorder(count)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
             }
             MetricValue::OutputBytes(count) => {
@@ -55,7 +67,10 @@ impl MetricEmitter for DefaultMetricEmitter {
                     .execution_output_size
                     .recorder(count)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
             }
             MetricValue::SpilledRows(count) => {
@@ -63,7 +78,10 @@ impl MetricEmitter for DefaultMetricEmitter {
                     .execution_spill_row_count
                     .recorder(count)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
             }
             MetricValue::CurrentMemoryUsage(gauge) => {
@@ -71,7 +89,10 @@ impl MetricEmitter for DefaultMetricEmitter {
                     .execution_memory_used
                     .recorder(gauge)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
             }
             MetricValue::Count { .. }
