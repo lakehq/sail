@@ -14,10 +14,19 @@ def get_schema_tree_string(schema):
     if hasattr(schema, "treeString"):
         return schema.treeString()
     # Fallback for PySpark 3.5.x which doesn't have treeString()
+    # Map simpleString() type names to treeString() format
+    type_mapping = {
+        "integer": "int",
+        "long": "bigint",
+        "byte": "tinyint",
+        "short": "smallint",
+    }
     lines = ["root"]
     for field in schema.fields:
         nullable_str = "nullable = true" if field.nullable else "nullable = false"
-        lines.append(f" |-- {field.name}: {field.dataType.simpleString()} ({nullable_str})")
+        type_str = field.dataType.simpleString()
+        type_str = type_mapping.get(type_str, type_str)
+        lines.append(f" |-- {field.name}: {type_str} ({nullable_str})")
     return "\n".join(lines)
 
 
