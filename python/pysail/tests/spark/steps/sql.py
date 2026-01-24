@@ -9,6 +9,18 @@ from pytest_bdd import given, parsers, then, when
 from pysail.tests.spark.utils import escape_sql_string_literal, parse_show_string
 
 
+def get_schema_tree_string(schema):
+    """Get schema tree string compatible with PySpark 3.5.x and 4.x."""
+    if hasattr(schema, "treeString"):
+        return schema.treeString()
+    # Fallback for PySpark 3.5.x which doesn't have treeString()
+    lines = ["root"]
+    for field in schema.fields:
+        nullable_str = "nullable = true" if field.nullable else "nullable = false"
+        lines.append(f" |-- {field.name}: {field.dataType.simpleString()} ({nullable_str})")
+    return "\n".join(lines)
+
+
 @pytest.fixture
 def variables():
     """Per-scenario variables used by `.feature` templates."""
@@ -82,7 +94,7 @@ def query(template, docstring, variables):
 def query_schema(docstring, query, spark):
     """Analyze the SQL query and compare schema with expected schema tree string."""
     df = spark.sql(query)
-    assert docstring.strip() == df.schema.treeString().strip()
+    assert docstring.strip() == get_schema_tree_string(df.schema).strip()
 
 
 @then(parsers.re("query result(?P<ordered>( ordered)?)"))
