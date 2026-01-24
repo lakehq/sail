@@ -5864,6 +5864,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "sail-catalog-system"
+version = "0.4.6"
+dependencies = [
+ "async-trait",
+ "datafusion",
+ "educe",
+ "futures",
+ "sail-catalog",
+ "sail-common-datafusion",
+ "serde",
+ "tokio",
+]
+
+[[package]]
 name = "sail-catalog-unity"
 version = "0.4.6"
 dependencies = [
@@ -5937,13 +5951,20 @@ dependencies = [
  "datafusion-expr",
  "either",
  "futures",
+ "lazy_static",
  "lexical-core",
  "pin-project-lite",
+ "prettyplease",
+ "proc-macro2",
  "prost",
+ "quote",
+ "regex",
  "ryu",
  "sail-common",
  "serde",
  "serde_arrow",
+ "serde_yaml",
+ "syn 2.0.114",
  "thiserror",
  "tokio",
  "tonic",
@@ -6017,6 +6038,7 @@ name = "sail-execution"
 version = "0.4.6"
 dependencies = [
  "arrow-flight",
+ "chrono",
  "datafusion",
  "datafusion-proto",
  "datafusion-spark",
@@ -6030,6 +6052,7 @@ dependencies = [
  "prost-build",
  "rand 0.9.2",
  "readonly",
+ "sail-catalog-system",
  "sail-common",
  "sail-common-datafusion",
  "sail-data-source",
@@ -6217,7 +6240,6 @@ dependencies = [
  "datafusion-expr-common",
  "datafusion-functions",
  "datafusion-functions-nested",
- "datafusion-physical-expr",
  "datafusion-spark",
  "either",
  "half",
@@ -6234,7 +6256,6 @@ dependencies = [
  "sail-function",
  "sail-logical-plan",
  "sail-physical-plan",
- "sail-plan-lakehouse",
  "sail-python-udf",
  "sail-sql-analyzer",
  "serde",
@@ -6313,8 +6334,15 @@ dependencies = [
 name = "sail-session"
 version = "0.4.6"
 dependencies = [
+ "async-trait",
+ "chrono",
  "datafusion",
+ "datafusion-common",
+ "datafusion-expr",
+ "datafusion-physical-expr",
  "fastrace",
+ "futures",
+ "indexmap 2.13.0",
  "log",
  "readonly",
  "sail-cache",
@@ -6322,6 +6350,7 @@ dependencies = [
  "sail-catalog-iceberg",
  "sail-catalog-memory",
  "sail-catalog-onelake",
+ "sail-catalog-system",
  "sail-catalog-unity",
  "sail-common",
  "sail-common-datafusion",
@@ -6330,11 +6359,14 @@ dependencies = [
  "sail-execution",
  "sail-iceberg",
  "sail-logical-optimizer",
+ "sail-logical-plan",
  "sail-object-store",
  "sail-physical-optimizer",
+ "sail-physical-plan",
  "sail-plan",
  "sail-plan-lakehouse",
  "sail-server",
+ "sail-sql-analyzer",
  "sail-telemetry",
  "secrecy",
  "thiserror",

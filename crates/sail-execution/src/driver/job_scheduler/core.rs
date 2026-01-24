@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use chrono::Utc;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
@@ -79,6 +80,9 @@ impl JobScheduler {
             return;
         };
         attempt.state = attempt.state.consolidate(state);
+        if attempt.state.is_terminal() && attempt.stopped_at.is_none() {
+            attempt.stopped_at = Some(Utc::now());
+        }
         attempt.messages.extend(message);
         if let Some(cause) = cause {
             attempt.cause = Some(cause);
@@ -144,6 +148,7 @@ impl JobScheduler {
                 })
             }
             job.state = JobState::Failed;
+            job.stopped_at = Some(Utc::now());
             return actions;
         }
 
@@ -216,6 +221,7 @@ impl JobScheduler {
                     for (a, attempt) in task.attempts.iter_mut().enumerate() {
                         if !attempt.state.is_terminal() {
                             attempt.state = TaskState::Canceled;
+                            attempt.stopped_at = Some(Utc::now());
                             actions.push(JobAction::CancelTask {
                                 key: TaskKey {
                                     job_id,
@@ -255,6 +261,7 @@ impl JobScheduler {
 
             if all_consumers_succeeded && !stage.consumers.is_empty() {
                 job.stages[s].state = StageState::Inactive;
+                job.stages[s].stopped_at = Some(Utc::now());
                 actions.push(JobAction::CleanUpJob {
                     job_id,
                     stage: Some(s),
@@ -301,6 +308,8 @@ impl JobScheduler {
                         messages: vec![],
                         cause: None,
                         job_output_fetched: false,
+                        created_at: Utc::now(),
+                        stopped_at: None,
                     });
             }
 
@@ -477,6 +486,9 @@ impl JobScheduler {
         }
         for stage in job.stages.iter_mut() {
             stage.state = StageState::Inactive;
+            if stage.stopped_at.is_none() {
+                stage.stopped_at = Some(Utc::now());
+            }
         }
         actions.push(JobAction::CleanUpJob {
             job_id,
@@ -487,6 +499,7 @@ impl JobScheduler {
         } else {
             job.state = JobState::Canceled;
         }
+        job.stopped_at = Some(Utc::now());
         actions
     }
 
