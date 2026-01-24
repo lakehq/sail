@@ -12,17 +12,17 @@ use jiter::{Jiter, Peek};
 ///
 /// Example: json_tuple('{"a":1, "b":2}', 'a', 'b') returns struct(c0: "1", c1: "2")
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct JsonTuple {
+pub struct SparkJsonTuple {
     signature: Signature,
 }
 
-impl Default for JsonTuple {
+impl Default for SparkJsonTuple {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl JsonTuple {
+impl SparkJsonTuple {
     pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
@@ -30,7 +30,7 @@ impl JsonTuple {
     }
 }
 
-impl ScalarUDFImpl for JsonTuple {
+impl ScalarUDFImpl for SparkJsonTuple {
     fn as_any(&self) -> &dyn Any {
         self
     }
