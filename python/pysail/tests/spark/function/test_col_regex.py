@@ -1,7 +1,5 @@
 """Tests for colRegex column selection functionality."""
 
-import pytest
-
 
 class TestColRegex:
     """Tests for DataFrame.colRegex() method."""
