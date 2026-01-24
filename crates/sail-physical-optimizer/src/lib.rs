@@ -47,7 +47,7 @@ fn limit_push_past_windows() -> Arc<dyn PhysicalOptimizerRule + Send + Sync> {
 
 pub fn get_physical_optimizers(
     options: PhysicalOptimizerOptions,
-) -> datafusion::common::Result<Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>> {
+) -> Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> {
     let mut rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = vec![];
 
     rules.push(Arc::new(OutputRequirements::new_add_mode()));
@@ -76,7 +76,7 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(RewriteExplicitRepartition::new()));
     rules.push(Arc::new(SanityCheckPlan::new()));
 
-    Ok(rules)
+    rules
 }
 
 #[cfg(test)]
@@ -87,7 +87,7 @@ mod tests {
 
     #[test]
     fn test_optimizer_rules() -> datafusion::common::Result<()> {
-        let optimizers = get_physical_optimizers(Default::default())?;
+        let optimizers = get_physical_optimizers(Default::default());
         let datafusion_optimizers = PhysicalOptimizer::default().rules;
 
         let datafusion_optimizer_names: Vec<&str> =
