@@ -28,6 +28,7 @@ datafusion = { workspace = true }
 # Async / Server
 tokio = { workspace = true }
 tonic = { workspace = true }
+tonic-health = { workspace = true }
 futures = { workspace = true }
 prost = { workspace = true }
 

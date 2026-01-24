@@ -147,7 +147,14 @@ async fn run_flight_server(
     info!("");
     info!("Press Ctrl+C to stop the server");
 
+    // Set up gRPC health check service
+    let (health_reporter, health_service) = tonic_health::server::health_reporter();
+    health_reporter
+        .set_serving::<FlightServiceServer<SailFlightSqlService>>()
+        .await;
+
     Server::builder()
+        .add_service(health_service)
         .add_service(FlightServiceServer::new(service))
         .serve(addr)
         .await?;
