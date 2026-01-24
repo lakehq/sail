@@ -227,11 +227,14 @@ fn cast_map(
         }
         _ => datafusion::arrow::compute::cast(&entries, target_kv.data_type())?,
     };
-    #[allow(clippy::expect_used)]
     let entries_sa = casted_entries
         .as_any()
         .downcast_ref::<StructArray>()
-        .expect("map entries must be struct")
+        .ok_or_else(|| {
+            datafusion_common::DataFusionError::Internal(
+                "Failed to downcast casted map entries to StructArray".to_string(),
+            )
+        })?
         .clone();
     let new_map = MapArray::try_new(
         Arc::new(target_kv.clone()),
