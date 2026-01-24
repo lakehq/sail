@@ -9,25 +9,19 @@ from pytest_bdd import given, parsers, then, when
 from pysail.tests.spark.utils import escape_sql_string_literal, parse_show_string
 
 
-def get_schema_tree_string(schema):
-    """Get schema tree string compatible with PySpark 3.5.x and 4.x."""
-    if hasattr(schema, "treeString"):
-        return schema.treeString()
-    # Fallback for PySpark 3.5.x which doesn't have treeString()
-    # Map simpleString() type names to treeString() format
-    type_mapping = {
+def normalize_type_name(type_str: str) -> str:
+    """Normalize PySpark type names to canonical form.
+
+    PySpark 3.5.x and 4.x use different type name formats.
+    This normalizes to the canonical names used in Spark SQL.
+    """
+    mapping = {
         "integer": "int",
         "long": "bigint",
         "byte": "tinyint",
         "short": "smallint",
     }
-    lines = ["root"]
-    for field in schema.fields:
-        nullable_str = "nullable = true" if field.nullable else "nullable = false"
-        type_str = field.dataType.simpleString()
-        type_str = type_mapping.get(type_str, type_str)
-        lines.append(f" |-- {field.name}: {type_str} ({nullable_str})")
-    return "\n".join(lines)
+    return mapping.get(type_str, type_str)
 
 
 @pytest.fixture
@@ -99,11 +93,33 @@ def query(template, docstring, variables):
     return Template(docstring).render(**variables) if template else docstring
 
 
-@then("query schema")
-def query_schema(docstring, query, spark):
-    """Analyze the SQL query and compare schema with expected schema tree string."""
+@then("query schema type")
+def query_schema_type(datatable, query, spark):
+    """Verify the schema types of query result columns.
+
+    Uses a datatable with columns: column, type, nullable (optional).
+    Type names are normalized to handle PySpark 3.5.x/4.x differences.
+    """
     df = spark.sql(query)
-    assert docstring.strip() == get_schema_tree_string(df.schema).strip()
+    schema = df.schema
+
+    for row in datatable[1:]:  # Skip header row
+        column_name = row[0]
+        expected_type = row[1]
+        expected_nullable = row[2].lower() == "true" if len(row) > 2 else None
+
+        field = schema[column_name]
+        actual_type = normalize_type_name(field.dataType.simpleString())
+
+        assert actual_type == expected_type, (
+            f"Column '{column_name}': expected type '{expected_type}', got '{actual_type}'"
+        )
+
+        if expected_nullable is not None:
+            assert field.nullable == expected_nullable, (
+                f"Column '{column_name}': expected nullable={expected_nullable}, "
+                f"got nullable={field.nullable}"
+            )
 
 
 @then(parsers.re("query result(?P<ordered>( ordered)?)"))
