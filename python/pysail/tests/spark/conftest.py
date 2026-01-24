@@ -14,16 +14,11 @@ from pysail.tests.spark.utils import SAIL_ONLY, is_jvm_spark
 
 
 def pytest_configure(config):
-    # Register custom markers
-    config.addinivalue_line(
-        "markers", "flight_sql: mark test as requiring a running Flight SQL server"
-    )
     # Load all pytest-bdd step modules.
     config.pluginmanager.import_plugin("pysail.tests.spark.steps.file_tree")
     config.pluginmanager.import_plugin("pysail.tests.spark.steps.sql")
     config.pluginmanager.import_plugin("pysail.tests.spark.steps.plan")
     config.pluginmanager.import_plugin("pysail.tests.spark.steps.delta_log")
-    config.pluginmanager.import_plugin("pysail.tests.spark.steps.flight_sql")
 
 
 if TYPE_CHECKING:

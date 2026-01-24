@@ -42,6 +42,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: ./.github/actions/adjust-swap-space
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -71,13 +73,13 @@ jobs:
           chmod +x /usr/local/bin/grpc_health_probe
           grpc_health_probe -version
 
-      - name: Build Rust workspace
+      - name: Build sail-flight binary
         env:
           RUSTFLAGS: "-C instrument-coverage"
         run: |
           # Wait for background Rust toolchain installation to complete
           wait
-          cargo build --workspace
+          cargo build --bin sail-flight
 
       - name: Download Python Package
         uses: actions/download-artifact@v4
@@ -113,7 +115,7 @@ jobs:
           TEST_RUN_GIT_COMMIT: ${{ github.sha }}
           TEST_RUN_GIT_REF: ${{ github.ref }}
         run: |
-          hatch run pytest -m flight_sql -v
+          hatch run pytest --pyargs pysail.tests.flight -v
 
       - name: Shutdown Flight SQL Server
         if: ${{ !cancelled() }}

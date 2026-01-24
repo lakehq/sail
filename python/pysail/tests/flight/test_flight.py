@@ -231,7 +231,6 @@ def test_flight_column_count(flight_connection, query, expected_cols):
     cur.close()
 
 
-@pytest.mark.skip(reason="concat_ws not yet fully implemented in Flight SQL server")
 @pytest.mark.parametrize(
     ("query", "expected_result"),
     [
@@ -253,7 +252,6 @@ def test_flight_concat_ws(flight_connection, query, expected_result):
     cur.close()
 
 
-@pytest.mark.skip(reason="String operations require additional debugging in Flight SQL server")
 def test_flight_string_operations(flight_connection):
     """Test various string operations via Flight SQL."""
     test_cases = [
@@ -289,7 +287,6 @@ def test_flight_numeric_operations(flight_connection):
         cur.close()
 
 
-@pytest.mark.skip(reason="CREATE TEMP VIEW requires catalog manager which is not yet available in Flight SQL mode")
 def test_flight_create_temp_view(flight_connection):
     """Test creating a temporary view and querying it."""
     cur = flight_connection.cursor()
