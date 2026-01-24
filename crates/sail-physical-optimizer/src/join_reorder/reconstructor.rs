@@ -592,6 +592,7 @@ impl<'a> PlanReconstructor<'a> {
         result
     }
 
+    #[allow(clippy::only_used_in_recursion)]
     fn add_relation_bits_from_expr(
         &self,
         expr: &Arc<dyn PhysicalExpr>,
