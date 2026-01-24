@@ -6226,6 +6226,7 @@ dependencies = [
  "log",
  "object_store",
  "rand 0.9.2",
+ "regex",
  "ryu",
  "sail-catalog",
  "sail-common",
