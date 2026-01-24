@@ -353,33 +353,39 @@ impl Literal {
 
         use crate::spec::types::{PrimitiveType, Type};
 
-        fn days_to_date_str(days: i32) -> Result<String, String> {
-            let epoch =
-                NaiveDate::from_ymd_opt(1970, 1, 1).ok_or_else(|| "Bad epoch".to_string())?;
+        fn days_to_date_str(days: i32) -> String {
+            #[expect(clippy::expect_used)]
+            let epoch = NaiveDate::from_ymd_opt(1970, 1, 1)
+                .expect("Creating date from constant should never fail");
             let d = epoch + chrono::Days::new(days as u64);
-            Ok(d.to_string())
+            d.to_string()
         }
-        fn micros_to_time_str(us: i64) -> Result<String, String> {
+        fn micros_to_time_str(us: i64) -> String {
             let secs = us.div_euclid(1_000_000);
             let rem = us.rem_euclid(1_000_000) as u32;
+            #[expect(clippy::expect_used)]
             let t = NaiveTime::from_num_seconds_from_midnight_opt(secs as u32, rem * 1000)
-                .unwrap_or(NaiveTime::from_hms_opt(0, 0, 0).ok_or_else(|| "Bad time".to_string())?);
-            Ok(t.format("%H:%M:%S%.f").to_string())
+                .unwrap_or(
+                    NaiveTime::from_hms_opt(0, 0, 0)
+                        .expect("Creating time from constant should never fail"),
+                );
+            t.format("%H:%M:%S%.f").to_string()
         }
-        fn micros_to_datetime_str(us: i64) -> Result<String, String> {
+        fn micros_to_datetime_str(us: i64) -> String {
             let secs = us.div_euclid(1_000_000);
             let rem = us.rem_euclid(1_000_000) as u32;
+            #[expect(clippy::expect_used)]
             let base = NaiveDate::from_ymd_opt(1970, 1, 1)
-                .ok_or_else(|| "Bad epoch".to_string())?
+                .expect("Creating date from constant should never fail")
                 .and_hms_nano_opt(0, 0, 0, 0)
-                .ok_or_else(|| "Bad epoch".to_string())?;
+                .expect("Creating time from constant should never fail");
             let dt = base
                 .checked_add_signed(chrono::Duration::seconds(secs))
                 .and_then(|d| {
                     d.checked_add_signed(chrono::Duration::nanoseconds((rem as i64) * 1000))
                 })
                 .unwrap_or(base);
-            Ok(dt.format("%Y-%m-%dT%H:%M:%S%.f").to_string())
+            dt.format("%Y-%m-%dT%H:%M:%S%.f").to_string()
         }
 
         match (self, data_type) {
@@ -398,22 +404,22 @@ impl Literal {
                     .map(JsonValue::Number)
                     .ok_or_else(|| "Invalid double".to_string()),
                 (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => {
-                    Ok(JsonValue::String(days_to_date_str(*v)?))
+                    Ok(JsonValue::String(days_to_date_str(*v)))
                 }
                 (PrimitiveType::Time, PrimitiveLiteral::Long(v)) => {
-                    Ok(JsonValue::String(micros_to_time_str(*v)?))
+                    Ok(JsonValue::String(micros_to_time_str(*v)))
                 }
                 (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => {
-                    Ok(JsonValue::String(micros_to_datetime_str(*v)?))
+                    Ok(JsonValue::String(micros_to_datetime_str(*v)))
                 }
                 (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(v)) => {
-                    Ok(JsonValue::String(micros_to_datetime_str(*v)?))
+                    Ok(JsonValue::String(micros_to_datetime_str(*v)))
                 }
                 (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(v)) => {
-                    Ok(JsonValue::String(micros_to_datetime_str(*v / 1000)?))
+                    Ok(JsonValue::String(micros_to_datetime_str(*v / 1000)))
                 }
                 (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(v)) => {
-                    Ok(JsonValue::String(micros_to_datetime_str(*v / 1000)?))
+                    Ok(JsonValue::String(micros_to_datetime_str(*v / 1000)))
                 }
                 (PrimitiveType::String, PrimitiveLiteral::String(s)) => {
                     Ok(JsonValue::String(s.clone()))

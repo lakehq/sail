@@ -261,8 +261,9 @@ impl StatsScalar {
         match (stats, logical_type) {
             (Statistics::Boolean(v), _) => Ok(Self::Boolean(get_stat!(v))),
             (Statistics::Int32(v), Some(LogicalType::Date)) => {
+                #[expect(clippy::expect_used)]
                 let epoch_start = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
-                    .ok_or_else(|| DeltaTableError::generic("Failed to create epoch date"))?;
+                    .expect("Creating date from constant should never fail");
                 let date = epoch_start + chrono::Duration::days(get_stat!(v) as i64);
                 Ok(Self::Date(date))
             }
