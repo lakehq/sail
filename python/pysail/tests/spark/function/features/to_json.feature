@@ -117,3 +117,44 @@ Feature: to_json function converts complex types to JSON strings
       Then query result
         | result                          |
         | {"active":true,"deleted":false} |
+
+  Rule: Date formatting
+    Scenario: Convert struct with date using custom format
+      When query
+        """
+        SELECT to_json(
+          named_struct('date', to_date('2024-01-15')),
+          map('dateFormat', 'dd/MM/yyyy')
+        ) AS result
+        """
+      Then query result
+        | result                  |
+        | {"date":"15/01/2024"}   |
+
+  Rule: Float conversion
+    Scenario: Convert struct with float to JSON
+      When query
+        """
+        SELECT to_json(named_struct('value', CAST(3.14159 AS DOUBLE))) AS result
+        """
+      Then query result
+        | result               |
+        | {"value":3.14159}    |
+
+  Rule: String conversion
+    Scenario: Convert struct with string to JSON
+      When query
+        """
+        SELECT to_json(named_struct('name', 'hello world')) AS result
+        """
+      Then query result
+        | result                    |
+        | {"name":"hello world"}    |
+
+  Rule: Error handling
+    Scenario: Invalid options type returns error
+      When query
+        """
+        SELECT to_json(named_struct('a', 1), 'invalid_options') AS result
+        """
+      Then query error INVALID_OPTIONS.NON_MAP_FUNCTION

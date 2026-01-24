@@ -161,11 +161,12 @@ fn to_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 
     let options = if let Some(opts_array) = args.get(1) {
-        if let Some(map_array) = opt_downcast_arg!(opts_array, MapArray) {
-            ToJsonOptions::from_map(map_array)
-        } else {
-            ToJsonOptions::default()
-        }
+        let map_array = opt_downcast_arg!(opts_array, MapArray).ok_or_else(|| {
+            datafusion_common::DataFusionError::Plan(
+                "[INVALID_OPTIONS.NON_MAP_FUNCTION] Invalid options: Must use the `map()` function for options.".to_string(),
+            )
+        })?;
+        ToJsonOptions::from_map(map_array)
     } else {
         ToJsonOptions::default()
     };
@@ -453,6 +454,7 @@ fn decimal_to_json_number(value: i128, scale: i8) -> Value {
     let decimal_str = format_decimal(value, scale);
     // Parse the formatted decimal string as a JSON number
     // This preserves the exact decimal representation
+    // TODO: This parsing approach may not be reliable for all decimal values
     serde_json::from_str(&decimal_str).unwrap_or(Value::String(decimal_str))
 }
 
