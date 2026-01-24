@@ -39,13 +39,14 @@ impl<T: ArrowNumericType + Send> PercentileDiscGroupsAccumulator<T> {
         &mut self,
         group_indices: &[usize],
         values: &PrimitiveArray<T>,
-    ) -> Result<()> {
+    ) {
         let data = values.values();
-        let nulls = values.nulls().ok_or_else(|| {
-            DataFusionError::Internal(
-                "Expected null bitmap in accumulate_with_nulls_chunked".to_string(),
-            )
-        })?;
+        // SAFETY: his function represents an infallible situation.
+        // When the null count is greater than zero, the null buffer must exist.
+        #[allow(clippy::expect_used)]
+        let nulls = values
+            .nulls()
+            .expect("null buffer must exist when null_count > 0");
 
         let group_indices_chunks = group_indices.chunks_exact(64);
         let data_chunks = data.chunks_exact(64);
@@ -81,8 +82,6 @@ impl<T: ArrowNumericType + Send> PercentileDiscGroupsAccumulator<T> {
                     self.group_values[group_index].push(new_value);
                 }
             });
-
-        Ok(())
     }
 }
 
@@ -109,7 +108,7 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for PercentileDiscGroupsAccum
                 }
             }
             (true, None) => {
-                self.accumulate_with_nulls_chunked(group_indices, values)?;
+                self.accumulate_with_nulls_chunked(group_indices, values);
             }
             (false, Some(filter)) => {
                 assert_eq!(filter.len(), group_indices.len());
