@@ -10,7 +10,7 @@ use datafusion_datasource::file_format::FileFormat;
 
 use crate::formats::binary::file_format::BinaryFileFormat;
 use crate::formats::binary::options::resolve_binary_read_options;
-use crate::formats::listing::{ListingFormat, ListingTableFormat};
+use crate::formats::listing::{DefaultSchemaInfer, ListingFormat, ListingTableFormat, SchemaInfer};
 
 pub mod file_format;
 pub mod options;
@@ -49,6 +49,10 @@ impl ListingFormat for BinaryListingFormat {
         _options: Vec<HashMap<String, String>>,
     ) -> Result<(Arc<dyn FileFormat>, Option<String>)> {
         not_impl_err!("Binary file format does not support writing")
+    }
+
+    fn schema_inferrer(&self) -> Arc<dyn SchemaInfer> {
+        Arc::new(DefaultSchemaInfer)
     }
 }
 

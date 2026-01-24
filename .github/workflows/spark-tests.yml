@@ -115,6 +115,11 @@ jobs:
           hatch run install-pyspark
           hatch run install-pysail
 
+      - name: List Python packages
+        continue-on-error: true
+        run: |
+          hatch run uv pip freeze || hatch run python -m pip freeze
+
       - name: Run Spark Connect Server
         run: |
           nohup hatch run scripts/spark-tests/run-server.sh > /dev/null 2>&1 < /dev/null &
