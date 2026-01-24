@@ -1,5 +1,7 @@
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll};
+use std::time::Instant;
 
 use arrow::array::RecordBatch;
 use arrow_schema::SchemaRef;
@@ -18,6 +20,54 @@ use tokio::sync::{mpsc, oneshot};
 /// - oneshot signal for graceful shutdown
 /// - Thread join in Drop to prevent leaks
 use super::executor::InputPartition;
+
+/// Metrics for Python execution performance tracking.
+///
+/// Tracks GIL contention and throughput to help identify bottlenecks
+/// in Python datasource execution.
+#[derive(Debug, Default)]
+pub struct PythonExecutionMetrics {
+    /// Total time spent waiting to acquire GIL (nanoseconds)
+    pub gil_wait_ns: AtomicU64,
+    /// Total time holding GIL (nanoseconds)
+    pub gil_hold_ns: AtomicU64,
+    /// Number of GIL acquisitions
+    pub gil_acquisitions: AtomicU64,
+    /// Number of batches processed
+    pub batches_processed: AtomicU64,
+    /// Total rows processed
+    pub rows_processed: AtomicU64,
+}
+
+impl PythonExecutionMetrics {
+    /// Create new metrics instance.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Log a summary of the metrics.
+    pub fn log_summary(&self, partition_id: usize) {
+        let wait_ms = self.gil_wait_ns.load(Ordering::Relaxed) / 1_000_000;
+        let hold_ms = self.gil_hold_ns.load(Ordering::Relaxed) / 1_000_000;
+        let acquisitions = self.gil_acquisitions.load(Ordering::Relaxed);
+        let batches = self.batches_processed.load(Ordering::Relaxed);
+        let rows = self.rows_processed.load(Ordering::Relaxed);
+
+        log::info!(
+            "[PythonDataSource:partition={}] GIL metrics: wait={}ms, hold={}ms, acquisitions={}, batches={}, rows={}",
+            partition_id, wait_ms, hold_ms, acquisitions, batches, rows
+        );
+
+        // Log warning if GIL contention is high
+        if wait_ms > hold_ms && wait_ms > 100 {
+            log::warn!(
+                "[PythonDataSource:partition={}] High GIL contention detected: wait={}ms > hold={}ms. \
+                Consider using GIL-releasing libraries (connector-x, DuckDB) or subprocess isolation.",
+                partition_id, wait_ms, hold_ms
+            );
+        }
+    }
+}
 
 /// Default batch size for collecting rows.
 pub const DEFAULT_BATCH_SIZE: usize = 8192;
@@ -81,7 +131,21 @@ impl PythonDataSourceStream {
         use pyo3::prelude::*;
         use pyo3::types::PyBytes;
 
+        let partition_id = partition.partition_id;
+        let metrics = PythonExecutionMetrics::new();
+
+        // Track time waiting for GIL
+        let gil_wait_start = Instant::now();
+
         let result = Python::attach(|py| -> Result<()> {
+            // Record GIL wait time (time from start to acquiring GIL)
+            let gil_acquired = Instant::now();
+            metrics.gil_wait_ns.fetch_add(
+                gil_wait_start.elapsed().as_nanos() as u64,
+                Ordering::Relaxed,
+            );
+            metrics.gil_acquisitions.fetch_add(1, Ordering::Relaxed);
+
             // Deserialize datasource
             let cloudpickle = py.import("cloudpickle").map_err(py_err)?;
             let command_bytes = PyBytes::new(py, &command);
@@ -104,6 +168,17 @@ impl PythonDataSourceStream {
                 .call_method1("read", (py_partition,))
                 .map_err(py_err)?;
 
+            // Get pyarrow.RecordBatch type for isinstance check
+            let pyarrow = py.import("pyarrow").map_err(py_err)?;
+            let record_batch_type = pyarrow.getattr("RecordBatch").map_err(py_err)?;
+
+            // Create row batcher for tuple fallback path
+            let batch_size = std::env::var("SAIL_PYTHON_BATCH_SIZE")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1024);
+            let mut row_batcher = RowBatchCollector::new(schema.clone(), batch_size);
+
             // Iterate over results
             loop {
                 // Check for stop signal
@@ -117,18 +192,58 @@ impl PythonDataSourceStream {
                 // Get next item from iterator
                 match iterator.call_method0("__next__") {
                     Ok(item) => {
-                        // Convert to RecordBatch
-                        let batch = super::arrow_utils::py_record_batch_to_rust(py, &item)?;
+                        // Check if item is a RecordBatch (Arrow zero-copy path)
+                        // or a tuple (row-based fallback path)
+                        if item.is_instance(&record_batch_type).unwrap_or(false) {
+                            // Arrow path - zero copy transfer
+                            let batch = super::arrow_utils::py_record_batch_to_rust(py, &item)?;
 
-                        // Send batch
-                        if tx.blocking_send(Ok(batch)).is_err() {
-                            // Receiver dropped, stop
-                            break;
+                            // Track metrics
+                            metrics
+                                .rows_processed
+                                .fetch_add(batch.num_rows() as u64, Ordering::Relaxed);
+                            metrics.batches_processed.fetch_add(1, Ordering::Relaxed);
+
+                            // Send batch
+                            if tx.blocking_send(Ok(batch)).is_err() {
+                                break;
+                            }
+                        } else {
+                            // Tuple fallback path - pickle and batch
+                            let row_bytes = cloudpickle
+                                .call_method1("dumps", (&item,))
+                                .map_err(py_err)?
+                                .extract::<Vec<u8>>()
+                                .map_err(py_err)?;
+
+                            row_batcher.add_row(row_bytes);
+
+                            // Flush if batch is ready
+                            if row_batcher.is_ready() {
+                                if let Some(batch) = row_batcher.flush()? {
+                                    metrics
+                                        .rows_processed
+                                        .fetch_add(batch.num_rows() as u64, Ordering::Relaxed);
+                                    metrics.batches_processed.fetch_add(1, Ordering::Relaxed);
+
+                                    if tx.blocking_send(Ok(batch)).is_err() {
+                                        break;
+                                    }
+                                }
+                            }
                         }
                     }
                     Err(e) => {
                         // Check if StopIteration (normal end)
                         if e.is_instance_of::<pyo3::exceptions::PyStopIteration>(py) {
+                            // Flush any remaining rows in the batcher
+                            if let Some(batch) = row_batcher.flush()? {
+                                metrics
+                                    .rows_processed
+                                    .fetch_add(batch.num_rows() as u64, Ordering::Relaxed);
+                                metrics.batches_processed.fetch_add(1, Ordering::Relaxed);
+                                let _ = tx.blocking_send(Ok(batch));
+                            }
                             break;
                         }
                         // Other error
@@ -138,8 +253,16 @@ impl PythonDataSourceStream {
                 }
             }
 
+            // Record total GIL hold time
+            metrics
+                .gil_hold_ns
+                .fetch_add(gil_acquired.elapsed().as_nanos() as u64, Ordering::Relaxed);
+
             Ok(())
         });
+
+        // Log metrics summary
+        metrics.log_summary(partition_id);
 
         // Send any error
         if let Err(e) = result {

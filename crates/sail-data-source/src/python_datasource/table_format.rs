@@ -207,7 +207,7 @@ impl TableFormat for PythonTableFormat {
         info: SourceInfo,
     ) -> Result<Arc<dyn TableProvider>> {
         // Create PythonDataSource from options
-        let mut datasource = self.create_datasource(&info.options)?;
+        let datasource = self.create_datasource(&info.options)?;
 
         // Get schema (use provided schema or discover from Python)
         let schema = if let Some(schema) = info.schema {

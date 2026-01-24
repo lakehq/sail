@@ -302,6 +302,8 @@ impl ServerSessionFactory {
             .execution
             .use_row_number_estimates_to_optimize_partitioning;
         execution.listing_table_ignore_subdirectory = false;
+        // Set strict mode for execution
+        config.options_mut().execution.parquet.pushdown_filters = true;
     }
 
     fn apply_execution_parquet_config(&mut self, config: &mut SessionConfig) {

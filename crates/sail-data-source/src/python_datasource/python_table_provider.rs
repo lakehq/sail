@@ -64,7 +64,7 @@ impl TableProvider for PythonTableProvider {
     async fn scan(
         &self,
         _state: &dyn datafusion::catalog::Session,
-        _projection: Option<&Vec<usize>>,
+        projection: Option<&Vec<usize>>,
         filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -76,14 +76,36 @@ impl TableProvider for PythonTableProvider {
         // Note: get_partitions needs schema to create the reader
         let partitions = self.datasource.get_partitions(&self.schema)?;
 
-        // Create execution plan
+        // Create execution plan from Python datasource (always yields full schema)
         let exec = PythonDataSourceExec::new(
             self.datasource.command().to_vec(),
             self.schema.clone(),
             partitions,
         );
+        let exec = Arc::new(exec) as Arc<dyn ExecutionPlan>;
 
-        Ok(Arc::new(exec))
+        // Apply projection if present
+        let exec = if let Some(projection) = projection {
+            let exprs: Vec<(Arc<dyn datafusion::physical_plan::PhysicalExpr>, String)> = projection
+                .iter()
+                .map(|&i| {
+                    let field = self.schema.field(i);
+                    (
+                        Arc::new(datafusion::physical_expr::expressions::Column::new(
+                            field.name(),
+                            i,
+                        ))
+                            as Arc<dyn datafusion::physical_plan::PhysicalExpr>,
+                        field.name().clone(),
+                    )
+                })
+                .collect();
+            Arc::new(datafusion::physical_plan::projection::ProjectionExec::try_new(exprs, exec)?)
+        } else {
+            exec
+        };
+
+        Ok(exec)
     }
 
     /// Determine which filters can be pushed down to Python.

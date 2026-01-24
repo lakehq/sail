@@ -15,6 +15,22 @@ use pyo3::prelude::*;
 #[cfg(feature = "python")]
 use pyo3::types::PyAnyMethods;
 
+#[cfg(feature = "python")]
+use super::error::PythonDataSourceContext;
+
+/// Maximum size for a single partition in bytes (default: 100MB).
+///
+/// Partitions exceeding this limit will cause an error to prevent OOM.
+/// This can be overridden via environment variable `SAIL_MAX_PARTITION_SIZE_MB`.
+#[cfg(feature = "python")]
+fn max_partition_size_bytes() -> usize {
+    std::env::var("SAIL_MAX_PARTITION_SIZE_MB")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .map(|mb| mb * 1024 * 1024)
+        .unwrap_or(100 * 1024 * 1024) // 100MB default
+}
+
 /// Input partition for parallel reading.
 #[derive(Debug, Clone)]
 pub struct InputPartition {
@@ -22,6 +38,13 @@ pub struct InputPartition {
     pub partition_id: usize,
     /// Pickled partition data (opaque to Rust)
     pub data: Vec<u8>,
+}
+
+impl InputPartition {
+    /// Get the size of the partition data in bytes.
+    pub fn size_bytes(&self) -> usize {
+        self.data.len()
+    }
 }
 
 /// Abstract executor for Python datasource operations.
@@ -82,10 +105,24 @@ impl PythonExecutor for InProcessExecutor {
             pyo3::Python::attach(|py| {
                 // Deserialize and call schema()
                 let datasource = deserialize_datasource(py, &command)?;
-                let schema_obj = datasource.call_method0("schema").map_err(py_err)?;
+
+                // Get datasource name for error context
+                let ds_name = datasource
+                    .call_method0("name")
+                    .and_then(|n| n.extract::<String>())
+                    .unwrap_or_else(|_| "<unknown>".to_string());
+                let ctx = PythonDataSourceContext::new(&ds_name, "schema");
+
+                let schema_obj = datasource
+                    .call_method0("schema")
+                    .map_err(|e| ctx.wrap_py_error(e))?;
 
                 // Convert to Arrow schema
-                super::arrow_utils::py_schema_to_rust(py, &schema_obj)
+                super::arrow_utils::py_schema_to_rust(py, &schema_obj).map_err(|e| {
+                    datafusion_common::DataFusionError::External(Box::new(
+                        ctx.wrap_error(format!("Failed to convert schema: {}", e)),
+                    ))
+                })
             })
         })
         .await
@@ -99,24 +136,60 @@ impl PythonExecutor for InProcessExecutor {
             pyo3::Python::attach(|py| {
                 let datasource = deserialize_datasource(py, &command)?;
 
+                // Get datasource name for error context
+                let ds_name = datasource
+                    .call_method0("name")
+                    .and_then(|n| n.extract::<String>())
+                    .unwrap_or_else(|_| "<unknown>".to_string());
+                let ctx = PythonDataSourceContext::new(&ds_name, "partitions");
+
                 // Get reader and partitions
-                let reader = datasource.call_method0("reader").map_err(py_err)?;
-                let partitions = reader.call_method0("partitions").map_err(py_err)?;
+                let reader = datasource
+                    .call_method0("reader")
+                    .map_err(|e| ctx.wrap_py_error(e))?;
+                let partitions = reader
+                    .call_method0("partitions")
+                    .map_err(|e| ctx.wrap_py_error(e))?;
 
                 // Convert Python partitions to Rust
-                let partitions_list = partitions
-                    .downcast::<pyo3::types::PyList>()
-                    .map_err(|e| datafusion_common::DataFusionError::Execution(e.to_string()))?;
+                let partitions_list = partitions.downcast::<pyo3::types::PyList>().map_err(|e| {
+                    ctx.wrap_error(format!("partitions() must return a list: {}", e))
+                })?;
 
+                let max_size = max_partition_size_bytes();
                 let mut result = Vec::with_capacity(partitions_list.len());
+                let mut total_size: usize = 0;
+
                 for (i, partition) in partitions_list.iter().enumerate() {
                     // Pickle each partition for distribution
                     let pickled = pickle_object(py, &partition)?;
+                    let partition_size = pickled.len();
+
+                    // Check partition size limit
+                    if partition_size > max_size {
+                        return Err(super::error::PythonDataSourceError::ResourceExhausted(
+                            format!(
+                                "[{}::partitions] Partition {} exceeds size limit: {} bytes (max: {} bytes). \
+                                Set SAIL_MAX_PARTITION_SIZE_MB to increase limit.",
+                                ds_name, i, partition_size, max_size
+                            ),
+                        )
+                        .into());
+                    }
+
+                    total_size += partition_size;
                     result.push(InputPartition {
                         partition_id: i,
                         data: pickled,
                     });
                 }
+
+                log::debug!(
+                    "[{}::partitions] Created {} partitions, total size: {} bytes",
+                    ds_name,
+                    result.len(),
+                    total_size
+                );
 
                 Ok(result)
             })

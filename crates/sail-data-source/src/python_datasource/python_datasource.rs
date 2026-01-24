@@ -1,9 +1,14 @@
+use std::sync::Arc;
+#[cfg(feature = "python")]
+use std::sync::Mutex;
+
+use arrow_schema::SchemaRef;
+use datafusion_common::Result;
 /// Core Python DataSource implementation using PyO3.
 ///
 /// This module provides the bridge between Rust and Python DataSources, managing
 /// the Python interpreter lifecycle and invoking Python DataSource methods.
-use arrow_schema::SchemaRef;
-use datafusion_common::Result;
+use once_cell::sync::OnceCell;
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
 #[cfg(feature = "python")]
@@ -12,7 +17,7 @@ use pyo3::types::PyBytes;
 #[cfg(feature = "python")]
 use super::arrow_utils::py_schema_to_rust;
 #[cfg(feature = "python")]
-use super::error::PythonDataSourceError;
+use super::error::{PythonDataSourceContext, PythonDataSourceError};
 #[cfg(feature = "python")]
 use super::executor::InputPartition;
 
@@ -20,16 +25,38 @@ use super::executor::InputPartition;
 ///
 /// This struct holds the serialized Python DataSource and provides methods
 /// to interact with it via PyO3.
-#[derive(Clone)]
+///
+/// # Caching Strategy
+///
+/// To reduce cloudpickle deserialization overhead, the datasource object is
+/// cached after first deserialization. The cache uses `Py<PyAny>` which is
+/// GIL-independent storage - the object stays on the Python heap and can be
+/// accessed when the GIL is acquired.
 pub struct PythonDataSource {
     /// Pickled Python DataSource command (serialized DataSource instance)
     command: Vec<u8>,
-    /// Python version string for compatibility checking
-    python_ver: String,
     /// DataSource name (cached for efficiency)
     name: String,
-    /// Cached schema (populated on first schema() call)
-    schema: Option<SchemaRef>,
+    /// Cached schema (lazily populated on first schema() call)
+    schema: OnceCell<SchemaRef>,
+    /// Cached deserialized Python datasource object.
+    /// Uses Mutex<Option<Py<PyAny>>> for thread-safe lazy initialization.
+    /// Py<PyAny> is Send+Sync when GIL is not held.
+    #[cfg(feature = "python")]
+    cached_datasource: Arc<Mutex<Option<Py<PyAny>>>>,
+}
+
+// Manual Clone implementation because Py<PyAny> clone requires GIL
+impl Clone for PythonDataSource {
+    fn clone(&self) -> Self {
+        Self {
+            command: self.command.clone(),
+            name: self.name.clone(),
+            schema: self.schema.clone(),
+            #[cfg(feature = "python")]
+            cached_datasource: Arc::new(Mutex::new(None)), // Don't clone the cache, will re-deserialize
+        }
+    }
 }
 
 impl PythonDataSource {
@@ -76,11 +103,43 @@ impl PythonDataSource {
 
             Ok(Self {
                 command,
-                python_ver,
                 name,
-                schema: None,
+                schema: OnceCell::new(),
+                #[cfg(feature = "python")]
+                cached_datasource: Arc::new(Mutex::new(None)),
             })
         }
+    }
+
+    /// Get or create the cached deserialized datasource.
+    ///
+    /// This method reduces cloudpickle overhead by caching the deserialized
+    /// Python object. The first call deserializes via cloudpickle, subsequent
+    /// calls return the cached object.
+    ///
+    /// # Arguments
+    /// * `py` - Python GIL token
+    ///
+    /// # Returns
+    /// * `Result<Bound<'py, PyAny>>` - Bound reference to the cached datasource
+    #[cfg(feature = "python")]
+    fn get_cached_datasource<'py>(&self, py: Python<'py>) -> Result<Bound<'py, PyAny>> {
+        let mut cache = self.cached_datasource.lock().map_err(|e| {
+            PythonDataSourceError::PythonError(format!("Failed to acquire cache lock: {}", e))
+        })?;
+
+        if let Some(ref cached) = *cache {
+            // Return cached object bound to current GIL scope
+            return Ok(cached.bind(py).clone());
+        }
+
+        // Cache miss - deserialize and store
+        let ds = Self::deserialize_datasource(py, &self.command)?;
+
+        // Store unbound reference in cache
+        *cache = Some(ds.clone().unbind());
+
+        Ok(ds)
     }
 
     /// Get the DataSource name.
@@ -100,7 +159,7 @@ impl PythonDataSource {
     /// - Python schema() method fails
     /// - Schema string parsing fails
     /// - Schema conversion fails
-    pub fn schema(&mut self) -> Result<SchemaRef> {
+    pub fn schema(&self) -> Result<SchemaRef> {
         #[cfg(not(feature = "python"))]
         {
             datafusion_common::exec_err!("Python support not enabled in this build")
@@ -108,42 +167,39 @@ impl PythonDataSource {
 
         #[cfg(feature = "python")]
         {
-            // Return cached schema if available
-            if let Some(ref schema) = self.schema {
-                return Ok(schema.clone());
-            }
+            // Use OnceLock for thread-safe lazy initialization
+            self.schema
+                .get_or_try_init(|| {
+                    let ctx = PythonDataSourceContext::new(&self.name, "schema");
 
-            // Call Python schema() method
-            let schema = Python::attach(|py| {
-                let ds = Self::deserialize_datasource(py, &self.command)?;
+                    // Call Python schema() method using cached datasource
+                    Python::attach(|py| {
+                        let ds = self.get_cached_datasource(py)?;
 
-                // Call schema() method
-                let schema_obj = ds.call_method0("schema").map_err(|e| {
-                    PythonDataSourceError::PythonError(format!("Failed to call schema(): {}", e))
-                })?;
+                        // Call schema() method
+                        let schema_obj = ds
+                            .call_method0("schema")
+                            .map_err(|e| ctx.wrap_py_error(e))?;
 
-                // Schema should be a PyArrow Schema or DDL string
-                // Try PyArrow Schema first
-                if let Ok(schema) = py_schema_to_rust(py, &schema_obj) {
-                    return Ok(schema);
-                }
+                        // Schema should be a PyArrow Schema or DDL string
+                        // Try PyArrow Schema first
+                        if let Ok(schema) = py_schema_to_rust(py, &schema_obj) {
+                            return Ok(schema);
+                        }
 
-                // Try DDL string
-                let schema_str: String = schema_obj.extract().map_err(|e| {
-                    PythonDataSourceError::SchemaError(format!(
-                        "schema() must return PyArrow Schema or DDL string: {}",
-                        e
-                    ))
-                })?;
+                        // Try DDL string
+                        let schema_str: String = schema_obj.extract().map_err(|e| {
+                            PythonDataSourceError::SchemaError(format!(
+                                "[{}::schema] schema() must return PyArrow Schema or DDL string: {}",
+                                self.name, e
+                            ))
+                        })?;
 
-                // Parse DDL string to Arrow schema
-                Self::parse_ddl_schema(&schema_str)
-            })?;
-
-            // Cache the schema
-            self.schema = Some(schema.clone());
-
-            Ok(schema)
+                        // Parse DDL string to Arrow schema
+                        Self::parse_ddl_schema(&schema_str)
+                    })
+                })
+                .cloned()
         }
     }
 
@@ -161,24 +217,20 @@ impl PythonDataSource {
 
         #[cfg(feature = "python")]
         {
+            let ctx = PythonDataSourceContext::new(&self.name, "partitioning");
+
             Python::attach(|py| {
-                let ds = Self::deserialize_datasource(py, &self.command)?;
+                let ds = self.get_cached_datasource(py)?;
 
                 // Call partitioning() method
-                let partitions = ds.call_method0("partitioning").map_err(|e| {
-                    PythonDataSourceError::PythonError(format!(
-                        "Failed to call partitioning(): {}",
-                        e
-                    ))
-                })?;
+                let partitions = ds
+                    .call_method0("partitioning")
+                    .map_err(|e| ctx.wrap_py_error(e))?;
 
                 // Convert to list
                 let partitions_list =
                     partitions.downcast::<pyo3::types::PyList>().map_err(|e| {
-                        PythonDataSourceError::PythonError(format!(
-                            "partitioning() must return a list: {}",
-                            e
-                        ))
+                        ctx.wrap_error(format!("partitioning() must return a list: {}", e))
                     })?;
 
                 Ok(partitions_list.len())
@@ -203,48 +255,42 @@ impl PythonDataSource {
     /// * `Result<Vec<InputPartition>>` - List of partitions
     #[cfg(feature = "python")]
     pub fn get_partitions(&self, schema: &SchemaRef) -> Result<Vec<InputPartition>> {
+        let ctx = PythonDataSourceContext::new(&self.name, "get_partitions");
+
         Python::attach(|py| {
-            let ds = Self::deserialize_datasource(py, &self.command)?;
+            let ds = self.get_cached_datasource(py)?;
 
             // Get reader with schema
             let schema_obj = super::arrow_utils::rust_schema_to_py(py, schema)?;
-            let reader = ds.call_method1("reader", (schema_obj,)).map_err(|e| {
-                PythonDataSourceError::PythonError(format!("Failed to call reader(): {}", e))
-            })?;
+            let reader = ds
+                .call_method1("reader", (schema_obj,))
+                .map_err(|e| ctx.wrap_py_error(e))?;
 
             // Get partitions
-            let partitions = reader.call_method0("partitions").map_err(|e| {
-                PythonDataSourceError::PythonError(format!("Failed to call partitions(): {}", e))
-            })?;
+            let partitions = reader
+                .call_method0("partitions")
+                .map_err(|e| ctx.wrap_py_error(e))?;
 
             // Convert to list
-            let partitions_list = partitions.downcast::<pyo3::types::PyList>().map_err(|e| {
-                PythonDataSourceError::PythonError(format!(
-                    "partitions() must return a list: {}",
-                    e
-                ))
-            })?;
+            let partitions_list = partitions
+                .downcast::<pyo3::types::PyList>()
+                .map_err(|e| ctx.wrap_error(format!("partitions() must return a list: {}", e)))?;
 
             // Pickle each partition
-            let cloudpickle = py.import("cloudpickle").map_err(|e| {
-                PythonDataSourceError::PythonError(format!("Failed to import cloudpickle: {}", e))
-            })?;
+            let cloudpickle = py.import("cloudpickle").map_err(|e| ctx.wrap_py_error(e))?;
 
             let mut result = Vec::with_capacity(partitions_list.len());
             for (i, partition) in partitions_list.iter().enumerate() {
                 let pickled = cloudpickle
                     .call_method1("dumps", (&partition,))
                     .map_err(|e| {
-                        PythonDataSourceError::PythonError(format!(
-                            "Failed to pickle partition: {}",
-                            e
-                        ))
+                        ctx.wrap_error(format!("Failed to pickle partition {}: {}", i, e))
                     })?;
 
                 let bytes: Vec<u8> = pickled.extract().map_err(|e| {
-                    PythonDataSourceError::PythonError(format!(
-                        "Failed to extract pickled bytes: {}",
-                        e
+                    ctx.wrap_error(format!(
+                        "Failed to extract pickled bytes for partition {}: {}",
+                        i, e
                     ))
                 })?;
 
@@ -253,6 +299,12 @@ impl PythonDataSource {
                     data: bytes,
                 });
             }
+
+            log::debug!(
+                "[{}::get_partitions] Created {} partitions",
+                self.name,
+                result.len()
+            );
 
             Ok(result)
         })
@@ -455,7 +507,6 @@ impl std::fmt::Debug for PythonDataSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PythonDataSource")
             .field("name", &self.name)
-            .field("python_ver", &self.python_ver)
             .field("command_len", &self.command.len())
             .finish()
     }

@@ -6,6 +6,7 @@
 /// - Datasource validation for security
 ///
 /// Entry points are registered under the group `sail.datasources`.
+use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use datafusion_common::{exec_err, DataFusionError, Result};
 use once_cell::sync::Lazy;
@@ -47,6 +48,13 @@ impl PythonDataSourceRegistry {
     /// Register a datasource entry.
     pub fn register(&self, entry: DataSourceEntry) {
         self.entries.insert(entry.name.clone(), entry);
+    }
+
+    /// Get entry for atomic check-and-insert operations.
+    ///
+    /// Returns a DashMap Entry that allows atomic insertion if the key is absent.
+    pub fn entry(&self, name: &str) -> Entry<'_, String, DataSourceEntry> {
+        self.entries.entry(name.to_string())
     }
 
     /// Get a datasource by name.
@@ -96,24 +104,24 @@ pub fn discover_datasources() -> Result<usize> {
                             if let Ok((name, cls)) =
                                 entry.extract::<(String, pyo3::Bound<'_, pyo3::PyAny>)>()
                             {
-                                if DATASOURCE_REGISTRY.contains(&name) {
-                                    continue;
-                                }
-                                if validate_datasource_class(py, &cls).is_ok() {
-                                    if let Ok(pickled) = pickle_class(py, &cls) {
-                                        let module_path = cls
-                                            .getattr("__module__")
-                                            .and_then(|m| m.extract::<String>())
-                                            .unwrap_or_default();
+                                // Use entry API for atomic check-and-insert (fixes TOCTOU)
+                                if let Entry::Vacant(vacant) = DATASOURCE_REGISTRY.entry(&name) {
+                                    if validate_datasource_class(py, &cls).is_ok() {
+                                        if let Ok(pickled) = pickle_class(py, &cls) {
+                                            let module_path = cls
+                                                .getattr("__module__")
+                                                .and_then(|m| m.extract::<String>())
+                                                .unwrap_or_default();
 
-                                        DATASOURCE_REGISTRY.register(DataSourceEntry {
-                                            name: name.clone(),
-                                            pickled_class: pickled,
-                                            module_path,
-                                        });
+                                            vacant.insert(DataSourceEntry {
+                                                name: name.clone(),
+                                                pickled_class: pickled,
+                                                module_path,
+                                            });
 
-                                        log::info!("Discovered datasource: {}", name);
-                                        count += 1;
+                                            log::info!("Discovered datasource: {}", name);
+                                            count += 1;
+                                        }
                                     }
                                 }
                             }
@@ -171,27 +179,25 @@ fn discover_from_python_registry(py: pyo3::Python<'_>) -> Result<usize> {
             for item in items_iter.flatten() {
                 // Each item is (name, class)
                 if let Ok((name, cls)) = item.extract::<(String, pyo3::Bound<'_, pyo3::PyAny>)>() {
-                    // Skip if already registered
-                    if DATASOURCE_REGISTRY.contains(&name) {
-                        continue;
-                    }
+                    // Use entry API for atomic check-and-insert (fixes TOCTOU)
+                    if let Entry::Vacant(vacant) = DATASOURCE_REGISTRY.entry(&name) {
+                        // Validate and pickle
+                        if validate_datasource_class(py, &cls).is_ok() {
+                            if let Ok(pickled) = pickle_class(py, &cls) {
+                                let module_path = cls
+                                    .getattr("__module__")
+                                    .and_then(|m| m.extract::<String>())
+                                    .unwrap_or_default();
 
-                    // Validate and pickle
-                    if validate_datasource_class(py, &cls).is_ok() {
-                        if let Ok(pickled) = pickle_class(py, &cls) {
-                            let module_path = cls
-                                .getattr("__module__")
-                                .and_then(|m| m.extract::<String>())
-                                .unwrap_or_default();
+                                vacant.insert(DataSourceEntry {
+                                    name: name.clone(),
+                                    pickled_class: pickled,
+                                    module_path,
+                                });
 
-                            DATASOURCE_REGISTRY.register(DataSourceEntry {
-                                name: name.clone(),
-                                pickled_class: pickled,
-                                module_path,
-                            });
-
-                            log::info!("Discovered datasource from registry: {}", name);
-                            count += 1;
+                                log::info!("Discovered datasource from registry: {}", name);
+                                count += 1;
+                            }
                         }
                     }
                 }

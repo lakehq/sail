@@ -15,6 +15,46 @@ pub enum PythonDataSourceError {
     ArrowError(String),
     /// DataFusion error
     DataFusion(DataFusionError),
+    /// Resource exhaustion (e.g., partition too large)
+    ResourceExhausted(String),
+}
+
+/// Context for Python datasource operations, used for enhanced error reporting.
+///
+/// This struct captures the datasource name and current operation to provide
+/// better error messages when Python operations fail.
+#[derive(Debug, Clone)]
+pub struct PythonDataSourceContext {
+    /// Name of the datasource being operated on
+    pub datasource_name: String,
+    /// Current operation (e.g., "schema", "partitions", "read")
+    pub operation: &'static str,
+}
+
+impl PythonDataSourceContext {
+    /// Create a new context for error reporting.
+    pub fn new(datasource_name: impl Into<String>, operation: &'static str) -> Self {
+        Self {
+            datasource_name: datasource_name.into(),
+            operation,
+        }
+    }
+
+    /// Wrap an error message with context information.
+    pub fn wrap_error(&self, msg: impl Into<String>) -> PythonDataSourceError {
+        PythonDataSourceError::PythonError(format!(
+            "[{}::{}] {}",
+            self.datasource_name,
+            self.operation,
+            msg.into()
+        ))
+    }
+
+    /// Wrap a Python error with context information.
+    #[cfg(feature = "python")]
+    pub fn wrap_py_error(&self, e: pyo3::PyErr) -> PythonDataSourceError {
+        self.wrap_error(e.to_string())
+    }
 }
 
 impl fmt::Display for PythonDataSourceError {
@@ -25,6 +65,7 @@ impl fmt::Display for PythonDataSourceError {
             Self::VersionError(msg) => write!(f, "Version error: {}", msg),
             Self::ArrowError(msg) => write!(f, "Arrow conversion error: {}", msg),
             Self::DataFusion(e) => write!(f, "DataFusion error: {}", e),
+            Self::ResourceExhausted(msg) => write!(f, "Resource exhausted: {}", msg),
         }
     }
 }
