@@ -32,8 +32,8 @@ pub struct PhysicalOptimizerOptions {
     pub enable_join_reorder: bool,
 }
 
-fn limit_push_past_windows(
-) -> datafusion::common::Result<Arc<dyn PhysicalOptimizerRule + Send + Sync>> {
+#[expect(clippy::expect_used)]
+fn limit_push_past_windows() -> Arc<dyn PhysicalOptimizerRule + Send + Sync> {
     // TODO: remove this workaround after the rule is made public in DataFusion
     //   https://github.com/apache/datafusion/pull/17736
     PhysicalOptimizer::default()
@@ -41,11 +41,8 @@ fn limit_push_past_windows(
         .iter()
         .find(|rule| rule.name() == "LimitPushPastWindows")
         .cloned()
-        .ok_or_else(|| {
-            datafusion::common::DataFusionError::Internal(
-                "LimitPushPastWindows optimizer rule not found".to_string(),
-            )
-        })
+        // A missing optimizer is catastrophic and should fail the entire program immediately.
+        .expect("LimitPushPastWindows optimizer rule not found")
 }
 
 pub fn get_physical_optimizers(
@@ -71,7 +68,7 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(CoalesceAsyncExecInput::new()));
     rules.push(Arc::new(OutputRequirements::new_remove_mode()));
     rules.push(Arc::new(TopKAggregation::new()));
-    rules.push(limit_push_past_windows()?);
+    rules.push(limit_push_past_windows());
     rules.push(Arc::new(LimitPushdown::new()));
     rules.push(Arc::new(ProjectionPushdown::new()));
     rules.push(Arc::new(EnsureCooperative::new()));
