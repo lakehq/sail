@@ -546,7 +546,7 @@ pub(crate) fn divide_by_partition_values(
         .project(&partition_indices)
         .map_err(|e| DeltaTableError::generic(e.to_string()))?;
 
-    let indices = lexsort_to_indices(sort_columns.columns());
+    let indices = lexsort_to_indices(sort_columns.columns())?;
     let sorted_partition_columns = partition_indices
         .iter()
         .map(|&idx| {
@@ -555,9 +555,8 @@ pub(crate) fn divide_by_partition_values(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    let partition_ranges =
-        datafusion::arrow::compute::partition(sorted_partition_columns.as_slice())
-            .map_err(|e| DeltaTableError::generic(e.to_string()))?;
+    let partition_ranges = compute::partition(sorted_partition_columns.as_slice())
+        .map_err(|e| DeltaTableError::generic(e.to_string()))?;
 
     for range in partition_ranges.ranges().iter() {
         // get row indices for current partition
@@ -601,16 +600,16 @@ pub(crate) fn divide_by_partition_values(
     Ok(partitions)
 }
 
-fn lexsort_to_indices(arrays: &[ArrayRef]) -> UInt32Array {
+fn lexsort_to_indices(arrays: &[ArrayRef]) -> Result<UInt32Array, DeltaTableError> {
     let fields = arrays
         .iter()
         .map(|a| SortField::new(a.data_type().clone()))
         .collect();
-    #[allow(clippy::unwrap_used)]
-    let converter = RowConverter::new(fields).unwrap();
-    #[allow(clippy::unwrap_used)]
-    let rows = converter.convert_columns(arrays).unwrap();
+    let converter = RowConverter::new(fields)?;
+    let rows = converter.convert_columns(arrays)?;
     let mut sort: Vec<_> = rows.iter().enumerate().collect();
     sort.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
-    UInt32Array::from_iter_values(sort.iter().map(|(i, _)| *i as u32))
+    Ok(UInt32Array::from_iter_values(
+        sort.iter().map(|(i, _)| *i as u32),
+    ))
 }

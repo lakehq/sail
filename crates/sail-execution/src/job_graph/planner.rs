@@ -13,6 +13,7 @@ use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMerge
 use datafusion::physical_plan::{
     with_new_children_if_necessary, ExecutionPlan, ExecutionPlanProperties,
 };
+use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{ExecutionError, ExecutionResult};
@@ -175,6 +176,9 @@ fn build_job_graph(
         let child = plan.children().one()?;
         plan.clone()
             .with_new_children(vec![create_merge_input(child, graph)?])?
+    } else if plan.as_any().is::<SystemTableExec>() {
+        plan.children().zero()?;
+        create_driver_stage(&plan, graph)?
     } else {
         plan
     };
@@ -262,4 +266,31 @@ fn rewrite_inputs(
         }
     });
     Ok((result.data()?, inputs))
+}
+
+// TODO: support driver stage with inputs
+fn create_driver_stage(
+    plan: &Arc<dyn ExecutionPlan>,
+    graph: &mut JobGraph,
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    let schema = plan.schema();
+    let partitioning = plan.output_partitioning().clone();
+    let stage = Stage {
+        inputs: vec![],
+        plan: plan.clone(),
+        group: String::new(),
+        mode: OutputMode::Pipelined,
+        distribution: OutputDistribution::RoundRobin { channels: 1 },
+        placement: TaskPlacement::Driver,
+    };
+    let s = graph.stages.len();
+    graph.stages.push(stage);
+    Ok(Arc::new(StageInputExec::new(
+        StageInput {
+            stage: s,
+            mode: InputMode::Forward,
+        },
+        schema,
+        partitioning,
+    )))
 }

@@ -36,6 +36,7 @@ test = [
     # PySpark 4.1.0 does not work on Windows.
     #   https://issues.apache.org/jira/browse/SPARK-54745
     "pyspark-client>=4.0,<4.2,!=4.1.0",
+    "pandas<3",
     "duckdb>=1.0,<2",
     "pytest>=8.4,<9",
     "pytest-bdd>=8.1,<9",
@@ -82,6 +83,7 @@ skip-install = true
 dependencies = [
     "pyspark[connect]==4.1.1",
     "ibis-framework>=11,<12",
+    "pandas<3",
     "pytest>=8.4,<9",
     "pytest-bdd>=8.1,<9",
     "syrupy>=5.0,<6",
@@ -130,6 +132,7 @@ python = "3.11"
 installer = "pip"
 skip-install = true
 dependencies = [
+    "pandas<3",
     "pytest>=8.4,<9",
     "pytest-bdd>=8.1,<9",
     "syrupy>=5.0,<6",
@@ -175,7 +178,7 @@ dependencies = [
 spark = ["3.5.7", "4.1.1"]
 
 [tool.hatch.envs.test-spark.extra-scripts]
-install-pyspark = "\"{env:HATCH_UV}\" pip install --force-reinstall 'pyspark[connect] @ opt/spark/python/dist/pyspark-{matrix:spark}.tar.gz'"
+install-pyspark = "\"{env:HATCH_UV}\" pip install --force-reinstall 'pyspark[connect] @ opt/spark/python/dist/pyspark-{matrix:spark}.tar.gz' 'pandas<3'"
 
 [tool.hatch.envs.test-spark.overrides]
 matrix.spark.path = [
