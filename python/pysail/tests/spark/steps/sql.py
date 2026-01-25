@@ -106,7 +106,10 @@ def query_schema_type(datatable, query, spark):
     for row in datatable[1:]:  # Skip header row
         column_name = row[0]
         expected_type = row[1]
-        expected_nullable = row[2].lower() == "true" if len(row) > 2 else None
+        try:
+            expected_nullable = row[2].lower() == "true"
+        except IndexError:
+            expected_nullable = None
 
         field = schema[column_name]
         actual_type = normalize_type_name(field.dataType.simpleString())
@@ -117,8 +120,7 @@ def query_schema_type(datatable, query, spark):
 
         if expected_nullable is not None:
             assert field.nullable == expected_nullable, (
-                f"Column '{column_name}': expected nullable={expected_nullable}, "
-                f"got nullable={field.nullable}"
+                f"Column '{column_name}': expected nullable={expected_nullable}, got nullable={field.nullable}"
             )
 
 
