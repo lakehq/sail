@@ -187,7 +187,7 @@ mod tests {
                 Arc::new(StringArray::from(vec![Some("file.parquet")])),
                 Arc::new(Int64Array::from(vec![Some(10)])),
                 Arc::new(Int64Array::from(vec![Some(20)])),
-                Arc::new(StringArray::from(vec![None])),
+                Arc::new(StringArray::from(vec![None::<&str>])),
                 Arc::new(Int64Array::from(vec![Some(7)])),
                 Arc::new(Int64Array::from(vec![Some(42)])),
                 Arc::new(StringArray::from(vec![Some("p1")])),

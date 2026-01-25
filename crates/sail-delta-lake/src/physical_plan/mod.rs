@@ -44,7 +44,6 @@ pub use commit_exec::DeltaCommitExec;
 pub use discovery_exec::DeltaDiscoveryExec;
 pub use expr_adapter::DeltaPhysicalExprAdapterFactory;
 pub use log_replay_exec::DeltaLogReplayExec;
-pub use metadata_agg_exec::DeltaMetadataAggExec;
 pub mod planner;
 pub use planner::{
     plan_delete, plan_merge, plan_update, DeltaPhysicalPlanner, DeltaTableConfig, PlannerContext,
