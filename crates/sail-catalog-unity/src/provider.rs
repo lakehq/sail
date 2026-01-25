@@ -319,10 +319,10 @@ impl UnityCatalogProvider {
         let properties: Vec<_> = properties.into_iter().collect();
 
         Ok(TableStatus {
+            catalog: Some(catalog),
+            database,
             name,
             kind: TableKind::Table {
-                catalog,
-                database,
                 columns,
                 comment,
                 constraints: vec![],

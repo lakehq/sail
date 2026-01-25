@@ -15,7 +15,7 @@ message ExtendedPhysicalPlanNode {
     ShowStringExecNode show_string = 2;
     // We have removed shuffle read and write nodes.
     StageInputExecNode stage_input = 3;
-    // TODO: update field number for all subsequent nodes
+    SystemTableExecNode system_table = 4;
     SchemaPivotExecNode schema_pivot = 5;
     MapPartitionsExecNode map_partitions = 6;
     // TODO: This can be removed once it is supported by DataFusion.
@@ -242,6 +242,13 @@ message StageInputExecNode {
   uint64 input = 1;
   bytes schema = 2;
   bytes partitioning = 3;
+}
+
+message SystemTableExecNode {
+  string table = 1;
+  optional PhysicalProjection projection = 2;
+  repeated bytes filters = 3;
+  optional uint64 fetch = 4;
 }
 
 message SchemaPivotExecNode {

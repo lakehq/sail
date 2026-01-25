@@ -11,13 +11,16 @@ sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-catalog = { path = "../sail-catalog" }
 sail-catalog-memory = { path = "../sail-catalog-memory" }
+sail-catalog-system = { path = "../sail-catalog-system" }
 sail-catalog-iceberg = { path = "../sail-catalog-iceberg" }
 sail-catalog-unity = { path = "../sail-catalog-unity" }
 sail-catalog-onelake = { path = "../sail-catalog-onelake" }
 sail-data-source = { path = "../sail-data-source" }
 sail-delta-lake = { path = "../sail-delta-lake" }
 sail-iceberg = { path = "../sail-iceberg" }
+sail-logical-plan = { path = "../sail-logical-plan" }
 sail-logical-optimizer = { path = "../sail-logical-optimizer" }
+sail-physical-plan = { path = "../sail-physical-plan" }
 sail-physical-optimizer = { path = "../sail-physical-optimizer" }
 sail-plan = { path = "../sail-plan" }
 sail-execution = { path = "../sail-execution" }
@@ -26,12 +29,20 @@ sail-plan-lakehouse = { path = "../sail-plan-lakehouse" }
 sail-server = { path = "../sail-server" }
 sail-cache = { path = "../sail-cache" }
 sail-telemetry = { path = "../sail-telemetry" }
+sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 
+async-trait = { workspace = true }
 readonly = { workspace = true }
 thiserror = { workspace = true }
 fastrace = { workspace = true }
 log = { workspace = true }
 datafusion = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-expr = { workspace = true }
+datafusion-physical-expr = { workspace = true }
 secrecy = { workspace = true }
 tonic = { workspace = true }
 tokio = { workspace = true }
+chrono = { workspace = true }
+indexmap = { workspace = true }
+futures = { workspace = true }

@@ -1,14 +1,13 @@
 mod core;
 mod handler;
 
-use std::collections::HashMap;
+use indexmap::IndexMap;
 
-use datafusion::prelude::SessionContext;
+use crate::session_factory::{ServerSessionInfo, SessionFactory};
+use crate::session_manager::session::ServerSession;
 
-use crate::session_factory::SessionFactory;
-
-pub struct SessionManagerActor<K> {
-    options: super::options::SessionManagerOptions<K>,
-    factory: Box<dyn SessionFactory<K>>,
-    sessions: HashMap<K, SessionContext>,
+pub struct SessionManagerActor {
+    options: super::options::SessionManagerOptions,
+    factory: Box<dyn SessionFactory<ServerSessionInfo>>,
+    sessions: IndexMap<String, ServerSession>,
 }

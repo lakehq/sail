@@ -14,7 +14,7 @@
     "@tailwindcss/vite": "^4.1.18",
     "@types/js-yaml": "^4.0.9",
     "@types/markdown-it": "^14.1.2",
-    "@types/node": "^24.9.1",
+    "@types/node": "^24.10.9",
     "@typescript-eslint/eslint-plugin": "^8.53.1",
     "@typescript-eslint/parser": "^8.53.1",
     "@viz-js/viz": "^3.24.0",
@@ -28,7 +28,7 @@
     "markdown-it": "^14.1.0",
     "markdown-it-deflist": "^3.0.0",
     "markdown-it-footnote": "^4.0.0",
-    "prettier": "^3.8.0",
+    "prettier": "^3.8.1",
     "prettier-plugin-tailwindcss": "^0.7.2",
     "prettier-plugin-vitepress": "^0.0.10",
     "sql-formatter": "^15.7.0",
@@ -41,7 +41,7 @@
     "vitepress": "^1.6.4",
     "vue": "^3.5.27",
     "vue-eslint-parser": "^10.2.0",
-    "vue-tsc": "^3.2.2"
+    "vue-tsc": "^3.2.3"
   },
   "prettier": {
     "plugins": [

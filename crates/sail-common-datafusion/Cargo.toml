@@ -28,3 +28,11 @@ serde_arrow = { workspace = true }
 
 [build-dependencies]
 tonic-prost-build = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+syn = { workspace = true }
+prettyplease = { workspace = true }
+regex = { workspace = true }
+quote = { workspace = true }
+proc-macro2 = { workspace = true }
+lazy_static = { workspace = true }

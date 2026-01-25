@@ -373,8 +373,8 @@ impl ExecutionPlan for DeltaCommitExec {
                         "minReaderVersion": 1,
                         "minWriterVersion": 2,
                     });
-                    #[allow(clippy::unwrap_used)]
-                    let protocol: Protocol = serde_json::from_value(protocol_json).unwrap();
+                    let protocol: Protocol = serde_json::from_value(protocol_json)
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                     let configuration: HashMap<String, String> = HashMap::new();
                     let metadata = Metadata::try_new(

@@ -8,6 +8,7 @@ use sail_catalog::provider::{CatalogProvider, RuntimeAwareCatalogProvider};
 use sail_catalog_iceberg::IcebergRestCatalogProvider;
 use sail_catalog_memory::MemoryCatalogProvider;
 use sail_catalog_onelake::OneLakeCatalogProvider;
+use sail_catalog_system::{SystemCatalogProvider, SYSTEM_CATALOG_NAME};
 use sail_catalog_unity::UnityCatalogProvider;
 use sail_common::config::{AppConfig, CatalogType};
 use sail_common::runtime::RuntimeHandle;
@@ -17,7 +18,7 @@ pub fn create_catalog_manager(
     config: &AppConfig,
     runtime: RuntimeHandle,
 ) -> Result<CatalogManager> {
-    let catalogs = config
+    let mut catalogs = config
         .catalog
         .list
         .iter()
@@ -129,6 +130,18 @@ pub fn create_catalog_manager(
         })
         .collect::<CatalogResult<HashMap<_, _>>>()
         .map_err(|e| plan_datafusion_err!("failed to create catalog: {e}"))?;
+    if catalogs
+        .insert(
+            SYSTEM_CATALOG_NAME.to_string(),
+            Arc::new(SystemCatalogProvider),
+        )
+        .is_some()
+    {
+        return Err(plan_datafusion_err!(
+            "cannot define catalog with reserved name: {}",
+            SYSTEM_CATALOG_NAME
+        ));
+    }
     let options = CatalogManagerOptions {
         catalogs,
         default_catalog: config.catalog.default_catalog.clone(),
