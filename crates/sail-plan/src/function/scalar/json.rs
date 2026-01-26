@@ -48,6 +48,10 @@ fn json_tuple(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             "json_tuple requires at least 2 arguments: json string and at least one key",
         ));
     }
+
+    // Return the SparkJsonTuple call directly.
+    // The JsonTupleRewriter will transform this into field access expressions
+    // wrapped in MultiExpr during the projection rewrite phase.
     let func = ScalarUDF::from(SparkJsonTuple::new());
     Ok(func.call(arguments))
 }

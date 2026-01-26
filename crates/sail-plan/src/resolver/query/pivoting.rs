@@ -168,7 +168,7 @@ impl PlanResolver<'_> {
             self.rewrite_projection::<ExplodeRewriter>(input.clone(), projections, state)?;
 
         let expr = self.rewrite_multi_expr(expr)?;
-        let expr = self.rewrite_named_expressions(expr, input.schema(), state)?;
+        let expr = self.rewrite_named_expressions(expr, state)?;
 
         Ok(LogicalPlan::Projection(Projection::try_new(
             expr,

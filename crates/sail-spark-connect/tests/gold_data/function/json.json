@@ -363,7 +363,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "invalid argument: alias expected to create named expression"
       }
     },
     {

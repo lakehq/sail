@@ -36,7 +36,7 @@ impl PlanResolver<'_> {
             .zip(columns.into_iter())
             .map(|(col, name)| NamedExpr::new(vec![name.into()], Expr::Column(col)))
             .collect();
-        let expr = self.rewrite_named_expressions(expr, input.schema(), state)?;
+        let expr = self.rewrite_named_expressions(expr, state)?;
         Ok(LogicalPlan::Projection(Projection::try_new(
             expr,
             Arc::new(input),
@@ -111,7 +111,7 @@ impl PlanResolver<'_> {
                 }
             })
             .collect::<PlanResult<Vec<_>>>()?;
-        let expr = self.rewrite_named_expressions(expr, input.schema(), state)?;
+        let expr = self.rewrite_named_expressions(expr, state)?;
         Ok(LogicalPlan::Projection(Projection::try_new(
             expr,
             Arc::new(input),
@@ -236,7 +236,7 @@ impl PlanResolver<'_> {
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<WindowRewriter>(input, expr, state)?;
         let expr = self.rewrite_multi_expr(expr)?;
-        let expr = self.rewrite_named_expressions(expr, input.schema(), state)?;
+        let expr = self.rewrite_named_expressions(expr, state)?;
         Ok(LogicalPlan::Projection(Projection::try_new(
             expr,
             Arc::new(input),
@@ -337,7 +337,7 @@ impl PlanResolver<'_> {
             .collect::<PlanResult<Vec<_>>>()?;
 
         Ok(LogicalPlan::Projection(Projection::try_new(
-            self.rewrite_named_expressions(replace_exprs, input.schema(), state)?,
+            self.rewrite_named_expressions(replace_exprs, state)?,
             Arc::new(input),
         )?))
     }

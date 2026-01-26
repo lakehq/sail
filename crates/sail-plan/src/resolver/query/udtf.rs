@@ -105,7 +105,7 @@ impl PlanResolver<'_> {
             .iter()
             .map(|e| e.name.clone().one())
             .collect::<datafusion_common::Result<_>>()?;
-        let projections = self.rewrite_named_expressions(projections, plan.schema(), state)?;
+        let projections = self.rewrite_named_expressions(projections, state)?;
         let input_types = projections
             .iter()
             .map(|e| e.get_type(plan.schema()))

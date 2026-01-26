@@ -91,7 +91,7 @@ impl PlanResolver<'_> {
             .collect::<PlanResult<Vec<_>>>()?;
 
         Ok(LogicalPlan::Projection(Projection::try_new(
-            self.rewrite_named_expressions(fill_na_exprs, input.schema(), state)?,
+            self.rewrite_named_expressions(fill_na_exprs, state)?,
             Arc::new(input),
         )?))
     }
