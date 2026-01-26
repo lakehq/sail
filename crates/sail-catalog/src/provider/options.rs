@@ -6,6 +6,7 @@ use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
 };
 
+/// Options for creating a database in a catalog.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd)]
 pub struct CreateDatabaseOptions {
     pub comment: Option<String>,

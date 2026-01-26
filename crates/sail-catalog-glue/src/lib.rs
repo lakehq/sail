@@ -1,3 +1,5 @@
+mod data_type;
+mod format;
 mod provider;
 
-pub use provider::GlueCatalogProvider;
+pub use provider::{GlueCatalogConfig, GlueCatalogProvider};

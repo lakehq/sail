@@ -10,4 +10,14 @@ workspace = true
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-catalog = { path = "../sail-catalog" }
 
+arrow = { workspace = true }
 async-trait = { workspace = true }
+aws-config = { workspace = true }
+aws-sdk-glue = "1"
+aws-credential-types = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+arrow = { workspace = true }
+testcontainers = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
