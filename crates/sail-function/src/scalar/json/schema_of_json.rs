@@ -11,17 +11,17 @@ use jiter::{Jiter, Peek};
 ///
 /// Example: schema_of_json('[{"col":0}]') returns 'ARRAY<STRUCT<col: BIGINT>>'
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SchemaOfJson {
+pub struct SparkSchemaOfJson {
     signature: Signature,
 }
 
-impl Default for SchemaOfJson {
+impl Default for SparkSchemaOfJson {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl SchemaOfJson {
+impl SparkSchemaOfJson {
     pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
@@ -29,7 +29,7 @@ impl SchemaOfJson {
     }
 }
 
-impl ScalarUDFImpl for SchemaOfJson {
+impl ScalarUDFImpl for SparkSchemaOfJson {
     fn as_any(&self) -> &dyn Any {
         self
     }

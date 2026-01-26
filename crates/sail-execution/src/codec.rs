@@ -104,7 +104,7 @@ use sail_function::scalar::drop_struct_field::DropStructField;
 use sail_function::scalar::explode::{explode_name_to_kind, Explode};
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
 use sail_function::scalar::hash::spark_xxhash64::SparkXxhash64;
-use sail_function::scalar::json::SparkToJson;
+use sail_function::scalar::json::{SparkSchemaOfJson, SparkToJson};
 use sail_function::scalar::map::map_from_arrays::MapFromArrays;
 use sail_function::scalar::map::map_from_entries::MapFromEntries;
 use sail_function::scalar::map::str_to_map::StrToMap;
@@ -1442,9 +1442,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "json_object_keys" | "json_keys" => {
                 Ok(sail_function::scalar::json::json_object_keys_udf())
             }
-            "schema_of_json" => Ok(Arc::new(ScalarUDF::from(
-                sail_function::scalar::json::SchemaOfJson::new(),
-            ))),
+            "schema_of_json" => Ok(Arc::new(ScalarUDF::from(SparkSchemaOfJson::new()))),
             "spark_base64" | "base64" => Ok(Arc::new(ScalarUDF::from(SparkBase64::new()))),
             "spark_bround" | "bround" => Ok(Arc::new(ScalarUDF::from(SparkBRound::new()))),
             "spark_interval_div" => Ok(Arc::new(ScalarUDF::from(SparkIntervalDiv::new()))),
@@ -1600,6 +1598,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkNextDay>()
             || node_inner.is::<SparkPmod>()
             || node_inner.is::<SparkReverse>()
+            || node_inner.is::<SparkSchemaOfJson>()
             || node_inner.is::<SparkSequence>()
             || node_inner.is::<SparkShuffle>()
             || node_inner.is::<SparkSha1>()
@@ -1635,7 +1634,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.name() == "json_as_text"
             || node.name() == "json_len"
             || node.name() == "json_length"
-            || node.name() == "schema_of_json"
         {
             UdfKind::Standard(gen::StandardUdf {})
         } else if let Some(func) = node.inner().as_any().downcast_ref::<PySparkUDF>() {
