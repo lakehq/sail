@@ -14,7 +14,6 @@ use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
 use datafusion_common::{arrow_datafusion_err, plan_err, Result};
 use futures::{Stream, StreamExt};
-use log::debug;
 use sail_common_datafusion::streaming::event::encoding::EncodedFlowEventStream;
 use sail_common_datafusion::streaming::event::schema::to_flow_event_schema;
 use sail_common_datafusion::streaming::event::stream::FlowEventStreamAdapter;
