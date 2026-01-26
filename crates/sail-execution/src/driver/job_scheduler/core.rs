@@ -550,10 +550,11 @@ impl JobScheduler {
                 // For running jobs, the job output is dropped here.
                 // Internally, the job output manages the receiving end of the output stream.
                 // So once the stream receiver is no longer available, all the running tasks
-                // will ultimately find that the sink is closed (even if the task produces
-                // infinite stream) and the task will stop running.
-                // Once the tasks are stopped, the worker gRPC server will have no active clients
-                // subscribing to local streams, so the server can proceed with shutdown.
+                // will ultimately find that the sink (owned by the shuffle write node) is closed.
+                // The task will stop running even if the task produces an infinite stream.
+                // Once the tasks are stopped, the inputs (gRPC streaming responses owned by
+                // shuffle read nodes) are dropped. So the worker gRPC server will have no active
+                // clients subscribing to local streams, and the server can proceed with shutdown.
                 job.state = JobState::Canceled;
                 job.stopped_at = Some(Utc::now());
             }
