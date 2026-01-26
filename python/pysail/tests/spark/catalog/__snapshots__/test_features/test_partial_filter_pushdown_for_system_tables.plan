@@ -1,0 +1,8 @@
+== Physical Plan ==
+ProjectionExec: expr=[#5@0 as session_id, #6@1 as job_id, #7@2 as status, #8@3 as created_at, #9@4 as stopped_at]
+  ProjectionExec: expr=[session_id@0 as #5, job_id@1 as #6, status@2 as #7, created_at@3 as #8, stopped_at@4 as #9]
+    CoalesceBatchesExec: target_batch_size=8192
+      FilterExec: spark_concat(session_id@0, CAST(job_id@1 AS Utf8)) = 0
+        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+          CooperativeExec
+            SystemTableExec: table=jobs, projection=Some([0, 1, 2, 3, 4]), filters=[BinaryExpr { left: BinaryExpr { left: CastExpr { expr: Column { name: "job_id", index: 1 }, cast_type: Decimal128(20, 0), cast_options: CastOptions { safe: false, format_options: FormatOptions { safe: true, null: "", date_format: None, datetime_format: None, timestamp_format: None, timestamp_tz_format: None, time_format: None, duration_format: Pretty, types_info: false, formatter_factory: None } } }, op: Plus, right: Literal { value: Decimal128(Some(1),20,0), field: Field { name: "lit", data_type: Decimal128(20, 0) } }, fail_on_overflow: false }, op: Eq, right: Literal { value: Decimal128(Some(1),21,0), field: Field { name: "lit", data_type: Decimal128(21, 0) } }, fail_on_overflow: false }], fetch=None

@@ -55,9 +55,11 @@ use datafusion_spark::function::string::elt::SparkElt;
 use datafusion_spark::function::string::format_string::FormatStringFunc;
 use datafusion_spark::function::string::luhn_check::SparkLuhnCheck;
 use prost::Message;
+use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::array::record_batch::{read_record_batches, write_record_batches};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::physical_expr::PhysicalExprWithSource;
+use sail_common_datafusion::system::catalog::SystemTable;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_data_source::formats::binary::source::BinarySource;
 use sail_data_source::formats::console::ConsoleSinkExec;
@@ -102,6 +104,7 @@ use sail_function::scalar::drop_struct_field::DropStructField;
 use sail_function::scalar::explode::{explode_name_to_kind, Explode};
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
 use sail_function::scalar::hash::spark_xxhash64::SparkXxhash64;
+use sail_function::scalar::json::SparkToJson;
 use sail_function::scalar::map::map_from_arrays::MapFromArrays;
 use sail_function::scalar::map::map_from_entries::MapFromEntries;
 use sail_function::scalar::map::str_to_map::StrToMap;
@@ -239,6 +242,27 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let schema = self.try_decode_schema(&schema)?;
                 let partitioning = self.try_decode_partitioning(&partitioning, &schema, ctx)?;
                 let node = StageInputExec::new(input as usize, Arc::new(schema), partitioning);
+                Ok(Arc::new(node))
+            }
+            NodeKind::SystemTable(gen::SystemTableExecNode {
+                table,
+                projection,
+                filters,
+                fetch,
+            }) => {
+                let table: SystemTable =
+                    serde_json::from_str(&table).map_err(|e| plan_datafusion_err!("{e}"))?;
+                let schema = table.schema();
+                let projection =
+                    projection.map(|x| x.columns.into_iter().map(|c| c as usize).collect());
+                let filters = filters
+                    .iter()
+                    .map(|expr| {
+                        parse_physical_expr(&self.try_decode_message(expr)?, ctx, &schema, self)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let fetch = fetch.map(|x| x as usize);
+                let node = SystemTableExec::try_new(table, projection, filters, fetch)?;
                 Ok(Arc::new(node))
             }
             NodeKind::SchemaPivot(gen::SchemaPivotExecNode {
@@ -828,6 +852,27 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input: *stage_input.input() as u64,
                 schema,
                 partitioning,
+            })
+        } else if let Some(system_table) = node.as_any().downcast_ref::<SystemTableExec>() {
+            let table = serde_json::to_string(&system_table.table())
+                .map_err(|e| plan_datafusion_err!("{e}"))?;
+            let projection = system_table.projection().map(|x| gen::PhysicalProjection {
+                columns: x.iter().map(|c| *c as u64).collect(),
+            });
+            let filters = system_table
+                .filters()
+                .iter()
+                .map(|expr| {
+                    let expr = serialize_physical_expr(expr, self)?;
+                    self.try_encode_message(expr)
+                })
+                .collect::<Result<_>>()?;
+            let fetch = system_table.fetch().map(|f| f as u64);
+            NodeKind::SystemTable(gen::SystemTableExecNode {
+                table,
+                projection,
+                filters,
+                fetch,
             })
         } else if let Some(schema_pivot) = node.as_any().downcast_ref::<SchemaPivotExec>() {
             let schema = self.try_encode_schema(schema_pivot.schema().as_ref())?;
@@ -1476,6 +1521,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkTryMult::new())))
             }
             "spark_version" | "version" => Ok(Arc::new(ScalarUDF::from(SparkVersion::new()))),
+            "spark_to_json" | "to_json" => Ok(Arc::new(ScalarUDF::from(SparkToJson::new()))),
             "spark_try_subtract" | "try_subtract" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTrySubtract::new())))
             }
@@ -1580,6 +1626,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkXxhash64>()
             || node_inner.is::<SparkYearMonthInterval>()
             || node_inner.is::<StrToMap>()
+            || node_inner.is::<SparkToJson>()
             || node_inner.is::<UrlDecode>()
             || node_inner.is::<UrlEncode>()
             || node.name() == "json_as_text"

@@ -32,7 +32,7 @@ pub struct PhysicalOptimizerOptions {
     pub enable_join_reorder: bool,
 }
 
-#[expect(clippy::unwrap_used)]
+#[expect(clippy::expect_used)]
 fn limit_push_past_windows() -> Arc<dyn PhysicalOptimizerRule + Send + Sync> {
     // TODO: remove this workaround after the rule is made public in DataFusion
     //   https://github.com/apache/datafusion/pull/17736
@@ -41,7 +41,8 @@ fn limit_push_past_windows() -> Arc<dyn PhysicalOptimizerRule + Send + Sync> {
         .iter()
         .find(|rule| rule.name() == "LimitPushPastWindows")
         .cloned()
-        .unwrap()
+        // A missing optimizer is catastrophic and should fail the entire program immediately.
+        .expect("LimitPushPastWindows optimizer rule not found")
 }
 
 pub fn get_physical_optimizers(

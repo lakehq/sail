@@ -40,6 +40,7 @@ impl Actor for DriverActor {
             task_runner: TaskRunner::new(),
             stream_manager,
             task_sequences: HashMap::new(),
+            history: None,
         }
     }
 
@@ -126,13 +127,17 @@ impl Actor for DriverActor {
                 schema,
                 result,
             } => self.handle_fetch_remote_stream(ctx, uri, key, schema, result),
-            DriverEvent::Shutdown => ActorAction::Stop,
+            DriverEvent::ObserveState { observer } => self.handle_observe_state(ctx, observer),
+            DriverEvent::Shutdown { history } => self.handle_shutdown(ctx, history),
         }
     }
 
     async fn stop(mut self, ctx: &mut ActorContext<Self>) {
         if let Err(e) = self.worker_pool.close(ctx).await {
             error!("encountered error while stopping workers: {e}");
+        }
+        if let Some(history) = self.history.take() {
+            let _ = history.send(self.build_history());
         }
         info!("stopping driver server");
         self.server.stop().await;

@@ -5,7 +5,7 @@ use arrow::datatypes::Date32Type;
 use datafusion_expr::expr;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::session::PlanService;
+use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 use sail_sql_analyzer::parser::{parse_date, parse_timestamp};
 
