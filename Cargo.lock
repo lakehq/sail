@@ -5820,6 +5820,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sail-catalog-glue"
+version = "0.4.6"
+dependencies = [
+ "async-trait",
+ "sail-catalog",
+ "sail-common-datafusion",
+]
+
+[[package]]
 name = "sail-catalog-iceberg"
 version = "0.4.6"
 dependencies = [
