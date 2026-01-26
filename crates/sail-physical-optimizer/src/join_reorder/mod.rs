@@ -45,7 +45,8 @@ impl PhysicalOptimizerRule for JoinReorder {
             displayable(plan.as_ref()).indent(true)
         );
 
-        // Start the top-down region search and optimization from the root plan
+        // Search and optimize reorderable regions. We traverse bottom-up so nested reorderable
+        // regions inside "leaf" plans (as seen by a higher-level region) are also visited.
         self.find_and_optimize_regions(plan)
     }
 
@@ -59,46 +60,41 @@ impl PhysicalOptimizerRule for JoinReorder {
 }
 
 impl JoinReorder {
-    /// Recursively searches for reorderable join regions from the top down.
+    /// Recursively searches for reorderable join regions bottom-up.
     fn find_and_optimize_regions(
         &self,
         plan: Arc<dyn ExecutionPlan>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         trace!("find_and_optimize_regions: Processing {}", plan.name());
 
-        // Soft fallback: if join reordering fails for any reason, log a warning and
-        // continue optimizing children under the original plan.
-        match self.try_optimize_region(plan.clone()) {
-            Ok(Some(new_plan)) => return Ok(new_plan),
-            Ok(None) => {}
-            Err(e) => {
-                warn!(
-                    "JoinReorder: Optimization failed for region rooted at {} (fallback to original plan): {}",
-                    plan.name(),
-                    e
-                );
-            }
-        }
-
-        // If no significant reorderable region was found starting at the current node,
-        // recursively optimize the children of the current node.
-        trace!("find_and_optimize_regions: No reorderable region found at {}, recursing to {} children", 
-              plan.name(), plan.children().len());
-
-        // Allow recursion through Left Joins to find Inner Join regions below.
-        // Left Joins won't be included in reorderable regions but we optimize their children.
-
+        // Optimize children first so any nested reorderable regions inside "leaf" plans
+        // (from the perspective of the current region) are not skipped.
         let optimized_children = plan
             .children()
             .into_iter()
-            .map(|child| self.find_and_optimize_regions(child.clone()))
+            .map(|child| self.find_and_optimize_regions(Arc::clone(child)))
             .collect::<Result<Vec<_>>>()?;
 
-        // Rebuild the current node with its optimized children.
-        if optimized_children.is_empty() {
-            Ok(plan)
+        let plan = if optimized_children.is_empty() {
+            plan
         } else {
-            plan.with_new_children(optimized_children)
+            plan.with_new_children(optimized_children)?
+        };
+
+        // Attempt to optimize a reorderable region rooted at this node.
+        // Soft fallback: if join reordering fails for any reason, log a warning and return
+        // the plan with optimized children.
+        match self.try_optimize_region(Arc::clone(&plan)) {
+            Ok(Some(new_plan)) => Ok(new_plan),
+            Ok(None) => Ok(plan),
+            Err(e) => {
+                warn!(
+                    "JoinReorder: Optimization failed for region rooted at {} (fallback to children-optimized plan): {}",
+                    plan.name(),
+                    e
+                );
+                Ok(plan)
+            }
         }
     }
 
@@ -366,15 +362,32 @@ mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::common::NullEquality;
     use datafusion::logical_expr::{JoinType, Operator};
-    use datafusion::physical_expr::expressions::{BinaryExpr, Column};
+    use datafusion::physical_expr::expressions::{BinaryExpr, Column, Literal};
     use datafusion::physical_expr::utils::collect_columns;
     use datafusion::physical_expr::PhysicalExpr;
     use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
     use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion::physical_plan::filter::FilterExec;
     use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
     use datafusion::physical_plan::projection::ProjectionExec;
+    use datafusion::scalar::ScalarValue;
 
     use super::*;
+
+    fn find_node_by_name(
+        plan: Arc<dyn ExecutionPlan>,
+        name: &str,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        if plan.name() == name {
+            return Some(plan);
+        }
+        for child in plan.children() {
+            if let Some(found) = find_node_by_name(Arc::clone(child), name) {
+                return Some(found);
+            }
+        }
+        None
+    }
 
     /// Test that the recursive optimizer correctly processes plans with boundary nodes
     /// This test verifies that the optimizer doesn't crash and preserves plan structure
@@ -607,6 +620,93 @@ mod tests {
         // Should complete without errors and preserve the aggregate boundaries
         assert_eq!(optimized_plan.name(), "AggregateExec");
         assert!(!optimized_plan.children().is_empty());
+
+        Ok(())
+    }
+
+    /// Regression test: nested reorderable regions inside leaf nodes of a higher-level region
+    /// must still be optimized. This requires a bottom-up traversal.
+    #[test]
+    fn test_nested_reorderable_region_under_leaf_is_optimized() -> Result<()> {
+        // Tables use the same simple schema so join conditions can consistently reference `id`.
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+
+        let t1 = Arc::new(EmptyExec::new(schema.clone()));
+        let t2 = Arc::new(EmptyExec::new(schema.clone()));
+        let t3 = Arc::new(EmptyExec::new(schema.clone()));
+        let t4 = Arc::new(EmptyExec::new(schema.clone()));
+        let t5 = Arc::new(EmptyExec::new(schema.clone()));
+
+        let on = vec![(
+            Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
+            Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
+        )];
+
+        // Build a nested reorderable region (3 relations): (t1 ⋈ t2) ⋈ t3
+        let join12 = Arc::new(HashJoinExec::try_new(
+            t1,
+            t2,
+            on.clone(),
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Auto,
+            NullEquality::NullEqualsNothing,
+        )?);
+        let join123 = Arc::new(HashJoinExec::try_new(
+            join12,
+            t3,
+            on.clone(),
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Auto,
+            NullEquality::NullEqualsNothing,
+        )?);
+
+        // Wrap the nested joins in a boundary node that GraphBuilder treats as a leaf.
+        // FilterExec is such a boundary (it has a child but isn't "see-through" for graph building).
+        let pred: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("id", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(0)))),
+        ));
+        let filtered_subplan = Arc::new(FilterExec::try_new(pred, join123)?);
+
+        // Higher-level reorderable region (3 relations): (filtered_subplan ⋈ t4) ⋈ t5
+        let join4 = Arc::new(HashJoinExec::try_new(
+            filtered_subplan,
+            t4,
+            on.clone(),
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Auto,
+            NullEquality::NullEqualsNothing,
+        )?);
+        let root = Arc::new(HashJoinExec::try_new(
+            join4,
+            t5,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Auto,
+            NullEquality::NullEqualsNothing,
+        )?);
+
+        let join_reorder = JoinReorder::new();
+        let optimized_plan = join_reorder.find_and_optimize_regions(root)?;
+
+        // Root region should be optimized (>= 3 relations), producing a ProjectionExec.
+        assert_eq!(optimized_plan.name(), "ProjectionExec");
+
+        // The nested region under FilterExec must also be optimized, producing its own ProjectionExec.
+        #[expect(clippy::expect_used)]
+        let filter_node = find_node_by_name(optimized_plan, "FilterExec")
+            .expect("expected FilterExec leaf to remain in the optimized plan");
+        assert_eq!(filter_node.children().len(), 1);
+        assert_eq!(filter_node.children()[0].name(), "ProjectionExec");
 
         Ok(())
     }
