@@ -85,11 +85,18 @@ pub fn build_job_output(
 ) -> (JobOutputManager, SendableRecordBatchStream) {
     let (sender, receiver) = mpsc::channel(JobOutputItem::CHANNEL_SIZE);
     let (tx, rx) = mpsc::channel(1);
-    let stream = JobOutputStream::new(receiver);
     let handle = ctx.handle().clone();
     ctx.spawn(async move {
-        let mut stream = stream;
-        while let Some(batch) = stream.next().await {
+        let mut stream = JobOutputStream::new(receiver);
+        loop {
+            let next = tokio::select! {
+                biased;
+                x = stream.next() => x,
+                _ = tx.closed() => break,
+            };
+            let Some(batch) = next else {
+                break;
+            };
             if tx.send(batch).await.is_err() {
                 break;
             }

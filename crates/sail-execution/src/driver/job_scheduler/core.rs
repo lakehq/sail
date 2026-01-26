@@ -544,6 +544,36 @@ impl JobScheduler {
         Ok((definition, context.clone()))
     }
 
+    pub fn stop(&mut self) {
+        for (_, job) in self.jobs.iter_mut() {
+            if matches!(job.state, JobState::Running { .. } | JobState::Draining) {
+                // For running jobs, the job output is dropped here.
+                // Internally, the job output manages the receiving end of the output stream.
+                // So once the stream receiver is no longer available, all the running tasks
+                // will ultimately find that the sink is closed (even if the task produces
+                // infinite stream) and the task will stop running.
+                // Once the tasks are stopped, the worker gRPC server will have no active clients
+                // subscribing to local streams, so the server can proceed with shutdown.
+                job.state = JobState::Canceled;
+                job.stopped_at = Some(Utc::now());
+            }
+            for stage in job.stages.iter_mut() {
+                if matches!(stage.state, StageState::Active) {
+                    stage.state = StageState::Inactive;
+                    stage.stopped_at = Some(Utc::now());
+                }
+                for task in stage.tasks.iter_mut() {
+                    for attempt in task.attempts.iter_mut() {
+                        if !attempt.state.is_terminal() {
+                            attempt.state = TaskState::Canceled;
+                            attempt.stopped_at = Some(Utc::now());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn get_task_input(
         &self,
         job: &JobDescriptor,
