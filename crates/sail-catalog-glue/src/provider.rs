@@ -602,21 +602,70 @@ impl CatalogProvider for GlueCatalogProvider {
         }
     }
 
-    async fn list_tables(&self, _database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
-        Err(CatalogError::NotSupported(
-            "AWS Glue catalog list_tables is not yet implemented".to_string(),
-        ))
+    async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
+        let client = self.get_client().await?;
+        let db_name = database.to_string();
+
+        let result = client
+            .get_tables()
+            .database_name(&db_name)
+            .send()
+            .await;
+
+        match result {
+            Ok(output) => output
+                .table_list()
+                .iter()
+                .map(|tbl| self.table_to_status(database, tbl))
+                .collect(),
+            Err(sdk_err) => {
+                let service_err = sdk_err.into_service_error();
+                Err(CatalogError::External(format!(
+                    "Failed to list tables: {service_err}"
+                )))
+            }
+        }
     }
 
     async fn drop_table(
         &self,
-        _database: &Namespace,
-        _table: &str,
-        _options: DropTableOptions,
+        database: &Namespace,
+        table: &str,
+        options: DropTableOptions,
     ) -> CatalogResult<()> {
-        Err(CatalogError::NotSupported(
-            "AWS Glue catalog drop_table is not yet implemented".to_string(),
-        ))
+        let DropTableOptions { if_exists, purge } = options;
+
+        if purge {
+            return Err(CatalogError::NotSupported(
+                "AWS Glue catalog does not support PURGE".to_string(),
+            ));
+        }
+
+        let client = self.get_client().await?;
+        let db_name = database.to_string();
+
+        let result = client
+            .delete_table()
+            .database_name(&db_name)
+            .name(table)
+            .send()
+            .await;
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(sdk_err) => {
+                let service_err = sdk_err.into_service_error();
+                if service_err.is_entity_not_found_exception() && if_exists {
+                    Ok(())
+                } else if service_err.is_entity_not_found_exception() {
+                    Err(CatalogError::NotFound("table", table.to_string()))
+                } else {
+                    Err(CatalogError::External(format!(
+                        "Failed to drop table: {service_err}"
+                    )))
+                }
+            }
+        }
     }
 
     async fn create_view(

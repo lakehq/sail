@@ -16,7 +16,7 @@
 
 mod common;
 
-use common::setup_glue_catalog;
+use common::{setup_glue_catalog, simple_database_options};
 use sail_catalog::provider::{CatalogProvider, CreateDatabaseOptions, DropDatabaseOptions, Namespace};
 
 #[tokio::test]
@@ -49,15 +49,7 @@ async fn test_create_database() {
 
     // Test creating duplicate without if_not_exists - should fail
     let result = catalog
-        .create_database(
-            &namespace,
-            CreateDatabaseOptions {
-                if_not_exists: false,
-                comment: None,
-                location: None,
-                properties: vec![],
-            },
-        )
+        .create_database(&namespace, simple_database_options())
         .await;
     assert!(result.is_err());
 
@@ -68,9 +60,7 @@ async fn test_create_database() {
             &namespace2,
             CreateDatabaseOptions {
                 if_not_exists: true,
-                comment: None,
-                location: None,
-                properties: vec![],
+                ..simple_database_options()
             },
         )
         .await
@@ -192,10 +182,8 @@ async fn test_drop_database() {
         .create_database(
             &namespace,
             CreateDatabaseOptions {
-                if_not_exists: false,
                 comment: Some("To be dropped".to_string()),
-                location: None,
-                properties: vec![],
+                ..simple_database_options()
             },
         )
         .await
@@ -233,41 +221,17 @@ async fn test_list_databases() {
     let ns3 = Namespace::try_from(vec!["other_db".to_string()]).unwrap();
 
     catalog
-        .create_database(
-            &ns1,
-            CreateDatabaseOptions {
-                if_not_exists: false,
-                comment: None,
-                location: None,
-                properties: vec![],
-            },
-        )
+        .create_database(&ns1, simple_database_options())
         .await
         .unwrap();
 
     catalog
-        .create_database(
-            &ns2,
-            CreateDatabaseOptions {
-                if_not_exists: false,
-                comment: None,
-                location: None,
-                properties: vec![],
-            },
-        )
+        .create_database(&ns2, simple_database_options())
         .await
         .unwrap();
 
     catalog
-        .create_database(
-            &ns3,
-            CreateDatabaseOptions {
-                if_not_exists: false,
-                comment: None,
-                location: None,
-                properties: vec![],
-            },
-        )
+        .create_database(&ns3, simple_database_options())
         .await
         .unwrap();
 

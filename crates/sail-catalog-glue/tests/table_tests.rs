@@ -19,8 +19,10 @@ mod common;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Fields, TimeUnit};
-use common::{col, setup_with_database};
-use sail_catalog::provider::{CatalogProvider, CreateTableColumnOptions, CreateTableOptions};
+use common::{col, setup_with_database, simple_table_options};
+use sail_catalog::provider::{
+    CatalogProvider, CreateTableColumnOptions, CreateTableOptions, DropTableOptions,
+};
 
 #[tokio::test]
 #[ignore]
@@ -98,27 +100,7 @@ async fn test_create_table() {
         .create_table(
             &namespace,
             "products",
-            CreateTableOptions {
-                columns: vec![CreateTableColumnOptions {
-                    name: "id".to_string(),
-                    data_type: DataType::Int32,
-                    nullable: false,
-                    comment: None,
-                    default: None,
-                    generated_always_as: None,
-                }],
-                comment: None,
-                constraints: vec![],
-                location: None,
-                format: "parquet".to_string(),
-                partition_by: vec![],
-                sort_by: vec![],
-                bucket_by: None,
-                if_not_exists: false,
-                replace: false,
-                options: vec![],
-                properties: vec![],
-            },
+            simple_table_options(vec![col("id", DataType::Int32)]),
         )
         .await;
     assert!(result.is_err());
@@ -129,21 +111,10 @@ async fn test_create_table() {
             &namespace,
             "products",
             CreateTableOptions {
-                columns: vec![CreateTableColumnOptions {
-                    nullable: false,
-                    ..col("different", DataType::Int32)
-                }],
+                columns: vec![col("different", DataType::Int32)],
                 comment: Some("Different comment".to_string()),
-                constraints: vec![],
-                location: None,
-                format: "parquet".to_string(),
-                partition_by: vec![],
-                sort_by: vec![],
-                bucket_by: None,
                 if_not_exists: true,
-                replace: false,
-                options: vec![],
-                properties: vec![],
+                ..simple_table_options(vec![])
             },
         )
         .await
@@ -239,6 +210,7 @@ async fn test_get_table() {
     }
 }
 
+/// Verifies all supported Arrow data types can be created as Glue table columns.
 #[tokio::test]
 #[ignore]
 async fn test_column_types() {
@@ -298,16 +270,8 @@ async fn test_column_types() {
             CreateTableOptions {
                 columns,
                 comment: Some("Table with all supported column types".to_string()),
-                constraints: vec![],
                 location: Some("s3://bucket/all_types".to_string()),
-                format: "parquet".to_string(),
-                partition_by: vec![],
-                sort_by: vec![],
-                bucket_by: None,
-                if_not_exists: false,
-                replace: false,
-                options: vec![],
-                properties: vec![],
+                ..simple_table_options(vec![])
             },
         )
         .await
@@ -384,17 +348,8 @@ async fn test_unsupported_column_types() {
             "unsupported_types",
             CreateTableOptions {
                 columns: unsupported_columns,
-                comment: None,
-                constraints: vec![],
                 location: Some("s3://bucket/unsupported".to_string()),
-                format: "parquet".to_string(),
-                partition_by: vec![],
-                sort_by: vec![],
-                bucket_by: None,
-                if_not_exists: false,
-                replace: false,
-                options: vec![],
-                properties: vec![],
+                ..simple_table_options(vec![])
             },
         )
         .await;
@@ -475,4 +430,94 @@ async fn test_storage_formats() {
             _ => panic!("Expected Table kind for {format}"),
         }
     }
+}
+
+/// Verifies list_tables returns all created tables in a database.
+#[tokio::test]
+#[ignore]
+async fn test_list_tables() {
+    let (catalog, _container, namespace) = setup_with_database("test_list_tables").await;
+
+    // Create multiple tables
+    let table_names = ["table_alpha", "table_beta", "table_gamma"];
+
+    for table_name in &table_names {
+        catalog
+            .create_table(
+                &namespace,
+                table_name,
+                simple_table_options(vec![col("id", DataType::Int32)]),
+            )
+            .await
+            .unwrap();
+    }
+
+    // List tables
+    let tables = catalog.list_tables(&namespace).await.unwrap();
+
+    // Verify all tables are returned
+    assert_eq!(tables.len(), table_names.len());
+
+    let returned_names: Vec<&str> = tables.iter().map(|t| t.name.as_str()).collect();
+    for name in &table_names {
+        assert!(
+            returned_names.contains(name),
+            "Expected table '{name}' not found in list"
+        );
+    }
+}
+
+/// Verifies drop_table removes a table and handles if_exists correctly.
+#[tokio::test]
+#[ignore]
+async fn test_drop_table() {
+    let (catalog, _container, namespace) = setup_with_database("test_drop_table").await;
+
+    // Create a table
+    catalog
+        .create_table(
+            &namespace,
+            "drop_me",
+            simple_table_options(vec![col("id", DataType::Int32)]),
+        )
+        .await
+        .unwrap();
+
+    // Verify table exists
+    let table = catalog.get_table(&namespace, "drop_me").await;
+    assert!(table.is_ok());
+
+    // Drop the table
+    let drop_options = DropTableOptions {
+        if_exists: false,
+        purge: false,
+    };
+    catalog
+        .drop_table(&namespace, "drop_me", drop_options)
+        .await
+        .unwrap();
+
+    // Verify table no longer exists
+    let result = catalog.get_table(&namespace, "drop_me").await;
+    assert!(result.is_err());
+
+    // Dropping non-existent table with if_exists=false should error
+    let drop_options = DropTableOptions {
+        if_exists: false,
+        purge: false,
+    };
+    let result = catalog
+        .drop_table(&namespace, "nonexistent", drop_options)
+        .await;
+    assert!(result.is_err());
+
+    // Dropping non-existent table with if_exists=true should succeed
+    let drop_options = DropTableOptions {
+        if_exists: true,
+        purge: false,
+    };
+    let result = catalog
+        .drop_table(&namespace, "nonexistent", drop_options)
+        .await;
+    assert!(result.is_ok());
 }

@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use arrow::datatypes::DataType;
 use sail_catalog::provider::{
-    CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions, Namespace,
+    CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions, Namespace,
 };
 use sail_catalog_glue::{GlueCatalogConfig, GlueCatalogProvider};
 use testcontainers::core::{ContainerPort, WaitFor};
@@ -32,6 +32,34 @@ pub fn col(name: &str, data_type: DataType) -> CreateTableColumnOptions {
         comment: None,
         default: None,
         generated_always_as: None,
+    }
+}
+
+/// Helper to create database options with sensible defaults.
+pub fn simple_database_options() -> CreateDatabaseOptions {
+    CreateDatabaseOptions {
+        if_not_exists: false,
+        comment: None,
+        location: None,
+        properties: vec![],
+    }
+}
+
+/// Helper to create table options with sensible defaults (parquet format, no partitioning).
+pub fn simple_table_options(columns: Vec<CreateTableColumnOptions>) -> CreateTableOptions {
+    CreateTableOptions {
+        columns,
+        comment: None,
+        constraints: vec![],
+        location: None,
+        format: "parquet".to_string(),
+        partition_by: vec![],
+        sort_by: vec![],
+        bucket_by: None,
+        if_not_exists: false,
+        replace: false,
+        options: vec![],
+        properties: vec![],
     }
 }
 
@@ -74,15 +102,7 @@ pub async fn setup_with_database(
     let (catalog, container) = setup_glue_catalog(test_name).await;
     let namespace = Namespace::try_from(vec![format!("{test_name}_db")]).unwrap();
     catalog
-        .create_database(
-            &namespace,
-            CreateDatabaseOptions {
-                if_not_exists: false,
-                comment: None,
-                location: None,
-                properties: vec![],
-            },
-        )
+        .create_database(&namespace, simple_database_options())
         .await
         .unwrap();
     (catalog, container, namespace)
