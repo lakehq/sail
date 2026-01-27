@@ -128,3 +128,11 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
     | result                                |
     | STRUCT<age: BIGINT, name: STRING>     |
     | STRUCT<x: DOUBLE, y: BOOLEAN>         |
+
+  Scenario: schema_of_json rejects non-foldable column input
+    When query
+    """
+    SELECT schema_of_json(json_col) AS result
+    FROM VALUES ('{"name":"Alice"}') AS t(json_col)
+    """
+    Then query error NON_FOLDABLE_INPUT

@@ -1,7 +1,5 @@
 use std::any::Any;
-use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, ArrayRef, StringArray, StringBuilder};
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
@@ -53,8 +51,9 @@ impl ScalarUDFImpl for SparkSchemaOfJson {
             return exec_err!("schema_of_json requires at least 1 argument");
         }
 
-        // First argument is the JSON string
-        // Second argument (optional) is a map of options - we ignore options for now
+        // First argument is the JSON string.
+        // Spark requires the input to be a foldable (constant/literal) expression.
+        // Second argument (optional) is a map of options - we ignore options for now.
         match &args[0] {
             ColumnarValue::Scalar(scalar) => {
                 let json_str = match scalar {
@@ -71,75 +70,13 @@ impl ScalarUDFImpl for SparkSchemaOfJson {
 
                 Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(schema))))
             }
-            ColumnarValue::Array(json_array) => {
-                schema_of_json_array(json_array).map(ColumnarValue::Array)
+            ColumnarValue::Array(_) => {
+                exec_err!(
+                    "[DATATYPE_MISMATCH.NON_FOLDABLE_INPUT] Cannot resolve \"schema_of_json()\" due to data type mismatch: the input `json` should be a foldable \"STRING\" expression; however, got a column reference."
+                )
             }
         }
     }
-}
-
-fn schema_of_json_array(json_array: &ArrayRef) -> Result<ArrayRef> {
-    let len = json_array.len();
-    let mut builder = StringBuilder::with_capacity(len, len * 20);
-
-    match json_array.data_type() {
-        DataType::Utf8 => {
-            let arr = json_array
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .ok_or_else(|| {
-                    datafusion_common::DataFusionError::Internal(
-                        "Failed to downcast to StringArray".to_string(),
-                    )
-                })?;
-            for i in 0..arr.len() {
-                if arr.is_null(i) {
-                    builder.append_value("STRING");
-                } else {
-                    builder.append_value(infer_json_schema(arr.value(i)));
-                }
-            }
-        }
-        DataType::LargeUtf8 => {
-            let arr = json_array
-                .as_any()
-                .downcast_ref::<datafusion::arrow::array::LargeStringArray>()
-                .ok_or_else(|| {
-                    datafusion_common::DataFusionError::Internal(
-                        "Failed to downcast to LargeStringArray".to_string(),
-                    )
-                })?;
-            for i in 0..arr.len() {
-                if arr.is_null(i) {
-                    builder.append_value("STRING");
-                } else {
-                    builder.append_value(infer_json_schema(arr.value(i)));
-                }
-            }
-        }
-        DataType::Utf8View => {
-            let arr = json_array
-                .as_any()
-                .downcast_ref::<datafusion::arrow::array::StringViewArray>()
-                .ok_or_else(|| {
-                    datafusion_common::DataFusionError::Internal(
-                        "Failed to downcast to StringViewArray".to_string(),
-                    )
-                })?;
-            for i in 0..arr.len() {
-                if arr.is_null(i) {
-                    builder.append_value("STRING");
-                } else {
-                    builder.append_value(infer_json_schema(arr.value(i)));
-                }
-            }
-        }
-        other => {
-            return exec_err!("schema_of_json expects string input, got {:?}", other);
-        }
-    }
-
-    Ok(Arc::new(builder.finish()))
 }
 
 /// Infer the Spark SQL DDL schema from a JSON string.
