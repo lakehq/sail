@@ -149,6 +149,7 @@ use sail_function::scalar::url::parse_url::ParseUrl;
 use sail_function::scalar::url::spark_try_parse_url::SparkTryParseUrl;
 use sail_function::scalar::url::url_decode::UrlDecode;
 use sail_function::scalar::url::url_encode::UrlEncode;
+use datafusion_spark::function::url::try_url_decode::TryUrlDecode;
 use sail_iceberg::physical_plan::{IcebergCommitExec, IcebergWriterExec};
 use sail_iceberg::TableIcebergOptions;
 use sail_logical_plan::range::Range;
@@ -1548,6 +1549,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "try_parse_url" | "spark_try_parse_url" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryParseUrl::new())))
             }
+            "try_url_decode" => Ok(Arc::new(ScalarUDF::from(TryUrlDecode::new()))),
             "url_decode" => Ok(Arc::new(ScalarUDF::from(UrlDecode::new()))),
             "url_encode" => Ok(Arc::new(ScalarUDF::from(UrlEncode::new()))),
             _ => plan_err!("could not find scalar function: {name}"),
@@ -1642,6 +1644,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkYearMonthInterval>()
             || node_inner.is::<StrToMap>()
             || node_inner.is::<SparkToJson>()
+            || node_inner.is::<TryUrlDecode>()
             || node_inner.is::<UrlDecode>()
             || node_inner.is::<UrlEncode>()
             || node.name() == "json_as_text"
