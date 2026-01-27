@@ -1,8 +1,8 @@
 use datafusion_spark::function::url::try_url_decode::TryUrlDecode;
+use datafusion_spark::function::url::url_decode::UrlDecode;
+use datafusion_spark::function::url::url_encode::UrlEncode;
 use sail_function::scalar::url::parse_url::ParseUrl;
 use sail_function::scalar::url::spark_try_parse_url::SparkTryParseUrl;
-use sail_function::scalar::url::url_decode::UrlDecode;
-use sail_function::scalar::url::url_encode::UrlEncode;
 
 use crate::function::common::ScalarFunction;
 

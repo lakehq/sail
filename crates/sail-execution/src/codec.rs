@@ -41,6 +41,7 @@ use datafusion_proto::physical_plan::{AsExecutionPlan, PhysicalExtensionCodec};
 use datafusion_proto::protobuf::{
     JoinType as ProtoJoinType, PhysicalPlanNode, PhysicalSortExprNode,
 };
+use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use datafusion_spark::function::array::shuffle::SparkShuffle;
 use datafusion_spark::function::bitmap::bitmap_count::BitmapCount;
 use datafusion_spark::function::bitwise::bit_count::SparkBitCount;
@@ -57,6 +58,7 @@ use datafusion_spark::function::math::width_bucket::SparkWidthBucket;
 use datafusion_spark::function::string::elt::SparkElt;
 use datafusion_spark::function::string::format_string::FormatStringFunc;
 use datafusion_spark::function::string::luhn_check::SparkLuhnCheck;
+use datafusion_spark::function::url::try_url_decode::TryUrlDecode;
 use prost::Message;
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::array::record_batch::{read_record_batches, write_record_batches};
@@ -80,7 +82,6 @@ use sail_function::aggregate::mode::ModeFunction;
 use sail_function::aggregate::percentile_disc::PercentileDisc;
 use sail_function::aggregate::skewness::SkewnessFunc;
 use sail_function::aggregate::try_avg::TryAvgFunction;
-use sail_function::aggregate::try_sum::TrySumFunction;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
 use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
@@ -108,8 +109,8 @@ use sail_function::scalar::explode::{explode_name_to_kind, Explode};
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
 use sail_function::scalar::hash::spark_xxhash64::SparkXxhash64;
 use sail_function::scalar::json::SparkToJson;
-use sail_function::scalar::map::map_from_arrays::MapFromArrays;
-use sail_function::scalar::map::map_from_entries::MapFromEntries;
+use datafusion_spark::function::map::map_from_arrays::MapFromArrays;
+use datafusion_spark::function::map::map_from_entries::MapFromEntries;
 use sail_function::scalar::map::str_to_map::StrToMap;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
@@ -147,9 +148,8 @@ use sail_function::scalar::struct_function::StructFunction;
 use sail_function::scalar::update_struct_field::UpdateStructField;
 use sail_function::scalar::url::parse_url::ParseUrl;
 use sail_function::scalar::url::spark_try_parse_url::SparkTryParseUrl;
-use sail_function::scalar::url::url_decode::UrlDecode;
-use sail_function::scalar::url::url_encode::UrlEncode;
-use datafusion_spark::function::url::try_url_decode::TryUrlDecode;
+use datafusion_spark::function::url::url_decode::UrlDecode;
+use datafusion_spark::function::url::url_encode::UrlEncode;
 use sail_iceberg::physical_plan::{IcebergCommitExec, IcebergWriterExec};
 use sail_iceberg::TableIcebergOptions;
 use sail_logical_plan::range::Range;
@@ -1748,7 +1748,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 "percentile_disc" => Ok(Arc::new(AggregateUDF::from(PercentileDisc::new()))),
                 "skewness" => Ok(Arc::new(AggregateUDF::from(SkewnessFunc::new()))),
                 "try_avg" => Ok(Arc::new(AggregateUDF::from(TryAvgFunction::new()))),
-                "try_sum" => Ok(Arc::new(AggregateUDF::from(TrySumFunction::new()))),
+                "try_sum" => Ok(Arc::new(AggregateUDF::from(SparkTrySum::new()))),
                 _ => plan_err!("Could not find Aggregate Function: {name}"),
             },
             Some(UdafKind::PySparkGroupAgg(gen::PySparkGroupAggUdaf {
@@ -1834,7 +1834,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<PercentileDisc>()
             || node.inner().as_any().is::<SkewnessFunc>()
             || node.inner().as_any().is::<TryAvgFunction>()
-            || node.inner().as_any().is::<TrySumFunction>()
+            || node.inner().as_any().is::<SparkTrySum>()
         {
             UdafKind::Standard(gen::StandardUdaf {})
         } else if let Some(func) = node
