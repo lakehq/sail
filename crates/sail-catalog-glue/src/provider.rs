@@ -3,16 +3,16 @@ use std::collections::{HashMap, HashSet};
 use aws_config::BehaviorVersion;
 use aws_credential_types::Credentials;
 use aws_sdk_glue::config::Region;
-use aws_sdk_glue::types::{SerDeInfo, StorageDescriptor, TableInput};
+use aws_sdk_glue::types::{
+    SerDeInfo, StorageDescriptor, TableInput, ViewDefinitionInput, ViewRepresentationInput,
+};
 use aws_sdk_glue::Client;
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::provider::{
-    CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewOptions,
-    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+    CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewColumnOptions,
+    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
 };
-use sail_common_datafusion::catalog::{
-    DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
-};
+use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
 use tokio::sync::OnceCell;
 
 use crate::data_type::{arrow_to_glue_type, glue_type_to_arrow};
@@ -23,7 +23,7 @@ use crate::format::GlueStorageFormat;
 pub struct GlueCatalogConfig {
     /// AWS region (e.g., "us-east-1"). If not set, uses default credential chain.
     pub region: Option<String>,
-    /// Custom endpoint URL for testing (e.g., Moto server).
+    /// Custom endpoint URL (optional). Useful for VPC endpoints or local development.
     pub endpoint_url: Option<String>,
     /// AWS access key ID. If not set, uses default credential chain.
     pub access_key_id: Option<String>,
@@ -188,6 +188,62 @@ impl GlueCatalogProvider {
         })
     }
 
+    fn view_to_status(
+        &self,
+        database: &Namespace,
+        table: &aws_sdk_glue::types::Table,
+    ) -> CatalogResult<TableStatus> {
+        let view_name = table.name().to_string();
+        let comment = table.description().map(|s| s.to_string());
+
+        let definition = table
+            .view_definition()
+            .and_then(|vd| vd.representations().first())
+            .and_then(|rep| rep.view_original_text())
+            .ok_or_else(|| CatalogError::External("View has no definition".to_string()))?
+            .to_string();
+
+        let storage = table.storage_descriptor();
+        let columns: Vec<TableColumnStatus> = storage
+            .map(|sd| sd.columns())
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|col| {
+                let name = col.name().to_string();
+                let type_str = col.r#type()?;
+                let data_type = glue_type_to_arrow(type_str).ok()?;
+                Some(TableColumnStatus {
+                    name,
+                    data_type,
+                    nullable: true,
+                    comment: col.comment().map(|s| s.to_string()),
+                    default: None,
+                    generated_always_as: None,
+                    is_partition: false,
+                    is_bucket: false,
+                    is_cluster: false,
+                })
+            })
+            .collect();
+
+        let properties: Vec<(String, String)> = table
+            .parameters()
+            .map(|p| p.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            .unwrap_or_default();
+
+        Ok(TableStatus {
+            catalog: Some(self.name.clone()),
+            database: database.clone().into(),
+            name: view_name,
+            kind: TableKind::View {
+                definition,
+                columns,
+                comment,
+                properties,
+            },
+        })
+    }
+
     /// Builds Glue columns from CreateTableColumnOptions, separating regular and partition columns.
     fn build_glue_columns(
         columns: Vec<sail_catalog::provider::CreateTableColumnOptions>,
@@ -278,6 +334,69 @@ impl GlueCatalogProvider {
             .map_err(|e| CatalogError::InvalidArgument(format!("Failed to build table input: {e}")))
     }
 
+    /// Builds Glue columns from CreateViewColumnOptions.
+    fn build_view_columns(
+        columns: Vec<CreateViewColumnOptions>,
+    ) -> CatalogResult<Vec<aws_sdk_glue::types::Column>> {
+        columns
+            .into_iter()
+            .map(|col| {
+                let glue_type = arrow_to_glue_type(&col.data_type)?;
+                aws_sdk_glue::types::Column::builder()
+                    .name(&col.name)
+                    .r#type(glue_type)
+                    .set_comment(col.comment.clone())
+                    .build()
+                    .map_err(|e| CatalogError::External(format!("Failed to build column: {e}")))
+            })
+            .collect()
+    }
+
+    /// Builds a Glue TableInput for a view.
+    fn build_view_input(
+        view_name: &str,
+        columns: Vec<aws_sdk_glue::types::Column>,
+        definition: &str,
+        comment: Option<&str>,
+        properties: Vec<(String, String)>,
+    ) -> CatalogResult<TableInput> {
+        let parameters: Option<HashMap<String, String>> = if properties.is_empty() {
+            None
+        } else {
+            Some(properties.into_iter().collect())
+        };
+
+        let storage_descriptor = StorageDescriptor::builder()
+            .set_columns(Some(columns))
+            .build();
+
+        let view_representation = ViewRepresentationInput::builder()
+            .view_original_text(definition)
+            .build();
+
+        let view_definition = ViewDefinitionInput::builder()
+            .representations(view_representation)
+            .build();
+
+        let mut builder = TableInput::builder()
+            .name(view_name)
+            .table_type("VIRTUAL_VIEW")
+            .view_definition(view_definition)
+            .storage_descriptor(storage_descriptor);
+
+        if let Some(desc) = comment {
+            builder = builder.description(desc);
+        }
+
+        if let Some(params) = parameters {
+            builder = builder.set_parameters(Some(params));
+        }
+
+        builder
+            .build()
+            .map_err(|e| CatalogError::InvalidArgument(format!("Failed to build view input: {e}")))
+    }
+
     /// Validates CreateTableOptions and returns only the supported fields.
     fn validate_create_table_options(
         options: CreateTableOptions,
@@ -323,7 +442,7 @@ impl GlueCatalogProvider {
         }
         // TODO: Glue supports bucketing via StorageDescriptor.BucketColumns and NumberOfBuckets.
         // To implement: set storage_builder.set_bucket_columns(columns).number_of_buckets(n).
-        // Keeping unsupported for now. 
+        // Keeping unsupported for now.
         if bucket_by.is_some() {
             return Err(CatalogError::NotSupported(
                 "AWS Glue catalog does not support BUCKET BY".to_string(),
@@ -396,12 +515,14 @@ impl CatalogProvider for GlueCatalogProvider {
             CatalogError::InvalidArgument(format!("Failed to build database input: {e}"))
         })?;
 
-        let result = client.create_database().database_input(db_input).send().await;
+        let result = client
+            .create_database()
+            .database_input(db_input)
+            .send()
+            .await;
 
         match result {
-            Ok(_) => {
-                self.get_database(database).await
-            }
+            Ok(_) => self.get_database(database).await,
             Err(sdk_err) => {
                 let service_err = sdk_err.into_service_error();
                 if service_err.is_already_exists_exception() {
@@ -427,9 +548,9 @@ impl CatalogProvider for GlueCatalogProvider {
 
         match result {
             Ok(output) => {
-                let db = output
-                    .database()
-                    .ok_or_else(|| CatalogError::External("Database response is empty".to_string()))?;
+                let db = output.database().ok_or_else(|| {
+                    CatalogError::External("Database response is empty".to_string())
+                })?;
                 self.database_to_status(db)
             }
             Err(sdk_err) => {
@@ -606,11 +727,7 @@ impl CatalogProvider for GlueCatalogProvider {
         let client = self.get_client().await?;
         let db_name = database.to_string();
 
-        let result = client
-            .get_tables()
-            .database_name(&db_name)
-            .send()
-            .await;
+        let result = client.get_tables().database_name(&db_name).send().await;
 
         match result {
             Ok(output) => output
@@ -670,35 +787,154 @@ impl CatalogProvider for GlueCatalogProvider {
 
     async fn create_view(
         &self,
-        _database: &Namespace,
-        _view: &str,
-        _options: CreateViewOptions,
+        database: &Namespace,
+        view: &str,
+        options: CreateViewOptions,
     ) -> CatalogResult<TableStatus> {
-        Err(CatalogError::NotSupported(
-            "AWS Glue catalog create_view is not yet implemented".to_string(),
-        ))
+        let client = self.get_client().await?;
+        let db_name = database.to_string();
+
+        let CreateViewOptions {
+            columns,
+            definition,
+            if_not_exists,
+            replace,
+            comment,
+            properties,
+        } = options;
+
+        if replace {
+            return Err(CatalogError::NotSupported(
+                "AWS Glue catalog does not support REPLACE for views".to_string(),
+            ));
+        }
+
+        let glue_columns = Self::build_view_columns(columns)?;
+        let view_input = Self::build_view_input(
+            view,
+            glue_columns,
+            &definition,
+            comment.as_deref(),
+            properties,
+        )?;
+
+        let result = client
+            .create_table()
+            .database_name(&db_name)
+            .table_input(view_input)
+            .send()
+            .await;
+
+        match result {
+            Ok(_) => self.get_view(database, view).await,
+            Err(sdk_err) => {
+                let service_err = sdk_err.into_service_error();
+                if service_err.is_already_exists_exception() {
+                    if if_not_exists {
+                        self.get_view(database, view).await
+                    } else {
+                        Err(CatalogError::AlreadyExists("view", view.to_string()))
+                    }
+                } else {
+                    Err(CatalogError::External(format!(
+                        "Failed to create view: {service_err}"
+                    )))
+                }
+            }
+        }
     }
 
-    async fn get_view(&self, _database: &Namespace, _view: &str) -> CatalogResult<TableStatus> {
-        Err(CatalogError::NotSupported(
-            "AWS Glue catalog get_view is not yet implemented".to_string(),
-        ))
+    async fn get_view(&self, database: &Namespace, view: &str) -> CatalogResult<TableStatus> {
+        let client = self.get_client().await?;
+        let db_name = database.to_string();
+
+        let result = client
+            .get_table()
+            .database_name(&db_name)
+            .name(view)
+            .send()
+            .await;
+
+        match result {
+            Ok(output) => {
+                let tbl = output
+                    .table()
+                    .ok_or_else(|| CatalogError::External("View response is empty".to_string()))?;
+
+                let table_type = tbl.table_type().unwrap_or_default();
+                if table_type != "VIRTUAL_VIEW" {
+                    return Err(CatalogError::NotFound("view", view.to_string()));
+                }
+
+                self.view_to_status(database, tbl)
+            }
+            Err(sdk_err) => {
+                let service_err = sdk_err.into_service_error();
+                if service_err.is_entity_not_found_exception() {
+                    Err(CatalogError::NotFound("view", view.to_string()))
+                } else {
+                    Err(CatalogError::External(format!(
+                        "Failed to get view: {service_err}"
+                    )))
+                }
+            }
+        }
     }
 
-    async fn list_views(&self, _database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
-        Err(CatalogError::NotSupported(
-            "AWS Glue catalog list_views is not yet implemented".to_string(),
-        ))
+    async fn list_views(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
+        let client = self.get_client().await?;
+        let db_name = database.to_string();
+
+        let result = client.get_tables().database_name(&db_name).send().await;
+
+        match result {
+            Ok(output) => output
+                .table_list()
+                .iter()
+                .filter(|tbl| tbl.table_type().unwrap_or_default() == "VIRTUAL_VIEW")
+                .map(|tbl| self.view_to_status(database, tbl))
+                .collect(),
+            Err(sdk_err) => {
+                let service_err = sdk_err.into_service_error();
+                Err(CatalogError::External(format!(
+                    "Failed to list views: {service_err}"
+                )))
+            }
+        }
     }
 
     async fn drop_view(
         &self,
-        _database: &Namespace,
-        _view: &str,
-        _options: DropViewOptions,
+        database: &Namespace,
+        view: &str,
+        options: DropViewOptions,
     ) -> CatalogResult<()> {
-        Err(CatalogError::NotSupported(
-            "AWS Glue catalog drop_view is not yet implemented".to_string(),
-        ))
+        let DropViewOptions { if_exists } = options;
+
+        let client = self.get_client().await?;
+        let db_name = database.to_string();
+
+        let result = client
+            .delete_table()
+            .database_name(&db_name)
+            .name(view)
+            .send()
+            .await;
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(sdk_err) => {
+                let service_err = sdk_err.into_service_error();
+                if service_err.is_entity_not_found_exception() && if_exists {
+                    Ok(())
+                } else if service_err.is_entity_not_found_exception() {
+                    Err(CatalogError::NotFound("view", view.to_string()))
+                } else {
+                    Err(CatalogError::External(format!(
+                        "Failed to drop view: {service_err}"
+                    )))
+                }
+            }
+        }
     }
 }

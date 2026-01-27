@@ -6475,6 +6475,7 @@ dependencies = [
  "readonly",
  "sail-cache",
  "sail-catalog",
+ "sail-catalog-glue",
  "sail-catalog-iceberg",
  "sail-catalog-memory",
  "sail-catalog-onelake",

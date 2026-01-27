@@ -16,7 +16,8 @@ use std::time::Duration;
 
 use arrow::datatypes::DataType;
 use sail_catalog::provider::{
-    CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions, Namespace,
+    CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions,
+    CreateViewColumnOptions, CreateViewOptions, Namespace,
 };
 use sail_catalog_glue::{GlueCatalogConfig, GlueCatalogProvider};
 use testcontainers::core::{ContainerPort, WaitFor};
@@ -63,7 +64,33 @@ pub fn simple_table_options(columns: Vec<CreateTableColumnOptions>) -> CreateTab
     }
 }
 
+/// Helper to create a view column with default options (nullable=true, no comment).
+pub fn view_col(name: &str, data_type: DataType) -> CreateViewColumnOptions {
+    CreateViewColumnOptions {
+        name: name.to_string(),
+        data_type,
+        nullable: true,
+        comment: None,
+    }
+}
+
+/// Helper to create view options with sensible defaults.
+pub fn simple_view_options(
+    definition: &str,
+    columns: Vec<CreateViewColumnOptions>,
+) -> CreateViewOptions {
+    CreateViewOptions {
+        columns,
+        definition: definition.to_string(),
+        if_not_exists: false,
+        replace: false,
+        comment: None,
+        properties: vec![],
+    }
+}
+
 /// Sets up a Glue catalog provider backed by a Moto container for testing.
+/// Returns the provider and container.
 pub async fn setup_glue_catalog(
     test_name: &str,
 ) -> (GlueCatalogProvider, ContainerAsync<GenericImage>) {
@@ -92,13 +119,10 @@ pub async fn setup_glue_catalog(
 }
 
 /// Sets up a Glue catalog with a pre-created database for table tests.
+/// Returns the provider, container, and namespace.
 pub async fn setup_with_database(
     test_name: &str,
-) -> (
-    GlueCatalogProvider,
-    ContainerAsync<GenericImage>,
-    Namespace,
-) {
+) -> (GlueCatalogProvider, ContainerAsync<GenericImage>, Namespace) {
     let (catalog, container) = setup_glue_catalog(test_name).await;
     let namespace = Namespace::try_from(vec![format!("{test_name}_db")]).unwrap();
     catalog

@@ -17,8 +17,16 @@
 mod common;
 
 use common::{setup_glue_catalog, simple_database_options};
-use sail_catalog::provider::{CatalogProvider, CreateDatabaseOptions, DropDatabaseOptions, Namespace};
+use sail_catalog::provider::{
+    CatalogProvider, CreateDatabaseOptions, DropDatabaseOptions, Namespace,
+};
 
+/// Tests database creation in Glue catalog.
+///
+/// - Creates a database with comment, location, and properties
+/// - Verifies returned database has correct name, comment, location, and properties
+/// - Duplicate creation without `if_not_exists` fails
+/// - Duplicate creation with `if_not_exists=true` returns existing database unchanged
 #[tokio::test]
 #[ignore]
 async fn test_create_database() {
@@ -39,7 +47,10 @@ async fn test_create_database() {
         .await
         .unwrap();
 
-    assert_eq!(created_db.database, vec!["test_create_database".to_string()]);
+    assert_eq!(
+        created_db.database,
+        vec!["test_create_database".to_string()]
+    );
     assert_eq!(created_db.comment, Some("test comment".to_string()));
     assert_eq!(created_db.location, Some("s3://bucket/path".to_string()));
     assert!(created_db
@@ -93,6 +104,11 @@ async fn test_create_database() {
     assert_eq!(created_again.comment, None);
 }
 
+/// Tests retrieving a database from Glue catalog.
+///
+/// - Non-existent database returns `NotFound` error
+/// - Creates a database with comment, location, and properties
+/// - Retrieves and verifies all fields match (name, comment, location, properties)
 #[tokio::test]
 #[ignore]
 async fn test_get_database() {
@@ -135,13 +151,16 @@ async fn test_get_database() {
     assert_eq!(db.comment, Some("Get test description".to_string()));
     assert_eq!(db.location, Some("s3://bucket/get-test".to_string()));
     for (key, value) in &properties {
-        assert!(db
-            .properties
-            .iter()
-            .any(|(k, v)| k == key && v == value));
+        assert!(db.properties.iter().any(|(k, v)| k == key && v == value));
     }
 }
 
+/// Tests dropping databases from Glue catalog.
+///
+/// - Dropping non-existent database with `if_exists=false` returns `NotFound` error
+/// - Dropping non-existent database with `if_exists=true` succeeds
+/// - Creates a database and verifies it exists
+/// - Drops the database and verifies it no longer exists
 #[tokio::test]
 #[ignore]
 async fn test_drop_database() {
@@ -208,6 +227,11 @@ async fn test_drop_database() {
     assert!(catalog.get_database(&namespace).await.is_err());
 }
 
+/// Tests listing databases in Glue catalog.
+///
+/// - Empty catalog returns empty list
+/// - Creates multiple databases
+/// - `list_databases` returns all created databases
 #[tokio::test]
 #[ignore]
 async fn test_list_databases() {

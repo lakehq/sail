@@ -24,6 +24,12 @@ use sail_catalog::provider::{
     CatalogProvider, CreateTableColumnOptions, CreateTableOptions, DropTableOptions,
 };
 
+/// Tests table creation in Glue catalog.
+///
+/// - Creates a table with multiple column types, nullability, comments, location, format, partitioning, and properties
+/// - Verifies returned table has correct name, database, columns, comment, location, format, partition_by, and properties
+/// - Duplicate creation without `if_not_exists` fails
+/// - Duplicate creation with `if_not_exists=true` returns existing table unchanged
 #[tokio::test]
 #[ignore]
 async fn test_create_table() {
@@ -130,6 +136,12 @@ async fn test_create_table() {
     }
 }
 
+/// Tests retrieving a table from Glue catalog.
+///
+/// - Non-existent table returns `NotFound` error
+/// - Creates a table with columns, comment, location, format, and properties
+/// - Retrieves and verifies all fields match (name, database, columns, comment, location, format, properties)
+/// - Verifies column details including data types and comments
 #[tokio::test]
 #[ignore]
 async fn test_get_table() {
@@ -194,9 +206,7 @@ async fn test_get_table() {
             assert_eq!(comment, &Some("Test table description".to_string()));
             assert_eq!(location, &Some("s3://bucket/test_table".to_string()));
             assert_eq!(format, "parquet");
-            assert!(properties
-                .iter()
-                .any(|(k, v)| k == "key1" && v == "value1"));
+            assert!(properties.iter().any(|(k, v)| k == "key1" && v == "value1"));
 
             // Check column details
             let id_col = columns.iter().find(|c| c.name == "id").unwrap();
@@ -210,7 +220,12 @@ async fn test_get_table() {
     }
 }
 
-/// Verifies all supported Arrow data types can be created as Glue table columns.
+/// Tests all supported Arrow data types can be created as Glue table columns.
+///
+/// - Simple types: boolean, tinyint, smallint, int, bigint, float, double, string, binary, date, timestamp
+/// - Parameterized type: decimal(10,2)
+/// - Complex types: array, struct, map
+/// - Verifies all 15 column types round-trip correctly through Glue
 #[tokio::test]
 #[ignore]
 async fn test_column_types() {
@@ -307,10 +322,7 @@ async fn test_column_types() {
             );
 
             // Complex types - verify structure
-            assert!(matches!(
-                find_col("col_array").data_type,
-                DataType::List(_)
-            ));
+            assert!(matches!(find_col("col_array").data_type, DataType::List(_)));
             assert!(matches!(
                 find_col("col_struct").data_type,
                 DataType::Struct(_)
@@ -321,7 +333,10 @@ async fn test_column_types() {
     }
 }
 
-/// Tests that unsupported column types (like Union) are rejected.
+/// Tests that unsupported column types are rejected.
+///
+/// - Attempts to create a table with a Union type column
+/// - Verifies creation fails with an error
 #[tokio::test]
 #[ignore]
 async fn test_unsupported_column_types() {
@@ -354,14 +369,13 @@ async fn test_unsupported_column_types() {
         )
         .await;
 
-    assert!(
-        result.is_err(),
-        "Expected error for unsupported Union type"
-    );
+    assert!(result.is_err(), "Expected error for unsupported Union type");
 }
 
-/// Tests that all supported storage formats (parquet, csv, json, orc, avro) are correctly
-/// accepted by Glue and the format is properly detected when reading back.
+/// Tests all supported storage formats are accepted and round-trip correctly.
+///
+/// - Creates tables with formats: parquet, csv, json, orc, avro
+/// - Retrieves each table and verifies the format is preserved
 #[tokio::test]
 #[ignore]
 async fn test_storage_formats() {
@@ -432,7 +446,11 @@ async fn test_storage_formats() {
     }
 }
 
-/// Verifies list_tables returns all created tables in a database.
+/// Tests listing tables in a database.
+///
+/// - Creates multiple tables in a database
+/// - `list_tables` returns all created tables
+/// - All table names are present in the list
 #[tokio::test]
 #[ignore]
 async fn test_list_tables() {
@@ -467,7 +485,12 @@ async fn test_list_tables() {
     }
 }
 
-/// Verifies drop_table removes a table and handles if_exists correctly.
+/// Tests dropping tables from Glue catalog.
+///
+/// - Creates a table and verifies it exists
+/// - Drops the table and verifies it no longer exists
+/// - Dropping non-existent table with `if_exists=false` fails
+/// - Dropping non-existent table with `if_exists=true` succeeds
 #[tokio::test]
 #[ignore]
 async fn test_drop_table() {
