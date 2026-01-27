@@ -25,6 +25,7 @@ use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 
 /// Helper to create a column with default options (nullable=true, no comment).
+#[allow(dead_code)]
 pub fn col(name: &str, data_type: DataType) -> CreateTableColumnOptions {
     CreateTableColumnOptions {
         name: name.to_string(),
@@ -47,6 +48,7 @@ pub fn simple_database_options() -> CreateDatabaseOptions {
 }
 
 /// Helper to create table options with sensible defaults (parquet format, no partitioning).
+#[allow(dead_code)]
 pub fn simple_table_options(columns: Vec<CreateTableColumnOptions>) -> CreateTableOptions {
     CreateTableOptions {
         columns,
@@ -65,6 +67,7 @@ pub fn simple_table_options(columns: Vec<CreateTableColumnOptions>) -> CreateTab
 }
 
 /// Helper to create a view column with default options (nullable=true, no comment).
+#[allow(dead_code)]
 pub fn view_col(name: &str, data_type: DataType) -> CreateViewColumnOptions {
     CreateViewColumnOptions {
         name: name.to_string(),
@@ -75,6 +78,7 @@ pub fn view_col(name: &str, data_type: DataType) -> CreateViewColumnOptions {
 }
 
 /// Helper to create view options with sensible defaults.
+#[allow(dead_code)]
 pub fn simple_view_options(
     definition: &str,
     columns: Vec<CreateViewColumnOptions>,
@@ -120,6 +124,7 @@ pub async fn setup_glue_catalog(
 
 /// Sets up a Glue catalog with a pre-created database for table tests.
 /// Returns the provider, container, and namespace.
+#[allow(dead_code)]
 pub async fn setup_with_database(
     test_name: &str,
 ) -> (GlueCatalogProvider, ContainerAsync<GenericImage>, Namespace) {

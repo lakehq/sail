@@ -428,17 +428,9 @@ async fn test_storage_formats() {
                 format: detected_format,
                 ..
             } => {
-                let expected = match format {
-                    "csv" => "csv",
-                    "json" => "json",
-                    "parquet" => "parquet",
-                    "orc" => "orc",
-                    "avro" => "avro",
-                    _ => format,
-                };
                 assert_eq!(
-                    detected_format, expected,
-                    "Format mismatch for {format}: expected '{expected}', got '{detected_format}'"
+                    detected_format, format,
+                    "Format mismatch for {format}: expected '{format}', got '{detected_format}'"
                 );
             }
             _ => panic!("Expected Table kind for {format}"),
