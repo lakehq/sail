@@ -19,7 +19,7 @@ use futures::future::try_join_all;
 use futures::StreamExt;
 
 use crate::plan::ListListDisplay;
-use crate::stream::writer::{TaskStreamWriter, TaskWriteLocation};
+use crate::stream::writer::{TaskStreamSinkState, TaskStreamWriter, TaskWriteLocation};
 
 #[derive(Debug, Clone)]
 pub struct ShuffleWriteExec {
@@ -177,25 +177,55 @@ async fn shuffle_write(
     mut partitioner: BatchPartitioner,
 ) -> Result<()> {
     let schema = stream.schema();
-    let mut partition_writers = {
+    let mut partition_sinks = {
         let futures = locations
             .iter()
             .map(|location| writer.open(location, schema.clone()));
-        try_join_all(futures).await?
+        try_join_all(futures)
+            .await?
+            .into_iter()
+            .map(Some)
+            .collect::<Vec<_>>()
     };
     while let Some(batch) = stream.next().await {
         let batch = batch?;
-        let mut partitions: Vec<Option<RecordBatch>> = vec![None; partition_writers.len()];
+        let mut partitions: Vec<Option<RecordBatch>> = vec![None; partition_sinks.len()];
         partitioner.partition(batch, |p, batch| {
             partitions[p] = Some(batch);
             Ok(())
         })?;
+        let mut active = 0;
         for p in 0..partitions.len() {
+            let Some(sink) = partition_sinks[p].as_mut() else {
+                continue;
+            };
+            // We should update the number of active sinks here,
+            // even if the current batch does not have data for this partition.
+            active += 1;
             if let Some(batch) = partitions[p].take() {
-                partition_writers[p].write(Ok(batch)).await?;
+                match sink.write(Ok(batch)).await {
+                    TaskStreamSinkState::Ok => {}
+                    TaskStreamSinkState::Error(e) => {
+                        return Err(e);
+                    }
+                    TaskStreamSinkState::Closed => {
+                        partition_sinks[p] = None;
+                        // This sink is closed when writing this batch,
+                        // so we should not consider it active anymore.
+                        active -= 1;
+                    }
+                }
             }
         }
+        if active == 0 {
+            break;
+        }
     }
-    partition_writers.into_iter().try_for_each(|w| w.close())?;
+    // TODO: Ensure the sinks are cleaned up properly when an error causes an early return
+    //   of this function. We need to consider this for sinks that handle remote data.
+    let futures = partition_sinks
+        .into_iter()
+        .filter_map(|s| s.map(|x| x.close()));
+    try_join_all(futures).await?;
     Ok(())
 }

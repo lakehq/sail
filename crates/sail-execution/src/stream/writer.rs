@@ -2,8 +2,8 @@ use std::fmt;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::common::{DataFusionError, Result};
-use tokio::sync::mpsc;
+use datafusion::common::Result;
+use datafusion::error::DataFusionError;
 
 use crate::id::{TaskStreamKey, TaskStreamKeyDenseDisplay};
 use crate::stream::error::TaskStreamResult;
@@ -59,22 +59,27 @@ pub trait TaskStreamWriter: fmt::Debug + Send + Sync {
     ) -> Result<Box<dyn TaskStreamSink>>;
 }
 
+/// A sink that can write record batches to a task stream.
 #[tonic::async_trait]
 pub trait TaskStreamSink: Send {
-    async fn write(&mut self, batch: TaskStreamResult<RecordBatch>) -> Result<()>;
-    // TODO: close the sink on drop
-    fn close(self: Box<Self>) -> Result<()>;
+    /// Write a record batch or an error to the sink.
+    async fn write(&mut self, batch: TaskStreamResult<RecordBatch>) -> TaskStreamSinkState;
+    // TODO: Are we required to call `close` when the user encounters an error and wants to
+    //   abort the sink? Should we have a separate `abort` method?
+    /// Flush all data and close the sink.
+    /// Since the operation may be async, the user must call this method before
+    /// dropping the sink, unless the user has received [`TaskStreamSinkState::Error`] or
+    /// [`TaskStreamSinkState::Closed`] state from [`write`](TaskStreamSink::write).
+    /// No implicit finalization will be done when the sink is dropped.
+    async fn close(self: Box<Self>) -> Result<()>;
 }
 
-#[tonic::async_trait]
-impl TaskStreamSink for mpsc::Sender<TaskStreamResult<RecordBatch>> {
-    async fn write(&mut self, batch: TaskStreamResult<RecordBatch>) -> Result<()> {
-        self.send(batch)
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))
-    }
-
-    fn close(self: Box<Self>) -> Result<()> {
-        Ok(())
-    }
+pub enum TaskStreamSinkState {
+    /// The sink is ready to accept more writes.
+    Ok,
+    /// The sink has encountered an error and no further writes should be attempted.
+    #[expect(unused)]
+    Error(DataFusionError),
+    /// The sink has been closed and no further writes should be attempted.
+    Closed,
 }
