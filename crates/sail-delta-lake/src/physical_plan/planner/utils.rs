@@ -36,9 +36,9 @@ use super::context::PlannerContext;
 use super::log_scan::{build_delta_log_datasource_union_with_options, LogScanOptions};
 use crate::datasource::{COMMIT_TIMESTAMP_COLUMN, COMMIT_VERSION_COLUMN, PATH_COLUMN};
 use crate::physical_plan::{
-    create_projection, create_repartition, create_sort, DeltaCommitExec,
-    DeltaPhysicalExprAdapterFactory, DeltaLogReplayExec, DeltaWriterExec, COL_LOG_IS_REMOVE,
-    COL_LOG_VERSION, COL_REPLAY_PATH,
+    create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaLogReplayExec,
+    DeltaPhysicalExprAdapterFactory, DeltaWriterExec, COL_LOG_IS_REMOVE, COL_LOG_VERSION,
+    COL_REPLAY_PATH,
 };
 
 /// Options that control what the log replay pipeline materializes as payload columns.
@@ -249,6 +249,18 @@ pub async fn build_log_replay_pipeline_with_options(
             None,
         )?))
     };
+    let coalesce_two = |first: Arc<dyn PhysicalExpr>,
+                        second: Arc<dyn PhysicalExpr>|
+     -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(Arc::new(CaseExpr::try_new(
+            None,
+            vec![(
+                Arc::new(IsNotNullExpr::new(Arc::clone(&first))),
+                Arc::clone(&first),
+            )],
+            Some(second),
+        )?))
+    };
 
     // NOTE: `get_field(struct, 'child')` does not apply the parent struct's
     // null buffer to the returned child array. We must guard child extraction with the
@@ -256,12 +268,7 @@ pub async fn build_log_replay_pipeline_with_options(
     let add_path = guard_with(Arc::clone(&add_is_not_null), add_path_raw)?;
     let remove_path = guard_with(Arc::clone(&remove_is_not_null), remove_path_raw)?;
 
-    let replay_path: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::try_new(
-        datafusion::functions::core::coalesce(),
-        vec![add_path, remove_path.clone()],
-        input_schema.as_ref(),
-        Arc::clone(&config_options),
-    )?);
+    let replay_path: Arc<dyn PhysicalExpr> = coalesce_two(add_path, remove_path.clone())?;
 
     // Mark tombstones using the struct's own validity.
     let is_remove: Arc<dyn PhysicalExpr> = Arc::clone(&remove_is_not_null);
@@ -324,24 +331,14 @@ pub async fn build_log_replay_pipeline_with_options(
         DataType::Int64,
         None,
     ));
-    let size_expr: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::try_new(
-        datafusion::functions::core::coalesce(),
-        vec![size_expr_i64, lit_i64(0)],
-        input_schema.as_ref(),
-        Arc::clone(&config_options),
-    )?);
+    let size_expr: Arc<dyn PhysicalExpr> = coalesce_two(size_expr_i64, lit_i64(0))?;
 
     let mod_time_expr_i64: Arc<dyn PhysicalExpr> = Arc::new(CastExpr::new(
         guard_add(get_add_field(mod_time_field)?)?,
         DataType::Int64,
         None,
     ));
-    let mod_time_expr: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::try_new(
-        datafusion::functions::core::coalesce(),
-        vec![mod_time_expr_i64, lit_i64(0)],
-        input_schema.as_ref(),
-        Arc::clone(&config_options),
-    )?);
+    let mod_time_expr: Arc<dyn PhysicalExpr> = coalesce_two(mod_time_expr_i64, lit_i64(0))?;
 
     let stats_expr: Option<Arc<dyn PhysicalExpr>> = if options.include_stats_json {
         Some(Arc::new(CastExpr::new(
@@ -381,7 +378,10 @@ pub async fn build_log_replay_pipeline_with_options(
         Arc::new(Column::new(COL_LOG_VERSION, log_version_idx)) as Arc<dyn PhysicalExpr>,
         COMMIT_VERSION_COLUMN.to_string(),
     ));
-    final_proj.push((Arc::clone(&mod_time_expr), COMMIT_TIMESTAMP_COLUMN.to_string()));
+    final_proj.push((
+        Arc::clone(&mod_time_expr),
+        COMMIT_TIMESTAMP_COLUMN.to_string(),
+    ));
     for col in &partition_columns {
         final_proj.push((part_expr_for(col)?, col.clone()));
     }

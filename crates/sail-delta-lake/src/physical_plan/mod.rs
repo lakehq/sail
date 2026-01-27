@@ -42,7 +42,7 @@ pub use action_schema::{
 };
 pub use commit_exec::DeltaCommitExec;
 pub use discovery_exec::DeltaDiscoveryExec;
-pub use expr_adapter::DeltaPhysicalExprAdapterFactory;
+pub use expr_adapter::{DeltaCastColumnExpr, DeltaPhysicalExprAdapterFactory};
 pub use log_replay_exec::DeltaLogReplayExec;
 pub mod planner;
 pub use planner::{

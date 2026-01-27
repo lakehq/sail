@@ -347,7 +347,7 @@ impl DeltaWriterExec {
             .await;
 
             let table = if table_exists {
-                Some(table_result.map_err(|e| DataFusionError::External(Box::new(e)))?)
+                Some(table_result?)
             } else {
                 None
             };
@@ -434,12 +434,8 @@ impl DeltaWriterExec {
                     .map_err(|e| DataFusionError::External(Box::new(e)))?
                     .effective_column_mapping_mode();
                 match mode {
-                    delta_kernel::table_features::ColumnMappingMode::Name => {
-                        ColumnMappingModeOption::Name
-                    }
-                    delta_kernel::table_features::ColumnMappingMode::Id => {
-                        ColumnMappingModeOption::Id
-                    }
+                    ColumnMappingMode::Name => ColumnMappingModeOption::Name,
+                    ColumnMappingMode::Id => ColumnMappingModeOption::Id,
                     _ => ColumnMappingModeOption::None,
                 }
             } else {
@@ -590,8 +586,8 @@ impl DeltaWriterExec {
                         .clone()
                 } else {
                     annotated_schema_opt.clone().ok_or_else(|| {
-                        DataFusionError::Internal(
-                            "annotated schema missing for new table with column mapping"
+                        DataFusionError::Plan(
+                            "Annotated schema should be present for new table with column mapping"
                                 .to_string(),
                         )
                     })?
@@ -820,7 +816,7 @@ impl DeltaWriterExec {
         let table_schema = table_metadata
             .parse_schema()
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let table_arrow_schema = std::sync::Arc::new((&table_schema).try_into_arrow()?);
+        let table_arrow_schema = Arc::new((&table_schema).try_into_arrow()?);
 
         match schema_mode {
             Some(SchemaMode::Merge) => {
@@ -908,17 +904,18 @@ impl DeltaWriterExec {
         }
 
         // Build merged fields in the correct order
-        let mut merged_fields: Vec<Field> = Vec::with_capacity(field_order.len());
-        for name in field_order {
-            let f = field_map.remove(&name).ok_or_else(|| {
-                DataFusionError::Internal(format!(
-                    "schema merge invariant violated: field '{name}' missing from map"
-                ))
-            })?;
-            merged_fields.push(f);
-        }
+        let merged_fields: Vec<Field> = field_order
+            .into_iter()
+            .map(|name| {
+                field_map.remove(&name).ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                        "Field '{name}' missing during schema merge construction",
+                    ))
+                })
+            })
+            .collect::<Result<Vec<Field>>>()?;
 
-        Ok(std::sync::Arc::new(Schema::new(merged_fields)))
+        Ok(Arc::new(Schema::new(merged_fields)))
     }
 
     /// Validate schema compatibility

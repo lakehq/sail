@@ -14,7 +14,7 @@ use sail_common_datafusion::formatter::{
     TimestampMicrosecondFormatter, TimestampMillisecondFormatter, TimestampNanosecondFormatter,
     TimestampSecondFormatter,
 };
-use sail_common_datafusion::session::PlanFormatter;
+use sail_common_datafusion::session::plan::PlanFormatter;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 #[derive(Debug, PartialEq, Eq, Hash, PartialOrd)]

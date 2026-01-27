@@ -6,11 +6,11 @@ use datafusion::datasource::file_format::json::JsonFormat;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, FileSource as _};
-use datafusion::datasource::schema_adapter::DefaultSchemaAdapterFactory;
+use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder};
 use datafusion::datasource::source::DataSourceExec;
-use datafusion::physical_plan::union::UnionExec;
+use datafusion::datasource::table_schema::TableSchema;
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
 use futures::{stream, StreamExt, TryStreamExt};
 use object_store::path::{Path, DELIMITER};
@@ -281,34 +281,38 @@ pub async fn build_delta_log_datasource_union_with_options(
 
     let mut inputs: Vec<Arc<dyn ExecutionPlan>> = Vec::new();
     let target_partitions = ctx.session().config().target_partitions();
+    let table_schema = TableSchema::new(
+        Arc::clone(&merged),
+        vec![Arc::new(Field::new(
+            COL_LOG_VERSION,
+            DataType::Int64,
+            false,
+        ))],
+    );
 
     if !checkpoint_metas.is_empty() {
-        let mut source = datafusion::datasource::physical_plan::ParquetSource::default();
+        let mut source =
+            datafusion::datasource::physical_plan::ParquetSource::new(table_schema.clone());
         if let Some(predicate) = &options.parquet_predicate {
             source = source.with_predicate(Arc::clone(predicate));
         }
-        let source = source.with_schema_adapter_factory(Arc::new(DefaultSchemaAdapterFactory {}))?;
+        let source: Arc<dyn datafusion::datasource::physical_plan::FileSource> = Arc::new(source);
         let groups = to_file_groups(checkpoint_metas, target_partitions)?;
-        let conf =
-            FileScanConfigBuilder::new(object_store_url.clone(), Arc::clone(&merged), source)
-                .with_table_partition_cols(vec![Field::new(
-                    COL_LOG_VERSION,
-                    DataType::Int64,
-                    false,
-                )])
-                .with_file_groups(groups)
-                .with_projection_indices(projection_indices.clone())
-                .build();
+        let conf = FileScanConfigBuilder::new(object_store_url.clone(), source)
+            .with_file_groups(groups)
+            .with_projection_indices(projection_indices.clone())?
+            .build();
         inputs.push(DataSourceExec::from_data_source(conf));
     }
 
     if !commit_metas.is_empty() {
-        let source = Arc::new(datafusion::datasource::physical_plan::JsonSource::new());
+        let source: Arc<dyn datafusion::datasource::physical_plan::FileSource> = Arc::new(
+            datafusion::datasource::physical_plan::JsonSource::new(table_schema),
+        );
         let groups = to_file_groups(commit_metas, target_partitions)?;
-        let conf = FileScanConfigBuilder::new(object_store_url, Arc::clone(&merged), source)
-            .with_table_partition_cols(vec![Field::new(COL_LOG_VERSION, DataType::Int64, false)])
+        let conf = FileScanConfigBuilder::new(object_store_url, source)
             .with_file_groups(groups)
-            .with_projection_indices(projection_indices)
+            .with_projection_indices(projection_indices)?
             .build();
         inputs.push(DataSourceExec::from_data_source(conf));
     }

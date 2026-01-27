@@ -14,8 +14,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::StringArray;
-use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::arrow::compute::concat_batches;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_expr::{Distribution, EquivalenceProperties};
@@ -36,6 +35,9 @@ use crate::datasource::type_converter::{arrow_schema_to_iceberg, iceberg_schema_
 use crate::operations::write::config::WriterConfig;
 use crate::operations::write::table_writer::IcebergTableWriter;
 use crate::options::TableIcebergOptions;
+use crate::physical_plan::action_schema::{
+    encode_add_data_files, encode_commit_meta, iceberg_action_schema, CommitMeta,
+};
 use crate::schema_evolution::{SchemaEvolver, SchemaMode};
 use crate::spec::partition::{
     PartitionSpec as BoundPartitionSpec, UnboundPartitionField, UnboundPartitionSpec,
@@ -85,13 +87,14 @@ impl IcebergWriterExec {
         table_exists: bool,
         options: TableIcebergOptions,
     ) -> Self {
-        let schema = Arc::new(Schema::new(vec![Field::new("data", DataType::Utf8, true)]));
-        let cache = PlanProperties::new(
-            EquivalenceProperties::new(schema),
-            Partitioning::UnknownPartitioning(1),
-            EmissionType::Final,
-            Boundedness::Bounded,
-        );
+        let schema = match iceberg_action_schema() {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("failed to initialize iceberg action schema: {e}");
+                Arc::new(datafusion::arrow::datatypes::Schema::empty())
+            }
+        };
+        let cache = Self::compute_properties(schema.clone());
         Self {
             input,
             table_url,
@@ -101,6 +104,15 @@ impl IcebergWriterExec {
             options,
             cache,
         }
+    }
+
+    fn compute_properties(schema: datafusion::arrow::datatypes::SchemaRef) -> PlanProperties {
+        PlanProperties::new(
+            EquivalenceProperties::new(schema),
+            Partitioning::UnknownPartitioning(1),
+            EmissionType::Final,
+            Boundedness::Bounded,
+        )
     }
 
     pub fn table_url(&self) -> &Url {
@@ -277,11 +289,7 @@ impl ExecutionPlan for IcebergWriterExec {
                 }
                 PhysicalSinkMode::IgnoreIfExists => {
                     if table_exists {
-                        let batch = RecordBatch::try_new(
-                            schema.clone(),
-                            vec![Arc::new(StringArray::from(vec!["{}".to_string()]))],
-                        )?;
-                        return Ok(batch);
+                        return Ok(RecordBatch::new_empty(schema.clone()));
                     }
                 }
                 PhysicalSinkMode::Append => {}
@@ -472,19 +480,15 @@ impl ExecutionPlan for IcebergWriterExec {
 
             let data_files = writer.close().await.map_err(DataFusionError::Execution)?;
 
-            let info = crate::physical_plan::commit::IcebergCommitInfo {
+            let commit_meta = CommitMeta {
                 table_uri: table_url.to_string(),
                 row_count: total_rows,
-                data_files,
-                manifest_path: String::new(),
-                manifest_list_path: String::new(),
-                updates: vec![],
-                requirements: commit_requirements,
                 operation: if matches!(sink_mode, PhysicalSinkMode::Overwrite) {
                     crate::spec::Operation::Overwrite
                 } else {
                     crate::spec::Operation::Append
                 },
+                requirements: commit_requirements,
                 schema: commit_schema.clone(),
                 partition_spec: if !table_exists
                     || matches!(schema_mode, Some(SchemaMode::Overwrite))
@@ -494,10 +498,14 @@ impl ExecutionPlan for IcebergWriterExec {
                     None
                 },
             };
-            let json =
-                serde_json::to_string(&info).map_err(|e| DataFusionError::External(Box::new(e)))?;
-            let array = Arc::new(StringArray::from(vec![json]));
-            let batch = RecordBatch::try_new(schema.clone(), vec![array])?;
+
+            let schema = iceberg_action_schema()?;
+            let batches = vec![
+                encode_add_data_files(data_files)?,
+                encode_commit_meta(commit_meta)?,
+            ];
+            let batch = concat_batches(&schema, &batches)
+                .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
             Ok(batch)
         };
 

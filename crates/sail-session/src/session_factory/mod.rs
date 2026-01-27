@@ -3,7 +3,7 @@ mod worker;
 
 use datafusion::common::Result;
 use datafusion::prelude::SessionContext;
-pub use server::{ServerSessionFactory, ServerSessionMutator};
+pub use server::{ServerSessionFactory, ServerSessionInfo, ServerSessionMutator};
 pub use worker::WorkerSessionFactory;
 
 pub trait SessionFactory<I>: Send {

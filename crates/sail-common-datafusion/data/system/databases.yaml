@@ -1,0 +1,265 @@
+- name: cluster
+  description: The database containing cluster information.
+  tables:
+    - name: workers
+      row_name: worker
+      description: The table containing information about cluster workers.
+      columns:
+        - name: session_id
+          description: The identifier for the session associated with the worker.
+          rust_type: String
+          sql_type: STRING
+          arrow_type: crate::system::types::string()
+          nullable: false
+        - name: worker_id
+          description: The unique identifier for the worker.
+          rust_type: u64
+          sql_type: UNSIGNED LONG
+          arrow_type: crate::system::types::numeric::<u64>()
+          nullable: false
+        - name: host
+          description: |
+            The hostname or IP address of the worker,
+            if the worker is running.
+          rust_type: Option<String>
+          sql_type: STRING
+          arrow_type: crate::system::types::string()
+          nullable: true
+        - name: port
+          description: |
+            The port number the worker is listening on,
+            if the worker is running.
+          rust_type: Option<u16>
+          sql_type: UNSIGNED SHORT
+          arrow_type: crate::system::types::numeric::<u16>()
+          nullable: true
+        - name: status
+          description: The current status of the worker.
+          rust_type: String
+          sql_type: STRING
+          arrow_type: crate::system::types::string()
+          nullable: false
+        - name: created_at
+          description: |
+            The timestamp when the worker was created.
+            This is the time when the worker is defined in the driver.
+          rust_type: chrono::DateTime<chrono::Utc>
+          sql_type: TIMESTAMP_LTZ(6)
+          arrow_type: crate::system::types::timestamp()
+          nullable: false
+        - name: stopped_at
+          description: |
+            The timestamp when the worker was stopped.
+          rust_type: Option<chrono::DateTime<chrono::Utc>>
+          sql_type: TIMESTAMP_LTZ(6)
+          arrow_type: crate::system::types::timestamp()
+          nullable: true
+
+- name: execution
+  description: The database containing execution data.
+  tables:
+    - name: jobs
+      row_name: job
+      description: The table containing job information.
+      columns:
+        - name: session_id
+          description: The identifier for the session associated with the job.
+          rust_type: String
+          sql_type: STRING
+          arrow_type: crate::system::types::string()
+          nullable: false
+        - name: job_id
+          description: The unique identifier for the job.
+          rust_type: u64
+          sql_type: UNSIGNED LONG
+          arrow_type: crate::system::types::numeric::<u64>()
+          nullable: false
+        - name: status
+          description: The current status of the job.
+          rust_type: String
+          sql_type: STRING
+          arrow_type: crate::system::types::string()
+          nullable: false
+        - name: created_at
+          description: The timestamp when the job was created.
+          rust_type: chrono::DateTime<chrono::Utc>
+          sql_type: TIMESTAMP_LTZ(6)
+          arrow_type: crate::system::types::timestamp()
+          nullable: false
+        - name: stopped_at
+          description: The timestamp when the job completed execution.
+          rust_type: Option<chrono::DateTime<chrono::Utc>>
+          sql_type: TIMESTAMP_LTZ(6)
+          arrow_type: crate::system::types::timestamp()
+          nullable: true
+
+    - name: stages
+      row_name: stage
+      description: The table containing job stage information.
+      columns:
+        - name: session_id
+          description: The identifier for the session associated with the stage.
+          rust_type: String
+          sql_type: STRING
+          arrow_type: crate::system::types::string()
+          nullable: false
+        - name: job_id
+          description: The identifier for the job associated with the stage.
+          rust_type: u64
+          sql_type: UNSIGNED LONG
+          arrow_type: crate::system::types::numeric::<u64>()
+          nullable: false
+        - name: stage
+          description: The index for the stage.
+          rust_type: u64
+          sql_type: UNSIGNED LONG
+          arrow_type: crate::system::types::numeric::<u64>()
+          nullable: false
+        - name: partitions
+          description: The number of partitions for the stage.
+          rust_type: u64
+          sql_type: UNSIGNED LONG
+          arrow_type: crate::system::types::numeric::<u64>()
+          nullable: false
+        - name: inputs
+          description: The input stages for the stage.
+          rust_type: Vec<crate::system::types::StageInput>
+          sql_type: "ARRAY<STRUCT<stage: UNSIGNED LONG NOT NULL, mode: STRING NOT NULL>>"
+          arrow_type: crate::system::types::stage_input_list()
+          nullable: false
+        - name: group
+          description: The slot sharing group for the stage.
+          rust_type: String
+          sql_type: STRING
+          arrow_type: crate::system::types::string()
+          nullable: false
+        - name: mode
+          description: The output mode for the stage.
+          rust_type: String
+          sql_type: STRING
+          arrow_type: crate::system::types::string()
+          nullable: false
+        - name: distribution
+          description: The output distribution for the stage.
+          rust_type: String
+          sql_type: STRING
+          arrow_type: crate::system::types::string()
+          nullable: false
+        - name: placement
+          description: The task placement for the stage.
+          rust_type: String
+          sql_type: STRING
+          arrow_type: crate::system::types::string()
+          nullable: false
+        - name: status
+          description: The current status of the stage.
+          rust_type: String
+          sql_type: STRING
+          arrow_type: crate::system::types::string()
+          nullable: false
+        - name: created_at
+          description: The timestamp when the stage was created.
+          rust_type: chrono::DateTime<chrono::Utc>
+          sql_type: TIMESTAMP_LTZ(6)
+          arrow_type: crate::system::types::timestamp()
+          nullable: false
+        - name: stopped_at
+          description: The timestamp when the stage completed execution.
+          rust_type: Option<chrono::DateTime<chrono::Utc>>
+          sql_type: TIMESTAMP_LTZ(6)
+          arrow_type: crate::system::types::timestamp()
+          nullable: true
+
+    - name: tasks
+      row_name: task
+      description: The table containing task attempt information.
+      columns:
+        - name: session_id
+          description: The identifier for the session associated with the task.
+          rust_type: String
+          sql_type: STRING
+          arrow_type: crate::system::types::string()
+          nullable: false
+        - name: job_id
+          description: The identifier for the job associated with the task.
+          rust_type: u64
+          sql_type: UNSIGNED LONG
+          arrow_type: crate::system::types::numeric::<u64>()
+          nullable: false
+        - name: stage
+          description: The index for the stage associated with the task.
+          rust_type: u64
+          sql_type: UNSIGNED LONG
+          arrow_type: crate::system::types::numeric::<u64>()
+          nullable: false
+        - name: partition
+          description: The partition index for the task.
+          rust_type: u64
+          sql_type: UNSIGNED LONG
+          arrow_type: crate::system::types::numeric::<u64>()
+          nullable: false
+        - name: attempt
+          description: The attempt number for the task.
+          rust_type: u64
+          sql_type: UNSIGNED LONG
+          arrow_type: crate::system::types::numeric::<u64>()
+          nullable: false
+        - name: status
+          description: The current status of the task.
+          rust_type: String
+          sql_type: STRING
+          arrow_type: crate::system::types::string()
+          nullable: false
+        - name: created_at
+          description: The timestamp when the task was created.
+          rust_type: chrono::DateTime<chrono::Utc>
+          sql_type: TIMESTAMP_LTZ(6)
+          arrow_type: crate::system::types::timestamp()
+          nullable: false
+        - name: stopped_at
+          description: The timestamp when the task stopped execution.
+          rust_type: Option<chrono::DateTime<chrono::Utc>>
+          sql_type: TIMESTAMP_LTZ(6)
+          arrow_type: crate::system::types::timestamp()
+          nullable: true
+
+- name: session
+  description: The database containing user session data.
+  tables:
+    - name: sessions
+      row_name: session
+      description: The table containing user session information.
+      columns:
+        - name: session_id
+          description: The unique identifier for the session.
+          rust_type: String
+          sql_type: STRING
+          arrow_type: crate::system::types::string()
+          nullable: false
+        - name: user_id
+          description: |
+            The identifier for the user associated with the session.
+            This can be an arbitrary string that identifies the user,
+            or empty if the user is not known.
+          rust_type: String
+          sql_type: STRING
+          arrow_type: crate::system::types::string()
+          nullable: false
+        - name: status
+          description: The current status of the session.
+          rust_type: String
+          sql_type: STRING
+          arrow_type: crate::system::types::string()
+          nullable: false
+        - name: created_at
+          description: The timestamp when the session was created.
+          rust_type: chrono::DateTime<chrono::Utc>
+          sql_type: TIMESTAMP_LTZ(6)
+          arrow_type: crate::system::types::timestamp()
+          nullable: false
+        - name: deleted_at
+          description: The timestamp when the session was deleted.
+          rust_type: Option<chrono::DateTime<chrono::Utc>>
+          sql_type: TIMESTAMP_LTZ(6)
+          arrow_type: crate::system::types::timestamp()
+          nullable: true

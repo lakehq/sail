@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    BinaryArray, Int64Array, RecordBatch, RecordBatchOptions, StringArray,
+    ArrayRef, BinaryArray, Int64Array, RecordBatch, RecordBatchOptions, StringArray,
     TimestampMicrosecondArray,
 };
-use datafusion::arrow::datatypes::{DataType, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use datafusion::arrow::error::ArrowError;
 use datafusion_common::arrow::array::ArrayData;
 
@@ -33,32 +33,76 @@ impl BinaryFileReader {
     }
 
     pub fn read(self) -> Result<RecordBatch, ArrowError> {
-        let tz = time_zone_from_read_schema(&self.schema)?;
-        let path_array = StringArray::from(vec![self.metadata.path.as_str()]);
-        let modification_time_array =
-            TimestampMicrosecondArray::from(vec![self.metadata.modification_time])
-                .with_timezone(tz);
-        let length_array = Int64Array::from(vec![self.metadata.length]);
-        let content_array = {
-            // create a binary array without copying the content
-            let size = i32::try_from(self.content.len()).map_err(|e| {
-                ArrowError::ComputeError(format!("file content size too large: {}", e))
-            })?;
-            let array_data = ArrayData::builder(DataType::Binary)
-                .len(1)
-                .add_buffer(vec![0, size].into())
-                .add_buffer(self.content.into())
-                .build()?;
-            BinaryArray::from(array_data)
-        };
+        let mut path_array: Option<ArrayRef> = None;
+        let mut modification_time_array: Option<ArrayRef> = None;
+        let mut length_array: Option<ArrayRef> = None;
+        let mut content_array: Option<ArrayRef> = None;
+        let mut content_bytes = Some(self.content);
+
+        let mut columns = Vec::with_capacity(self.schema.fields().len());
+        for field in self.schema.fields() {
+            match field.name().as_str() {
+                "path" => {
+                    let arr = path_array.get_or_insert_with(|| {
+                        Arc::new(StringArray::from(vec![self.metadata.path.as_str()])) as _
+                    });
+                    columns.push(Arc::clone(arr));
+                }
+                "modificationTime" => {
+                    let tz = match field.data_type() {
+                        DataType::Timestamp(TimeUnit::Microsecond, Some(tz)) => tz.clone(),
+                        _ => time_zone_from_read_schema(&self.schema)?,
+                    };
+                    let arr = modification_time_array.get_or_insert_with(|| {
+                        Arc::new(
+                            TimestampMicrosecondArray::from(vec![self.metadata.modification_time])
+                                .with_timezone(tz),
+                        ) as _
+                    });
+                    columns.push(Arc::clone(arr));
+                }
+                "length" => {
+                    let arr = length_array.get_or_insert_with(|| {
+                        Arc::new(Int64Array::from(vec![self.metadata.length])) as _
+                    });
+                    columns.push(Arc::clone(arr));
+                }
+                "content" => {
+                    if content_array.is_none() {
+                        let content = content_bytes.take().unwrap_or_default();
+                        // create a binary array without copying the content
+                        let size = i32::try_from(content.len()).map_err(|e| {
+                            ArrowError::ComputeError(format!("file content size too large: {}", e))
+                        })?;
+                        let array_data = ArrayData::builder(DataType::Binary)
+                            .len(1)
+                            .add_buffer(vec![0, size].into())
+                            .add_buffer(content.into())
+                            .build()?;
+                        content_array = Some(Arc::new(BinaryArray::from(array_data)) as _);
+                    }
+                    columns.push(
+                        content_array
+                            .as_ref()
+                            .ok_or_else(|| {
+                                ArrowError::ComputeError(
+                                    "content_array should be initialized before use".to_string(),
+                                )
+                            })?
+                            .clone(),
+                    );
+                }
+                other => {
+                    return Err(ArrowError::ParseError(format!(
+                        "Unexpected field '{other}' in BinaryFile schema"
+                    )));
+                }
+            }
+        }
+
         let batch = RecordBatch::try_new_with_options(
             self.schema,
-            vec![
-                Arc::new(path_array),
-                Arc::new(modification_time_array),
-                Arc::new(length_array),
-                Arc::new(content_array),
-            ],
+            columns,
             &RecordBatchOptions::new().with_row_count(Some(1)),
         )?;
 

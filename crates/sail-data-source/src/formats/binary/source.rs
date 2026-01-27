@@ -2,35 +2,37 @@ use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{RecordBatch, RecordBatchOptions};
-use datafusion::arrow::datatypes::{Schema, SchemaRef};
+use datafusion::physical_expr::projection::ProjectionExprs;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
-use datafusion_common::{internal_err, DataFusionError, Result, Statistics};
+use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
-use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
+use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
 use datafusion_datasource::{PartitionedFile, TableSchema};
 use futures::StreamExt;
 use object_store::ObjectStore;
 
 use crate::formats::binary::reader::{BinaryFileMetadata, BinaryFileReader};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct BinarySource {
+    table_schema: TableSchema,
     path_glob_filter: Option<String>,
     batch_size: Option<usize>,
-    file_schema: Option<SchemaRef>,
-    file_projection: Option<Vec<usize>>,
     metrics: ExecutionPlanMetricsSet,
-    projected_statistics: Option<Statistics>,
-    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+    projection: SplitProjection,
 }
 
 impl BinarySource {
-    pub fn new(path_glob_filter: Option<String>) -> Self {
+    pub fn new(table_schema: impl Into<TableSchema>, path_glob_filter: Option<String>) -> Self {
+        let table_schema = table_schema.into();
         Self {
+            projection: SplitProjection::unprojected(&table_schema),
+            table_schema,
             path_glob_filter,
-            ..Self::default()
+            batch_size: None,
+            metrics: ExecutionPlanMetricsSet::new(),
         }
     }
 
@@ -56,12 +58,25 @@ impl FileSource for BinarySource {
         object_store: Arc<dyn ObjectStore>,
         _base_config: &FileScanConfig,
         _partition: usize,
-    ) -> Arc<dyn FileOpener> {
-        Arc::new(BinaryOpener::new(Arc::new(self.clone()), object_store))
+    ) -> Result<Arc<dyn FileOpener>> {
+        let opener = Arc::new(BinaryOpener::new(Arc::new(self.clone()), object_store))
+            as Arc<dyn FileOpener>;
+
+        let opener = ProjectionOpener::try_new(
+            self.projection.clone(),
+            opener,
+            self.table_schema.file_schema(),
+        )?;
+
+        Ok(opener)
     }
 
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn table_schema(&self) -> &TableSchema {
+        &self.table_schema
     }
 
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
@@ -70,53 +85,26 @@ impl FileSource for BinarySource {
         Arc::new(conf)
     }
 
-    fn with_schema(&self, schema: TableSchema) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.file_schema = Some(schema.file_schema().clone());
-        Arc::new(conf)
-    }
-
-    fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.file_projection = config.file_column_projection_indices();
-        Arc::new(conf)
-    }
-
-    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.projected_statistics = Some(statistics);
-        Arc::new(conf)
-    }
-
     fn metrics(&self) -> &ExecutionPlanMetricsSet {
         &self.metrics
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        let statistics = &self.projected_statistics;
-        statistics.clone().ok_or_else(|| {
-            DataFusionError::Internal(
-                "projected_statistics must be set before calling statistics()".to_string(),
-            )
-        })
+    fn try_pushdown_projection(
+        &self,
+        projection: &ProjectionExprs,
+    ) -> Result<Option<Arc<dyn FileSource>>> {
+        let mut source = self.clone();
+        let new_projection = self.projection.source.try_merge(projection)?;
+        source.projection = SplitProjection::new(self.table_schema.file_schema(), &new_projection);
+        Ok(Some(Arc::new(source)))
+    }
+
+    fn projection(&self) -> Option<&ProjectionExprs> {
+        Some(&self.projection.source)
     }
 
     fn file_type(&self) -> &str {
         "binary"
-    }
-
-    fn with_schema_adapter_factory(
-        &self,
-        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
-    ) -> Result<Arc<dyn FileSource>> {
-        Ok(Arc::new(Self {
-            schema_adapter_factory: Some(schema_adapter_factory),
-            ..self.clone()
-        }))
-    }
-
-    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
-        self.schema_adapter_factory.clone()
     }
 }
 
@@ -151,14 +139,24 @@ impl FileOpener for BinaryOpener {
         let location = file.object_meta.location.clone();
         let last_modified = file.object_meta.last_modified;
         let size = file.object_meta.size as i64;
-        let projection = self.config.file_projection.clone();
-        let schema = if let Some(schema) = &self.config.file_schema {
-            Arc::clone(schema)
-        } else {
-            return internal_err!("schema must be set before open the file");
-        };
+        let schema = Arc::new(
+            self.config
+                .table_schema
+                .file_schema()
+                .project(&self.config.projection.file_indices)?,
+        );
 
         Ok(Box::pin(async move {
+            if schema.fields().is_empty() {
+                let empty_batch = RecordBatch::try_new_with_options(
+                    schema,
+                    vec![],
+                    &RecordBatchOptions::new().with_row_count(Some(1)),
+                )
+                .map_err(DataFusionError::from)?;
+                return Ok(futures::stream::once(async move { Ok(empty_batch) }).boxed());
+            }
+
             let get_result = store.get(&location).await?;
             let content = get_result.bytes().await?;
             let modification_time = last_modified.timestamp_micros();
@@ -172,31 +170,8 @@ impl FileOpener for BinaryOpener {
             let reader = BinaryFileReader::new(metadata, content.into(), schema.clone());
 
             let stream = futures::stream::once(async move {
-                let batch = reader.read()?;
-                match &projection {
-                    Some(proj) => {
-                        if !proj.is_empty() {
-                            // Project the batch to only include requested columns
-                            let projected_columns: Vec<_> =
-                                proj.iter().map(|&i| batch.column(i).clone()).collect();
-                            let projected_fields: Vec<_> =
-                                proj.iter().map(|&i| schema.field(i).clone()).collect();
-                            let projected_schema = Arc::new(Schema::new(projected_fields));
-                            RecordBatch::try_new(projected_schema, projected_columns)
-                                .map_err(DataFusionError::from)
-                        } else {
-                            // Empty projection - return empty batch with row count preserved
-                            let empty_schema = Arc::new(Schema::empty());
-                            RecordBatch::try_new_with_options(
-                                empty_schema,
-                                vec![],
-                                &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
-                            )
-                            .map_err(DataFusionError::from)
-                        }
-                    }
-                    None => Ok(batch),
-                }
+                let batch = reader.read().map_err(DataFusionError::from)?;
+                Ok(batch)
             })
             .boxed();
 

@@ -583,7 +583,6 @@ mod tests {
             32,
             None,
         );
-
         Ok(DeltaWriter::new(object_store, table_path, config))
     }
 
