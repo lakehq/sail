@@ -695,6 +695,12 @@ impl CatalogProvider for GlueCatalogProvider {
                 let tbl = output
                     .table()
                     .ok_or_else(|| CatalogError::External("Table response is empty".to_string()))?;
+
+                // Reject views - they should be accessed via get_view
+                if matches!(tbl.table_type(), Some(t) if t == "VIRTUAL_VIEW") {
+                    return Err(CatalogError::NotFound("table", table.to_string()));
+                }
+
                 self.table_to_status(database, tbl)
             }
             Err(sdk_err) => {
@@ -714,21 +720,29 @@ impl CatalogProvider for GlueCatalogProvider {
         let client = self.get_client().await?;
         let db_name = database.to_string();
 
-        let result = client.get_tables().database_name(&db_name).send().await;
+        let mut tables = Vec::new();
+        let mut paginator = client
+            .get_tables()
+            .database_name(&db_name)
+            .into_paginator()
+            .send();
 
-        match result {
-            Ok(output) => output
-                .table_list()
-                .iter()
-                .map(|tbl| self.table_to_status(database, tbl))
-                .collect(),
-            Err(sdk_err) => {
-                let service_err = sdk_err.into_service_error();
-                Err(CatalogError::External(format!(
-                    "Failed to list tables: {service_err}"
-                )))
+        while let Some(page) = paginator
+            .next()
+            .await
+            .transpose()
+            .map_err(|e| CatalogError::External(format!("Failed to list tables: {e}")))?
+        {
+            for tbl in page.table_list() {
+                // Filter out views - they should be listed via list_views
+                if tbl.table_type().unwrap_or_default() == "VIRTUAL_VIEW" {
+                    continue;
+                }
+                tables.push(self.table_to_status(database, tbl)?);
             }
         }
+
+        Ok(tables)
     }
 
     async fn drop_table(
@@ -872,22 +886,27 @@ impl CatalogProvider for GlueCatalogProvider {
         let client = self.get_client().await?;
         let db_name = database.to_string();
 
-        let result = client.get_tables().database_name(&db_name).send().await;
+        let mut views = Vec::new();
+        let mut paginator = client
+            .get_tables()
+            .database_name(&db_name)
+            .into_paginator()
+            .send();
 
-        match result {
-            Ok(output) => output
-                .table_list()
-                .iter()
-                .filter(|tbl| tbl.table_type().unwrap_or_default() == "VIRTUAL_VIEW")
-                .map(|tbl| self.view_to_status(database, tbl))
-                .collect(),
-            Err(sdk_err) => {
-                let service_err = sdk_err.into_service_error();
-                Err(CatalogError::External(format!(
-                    "Failed to list views: {service_err}"
-                )))
+        while let Some(page) = paginator
+            .next()
+            .await
+            .transpose()
+            .map_err(|e| CatalogError::External(format!("Failed to list views: {e}")))?
+        {
+            for tbl in page.table_list() {
+                if tbl.table_type().unwrap_or_default() == "VIRTUAL_VIEW" {
+                    views.push(self.view_to_status(database, tbl)?);
+                }
             }
         }
+
+        Ok(views)
     }
 
     async fn drop_view(
