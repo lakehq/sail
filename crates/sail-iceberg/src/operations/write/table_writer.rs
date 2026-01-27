@@ -184,7 +184,9 @@ impl IcebergTableWriter {
     }
 
     pub async fn close(mut self) -> Result<Vec<DataFile>, String> {
-        let keys: Vec<String> = self.writers.keys().cloned().collect();
+        let mut keys: Vec<String> = self.writers.keys().cloned().collect();
+        // Sort keys to ensure stable flush order (and stable file name sequence assignment).
+        keys.sort();
         for k in keys {
             let vals = self
                 .partition_values_map

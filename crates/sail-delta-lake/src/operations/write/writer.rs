@@ -218,12 +218,17 @@ impl DeltaWriter {
     }
 
     /// Close the writer and get the Add actions
-    pub async fn close(self) -> Result<Vec<Add>, DeltaTableError> {
+    pub async fn close(mut self) -> Result<Vec<Add>, DeltaTableError> {
         let mut all_actions = Vec::new();
 
-        for (_, writer) in self.partition_writers.into_iter() {
-            let actions = writer.close().await?;
-            all_actions.extend(actions);
+        // Sort keys to ensure deterministic close order across partitions.
+        let mut keys: Vec<String> = self.partition_writers.keys().cloned().collect();
+        keys.sort();
+        for k in keys {
+            if let Some(writer) = self.partition_writers.remove(&k) {
+                let actions = writer.close().await?;
+                all_actions.extend(actions);
+            }
         }
 
         Ok(all_actions)
