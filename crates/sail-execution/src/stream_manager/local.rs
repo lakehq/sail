@@ -1,6 +1,6 @@
 use datafusion::arrow::array::RecordBatch;
 use datafusion::common::Result;
-use log::warn;
+use log::debug;
 use tokio::sync::mpsc;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 
@@ -81,7 +81,7 @@ impl TaskStreamSink for MemoryStreamReplicaSender {
                     Err(_) => {
                         // This can happen under normal operation when the receiver no longer needs
                         // more data (e.g., after a LIMIT operator has received enough rows).
-                        warn!("memory stream replica receiver has been dropped");
+                        debug!("memory stream replica receiver has been dropped");
                         *sender = None;
                     }
                 }

@@ -183,12 +183,14 @@ async fn shuffle_write(
             partitions[p] = Some(batch);
             Ok(())
         })?;
-        let mut active = false;
+        let mut active = 0;
         for p in 0..partitions.len() {
             let Some(sink) = partition_sinks[p].as_mut() else {
                 continue;
             };
-            active = true;
+            // We should update the number of active sinks here,
+            // even if the current batch does not have data for this partition.
+            active += 1;
             if let Some(batch) = partitions[p].take() {
                 match sink.write(Ok(batch)).await {
                     TaskStreamSinkState::Ok => {}
@@ -197,14 +199,19 @@ async fn shuffle_write(
                     }
                     TaskStreamSinkState::Closed => {
                         partition_sinks[p] = None;
+                        // This sink is closed when writing this batch,
+                        // so we should not consider it active anymore.
+                        active -= 1;
                     }
                 }
             }
         }
-        if !active {
+        if active == 0 {
             break;
         }
     }
+    // TODO: Ensure the sinks are cleaned up properly when an error causes an early return
+    //   of this function. We need to consider this for sinks that handle remote data.
     let futures = partition_sinks
         .into_iter()
         .filter_map(|s| s.map(|x| x.close()));

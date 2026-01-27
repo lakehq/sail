@@ -101,6 +101,8 @@ pub fn build_job_output(
         // via prior task status updates.
         // Therefore, it is safe to clean up the job. The job can reach a terminal state and all
         // its streams can be removed.
+        // When `tx` is dropped at the end of this async block, the job output stream built around
+        // `rx` will also end, signaling to the consumer that the job has completed.
         // This is how we ensure the data plane event (output stream termination) is consistent
         // with the control plane event (job termination).
         let _ = handle.send(DriverEvent::CleanUpJob { job_id }).await;

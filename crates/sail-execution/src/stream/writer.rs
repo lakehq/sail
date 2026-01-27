@@ -64,6 +64,8 @@ pub trait TaskStreamWriter: fmt::Debug + Send + Sync {
 pub trait TaskStreamSink: Send {
     /// Write a record batch or an error to the sink.
     async fn write(&mut self, batch: TaskStreamResult<RecordBatch>) -> TaskStreamSinkState;
+    // TODO: Are we required to call `close` when the user encounters an error and wants to
+    //   abort the sink? Should we have a separate `abort` method?
     /// Flush all data and close the sink.
     /// Since the operation may be async, the user must call this method before
     /// dropping the sink, unless the user has received [`TaskStreamSinkState::Error`] or
