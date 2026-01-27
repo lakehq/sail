@@ -14,11 +14,13 @@ use std::sync::Arc;
 
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
-use datafusion::common::{DataFusionError, Result, ScalarValue};
-use datafusion::physical_expr::expressions::{CastExpr, Column, Literal};
-use datafusion::physical_expr::{
-    LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr, ScalarFunctionExpr,
+use datafusion::common::{
+    Column as LogicalColumn, DataFusionError, Result, ScalarValue, ToDFSchema,
 };
+use datafusion::logical_expr::expr::{Case, Cast, ScalarFunction};
+use datafusion::logical_expr::Expr;
+use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::filter::FilterExec;
@@ -28,13 +30,15 @@ use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_functions_nested::extract::array_element_udf;
 use datafusion_functions_nested::map_extract::map_extract_udf;
-use datafusion_physical_expr::expressions::{CaseExpr, Column as PhysicalColumn, IsNotNullExpr};
+use datafusion_physical_expr::expressions::Column as PhysicalColumn;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
 use super::context::PlannerContext;
 use super::log_scan::{build_delta_log_datasource_union_with_options, LogScanOptions};
-use crate::datasource::{COMMIT_TIMESTAMP_COLUMN, COMMIT_VERSION_COLUMN, PATH_COLUMN};
+use crate::datasource::{
+    simplify_expr, COMMIT_TIMESTAMP_COLUMN, COMMIT_VERSION_COLUMN, PATH_COLUMN,
+};
 use crate::physical_plan::{
     create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaLogReplayExec,
     DeltaPhysicalExprAdapterFactory, DeltaWriterExec, COL_LOG_IS_REMOVE, COL_LOG_VERSION,
@@ -212,66 +216,51 @@ pub async fn build_log_replay_pipeline_with_options(
     // - __sail_delta_log_version is passed through from the scan as a partition column
     // - payload columns are extracted up-front so the sort/replay does not carry wide structs
     let input_schema = raw_scan.schema();
-    let add_idx = input_schema.index_of("add")?;
-    let remove_idx = input_schema.index_of("remove")?;
     let log_version_idx = input_schema.index_of(COL_LOG_VERSION)?;
+    let df_schema = input_schema.clone().to_dfschema()?;
+    let simplify = |expr: Expr| simplify_expr(ctx.session(), &df_schema, expr);
 
-    let config_options = Arc::new(ctx.session().config_options().clone());
-    let path_lit: Arc<dyn PhysicalExpr> =
-        Arc::new(Literal::new(ScalarValue::Utf8(Some("path".to_string()))));
-    let add_col_in: Arc<dyn PhysicalExpr> = Arc::new(Column::new("add", add_idx));
-    let remove_col_in: Arc<dyn PhysicalExpr> = Arc::new(Column::new("remove", remove_idx));
-
-    let add_path_raw: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::try_new(
-        datafusion::functions::core::get_field(),
-        vec![Arc::clone(&add_col_in), Arc::clone(&path_lit)],
-        input_schema.as_ref(),
-        Arc::clone(&config_options),
-    )?);
-    let remove_path_raw: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::try_new(
-        datafusion::functions::core::get_field(),
-        vec![Arc::clone(&remove_col_in), Arc::clone(&path_lit)],
-        input_schema.as_ref(),
-        Arc::clone(&config_options),
-    )?);
-
-    let add_is_not_null: Arc<dyn PhysicalExpr> =
-        Arc::new(IsNotNullExpr::new(Arc::clone(&add_col_in)));
-    let remove_is_not_null: Arc<dyn PhysicalExpr> =
-        Arc::new(IsNotNullExpr::new(Arc::clone(&remove_col_in)));
-
-    let guard_with = |cond: Arc<dyn PhysicalExpr>,
-                      then_expr: Arc<dyn PhysicalExpr>|
-     -> Result<Arc<dyn PhysicalExpr>> {
-        Ok(Arc::new(CaseExpr::try_new(
-            None,
-            vec![(cond, then_expr)],
-            None,
-        )?))
+    let col_expr = |name: &str| Expr::Column(LogicalColumn::new_unqualified(name));
+    let lit_str = |s: &str| Expr::Literal(ScalarValue::Utf8(Some(s.to_string())), None);
+    let lit_i64 = |v: i64| Expr::Literal(ScalarValue::Int64(Some(v)), None);
+    let get_field_expr = |struct_expr: Expr, field_name: &str| {
+        Expr::ScalarFunction(ScalarFunction::new_udf(
+            datafusion::functions::core::get_field(),
+            vec![struct_expr, lit_str(field_name)],
+        ))
     };
-    let coalesce_two = |first: Arc<dyn PhysicalExpr>,
-                        second: Arc<dyn PhysicalExpr>|
-     -> Result<Arc<dyn PhysicalExpr>> {
-        Ok(Arc::new(CaseExpr::try_new(
+    let guard_with = |cond: Expr, then_expr: Expr| {
+        Expr::Case(Case::new(
             None,
-            vec![(
-                Arc::new(IsNotNullExpr::new(Arc::clone(&first))),
-                Arc::clone(&first),
-            )],
-            Some(second),
-        )?))
+            vec![(Box::new(cond), Box::new(then_expr))],
+            None,
+        ))
     };
+
+    let add_col_expr = col_expr("add");
+    let remove_col_expr = col_expr("remove");
+    let add_is_not_null = add_col_expr.clone().is_not_null();
+    let remove_is_not_null = remove_col_expr.clone().is_not_null();
 
     // NOTE: `get_field(struct, 'child')` does not apply the parent struct's
     // null buffer to the returned child array. We must guard child extraction with the
     // struct's validity to avoid spurious values.
-    let add_path = guard_with(Arc::clone(&add_is_not_null), add_path_raw)?;
-    let remove_path = guard_with(Arc::clone(&remove_is_not_null), remove_path_raw)?;
+    let add_path = guard_with(
+        add_is_not_null.clone(),
+        get_field_expr(add_col_expr.clone(), "path"),
+    );
+    let remove_path = guard_with(
+        remove_is_not_null.clone(),
+        get_field_expr(remove_col_expr.clone(), "path"),
+    );
 
-    let replay_path: Arc<dyn PhysicalExpr> = coalesce_two(add_path, remove_path.clone())?;
+    let replay_path = simplify(Expr::ScalarFunction(ScalarFunction::new_udf(
+        datafusion::functions::core::coalesce(),
+        vec![add_path, remove_path.clone()],
+    )))?;
 
     // Mark tombstones using the struct's own validity.
-    let is_remove: Arc<dyn PhysicalExpr> = Arc::clone(&remove_is_not_null);
+    let is_remove = simplify(remove_is_not_null.clone())?;
 
     // Extract a stable "metadata table" schema from `add` up-front so replay can stream
     // over narrow payload columns.
@@ -301,70 +290,52 @@ pub async fn build_log_replay_pipeline_with_options(
         "stats_json"
     };
 
-    let lit_str = |s: &str| -> Arc<dyn PhysicalExpr> {
-        Arc::new(Literal::new(ScalarValue::Utf8(Some(s.to_string()))))
-    };
-    let lit_i64 =
-        |v: i64| -> Arc<dyn PhysicalExpr> { Arc::new(Literal::new(ScalarValue::Int64(Some(v)))) };
+    let get_add_field = |field_name: &str| get_field_expr(add_col_expr.clone(), field_name);
+    let guard_add = |e: Expr| guard_with(add_is_not_null.clone(), e);
 
-    let get_add_field = |field_name: &str| -> Result<Arc<dyn PhysicalExpr>> {
-        Ok(Arc::new(ScalarFunctionExpr::try_new(
-            datafusion::functions::core::get_field(),
-            vec![Arc::clone(&add_col_in), lit_str(field_name)],
-            input_schema.as_ref(),
-            Arc::clone(&config_options),
-        )?))
-    };
-
-    let guard_add = |e: Arc<dyn PhysicalExpr>| -> Result<Arc<dyn PhysicalExpr>> {
-        guard_with(Arc::clone(&add_is_not_null), e)
-    };
-
-    let path_expr: Arc<dyn PhysicalExpr> = Arc::new(CastExpr::new(
-        guard_add(get_add_field("path")?)?,
+    let path_expr = simplify(Expr::Cast(Cast::new(
+        Box::new(guard_add(get_add_field("path"))),
         DataType::Utf8,
-        None,
-    ));
+    )))?;
 
-    let size_expr_i64: Arc<dyn PhysicalExpr> = Arc::new(CastExpr::new(
-        guard_add(get_add_field("size")?)?,
+    let size_expr_i64 = Expr::Cast(Cast::new(
+        Box::new(guard_add(get_add_field("size"))),
         DataType::Int64,
-        None,
     ));
-    let size_expr: Arc<dyn PhysicalExpr> = coalesce_two(size_expr_i64, lit_i64(0))?;
+    let size_expr = simplify(Expr::ScalarFunction(ScalarFunction::new_udf(
+        datafusion::functions::core::coalesce(),
+        vec![size_expr_i64, lit_i64(0)],
+    )))?;
 
-    let mod_time_expr_i64: Arc<dyn PhysicalExpr> = Arc::new(CastExpr::new(
-        guard_add(get_add_field(mod_time_field)?)?,
+    let mod_time_expr_i64 = Expr::Cast(Cast::new(
+        Box::new(guard_add(get_add_field(mod_time_field))),
         DataType::Int64,
-        None,
     ));
-    let mod_time_expr: Arc<dyn PhysicalExpr> = coalesce_two(mod_time_expr_i64, lit_i64(0))?;
+    let mod_time_expr = simplify(Expr::ScalarFunction(ScalarFunction::new_udf(
+        datafusion::functions::core::coalesce(),
+        vec![mod_time_expr_i64, lit_i64(0)],
+    )))?;
 
-    let stats_expr: Option<Arc<dyn PhysicalExpr>> = if options.include_stats_json {
-        Some(Arc::new(CastExpr::new(
-            guard_add(get_add_field(stats_field)?)?,
+    let stats_expr = if options.include_stats_json {
+        Some(simplify(Expr::Cast(Cast::new(
+            Box::new(guard_add(get_add_field(stats_field))),
             DataType::Utf8,
-            None,
-        )))
+        )))?)
     } else {
         None
     };
 
-    let part_values = guard_add(get_add_field(part_values_field)?)?;
+    let part_values = guard_add(get_add_field(part_values_field));
     let part_expr_for = |key: &str| -> Result<Arc<dyn PhysicalExpr>> {
-        let extracted: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::try_new(
+        let extracted = Expr::ScalarFunction(ScalarFunction::new_udf(
             map_extract_udf(),
-            vec![Arc::clone(&part_values), lit_str(key)],
-            input_schema.as_ref(),
-            Arc::clone(&config_options),
-        )?);
-        let elem: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::try_new(
+            vec![part_values.clone(), lit_str(key)],
+        ));
+        let elem = Expr::ScalarFunction(ScalarFunction::new_udf(
             array_element_udf(),
             vec![extracted, lit_i64(1)],
-            input_schema.as_ref(),
-            Arc::clone(&config_options),
-        )?);
-        Ok(Arc::new(CastExpr::new(elem, DataType::Utf8, None)))
+        ));
+        simplify(Expr::Cast(Cast::new(Box::new(elem), DataType::Utf8)))
     };
 
     let mut final_proj: Vec<(Arc<dyn PhysicalExpr>, String)> =

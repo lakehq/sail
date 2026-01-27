@@ -32,8 +32,7 @@ use datafusion::datasource::physical_plan::{
     FileScanConfigBuilder, ParquetSource,
 };
 use datafusion::datasource::table_schema::TableSchema;
-use datafusion::physical_expr::LexOrdering;
-use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr::{LexOrdering, PhysicalExpr};
 use object_store::path::Path;
 
 use crate::datasource::{
