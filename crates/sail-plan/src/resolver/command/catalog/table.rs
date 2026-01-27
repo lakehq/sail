@@ -5,6 +5,7 @@ use sail_common::spec;
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
 };
+use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_common_datafusion::utils::items::ItemTaker;
 use uuid::Uuid;
 
@@ -76,12 +77,108 @@ impl PlanResolver<'_> {
 
     pub(in super::super) async fn resolve_catalog_create_table_as_select(
         &self,
-        _table: spec::ObjectName,
-        _definition: spec::TableDefinition,
-        _query: spec::QueryPlan,
-        _state: &mut PlanResolverState,
+        table: spec::ObjectName,
+        definition: spec::TableDefinition,
+        query: spec::QueryPlan,
+        state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        Err(PlanError::todo("CREATE TABLE ... AS SELECT ..."))
+        use super::super::write::{WriteMode, WritePlanBuilder, WriteTableAction, WriteTarget};
+        let spec::TableDefinition {
+            columns,
+            comment,
+            constraints,
+            location,
+            file_format,
+            row_format,
+            partition_by,
+            sort_by,
+            bucket_by,
+            cluster_by,
+            if_not_exists,
+            replace,
+            options,
+            properties,
+        } = definition;
+        if row_format.is_some() {
+            return Err(PlanError::todo(
+                "ROW FORMAT in CREATE TABLE AS SELECT statement",
+            ));
+        }
+        if !cluster_by.is_empty() {
+            return Err(PlanError::todo(
+                "CLUSTER BY in CREATE TABLE AS SELECT statement",
+            ));
+        }
+        if replace {
+            return Err(PlanError::todo(
+                "REPLACE in CREATE TABLE AS SELECT statement",
+            ));
+        }
+        if !properties.is_empty() {
+            return Err(PlanError::todo(
+                "PROPERTIES in CREATE TABLE AS SELECT statement",
+            ));
+        }
+
+        if !sort_by.is_empty() {
+            return Err(PlanError::todo(
+                "SORT_BY in CREATE TABLE AS SELECT statement",
+            ));
+        }
+        if bucket_by.is_some() {
+            return Err(PlanError::todo(
+                "BUCKET_BY in CREATE TABLE AS SELECT statement",
+            ));
+        }
+        if comment.is_some() {
+            return Err(PlanError::todo(
+                "COMMENT in CREATE TABLE AS SELECT statement",
+            ));
+        }
+
+        if !constraints.is_empty() {
+            return Err(PlanError::todo(
+                "CONSTRAINTS in CREATE TABLE AS SELECT statement",
+            ));
+        }
+
+        if !columns.is_empty() {
+            // Follow Spark's semantics here, do not allow columns in CTAS
+            return Err(PlanError::invalid(
+                "Schema may not be specified in a Create Table As Select (CTAS) statement.",
+            ));
+        }
+
+        // Rename the input using names in the PlanResolverState, opaque field ID -> fieldInfo.name
+        let input = self.resolve_query_plan(query, state).await?;
+        let column_names = PlanResolver::get_field_names(input.schema(), state)?;
+        let input = rename_logical_plan(input, &column_names)?;
+        let format = self.resolve_catalog_table_format(file_format)?;
+        // Handle location: add to options if specified
+        let mut write_options = options;
+        if let Some(location) = location {
+            write_options.push(("location".to_string(), location));
+        }
+
+        // Set write mode and action based on if_not_exists
+        let write_mode = if if_not_exists {
+            WriteMode::IgnoreIfExists
+        } else {
+            WriteMode::ErrorIfExists
+        };
+        let action = if if_not_exists {
+            WriteTableAction::CreateIfNotExists
+        } else {
+            WriteTableAction::Create
+        };
+        let builder = WritePlanBuilder::new()
+            .with_target(WriteTarget::NewTable { table, action })
+            .with_mode(write_mode)
+            .with_format(format)
+            .with_partition_by(partition_by)
+            .with_options(write_options);
+
+        self.resolve_write_with_builder(input, builder, state).await
     }
 
     pub(in super::super) fn resolve_default_table_location(
