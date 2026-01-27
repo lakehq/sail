@@ -1910,10 +1910,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         let ExprKind::DeltaCast(DeltaCastColumnExprNode {
             input_schema,
             target_schema,
-        }) = expr_kind
-        else {
-            return plan_err!("unsupported physical expr extension");
-        };
+        }) = expr_kind;
         if inputs.len() != 1 {
             return plan_err!(
                 "DeltaCastColumnExpr expects exactly one input, got {}",
