@@ -30,7 +30,7 @@ pbjson-types = "0.9.0"
 pbjson-build = "0.9.0"
 educe = "0.6"
 tower = { version = "0.5.3", features = ["full"] }
-uuid = { version = "1.19.0", features = ["serde", "v4"] }
+uuid = { version = "1.20.0", features = ["serde", "v4"] }
 async-trait = "0.1.89"
 async-recursion = "1.1.1"
 async-stream = "0.3.6"
@@ -103,7 +103,7 @@ percent-encoding = "2.3.2"
 rustls = "0.23.36"
 dashmap = "6.1.0"
 itertools = "0.14.0"
-moka = { version = "0.12.12", features = ["sync"] }
+moka = { version = "0.12.13", features = ["sync"] }
 bytes = "1.11.0"
 indexmap = "2.13.0"
 pin-project-lite = "0.2.16"
