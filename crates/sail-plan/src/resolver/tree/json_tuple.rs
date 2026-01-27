@@ -56,12 +56,14 @@ impl TreeNodeRewriter for JsonTupleRewriter<'_> {
         let field_exprs: Vec<Expr> = (0..num_keys)
             .map(|i| {
                 let field_name = format!("c{i}");
-                struct_expr.clone().field(field_name)
+                struct_expr.clone().field(&field_name).alias(field_name)
             })
             .collect();
 
-        // If there's only one field, return it directly
-        // Otherwise wrap in MultiExpr
+        // For multiple fields, wrap in MultiExpr so that rewrite_multi_expr
+        // extracts the alias names (c0, c1, ...) via try_from_alias_expr.
+        // For a single field, return the expression directly since MultiExpr
+        // with one arg doesn't trigger alias extraction (name.len() == args.len()).
         let result = if field_exprs.len() == 1 {
             field_exprs.into_iter().next().ok_or_else(|| {
                 datafusion_common::DataFusionError::Internal(

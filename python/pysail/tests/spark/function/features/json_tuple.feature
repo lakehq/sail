@@ -115,3 +115,32 @@ Feature: json_tuple() extracts multiple values from JSON strings
       Then query result ordered
       | c0           |
       | hello"world  |
+
+  Rule: Direct usage without explicit alias
+
+    Scenario: json_tuple direct select without subquery
+      When query
+      """
+      SELECT json_tuple('{"a":1, "b":2}', 'a', 'b')
+      """
+      Then query result ordered
+      | c0 | c1 |
+      | 1  | 2  |
+
+    Scenario: json_tuple direct select single key
+      When query
+      """
+      SELECT c0 FROM (SELECT json_tuple('{"x":"hello"}', 'x') AS (c0))
+      """
+      Then query result ordered
+      | c0    |
+      | hello |
+
+    Scenario: json_tuple direct select with missing key
+      When query
+      """
+      SELECT json_tuple('{"a":1}', 'a', 'b', 'c')
+      """
+      Then query result ordered
+      | c0 | c1   | c2   |
+      | 1  | NULL | NULL |
