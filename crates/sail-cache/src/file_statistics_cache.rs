@@ -1,7 +1,9 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use datafusion::common::Statistics;
+use datafusion::execution::cache::cache_manager::{FileStatisticsCache, FileStatisticsCacheEntry};
 use datafusion::execution::cache::CacheAccessor;
 use log::{debug, error};
 use moka::sync::Cache;
@@ -70,7 +72,7 @@ impl CacheAccessor<Path, Arc<Statistics>> for MokaFileStatisticsCache {
         None
     }
 
-    fn remove(&mut self, k: &Path) -> Option<Arc<Statistics>> {
+    fn remove(&self, k: &Path) -> Option<Arc<Statistics>> {
         self.statistics.remove(k).map(|(_, statistics)| statistics)
     }
 
@@ -87,6 +89,26 @@ impl CacheAccessor<Path, Arc<Statistics>> for MokaFileStatisticsCache {
     }
     fn name(&self) -> String {
         Self::NAME.to_string()
+    }
+}
+
+impl FileStatisticsCache for MokaFileStatisticsCache {
+    fn list_entries(&self) -> HashMap<Path, FileStatisticsCacheEntry> {
+        self.statistics
+            .iter()
+            .map(|(path, (object_meta, stats))| {
+                (
+                    path.as_ref().clone(),
+                    FileStatisticsCacheEntry {
+                        object_meta,
+                        num_rows: stats.num_rows,
+                        num_columns: stats.column_statistics.len(),
+                        table_size_bytes: stats.total_byte_size,
+                        statistics_size_bytes: 0, // TODO: set to the real size in the future
+                    },
+                )
+            })
+            .collect()
     }
 }
 

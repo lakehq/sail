@@ -29,6 +29,7 @@ impl WorkerPool {
     pub async fn close(&mut self, ctx: &mut ActorContext<DriverActor>) -> ExecutionResult<()> {
         let worker_ids = self.workers.keys().cloned().collect::<Vec<_>>();
         for worker_id in worker_ids.into_iter() {
+            // TODO: Should we wait for the spawned tasks for stopping the workers?
             self.stop_worker(ctx, worker_id, Some("closing worker pool".to_string()));
         }
         // TODO: support timeout for worker manager stop
