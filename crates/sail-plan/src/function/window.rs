@@ -4,8 +4,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field};
 use datafusion::functions_aggregate::{
     approx_distinct, approx_percentile_cont, array_agg, average, bit_and_or_xor, bool_and_or,
-    correlation, count, covariance, first_last, grouping, median, min_max, regr, stddev, sum,
-    variance,
+    correlation, count, covariance, grouping, median, min_max, regr, stddev, sum, variance,
 };
 use datafusion::functions_nested::string::array_to_string;
 use datafusion::functions_window::cume_dist::cume_dist_udwf;
@@ -123,7 +122,7 @@ fn first_value(input: WinFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     let (args, null_treatment) = get_arguments_and_null_treatment(arguments, ignore_nulls)?;
     Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
-        fun: WindowFunctionDefinition::AggregateUDF(first_last::first_value_udaf()),
+        fun: WindowFunctionDefinition::WindowUDF(first_value_udwf()),
         params: WindowFunctionParams {
             args,
             partition_by,
@@ -148,7 +147,7 @@ fn last_value(input: WinFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     let (args, null_treatment) = get_arguments_and_null_treatment(arguments, ignore_nulls)?;
     Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
-        fun: WindowFunctionDefinition::AggregateUDF(first_last::last_value_udaf()),
+        fun: WindowFunctionDefinition::WindowUDF(last_value_udwf()),
         params: WindowFunctionParams {
             args,
             partition_by,
