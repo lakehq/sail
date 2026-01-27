@@ -7,15 +7,14 @@ DeltaCommitExec(table_path=file://<tmp>/delta_overwrite/)
           UnionExec
             ProjectionExec: expr=[CAST(column1@0 AS Int64) as id, column2@1 as category, CAST(column3@2 AS Int64) as value]
               DataSourceExec: partitions=1, partition_sizes=[1]
-            CoalesceBatchesExec: target_batch_size=8192
-              FilterExec: NOT id@0 >= CAST(0 AS Int64)
-                DeltaScanByAddsExec(table_path=file://<tmp>/delta_overwrite/)
-                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                    DeltaDiscoveryExec(table_path=file://<tmp>/delta_overwrite/)
-                      CoalescePartitionsExec
-                        DeltaLogScanExec(table_path=file://<tmp>/delta_overwrite/, version=0)
-                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                            DataSourceExec: file_groups={1 group: [[<tmp>/delta_overwrite/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+            FilterExec: NOT id@0 >= CAST(0 AS Int64)
+              DeltaScanByAddsExec(table_path=file://<tmp>/delta_overwrite/)
+                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                  DeltaDiscoveryExec(table_path=file://<tmp>/delta_overwrite/)
+                    CoalescePartitionsExec
+                      DeltaLogScanExec(table_path=file://<tmp>/delta_overwrite/, version=0)
+                        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                          DataSourceExec: file_groups={1 group: [[<tmp>/delta_overwrite/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
       DeltaRemoveActionsExec
         DeltaDiscoveryExec(table_path=file://<tmp>/delta_overwrite/)
           CoalescePartitionsExec

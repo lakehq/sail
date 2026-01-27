@@ -277,10 +277,11 @@ mod tests {
             registry.execution_join_build_side_memory_used.name(),
             registry.execution_join_probe_side_batch_count.name(),
             registry.execution_join_probe_side_row_count.name(),
-            registry.execution_join_output_batch_count.name(),
+            // output_batches is now tracked through BaselineMetrics, not as a custom join metric
         ]
     }
 
+    #[expect(dead_code)]
     fn expected_nested_loop_join_metrics(registry: &MetricRegistry) -> Vec<Cow<'static, str>> {
         vec![
             registry.execution_join_candidate_count.name(),
@@ -293,7 +294,7 @@ mod tests {
             registry.execution_join_operation_time.name(),
             registry.execution_join_input_batch_count.name(),
             registry.execution_join_input_row_count.name(),
-            registry.execution_join_output_batch_count.name(),
+            // output_batches is now tracked through BaselineMetrics, not as a custom join metric
             registry.execution_join_memory_used.name(),
             registry.execution_spill_count.name(),
             registry.execution_spill_size.name(),
@@ -381,7 +382,8 @@ mod tests {
         MetricEmitterTester::new()
             .with_plan(plan)
             .with_expected_metrics(expected_build_probe_join_metrics)
-            .with_expected_metrics(expected_nested_loop_join_metrics)
+            // Note: selectivity metrics are only emitted when there's actual data to join
+            // so we don't include expected_nested_loop_join_metrics for EmptyExec tests
             .run()
             .await
     }
