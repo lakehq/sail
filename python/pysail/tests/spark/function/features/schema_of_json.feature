@@ -54,7 +54,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
     | result                                  |
     | STRUCT<age: STRING, name: STRING>       |
 
-  Scenario: schema_of_json with mixed types in array
+  Scenario: schema_of_json with array and nested object
     When query
     """
     SELECT schema_of_json('{"data":[1,2,3],"meta":{"count":3}}') AS result
@@ -62,6 +62,15 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
     Then query result ordered
     | result                                                  |
     | STRUCT<data: ARRAY<BIGINT>, meta: STRUCT<count: BIGINT>> |
+
+  Scenario: schema_of_json with mixed types in array
+    When query
+    """
+    SELECT schema_of_json('{"values":[1, "two", true]}') AS result
+    """
+    Then query result ordered
+    | result                            |
+    | STRUCT<values: ARRAY<STRING>>     |
 
   Scenario: schema_of_json with empty object
     When query
@@ -107,3 +116,15 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
     Then query result ordered
     | result                               |
     | STRUCT<id: STRING, value: STRING>    |
+
+  Scenario: schema_of_json with multiple rows
+    When query
+    """
+    SELECT schema_of_json('{"name":"Alice","age":30}') AS result
+    UNION ALL
+    SELECT schema_of_json('{"x":1.5,"y":true}') AS result
+    """
+    Then query result ordered
+    | result                                |
+    | STRUCT<age: BIGINT, name: STRING>     |
+    | STRUCT<x: DOUBLE, y: BOOLEAN>         |
