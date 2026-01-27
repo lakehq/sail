@@ -13,8 +13,7 @@ sail-catalog = { path = "../sail-catalog" }
 arrow = { workspace = true }
 async-trait = { workspace = true }
 aws-config = { workspace = true }
-aws-sdk-glue = "1"
-aws-credential-types = { workspace = true }
+aws-sdk-glue = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]

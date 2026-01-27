@@ -131,18 +131,10 @@ pub fn create_catalog_manager(
                     name,
                     region,
                     endpoint_url,
-                    access_key_id,
-                    secret_access_key,
                 } => {
                     let config = GlueCatalogConfig {
                         region: region.clone(),
                         endpoint_url: endpoint_url.clone(),
-                        access_key_id: access_key_id
-                            .as_ref()
-                            .map(|s| s.expose_secret().to_string()),
-                        secret_access_key: secret_access_key
-                            .as_ref()
-                            .map(|s| s.expose_secret().to_string()),
                     };
                     let runtime_aware = RuntimeAwareCatalogProvider::try_new(
                         || Ok(GlueCatalogProvider::new(name.to_string(), config)),

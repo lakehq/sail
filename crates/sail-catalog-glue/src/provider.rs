@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
 use aws_config::BehaviorVersion;
-use aws_credential_types::Credentials;
 use aws_sdk_glue::config::Region;
 use aws_sdk_glue::types::{
     SerDeInfo, StorageDescriptor, TableInput, ViewDefinitionInput, ViewRepresentationInput,
@@ -21,14 +20,10 @@ use crate::format::GlueStorageFormat;
 /// Configuration for AWS Glue Data Catalog.
 #[derive(Debug, Clone, Default)]
 pub struct GlueCatalogConfig {
-    /// AWS region (e.g., "us-east-1"). If not set, uses default credential chain.
+    /// AWS region (e.g., "us-east-1"). If not set, uses default from credential chain.
     pub region: Option<String>,
     /// Custom endpoint URL (optional). Useful for VPC endpoints or local development.
     pub endpoint_url: Option<String>,
-    /// AWS access key ID. If not set, uses default credential chain.
-    pub access_key_id: Option<String>,
-    /// AWS secret access key. If not set, uses default credential chain.
-    pub secret_access_key: Option<String>,
 }
 
 /// An AWS Glue Data Catalog provider.
@@ -58,14 +53,6 @@ impl GlueCatalogProvider {
 
                 if let Some(endpoint) = &self.config.endpoint_url {
                     config_loader = config_loader.endpoint_url(endpoint);
-                }
-
-                if let (Some(access_key), Some(secret_key)) =
-                    (&self.config.access_key_id, &self.config.secret_access_key)
-                {
-                    let credentials =
-                        Credentials::new(access_key, secret_key, None, None, "sail-glue");
-                    config_loader = config_loader.credentials_provider(credentials);
                 }
 
                 let sdk_config = config_loader.load().await;

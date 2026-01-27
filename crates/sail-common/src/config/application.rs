@@ -318,8 +318,6 @@ pub enum CatalogType {
         name: String,
         region: Option<String>,
         endpoint_url: Option<String>,
-        access_key_id: Option<SecretString>,
-        secret_access_key: Option<SecretString>,
     },
 }
 

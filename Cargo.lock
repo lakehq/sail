@@ -5938,7 +5938,6 @@ dependencies = [
  "arrow",
  "async-trait",
  "aws-config",
- "aws-credential-types",
  "aws-sdk-glue",
  "sail-catalog",
  "sail-common-datafusion",
