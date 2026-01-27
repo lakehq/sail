@@ -101,6 +101,17 @@ pub fn build_job_output(
                 break;
             }
         }
+        // When we reach here, the job output stream has ended, which means the job output manager
+        // has been dropped (otherwise the job output stream would still be active waiting for
+        // new streams to be added). Since the job output manager is dropped, we know that the job
+        // is no longer in the running state, which means all tasks have reached a terminal state
+        // via prior task status updates.
+        // Therefore, it is safe to clean up the job. The job can reach a terminal state and all
+        // its streams can be removed.
+        // When `tx` is dropped at the end of this async block, the job output stream built around
+        // `rx` will also end, signaling to the consumer that the job has completed.
+        // This is how we ensure the data plane event (output stream termination) is consistent
+        // with the control plane event (job termination).
         let _ = handle.send(DriverEvent::CleanUpJob { job_id }).await;
     });
     (
