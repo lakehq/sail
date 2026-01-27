@@ -208,7 +208,7 @@ impl ScanByAddsStreamState {
             scans.push(scan_exec.execute(partition, Arc::clone(&self.context))?);
         }
         let combined = stream::iter(scans)
-            .map(|scan| Ok::<_, DataFusionError>(scan))
+            .map(Ok::<_, DataFusionError>)
             .try_flatten();
         self.current_scan = Some(Box::pin(RecordBatchStreamAdapter::new(
             Arc::clone(&self.output_schema),

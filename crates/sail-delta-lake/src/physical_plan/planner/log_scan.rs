@@ -22,7 +22,7 @@ use crate::physical_plan::COL_LOG_VERSION;
 
 const DELTA_LOG_DIR: &str = "_delta_log";
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct LogScanOptions {
     /// Optional projection of top-level log columns (e.g. ["add", "remove", "metaData"]).
     ///
@@ -32,16 +32,6 @@ pub struct LogScanOptions {
     pub commit_version_range: Option<(i64, i64)>,
     /// Optional pushdown predicate for checkpoint parquet scans.
     pub parquet_predicate: Option<Arc<dyn PhysicalExpr>>,
-}
-
-impl Default for LogScanOptions {
-    fn default() -> Self {
-        Self {
-            projection: None,
-            commit_version_range: None,
-            parquet_predicate: None,
-        }
-    }
 }
 
 fn parse_log_version_prefix(filename: &str) -> Option<u64> {
@@ -147,22 +137,6 @@ fn to_file_groups(metas: Vec<ObjectMeta>, target_partitions: usize) -> Result<Ve
         files = rest;
     }
     Ok(groups)
-}
-
-/// Build a `UnionExec` over `_delta_log` checkpoint parquet + commit json files using DataFusion's
-/// `DataSourceExec`. Returns `(plan, checkpoint_filenames, commit_filenames)` for observability.
-pub async fn build_delta_log_datasource_union(
-    ctx: &PlannerContext<'_>,
-    checkpoint_files: Vec<String>,
-    commit_files: Vec<String>,
-) -> Result<(Arc<dyn ExecutionPlan>, Vec<String>, Vec<String>)> {
-    build_delta_log_datasource_union_with_options(
-        ctx,
-        checkpoint_files,
-        commit_files,
-        LogScanOptions::default(),
-    )
-    .await
 }
 
 pub async fn build_delta_log_datasource_union_with_options(
