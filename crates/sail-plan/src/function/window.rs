@@ -468,6 +468,7 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
             F::aggregate(approx_percentile_cont::approx_percentile_cont_udaf),
         ),
         ("array_agg", F::custom(array_agg_compacted)),
+        ("array_join", F::custom(listagg)),
         ("avg", F::custom(avg)),
         ("bit_and", F::aggregate(bit_and_or_xor::bit_and_udaf)),
         ("bit_or", F::aggregate(bit_and_or_xor::bit_or_udaf)),
