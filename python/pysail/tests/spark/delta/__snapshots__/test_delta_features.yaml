@@ -8,10 +8,10 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 1132
+    numAddedBytes: 1130
     numAddedFiles: 1
     numFiles: 1
-    numOutputBytes: 1132
+    numOutputBytes: 1130
     numOutputFiles: 1
     numOutputRows: 4
     numRemovedBytes: 1070
@@ -344,10 +344,10 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 1420
+    numAddedBytes: 1419
     numAddedFiles: 1
     numFiles: 1
-    numOutputBytes: 1420
+    numOutputBytes: 1419
     numOutputFiles: 1
     numOutputRows: 4
     numRemovedBytes: 1293
@@ -372,10 +372,10 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 1033
+    numAddedBytes: 1034
     numAddedFiles: 1
     numFiles: 1
-    numOutputBytes: 1033
+    numOutputBytes: 1034
     numOutputFiles: 1
     numOutputRows: 3
     numRemovedBytes: 1017
