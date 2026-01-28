@@ -303,27 +303,6 @@ impl ServerSessionFactory {
             .execution
             .use_row_number_estimates_to_optimize_partitioning;
         execution.listing_table_ignore_subdirectory = false;
-
-        // DataFusion's `HashJoinExec` supports a `PartitionMode::CollectLeft` optimization that
-        // collects the build side once and shares it across multiple output partitions via
-        // in-process shared state.
-        //
-        // In Sail's distributed modes (local-cluster / kubernetes), partitions run as independent
-        // tasks on different workers/processes. That shared-state assumption does not hold and can
-        // lead to missing build-side "final" output for joins that require it (e.g. FULL / LEFT /
-        // LEFT ANTI), which breaks MERGE semantics (missing inserts / rows).
-        //
-        // To avoid generating `CollectLeft` joins, force repartitioned joins and disable the
-        // optimizer's collect-left thresholds.
-        if matches!(
-            self.config.mode,
-            ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster
-        ) {
-            let optimizer = &mut options.optimizer;
-            optimizer.repartition_joins = true;
-            optimizer.hash_join_single_partition_threshold = 0;
-            optimizer.hash_join_single_partition_threshold_rows = 0;
-        }
     }
 
     fn apply_execution_parquet_config(&mut self, config: &mut SessionConfig) {
