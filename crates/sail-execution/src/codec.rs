@@ -172,17 +172,17 @@ use sail_python_udf::udf::pyspark_udtf::{PySparkUDTF, PySparkUdtfKind};
 use url::Url;
 
 use crate::plan::gen::extended_aggregate_udf::UdafKind;
+use crate::plan::gen::extended_physical_expr_node::ExprKind;
 use crate::plan::gen::extended_physical_plan_node::NodeKind;
 use crate::plan::gen::extended_scalar_udf::UdfKind;
 use crate::plan::gen::extended_stream_udf::StreamUdfKind;
 use crate::plan::gen::{
-    ExtendedAggregateUdf, ExtendedPhysicalPlanNode, ExtendedScalarUdf, ExtendedStreamUdf,
+    DeltaCastColumnExprNode, ExtendedAggregateUdf, ExtendedPhysicalExprNode,
+    ExtendedPhysicalPlanNode, ExtendedScalarUdf, ExtendedStreamUdf,
 };
 use crate::plan::{gen, StageInputExec};
 
 pub struct RemoteExecutionCodec;
-
-const DELTA_CAST_COLUMN_EXPR_TAG: &[u8] = b"DeltaCastColumnExpr";
 
 impl Debug for RemoteExecutionCodec {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -1902,9 +1902,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         buf: &[u8],
         inputs: &[Arc<dyn PhysicalExpr>],
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        if !buf.starts_with(DELTA_CAST_COLUMN_EXPR_TAG) {
-            return plan_err!("unsupported physical expr extension");
-        }
+        let node = ExtendedPhysicalExprNode::decode(buf)
+            .map_err(|e| plan_datafusion_err!("failed to decode physical expr: {e}"))?;
+        let expr_kind = node
+            .expr_kind
+            .ok_or_else(|| plan_datafusion_err!("missing physical expr node"))?;
+        let ExprKind::DeltaCast(DeltaCastColumnExprNode {
+            input_schema,
+            target_schema,
+        }) = expr_kind;
         if inputs.len() != 1 {
             return plan_err!(
                 "DeltaCastColumnExpr expects exactly one input, got {}",
@@ -1912,30 +1918,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             );
         }
 
-        let mut offset = DELTA_CAST_COLUMN_EXPR_TAG.len();
-        fn read_len_prefixed<'a>(buf: &'a [u8], offset: &mut usize) -> Result<&'a [u8]> {
-            if *offset + 4 > buf.len() {
-                return plan_err!("DeltaCastColumnExpr missing length prefix");
-            }
-            let len = u32::from_le_bytes(
-                buf[*offset..*offset + 4]
-                    .try_into()
-                    .map_err(|_| plan_datafusion_err!("invalid length prefix"))?,
-            ) as usize;
-            *offset += 4;
-            if *offset + len > buf.len() {
-                return plan_err!("DeltaCastColumnExpr length out of bounds");
-            }
-            let slice = &buf[*offset..*offset + len];
-            *offset += len;
-            Ok(slice)
-        }
-
-        let input_schema_buf = read_len_prefixed(buf, &mut offset)?;
-        let target_schema_buf = read_len_prefixed(buf, &mut offset)?;
-
-        let input_schema = self.try_decode_schema(input_schema_buf)?;
-        let target_schema = self.try_decode_schema(target_schema_buf)?;
+        let input_schema = self.try_decode_schema(&input_schema)?;
+        let target_schema = self.try_decode_schema(&target_schema)?;
 
         let input_field = input_schema
             .fields()
@@ -1963,19 +1947,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             return plan_err!("unsupported physical expr extension");
         };
 
-        buf.extend_from_slice(DELTA_CAST_COLUMN_EXPR_TAG);
-
         let input_schema = Schema::new(vec![delta_cast.input_field().as_ref().clone()]);
         let input_schema_buf = self.try_encode_schema(&input_schema)?;
-        buf.extend_from_slice(&(input_schema_buf.len() as u32).to_le_bytes());
-        buf.extend_from_slice(&input_schema_buf);
-
         let target_schema = Schema::new(vec![delta_cast.target_field().as_ref().clone()]);
         let target_schema_buf = self.try_encode_schema(&target_schema)?;
-        buf.extend_from_slice(&(target_schema_buf.len() as u32).to_le_bytes());
-        buf.extend_from_slice(&target_schema_buf);
-
-        Ok(())
+        let node = ExtendedPhysicalExprNode {
+            expr_kind: Some(ExprKind::DeltaCast(DeltaCastColumnExprNode {
+                input_schema: input_schema_buf,
+                target_schema: target_schema_buf,
+            })),
+        };
+        node.encode(buf)
+            .map_err(|e| plan_datafusion_err!("failed to encode physical expr: {e}"))
     }
 }
 

@@ -49,6 +49,17 @@ message ExtendedPhysicalPlanNode {
   }
 }
 
+message ExtendedPhysicalExprNode {
+  oneof ExprKind {
+    DeltaCastColumnExprNode delta_cast = 1;
+  }
+}
+
+message DeltaCastColumnExprNode {
+  bytes input_schema = 1;
+  bytes target_schema = 2;
+}
+
 message ExtendedScalarUdf {
   oneof UdfKind {
     StandardUdf standard = 1;

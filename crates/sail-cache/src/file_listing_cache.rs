@@ -25,7 +25,7 @@ impl MokaFileListingCache {
 
         let ttl = ttl.map(Duration::from_secs);
         if let Some(ttl) = ttl {
-            debug!("Setting TTL for {} to {:?} second(s)", Self::NAME, ttl);
+            debug!("Setting TTL for {} to {ttl:?}", Self::NAME);
             builder = builder.time_to_live(ttl);
         }
         if let Some(max_entries) = max_entries {
