@@ -1458,9 +1458,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "json_object_keys" | "json_keys" => {
                 Ok(sail_function::scalar::json::json_object_keys_udf())
             }
-            "json_tuple" => Ok(Arc::new(ScalarUDF::from(
-                sail_function::scalar::json::SparkJsonTuple::new(),
-            ))),
+            "json_tuple" => Ok(Arc::new(ScalarUDF::from(SparkJsonTuple::new()))),
             "spark_base64" | "base64" => Ok(Arc::new(ScalarUDF::from(SparkBase64::new()))),
             "spark_bround" | "bround" => Ok(Arc::new(ScalarUDF::from(SparkBRound::new()))),
             "spark_interval_div" => Ok(Arc::new(ScalarUDF::from(SparkIntervalDiv::new()))),

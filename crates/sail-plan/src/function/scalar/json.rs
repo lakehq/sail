@@ -1,10 +1,12 @@
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::{cast, expr, lit, when, ScalarUDF};
+use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_functions::unicode::expr_fn as unicode_fn;
 use sail_function::scalar::json::{
     json_as_text_udf, json_length_udf, json_object_keys_udf, to_json_udf, SparkJsonTuple,
 };
+use sail_function::scalar::multi_expr::MultiExpr;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -49,11 +51,21 @@ fn json_tuple(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         ));
     }
 
-    // Return the SparkJsonTuple call directly.
-    // The JsonTupleRewriter will transform this into field access expressions
-    // wrapped in MultiExpr during the projection rewrite phase.
+    let num_keys = arguments.len() - 1;
     let func = ScalarUDF::from(SparkJsonTuple::new());
-    Ok(func.call(arguments))
+    let struct_expr = func.call(arguments);
+
+    // json_tuple only expands columns (not rows), so we can build
+    // the MultiExpr directly without needing a separate rewriter.
+    // Always use MultiExpr so rewrite_multi_expr extracts the alias names.
+    let field_exprs: Vec<expr::Expr> = (0..num_keys)
+        .map(|i| {
+            let field_name = format!("c{i}");
+            struct_expr.clone().field(&field_name).alias(field_name)
+        })
+        .collect();
+
+    Ok(ScalarUDF::from(MultiExpr::new()).call(field_exprs))
 }
 
 fn to_json(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {

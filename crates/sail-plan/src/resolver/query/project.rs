@@ -15,7 +15,6 @@ use crate::error::{PlanError, PlanResult};
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::explode::ExplodeRewriter;
-use crate::resolver::tree::json_tuple::JsonTupleRewriter;
 use crate::resolver::tree::window::WindowRewriter;
 use crate::resolver::tree::PlanRewriter;
 use crate::resolver::PlanResolver;
@@ -36,7 +35,6 @@ impl PlanResolver<'_> {
         let (input, expr) = self.rewrite_wildcard(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<WindowRewriter>(input, expr, state)?;
-        let (input, expr) = self.rewrite_projection::<JsonTupleRewriter>(input, expr, state)?;
         let expr = self.rewrite_multi_expr(expr)?;
         let has_aggregate = expr.iter().any(|e| {
             e.expr
@@ -157,7 +155,10 @@ impl PlanResolver<'_> {
                 Expr::ScalarFunction(ScalarFunction { func, args }) => {
                     if func.inner().as_any().is::<MultiExpr>() {
                         // The metadata from the original expression are ignored.
-                        if name.len() == args.len() {
+                        // For wildcard-derived MultiExpr (multiple names matching args count),
+                        // pair original names with args. For function-derived MultiExpr
+                        // (single name regardless of args count), extract aliases from args.
+                        if name.len() == args.len() && name.len() > 1 {
                             for (name, arg) in name.into_iter().zip(args) {
                                 out.push(NamedExpr::new(vec![name], arg));
                             }
