@@ -69,9 +69,8 @@ DeltaCommitExec(table_path=file://<tmp>/merge_cardinality_skip/)
             ProjectionExec: expr=[CASE WHEN __common_expr_1@0 THEN __sail_src_id@5 ELSE id@1 END as id, CASE WHEN __sail_merge_target_row_present@4 IS NOT NULL AND __sail_merge_source_row_present@7 IS NOT NULL THEN __sail_src_value@6 WHEN __common_expr_1@0 THEN __sail_src_value@6 ELSE value@2 END as value]
               ProjectionExec: expr=[__sail_merge_target_row_present@3 IS NULL AND __sail_merge_source_row_present@6 IS NOT NULL as __common_expr_1, id@0 as id, value@1 as value, __sail_file_path@2 as __sail_file_path, __sail_merge_target_row_present@3 as __sail_merge_target_row_present, __sail_src_id@4 as __sail_src_id, __sail_src_value@5 as __sail_src_value, __sail_merge_source_row_present@6 as __sail_merge_source_row_present]
                 FilterExec: __sail_file_path@2 IS NULL AND (__sail_merge_target_row_present@3 IS NOT NULL OR __sail_merge_target_row_present@3 IS NULL AND __sail_merge_source_row_present@6 IS NOT NULL)
-                  HashJoinExec: mode=Partitioned, join_type=Full, on=[(id@0, __sail_src_id@0)]
-                    RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
-                      DataSourceExec: file_groups={1 group: [[<tmp>/merge_cardinality_skip/part-<id>.snappy.parquet]]}, projection=[id, value, __sail_file_path, true as __sail_merge_target_row_present], file_type=parquet
+                  HashJoinExec: mode=CollectLeft, join_type=Full, on=[(id@0, __sail_src_id@0)]
+                    DataSourceExec: file_groups={1 group: [[<tmp>/merge_cardinality_skip/part-<id>.snappy.parquet]]}, projection=[id, value, __sail_file_path, true as __sail_merge_target_row_present], file_type=parquet
                     ProjectionExec: expr=[#2@0 as __sail_src_id, max(src.#3)@1 as __sail_src_value, true as __sail_merge_source_row_present]
                       AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[max(src.#3)]
                         RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
@@ -94,9 +93,8 @@ DeltaCommitExec(table_path=file://<tmp>/merge_cardinality_skip/)
               ProjectionExec: expr=[CASE WHEN __common_expr_1@0 THEN __sail_src_id@5 ELSE id@1 END as id, CASE WHEN __sail_merge_target_row_present@4 IS NOT NULL AND __sail_merge_source_row_present@7 IS NOT NULL THEN __sail_src_value@6 WHEN __common_expr_1@0 THEN __sail_src_value@6 ELSE value@2 END as value, __sail_file_path@3 as __sail_file_path]
                 ProjectionExec: expr=[__sail_merge_target_row_present@3 IS NULL AND __sail_merge_source_row_present@6 IS NOT NULL as __common_expr_1, id@0 as id, value@1 as value, __sail_file_path@2 as __sail_file_path, __sail_merge_target_row_present@3 as __sail_merge_target_row_present, __sail_src_id@4 as __sail_src_id, __sail_src_value@5 as __sail_src_value, __sail_merge_source_row_present@6 as __sail_merge_source_row_present]
                   FilterExec: __sail_merge_target_row_present@3 IS NOT NULL OR __sail_merge_target_row_present@3 IS NULL AND __sail_merge_source_row_present@6 IS NOT NULL
-                    HashJoinExec: mode=Partitioned, join_type=Full, on=[(id@0, __sail_src_id@0)]
-                      RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
-                        DataSourceExec: file_groups={1 group: [[<tmp>/merge_cardinality_skip/part-<id>.snappy.parquet]]}, projection=[id, value, __sail_file_path, true as __sail_merge_target_row_present], file_type=parquet
+                    HashJoinExec: mode=CollectLeft, join_type=Full, on=[(id@0, __sail_src_id@0)]
+                      DataSourceExec: file_groups={1 group: [[<tmp>/merge_cardinality_skip/part-<id>.snappy.parquet]]}, projection=[id, value, __sail_file_path, true as __sail_merge_target_row_present], file_type=parquet
                       ProjectionExec: expr=[#2@0 as __sail_src_id, max(src.#3)@1 as __sail_src_value, true as __sail_merge_source_row_present]
                         AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[max(src.#3)]
                           RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1

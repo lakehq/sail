@@ -5,6 +5,7 @@ use datafusion::common::{plan_datafusion_err, Result};
 use sail_catalog::error::CatalogResult;
 use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
 use sail_catalog::provider::{CatalogProvider, RuntimeAwareCatalogProvider};
+use sail_catalog_glue::{GlueCatalogConfig, GlueCatalogProvider};
 use sail_catalog_iceberg::IcebergRestCatalogProvider;
 use sail_catalog_memory::MemoryCatalogProvider;
 use sail_catalog_onelake::OneLakeCatalogProvider;
@@ -124,6 +125,21 @@ pub fn create_catalog_manager(
                         runtime.io().clone(),
                     )?;
 
+                    Ok((name.to_string(), Arc::new(runtime_aware)))
+                }
+                CatalogType::Glue {
+                    name,
+                    region,
+                    endpoint_url,
+                } => {
+                    let config = GlueCatalogConfig {
+                        region: region.clone(),
+                        endpoint_url: endpoint_url.clone(),
+                    };
+                    let runtime_aware = RuntimeAwareCatalogProvider::try_new(
+                        || Ok(GlueCatalogProvider::new(name.to_string(), config)),
+                        runtime.io().clone(),
+                    )?;
                     Ok((name.to_string(), Arc::new(runtime_aware)))
                 }
             }

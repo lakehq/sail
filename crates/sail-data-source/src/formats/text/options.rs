@@ -15,6 +15,7 @@ fn apply_text_read_options(
         to.whole_text = whole_text;
     }
     if let Some(Some(line_sep)) = from.line_sep {
+        let _ = char_to_u8(line_sep, "line_sep")?;
         to.line_sep = Some(line_sep);
     }
     Ok(())
@@ -25,6 +26,7 @@ fn apply_text_write_options(
     to: &mut TableTextOptions,
 ) -> datafusion_common::Result<()> {
     if let Some(line_sep) = from.line_sep {
+        let _ = char_to_u8(line_sep, "line_sep")?;
         to.line_sep = Some(line_sep);
     }
     if let Some(compression) = from.compression {
@@ -46,9 +48,6 @@ pub fn resolve_text_read_options(
     for opt in options {
         apply_text_read_options(load_options(opt)?, &mut text_options)?;
     }
-    if let Some(line_sep) = text_options.line_sep {
-        let _ = char_to_u8(line_sep, "line_sep")?;
-    }
     Ok(text_options)
 }
 
@@ -59,9 +58,6 @@ pub fn resolve_text_write_options(
     apply_text_write_options(load_default_options()?, &mut text_options)?;
     for opt in options {
         apply_text_write_options(load_options(opt)?, &mut text_options)?;
-    }
-    if let Some(line_sep) = text_options.line_sep {
-        let _ = char_to_u8(line_sep, "line_sep")?;
     }
     Ok(text_options)
 }

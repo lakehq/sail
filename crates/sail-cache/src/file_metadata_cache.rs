@@ -24,8 +24,9 @@ impl MokaFileMetadataCache {
         let mut builder = Cache::builder().eviction_policy(EvictionPolicy::lru());
 
         if let Some(ttl) = ttl {
-            debug!("Setting TTL for {} to {ttl} second(s)", Self::NAME);
-            builder = builder.time_to_live(Duration::from_secs(ttl));
+            let ttl = Duration::from_secs(ttl);
+            debug!("Setting TTL for {} to {ttl:?}", Self::NAME);
+            builder = builder.time_to_live(ttl);
         }
         if let Some(size_limit) = size_limit {
             debug!(
