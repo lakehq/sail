@@ -41,6 +41,7 @@ use datafusion_proto::physical_plan::{AsExecutionPlan, PhysicalExtensionCodec};
 use datafusion_proto::protobuf::{
     JoinType as ProtoJoinType, PhysicalPlanNode, PhysicalSortExprNode,
 };
+use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use datafusion_spark::function::array::shuffle::SparkShuffle;
 use datafusion_spark::function::bitmap::bitmap_count::BitmapCount;
 use datafusion_spark::function::bitwise::bit_count::SparkBitCount;
@@ -50,6 +51,8 @@ use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
 use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
 use datafusion_spark::function::hash::crc32::SparkCrc32;
 use datafusion_spark::function::hash::sha1::SparkSha1;
+use datafusion_spark::function::map::map_from_arrays::MapFromArrays;
+use datafusion_spark::function::map::map_from_entries::MapFromEntries;
 use datafusion_spark::function::math::expm1::SparkExpm1;
 use datafusion_spark::function::math::hex::SparkHex;
 use datafusion_spark::function::math::modulus::SparkPmod;
@@ -57,6 +60,9 @@ use datafusion_spark::function::math::width_bucket::SparkWidthBucket;
 use datafusion_spark::function::string::elt::SparkElt;
 use datafusion_spark::function::string::format_string::FormatStringFunc;
 use datafusion_spark::function::string::luhn_check::SparkLuhnCheck;
+use datafusion_spark::function::url::try_url_decode::TryUrlDecode;
+use datafusion_spark::function::url::url_decode::UrlDecode;
+use datafusion_spark::function::url::url_encode::UrlEncode;
 use prost::Message;
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::array::record_batch::{read_record_batches, write_record_batches};
@@ -80,7 +86,6 @@ use sail_function::aggregate::mode::ModeFunction;
 use sail_function::aggregate::percentile_disc::PercentileDisc;
 use sail_function::aggregate::skewness::SkewnessFunc;
 use sail_function::aggregate::try_avg::TryAvgFunction;
-use sail_function::aggregate::try_sum::TrySumFunction;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
 use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
@@ -108,8 +113,6 @@ use sail_function::scalar::explode::{explode_name_to_kind, Explode};
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
 use sail_function::scalar::hash::spark_xxhash64::SparkXxhash64;
 use sail_function::scalar::json::SparkToJson;
-use sail_function::scalar::map::map_from_arrays::MapFromArrays;
-use sail_function::scalar::map::map_from_entries::MapFromEntries;
 use sail_function::scalar::map::str_to_map::StrToMap;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
@@ -147,8 +150,6 @@ use sail_function::scalar::struct_function::StructFunction;
 use sail_function::scalar::update_struct_field::UpdateStructField;
 use sail_function::scalar::url::parse_url::ParseUrl;
 use sail_function::scalar::url::spark_try_parse_url::SparkTryParseUrl;
-use sail_function::scalar::url::url_decode::UrlDecode;
-use sail_function::scalar::url::url_encode::UrlEncode;
 use sail_iceberg::physical_plan::{IcebergCommitExec, IcebergWriterExec};
 use sail_iceberg::TableIcebergOptions;
 use sail_logical_plan::range::Range;
@@ -172,17 +173,17 @@ use sail_python_udf::udf::pyspark_udtf::{PySparkUDTF, PySparkUdtfKind};
 use url::Url;
 
 use crate::plan::gen::extended_aggregate_udf::UdafKind;
+use crate::plan::gen::extended_physical_expr_node::ExprKind;
 use crate::plan::gen::extended_physical_plan_node::NodeKind;
 use crate::plan::gen::extended_scalar_udf::UdfKind;
 use crate::plan::gen::extended_stream_udf::StreamUdfKind;
 use crate::plan::gen::{
-    ExtendedAggregateUdf, ExtendedPhysicalPlanNode, ExtendedScalarUdf, ExtendedStreamUdf,
+    DeltaCastColumnExprNode, ExtendedAggregateUdf, ExtendedPhysicalExprNode,
+    ExtendedPhysicalPlanNode, ExtendedScalarUdf, ExtendedStreamUdf,
 };
 use crate::plan::{gen, StageInputExec};
 
 pub struct RemoteExecutionCodec;
-
-const DELTA_CAST_COLUMN_EXPR_TAG: &[u8] = b"DeltaCastColumnExpr";
 
 impl Debug for RemoteExecutionCodec {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -1550,6 +1551,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "try_parse_url" | "spark_try_parse_url" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryParseUrl::new())))
             }
+            "try_url_decode" => Ok(Arc::new(ScalarUDF::from(TryUrlDecode::new()))),
             "url_decode" => Ok(Arc::new(ScalarUDF::from(UrlDecode::new()))),
             "url_encode" => Ok(Arc::new(ScalarUDF::from(UrlEncode::new()))),
             _ => plan_err!("could not find scalar function: {name}"),
@@ -1644,6 +1646,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkYearMonthInterval>()
             || node_inner.is::<StrToMap>()
             || node_inner.is::<SparkToJson>()
+            || node_inner.is::<TryUrlDecode>()
             || node_inner.is::<UrlDecode>()
             || node_inner.is::<UrlEncode>()
             || node.name() == "json_as_text"
@@ -1747,7 +1750,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 "percentile_disc" => Ok(Arc::new(AggregateUDF::from(PercentileDisc::new()))),
                 "skewness" => Ok(Arc::new(AggregateUDF::from(SkewnessFunc::new()))),
                 "try_avg" => Ok(Arc::new(AggregateUDF::from(TryAvgFunction::new()))),
-                "try_sum" => Ok(Arc::new(AggregateUDF::from(TrySumFunction::new()))),
+                "try_sum" => Ok(Arc::new(AggregateUDF::from(SparkTrySum::new()))),
                 _ => plan_err!("Could not find Aggregate Function: {name}"),
             },
             Some(UdafKind::PySparkGroupAgg(gen::PySparkGroupAggUdaf {
@@ -1833,7 +1836,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<PercentileDisc>()
             || node.inner().as_any().is::<SkewnessFunc>()
             || node.inner().as_any().is::<TryAvgFunction>()
-            || node.inner().as_any().is::<TrySumFunction>()
+            || node.inner().as_any().is::<SparkTrySum>()
         {
             UdafKind::Standard(gen::StandardUdaf {})
         } else if let Some(func) = node
@@ -1904,9 +1907,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         buf: &[u8],
         inputs: &[Arc<dyn PhysicalExpr>],
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        if !buf.starts_with(DELTA_CAST_COLUMN_EXPR_TAG) {
-            return plan_err!("unsupported physical expr extension");
-        }
+        let node = ExtendedPhysicalExprNode::decode(buf)
+            .map_err(|e| plan_datafusion_err!("failed to decode physical expr: {e}"))?;
+        let expr_kind = node
+            .expr_kind
+            .ok_or_else(|| plan_datafusion_err!("missing physical expr node"))?;
+        let ExprKind::DeltaCast(DeltaCastColumnExprNode {
+            input_schema,
+            target_schema,
+        }) = expr_kind;
         if inputs.len() != 1 {
             return plan_err!(
                 "DeltaCastColumnExpr expects exactly one input, got {}",
@@ -1914,30 +1923,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             );
         }
 
-        let mut offset = DELTA_CAST_COLUMN_EXPR_TAG.len();
-        fn read_len_prefixed<'a>(buf: &'a [u8], offset: &mut usize) -> Result<&'a [u8]> {
-            if *offset + 4 > buf.len() {
-                return plan_err!("DeltaCastColumnExpr missing length prefix");
-            }
-            let len = u32::from_le_bytes(
-                buf[*offset..*offset + 4]
-                    .try_into()
-                    .map_err(|_| plan_datafusion_err!("invalid length prefix"))?,
-            ) as usize;
-            *offset += 4;
-            if *offset + len > buf.len() {
-                return plan_err!("DeltaCastColumnExpr length out of bounds");
-            }
-            let slice = &buf[*offset..*offset + len];
-            *offset += len;
-            Ok(slice)
-        }
-
-        let input_schema_buf = read_len_prefixed(buf, &mut offset)?;
-        let target_schema_buf = read_len_prefixed(buf, &mut offset)?;
-
-        let input_schema = self.try_decode_schema(input_schema_buf)?;
-        let target_schema = self.try_decode_schema(target_schema_buf)?;
+        let input_schema = self.try_decode_schema(&input_schema)?;
+        let target_schema = self.try_decode_schema(&target_schema)?;
 
         let input_field = input_schema
             .fields()
@@ -1965,19 +1952,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             return plan_err!("unsupported physical expr extension");
         };
 
-        buf.extend_from_slice(DELTA_CAST_COLUMN_EXPR_TAG);
-
         let input_schema = Schema::new(vec![delta_cast.input_field().as_ref().clone()]);
         let input_schema_buf = self.try_encode_schema(&input_schema)?;
-        buf.extend_from_slice(&(input_schema_buf.len() as u32).to_le_bytes());
-        buf.extend_from_slice(&input_schema_buf);
-
         let target_schema = Schema::new(vec![delta_cast.target_field().as_ref().clone()]);
         let target_schema_buf = self.try_encode_schema(&target_schema)?;
-        buf.extend_from_slice(&(target_schema_buf.len() as u32).to_le_bytes());
-        buf.extend_from_slice(&target_schema_buf);
-
-        Ok(())
+        let node = ExtendedPhysicalExprNode {
+            expr_kind: Some(ExprKind::DeltaCast(DeltaCastColumnExprNode {
+                input_schema: input_schema_buf,
+                target_schema: target_schema_buf,
+            })),
+        };
+        node.encode(buf)
+            .map_err(|e| plan_datafusion_err!("failed to encode physical expr: {e}"))
     }
 }
 
