@@ -941,125 +941,6 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                 DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
-physical_plan after RewriteDeltaCollectLeft:
-OutputRequirementExec: order_by=[], dist_by=Unspecified
-  DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
-    UnionExec
-      DeltaWriterExec(table_path=file://<tmp>/merge_explain_codegen/)
-        CoalescePartitionsExec
-          ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note]
-            UnionExec
-              FilterExec: __sail_file_path@4 IS NULL
-                ProjectionExec: expr=[CASE WHEN __common_expr_1@0 THEN __sail_src_id@10 ELSE id@3 END as id, CASE WHEN __common_expr_1@0 THEN __sail_src_category@11 ELSE category@4 END as category, CASE WHEN __common_expr_2@1 THEN __sail_src_amount@12 + 1 WHEN __common_expr_1@0 THEN __sail_src_amount@12 ELSE amount@5 END as amount, CASE WHEN __common_expr_2@1 THEN spark_concat(__sail_src_note@13, _, id@3) WHEN __common_expr_3@2 AND __sail_merge_source_row_present@14 IS NULL AND category@4 = stale THEN spark_concat(note@6, _orphan) WHEN __common_expr_1@0 THEN spark_concat(insert_, __sail_src_note@13) ELSE note@6 END as note, __sail_file_path@7 as __sail_file_path]
-                  ProjectionExec: expr=[__sail_merge_target_row_present@7 IS NULL AND __sail_merge_source_row_present@12 IS NOT NULL as __common_expr_1, __common_expr_4@0 AND __sail_merge_source_row_present@12 IS NOT NULL AND category@2 = vip as __common_expr_2, __common_expr_4@0 as __common_expr_3, id@1 as id, category@2 as category, amount@3 as amount, note@4 as note, __sail_file_path@5 as __sail_file_path, __sail_merge_target_row_id@6 as __sail_merge_target_row_id, __sail_merge_target_row_present@7 as __sail_merge_target_row_present, __sail_src_id@8 as __sail_src_id, __sail_src_category@9 as __sail_src_category, __sail_src_amount@10 as __sail_src_amount, __sail_src_note@11 as __sail_src_note, __sail_merge_source_row_present@12 as __sail_merge_source_row_present]
-                    ProjectionExec: expr=[__sail_merge_target_row_present@6 IS NOT NULL as __common_expr_4, id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, __sail_merge_target_row_present@6 as __sail_merge_target_row_present, __sail_src_id@7 as __sail_src_id, __sail_src_category@8 as __sail_src_category, __sail_src_amount@9 as __sail_src_amount, __sail_src_note@10 as __sail_src_note, __sail_merge_source_row_present@11 as __sail_merge_source_row_present]
-                      FilterExec: __sail_merge_target_row_present@6 IS NOT NULL AND (__sail_merge_target_row_present@6 IS NULL OR __sail_merge_source_row_present@11 IS NULL OR category@1 != stale) OR __sail_merge_target_row_present@6 IS NULL AND __sail_merge_source_row_present@11 IS NOT NULL
-                        MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
-                          ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
-                            HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
-                              RepartitionExec: partitioning=Hash([__sail_src_id@0], 1), input_partitions=1
-                                ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present]
-                                  ProjectionExec: expr=[#8@0 as __sail_src_id, #9@1 as __sail_src_category, #10@2 as __sail_src_amount, #11@3 as __sail_src_note]
-                                    ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
-                                      ProjectionExec: expr=[id@0 as #4, category@1 as #5, amount@2 as #6, note@3 as #7]
-                                        ProjectionExec: expr=[#8@0 as id, #9@1 as category, #10@2 as amount, #11@3 as note]
-                                          ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
-                                            ProjectionExec: expr=[#0@0 as #4, #1@1 as #5, #2@2 as #6, #3@3 as #7]
-                                              ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3]
-                                                FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
-                                                  DataSourceExec: partitions=1, partition_sizes=[1]
-                              RepartitionExec: partitioning=Hash([id@0], 1), input_partitions=1
-                                ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                  ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id]
-                                    ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
-                                      ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
-                                        ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                          DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
-              ProjectionExec: expr=[id@1 as id, category@2 as category, amount@3 as amount, note@4 as note, __sail_file_path@5 as __sail_file_path]
-                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@4)]
-                  ProjectionExec: expr=[__sail_file_path@0 as __sail_file_path]
-                    AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
-                      AggregateExec: mode=Partial, gby=[__sail_file_path@4 as __sail_file_path], aggr=[]
-                        FilterExec: __sail_merge_target_row_present@6 IS NOT NULL AND (__sail_merge_source_row_present@11 IS NOT NULL AND id@0 = __sail_src_id@7 AND category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR __sail_merge_source_row_present@11 IS NULL AND category@1 = stale)
-                          MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
-                            ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
-                              HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
-                                RepartitionExec: partitioning=Hash([__sail_src_id@0], 1), input_partitions=1
-                                  ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present]
-                                    ProjectionExec: expr=[#8@0 as __sail_src_id, #9@1 as __sail_src_category, #10@2 as __sail_src_amount, #11@3 as __sail_src_note]
-                                      ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
-                                        ProjectionExec: expr=[id@0 as #4, category@1 as #5, amount@2 as #6, note@3 as #7]
-                                          ProjectionExec: expr=[#8@0 as id, #9@1 as category, #10@2 as amount, #11@3 as note]
-                                            ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
-                                              ProjectionExec: expr=[#0@0 as #4, #1@1 as #5, #2@2 as #6, #3@3 as #7]
-                                                ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3]
-                                                  FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
-                                                    DataSourceExec: partitions=1, partition_sizes=[1]
-                                RepartitionExec: partitioning=Hash([id@0], 1), input_partitions=1
-                                  ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                    ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id]
-                                      ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
-                                        ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
-                                          ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                            DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
-                  ProjectionExec: expr=[CASE WHEN __common_expr_1@0 THEN __sail_src_id@10 ELSE id@3 END as id, CASE WHEN __common_expr_1@0 THEN __sail_src_category@11 ELSE category@4 END as category, CASE WHEN __common_expr_2@1 THEN __sail_src_amount@12 + 1 WHEN __common_expr_1@0 THEN __sail_src_amount@12 ELSE amount@5 END as amount, CASE WHEN __common_expr_2@1 THEN spark_concat(__sail_src_note@13, _, id@3) WHEN __common_expr_3@2 AND __sail_merge_source_row_present@14 IS NULL AND category@4 = stale THEN spark_concat(note@6, _orphan) WHEN __common_expr_1@0 THEN spark_concat(insert_, __sail_src_note@13) ELSE note@6 END as note, __sail_file_path@7 as __sail_file_path]
-                    ProjectionExec: expr=[__sail_merge_target_row_present@7 IS NULL AND __sail_merge_source_row_present@12 IS NOT NULL as __common_expr_1, __common_expr_4@0 AND __sail_merge_source_row_present@12 IS NOT NULL AND category@2 = vip as __common_expr_2, __common_expr_4@0 as __common_expr_3, id@1 as id, category@2 as category, amount@3 as amount, note@4 as note, __sail_file_path@5 as __sail_file_path, __sail_merge_target_row_id@6 as __sail_merge_target_row_id, __sail_merge_target_row_present@7 as __sail_merge_target_row_present, __sail_src_id@8 as __sail_src_id, __sail_src_category@9 as __sail_src_category, __sail_src_amount@10 as __sail_src_amount, __sail_src_note@11 as __sail_src_note, __sail_merge_source_row_present@12 as __sail_merge_source_row_present]
-                      ProjectionExec: expr=[__sail_merge_target_row_present@6 IS NOT NULL as __common_expr_4, id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, __sail_merge_target_row_present@6 as __sail_merge_target_row_present, __sail_src_id@7 as __sail_src_id, __sail_src_category@8 as __sail_src_category, __sail_src_amount@9 as __sail_src_amount, __sail_src_note@10 as __sail_src_note, __sail_merge_source_row_present@11 as __sail_merge_source_row_present]
-                        FilterExec: __sail_merge_target_row_present@6 IS NOT NULL AND (__sail_merge_target_row_present@6 IS NULL OR __sail_merge_source_row_present@11 IS NULL OR category@1 != stale) OR __sail_merge_target_row_present@6 IS NULL AND __sail_merge_source_row_present@11 IS NOT NULL
-                          MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
-                            ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
-                              HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
-                                RepartitionExec: partitioning=Hash([__sail_src_id@0], 1), input_partitions=1
-                                  ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present]
-                                    ProjectionExec: expr=[#8@0 as __sail_src_id, #9@1 as __sail_src_category, #10@2 as __sail_src_amount, #11@3 as __sail_src_note]
-                                      ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
-                                        ProjectionExec: expr=[id@0 as #4, category@1 as #5, amount@2 as #6, note@3 as #7]
-                                          ProjectionExec: expr=[#8@0 as id, #9@1 as category, #10@2 as amount, #11@3 as note]
-                                            ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
-                                              ProjectionExec: expr=[#0@0 as #4, #1@1 as #5, #2@2 as #6, #3@3 as #7]
-                                                ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3]
-                                                  FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
-                                                    DataSourceExec: partitions=1, partition_sizes=[1]
-                                RepartitionExec: partitioning=Hash([id@0], 1), input_partitions=1
-                                  ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                    ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id]
-                                      ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
-                                        ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
-                                          ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                            DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
-      DeltaRemoveActionsExec
-        DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
-          ProjectionExec: expr=[__sail_file_path@1 as __sail_file_path, size_bytes@2 as size_bytes, modification_time@3 as modification_time]
-            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)]
-              ProjectionExec: expr=[__sail_file_path@0 as __sail_file_path]
-                AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
-                  AggregateExec: mode=Partial, gby=[__sail_file_path@4 as __sail_file_path], aggr=[]
-                    FilterExec: __sail_merge_target_row_present@6 IS NOT NULL AND (__sail_merge_source_row_present@11 IS NOT NULL AND id@0 = __sail_src_id@7 AND category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR __sail_merge_source_row_present@11 IS NULL AND category@1 = stale)
-                      MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
-                        ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
-                          HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
-                            RepartitionExec: partitioning=Hash([__sail_src_id@0], 1), input_partitions=1
-                              ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present]
-                                ProjectionExec: expr=[#8@0 as __sail_src_id, #9@1 as __sail_src_category, #10@2 as __sail_src_amount, #11@3 as __sail_src_note]
-                                  ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
-                                    ProjectionExec: expr=[id@0 as #4, category@1 as #5, amount@2 as #6, note@3 as #7]
-                                      ProjectionExec: expr=[#8@0 as id, #9@1 as category, #10@2 as amount, #11@3 as note]
-                                        ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
-                                          ProjectionExec: expr=[#0@0 as #4, #1@1 as #5, #2@2 as #6, #3@3 as #7]
-                                            ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3]
-                                              FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
-                                                DataSourceExec: partitions=1, partition_sizes=[1]
-                            RepartitionExec: partitioning=Hash([id@0], 1), input_partitions=1
-                              ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id]
-                                  ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
-                                    ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
-                                      ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                        DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
-              DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
-                DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
-
-
 physical_plan after LimitedDistinctAggregation:
 SAME TEXT AS ABOVE
 
@@ -1077,25 +958,23 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                     FilterExec: __sail_file_path@4 IS NULL AND (__sail_merge_target_row_present@6 IS NOT NULL AND (__sail_merge_target_row_present@6 IS NULL OR __sail_merge_source_row_present@11 IS NULL OR category@1 != stale) OR __sail_merge_target_row_present@6 IS NULL AND __sail_merge_source_row_present@11 IS NOT NULL)
                       MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
                         ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
-                          HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
-                            RepartitionExec: partitioning=Hash([__sail_src_id@0], 1), input_partitions=1
-                              ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present]
-                                ProjectionExec: expr=[#8@0 as __sail_src_id, #9@1 as __sail_src_category, #10@2 as __sail_src_amount, #11@3 as __sail_src_note]
-                                  ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
-                                    ProjectionExec: expr=[id@0 as #4, category@1 as #5, amount@2 as #6, note@3 as #7]
-                                      ProjectionExec: expr=[#8@0 as id, #9@1 as category, #10@2 as amount, #11@3 as note]
-                                        ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
-                                          ProjectionExec: expr=[#0@0 as #4, #1@1 as #5, #2@2 as #6, #3@3 as #7]
-                                            ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3]
-                                              FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
-                                                DataSourceExec: partitions=1, partition_sizes=[1]
-                            RepartitionExec: partitioning=Hash([id@0], 1), input_partitions=1
-                              ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id]
-                                  ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
-                                    ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
-                                      ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                        DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
+                          HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
+                            ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                              ProjectionExec: expr=[#8@0 as __sail_src_id, #9@1 as __sail_src_category, #10@2 as __sail_src_amount, #11@3 as __sail_src_note]
+                                ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
+                                  ProjectionExec: expr=[id@0 as #4, category@1 as #5, amount@2 as #6, note@3 as #7]
+                                    ProjectionExec: expr=[#8@0 as id, #9@1 as category, #10@2 as amount, #11@3 as note]
+                                      ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
+                                        ProjectionExec: expr=[#0@0 as #4, #1@1 as #5, #2@2 as #6, #3@3 as #7]
+                                          ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3]
+                                            FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                              DataSourceExec: partitions=1, partition_sizes=[1]
+                            ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
+                              ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id]
+                                ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
+                                  ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
+                                    ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
+                                      DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
               ProjectionExec: expr=[id@1 as id, category@2 as category, amount@3 as amount, note@4 as note, __sail_file_path@5 as __sail_file_path]
                 HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@4)]
                   ProjectionExec: expr=[__sail_file_path@0 as __sail_file_path]
@@ -1104,50 +983,46 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                         FilterExec: __sail_merge_target_row_present@6 IS NOT NULL AND (__sail_merge_source_row_present@11 IS NOT NULL AND id@0 = __sail_src_id@7 AND category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR __sail_merge_source_row_present@11 IS NULL AND category@1 = stale)
                           MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
                             ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
-                              HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
-                                RepartitionExec: partitioning=Hash([__sail_src_id@0], 1), input_partitions=1
-                                  ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present]
-                                    ProjectionExec: expr=[#8@0 as __sail_src_id, #9@1 as __sail_src_category, #10@2 as __sail_src_amount, #11@3 as __sail_src_note]
-                                      ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
-                                        ProjectionExec: expr=[id@0 as #4, category@1 as #5, amount@2 as #6, note@3 as #7]
-                                          ProjectionExec: expr=[#8@0 as id, #9@1 as category, #10@2 as amount, #11@3 as note]
-                                            ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
-                                              ProjectionExec: expr=[#0@0 as #4, #1@1 as #5, #2@2 as #6, #3@3 as #7]
-                                                ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3]
-                                                  FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
-                                                    DataSourceExec: partitions=1, partition_sizes=[1]
-                                RepartitionExec: partitioning=Hash([id@0], 1), input_partitions=1
-                                  ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                    ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id]
-                                      ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
-                                        ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
-                                          ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                            DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
+                              HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
+                                ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                                  ProjectionExec: expr=[#8@0 as __sail_src_id, #9@1 as __sail_src_category, #10@2 as __sail_src_amount, #11@3 as __sail_src_note]
+                                    ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
+                                      ProjectionExec: expr=[id@0 as #4, category@1 as #5, amount@2 as #6, note@3 as #7]
+                                        ProjectionExec: expr=[#8@0 as id, #9@1 as category, #10@2 as amount, #11@3 as note]
+                                          ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
+                                            ProjectionExec: expr=[#0@0 as #4, #1@1 as #5, #2@2 as #6, #3@3 as #7]
+                                              ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3]
+                                                FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                                  DataSourceExec: partitions=1, partition_sizes=[1]
+                                ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
+                                  ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id]
+                                    ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
+                                      ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
+                                        ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
+                                          DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
                   ProjectionExec: expr=[CASE WHEN __common_expr_1@0 THEN __sail_src_id@10 ELSE id@3 END as id, CASE WHEN __common_expr_1@0 THEN __sail_src_category@11 ELSE category@4 END as category, CASE WHEN __common_expr_2@1 THEN __sail_src_amount@12 + 1 WHEN __common_expr_1@0 THEN __sail_src_amount@12 ELSE amount@5 END as amount, CASE WHEN __common_expr_2@1 THEN spark_concat(__sail_src_note@13, _, id@3) WHEN __common_expr_3@2 AND __sail_merge_source_row_present@14 IS NULL AND category@4 = stale THEN spark_concat(note@6, _orphan) WHEN __common_expr_1@0 THEN spark_concat(insert_, __sail_src_note@13) ELSE note@6 END as note, __sail_file_path@7 as __sail_file_path]
                     ProjectionExec: expr=[__sail_merge_target_row_present@7 IS NULL AND __sail_merge_source_row_present@12 IS NOT NULL as __common_expr_1, __common_expr_4@0 AND __sail_merge_source_row_present@12 IS NOT NULL AND category@2 = vip as __common_expr_2, __common_expr_4@0 as __common_expr_3, id@1 as id, category@2 as category, amount@3 as amount, note@4 as note, __sail_file_path@5 as __sail_file_path, __sail_merge_target_row_id@6 as __sail_merge_target_row_id, __sail_merge_target_row_present@7 as __sail_merge_target_row_present, __sail_src_id@8 as __sail_src_id, __sail_src_category@9 as __sail_src_category, __sail_src_amount@10 as __sail_src_amount, __sail_src_note@11 as __sail_src_note, __sail_merge_source_row_present@12 as __sail_merge_source_row_present]
                       ProjectionExec: expr=[__sail_merge_target_row_present@6 IS NOT NULL as __common_expr_4, id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, __sail_merge_target_row_present@6 as __sail_merge_target_row_present, __sail_src_id@7 as __sail_src_id, __sail_src_category@8 as __sail_src_category, __sail_src_amount@9 as __sail_src_amount, __sail_src_note@10 as __sail_src_note, __sail_merge_source_row_present@11 as __sail_merge_source_row_present]
                         FilterExec: __sail_merge_target_row_present@6 IS NOT NULL AND (__sail_merge_target_row_present@6 IS NULL OR __sail_merge_source_row_present@11 IS NULL OR category@1 != stale) OR __sail_merge_target_row_present@6 IS NULL AND __sail_merge_source_row_present@11 IS NOT NULL
                           MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
                             ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
-                              HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
-                                RepartitionExec: partitioning=Hash([__sail_src_id@0], 1), input_partitions=1
-                                  ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present]
-                                    ProjectionExec: expr=[#8@0 as __sail_src_id, #9@1 as __sail_src_category, #10@2 as __sail_src_amount, #11@3 as __sail_src_note]
-                                      ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
-                                        ProjectionExec: expr=[id@0 as #4, category@1 as #5, amount@2 as #6, note@3 as #7]
-                                          ProjectionExec: expr=[#8@0 as id, #9@1 as category, #10@2 as amount, #11@3 as note]
-                                            ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
-                                              ProjectionExec: expr=[#0@0 as #4, #1@1 as #5, #2@2 as #6, #3@3 as #7]
-                                                ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3]
-                                                  FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
-                                                    DataSourceExec: partitions=1, partition_sizes=[1]
-                                RepartitionExec: partitioning=Hash([id@0], 1), input_partitions=1
-                                  ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                    ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id]
-                                      ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
-                                        ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
-                                          ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                            DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
+                              HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
+                                ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                                  ProjectionExec: expr=[#8@0 as __sail_src_id, #9@1 as __sail_src_category, #10@2 as __sail_src_amount, #11@3 as __sail_src_note]
+                                    ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
+                                      ProjectionExec: expr=[id@0 as #4, category@1 as #5, amount@2 as #6, note@3 as #7]
+                                        ProjectionExec: expr=[#8@0 as id, #9@1 as category, #10@2 as amount, #11@3 as note]
+                                          ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
+                                            ProjectionExec: expr=[#0@0 as #4, #1@1 as #5, #2@2 as #6, #3@3 as #7]
+                                              ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3]
+                                                FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                                  DataSourceExec: partitions=1, partition_sizes=[1]
+                                ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
+                                  ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id]
+                                    ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
+                                      ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
+                                        ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
+                                          DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
       DeltaRemoveActionsExec
         DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
           ProjectionExec: expr=[__sail_file_path@1 as __sail_file_path, size_bytes@2 as size_bytes, modification_time@3 as modification_time]
@@ -1158,25 +1033,23 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                     FilterExec: __sail_merge_target_row_present@6 IS NOT NULL AND (__sail_merge_source_row_present@11 IS NOT NULL AND id@0 = __sail_src_id@7 AND category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR __sail_merge_source_row_present@11 IS NULL AND category@1 = stale)
                       MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
                         ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
-                          HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
-                            RepartitionExec: partitioning=Hash([__sail_src_id@0], 1), input_partitions=1
-                              ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present]
-                                ProjectionExec: expr=[#8@0 as __sail_src_id, #9@1 as __sail_src_category, #10@2 as __sail_src_amount, #11@3 as __sail_src_note]
-                                  ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
-                                    ProjectionExec: expr=[id@0 as #4, category@1 as #5, amount@2 as #6, note@3 as #7]
-                                      ProjectionExec: expr=[#8@0 as id, #9@1 as category, #10@2 as amount, #11@3 as note]
-                                        ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
-                                          ProjectionExec: expr=[#0@0 as #4, #1@1 as #5, #2@2 as #6, #3@3 as #7]
-                                            ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3]
-                                              FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
-                                                DataSourceExec: partitions=1, partition_sizes=[1]
-                            RepartitionExec: partitioning=Hash([id@0], 1), input_partitions=1
-                              ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id]
-                                  ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
-                                    ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
-                                      ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                        DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
+                          HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
+                            ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                              ProjectionExec: expr=[#8@0 as __sail_src_id, #9@1 as __sail_src_category, #10@2 as __sail_src_amount, #11@3 as __sail_src_note]
+                                ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
+                                  ProjectionExec: expr=[id@0 as #4, category@1 as #5, amount@2 as #6, note@3 as #7]
+                                    ProjectionExec: expr=[#8@0 as id, #9@1 as category, #10@2 as amount, #11@3 as note]
+                                      ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
+                                        ProjectionExec: expr=[#0@0 as #4, #1@1 as #5, #2@2 as #6, #3@3 as #7]
+                                          ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3]
+                                            FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                              DataSourceExec: partitions=1, partition_sizes=[1]
+                            ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
+                              ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id]
+                                ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
+                                  ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
+                                    ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
+                                      DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
               DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                 DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
@@ -1196,27 +1069,24 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                       FilterExec: __sail_file_path@4 IS NULL AND (__sail_merge_target_row_present@6 IS NOT NULL AND (__sail_merge_target_row_present@6 IS NULL OR __sail_merge_source_row_present@11 IS NULL OR category@1 != stale) OR __sail_merge_target_row_present@6 IS NULL AND __sail_merge_source_row_present@11 IS NOT NULL)
                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                           MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
-                            CoalescePartitionsExec
-                              ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
-                                HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
-                                  RepartitionExec: partitioning=Hash([__sail_src_id@0], 4), input_partitions=1
-                                    ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present]
-                                      ProjectionExec: expr=[#8@0 as __sail_src_id, #9@1 as __sail_src_category, #10@2 as __sail_src_amount, #11@3 as __sail_src_note]
-                                        ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
-                                          ProjectionExec: expr=[id@0 as #4, category@1 as #5, amount@2 as #6, note@3 as #7]
-                                            ProjectionExec: expr=[#8@0 as id, #9@1 as category, #10@2 as amount, #11@3 as note]
-                                              ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
-                                                ProjectionExec: expr=[#0@0 as #4, #1@1 as #5, #2@2 as #6, #3@3 as #7]
-                                                  ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3]
-                                                    FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
-                                                      DataSourceExec: partitions=1, partition_sizes=[1]
-                                  RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
-                                    ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                      ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id]
-                                        ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
-                                          ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
-                                            ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                              DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
+                            ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
+                              HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
+                                ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                                  ProjectionExec: expr=[#8@0 as __sail_src_id, #9@1 as __sail_src_category, #10@2 as __sail_src_amount, #11@3 as __sail_src_note]
+                                    ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
+                                      ProjectionExec: expr=[id@0 as #4, category@1 as #5, amount@2 as #6, note@3 as #7]
+                                        ProjectionExec: expr=[#8@0 as id, #9@1 as category, #10@2 as amount, #11@3 as note]
+                                          ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
+                                            ProjectionExec: expr=[#0@0 as #4, #1@1 as #5, #2@2 as #6, #3@3 as #7]
+                                              ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3]
+                                                FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                                  DataSourceExec: partitions=1, partition_sizes=[1]
+                                ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
+                                  ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id]
+                                    ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
+                                      ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
+                                        ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
+                                          DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
                 ProjectionExec: expr=[id@1 as id, category@2 as category, amount@3 as amount, note@4 as note, __sail_file_path@5 as __sail_file_path]
                   HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@4)]
                     CoalescePartitionsExec
@@ -1227,37 +1097,8 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                               FilterExec: __sail_merge_target_row_present@6 IS NOT NULL AND (__sail_merge_source_row_present@11 IS NOT NULL AND id@0 = __sail_src_id@7 AND category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR __sail_merge_source_row_present@11 IS NULL AND category@1 = stale)
                                 RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                   MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
-                                    CoalescePartitionsExec
-                                      ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
-                                        HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
-                                          RepartitionExec: partitioning=Hash([__sail_src_id@0], 4), input_partitions=1
-                                            ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present]
-                                              ProjectionExec: expr=[#8@0 as __sail_src_id, #9@1 as __sail_src_category, #10@2 as __sail_src_amount, #11@3 as __sail_src_note]
-                                                ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
-                                                  ProjectionExec: expr=[id@0 as #4, category@1 as #5, amount@2 as #6, note@3 as #7]
-                                                    ProjectionExec: expr=[#8@0 as id, #9@1 as category, #10@2 as amount, #11@3 as note]
-                                                      ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
-                                                        ProjectionExec: expr=[#0@0 as #4, #1@1 as #5, #2@2 as #6, #3@3 as #7]
-                                                          ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3]
-                                                            FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
-                                                              DataSourceExec: partitions=1, partition_sizes=[1]
-                                          RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
-                                            ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                              ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id]
-                                                ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
-                                                  ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
-                                                    ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                                      DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
-                    ProjectionExec: expr=[CASE WHEN __common_expr_1@0 THEN __sail_src_id@10 ELSE id@3 END as id, CASE WHEN __common_expr_1@0 THEN __sail_src_category@11 ELSE category@4 END as category, CASE WHEN __common_expr_2@1 THEN __sail_src_amount@12 + 1 WHEN __common_expr_1@0 THEN __sail_src_amount@12 ELSE amount@5 END as amount, CASE WHEN __common_expr_2@1 THEN spark_concat(__sail_src_note@13, _, id@3) WHEN __common_expr_3@2 AND __sail_merge_source_row_present@14 IS NULL AND category@4 = stale THEN spark_concat(note@6, _orphan) WHEN __common_expr_1@0 THEN spark_concat(insert_, __sail_src_note@13) ELSE note@6 END as note, __sail_file_path@7 as __sail_file_path]
-                      ProjectionExec: expr=[__sail_merge_target_row_present@7 IS NULL AND __sail_merge_source_row_present@12 IS NOT NULL as __common_expr_1, __common_expr_4@0 AND __sail_merge_source_row_present@12 IS NOT NULL AND category@2 = vip as __common_expr_2, __common_expr_4@0 as __common_expr_3, id@1 as id, category@2 as category, amount@3 as amount, note@4 as note, __sail_file_path@5 as __sail_file_path, __sail_merge_target_row_id@6 as __sail_merge_target_row_id, __sail_merge_target_row_present@7 as __sail_merge_target_row_present, __sail_src_id@8 as __sail_src_id, __sail_src_category@9 as __sail_src_category, __sail_src_amount@10 as __sail_src_amount, __sail_src_note@11 as __sail_src_note, __sail_merge_source_row_present@12 as __sail_merge_source_row_present]
-                        ProjectionExec: expr=[__sail_merge_target_row_present@6 IS NOT NULL as __common_expr_4, id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, __sail_merge_target_row_present@6 as __sail_merge_target_row_present, __sail_src_id@7 as __sail_src_id, __sail_src_category@8 as __sail_src_category, __sail_src_amount@9 as __sail_src_amount, __sail_src_note@10 as __sail_src_note, __sail_merge_source_row_present@11 as __sail_merge_source_row_present]
-                          FilterExec: __sail_merge_target_row_present@6 IS NOT NULL AND (__sail_merge_target_row_present@6 IS NULL OR __sail_merge_source_row_present@11 IS NULL OR category@1 != stale) OR __sail_merge_target_row_present@6 IS NULL AND __sail_merge_source_row_present@11 IS NOT NULL
-                            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                              MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
-                                CoalescePartitionsExec
-                                  ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
-                                    HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
-                                      RepartitionExec: partitioning=Hash([__sail_src_id@0], 4), input_partitions=1
+                                    ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
+                                      HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
                                         ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present]
                                           ProjectionExec: expr=[#8@0 as __sail_src_id, #9@1 as __sail_src_category, #10@2 as __sail_src_amount, #11@3 as __sail_src_note]
                                             ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
@@ -1268,13 +1109,36 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                                       ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3]
                                                         FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
                                                           DataSourceExec: partitions=1, partition_sizes=[1]
-                                      RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
                                         ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
                                           ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id]
                                             ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
                                               ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
                                                 ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
                                                   DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
+                    ProjectionExec: expr=[CASE WHEN __common_expr_1@0 THEN __sail_src_id@10 ELSE id@3 END as id, CASE WHEN __common_expr_1@0 THEN __sail_src_category@11 ELSE category@4 END as category, CASE WHEN __common_expr_2@1 THEN __sail_src_amount@12 + 1 WHEN __common_expr_1@0 THEN __sail_src_amount@12 ELSE amount@5 END as amount, CASE WHEN __common_expr_2@1 THEN spark_concat(__sail_src_note@13, _, id@3) WHEN __common_expr_3@2 AND __sail_merge_source_row_present@14 IS NULL AND category@4 = stale THEN spark_concat(note@6, _orphan) WHEN __common_expr_1@0 THEN spark_concat(insert_, __sail_src_note@13) ELSE note@6 END as note, __sail_file_path@7 as __sail_file_path]
+                      ProjectionExec: expr=[__sail_merge_target_row_present@7 IS NULL AND __sail_merge_source_row_present@12 IS NOT NULL as __common_expr_1, __common_expr_4@0 AND __sail_merge_source_row_present@12 IS NOT NULL AND category@2 = vip as __common_expr_2, __common_expr_4@0 as __common_expr_3, id@1 as id, category@2 as category, amount@3 as amount, note@4 as note, __sail_file_path@5 as __sail_file_path, __sail_merge_target_row_id@6 as __sail_merge_target_row_id, __sail_merge_target_row_present@7 as __sail_merge_target_row_present, __sail_src_id@8 as __sail_src_id, __sail_src_category@9 as __sail_src_category, __sail_src_amount@10 as __sail_src_amount, __sail_src_note@11 as __sail_src_note, __sail_merge_source_row_present@12 as __sail_merge_source_row_present]
+                        ProjectionExec: expr=[__sail_merge_target_row_present@6 IS NOT NULL as __common_expr_4, id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, __sail_merge_target_row_present@6 as __sail_merge_target_row_present, __sail_src_id@7 as __sail_src_id, __sail_src_category@8 as __sail_src_category, __sail_src_amount@9 as __sail_src_amount, __sail_src_note@10 as __sail_src_note, __sail_merge_source_row_present@11 as __sail_merge_source_row_present]
+                          FilterExec: __sail_merge_target_row_present@6 IS NOT NULL AND (__sail_merge_target_row_present@6 IS NULL OR __sail_merge_source_row_present@11 IS NULL OR category@1 != stale) OR __sail_merge_target_row_present@6 IS NULL AND __sail_merge_source_row_present@11 IS NOT NULL
+                            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                              MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
+                                ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
+                                  HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
+                                    ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                                      ProjectionExec: expr=[#8@0 as __sail_src_id, #9@1 as __sail_src_category, #10@2 as __sail_src_amount, #11@3 as __sail_src_note]
+                                        ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
+                                          ProjectionExec: expr=[id@0 as #4, category@1 as #5, amount@2 as #6, note@3 as #7]
+                                            ProjectionExec: expr=[#8@0 as id, #9@1 as category, #10@2 as amount, #11@3 as note]
+                                              ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
+                                                ProjectionExec: expr=[#0@0 as #4, #1@1 as #5, #2@2 as #6, #3@3 as #7]
+                                                  ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3]
+                                                    FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                                      DataSourceExec: partitions=1, partition_sizes=[1]
+                                    ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
+                                      ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id]
+                                        ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
+                                          ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
+                                            ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
+                                              DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
         DeltaRemoveActionsExec
           DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
             CoalescePartitionsExec
@@ -1288,27 +1152,24 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                             FilterExec: __sail_merge_target_row_present@6 IS NOT NULL AND (__sail_merge_source_row_present@11 IS NOT NULL AND id@0 = __sail_src_id@7 AND category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR __sail_merge_source_row_present@11 IS NULL AND category@1 = stale)
                               RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                 MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
-                                  CoalescePartitionsExec
-                                    ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
-                                      HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
-                                        RepartitionExec: partitioning=Hash([__sail_src_id@0], 4), input_partitions=1
-                                          ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present]
-                                            ProjectionExec: expr=[#8@0 as __sail_src_id, #9@1 as __sail_src_category, #10@2 as __sail_src_amount, #11@3 as __sail_src_note]
-                                              ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
-                                                ProjectionExec: expr=[id@0 as #4, category@1 as #5, amount@2 as #6, note@3 as #7]
-                                                  ProjectionExec: expr=[#8@0 as id, #9@1 as category, #10@2 as amount, #11@3 as note]
-                                                    ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
-                                                      ProjectionExec: expr=[#0@0 as #4, #1@1 as #5, #2@2 as #6, #3@3 as #7]
-                                                        ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3]
-                                                          FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
-                                                            DataSourceExec: partitions=1, partition_sizes=[1]
-                                        RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
-                                          ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                            ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id]
-                                              ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
-                                                ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
-                                                  ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                                    DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
+                                  ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
+                                    HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
+                                      ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                                        ProjectionExec: expr=[#8@0 as __sail_src_id, #9@1 as __sail_src_category, #10@2 as __sail_src_amount, #11@3 as __sail_src_note]
+                                          ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
+                                            ProjectionExec: expr=[id@0 as #4, category@1 as #5, amount@2 as #6, note@3 as #7]
+                                              ProjectionExec: expr=[#8@0 as id, #9@1 as category, #10@2 as amount, #11@3 as note]
+                                                ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11]
+                                                  ProjectionExec: expr=[#0@0 as #4, #1@1 as #5, #2@2 as #6, #3@3 as #7]
+                                                    ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3]
+                                                      FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                                        DataSourceExec: partitions=1, partition_sizes=[1]
+                                      ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
+                                        ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id]
+                                          ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
+                                            ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
+                                              ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
+                                                DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
                   DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                       DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
@@ -1337,15 +1198,12 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                     FilterExec: __sail_file_path@4 IS NULL AND (__sail_merge_target_row_present@6 IS NOT NULL AND (__sail_merge_target_row_present@6 IS NULL OR __sail_merge_source_row_present@11 IS NULL OR category@1 != stale) OR __sail_merge_target_row_present@6 IS NULL AND __sail_merge_source_row_present@11 IS NOT NULL)
                       RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                         MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
-                          CoalescePartitionsExec
-                            ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
-                              HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
-                                RepartitionExec: partitioning=Hash([__sail_src_id@0], 4), input_partitions=1
-                                  ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
-                                    FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
-                                      DataSourceExec: partitions=1, partition_sizes=[1]
-                                RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
-                                  DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present], file_type=parquet
+                          ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
+                            HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
+                              ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                                FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                  DataSourceExec: partitions=1, partition_sizes=[1]
+                              DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present], file_type=parquet
               HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@4)], projection=[id@1, category@2, amount@3, note@4]
                 CoalescePartitionsExec
                   AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
@@ -1354,30 +1212,24 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                         FilterExec: __sail_merge_target_row_present@6 IS NOT NULL AND (__sail_merge_source_row_present@11 IS NOT NULL AND id@0 = __sail_src_id@7 AND category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR __sail_merge_source_row_present@11 IS NULL AND category@1 = stale)
                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                             MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
-                              CoalescePartitionsExec
-                                ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
-                                  HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
-                                    RepartitionExec: partitioning=Hash([__sail_src_id@0], 4), input_partitions=1
-                                      ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
-                                        FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
-                                          DataSourceExec: partitions=1, partition_sizes=[1]
-                                    RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
-                                      DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present], file_type=parquet
+                              ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
+                                HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
+                                  ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                                    FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                      DataSourceExec: partitions=1, partition_sizes=[1]
+                                  DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present], file_type=parquet
                 ProjectionExec: expr=[CASE WHEN __common_expr_1@0 THEN __sail_src_id@10 ELSE id@3 END as id, CASE WHEN __common_expr_1@0 THEN __sail_src_category@11 ELSE category@4 END as category, CASE WHEN __common_expr_2@1 THEN __sail_src_amount@12 + 1 WHEN __common_expr_1@0 THEN __sail_src_amount@12 ELSE amount@5 END as amount, CASE WHEN __common_expr_2@1 THEN spark_concat(__sail_src_note@13, _, id@3) WHEN __common_expr_3@2 AND __sail_merge_source_row_present@14 IS NULL AND category@4 = stale THEN spark_concat(note@6, _orphan) WHEN __common_expr_1@0 THEN spark_concat(insert_, __sail_src_note@13) ELSE note@6 END as note, __sail_file_path@7 as __sail_file_path]
                   ProjectionExec: expr=[__sail_merge_target_row_present@7 IS NULL AND __sail_merge_source_row_present@12 IS NOT NULL as __common_expr_1, __common_expr_4@0 AND __sail_merge_source_row_present@12 IS NOT NULL AND category@2 = vip as __common_expr_2, __common_expr_4@0 as __common_expr_3, id@1 as id, category@2 as category, amount@3 as amount, note@4 as note, __sail_file_path@5 as __sail_file_path, __sail_merge_target_row_id@6 as __sail_merge_target_row_id, __sail_merge_target_row_present@7 as __sail_merge_target_row_present, __sail_src_id@8 as __sail_src_id, __sail_src_category@9 as __sail_src_category, __sail_src_amount@10 as __sail_src_amount, __sail_src_note@11 as __sail_src_note, __sail_merge_source_row_present@12 as __sail_merge_source_row_present]
                     ProjectionExec: expr=[__sail_merge_target_row_present@6 IS NOT NULL as __common_expr_4, id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, __sail_merge_target_row_present@6 as __sail_merge_target_row_present, __sail_src_id@7 as __sail_src_id, __sail_src_category@8 as __sail_src_category, __sail_src_amount@9 as __sail_src_amount, __sail_src_note@10 as __sail_src_note, __sail_merge_source_row_present@11 as __sail_merge_source_row_present]
                       FilterExec: __sail_merge_target_row_present@6 IS NOT NULL AND (__sail_merge_target_row_present@6 IS NULL OR __sail_merge_source_row_present@11 IS NULL OR category@1 != stale) OR __sail_merge_target_row_present@6 IS NULL AND __sail_merge_source_row_present@11 IS NOT NULL
                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                           MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
-                            CoalescePartitionsExec
-                              ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
-                                HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
-                                  RepartitionExec: partitioning=Hash([__sail_src_id@0], 4), input_partitions=1
-                                    ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
-                                      FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
-                                        DataSourceExec: partitions=1, partition_sizes=[1]
-                                  RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
-                                    DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present], file_type=parquet
+                            ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
+                              HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
+                                ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                                  FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                    DataSourceExec: partitions=1, partition_sizes=[1]
+                                DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present], file_type=parquet
         DeltaRemoveActionsExec
           DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
             CoalescePartitionsExec
@@ -1389,15 +1241,12 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                         FilterExec: __sail_merge_target_row_present@6 IS NOT NULL AND (__sail_merge_source_row_present@11 IS NOT NULL AND id@0 = __sail_src_id@7 AND category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR __sail_merge_source_row_present@11 IS NULL AND category@1 = stale)
                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                             MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
-                              CoalescePartitionsExec
-                                ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
-                                  HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
-                                    RepartitionExec: partitioning=Hash([__sail_src_id@0], 4), input_partitions=1
-                                      ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
-                                        FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
-                                          DataSourceExec: partitions=1, partition_sizes=[1]
-                                    RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
-                                      DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present], file_type=parquet
+                              ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
+                                HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
+                                  ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                                    FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                      DataSourceExec: partitions=1, partition_sizes=[1]
+                                  DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present], file_type=parquet
                 DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                     DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
@@ -1419,15 +1268,12 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                   FilterExec: __sail_file_path@4 IS NULL AND (__sail_merge_target_row_present@6 IS NOT NULL AND (__sail_merge_target_row_present@6 IS NULL OR __sail_merge_source_row_present@11 IS NULL OR category@1 != stale) OR __sail_merge_target_row_present@6 IS NULL AND __sail_merge_source_row_present@11 IS NOT NULL)
                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                       MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
-                        CoalescePartitionsExec
-                          ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
-                            HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
-                              RepartitionExec: partitioning=Hash([__sail_src_id@0], 4), input_partitions=1
-                                ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
-                                  FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
-                                    DataSourceExec: partitions=1, partition_sizes=[1]
-                              RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
-                                DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present], file_type=parquet
+                        ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
+                          HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
+                            ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                              FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                DataSourceExec: partitions=1, partition_sizes=[1]
+                            DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present], file_type=parquet
             HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@4)], projection=[id@1, category@2, amount@3, note@4]
               CoalescePartitionsExec
                 AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
@@ -1436,30 +1282,24 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                       FilterExec: __sail_merge_target_row_present@6 IS NOT NULL AND (__sail_merge_source_row_present@11 IS NOT NULL AND id@0 = __sail_src_id@7 AND category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR __sail_merge_source_row_present@11 IS NULL AND category@1 = stale)
                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                           MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
-                            CoalescePartitionsExec
-                              ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
-                                HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
-                                  RepartitionExec: partitioning=Hash([__sail_src_id@0], 4), input_partitions=1
-                                    ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
-                                      FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
-                                        DataSourceExec: partitions=1, partition_sizes=[1]
-                                  RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
-                                    DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present], file_type=parquet
+                            ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
+                              HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
+                                ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                                  FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                    DataSourceExec: partitions=1, partition_sizes=[1]
+                                DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present], file_type=parquet
               ProjectionExec: expr=[CASE WHEN __common_expr_1@0 THEN __sail_src_id@10 ELSE id@3 END as id, CASE WHEN __common_expr_1@0 THEN __sail_src_category@11 ELSE category@4 END as category, CASE WHEN __common_expr_2@1 THEN __sail_src_amount@12 + 1 WHEN __common_expr_1@0 THEN __sail_src_amount@12 ELSE amount@5 END as amount, CASE WHEN __common_expr_2@1 THEN spark_concat(__sail_src_note@13, _, id@3) WHEN __common_expr_3@2 AND __sail_merge_source_row_present@14 IS NULL AND category@4 = stale THEN spark_concat(note@6, _orphan) WHEN __common_expr_1@0 THEN spark_concat(insert_, __sail_src_note@13) ELSE note@6 END as note, __sail_file_path@7 as __sail_file_path]
                 ProjectionExec: expr=[__sail_merge_target_row_present@7 IS NULL AND __sail_merge_source_row_present@12 IS NOT NULL as __common_expr_1, __common_expr_4@0 AND __sail_merge_source_row_present@12 IS NOT NULL AND category@2 = vip as __common_expr_2, __common_expr_4@0 as __common_expr_3, id@1 as id, category@2 as category, amount@3 as amount, note@4 as note, __sail_file_path@5 as __sail_file_path, __sail_merge_target_row_id@6 as __sail_merge_target_row_id, __sail_merge_target_row_present@7 as __sail_merge_target_row_present, __sail_src_id@8 as __sail_src_id, __sail_src_category@9 as __sail_src_category, __sail_src_amount@10 as __sail_src_amount, __sail_src_note@11 as __sail_src_note, __sail_merge_source_row_present@12 as __sail_merge_source_row_present]
                   ProjectionExec: expr=[__sail_merge_target_row_present@6 IS NOT NULL as __common_expr_4, id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, __sail_merge_target_row_present@6 as __sail_merge_target_row_present, __sail_src_id@7 as __sail_src_id, __sail_src_category@8 as __sail_src_category, __sail_src_amount@9 as __sail_src_amount, __sail_src_note@10 as __sail_src_note, __sail_merge_source_row_present@11 as __sail_merge_source_row_present]
                     FilterExec: __sail_merge_target_row_present@6 IS NOT NULL AND (__sail_merge_target_row_present@6 IS NULL OR __sail_merge_source_row_present@11 IS NULL OR category@1 != stale) OR __sail_merge_target_row_present@6 IS NULL AND __sail_merge_source_row_present@11 IS NOT NULL
                       RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                         MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
-                          CoalescePartitionsExec
-                            ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
-                              HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
-                                RepartitionExec: partitioning=Hash([__sail_src_id@0], 4), input_partitions=1
-                                  ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
-                                    FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
-                                      DataSourceExec: partitions=1, partition_sizes=[1]
-                                RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
-                                  DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present], file_type=parquet
+                          ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
+                            HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
+                              ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                                FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                  DataSourceExec: partitions=1, partition_sizes=[1]
+                              DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present], file_type=parquet
       DeltaRemoveActionsExec
         DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
           CoalescePartitionsExec
@@ -1471,15 +1311,12 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                       FilterExec: __sail_merge_target_row_present@6 IS NOT NULL AND (__sail_merge_source_row_present@11 IS NOT NULL AND id@0 = __sail_src_id@7 AND category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR __sail_merge_source_row_present@11 IS NULL AND category@1 = stale)
                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                           MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
-                            CoalescePartitionsExec
-                              ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
-                                HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
-                                  RepartitionExec: partitioning=Hash([__sail_src_id@0], 4), input_partitions=1
-                                    ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
-                                      FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
-                                        DataSourceExec: partitions=1, partition_sizes=[1]
-                                  RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
-                                    DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present], file_type=parquet
+                            ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
+                              HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
+                                ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                                  FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                    DataSourceExec: partitions=1, partition_sizes=[1]
+                                DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present], file_type=parquet
               DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                 RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                   DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
@@ -1525,15 +1362,12 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                   FilterExec: __sail_file_path@4 IS NULL AND (__sail_merge_target_row_present@6 IS NOT NULL AND (__sail_merge_target_row_present@6 IS NULL OR __sail_merge_source_row_present@11 IS NULL OR category@1 != stale) OR __sail_merge_target_row_present@6 IS NULL AND __sail_merge_source_row_present@11 IS NOT NULL)
                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                       MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
-                        CoalescePartitionsExec
-                          ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
-                            HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
-                              RepartitionExec: partitioning=Hash([__sail_src_id@0], 4), input_partitions=1
-                                ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
-                                  FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
-                                    DataSourceExec: partitions=1, partition_sizes=[1]
-                              RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
-                                DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present], file_type=parquet
+                        ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
+                          HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
+                            ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                              FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                DataSourceExec: partitions=1, partition_sizes=[1]
+                            DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present], file_type=parquet
             HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@4)], projection=[id@1, category@2, amount@3, note@4]
               CoalescePartitionsExec
                 AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
@@ -1542,30 +1376,24 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                       FilterExec: __sail_merge_target_row_present@6 IS NOT NULL AND (__sail_merge_source_row_present@11 IS NOT NULL AND id@0 = __sail_src_id@7 AND category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR __sail_merge_source_row_present@11 IS NULL AND category@1 = stale)
                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                           MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
-                            CoalescePartitionsExec
-                              ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
-                                HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
-                                  RepartitionExec: partitioning=Hash([__sail_src_id@0], 4), input_partitions=1
-                                    ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
-                                      FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
-                                        DataSourceExec: partitions=1, partition_sizes=[1]
-                                  RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
-                                    DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present], file_type=parquet
+                            ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
+                              HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
+                                ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                                  FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                    DataSourceExec: partitions=1, partition_sizes=[1]
+                                DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present], file_type=parquet
               ProjectionExec: expr=[CASE WHEN __common_expr_1@0 THEN __sail_src_id@10 ELSE id@3 END as id, CASE WHEN __common_expr_1@0 THEN __sail_src_category@11 ELSE category@4 END as category, CASE WHEN __common_expr_2@1 THEN __sail_src_amount@12 + 1 WHEN __common_expr_1@0 THEN __sail_src_amount@12 ELSE amount@5 END as amount, CASE WHEN __common_expr_2@1 THEN spark_concat(__sail_src_note@13, _, id@3) WHEN __common_expr_3@2 AND __sail_merge_source_row_present@14 IS NULL AND category@4 = stale THEN spark_concat(note@6, _orphan) WHEN __common_expr_1@0 THEN spark_concat(insert_, __sail_src_note@13) ELSE note@6 END as note, __sail_file_path@7 as __sail_file_path]
                 ProjectionExec: expr=[__sail_merge_target_row_present@7 IS NULL AND __sail_merge_source_row_present@12 IS NOT NULL as __common_expr_1, __common_expr_4@0 AND __sail_merge_source_row_present@12 IS NOT NULL AND category@2 = vip as __common_expr_2, __common_expr_4@0 as __common_expr_3, id@1 as id, category@2 as category, amount@3 as amount, note@4 as note, __sail_file_path@5 as __sail_file_path, __sail_merge_target_row_id@6 as __sail_merge_target_row_id, __sail_merge_target_row_present@7 as __sail_merge_target_row_present, __sail_src_id@8 as __sail_src_id, __sail_src_category@9 as __sail_src_category, __sail_src_amount@10 as __sail_src_amount, __sail_src_note@11 as __sail_src_note, __sail_merge_source_row_present@12 as __sail_merge_source_row_present]
                   ProjectionExec: expr=[__sail_merge_target_row_present@6 IS NOT NULL as __common_expr_4, id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, __sail_merge_target_row_present@6 as __sail_merge_target_row_present, __sail_src_id@7 as __sail_src_id, __sail_src_category@8 as __sail_src_category, __sail_src_amount@9 as __sail_src_amount, __sail_src_note@10 as __sail_src_note, __sail_merge_source_row_present@11 as __sail_merge_source_row_present]
                     FilterExec: __sail_merge_target_row_present@6 IS NOT NULL AND (__sail_merge_target_row_present@6 IS NULL OR __sail_merge_source_row_present@11 IS NULL OR category@1 != stale) OR __sail_merge_target_row_present@6 IS NULL AND __sail_merge_source_row_present@11 IS NOT NULL
                       RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                         MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
-                          CoalescePartitionsExec
-                            ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
-                              HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
-                                RepartitionExec: partitioning=Hash([__sail_src_id@0], 4), input_partitions=1
-                                  ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
-                                    FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
-                                      DataSourceExec: partitions=1, partition_sizes=[1]
-                                RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
-                                  DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present], file_type=parquet
+                          ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
+                            HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
+                              ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                                FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                  DataSourceExec: partitions=1, partition_sizes=[1]
+                              DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present], file_type=parquet
       DeltaRemoveActionsExec
         DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
           CoalescePartitionsExec
@@ -1577,15 +1405,12 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                       FilterExec: __sail_merge_target_row_present@6 IS NOT NULL AND (__sail_merge_source_row_present@11 IS NOT NULL AND id@0 = __sail_src_id@7 AND category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR __sail_merge_source_row_present@11 IS NULL AND category@1 = stale)
                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                           MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
-                            CoalescePartitionsExec
-                              ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
-                                HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
-                                  RepartitionExec: partitioning=Hash([__sail_src_id@0], 4), input_partitions=1
-                                    ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
-                                      FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
-                                        DataSourceExec: partitions=1, partition_sizes=[1]
-                                  RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
-                                    DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present], file_type=parquet
+                            ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
+                              HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
+                                ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                                  FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                    DataSourceExec: partitions=1, partition_sizes=[1]
+                                DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present], file_type=parquet
               DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                 RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                   DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
@@ -1604,15 +1429,12 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                   FilterExec: __sail_file_path@4 IS NULL AND (__sail_merge_target_row_present@6 IS NOT NULL AND (__sail_merge_target_row_present@6 IS NULL OR __sail_merge_source_row_present@11 IS NULL OR category@1 != stale) OR __sail_merge_target_row_present@6 IS NULL AND __sail_merge_source_row_present@11 IS NOT NULL)
                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                       MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
-                        CoalescePartitionsExec
-                          ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
-                            HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
-                              RepartitionExec: partitioning=Hash([__sail_src_id@0], 4), input_partitions=1
-                                ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
-                                  FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
-                                    DataSourceExec: partitions=1, partition_sizes=[1]
-                              RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
-                                DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present], file_type=parquet
+                        ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
+                          HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
+                            ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                              FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                DataSourceExec: partitions=1, partition_sizes=[1]
+                            DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present], file_type=parquet
             HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@4)], projection=[id@1, category@2, amount@3, note@4]
               CoalescePartitionsExec
                 AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
@@ -1621,30 +1443,24 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                       FilterExec: __sail_merge_target_row_present@6 IS NOT NULL AND (__sail_merge_source_row_present@11 IS NOT NULL AND id@0 = __sail_src_id@7 AND category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR __sail_merge_source_row_present@11 IS NULL AND category@1 = stale)
                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                           MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
-                            CoalescePartitionsExec
-                              ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
-                                HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
-                                  RepartitionExec: partitioning=Hash([__sail_src_id@0], 4), input_partitions=1
-                                    ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
-                                      FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
-                                        DataSourceExec: partitions=1, partition_sizes=[1]
-                                  RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
-                                    DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present], file_type=parquet
+                            ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
+                              HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
+                                ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                                  FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                    DataSourceExec: partitions=1, partition_sizes=[1]
+                                DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present], file_type=parquet
               ProjectionExec: expr=[CASE WHEN __common_expr_1@0 THEN __sail_src_id@10 ELSE id@3 END as id, CASE WHEN __common_expr_1@0 THEN __sail_src_category@11 ELSE category@4 END as category, CASE WHEN __common_expr_2@1 THEN __sail_src_amount@12 + 1 WHEN __common_expr_1@0 THEN __sail_src_amount@12 ELSE amount@5 END as amount, CASE WHEN __common_expr_2@1 THEN spark_concat(__sail_src_note@13, _, id@3) WHEN __common_expr_3@2 AND __sail_merge_source_row_present@14 IS NULL AND category@4 = stale THEN spark_concat(note@6, _orphan) WHEN __common_expr_1@0 THEN spark_concat(insert_, __sail_src_note@13) ELSE note@6 END as note, __sail_file_path@7 as __sail_file_path]
                 ProjectionExec: expr=[__sail_merge_target_row_present@7 IS NULL AND __sail_merge_source_row_present@12 IS NOT NULL as __common_expr_1, __common_expr_4@0 AND __sail_merge_source_row_present@12 IS NOT NULL AND category@2 = vip as __common_expr_2, __common_expr_4@0 as __common_expr_3, id@1 as id, category@2 as category, amount@3 as amount, note@4 as note, __sail_file_path@5 as __sail_file_path, __sail_merge_target_row_id@6 as __sail_merge_target_row_id, __sail_merge_target_row_present@7 as __sail_merge_target_row_present, __sail_src_id@8 as __sail_src_id, __sail_src_category@9 as __sail_src_category, __sail_src_amount@10 as __sail_src_amount, __sail_src_note@11 as __sail_src_note, __sail_merge_source_row_present@12 as __sail_merge_source_row_present]
                   ProjectionExec: expr=[__sail_merge_target_row_present@6 IS NOT NULL as __common_expr_4, id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, __sail_merge_target_row_present@6 as __sail_merge_target_row_present, __sail_src_id@7 as __sail_src_id, __sail_src_category@8 as __sail_src_category, __sail_src_amount@9 as __sail_src_amount, __sail_src_note@10 as __sail_src_note, __sail_merge_source_row_present@11 as __sail_merge_source_row_present]
                     FilterExec: __sail_merge_target_row_present@6 IS NOT NULL AND (__sail_merge_target_row_present@6 IS NULL OR __sail_merge_source_row_present@11 IS NULL OR category@1 != stale) OR __sail_merge_target_row_present@6 IS NULL AND __sail_merge_source_row_present@11 IS NOT NULL
                       RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                         MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
-                          CoalescePartitionsExec
-                            ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
-                              HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
-                                RepartitionExec: partitioning=Hash([__sail_src_id@0], 4), input_partitions=1
-                                  ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
-                                    FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
-                                      DataSourceExec: partitions=1, partition_sizes=[1]
-                                RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
-                                  DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present], file_type=parquet
+                          ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
+                            HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
+                              ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                                FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                  DataSourceExec: partitions=1, partition_sizes=[1]
+                              DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present], file_type=parquet
       DeltaRemoveActionsExec
         DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
           CoalescePartitionsExec
@@ -1656,15 +1472,12 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                       FilterExec: __sail_merge_target_row_present@6 IS NOT NULL AND (__sail_merge_source_row_present@11 IS NOT NULL AND id@0 = __sail_src_id@7 AND category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR __sail_merge_source_row_present@11 IS NULL AND category@1 = stale)
                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                           MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
-                            CoalescePartitionsExec
-                              ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
-                                HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
-                                  RepartitionExec: partitioning=Hash([__sail_src_id@0], 4), input_partitions=1
-                                    ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
-                                      FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
-                                        DataSourceExec: partitions=1, partition_sizes=[1]
-                                  RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
-                                    DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present], file_type=parquet
+                            ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
+                              HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
+                                ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                                  FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                    DataSourceExec: partitions=1, partition_sizes=[1]
+                                DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present], file_type=parquet
               DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                 RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                   DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet

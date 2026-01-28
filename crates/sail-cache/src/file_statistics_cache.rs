@@ -21,8 +21,9 @@ impl MokaFileStatisticsCache {
         let mut builder = Cache::builder();
 
         if let Some(ttl) = ttl {
-            debug!("Setting TTL for {} to {ttl} second(s)", Self::NAME);
-            builder = builder.time_to_live(Duration::from_secs(ttl));
+            let ttl = Duration::from_secs(ttl);
+            debug!("Setting TTL for {} to {ttl:?}", Self::NAME);
+            builder = builder.time_to_live(ttl);
         }
         if let Some(max_entries) = max_entries {
             debug!(

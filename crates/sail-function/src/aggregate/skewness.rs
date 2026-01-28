@@ -161,14 +161,17 @@ impl SkewnessAccumulator {
         self.m3
     }
 
+    /// Returns NULL when fewer than 2 values have been accumulated,
+    /// matching Spark's behavior for skewness and kurtosis.
+    /// With n=1, m2 (variance) is zero, causing division by zero in the
+    /// skewness formula `sqrt(n) * m3 / m2^(3/2)`, which produces NaN.
+    /// Spark returns NULL for n < 2 and computes from n >= 2 onward.
     pub fn null_or_value(&self, value: f64) -> Result<ScalarValue> {
-        Ok(ScalarValue::Float64(
-            if (self.n() == 0.0) || (self.avg() == 0.0) {
-                None
-            } else {
-                Some(value)
-            },
-        ))
+        Ok(ScalarValue::Float64(if self.n() < 2.0 {
+            None
+        } else {
+            Some(value)
+        }))
     }
 }
 
