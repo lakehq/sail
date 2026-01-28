@@ -95,8 +95,10 @@ fn compute_soundex(s: &str) -> String {
         }
 
         let code = soundex_code(c);
-        if code.is_some() && code != last_code {
-            result.push(code.unwrap());
+        if let Some(c) = code {
+            if code != last_code {
+                result.push(c);
+            }
             last_code = code;
         }
     }
