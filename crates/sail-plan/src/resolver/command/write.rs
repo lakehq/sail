@@ -14,6 +14,7 @@ use sail_common_datafusion::catalog::{
 };
 use sail_common_datafusion::datasource::{BucketBy, SinkMode};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_common_datafusion::rename::schema::rename_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -29,7 +30,9 @@ pub(super) enum WriteMode {
     IgnoreIfExists,
     Append,
     Overwrite,
-    OverwriteIf { condition: Box<spec::Expr> },
+    OverwriteIf {
+        condition: Box<spec::ExprWithSource>,
+    },
     OverwritePartitions,
 }
 
@@ -178,6 +181,7 @@ impl PlanResolver<'_> {
         if !cluster_by.is_empty() {
             return Err(PlanError::todo("CLUSTER BY for write"));
         }
+        let input_schema = input.schema().inner().clone();
         let options_map = options
             .clone()
             .into_iter()
@@ -206,7 +210,11 @@ impl PlanResolver<'_> {
                     file_write_options.format = self.config.default_table_file_format.clone();
                 }
                 file_write_options.path = location;
-                file_write_options.mode = self.resolve_write_mode(mode, None, state).await?;
+                let schema_for_cond =
+                    matches!(mode, WriteMode::OverwriteIf { .. }).then_some(input_schema.as_ref());
+                file_write_options.mode = self
+                    .resolve_write_mode(mode, schema_for_cond, state)
+                    .await?;
             }
             WriteTarget::Sink => {
                 if !table_properties.is_empty() {
@@ -217,7 +225,11 @@ impl PlanResolver<'_> {
                 if file_write_options.format.is_empty() {
                     file_write_options.format = self.config.default_table_file_format.clone();
                 }
-                file_write_options.mode = self.resolve_write_mode(mode, None, state).await?;
+                let schema_for_cond =
+                    matches!(mode, WriteMode::OverwriteIf { .. }).then_some(input_schema.as_ref());
+                file_write_options.mode = self
+                    .resolve_write_mode(mode, schema_for_cond, state)
+                    .await?;
             }
             WriteTarget::ExistingTable {
                 table,
@@ -249,6 +261,9 @@ impl PlanResolver<'_> {
                 })?;
                 file_write_options.format = info.format;
                 file_write_options.options.insert(0, info.options);
+                if !info.properties.is_empty() {
+                    file_write_options.options.insert(0, info.properties);
+                }
             }
             WriteTarget::NewTable { table, action } => {
                 let info = self.resolve_table_info(&table).await?;
@@ -277,6 +292,11 @@ impl PlanResolver<'_> {
                     file_write_options.path = path.to_string();
                 } else {
                     file_write_options.path = self.resolve_default_table_location(&table)?;
+                }
+                if !table_properties.is_empty() {
+                    file_write_options
+                        .options
+                        .insert(0, table_properties.clone());
                 }
                 let (if_not_exists, replace) = match action {
                     WriteTableAction::Create => (false, false),
@@ -381,10 +401,12 @@ impl PlanResolver<'_> {
                 let names = state.register_fields(schema.fields());
                 let schema = rename_schema(schema, &names)?;
                 let schema = Arc::new(DFSchema::try_from(schema)?);
-                let condition = self.resolve_expression(*condition, &schema, state).await?;
-                let condition = self.rewrite_expression_for_external_schema(condition, state)?;
+                let expr = self
+                    .resolve_expression(condition.expr, &schema, state)
+                    .await?;
+                let expr = self.rewrite_expression_for_external_schema(expr, state)?;
                 Ok(SinkMode::OverwriteIf {
-                    condition: Box::new(condition),
+                    condition: Box::new(ExprWithSource::new(expr, condition.source)),
                 })
             }
             WriteMode::OverwritePartitions => Ok(SinkMode::OverwritePartitions),
@@ -404,8 +426,6 @@ impl PlanResolver<'_> {
         };
         match status.kind {
             TableKind::Table {
-                catalog: _,
-                database: _,
                 columns,
                 comment: _,
                 constraints: _,
@@ -415,7 +435,7 @@ impl PlanResolver<'_> {
                 sort_by,
                 bucket_by,
                 options,
-                properties: _,
+                properties,
             } => Ok(Some(TableInfo {
                 columns,
                 location,
@@ -424,6 +444,7 @@ impl PlanResolver<'_> {
                 sort_by,
                 bucket_by,
                 options,
+                properties,
             })),
             _ => Ok(None),
         }
@@ -539,6 +560,7 @@ struct TableInfo {
     sort_by: Vec<CatalogTableSort>,
     bucket_by: Option<CatalogTableBucketBy>,
     options: Vec<(String, String)>,
+    properties: Vec<(String, String)>,
 }
 
 impl TableInfo {

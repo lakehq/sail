@@ -2,9 +2,11 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::{cast, expr, lit, when};
 use datafusion_functions::unicode::expr_fn as unicode_fn;
-use datafusion_functions_json::udfs;
+use sail_function::scalar::json::{
+    json_as_text_udf, json_length_udf, json_object_keys_udf, to_json_udf,
+};
 
-use crate::error::PlanResult;
+use crate::error::{PlanError, PlanResult};
 use crate::function::common::ScalarFunction;
 
 fn get_json_object(expr: expr::Expr, path: expr::Expr) -> PlanResult<expr::Expr> {
@@ -25,18 +27,27 @@ fn get_json_object(expr: expr::Expr, path: expr::Expr) -> PlanResult<expr::Expr>
     let mut args = Vec::with_capacity(1 + paths.len());
     args.push(expr);
     args.extend(paths);
-    Ok(udfs::json_as_text_udf().call(args))
+    Ok(json_as_text_udf().call(args))
 }
 
 fn json_array_length(json_data: expr::Expr) -> expr::Expr {
-    cast(
-        udfs::json_length_udf().call(vec![json_data]),
-        DataType::Int32,
-    )
+    cast(json_length_udf().call(vec![json_data]), DataType::Int32)
 }
 
 fn json_object_keys(json_data: expr::Expr) -> expr::Expr {
-    udfs::json_object_keys_udf().call(vec![json_data])
+    json_object_keys_udf().call(vec![json_data])
+}
+
+fn to_json(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+    // to_json accepts 1 or 2 arguments:
+    // - to_json(expr) - convert expr to JSON string
+    // - to_json(expr, options) - convert expr to JSON string with options
+    match args.len() {
+        1 | 2 => Ok(to_json_udf().call(args)),
+        n => Err(PlanError::invalid(format!(
+            "to_json expects 1 or 2 arguments, got {n}"
+        ))),
+    }
 }
 
 pub(super) fn list_built_in_json_functions() -> Vec<(&'static str, ScalarFunction)> {
@@ -49,6 +60,6 @@ pub(super) fn list_built_in_json_functions() -> Vec<(&'static str, ScalarFunctio
         ("json_object_keys", F::unary(json_object_keys)),
         ("json_tuple", F::unknown("json_tuple")),
         ("schema_of_json", F::unknown("schema_of_json")),
-        ("to_json", F::unknown("to_json")),
+        ("to_json", F::var_arg(to_json)),
     ]
 }

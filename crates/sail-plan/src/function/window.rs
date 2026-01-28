@@ -4,8 +4,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field};
 use datafusion::functions_aggregate::{
     approx_distinct, approx_percentile_cont, array_agg, average, bit_and_or_xor, bool_and_or,
-    correlation, count, covariance, first_last, grouping, median, min_max, regr, stddev, sum,
-    variance,
+    correlation, count, covariance, grouping, median, min_max, regr, stddev, sum, variance,
 };
 use datafusion::functions_nested::string::array_to_string;
 use datafusion::functions_window::cume_dist::cume_dist_udwf;
@@ -19,6 +18,7 @@ use datafusion_expr::expr::WindowFunctionParams;
 use datafusion_expr::{
     cast, expr, lit, when, AggregateUDF, ExprSchemable, WindowFunctionDefinition,
 };
+use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use lazy_static::lazy_static;
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -27,7 +27,6 @@ use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
 use sail_function::aggregate::skewness::SkewnessFunc;
 use sail_function::aggregate::try_avg::TryAvgFunction;
-use sail_function::aggregate::try_sum::TrySumFunction;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
@@ -123,7 +122,7 @@ fn first_value(input: WinFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     let (args, null_treatment) = get_arguments_and_null_treatment(arguments, ignore_nulls)?;
     Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
-        fun: WindowFunctionDefinition::AggregateUDF(first_last::first_value_udaf()),
+        fun: WindowFunctionDefinition::WindowUDF(first_value_udwf()),
         params: WindowFunctionParams {
             args,
             partition_by,
@@ -148,7 +147,7 @@ fn last_value(input: WinFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     let (args, null_treatment) = get_arguments_and_null_treatment(arguments, ignore_nulls)?;
     Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
-        fun: WindowFunctionDefinition::AggregateUDF(first_last::last_value_udaf()),
+        fun: WindowFunctionDefinition::WindowUDF(last_value_udwf()),
         params: WindowFunctionParams {
             args,
             partition_by,
@@ -284,25 +283,31 @@ fn count_if(input: WinFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn collect_set(input: WinFunctionInput) -> PlanResult<expr::Expr> {
+    // Spark's collect_set always returns distinct values and ignores NULLs.
+    // WORKAROUND: DataFusion's array_agg doesn't properly handle null_treatment
+    // when distinct=true, so we add an explicit IS NOT NULL filter
+    // (same workaround as the aggregate version in aggregate.rs).
     let WinFunctionInput {
         arguments,
         partition_by,
         order_by,
         window_frame,
         ignore_nulls: _,
-        distinct,
+        distinct: _,
         function_context: _,
     } = input;
+    let arg = arguments.one()?;
+    let null_filter = Some(Box::new(arg.clone().is_not_null()));
     Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
         fun: WindowFunctionDefinition::AggregateUDF(array_agg::array_agg_udaf()),
         params: WindowFunctionParams {
-            args: arguments,
+            args: vec![arg],
             partition_by,
             order_by,
             window_frame,
-            filter: None,
-            null_treatment: get_null_treatment(Some(true)),
-            distinct,
+            filter: null_filter,
+            null_treatment: None,
+            distinct: true,
         },
     })))
 }
@@ -469,6 +474,7 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
             F::aggregate(approx_percentile_cont::approx_percentile_cont_udaf),
         ),
         ("array_agg", F::custom(array_agg_compacted)),
+        ("array_join", F::custom(listagg)),
         ("avg", F::custom(avg)),
         ("bit_and", F::aggregate(bit_and_or_xor::bit_and_udaf)),
         ("bit_or", F::aggregate(bit_and_or_xor::bit_or_udaf)),
@@ -543,7 +549,7 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
         ),
         (
             "try_sum",
-            F::aggregate(|| Arc::new(AggregateUDF::from(TrySumFunction::new()))),
+            F::aggregate(|| Arc::new(AggregateUDF::from(SparkTrySum::new()))),
         ),
         ("var_pop", F::aggregate(variance::var_pop_udaf)),
         ("var_samp", F::aggregate(variance::var_samp_udaf)),

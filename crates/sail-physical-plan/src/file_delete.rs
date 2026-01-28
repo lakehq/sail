@@ -7,6 +7,7 @@ use datafusion::physical_planner::PhysicalPlanner;
 use datafusion_common::Result;
 use sail_common_datafusion::datasource::{DeleteInfo, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::physical_expr::PhysicalExprWithSource;
 use sail_logical_plan::file_delete::FileDeleteOptions;
 
 pub async fn create_file_delete_physical_plan(
@@ -24,7 +25,10 @@ pub async fn create_file_delete_physical_plan(
     } = options;
 
     let condition = if let Some(condition) = condition {
-        Some(planner.create_physical_expr(&condition, &schema, ctx)?)
+        Some(PhysicalExprWithSource::new(
+            planner.create_physical_expr(&condition.expr, &schema, ctx)?,
+            condition.source,
+        ))
     } else {
         None
     };

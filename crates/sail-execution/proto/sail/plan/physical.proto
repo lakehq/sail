@@ -13,8 +13,9 @@ message ExtendedPhysicalPlanNode {
   oneof NodeKind {
     RangeExecNode range = 1;
     ShowStringExecNode show_string = 2;
-    ShuffleReadExecNode shuffle_read = 3;
-    ShuffleWriteExecNode shuffle_write = 4;
+    // We have removed shuffle read and write nodes.
+    StageInputExecNode stage_input = 3;
+    SystemTableExecNode system_table = 4;
     SchemaPivotExecNode schema_pivot = 5;
     MapPartitionsExecNode map_partitions = 6;
     // TODO: This can be removed once it is supported by DataFusion.
@@ -30,9 +31,9 @@ message ExtendedPhysicalPlanNode {
     DeltaWriterExecNode delta_writer = 16;
     DeltaCommitExecNode delta_commit = 17;
     DeltaScanByAddsExecNode delta_scan_by_adds = 18;
-    DeltaFindFilesExecNode delta_find_files = 19;
+    DeltaDiscoveryExecNode delta_discovery = 19;
     DeltaRemoveActionsExecNode delta_remove_actions = 20;
-    DeltaFileLookupExecNode delta_file_lookup = 21;
+    DeltaLogScanExecNode delta_log_scan = 21;
     AvroExecNode avro = 22;
     ConsoleSinkExecNode console_sink = 23;
     SocketSourceExecNode socket_source = 24;
@@ -49,6 +50,17 @@ message ExtendedPhysicalPlanNode {
   }
 }
 
+message ExtendedPhysicalExprNode {
+  oneof ExprKind {
+    DeltaCastColumnExprNode delta_cast = 1;
+  }
+}
+
+message DeltaCastColumnExprNode {
+  bytes input_schema = 1;
+  bytes target_schema = 2;
+}
+
 message ExtendedScalarUdf {
   oneof UdfKind {
     StandardUdf standard = 1;
@@ -61,6 +73,7 @@ message ExtendedScalarUdf {
     UpdateStructFieldUdf update_struct_field = 8;
     TimestampNowUdf timestamp_now = 9;
     SparkTimestampUdf spark_timestamp = 10;
+    SparkDateUdf spark_date = 11;
   }
 }
 
@@ -132,6 +145,11 @@ message TimestampNowUdf {
 
 message SparkTimestampUdf {
   optional string timezone = 1;
+  bool is_try = 2;
+}
+
+message SparkDateUdf {
+  bool is_try = 1;
 }
 
 message StandardUdaf {}
@@ -232,6 +250,19 @@ enum ShowStringStyle {
   SHOW_STRING_STYLE_HTML = 2;
 }
 
+message StageInputExecNode {
+  uint64 input = 1;
+  bytes schema = 2;
+  bytes partitioning = 3;
+}
+
+message SystemTableExecNode {
+  string table = 1;
+  optional PhysicalProjection projection = 2;
+  repeated bytes filters = 3;
+  optional uint64 fetch = 4;
+}
+
 message SchemaPivotExecNode {
   bytes input = 1;
   repeated string names = 2;
@@ -319,12 +350,11 @@ message PartialSortExecNode {
   uint64 common_prefix_length = 3;
 }
 
-
-
 message AppendMode {}
 message OverwriteMode {}
 message OverwriteIfMode {
   bytes condition = 1;
+  optional string source = 2;
 }
 message ErrorIfExistsMode {}
 message IgnoreIfExistsMode {}
@@ -367,21 +397,18 @@ message DeltaScanByAddsExecNode {
   bytes table_schema = 3;
 }
 
-message DeltaFindFilesExecNode {
+message DeltaDiscoveryExecNode {
   string table_url = 1;
   optional bytes predicate = 2;
   optional bytes table_schema = 3;
   int64 version = 4;
+  optional bytes input = 5;
+  repeated string input_partition_columns = 6;
+  bool input_partition_scan = 7;
 }
 
 message DeltaRemoveActionsExecNode {
   bytes input = 1;
-}
-
-message DeltaFileLookupExecNode {
-  bytes input = 1;
-  string table_url = 2;
-  int64 version = 3;
 }
 
 message ConsoleSinkExecNode {
@@ -465,72 +492,6 @@ message PhysicalProjection {
   repeated uint64 columns = 1;
 }
 
-message ShuffleReadExecNode {
-  uint64 stage = 1;
-  bytes schema = 2;
-  bytes partitioning = 3;
-  repeated TaskReadLocationList locations = 4;
-}
-
-message TaskReadLocationList {
-  repeated TaskReadLocation locations = 1;
-}
-
-message TaskReadLocation {
-  oneof Location {
-    TaskReadLocationWorker worker = 1;
-    TaskReadLocationRemote remote = 2;
-  }
-}
-
-message TaskReadLocationWorker {
-  uint64 worker_id = 1;
-  string channel = 2;
-}
-
-message TaskReadLocationRemote {
-  string uri = 1;
-}
-
-message ShuffleWriteExecNode {
-  uint64 stage = 1;
-  bytes plan = 2;
-  bytes partitioning = 3;
-  ShuffleConsumption consumption = 4;
-  repeated TaskWriteLocationList locations = 5;
-}
-
-message TaskWriteLocationList {
-  repeated TaskWriteLocation locations = 1;
-}
-
-message TaskWriteLocation {
-  oneof Location {
-    TaskWriteLocationLocal local = 1;
-    TaskWriteLocationRemote remote = 2;
-  }
-}
-
-message TaskWriteLocationLocal {
-  string channel = 1;
-  LocalStreamStorage storage = 2;
-}
-
-message TaskWriteLocationRemote {
-  string uri = 1;
-}
-
-enum ShuffleConsumption {
-  SHUFFLE_CONSUMPTION_SINGLE = 0;
-  SHUFFLE_CONSUMPTION_MULTIPLE = 1;
-}
-
-enum LocalStreamStorage {
-  LOCAL_STREAM_STORAGE_EPHEMERAL = 0;
-  LOCAL_STREAM_STORAGE_MEMORY = 1;
-  LOCAL_STREAM_STORAGE_DISK = 2;
-}
-
 enum CompressionTypeVariant {
   COMPRESSION_TYPE_VARIANT_GZIP = 0;
   COMPRESSION_TYPE_VARIANT_BZIP2 = 1;
@@ -551,4 +512,13 @@ message IcebergWriterExecNode {
 message IcebergCommitExecNode {
   bytes input = 1;
   string table_url = 2;
+}
+
+message DeltaLogScanExecNode {
+  bytes input = 1;
+  string table_url = 2;
+  int64 version = 3;
+  repeated string partition_columns = 4;
+  repeated string checkpoint_files = 5;
+  repeated string commit_files = 6;
 }

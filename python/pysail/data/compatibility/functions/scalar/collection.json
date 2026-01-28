@@ -1,22 +1,19 @@
 [
   {
     "module": "pyspark.sql.functions",
+    "function": "aggregate",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/229"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "array_sort",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/229"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "cardinality",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "deep_size",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "element_at",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "size",
     "status": "supported"
   },
   {
@@ -26,12 +23,82 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "element_at",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "exists",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/229"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "filter",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/229"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "forall",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/229"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "map_filter",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/229"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "map_zip_with",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/229"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "reduce",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/229"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "reverse",
     "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "size",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "transform",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/229"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "transform_keys",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/229"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "transform_values",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/229"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "try_element_at",
     "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "zip_with",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/229"
   }
 ]

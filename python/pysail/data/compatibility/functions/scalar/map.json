@@ -1,8 +1,14 @@
 [
   {
     "module": "pyspark.sql.functions",
-    "function": "map",
+    "function": "create_map",
     "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "map",
+    "status": "supported",
+    "note": "Spark SQL only; not available in PySpark"
   },
   {
     "module": "pyspark.sql.functions",

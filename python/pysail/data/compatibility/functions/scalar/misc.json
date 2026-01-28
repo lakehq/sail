@@ -51,8 +51,59 @@
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "equal_null",
-    "status": "supported"
+    "function": "from_avro",
+    "status": "planned",
+    "note": "Spark SQL only; not available in PySpark",
+    "ref": "???"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "from_protobuf",
+    "status": "planned",
+    "note": "Spark SQL only; not available in PySpark",
+    "ref": "???"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "hll_sketch_estimate",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/507"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "hll_union",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/507"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "input_file_block_length",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/507"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "input_file_block_start",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/507"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "input_file_name",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/507"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "java_method",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/507"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "monotonically_increasing_id",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/507"
   },
   {
     "module": "pyspark.sql.functions",
@@ -61,18 +112,58 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "reflect",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/507"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "schema_of_avro",
+    "status": "planned",
+    "note": "Spark SQL only; not available in PySpark",
+    "ref": "???"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "session_user",
     "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "try_aes_encrypt",
-    "status": "supported"
+    "function": "spark_partition_id",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/507"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "to_avro",
+    "status": "planned",
+    "note": "Spark SQL only; not available in PySpark",
+    "ref": "???"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "to_protobuf",
+    "status": "planned",
+    "note": "Spark SQL only; not available in PySpark",
+    "ref": "???"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "try_aes_decrypt",
     "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "try_aes_encrypt",
+    "status": "supported",
+    "note": "Sail exclusive; not available in PySpark or Spark SQL"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "try_reflect",
+    "status": "not supported",
+    "note": "Java specific"
   },
   {
     "module": "pyspark.sql.functions",
@@ -93,80 +184,5 @@
     "module": "pyspark.sql.functions",
     "function": "version",
     "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "from_avro",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "from_protobuf",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "hll_sketch_estimate",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "hll_union",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "input_file_block_length",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "input_file_block_start",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "input_file_name",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "monotonically_increasing_id",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "spark_partition_id",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "schema_of_avro",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "to_avro",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "to_protobuf",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "java_method",
-    "status": "not supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "reflect",
-    "status": "not supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "try_reflect",
-    "status": "not supported"
   }
 ]

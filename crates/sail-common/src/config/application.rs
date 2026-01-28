@@ -107,6 +107,8 @@ pub struct ClusterConfig {
     pub worker_task_slots: usize,
     pub worker_stream_buffer: usize,
     pub task_launch_timeout_secs: u64,
+    pub task_stream_creation_timeout_secs: u64,
+    pub task_max_attempts: usize,
     pub job_output_buffer: usize,
     pub rpc_retry_strategy: RetryStrategy,
 }
@@ -169,6 +171,7 @@ mod retry_strategy {
 #[serde(deny_unknown_fields)]
 pub struct ExecutionConfig {
     pub batch_size: usize,
+    pub default_parallelism: usize,
     pub collect_statistics: bool,
     pub use_row_number_estimates_to_optimize_partitioning: bool,
     pub file_listing_cache: FileListingCacheConfig,
@@ -305,6 +308,17 @@ pub enum CatalogType {
         default_catalog: Option<String>,
         token: Option<SecretString>,
     },
+    #[serde(alias = "onelake")]
+    OneLake {
+        name: String,
+        url: String,
+        bearer_token: Option<SecretString>,
+    },
+    Glue {
+        name: String,
+        region: Option<String>,
+        endpoint_url: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -359,6 +373,7 @@ impl ClusterConfigEnv {
         WORKER_EXTERNAL_HOST,
         WORKER_HEARTBEAT_INTERVAL_SECS,
         WORKER_STREAM_BUFFER,
+        TASK_STREAM_CREATION_TIMEOUT_SECS,
         RPC_RETRY_STRATEGY,
     }
 }

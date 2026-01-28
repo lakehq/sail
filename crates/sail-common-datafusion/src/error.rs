@@ -146,6 +146,7 @@ impl CommonErrorCause {
                     Some(e) => Self::build::<Py>(e, seen),
                 },
                 DataFusionError::Shared(e) => Self::build::<Py>(e.as_ref(), seen),
+                DataFusionError::Ffi(x) => Self::Unknown(x.clone()),
             };
         }
 

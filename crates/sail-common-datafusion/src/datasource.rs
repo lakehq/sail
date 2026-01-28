@@ -11,10 +11,10 @@ use datafusion::physical_expr::{
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, DFSchemaRef, Result};
 use datafusion_expr::expr::Sort;
-use datafusion_expr::Expr;
-use serde::{Deserialize, Serialize};
 
 use crate::extension::SessionExtension;
+use crate::logical_expr::ExprWithSource;
+use crate::physical_expr::PhysicalExprWithSource;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
 pub enum SinkMode {
@@ -22,7 +22,7 @@ pub enum SinkMode {
     IgnoreIfExists,
     Append,
     Overwrite,
-    OverwriteIf { condition: Box<Expr> },
+    OverwriteIf { condition: Box<ExprWithSource> },
     OverwritePartitions,
 }
 
@@ -32,7 +32,7 @@ pub enum PhysicalSinkMode {
     IgnoreIfExists,
     Append,
     Overwrite,
-    OverwriteIf { condition: Arc<dyn PhysicalExpr> },
+    OverwriteIf { condition: PhysicalExprWithSource },
     OverwritePartitions,
 }
 
@@ -75,7 +75,7 @@ pub struct SinkInfo {
 #[derive(Debug, Clone)]
 pub struct DeleteInfo {
     pub path: String,
-    pub condition: Option<Arc<dyn PhysicalExpr>>,
+    pub condition: Option<PhysicalExprWithSource>,
     /// The sets of options for the data deletion.
     /// A later set of options can override earlier ones.
     pub options: Vec<HashMap<String, String>>,
@@ -104,7 +104,7 @@ pub enum MergeMatchedActionInfo {
 
 #[derive(Debug, Clone)]
 pub struct MergeMatchedClauseInfo {
-    pub condition: Option<Arc<dyn PhysicalExpr>>,
+    pub condition: Option<PhysicalExprWithSource>,
     pub action: MergeMatchedActionInfo,
 }
 
@@ -116,7 +116,7 @@ pub enum MergeNotMatchedBySourceActionInfo {
 
 #[derive(Debug, Clone)]
 pub struct MergeNotMatchedBySourceClauseInfo {
-    pub condition: Option<Arc<dyn PhysicalExpr>>,
+    pub condition: Option<PhysicalExprWithSource>,
     pub action: MergeNotMatchedBySourceActionInfo,
 }
 
@@ -131,31 +131,24 @@ pub enum MergeNotMatchedByTargetActionInfo {
 
 #[derive(Debug, Clone)]
 pub struct MergeNotMatchedByTargetClauseInfo {
-    pub condition: Option<Arc<dyn PhysicalExpr>>,
+    pub condition: Option<PhysicalExprWithSource>,
     pub action: MergeNotMatchedByTargetActionInfo,
 }
 
 /// Merge operation metadata used to construct commit log `operationParameters`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct MergePredicateInfo {
     /// The type of merge operation performed (e.g. "update", "delete", "insert").
     pub action_type: String,
     /// The predicate used for the merge operation.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub predicate: Option<String>,
 }
 
 /// Optional override metadata for operation commit logs (currently used by Delta MERGE).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub enum OperationOverride {
-    // TODO: extend or rename like `DeltaMerge`, `IcebergMerge` to better distinguish between different implementations.
-    #[serde(rename_all = "camelCase")]
     Merge {
-        #[serde(skip_serializing_if = "Option::is_none")]
         predicate: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
         merge_predicate: Option<String>,
         matched_predicates: Vec<MergePredicateInfo>,
         not_matched_predicates: Vec<MergePredicateInfo>,
@@ -171,14 +164,14 @@ pub struct MergeInfo {
     pub target_schema: DFSchemaRef,
     pub source_schema: DFSchemaRef,
     /// Joined logical schema (target followed by source)
-    pub join_schema: Arc<datafusion::arrow::datatypes::Schema>,
+    pub join_schema: Arc<Schema>,
     /// Indicates that join/filter/project have been expanded in the logical plan
     pub pre_expanded: bool,
     /// Final physical plan ready for writing (if pre_expanded)
     pub expanded_input: Option<Arc<dyn ExecutionPlan>>,
     /// Physical plan that yields touched file paths (if pre_expanded)
     pub touched_file_plan: Option<Arc<dyn ExecutionPlan>>,
-    pub on_condition: Arc<dyn PhysicalExpr>,
+    pub on_condition: PhysicalExprWithSource,
     /// Equality join keys extracted from the ON condition (target, source)
     pub join_keys: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
     /// Residual predicates from the ON condition (applied as join filter)

@@ -19,6 +19,7 @@ edition = { workspace = true }
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-data-source = { path = "../sail-data-source" }
+sail-physical-plan = { path = "../sail-physical-plan" }
 # Delta Lake
 delta_kernel = { workspace = true }
 
@@ -48,6 +49,7 @@ log = { workspace = true }
 itertools = { workspace = true }
 percent-encoding = { workspace = true }
 regex = { workspace = true }
+serde_arrow = { workspace = true }
 
 [lints]
 workspace = true

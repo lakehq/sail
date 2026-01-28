@@ -642,8 +642,6 @@ async fn test_create_table() {
         .unwrap();
 
     let TableKind::Table {
-        catalog,
-        database,
         columns,
         comment,
         constraints,
@@ -668,8 +666,8 @@ async fn test_create_table() {
     assert_eq!(properties.get("table_type"), Some(&"EXTERNAL".to_string()));
 
     assert_eq!(table.name, "t1".to_string());
-    assert_eq!(catalog, "sail_test_catalog".to_string());
-    assert_eq!(database, Vec::<String>::from(full_ns.clone()));
+    assert_eq!(table.catalog, Some("sail_test_catalog".to_string()));
+    assert_eq!(table.database, Vec::<String>::from(full_ns.clone()));
     assert_eq!(comment, Some("peow".to_string()));
     assert_eq!(constraints, vec![]);
     assert_eq!(
@@ -851,8 +849,6 @@ async fn test_create_table() {
         .unwrap();
 
     let TableKind::Table {
-        catalog,
-        database,
         columns,
         comment,
         constraints,
@@ -869,8 +865,8 @@ async fn test_create_table() {
     };
 
     assert_eq!(table.name, "t2".to_string());
-    assert_eq!(catalog, "sail_test_catalog".to_string());
-    assert_eq!(database, Vec::<String>::from(full_ns.clone()));
+    assert_eq!(table.catalog, Some("sail_test_catalog".to_string()));
+    assert_eq!(table.database, Vec::<String>::from(full_ns.clone()));
     assert_eq!(comment, Some("test table".to_string()));
     assert!(constraints.is_empty());
     assert_eq!(
@@ -1013,8 +1009,6 @@ async fn test_get_table() {
     assert_eq!(table_ns.name, table_full_ns.name);
 
     let TableKind::Table {
-        catalog,
-        database,
         columns,
         comment,
         constraints,
@@ -1041,8 +1035,8 @@ async fn test_get_table() {
     assert_eq!(properties.get("team"), Some(&"data-eng".to_string()));
 
     assert_eq!(table_ns.name, "t2".to_string());
-    assert_eq!(catalog, "sail_test_catalog".to_string());
-    assert_eq!(database, Vec::<String>::from(full_ns.clone()));
+    assert_eq!(table_ns.catalog, Some("sail_test_catalog".to_string()));
+    assert_eq!(table_ns.database, Vec::<String>::from(full_ns.clone()));
     assert_eq!(comment, Some("test table".to_string()));
     assert!(constraints.is_empty());
     assert_eq!(
@@ -1187,17 +1181,11 @@ async fn test_list_tables() {
         assert!(tables.iter().any(|t| t.name == "table1"));
         assert!(tables.iter().any(|t| t.name == "table2"));
         for table in &tables {
-            let TableKind::Table {
-                catalog,
-                database,
-                format,
-                ..
-            } = &table.kind
-            else {
+            let TableKind::Table { format, .. } = &table.kind else {
                 panic!("Expected TableKind::Table");
             };
-            assert_eq!(catalog, "sail_test_catalog");
-            assert_eq!(database, &Vec::<String>::from(full_ns.clone()));
+            assert_eq!(table.catalog, Some("sail_test_catalog".to_string()));
+            assert_eq!(table.database, Vec::<String>::from(full_ns.clone()));
             assert_eq!(format, "delta");
         }
     }

@@ -6,12 +6,15 @@ on:
       spark_version:
         description: The Spark version to test
         type: string
-        default: "4.1.0"
+        required: true
+    secrets:
+      CODECOV_TOKEN:
+        required: false
 
 jobs:
   setup:
     name: Setup
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       run_tests: ${{ ((github.event_name == 'pull_request' && (github.event.action == 'opened' || steps.match.outputs.result == 'true' || steps.label.outputs.has_label == 'true')) || github.event_name == 'push') && 'true' || 'false' }}
     steps:
@@ -112,6 +115,11 @@ jobs:
           hatch run install-pyspark
           hatch run install-pysail
 
+      - name: List Python packages
+        continue-on-error: true
+        run: |
+          hatch run uv pip freeze || hatch run python -m pip freeze
+
       - name: Run Spark Connect Server
         run: |
           nohup hatch run scripts/spark-tests/run-server.sh > /dev/null 2>&1 < /dev/null &
@@ -132,7 +140,7 @@ jobs:
           hatch run scripts/spark-tests/run-tests.sh
 
       - name: Shutdown Spark Connect Server
-        if: always()
+        if: ${{ !cancelled() }}
         run: |
           scripts/spark-tests/stop-server.sh
 
@@ -149,14 +157,19 @@ jobs:
             -t lcov --branch --ignore-not-existing \
             -o coverage-spark-${{ inputs.spark_version }}.info
 
-      - name: Upload spark coverage artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload Spark coverage to Codecov
+        if: ${{ github.actor != 'dependabot[bot]' }}
+        uses: codecov/codecov-action@v5
         with:
-          name: spark-coverage-report-${{ inputs.spark_version }}
-          path: coverage-spark-${{ inputs.spark_version }}.info
-          retention-days: 1
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage-spark-${{ inputs.spark_version }}.info
+          flags: spark-tests
+          name: spark-tests
+          fail_ci_if_error: true
+          env_vars: OS
 
       - name: Upload Test Logs
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: spark-${{ inputs.spark_version }}-test-logs
@@ -165,7 +178,7 @@ jobs:
 
   analyze:
     name: Analyze
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     needs:
       - test
     steps:

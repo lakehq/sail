@@ -25,14 +25,13 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use chrono::Utc;
-use datafusion::arrow::array::{ArrayRef, PrimitiveArray, StringArray};
+use datafusion::arrow::array::{ArrayRef, PrimitiveArray};
 use datafusion::arrow::datatypes::{
     ArrowTimestampType, DataType, Field, Schema, SchemaRef, TimeUnit, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
-use datafusion::physical_expr_common::physical_expr::fmt_sql;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -41,7 +40,7 @@ use datafusion::physical_plan::{
     PlanProperties, SendableRecordBatchStream,
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
-use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
+use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use delta_kernel::schema::StructType;
 use delta_kernel::table_features::ColumnMappingMode;
@@ -52,11 +51,10 @@ use url::Url;
 
 use crate::conversion::DeltaTypeConverter;
 use crate::kernel::models::{contains_timestampntz, Action, Metadata, Protocol};
-// TODO: Follow upstream for `MetadataExt`.
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::options::{ColumnMappingModeOption, TableDeltaOptions};
-use crate::physical_plan::CommitInfo;
+use crate::physical_plan::{delta_action_schema, encode_actions, CommitMeta, ExecAction};
 use crate::schema::{
     annotate_for_column_mapping, compute_max_column_id, evolve_schema, get_physical_schema,
     normalize_delta_schema,
@@ -83,7 +81,6 @@ pub struct DeltaWriterExec {
     sink_mode: PhysicalSinkMode,
     table_exists: bool,
     sink_schema: SchemaRef,
-    condition: Option<Arc<dyn PhysicalExpr>>,
     /// Optional override for commit operation metadata.
     operation_override: Option<DeltaOperation>,
     metrics: ExecutionPlanMetricsSet,
@@ -114,12 +111,11 @@ impl DeltaWriterExec {
         sink_mode: PhysicalSinkMode,
         table_exists: bool,
         sink_schema: SchemaRef,
-        condition: Option<Arc<dyn PhysicalExpr>>,
         operation_override: Option<DeltaOperation>,
-    ) -> Self {
-        let schema = Arc::new(Schema::new(vec![Field::new("data", DataType::Utf8, true)]));
+    ) -> Result<Self> {
+        let schema = delta_action_schema()?;
         let cache = Self::compute_properties(schema);
-        Self {
+        Ok(Self {
             input,
             table_url,
             options,
@@ -127,11 +123,10 @@ impl DeltaWriterExec {
             sink_mode,
             table_exists,
             sink_schema,
-            condition,
             operation_override,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
-        }
+        })
     }
 
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
@@ -169,10 +164,6 @@ impl DeltaWriterExec {
 
     pub fn table_exists(&self) -> bool {
         self.table_exists
-    }
-
-    pub fn condition(&self) -> &Option<Arc<dyn PhysicalExpr>> {
-        &self.condition
     }
 
     pub fn operation_override(&self) -> Option<&DeltaOperation> {
@@ -222,9 +213,8 @@ impl ExecutionPlan for DeltaWriterExec {
             self.sink_mode.clone(),
             self.table_exists,
             self.sink_schema.clone(),
-            self.condition.clone(),
             self.operation_override.clone(),
-        )))
+        )?))
     }
 
     fn execute(
@@ -255,7 +245,6 @@ impl ExecutionPlan for DeltaWriterExec {
         let sink_mode = self.sink_mode.clone();
         let table_exists = self.table_exists;
         let input_schema = normalize_delta_schema(&self.input.schema());
-        let condition = self.condition.clone();
         let operation_override = self.operation_override.clone();
         // let sink_schema = self.sink_schema.clone();
         let session_timezone = context
@@ -265,7 +254,6 @@ impl ExecutionPlan for DeltaWriterExec {
             .time_zone
             .clone();
 
-        let schema = self.schema();
         let future = async move {
             let _elapsed_compute_timer = elapsed_compute.timer();
             let exec_start = Instant::now();
@@ -290,9 +278,8 @@ impl ExecutionPlan for DeltaWriterExec {
             )
             .await;
 
-            #[allow(clippy::unwrap_used)]
             let table = if table_exists {
-                Some(table_result.unwrap())
+                Some(table_result?)
             } else {
                 None
             };
@@ -310,7 +297,6 @@ impl ExecutionPlan for DeltaWriterExec {
                     });
                 }
                 PhysicalSinkMode::Overwrite => {
-                    let predicate_str = condition.map(|c| format!("{}", fmt_sql(c.as_ref())));
                     operation = Some(DeltaOperation::Write {
                         mode: SaveMode::Overwrite,
                         partition_by: if partition_columns.is_empty() {
@@ -318,11 +304,10 @@ impl ExecutionPlan for DeltaWriterExec {
                         } else {
                             Some(partition_columns.clone())
                         },
-                        predicate: predicate_str,
+                        predicate: None,
                     });
                 }
-                PhysicalSinkMode::OverwriteIf { .. } => {
-                    let predicate_str = condition.map(|c| format!("{}", fmt_sql(c.as_ref())));
+                PhysicalSinkMode::OverwriteIf { condition } => {
                     operation = Some(DeltaOperation::Write {
                         mode: SaveMode::Overwrite,
                         partition_by: if partition_columns.is_empty() {
@@ -330,7 +315,7 @@ impl ExecutionPlan for DeltaWriterExec {
                         } else {
                             Some(partition_columns.clone())
                         },
-                        predicate: predicate_str,
+                        predicate: condition.source.clone(),
                     });
                 }
                 PhysicalSinkMode::ErrorIfExists => {
@@ -342,23 +327,11 @@ impl ExecutionPlan for DeltaWriterExec {
                 }
                 PhysicalSinkMode::IgnoreIfExists => {
                     if table_exists {
-                        // Table exists, ignore the write operation and return empty commit info
+                        // Table exists, ignore the write operation and return "no-op" output.
                         // Still update execution metrics so callers see a completed node.
                         output_rows.add(0);
                         output_bytes.add(0);
-                        let commit_info = CommitInfo {
-                            row_count: 0,
-                            actions: Vec::new(),
-                            initial_actions: Vec::new(),
-                            operation: None,
-                            operation_metrics: HashMap::new(),
-                        };
-                        let commit_info_json = serde_json::to_string(&commit_info)
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                        let data_array = Arc::new(StringArray::from(vec![commit_info_json]));
-                        let batch = RecordBatch::try_new(schema, vec![data_array])?;
-                        return Ok(batch);
+                        return encode_actions(vec![CommitMeta::default().try_into()?]);
                     }
                 }
                 PhysicalSinkMode::OverwritePartitions => {
@@ -393,12 +366,8 @@ impl ExecutionPlan for DeltaWriterExec {
                     .map_err(|e| DataFusionError::External(Box::new(e)))?
                     .effective_column_mapping_mode();
                 match mode {
-                    delta_kernel::table_features::ColumnMappingMode::Name => {
-                        ColumnMappingModeOption::Name
-                    }
-                    delta_kernel::table_features::ColumnMappingMode::Id => {
-                        ColumnMappingModeOption::Id
-                    }
+                    ColumnMappingMode::Name => ColumnMappingModeOption::Name,
+                    ColumnMappingMode::Id => ColumnMappingModeOption::Id,
                     _ => ColumnMappingModeOption::None,
                 }
             } else {
@@ -437,14 +406,13 @@ impl ExecutionPlan for DeltaWriterExec {
                         writer_features.push("timestampNtz");
                     }
 
-                    #[allow(clippy::unwrap_used)]
                     let protocol: Protocol = serde_json::from_value(serde_json::json!({
                         "minReaderVersion": 3,
                         "minWriterVersion": 7,
                         "readerFeatures": reader_features,
                         "writerFeatures": writer_features
                     }))
-                    .unwrap();
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                     let mut configuration = HashMap::new();
                     let mode_str = match effective_mode {
@@ -455,18 +423,29 @@ impl ExecutionPlan for DeltaWriterExec {
                     configuration
                         .insert("delta.columnMapping.mode".to_string(), mode_str.to_string());
                     // Set maxColumnId for new tables
-                    #[allow(clippy::unwrap_used)]
-                    let max_id = compute_max_column_id(annotated_schema_opt.as_ref().unwrap());
+                    let max_id =
+                        compute_max_column_id(annotated_schema_opt.as_ref().ok_or_else(|| {
+                            DataFusionError::Plan(
+                                "Annotated schema should be present for column mapping".to_string(),
+                            )
+                        })?);
                     configuration.insert(
                         "delta.columnMapping.maxColumnId".to_string(),
                         max_id.to_string(),
                     );
 
-                    #[allow(clippy::unwrap_used)]
                     let metadata = Metadata::try_new(
                         None,
                         None,
-                        annotated_schema_opt.as_ref().unwrap().clone(),
+                        annotated_schema_opt
+                            .as_ref()
+                            .ok_or_else(|| {
+                                DataFusionError::Plan(
+                                    "Annotated schema should be present for column mapping"
+                                        .to_string(),
+                                )
+                            })?
+                            .clone(),
                         partition_columns.clone(),
                         Utc::now().timestamp_millis(),
                         configuration,
@@ -488,14 +467,13 @@ impl ExecutionPlan for DeltaWriterExec {
                         metadata,
                     });
                 } else if has_timestamp_ntz {
-                    #[allow(clippy::unwrap_used)]
                     let protocol: Protocol = serde_json::from_value(serde_json::json!({
                         "minReaderVersion": 3,
                         "minWriterVersion": 7,
                         "readerFeatures": ["timestampNtz"],
                         "writerFeatures": ["timestampNtz"]
                     }))
-                    .unwrap();
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                     let metadata = Metadata::try_new(
                         None,
@@ -526,8 +504,6 @@ impl ExecutionPlan for DeltaWriterExec {
                 ColumnMappingModeOption::Name | ColumnMappingModeOption::Id
             ) {
                 // Determine logical kernel schema (annotated for new tables; from snapshot for existing tables)
-                #[allow(clippy::unwrap_used)]
-                #[allow(clippy::expect_used)]
                 let logical_kernel: StructType = if let Some(meta_action_schema) = schema_actions
                     .iter()
                     .find_map(|a| match a {
@@ -543,16 +519,23 @@ impl ExecutionPlan for DeltaWriterExec {
                 } else if table_exists {
                     table
                         .as_ref()
-                        .unwrap()
+                        .ok_or_else(|| {
+                            DataFusionError::Plan(
+                                "Table should exist to get schema from snapshot".to_string(),
+                            )
+                        })?
                         .snapshot()
                         .map_err(|e| DataFusionError::External(Box::new(e)))?
                         .snapshot()
                         .schema()
                         .clone()
                 } else {
-                    annotated_schema_opt
-                        .clone()
-                        .expect("annotated schema should exist for new table with column mapping")
+                    annotated_schema_opt.clone().ok_or_else(|| {
+                        DataFusionError::Plan(
+                            "Annotated schema should be present for new table with column mapping"
+                                .to_string(),
+                        )
+                    })?
                 };
 
                 // Build physical Arrow schema enriched with PARQUET:field_id
@@ -689,23 +672,48 @@ impl ExecutionPlan for DeltaWriterExec {
                 Value::from(exec_start.elapsed().as_millis() as u64),
             );
 
-            let commit_info = CommitInfo {
-                row_count: total_rows,
-                actions,
-                initial_actions,
-                operation,
-                operation_metrics,
-            };
-
             output_rows.add(usize::try_from(total_rows).unwrap_or(usize::MAX));
             output_bytes.add(usize::try_from(num_added_bytes).unwrap_or(usize::MAX));
 
-            let commit_info_json = serde_json::to_string(&commit_info)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            // Build row-per-action output:
+            // - protocol/metadata "initial actions" (when present)
+            // - schema evolution actions (metadata)
+            // - Add actions (one row per file)
+            // - CommitMeta row (row_count + operation + metrics)
+            let mut exec_actions: Vec<ExecAction> = Vec::new();
 
-            let data_array = Arc::new(StringArray::from(vec![commit_info_json]));
-            let batch = RecordBatch::try_new(schema, vec![data_array])?;
-            Ok(batch)
+            for ia in &initial_actions {
+                match ia {
+                    Action::Protocol(p) => exec_actions.push(p.clone().try_into()?),
+                    Action::Metadata(m) => exec_actions.push(m.clone().try_into()?),
+                    _ => {}
+                }
+            }
+
+            for sa in &actions {
+                match sa {
+                    Action::Metadata(m) => exec_actions.push(m.clone().try_into()?),
+                    Action::Protocol(p) => exec_actions.push(p.clone().try_into()?),
+                    _ => {}
+                }
+            }
+
+            for action in actions {
+                if let Action::Add(add) = action {
+                    exec_actions.push(add.into());
+                }
+            }
+
+            exec_actions.push(
+                CommitMeta {
+                    row_count: total_rows,
+                    operation,
+                    operation_metrics,
+                }
+                .try_into()?,
+            );
+
+            encode_actions(exec_actions)
         };
 
         let stream = once(future);
@@ -751,7 +759,7 @@ impl DeltaWriterExec {
         let table_schema = table_metadata
             .parse_schema()
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let table_arrow_schema = std::sync::Arc::new((&table_schema).try_into_arrow()?);
+        let table_arrow_schema = Arc::new((&table_schema).try_into_arrow()?);
 
         match schema_mode {
             Some(SchemaMode::Merge) => {
@@ -839,13 +847,18 @@ impl DeltaWriterExec {
         }
 
         // Build merged fields in the correct order
-        #[allow(clippy::unwrap_used)]
         let merged_fields: Vec<Field> = field_order
             .into_iter()
-            .map(|name| field_map.remove(&name).unwrap())
-            .collect();
+            .map(|name| {
+                field_map.remove(&name).ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                        "Field '{name}' missing during schema merge construction",
+                    ))
+                })
+            })
+            .collect::<Result<Vec<Field>>>()?;
 
-        Ok(std::sync::Arc::new(Schema::new(merged_fields)))
+        Ok(Arc::new(Schema::new(merged_fields)))
     }
 
     /// Validate schema compatibility

@@ -19,6 +19,7 @@ use datafusion_expr::{
 };
 use educe::Educe;
 use log::trace;
+use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::monotonic_id::MonotonicIdNode;
@@ -126,7 +127,7 @@ pub struct MergeIntoOptions {
     /// Resolved logical schemas from analysis time (before any rewrites)
     pub resolved_target_schema: DFSchemaRef,
     pub resolved_source_schema: DFSchemaRef,
-    pub on_condition: Expr,
+    pub on_condition: ExprWithSource,
     pub matched_clauses: Vec<MergeMatchedClause>,
     pub not_matched_by_source_clauses: Vec<MergeNotMatchedBySourceClause>,
     pub not_matched_by_target_clauses: Vec<MergeNotMatchedByTargetClause>,
@@ -149,7 +150,7 @@ pub struct MergeTargetInfo {
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct MergeMatchedClause {
-    pub condition: Option<Expr>,
+    pub condition: Option<ExprWithSource>,
     pub action: MergeMatchedAction,
 }
 
@@ -162,7 +163,7 @@ pub enum MergeMatchedAction {
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct MergeNotMatchedBySourceClause {
-    pub condition: Option<Expr>,
+    pub condition: Option<ExprWithSource>,
     pub action: MergeNotMatchedBySourceAction,
 }
 
@@ -174,7 +175,7 @@ pub enum MergeNotMatchedBySourceAction {
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct MergeNotMatchedByTargetClause {
-    pub condition: Option<Expr>,
+    pub condition: Option<ExprWithSource>,
     pub action: MergeNotMatchedByTargetAction,
 }
 
@@ -600,7 +601,10 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
 
     // Rewrite all expressions that reference source columns to the new prefixed names.
     let rewrite = |expr: Expr| rewrite_merge_columns(expr, &target_rename_map, &source_rename_map);
-    options.on_condition = rewrite(options.on_condition.clone())?;
+    options.on_condition = ExprWithSource::new(
+        rewrite(options.on_condition.expr.clone())?,
+        options.on_condition.source.clone(),
+    );
     options.join_key_pairs = options
         .join_key_pairs
         .iter()
@@ -731,7 +735,7 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
     for clause in &options.matched_clauses {
         let mut pred = matched_pred.clone();
         if let Some(cond) = &clause.condition {
-            pred = pred.and(cond.clone());
+            pred = pred.and(cond.expr.clone());
         }
         match clause.action {
             MergeMatchedAction::Delete => {
@@ -744,7 +748,7 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
     for clause in &options.not_matched_by_source_clauses {
         let mut pred = not_matched_by_source_pred.clone();
         if let Some(cond) = &clause.condition {
-            pred = pred.and(cond.clone());
+            pred = pred.and(cond.expr.clone());
         }
         match clause.action {
             MergeNotMatchedBySourceAction::Delete => {
@@ -757,7 +761,7 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
     for clause in &options.not_matched_by_target_clauses {
         let mut pred = not_matched_by_target_pred.clone();
         if let Some(cond) = &clause.condition {
-            pred = pred.and(cond.clone());
+            pred = pred.and(cond.expr.clone());
         }
         match clause.action {
             MergeNotMatchedByTargetAction::InsertAll
@@ -857,7 +861,7 @@ fn can_fast_append_insert_only(
 
     for clause in &options.not_matched_by_target_clauses {
         if let Some(cond) = &clause.condition {
-            if references_target(cond)? {
+            if references_target(&cond.expr)? {
                 return Ok(false);
             }
         }
@@ -880,7 +884,12 @@ fn insert_only_insert_filter(options: &MergeIntoOptions) -> Expr {
     let preds = options
         .not_matched_by_target_clauses
         .iter()
-        .map(|c| c.condition.clone().unwrap_or_else(|| lit(true)))
+        .map(|c| {
+            c.condition
+                .as_ref()
+                .map(|x| x.expr.clone())
+                .unwrap_or_else(|| lit(true))
+        })
         .collect::<Vec<_>>();
     combine_disjunction(&preds).unwrap_or_else(|| lit(false))
 }
@@ -910,7 +919,11 @@ fn build_insert_only_projection(
         let mut branches: Vec<(Expr, Expr)> = Vec::new();
 
         for clause in &options.not_matched_by_target_clauses {
-            let pred = clause.condition.clone().unwrap_or_else(|| lit(true));
+            let pred = clause
+                .condition
+                .as_ref()
+                .map(|x| x.expr.clone())
+                .unwrap_or_else(|| lit(true));
             let value = match &clause.action {
                 MergeNotMatchedByTargetAction::InsertAll => source_exprs
                     .get(idx)
@@ -1144,7 +1157,7 @@ fn build_merge_projection(
             .is_not_null()
             .and(col(SOURCE_PRESENT_COLUMN).is_not_null());
         if let Some(cond) = &clause.condition {
-            pred = pred.and(cond.clone());
+            pred = pred.and(cond.expr.clone());
         }
         match &clause.action {
             MergeMatchedAction::Delete => {}
@@ -1176,7 +1189,7 @@ fn build_merge_projection(
             .is_not_null()
             .and(col(SOURCE_PRESENT_COLUMN).is_null());
         if let Some(cond) = &clause.condition {
-            pred = pred.and(cond.clone());
+            pred = pred.and(cond.expr.clone());
         }
         match &clause.action {
             MergeNotMatchedBySourceAction::Delete => {}
@@ -1197,7 +1210,7 @@ fn build_merge_projection(
             .is_null()
             .and(col(SOURCE_PRESENT_COLUMN).is_not_null());
         if let Some(cond) = &clause.condition {
-            pred = pred.and(cond.clone());
+            pred = pred.and(cond.expr.clone());
         }
 
         match &clause.action {
@@ -1257,6 +1270,10 @@ fn build_merge_projection(
 
         projections.push(expr.alias(name.clone()));
     }
+
+    // Preserve the file path column so downstream physical planning can implement
+    // targeted rewrite (filter writer input to touched files, while keeping inserts).
+    projections.push(col(path_column).alias(path_column.to_string()));
     Ok(projections)
 }
 
@@ -1269,9 +1286,9 @@ fn build_rewrite_predicates(
     let mut not_matched_by_source = Vec::new();
 
     for clause in &options.matched_clauses {
-        let mut pred = matched_pred.clone().and(options.on_condition.clone());
+        let mut pred = matched_pred.clone().and(options.on_condition.expr.clone());
         if let Some(cond) = &clause.condition {
-            pred = pred.and(cond.clone());
+            pred = pred.and(cond.expr.clone());
         }
         matched.push(pred);
     }
@@ -1279,7 +1296,7 @@ fn build_rewrite_predicates(
     for clause in &options.not_matched_by_source_clauses {
         let mut pred = not_matched_by_source_pred.clone();
         if let Some(cond) = &clause.condition {
-            pred = pred.and(cond.clone());
+            pred = pred.and(cond.expr.clone());
         }
         not_matched_by_source.push(pred);
     }
@@ -1368,7 +1385,7 @@ where
 {
     for clause in clauses.iter_mut() {
         if let Some(cond) = clause.condition.take() {
-            clause.condition = Some(rewrite(cond)?);
+            clause.condition = Some(ExprWithSource::new(rewrite(cond.expr)?, cond.source));
         }
         if let MergeMatchedAction::UpdateSet(assignments) = &mut clause.action {
             for assignment in assignments.iter_mut() {
@@ -1388,7 +1405,7 @@ where
 {
     for clause in clauses.iter_mut() {
         if let Some(cond) = clause.condition.take() {
-            clause.condition = Some(rewrite(cond)?);
+            clause.condition = Some(ExprWithSource::new(rewrite(cond.expr)?, cond.source));
         }
         if let MergeNotMatchedBySourceAction::UpdateSet(assignments) = &mut clause.action {
             for assignment in assignments.iter_mut() {
@@ -1408,7 +1425,7 @@ where
 {
     for clause in clauses.iter_mut() {
         if let Some(cond) = clause.condition.take() {
-            clause.condition = Some(rewrite(cond)?);
+            clause.condition = Some(ExprWithSource::new(rewrite(cond.expr)?, cond.source));
         }
         if let MergeNotMatchedByTargetAction::InsertColumns { values, .. } = &mut clause.action {
             for value in values.iter_mut() {

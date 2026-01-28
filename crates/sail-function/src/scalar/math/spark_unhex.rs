@@ -72,33 +72,23 @@ fn hex_int64(num: i64) -> String {
 }
 
 #[inline(always)]
-fn hex_encode<T: AsRef<[u8]>>(data: T, lower_case: bool) -> String {
+fn hex_encode<T: AsRef<[u8]>>(data: T, lower_case: bool) -> Result<String> {
     let mut s = String::with_capacity(data.as_ref().len() * 2);
     if lower_case {
         for b in data.as_ref() {
-            // Writing to a string never errors, so we can unwrap here.
-            #[allow(clippy::unwrap_used)]
-            write!(&mut s, "{b:02x}").unwrap();
+            write!(&mut s, "{b:02x}")?;
         }
     } else {
         for b in data.as_ref() {
-            // Writing to a string never errors, so we can unwrap here.
-            #[allow(clippy::unwrap_used)]
-            write!(&mut s, "{b:02X}").unwrap();
+            write!(&mut s, "{b:02X}")?;
         }
     }
-    s
-}
-
-#[allow(dead_code)]
-#[inline(always)]
-pub(crate) fn hex_strings<T: AsRef<[u8]>>(data: T) -> String {
-    hex_encode(data, true)
+    Ok(s)
 }
 
 #[inline(always)]
-fn hex_bytes<T: AsRef<[u8]>>(bytes: T) -> Result<String, std::fmt::Error> {
-    let hex_string = hex_encode(bytes, false);
+fn hex_bytes<T: AsRef<[u8]>>(bytes: T) -> Result<String> {
+    let hex_string = hex_encode(bytes, false)?;
     Ok(hex_string)
 }
 

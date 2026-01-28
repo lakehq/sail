@@ -47,14 +47,13 @@ pub fn write_data_files_to_avro<W: std::io::Write>(
     version: FormatVersion,
 ) -> Result<usize, String> {
     let avro_schema = match version {
-        FormatVersion::V1 => super::manifest::schema::data_file_schema_v2(partition_type),
-        FormatVersion::V2 => super::manifest::schema::data_file_schema_v2(partition_type),
+        FormatVersion::V1 => schema::data_file_schema_v2(partition_type),
+        FormatVersion::V2 => schema::data_file_schema_v2(partition_type),
     };
     let mut writer = AvroWriter::new(&avro_schema, writer);
 
     for data_file in data_files {
-        let serde_df =
-            super::manifest::_serde::DataFileSerde::from_data_file(data_file, partition_type);
+        let serde_df = _serde::DataFileSerde::from_data_file(data_file, partition_type)?;
         let value = to_value(serde_df)
             .map_err(|e| format!("Avro to_value error: {e}"))?
             .resolve(&avro_schema)
@@ -75,14 +74,14 @@ pub fn read_data_files_from_avro<R: std::io::Read>(
     partition_type: &StructType,
     _version: FormatVersion,
 ) -> Result<Vec<DataFile>, String> {
-    let avro_schema = super::manifest::schema::data_file_schema_v2(partition_type);
+    let avro_schema = schema::data_file_schema_v2(partition_type);
     let reader = AvroReader::with_schema(&avro_schema, reader)
         .map_err(|e| format!("Avro reader error: {e}"))?;
     reader
         .into_iter()
         .map(|value| {
             let value = value.map_err(|e| format!("Avro read error: {e}"))?;
-            let serde_df: super::manifest::_serde::DataFileSerde =
+            let serde_df: _serde::DataFileSerde =
                 avro_from_value(&value).map_err(|e| format!("Avro decode DataFile error: {e}"))?;
             Ok(serde_df.into_data_file(partition_spec_id, partition_type))
         })
@@ -164,11 +163,7 @@ impl Manifest {
     }
 
     pub fn to_avro_bytes_v2(&self) -> Result<Vec<u8>, String> {
-        let builder = crate::spec::manifest::writer::ManifestWriterBuilder::new(
-            None,
-            None,
-            self.metadata.clone(),
-        );
+        let builder = ManifestWriterBuilder::new(None, None, self.metadata.clone());
         let mut w = builder.build();
         for e in &self.entries {
             w.add(e.data_file.clone());

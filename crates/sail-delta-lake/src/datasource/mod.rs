@@ -43,8 +43,7 @@ pub mod schema;
 // Re-exports
 pub use actions::{adds_to_remove_actions, partitioned_file_from_action};
 pub use expressions::{
-    collect_physical_columns, get_pushdown_filters, parse_log_data_predicate,
-    parse_predicate_expression, simplify_expr, DeltaContextProvider, PredicateProperties,
+    collect_physical_columns, get_pushdown_filters, simplify_expr, PredicateProperties,
 };
 pub use provider::DeltaTableProvider;
 pub use pruning::{prune_files, PruningResult};

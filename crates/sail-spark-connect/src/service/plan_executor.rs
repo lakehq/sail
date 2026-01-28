@@ -10,7 +10,7 @@ use futures::stream;
 use log::{debug, warn};
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::session::JobService;
+use sail_common_datafusion::session::job::JobService;
 use sail_plan::resolve_and_execute_plan;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 use tonic::codegen::tokio_stream::Stream;
@@ -209,6 +209,8 @@ pub(crate) async fn handle_execute_write_operation_v2(
     handle_execute_plan(ctx, plan, metadata, ExecutePlanMode::EagerSilent).await
 }
 
+/// Handles execution of a SQL command.
+/// If a string is sent over we convert it to a relation then convert it to a plan, then execute it.
 pub(crate) async fn handle_execute_sql_command(
     ctx: &SessionContext,
     sql: SqlCommand,

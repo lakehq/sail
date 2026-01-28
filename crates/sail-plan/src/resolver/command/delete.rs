@@ -7,6 +7,7 @@ use sail_common::spec;
 use sail_common_datafusion::catalog::{TableKind, TableStatus};
 use sail_common_datafusion::datasource::{SourceInfo, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::rename::expression::expression_before_rename;
 use sail_common_datafusion::rename::schema::rename_schema;
 use sail_logical_plan::file_delete::{FileDeleteNode, FileDeleteOptions};
@@ -44,7 +45,7 @@ impl PlanResolver<'_> {
         // Convert the condition expression if present
         let condition = if let Some(condition) = condition {
             let resolved_condition = self
-                .resolve_expression(condition, &df_schema_for_resolution, state)
+                .resolve_expression(condition.expr, &df_schema_for_resolution, state)
                 .await?;
 
             let rewritten_condition = expression_before_rename(
@@ -54,7 +55,7 @@ impl PlanResolver<'_> {
                 true,
             )?;
 
-            Some(rewritten_condition)
+            Some(ExprWithSource::new(rewritten_condition, condition.source))
         } else {
             None
         };

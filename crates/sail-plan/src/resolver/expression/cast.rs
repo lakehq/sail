@@ -7,7 +7,7 @@ use datafusion_expr::{cast, expr, lit, try_cast, ExprSchemable, ScalarUDF};
 use sail_common::datetime::time_unit_to_multiplier;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::session::PlanService;
+use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_interval::{
@@ -100,14 +100,19 @@ impl PlanResolver<'_> {
                 DataType::Interval(IntervalUnit::MonthDayNano),
                 _,
             ) => ScalarUDF::new_from_impl(SparkCalendarInterval::new()).call(vec![expr]),
-            (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View, DataType::Date32, _) => {
-                ScalarUDF::new_from_impl(SparkDate::new()).call(vec![expr])
-            }
+            (
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+                DataType::Date32,
+                is_try,
+            ) => ScalarUDF::new_from_impl(SparkDate::new(is_try)).call(vec![expr]),
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Timestamp(TimeUnit::Microsecond, tz),
-                _,
-            ) => Arc::new(ScalarUDF::new_from_impl(SparkTimestamp::try_new(tz)?)).call(vec![expr]),
+                is_try,
+            ) => Arc::new(ScalarUDF::new_from_impl(SparkTimestamp::try_new(
+                tz, is_try,
+            )?))
+            .call(vec![expr]),
             (_, DataType::Utf8, _) if override_string_cast => {
                 ScalarUDF::new_from_impl(SparkToUtf8::new()).call(vec![expr])
             }

@@ -48,6 +48,13 @@ Feature: Delta Lake Merge
           INSERT *
         """
       Then delta log latest commit info matches snapshot
+      Then delta log latest commit info contains
+        | path                                               | value                  |
+        | operation                                          | "MERGE"                |
+        | operationParameters.mergePredicate                 | "t . id = s . id " |
+        | operationParameters.matchedPredicates[0].actionType | "update"               |
+        | operationParameters.matchedPredicates[1].actionType | "delete"               |
+        | operationParameters.notMatchedPredicates[0].actionType | "insert"            |
       When query
         """
         SELECT id, value, flag FROM delta_merge_basic ORDER BY id
@@ -148,6 +155,24 @@ Feature: Delta Lake Merge
           INSERT *
         """
       Then query plan matches snapshot
+      Given statement
+        """
+        MERGE INTO delta_merge_cardinality_skip AS t
+        USING src_merge_cardinality_skip AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN
+          UPDATE SET value = s.value
+        WHEN NOT MATCHED THEN
+          INSERT *
+        """
+      When query
+        """
+        SELECT id, value FROM delta_merge_cardinality_skip ORDER BY id
+        """
+      Then query result ordered
+        | id | value |
+        | 1  | s2    |
+
 
     Scenario: MERGE succeeds when source is grouped by join keys
       Given statement
@@ -209,6 +234,13 @@ Feature: Delta Lake Merge
           INSERT *
         """
       Then delta log latest commit info matches snapshot
+      Then delta log latest commit info contains
+        | path                                               | value                  |
+        | operation                                          | "MERGE"                |
+        | operationParameters.mergePredicate                 | "t . id = s . id " |
+        | operationParameters.matchedPredicates              | []                     |
+        | operationParameters.notMatchedBySourcePredicates   | []                     |
+        | operationParameters.notMatchedPredicates[0].actionType | "insert"            |
       When query
         """
         SELECT id, value FROM delta_merge_insert_only ORDER BY id
@@ -230,6 +262,24 @@ Feature: Delta Lake Merge
           INSERT *
         """
       Then query plan matches snapshot
+      Given statement
+        """
+        MERGE INTO delta_merge_insert_only AS t
+        USING src_merge_insert_only AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED THEN
+          INSERT *
+        """
+      When query
+        """
+        SELECT id, value FROM delta_merge_insert_only ORDER BY id
+        """
+      Then query result ordered
+        | id | value    |
+        | 1  | keep     |
+        | 2  | keep     |
+        | 3  | inserted |
+
 
   Rule: Updates for rows not matched by source and explicit insert columns
     Background:
@@ -280,6 +330,13 @@ Feature: Delta Lake Merge
           VALUES (s.id, concat(s.value, '_insert'), s.flag)
         """
       Then delta log latest commit info matches snapshot
+      Then delta log latest commit info contains
+        | path                                               | value                  |
+        | operation                                          | "MERGE"                |
+        | operationParameters.mergePredicate                 | "t . id = s . id " |
+        | operationParameters.matchedPredicates[0].actionType | "update"               |
+        | operationParameters.notMatchedBySourcePredicates[0].actionType | "update"      |
+        | operationParameters.notMatchedPredicates[0].actionType | "insert"            |
       When query
         """
         SELECT id, value, flag FROM delta_merge_extended ORDER BY id
@@ -340,6 +397,13 @@ Feature: Delta Lake Merge
           VALUES (s.id, concat('insert_', s.value), s.flag)
         """
       Then delta log latest commit info matches snapshot
+      Then delta log latest commit info contains
+        | path                                               | value                  |
+        | operation                                          | "MERGE"                |
+        | operationParameters.mergePredicate                 | "t . id = s . id " |
+        | operationParameters.matchedPredicates[0].actionType | "update"               |
+        | operationParameters.notMatchedBySourcePredicates[0].actionType | "delete"      |
+        | operationParameters.notMatchedPredicates[0].actionType | "insert"            |
       When query
         """
         SELECT id, value, flag FROM delta_merge_cleanup ORDER BY id
@@ -401,6 +465,12 @@ Feature: Delta Lake Merge
           VALUES (s.id, s.category, s.amount, concat('default_', s.note))
         """
       Then delta log latest commit info matches snapshot
+      Then delta log latest commit info contains
+        | path                                               | value                   |
+        | operation                                          | "MERGE"                 |
+        | operationParameters.mergePredicate                 | "t . id = s . id "  |
+        | operationParameters.notMatchedPredicates[0].actionType | "insert"             |
+        | operationParameters.notMatchedPredicates[0].predicate | "s . id = 3 " |
       When query
         """
         SELECT id, category, amount, note FROM delta_merge_conditional ORDER BY id
@@ -475,3 +545,103 @@ Feature: Delta Lake Merge
           VALUES (s.id, s.category, s.amount, concat('insert_', s.note))
         """
       Then query plan matches snapshot
+      Given statement
+        """
+        MERGE INTO delta_merge_explain_codegen AS t
+        USING (
+          SELECT *
+          FROM src_merge_explain_codegen
+          WHERE amount + 1 > 10 AND (id = 1 OR id = 2 OR id = 4)
+        ) AS s
+        ON t.id = s.id AND t.category IS NOT NULL
+        WHEN MATCHED AND t.category = 'vip' THEN
+          UPDATE SET amount = s.amount + 1,
+                     note = concat(s.note, '_', t.id)
+        WHEN MATCHED AND t.category = 'stale' THEN
+          DELETE
+        WHEN NOT MATCHED BY SOURCE AND t.category = 'stale' THEN
+          UPDATE SET note = concat(t.note, '_orphan')
+        WHEN NOT MATCHED THEN
+          INSERT (id, category, amount, note)
+          VALUES (s.id, s.category, s.amount, concat('insert_', s.note))
+        """
+      When query
+        """
+        SELECT id, category, amount, note FROM delta_merge_explain_codegen ORDER BY id
+        """
+      Then query result ordered
+        | id | category | amount | note           |
+        | 1  | existing | 10     | keep           |
+        | 2  | vip      | 23     | platinum_2     |
+        | 3  | stale    | 30     | old_orphan     |
+        | 4  | standard | 25     | insert_regular |
+
+
+  Rule: EXPLAIN shows visible delta log scan for MERGE on partitioned tables
+    Background:
+      Given variable location for temporary directory merge_explain_partition_pushdown
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_explain_partition_pushdown
+        """
+      Given final statement
+        """
+        DROP VIEW IF EXISTS src_merge_explain_partition_pushdown
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_explain_partition_pushdown (
+          id INT,
+          year INT,
+          value INT
+        )
+        USING DELTA LOCATION {{ location.sql }}
+        PARTITIONED BY (year)
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_explain_partition_pushdown
+        SELECT * FROM VALUES
+          (1, 2023, 100),
+          (2, 2024, 200),
+          (3, 2024, 700)
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW src_merge_explain_partition_pushdown AS
+        SELECT * FROM VALUES
+          (2, 2024, 250),
+          (4, 2024, 900)
+        AS src(id, year, value)
+        """
+
+    Scenario: EXPLAIN shows delta log meta scan under MERGE file lookup
+      When query
+        """
+        EXPLAIN
+        MERGE INTO delta_merge_explain_partition_pushdown AS t
+        USING src_merge_explain_partition_pushdown AS s
+        ON t.id = s.id AND t.year = 2024 AND t.value > 150
+        WHEN MATCHED THEN UPDATE SET value = s.value
+        WHEN NOT MATCHED THEN INSERT (id, year, value) VALUES (s.id, s.year, s.value)
+        """
+      Then query plan matches snapshot
+      Given statement
+        """
+        MERGE INTO delta_merge_explain_partition_pushdown AS t
+        USING src_merge_explain_partition_pushdown AS s
+        ON t.id = s.id AND t.year = 2024 AND t.value > 150
+        WHEN MATCHED THEN UPDATE SET value = s.value
+        WHEN NOT MATCHED THEN INSERT (id, year, value) VALUES (s.id, s.year, s.value)
+        """
+      When query
+        """
+        SELECT id, year, value FROM delta_merge_explain_partition_pushdown ORDER BY id
+        """
+      Then query result ordered
+        | id | year | value |
+        | 1  | 2023 | 100   |
+        | 2  | 2024 | 250   |
+        | 3  | 2024 | 700   |
+        | 4  | 2024 | 900   |
+
