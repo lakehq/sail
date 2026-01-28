@@ -155,16 +155,20 @@ impl PlanResolver<'_> {
                 Expr::ScalarFunction(ScalarFunction { func, args }) => {
                     if func.inner().as_any().is::<MultiExpr>() {
                         // The metadata from the original expression are ignored.
-                        // For wildcard-derived MultiExpr (multiple names matching args count),
-                        // pair original names with args. For function-derived MultiExpr
-                        // (single name regardless of args count), extract aliases from args.
-                        if name.len() == args.len() {
-                            for (name, arg) in name.into_iter().zip(args) {
-                                out.push(NamedExpr::new(vec![name], arg));
-                            }
-                        } else {
+                        // Function-derived MultiExpr (e.g. json_tuple, explode) wraps
+                        // pre-aliased arguments whose alias names become the output
+                        // column names.  Wildcard-derived MultiExpr passes raw column
+                        // or field-access expressions without aliases, paired with
+                        // the externally provided names.
+                        let all_args_aliased =
+                            !args.is_empty() && args.iter().all(|a| matches!(a, Expr::Alias(_)));
+                        if all_args_aliased {
                             for arg in args {
                                 out.push(NamedExpr::try_from_alias_expr(arg)?);
+                            }
+                        } else {
+                            for (name, arg) in name.into_iter().zip(args) {
+                                out.push(NamedExpr::new(vec![name], arg));
                             }
                         }
                     } else {

@@ -118,7 +118,7 @@ Feature: json_tuple() extracts multiple values from JSON strings
 
   Rule: Star expansion
 
-    Scenario: json_tuple with star expansion
+    Scenario: json_tuple with star expansion over multiple keys
       When query
       """
       SELECT * FROM (SELECT json_tuple('{"name":"Alice","age":"30"}', 'name', 'age'))
@@ -126,3 +126,12 @@ Feature: json_tuple() extracts multiple values from JSON strings
       Then query result ordered
       | c0    | c1 |
       | Alice | 30 |
+
+    Scenario: json_tuple with star expansion over single key
+      When query
+      """
+      SELECT * FROM (SELECT json_tuple('{"x":100}', 'x'))
+      """
+      Then query result ordered
+      | c0  |
+      | 100 |
