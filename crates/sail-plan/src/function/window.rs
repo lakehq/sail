@@ -18,6 +18,7 @@ use datafusion_expr::expr::WindowFunctionParams;
 use datafusion_expr::{
     cast, expr, lit, when, AggregateUDF, ExprSchemable, WindowFunctionDefinition,
 };
+use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use lazy_static::lazy_static;
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -26,7 +27,6 @@ use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
 use sail_function::aggregate::skewness::SkewnessFunc;
 use sail_function::aggregate::try_avg::TryAvgFunction;
-use sail_function::aggregate::try_sum::TrySumFunction;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
@@ -549,7 +549,7 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
         ),
         (
             "try_sum",
-            F::aggregate(|| Arc::new(AggregateUDF::from(TrySumFunction::new()))),
+            F::aggregate(|| Arc::new(AggregateUDF::from(SparkTrySum::new()))),
         ),
         ("var_pop", F::aggregate(variance::var_pop_udaf)),
         ("var_samp", F::aggregate(variance::var_samp_udaf)),
