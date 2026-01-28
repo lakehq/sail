@@ -283,25 +283,31 @@ fn count_if(input: WinFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn collect_set(input: WinFunctionInput) -> PlanResult<expr::Expr> {
+    // Spark's collect_set always returns distinct values and ignores NULLs.
+    // WORKAROUND: DataFusion's array_agg doesn't properly handle null_treatment
+    // when distinct=true, so we add an explicit IS NOT NULL filter
+    // (same workaround as the aggregate version in aggregate.rs).
     let WinFunctionInput {
         arguments,
         partition_by,
         order_by,
         window_frame,
         ignore_nulls: _,
-        distinct,
+        distinct: _,
         function_context: _,
     } = input;
+    let arg = arguments.one()?;
+    let null_filter = Some(Box::new(arg.clone().is_not_null()));
     Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
         fun: WindowFunctionDefinition::AggregateUDF(array_agg::array_agg_udaf()),
         params: WindowFunctionParams {
-            args: arguments,
+            args: vec![arg],
             partition_by,
             order_by,
             window_frame,
-            filter: None,
-            null_treatment: get_null_treatment(Some(true)),
-            distinct,
+            filter: null_filter,
+            null_treatment: None,
+            distinct: true,
         },
     })))
 }
