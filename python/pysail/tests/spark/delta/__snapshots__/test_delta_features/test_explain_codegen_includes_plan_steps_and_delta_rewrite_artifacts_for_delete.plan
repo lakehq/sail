@@ -158,9 +158,6 @@ SAME TEXT AS ABOVE
 physical_plan after join_selection:
 SAME TEXT AS ABOVE
 
-physical_plan after RewriteDeltaCollectLeft:
-SAME TEXT AS ABOVE
-
 physical_plan after LimitedDistinctAggregation:
 SAME TEXT AS ABOVE
 

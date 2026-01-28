@@ -1,7 +1,6 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{RecordBatch, RecordBatchOptions};
 use datafusion::physical_expr::projection::ProjectionExprs;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_common::{DataFusionError, Result};
@@ -147,16 +146,6 @@ impl FileOpener for BinaryOpener {
         );
 
         Ok(Box::pin(async move {
-            if schema.fields().is_empty() {
-                let empty_batch = RecordBatch::try_new_with_options(
-                    schema,
-                    vec![],
-                    &RecordBatchOptions::new().with_row_count(Some(1)),
-                )
-                .map_err(DataFusionError::from)?;
-                return Ok(futures::stream::once(async move { Ok(empty_batch) }).boxed());
-            }
-
             let get_result = store.get(&location).await?;
             let content = get_result.bytes().await?;
             let modification_time = last_modified.timestamp_micros();
