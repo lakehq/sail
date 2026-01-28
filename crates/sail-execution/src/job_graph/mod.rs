@@ -6,6 +6,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties, PhysicalExpr};
+use log::debug;
 
 /// A job graph represents a distributed execution plan for a job.
 /// A job consists of multiple *stages*, where each stage has one or more
@@ -33,23 +34,80 @@ impl JobGraph {
 
     /// Get the required number of output replicas for the given stage.
     pub fn replicas(&self, stage: usize) -> usize {
+        let mut consumers = Vec::new();
         let replicas = self
             .stages
             .iter()
-            .flat_map(|x| {
-                x.inputs
+            .flat_map(|consumer_stage| {
+                let consumer_partitions =
+                    consumer_stage.plan.output_partitioning().partition_count();
+                consumer_stage
+                    .inputs
                     .iter()
                     .filter(|input| input.stage == stage)
-                    .map(|input| match input.mode {
-                        InputMode::Forward | InputMode::Shuffle => 1,
-                        InputMode::Merge | InputMode::Broadcast => {
-                            x.plan.output_partitioning().partition_count()
+                    .map(move |input| match input.mode {
+                        InputMode::Merge | InputMode::Broadcast => consumer_partitions,
+                        InputMode::Forward | InputMode::Shuffle => {
+                            let producer_partitions = self
+                                .stages
+                                .get(input.stage)
+                                .map(|s| s.plan.output_partitioning().partition_count())
+                                .unwrap_or(1);
+                            if producer_partitions == 1 && consumer_partitions > 1 {
+                                consumer_partitions
+                            } else {
+                                1
+                            }
                         }
                     })
             })
             .sum::<usize>();
-        // ensure one replica for final stages for the job output
-        replicas.max(1)
+        let fanout = self
+            .stages
+            .iter()
+            .map(|consumer_stage| {
+                let consumer_partitions =
+                    consumer_stage.plan.output_partitioning().partition_count();
+                let has_input = consumer_stage
+                    .inputs
+                    .iter()
+                    .any(|input| input.stage == stage);
+                if has_input {
+                    consumers.push((consumer_partitions, consumer_stage.inputs.clone()));
+                }
+                if consumer_stage
+                    .inputs
+                    .iter()
+                    .any(|input| input.stage == stage)
+                {
+                    consumer_partitions
+                } else {
+                    0
+                }
+            })
+            .sum::<usize>();
+        // ensure enough replicas for final stages / multiple consumers
+        let min_replicas = if fanout == 0 { 2 } else { 1 };
+        let replicas = replicas.max(fanout).max(min_replicas);
+        debug!(
+            "job graph replicas: stage={}, replicas={}, fanout={}, consumers={}",
+            stage,
+            replicas,
+            fanout,
+            consumers
+                .iter()
+                .map(|(parts, inputs)| {
+                    let inputs = inputs
+                        .iter()
+                        .map(|input| format!("{}:{}", input.stage, input.mode))
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    format!("parts={parts}, inputs=[{inputs}]")
+                })
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+        replicas
     }
 }
 
@@ -77,7 +135,14 @@ impl fmt::Display for JobGraph {
                 "partitions={}",
                 stage.plan.output_partitioning().partition_count()
             )?;
-            writeln!(f, "distribution={}", stage.distribution)?;
+            let outputs = stage
+                .outputs
+                .iter()
+                .enumerate()
+                .map(|(index, output)| format!("{index}:{output}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            writeln!(f, "outputs=[{outputs}]")?;
             writeln!(f, "placement={}", stage.placement)?;
             writeln!(f, "{}", displayable.indent(true))?;
         }
@@ -92,7 +157,7 @@ pub struct Stage {
     /// The name of the "slot sharing group" for the stage.
     pub group: String,
     pub mode: OutputMode,
-    pub distribution: OutputDistribution,
+    pub outputs: Vec<OutputDistribution>,
     pub placement: TaskPlacement,
 }
 
@@ -114,12 +179,17 @@ impl fmt::Display for TaskPlacement {
 #[derive(Debug, Clone)]
 pub struct StageInput {
     pub stage: usize,
+    pub output: usize,
     pub mode: InputMode,
 }
 
 impl fmt::Display for StageInput {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "StageInput(stage={}, mode={})", self.stage, self.mode)
+        write!(
+            f,
+            "StageInput(stage={}, output={}, mode={})",
+            self.stage, self.output, self.mode
+        )
     }
 }
 

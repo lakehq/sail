@@ -280,6 +280,7 @@ pub struct CatalogConfig {
 #[serde(deny_unknown_fields)]
 pub struct OptimizerConfig {
     pub enable_join_reorder: bool,
+    pub enable_distributed_collect_left: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

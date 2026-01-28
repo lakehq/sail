@@ -676,6 +676,14 @@
     Whether to enable cost-based join reorder in the query optimizer.
   experimental: true
 
+- key: optimizer.enable_distributed_collect_left
+  type: boolean
+  default: "true"
+  description: |
+    Whether to rewrite `CollectLeft` hash joins into `DistributedCollectLeftJoinExec` for distributed execution.
+    This is intended for cluster modes. It is ignored in `local` mode.
+  experimental: true
+
 - key: spark.session_timeout_secs
   type: number
   default: "900"

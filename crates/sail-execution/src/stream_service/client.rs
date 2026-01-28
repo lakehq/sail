@@ -35,6 +35,7 @@ impl TaskStreamFlightClient {
             stage: key.stage as u64,
             partition: key.partition as u64,
             attempt: key.attempt as u64,
+            output: key.output as u64,
             channel: key.channel as u64,
         };
         let ticket = {

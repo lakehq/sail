@@ -5,7 +5,7 @@ use std::sync::Arc;
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Schema, TimeUnit};
 use datafusion::common::parsers::CompressionTypeVariant;
-use datafusion::common::{plan_datafusion_err, plan_err, JoinSide, Result};
+use datafusion::common::{plan_datafusion_err, plan_err, JoinSide, JoinType, Result};
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::{
@@ -184,7 +184,9 @@ use crate::plan::gen::{
     DeltaCastColumnExprNode, ExtendedAggregateUdf, ExtendedPhysicalExprNode,
     ExtendedPhysicalPlanNode, ExtendedScalarUdf, ExtendedStreamUdf,
 };
-use crate::plan::{gen, StageInputExec};
+use crate::plan::{
+    gen, AddRowIdExec, ApplyMatchSetExec, BuildMatchSetExec, MatchSetOrExec, StageInputExec,
+};
 
 pub struct RemoteExecutionCodec;
 
@@ -838,6 +840,43 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
 
                 Ok(Arc::new(IcebergCommitExec::new(input, table_url)))
             }
+            NodeKind::AddRowId(gen::AddRowIdExecNode { input }) => {
+                let input = self.try_decode_plan(&input, ctx)?;
+                Ok(Arc::new(AddRowIdExec::try_new(input)?))
+            }
+            NodeKind::BuildMatchSet(gen::BuildMatchSetExecNode { input, row_id_index }) => {
+                let input = self.try_decode_plan(&input, ctx)?;
+                Ok(Arc::new(BuildMatchSetExec::new(
+                    input,
+                    row_id_index as usize,
+                )))
+            }
+            NodeKind::MatchSetOr(gen::MatchSetOrExecNode { input }) => {
+                let input = self.try_decode_plan(&input, ctx)?;
+                Ok(Arc::new(MatchSetOrExec::new(input)))
+            }
+            NodeKind::ApplyMatchSet(gen::ApplyMatchSetExecNode {
+                left,
+                match_set,
+                row_id_index,
+                join_type,
+                schema,
+            }) => {
+                let left = self.try_decode_plan(&left, ctx)?;
+                let match_set = self.try_decode_plan(&match_set, ctx)?;
+                let join_type = ProtoJoinType::from_str_name(&join_type).ok_or_else(|| {
+                    plan_datafusion_err!("invalid join type: {join_type}")
+                })?;
+                let join_type: JoinType = join_type.into();
+                let schema = self.try_decode_schema(&schema)?;
+                Ok(Arc::new(ApplyMatchSetExec::new(
+                    left,
+                    match_set,
+                    row_id_index as usize,
+                    join_type,
+                    Arc::new(schema),
+                )))
+            }
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
         }
     }
@@ -906,6 +945,29 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::MapPartitions(gen::MapPartitionsExecNode {
                 input: self.try_encode_plan(map_partitions.input().clone())?,
                 udf: Some(udf),
+                schema,
+            })
+        } else if let Some(add_row_id) = node.as_any().downcast_ref::<AddRowIdExec>() {
+            NodeKind::AddRowId(gen::AddRowIdExecNode {
+                input: self.try_encode_plan(add_row_id.input().clone())?,
+            })
+        } else if let Some(build_match_set) = node.as_any().downcast_ref::<BuildMatchSetExec>() {
+            NodeKind::BuildMatchSet(gen::BuildMatchSetExecNode {
+                input: self.try_encode_plan(build_match_set.input().clone())?,
+                row_id_index: build_match_set.row_id_index() as u64,
+            })
+        } else if let Some(match_set_or) = node.as_any().downcast_ref::<MatchSetOrExec>() {
+            NodeKind::MatchSetOr(gen::MatchSetOrExecNode {
+                input: self.try_encode_plan(match_set_or.input().clone())?,
+            })
+        } else if let Some(apply_match_set) = node.as_any().downcast_ref::<ApplyMatchSetExec>() {
+            let join_type: ProtoJoinType = apply_match_set.join_type().into();
+            let schema = self.try_encode_schema(apply_match_set.output_schema().as_ref())?;
+            NodeKind::ApplyMatchSet(gen::ApplyMatchSetExecNode {
+                left: self.try_encode_plan(apply_match_set.left().clone())?,
+                match_set: self.try_encode_plan(apply_match_set.match_set().clone())?,
+                row_id_index: apply_match_set.row_id_index() as u64,
+                join_type: join_type.as_str_name().to_string(),
                 schema,
             })
         } else if let Some(work_table) = node.as_any().downcast_ref::<WorkTableExec>() {

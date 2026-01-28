@@ -24,10 +24,21 @@ use crate::join_reorder::JoinReorder;
 
 mod explicit_repartition;
 mod join_reorder;
+mod rewrite_collect_left_join;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct PhysicalOptimizerOptions {
     pub enable_join_reorder: bool,
+    pub enable_distributed_collect_left: bool,
+}
+
+impl Default for PhysicalOptimizerOptions {
+    fn default() -> Self {
+        Self {
+            enable_join_reorder: false,
+            enable_distributed_collect_left: true,
+        }
+    }
 }
 
 pub fn get_physical_optimizers(
@@ -41,6 +52,11 @@ pub fn get_physical_optimizers(
         rules.push(Arc::new(JoinReorder::new()));
     }
     rules.push(Arc::new(JoinSelection::new()));
+    if options.enable_distributed_collect_left {
+        rules.push(Arc::new(
+            rewrite_collect_left_join::RewriteCollectLeftJoinForDistributed::new(),
+        ));
+    }
     rules.push(Arc::new(LimitedDistinctAggregation::new()));
     rules.push(Arc::new(FilterPushdown::new()));
     rules.push(Arc::new(EnforceDistribution::new()));

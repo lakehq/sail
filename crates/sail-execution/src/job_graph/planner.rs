@@ -2,25 +2,33 @@ use std::sync::Arc;
 
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::{plan_datafusion_err, JoinType, Result};
+use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::Partitioning;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion::physical_plan::joins::utils::build_join_schema;
 use datafusion::physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, PiecewiseMergeJoinExec,
 };
 use datafusion::physical_plan::limit::GlobalLimitExec;
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{
     with_new_children_if_necessary, ExecutionPlan, ExecutionPlanProperties, PhysicalExpr,
 };
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_physical_plan::distributed_collect_left_join::DistributedCollectLeftJoinExec;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::job_graph::{
     InputMode, JobGraph, OutputDistribution, OutputMode, Stage, StageInput, TaskPlacement,
 };
-use crate::plan::{ShuffleConsumption, StageInputExec};
+use crate::plan::{
+    AddRowIdExec, ApplyMatchSetExec, BuildMatchSetExec, MatchSetOrExec, ShuffleConsumption,
+    StageInputExec,
+};
 
 impl JobGraph {
     pub fn try_new(plan: Arc<dyn ExecutionPlan>) -> ExecutionResult<Self> {
@@ -37,7 +45,7 @@ impl JobGraph {
             plan: last,
             group: String::new(),
             mode: OutputMode::Pipelined,
-            distribution: OutputDistribution::RoundRobin { channels: 1 },
+            outputs: vec![OutputDistribution::RoundRobin { channels: 1 }],
             placement: TaskPlacement::Worker,
         });
         Ok(graph)
@@ -168,6 +176,12 @@ fn build_job_graph(
     usage: PartitionUsage,
     graph: &mut JobGraph,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    if let Some(join) = plan
+        .as_any()
+        .downcast_ref::<DistributedCollectLeftJoinExec>()
+    {
+        return build_distributed_collect_left_join(join, usage, graph);
+    }
     // Recursively build the job graph for the children first
     // and propagate partition usage information.
     let children = if let Some(join) = plan.as_any().downcast_ref::<HashJoinExec>() {
@@ -212,7 +226,13 @@ fn build_job_graph(
             .map(|x| build_job_graph(x.clone(), usage, graph))
             .collect::<ExecutionResult<Vec<_>>>()?
     };
-    let plan = with_new_children_if_necessary(plan, children)?;
+    // Avoid calling `with_new_children` on leaf nodes: some DataFusion test execs (e.g.
+    // `physical_plan::test::TestMemoryExec`) intentionally leave it unimplemented.
+    let plan = if children.is_empty() {
+        plan
+    } else {
+        with_new_children_if_necessary(plan, children)?
+    };
 
     let consumption = match usage {
         PartitionUsage::Once => ShuffleConsumption::Single,
@@ -251,6 +271,149 @@ fn build_job_graph(
     Ok(plan)
 }
 
+fn build_distributed_collect_left_join(
+    join: &DistributedCollectLeftJoinExec,
+    usage: PartitionUsage,
+    graph: &mut JobGraph,
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    // The distributed collect-left join rewrite builds its own fan-out stage (`left_stage`)
+    // for the left side. Upstream of that, the left subtree is planned as single-consumer.
+    let left_base = build_job_graph(join.left().clone(), PartitionUsage::Once, graph)?;
+    let right = build_job_graph(join.right().clone(), usage, graph)?;
+
+    let left_base = if left_base.output_partitioning().partition_count() > 1 {
+        Arc::new(CoalescePartitionsExec::new(left_base))
+    } else {
+        left_base
+    };
+    let left_with_row_id: Arc<dyn ExecutionPlan> = Arc::new(AddRowIdExec::try_new(left_base)?);
+    let row_id_index = left_with_row_id.schema().fields().len() - 1;
+
+    let left_stage = create_shuffle(
+        &left_with_row_id,
+        graph,
+        Partitioning::RoundRobinBatch(1),
+        ShuffleConsumption::Multiple,
+    )?;
+
+    // The probe stage primarily determines matches, but we intentionally keep FULL here so the
+    // produced schema / nullability matches the eventual FULL join output (used by union/projection).
+    let probe_join_type = match join.join_type() {
+        JoinType::Full => JoinType::Full,
+        _ => JoinType::Inner,
+    };
+    let hash_join: Arc<dyn ExecutionPlan> = Arc::new(HashJoinExec::try_new(
+        left_stage.clone(),
+        right,
+        join.on().clone(),
+        join.filter().cloned(),
+        &probe_join_type,
+        None,
+        PartitionMode::CollectLeft,
+        join.null_equality(),
+    )?);
+    let join_consumption = ShuffleConsumption::Single;
+    let join_partitioning = hash_join.output_partitioning().clone();
+    let join_stage = create_shuffle(&hash_join, graph, join_partitioning, join_consumption)?;
+
+    let build_match_set: Arc<dyn ExecutionPlan> =
+        Arc::new(BuildMatchSetExec::new(join_stage.clone(), row_id_index));
+    let match_set_partial = create_shuffle(
+        &build_match_set,
+        graph,
+        Partitioning::RoundRobinBatch(1),
+        ShuffleConsumption::Single,
+    )?;
+    let match_set_plan: Arc<dyn ExecutionPlan> = Arc::new(MatchSetOrExec::new(match_set_partial));
+    let match_set_stage = create_shuffle(
+        &match_set_plan,
+        graph,
+        Partitioning::RoundRobinBatch(1),
+        ShuffleConsumption::Single,
+    )?;
+
+    let (output_schema, _) = build_join_schema(
+        join.left().schema().as_ref(),
+        join.right().schema().as_ref(),
+        &join.join_type(),
+    );
+    let apply_match_set: Arc<dyn ExecutionPlan> = Arc::new(ApplyMatchSetExec::new(
+        left_stage,
+        match_set_stage,
+        row_id_index,
+        join.join_type(),
+        Arc::new(output_schema),
+    ));
+
+    let mut output_plan: Arc<dyn ExecutionPlan> = match join.join_type() {
+        JoinType::Left | JoinType::Full => {
+            let projected_join = project_drop_row_id(join_stage, row_id_index)?;
+            UnionExec::try_new(vec![projected_join, apply_match_set.clone()])?
+        }
+        JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => apply_match_set,
+        _ => {
+            return Err(ExecutionError::InternalError(format!(
+                "unsupported distributed collect-left join type: {}",
+                join.join_type()
+            )))
+        }
+    };
+
+    if let Some(projection) = join.projection() {
+        output_plan = apply_projection_indices(output_plan, projection)?;
+    }
+
+    Ok(output_plan)
+}
+
+fn project_drop_row_id(
+    plan: Arc<dyn ExecutionPlan>,
+    row_id_index: usize,
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    let schema = plan.schema();
+    let exprs = schema
+        .fields()
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, field)| {
+            (idx != row_id_index).then(|| {
+                Column::new_with_schema(field.name(), schema.as_ref()).map(|expr| {
+                    (
+                        Arc::new(expr) as Arc<dyn PhysicalExpr>,
+                        field.name().clone(),
+                    )
+                })
+            })
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(ExecutionError::DataFusionError)?;
+    Ok(Arc::new(ProjectionExec::try_new(exprs, plan)?))
+}
+
+fn apply_projection_indices(
+    plan: Arc<dyn ExecutionPlan>,
+    projection: &[usize],
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    let schema = plan.schema();
+    let exprs = projection
+        .iter()
+        .map(|index| {
+            let field = schema.fields().get(*index).ok_or_else(|| {
+                ExecutionError::InternalError(format!("projection index {} out of bounds", index))
+            })?;
+            Column::new_with_schema(field.name(), schema.as_ref())
+                .map(|expr| {
+                    (
+                        Arc::new(expr) as Arc<dyn PhysicalExpr>,
+                        field.name().clone(),
+                    )
+                })
+                .map_err(ExecutionError::DataFusionError)
+        })
+        .collect::<ExecutionResult<Vec<_>>>()?;
+    Ok(Arc::new(ProjectionExec::try_new(exprs, plan)?))
+}
+
 fn create_merge_input(
     plan: &Arc<dyn ExecutionPlan>,
     graph: &mut JobGraph,
@@ -263,7 +426,7 @@ fn create_merge_input(
         plan,
         group: String::new(),
         mode: OutputMode::Pipelined,
-        distribution: OutputDistribution::RoundRobin { channels: 1 },
+        outputs: vec![OutputDistribution::RoundRobin { channels: 1 }],
         placement: TaskPlacement::Worker,
     };
     let s = graph.stages.len();
@@ -271,6 +434,7 @@ fn create_merge_input(
     Ok(Arc::new(StageInputExec::new(
         StageInput {
             stage: s,
+            output: 0,
             mode: InputMode::Merge,
         },
         schema,
@@ -297,7 +461,7 @@ fn create_shuffle(
         plan,
         group: String::new(),
         mode: OutputMode::Pipelined,
-        distribution,
+        outputs: vec![distribution],
         placement: TaskPlacement::Worker,
     };
     let s = graph.stages.len();
@@ -307,7 +471,11 @@ fn create_shuffle(
         ShuffleConsumption::Multiple => InputMode::Broadcast,
     };
     Ok(Arc::new(StageInputExec::new(
-        StageInput { stage: s, mode },
+        StageInput {
+            stage: s,
+            output: 0,
+            mode,
+        },
         schema,
         partitioning.clone(),
     )))
@@ -346,7 +514,7 @@ fn create_driver_stage(
         plan: plan.clone(),
         group: String::new(),
         mode: OutputMode::Pipelined,
-        distribution: OutputDistribution::RoundRobin { channels: 1 },
+        outputs: vec![OutputDistribution::RoundRobin { channels: 1 }],
         placement: TaskPlacement::Driver,
     };
     let s = graph.stages.len();
@@ -354,9 +522,95 @@ fn create_driver_stage(
     Ok(Arc::new(StageInputExec::new(
         StageInput {
             stage: s,
+            output: 0,
             mode: InputMode::Forward,
         },
         schema,
         partitioning,
     )))
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used, reason = "tests use unwrap for brevity")]
+#[expect(clippy::panic, reason = "tests may use panic for unreachable branches")]
+mod tests {
+    use super::*;
+    use datafusion::arrow::array::Int32Array;
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::physical_expr::expressions::Column;
+    use datafusion::physical_plan::joins::JoinOn;
+    use datafusion::physical_plan::test::TestMemoryExec;
+    use sail_physical_plan::distributed_collect_left_join::DistributedCollectLeftJoinExec;
+
+    fn make_exec(schema: Arc<Schema>, partitions: usize) -> Arc<dyn ExecutionPlan> {
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )
+        .unwrap();
+        let data = vec![vec![batch]; partitions];
+        TestMemoryExec::try_new_exec(&data, schema, None).unwrap()
+    }
+
+    fn build_join_on(left: &Arc<dyn ExecutionPlan>, right: &Arc<dyn ExecutionPlan>) -> JoinOn {
+        let left_expr = Arc::new(Column::new_with_schema("id", left.schema().as_ref()).unwrap());
+        let right_expr = Arc::new(Column::new_with_schema("id", right.schema().as_ref()).unwrap());
+        vec![(left_expr, right_expr)]
+    }
+
+    #[test]
+    fn job_graph_handles_distributed_collect_left_join_types() {
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let left = make_exec(schema.clone(), 1);
+        let right = make_exec(schema.clone(), 2);
+        let join_on = build_join_on(&left, &right);
+        let join_types = vec![
+            JoinType::Left,
+            JoinType::Full,
+            JoinType::LeftSemi,
+            JoinType::LeftAnti,
+            JoinType::LeftMark,
+        ];
+        for join_type in join_types {
+            let join = DistributedCollectLeftJoinExec::try_new(
+                left.clone(),
+                right.clone(),
+                join_on.clone(),
+                None,
+                join_type,
+                None,
+                datafusion::common::NullEquality::NullEqualsNothing,
+            )
+            .unwrap();
+            let graph = JobGraph::try_new(Arc::new(join));
+            assert!(graph.is_ok(), "job graph should build for {join_type}");
+        }
+    }
+
+    #[test]
+    fn fallback_rewrites_collect_left_hash_join() {
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let left = make_exec(schema.clone(), 1);
+        let right = make_exec(schema.clone(), 2);
+        let join_on = build_join_on(&left, &right);
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            join_on,
+            None,
+            &JoinType::Left,
+            None,
+            PartitionMode::CollectLeft,
+            datafusion::common::NullEquality::NullEqualsNothing,
+        )
+        .unwrap();
+        let rewritten =
+            ensure_partitioned_hash_join_if_build_side_emits_unmatched_rows(Arc::new(join))
+                .unwrap();
+        let Some(join) = rewritten.as_any().downcast_ref::<HashJoinExec>() else {
+            panic!("expected HashJoinExec after rewrite");
+        };
+        assert_eq!(join.mode, PartitionMode::Partitioned);
+    }
 }

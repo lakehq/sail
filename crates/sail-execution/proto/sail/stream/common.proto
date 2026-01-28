@@ -7,5 +7,6 @@ message TaskStreamTicket {
   uint64 stage = 2;
   uint64 partition = 3;
   uint64 attempt = 4;
-  uint64 channel = 5;
+  uint64 output = 5;
+  uint64 channel = 6;
 }

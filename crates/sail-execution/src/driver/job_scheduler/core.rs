@@ -397,7 +397,10 @@ impl JobScheduler {
                 continue;
             }
             let partitions = stage.plan.output_partitioning().partition_count();
-            let channels = stage.distribution.channels();
+            let Some(stage_output) = stage.outputs.get(0) else {
+                continue;
+            };
+            let channels = stage_output.channels();
             for p in 0..partitions {
                 let Some((attempt, head)) = job.stages[s].tasks[p].attempts.split_last_mut() else {
                     continue;
@@ -414,6 +417,7 @@ impl JobScheduler {
                         stage: s,
                         partition: p,
                         attempt: head.len(),
+                        output: 0,
                         channel: c,
                     };
                     actions.push(JobAction::ExtendJobOutput {
@@ -535,11 +539,11 @@ impl JobScheduler {
             .iter()
             .map(|input| self.get_task_input(job, key, input, assignments))
             .collect::<ExecutionResult<Vec<_>>>()?;
-        let output = self.get_task_output(job, key, stage)?;
+        let outputs = self.get_task_outputs(job, key, stage)?;
         let definition = TaskDefinition {
             plan: Arc::from(plan),
             inputs,
-            output,
+            outputs,
         };
         Ok((definition, context.clone()))
     }
@@ -597,8 +601,30 @@ impl JobScheduler {
                 key.job_id, input.stage
             )));
         };
+        let consumer_partitions = job
+            .graph
+            .stages()
+            .get(key.stage)
+            .ok_or_else(|| {
+                ExecutionError::InvalidArgument(format!(
+                    "job {} stage {} not found",
+                    key.job_id, key.stage
+                ))
+            })?
+            .plan
+            .output_partitioning()
+            .partition_count();
         let partitions = producer.plan.output_partitioning().partition_count();
-        let channels = producer.distribution.channels();
+        let channels = producer
+            .outputs
+            .get(input.output)
+            .ok_or_else(|| {
+                ExecutionError::InternalError(format!(
+                    "input stage {} output {} not found",
+                    input.stage, input.output
+                ))
+            })?
+            .channels();
         let keys = match input.mode {
             InputMode::Forward | InputMode::Merge => (0..partitions)
                 .map(|partition| {
@@ -607,6 +633,7 @@ impl JobScheduler {
                             Ok(TaskInputKey {
                                 partition,
                                 attempt: latest_attempt(input.stage, partition)?,
+                                output: input.output,
                                 channel,
                             })
                         })
@@ -622,6 +649,7 @@ impl JobScheduler {
                             Ok(TaskInputKey {
                                 partition,
                                 attempt: latest_attempt(input.stage, partition)?,
+                                output: input.output,
                                 channel,
                             })
                         })
@@ -635,12 +663,13 @@ impl JobScheduler {
                             Ok(TaskInputKey {
                                 partition,
                                 attempt: latest_attempt(input.stage, partition)?,
+                                output: input.output,
                                 channel,
                             })
                         })
                     })
                     .collect::<ExecutionResult<Vec<_>>>()?;
-                vec![keys]
+                vec![keys; consumer_partitions]
             }
         };
         let locator = match producer.mode {
@@ -704,32 +733,38 @@ impl JobScheduler {
         Ok(TaskInput { locator })
     }
 
-    fn get_task_output(
+    fn get_task_outputs(
         &self,
         job: &JobDescriptor,
         key: &TaskKey,
         stage: &Stage,
-    ) -> ExecutionResult<TaskOutput> {
-        let replicas = job.graph.replicas(key.stage);
-        let distribution = match &stage.distribution {
-            OutputDistribution::Hash { keys, channels } => {
-                let keys = keys
-                    .iter()
-                    .map(|expr| {
-                        let expr =
-                            serialize_physical_expr(expr, self.codec.as_ref())?.encode_to_vec();
-                        Ok(Arc::from(expr))
-                    })
-                    .collect::<ExecutionResult<Vec<Arc<[u8]>>>>()?;
-                TaskOutputDistribution::Hash {
-                    keys,
-                    channels: *channels,
-                }
-            }
-            OutputDistribution::RoundRobin { channels } => TaskOutputDistribution::RoundRobin {
-                channels: *channels,
-            },
-        };
+    ) -> ExecutionResult<Vec<TaskOutput>> {
+        let max_channels = stage
+            .outputs
+            .iter()
+            .map(|output| output.channels())
+            .max()
+            .unwrap_or(1);
+        let replicas = job
+            .graph
+            .replicas(key.stage)
+            .max(self.options.task_max_attempts)
+            .max(max_channels);
+        log::debug!(
+            "task outputs: job={}, stage={}, replicas={}, outputs={}, max_attempts={}, max_channels={}",
+            key.job_id,
+            key.stage,
+            replicas,
+            stage.outputs.len(),
+            self.options.task_max_attempts,
+            max_channels
+        );
+        if stage.outputs.is_empty() {
+            return Err(ExecutionError::InternalError(format!(
+                "stage {} has no outputs",
+                key.stage
+            )));
+        }
         let locator = match stage.mode {
             OutputMode::Pipelined => TaskOutputLocator::Local { replicas },
             OutputMode::Blocking => {
@@ -737,10 +772,37 @@ impl JobScheduler {
                 TaskOutputLocator::Remote { uri }
             }
         };
-        Ok(TaskOutput {
-            distribution,
-            locator,
-        })
+        stage
+            .outputs
+            .iter()
+            .map(|output| {
+                let distribution = match output {
+                    OutputDistribution::Hash { keys, channels } => {
+                        let keys = keys
+                            .iter()
+                            .map(|expr| {
+                                let expr = serialize_physical_expr(expr, self.codec.as_ref())?
+                                    .encode_to_vec();
+                                Ok(Arc::from(expr))
+                            })
+                            .collect::<ExecutionResult<Vec<Arc<[u8]>>>>()?;
+                        TaskOutputDistribution::Hash {
+                            keys,
+                            channels: *channels,
+                        }
+                    }
+                    OutputDistribution::RoundRobin { channels } => {
+                        TaskOutputDistribution::RoundRobin {
+                            channels: *channels,
+                        }
+                    }
+                };
+                Ok(TaskOutput {
+                    distribution,
+                    locator: locator.clone(),
+                })
+            })
+            .collect::<ExecutionResult<Vec<_>>>()
     }
 
     fn get_latest_task_attempt(

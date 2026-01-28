@@ -98,9 +98,17 @@ impl JobDescriptor {
                     .iter()
                     .map(|x| sail_common_datafusion::system::types::StageInput {
                         stage: x.stage as u64,
+                        output: x.output as u64,
                         mode: x.mode.to_string(),
                     })
                     .collect();
+                let outputs = stage
+                    .outputs
+                    .iter()
+                    .enumerate()
+                    .map(|(index, output)| format!("{index}:{output}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 StageSnapshot {
                     job_id: job_id.into(),
                     stage: s as u64,
@@ -108,7 +116,7 @@ impl JobDescriptor {
                     inputs,
                     group: stage.group.clone(),
                     mode: stage.mode.to_string(),
-                    distribution: stage.distribution.to_string(),
+                    distribution: outputs,
                     placement: stage.placement.to_string(),
                     status: descriptor.state.status().to_string(),
                     created_at: descriptor.created_at,

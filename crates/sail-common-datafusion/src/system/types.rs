@@ -51,6 +51,7 @@ impl_numeric_type!(f64, DataType::Float64);
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StageInput {
     pub stage: u64,
+    pub output: u64,
     pub mode: String,
 }
 
@@ -60,6 +61,7 @@ pub(crate) fn stage_input_list() -> DataType {
         DataType::Struct(
             vec![
                 Field::new("stage", DataType::UInt64, false),
+                Field::new("output", DataType::UInt64, false),
                 Field::new("mode", DataType::Utf8, false),
             ]
             .into(),

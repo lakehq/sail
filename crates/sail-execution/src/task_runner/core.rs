@@ -24,7 +24,7 @@ use crate::codec::RemoteExecutionCodec;
 use crate::driver::TaskStatus;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{TaskKey, TaskKeyDisplay};
-use crate::plan::{ShuffleReadExec, ShuffleWriteExec, StageInputExec};
+use crate::plan::{MultiShuffleWriteExec, ShuffleReadExec, ShuffleWriteExec, StageInputExec};
 use crate::stream_accessor::{StreamAccessor, StreamAccessorMessage};
 use crate::task::definition::{TaskDefinition, TaskInput, TaskOutput};
 use crate::task_runner::monitor::TaskMonitor;
@@ -90,7 +90,7 @@ impl TaskRunner {
             ctx,
             key,
             &definition.inputs,
-            &definition.output,
+            &definition.outputs,
             plan,
             &context,
         )?;
@@ -136,7 +136,7 @@ impl TaskRunner {
         ctx: &mut ActorContext<T>,
         key: &TaskKey,
         inputs: &[TaskInput],
-        output: &TaskOutput,
+        outputs: &[TaskOutput],
         plan: Arc<dyn ExecutionPlan>,
         context: &TaskContext,
     ) -> ExecutionResult<Arc<dyn ExecutionPlan>>
@@ -170,18 +170,44 @@ impl TaskRunner {
         let plan = result.data()?;
         let schema = plan.schema();
         let accessor = StreamAccessor::new(handle.clone());
-        let mut locations = vec![vec![]; plan.output_partitioning().partition_count()];
-        match locations.get_mut(key.partition) {
-            Some(x) => x.extend(output.locations(key)),
-            None => {
-                return Err(ExecutionError::InternalError(format!(
-                    "invalid partition: {}",
-                    TaskKeyDisplay(key)
-                )));
-            }
-        };
-        let partitioning = output.partitioning(context, &schema, self.codec.as_ref())?;
-        let shuffle = ShuffleWriteExec::new(plan, locations, Arc::new(accessor), partitioning);
+        let partition_count = plan.output_partitioning().partition_count();
+        if outputs.is_empty() {
+            return Err(ExecutionError::InternalError(format!(
+                "task {} has no outputs",
+                TaskKeyDisplay(key)
+            )));
+        }
+        if outputs.len() == 1 {
+            let mut locations = vec![vec![]; partition_count];
+            match locations.get_mut(key.partition) {
+                Some(x) => x.extend(outputs[0].locations(key, 0)),
+                None => {
+                    return Err(ExecutionError::InternalError(format!(
+                        "invalid partition: {}",
+                        TaskKeyDisplay(key)
+                    )));
+                }
+            };
+            let partitioning = outputs[0].partitioning(context, &schema, self.codec.as_ref())?;
+            let shuffle = ShuffleWriteExec::new(plan, locations, Arc::new(accessor), partitioning);
+            return Ok(Arc::new(shuffle));
+        }
+        let mut multi_outputs = Vec::with_capacity(outputs.len());
+        for (index, output) in outputs.iter().enumerate() {
+            let mut locations = vec![vec![]; partition_count];
+            match locations.get_mut(key.partition) {
+                Some(x) => x.extend(output.locations(key, index)),
+                None => {
+                    return Err(ExecutionError::InternalError(format!(
+                        "invalid partition: {}",
+                        TaskKeyDisplay(key)
+                    )));
+                }
+            };
+            let partitioning = output.partitioning(context, &schema, self.codec.as_ref())?;
+            multi_outputs.push((partitioning, locations));
+        }
+        let shuffle = MultiShuffleWriteExec::new(plan, multi_outputs, Arc::new(accessor));
         Ok(Arc::new(shuffle))
     }
 }

@@ -1,3 +1,4 @@
+pub mod distributed_collect_left_join;
 pub mod file_delete;
 pub mod file_write;
 pub mod format_tag;

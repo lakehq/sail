@@ -5,7 +5,7 @@ package sail.task;
 message TaskDefinition {
   bytes plan = 1;
   repeated TaskInput inputs = 2;
-  TaskOutput output = 3;
+  repeated TaskOutput outputs = 3;
 }
 
 message TaskInput {
@@ -28,7 +28,8 @@ message TaskInputDriverLocator {
 message TaskInputDriverKey {
   uint64 partition = 2;
   uint64 attempt = 3;
-  uint64 channel = 4;
+  uint64 output = 4;
+  uint64 channel = 5;
 }
 
 message TaskInputDriverKeyList {
@@ -44,7 +45,8 @@ message TaskInputWorkerKey {
   uint64 worker_id = 1;
   uint64 partition = 2;
   uint64 attempt = 3;
-  uint64 channel = 4;
+  uint64 output = 4;
+  uint64 channel = 5;
 }
 
 message TaskInputWorkerKeyList {
@@ -60,7 +62,8 @@ message TaskInputRemoteLocator {
 message TaskInputRemoteKey {
   uint64 partition = 1;
   uint64 attempt = 2;
-  uint64 channel = 3;
+  uint64 output = 3;
+  uint64 channel = 4;
 }
 
 message TaskInputRemoteKeyList {

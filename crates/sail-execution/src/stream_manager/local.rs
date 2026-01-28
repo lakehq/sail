@@ -23,6 +23,7 @@ pub trait LocalStream: Send {
 pub(crate) struct MemoryStream {
     sender: Option<MemoryStreamReplicaSender>,
     receivers: Vec<mpsc::Receiver<TaskStreamResult<RecordBatch>>>,
+    total_replicas: usize,
 }
 
 impl MemoryStream {
@@ -44,6 +45,7 @@ impl MemoryStream {
         Self {
             sender: Some(MemoryStreamReplicaSender { senders }),
             receivers,
+            total_replicas: replicas,
         }
     }
 }
@@ -57,9 +59,17 @@ impl LocalStream for MemoryStream {
     }
 
     fn subscribe(&mut self) -> ExecutionResult<TaskStreamSource> {
+        let remaining = self.receivers.len();
         let rx = self.receivers.pop().ok_or_else(|| {
-            ExecutionError::InternalError("memory stream has exhausted all replica(s)".to_string())
+            ExecutionError::InternalError(format!(
+                "memory stream has exhausted all replica(s): total={}, remaining=0",
+                self.total_replicas
+            ))
         })?;
+        debug!(
+            "memory stream subscribe: total_replicas={}, remaining_before={}",
+            self.total_replicas, remaining
+        );
         Ok(Box::pin(ReceiverStream::new(rx)))
     }
 }
