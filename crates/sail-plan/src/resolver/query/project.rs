@@ -155,10 +155,10 @@ impl PlanResolver<'_> {
                 Expr::ScalarFunction(ScalarFunction { func, args }) => {
                     if func.inner().as_any().is::<MultiExpr>() {
                         // The metadata from the original expression are ignored.
-                        // For wildcard-derived MultiExpr (multiple names matching args count),
+                        // For wildcard-derived MultiExpr (names count matching args count),
                         // pair original names with args. For function-derived MultiExpr
-                        // (single name regardless of args count), extract aliases from args.
-                        if name.len() == args.len() && name.len() > 1 {
+                        // (different name count from args count), extract aliases from args.
+                        if name.len() == args.len() {
                             for (name, arg) in name.into_iter().zip(args) {
                                 out.push(NamedExpr::new(vec![name], arg));
                             }
