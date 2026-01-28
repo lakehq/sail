@@ -328,6 +328,8 @@ impl ExecutionPlan for DeltaLogReplayExec {
         // The streaming replay logic relies on all rows for the same `COL_REPLAY_PATH`
         // being adjacent within each partition, so we require a local ordering by
         // (COL_REPLAY_PATH ASC, COL_LOG_VERSION DESC).
+        // TODO: Add COL_LOG_IS_REMOVE ASC as a tie-breaker so Add beats Remove within
+        // the same path/version (needed for DV updates: Remove(old dv) + Add(new dv)).
         let replay_idx = match self.input.schema().index_of(COL_REPLAY_PATH) {
             Ok(i) => i,
             Err(_) => return vec![None],

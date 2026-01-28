@@ -384,6 +384,8 @@ pub async fn build_log_replay_pipeline_with_options(
 
     // Ensure per-partition ordering on (replay_path, log_version desc) so DeltaLogReplayExec can
     // stream without materializing the full active set in memory. SortExec can spill.
+    // TODO: Add COL_LOG_IS_REMOVE ASC as a tie-breaker so Add sorts ahead of Remove for the
+    // same path/version (DV updates emit Remove+Add in one commit).
     let ordering = LexOrdering::new(vec![
         PhysicalSortExpr {
             expr: Arc::new(Column::new(COL_REPLAY_PATH, replay_path_idx)),
