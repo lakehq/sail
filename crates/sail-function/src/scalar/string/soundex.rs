@@ -62,16 +62,24 @@ impl ScalarUDFImpl for Soundex {
     }
 }
 
-/// Maps a character to its Soundex digit code (1-6), or None for vowels/H/W/Y.
-fn soundex_code(c: char) -> Option<char> {
+/// Represents character categories in Soundex algorithm.
+enum SoundexChar {
+    Code(char),
+    Separator,
+    Ignored,
+}
+
+/// Classifies a character for Soundex processing.
+fn classify_char(c: char) -> SoundexChar {
     match c.to_ascii_uppercase() {
-        'B' | 'F' | 'P' | 'V' => Some('1'),
-        'C' | 'G' | 'J' | 'K' | 'Q' | 'S' | 'X' | 'Z' => Some('2'),
-        'D' | 'T' => Some('3'),
-        'L' => Some('4'),
-        'M' | 'N' => Some('5'),
-        'R' => Some('6'),
-        _ => None,
+        'B' | 'F' | 'P' | 'V' => SoundexChar::Code('1'),
+        'C' | 'G' | 'J' | 'K' | 'Q' | 'S' | 'X' | 'Z' => SoundexChar::Code('2'),
+        'D' | 'T' => SoundexChar::Code('3'),
+        'L' => SoundexChar::Code('4'),
+        'M' | 'N' => SoundexChar::Code('5'),
+        'R' => SoundexChar::Code('6'),
+        'H' | 'W' => SoundexChar::Ignored,
+        _ => SoundexChar::Separator,
     }
 }
 
@@ -87,19 +95,27 @@ fn compute_soundex(s: &str) -> String {
     let mut result = String::with_capacity(4);
     result.push(first_char);
 
-    let mut last_code = soundex_code(first_char);
+    let mut last_code = match classify_char(first_char) {
+        SoundexChar::Code(c) => Some(c),
+        _ => None,
+    };
 
     for c in chars {
         if result.len() >= 4 {
             break;
         }
 
-        let code = soundex_code(c);
-        if let Some(c) = code {
-            if code != last_code {
-                result.push(c);
+        match classify_char(c) {
+            SoundexChar::Code(code) => {
+                if last_code != Some(code) {
+                    result.push(code);
+                }
+                last_code = Some(code);
             }
-            last_code = code;
+            SoundexChar::Separator => {
+                last_code = None;
+            }
+            SoundexChar::Ignored => {}
         }
     }
 
