@@ -33,17 +33,14 @@ use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use delta_kernel::engine::arrow_conversion::TryIntoKernel;
 use delta_kernel::schema::StructType;
 use futures::stream::{self, StreamExt};
-use futures::TryStreamExt;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
-use crate::kernel::models::{Action, Add, Metadata, Protocol, RemoveOptions};
+use crate::kernel::models::{Action, Metadata, Protocol};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::physical_plan::action_schema::CommitMeta;
-use crate::physical_plan::{
-    current_timestamp_millis, decode_actions_and_meta_from_batch, COL_ACTION,
-};
+use crate::physical_plan::{decode_actions_and_meta_from_batch, COL_ACTION};
 use crate::schema::normalize_delta_schema;
 use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::{create_delta_table_with_object_store, open_table_with_object_store};
@@ -202,8 +199,6 @@ impl ExecutionPlan for DeltaCommitExec {
         let partition_columns = self.partition_columns.clone();
         let table_exists = self.table_exists;
         let sink_schema = self.sink_schema.clone();
-        let sink_mode = self.sink_mode.clone();
-
         let schema = self.schema();
         let future = async move {
             let _elapsed_compute_timer = elapsed_compute.timer();
@@ -276,34 +271,6 @@ impl ExecutionPlan for DeltaCommitExec {
                 let array = Arc::new(UInt64Array::from(vec![0]));
                 let batch = RecordBatch::try_new(schema, vec![array])?;
                 return Ok(batch);
-            }
-
-            // Handle full table overwrite
-            if matches!(sink_mode, PhysicalSinkMode::Overwrite) && table_exists {
-                let snapshot = table
-                    .snapshot()
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let all_files: Vec<Add> = snapshot
-                    .snapshot()
-                    .files(table.log_store().as_ref(), None)
-                    .map_ok(|view| view.add_action())
-                    .try_collect()
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let deletion_timestamp = current_timestamp_millis()?;
-                let remove_actions = all_files
-                    .into_iter()
-                    .map(|add| {
-                        Action::Remove(add.into_remove_with_options(
-                            deletion_timestamp,
-                            RemoveOptions {
-                                extended_file_metadata: Some(true),
-                                include_tags: false,
-                            },
-                        ))
-                    })
-                    .collect::<Vec<_>>();
-                actions.extend(remove_actions);
             }
 
             // Prepend initial actions

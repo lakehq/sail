@@ -5,6 +5,7 @@ use datafusion::functions::regex::regexpcount::RegexpCountFunc;
 use datafusion::functions::regex::regexpinstr::RegexpInstrFunc;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::{cast, expr, lit, try_cast, when, ExprSchemable};
+use datafusion_functions_nested::expr_fn::array_element;
 use datafusion_spark::function::string::elt::SparkElt;
 use datafusion_spark::function::string::expr_fn as string_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -25,6 +26,29 @@ use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
 fn regexp_replace(string: expr::Expr, pattern: expr::Expr, replacement: expr::Expr) -> expr::Expr {
     regex_fn::regexp_replace(string, pattern, replacement, Some(lit("g")))
+}
+
+fn regexp_extract(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput { mut arguments, .. } = input;
+    // regexp_extract(str, pattern, idx) - idx defaults to 1
+    let idx = if arguments.len() == 3 {
+        arguments
+            .pop()
+            .ok_or_else(|| PlanError::invalid("regexp_extract requires 2 or 3 arguments"))?
+    } else {
+        lit(1i64)
+    };
+    let (string, pattern) = arguments
+        .two()
+        .map_err(|_| PlanError::invalid("regexp_extract requires 2 or 3 arguments"))?;
+    // Wrap pattern with an outer capture group so idx=0 (entire match) works.
+    // After wrapping, regexp_match returns [entire_match, group1, group2, ...].
+    let wrapped_pattern = expr_fn::concat_ws(lit(""), vec![lit("("), pattern, lit(")")]);
+    let matches = regex_fn::regexp_match(string, wrapped_pattern, None);
+    // array_element is 1-indexed; +1 accounts for the outer group we added.
+    let element = array_element(matches, idx + lit(1i64));
+    // Spark returns "" instead of NULL when no match.
+    Ok(expr_fn::coalesce(vec![element, lit("")]))
 }
 
 fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -245,7 +269,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("printf", F::unknown("printf")),
         ("randstr", F::udf(Randstr::new())),
         ("regexp_count", F::udf(RegexpCountFunc::new())),
-        ("regexp_extract", F::unknown("regexp_extract")),
+        ("regexp_extract", F::custom(regexp_extract)),
         ("regexp_extract_all", F::unknown("regexp_extract_all")),
         ("regexp_instr", F::udf(RegexpInstrFunc::new())),
         ("regexp_replace", F::ternary(regexp_replace)),

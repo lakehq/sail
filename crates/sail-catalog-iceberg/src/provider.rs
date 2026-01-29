@@ -15,9 +15,9 @@ use std::sync::Arc;
 
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::provider::{
-    CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions,
-    CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions,
-    DropViewOptions, Namespace,
+    CatalogPartitionField, CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions,
+    CreateTableOptions, CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions,
+    DropTableOptions, DropViewOptions, Namespace, PartitionTransform,
 };
 use sail_catalog::utils::get_property;
 use sail_common_datafusion::catalog::{
@@ -149,6 +149,7 @@ impl IcebergRestCatalogProvider {
         Ok((client, merged_catalog_config))
     }
 
+    /// Converts an Iceberg REST API table load result into a catalog `TableStatus`.
     fn load_table_result_to_status(
         &self,
         table_name: &str,
@@ -185,29 +186,10 @@ impl IcebergRestCatalogProvider {
             partition_statistics,
         } = *result.metadata;
 
-        let current_schema = if let Some(schemas) = &schemas {
-            if let Some(schema_id) = current_schema_id {
-                schemas
-                    .iter()
-                    .find(|s| s.schema_id == Some(schema_id))
-                    .or_else(|| schemas.last())
-            } else {
-                schemas.last()
-            }
-        } else {
-            None
-        };
-
-        let default_partition_spec = partition_specs.as_ref().and_then(|specs| {
-            if let Some(spec_id) = default_spec_id {
-                specs
-                    .iter()
-                    .find(|s| s.spec_id == Some(spec_id))
-                    .or_else(|| specs.last())
-            } else {
-                specs.last()
-            }
-        });
+        let current_schema =
+            find_by_id_or_last(schemas.as_ref(), current_schema_id, |s| s.schema_id);
+        let default_partition_spec =
+            find_by_id_or_last(partition_specs.as_ref(), default_spec_id, |s| s.spec_id);
 
         let partition_field_ids: std::collections::HashSet<i32> = default_partition_spec
             .map(|spec| spec.fields.iter().map(|f| f.source_id).collect())
@@ -254,16 +236,10 @@ impl IcebergRestCatalogProvider {
             Vec::new()
         };
 
-        let default_sort_order = sort_orders.as_ref().and_then(|orders| {
-            if let Some(order_id) = default_sort_order_id {
-                orders
-                    .iter()
-                    .find(|o| o.order_id == order_id)
-                    .or_else(|| orders.last())
-            } else {
-                orders.last()
-            }
-        });
+        let default_sort_order =
+            find_by_id_or_last(sort_orders.as_ref(), default_sort_order_id, |o| {
+                Some(o.order_id)
+            });
 
         let sort_by: Vec<CatalogTableSort> = default_sort_order
             .map(|order| {
@@ -348,67 +324,44 @@ impl IcebergRestCatalogProvider {
             format_version.to_string(),
         );
         properties.insert("metadata.table-uuid".to_string(), table_uuid);
-        if let Some(last_updated_ms) = last_updated_ms {
-            properties.insert(
-                "metadata.last-updated-ms".to_string(),
-                last_updated_ms.to_string(),
-            );
+
+        if let Some(v) = last_updated_ms {
+            properties.insert("metadata.last-updated-ms".to_string(), v.to_string());
         }
-        if let Some(next_row_id) = next_row_id {
-            properties.insert("metadata.next-row-id".to_string(), next_row_id.to_string());
+        if let Some(v) = next_row_id {
+            properties.insert("metadata.next-row-id".to_string(), v.to_string());
         }
-        if let Some(current_schema_id) = current_schema_id {
-            properties.insert(
-                "metadata.current-schema-id".to_string(),
-                current_schema_id.to_string(),
-            );
+        if let Some(v) = current_schema_id {
+            properties.insert("metadata.current-schema-id".to_string(), v.to_string());
         }
-        if let Some(last_column_id) = last_column_id {
-            properties.insert(
-                "metadata.last-column-id".to_string(),
-                last_column_id.to_string(),
-            );
+        if let Some(v) = last_column_id {
+            properties.insert("metadata.last-column-id".to_string(), v.to_string());
         }
-        if let Some(default_spec_id) = default_spec_id {
-            properties.insert(
-                "metadata.default-spec-id".to_string(),
-                default_spec_id.to_string(),
-            );
+        if let Some(v) = default_spec_id {
+            properties.insert("metadata.default-spec-id".to_string(), v.to_string());
         }
-        if let Some(last_partition_id) = last_partition_id {
-            properties.insert(
-                "metadata.last-partition-id".to_string(),
-                last_partition_id.to_string(),
-            );
+        if let Some(v) = last_partition_id {
+            properties.insert("metadata.last-partition-id".to_string(), v.to_string());
         }
-        if let Some(default_sort_order_id) = default_sort_order_id {
-            properties.insert(
-                "metadata.default-sort-order-id".to_string(),
-                default_sort_order_id.to_string(),
-            );
+        if let Some(v) = default_sort_order_id {
+            properties.insert("metadata.default-sort-order-id".to_string(), v.to_string());
         }
-        if let Some(current_snapshot_id) = current_snapshot_id {
-            properties.insert(
-                "metadata.current-snapshot-id".to_string(),
-                current_snapshot_id.to_string(),
-            );
+        if let Some(v) = current_snapshot_id {
+            properties.insert("metadata.current-snapshot-id".to_string(), v.to_string());
         }
-        if let Some(last_sequence_number) = last_sequence_number {
-            properties.insert(
-                "metadata.last-sequence-number".to_string(),
-                last_sequence_number.to_string(),
-            );
+        if let Some(v) = last_sequence_number {
+            properties.insert("metadata.last-sequence-number".to_string(), v.to_string());
         }
-        if let Some(statistics) = statistics {
+        if let Some(v) = statistics {
             properties.insert(
                 "metadata.statistics".to_string(),
-                serde_json::to_string(&statistics).unwrap_or_default(),
+                serde_json::to_string(&v).unwrap_or_default(),
             );
         }
-        if let Some(partition_statistics) = partition_statistics {
+        if let Some(v) = partition_statistics {
             properties.insert(
                 "metadata.partition-statistics".to_string(),
-                serde_json::to_string(&partition_statistics).unwrap_or_default(),
+                serde_json::to_string(&v).unwrap_or_default(),
             );
         }
 
@@ -762,47 +715,10 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             ));
         }
 
-        let mut fields = Vec::new();
-        for (idx, col) in columns.iter().enumerate() {
-            let CreateTableColumnOptions {
-                name,
-                data_type,
-                nullable,
-                comment,
-                default: _,
-                generated_always_as: _, // TODO: Support generated_always_as
-            } = col;
-            let field_id = idx as i32 + 1; // FIXME: Is this wrong?
-            let field_type = arrow_type_to_iceberg(data_type).map_err(|e| {
-                CatalogError::External(format!(
-                    "Failed to convert Arrow type to Iceberg type for column '{name}': {e}"
-                ))
-            })?;
-
-            // TODO: `default` is not supported until Iceberg V3
-            // let default_literal = if let Some(default) = default {
-            //     let json_default: serde_json::Value =
-            //         serde_json::from_str(default).map_err(|e| {
-            //             CatalogError::External(format!(
-            //                 "Failed to parse default value as JSON for column '{name}': {e}"
-            //             ))
-            //         })?;
-            //     Literal::try_from_json(json_default.clone(), &field_type).map_err(|e| {
-            //         CatalogError::External(format!(
-            //             "Failed to convert default value to Iceberg literal for column '{name}': {e}"
-            //         ))
-            //     })?
-            // } else {
-            //     None
-            // };
-            let mut field = NestedField::new(field_id, name.clone(), field_type, !nullable);
-            if let Some(comment) = comment {
-                field = field.with_doc(comment);
-            }
-            fields.push(Arc::new(field));
-        }
+        let fields = columns_to_nested_fields(&columns)?;
 
         let struct_type = StructType::new(fields.clone());
+
         let (name_to_id, _id_to_name) =
             sail_iceberg::spec::SchemaBuilder::build_name_indexes(&struct_type);
 
@@ -1171,21 +1087,98 @@ impl CatalogProvider for IcebergRestCatalogProvider {
     }
 }
 
+/// Finds an item by ID, falling back to the last item if not found or no ID is provided.
+fn find_by_id_or_last<'a, T, F>(
+    items: Option<&'a Vec<T>>,
+    id: Option<i32>,
+    get_id: F,
+) -> Option<&'a T>
+where
+    F: Fn(&T) -> Option<i32>,
+{
+    items.and_then(|items| {
+        if let Some(id) = id {
+            items
+                .iter()
+                .find(|item| get_id(item) == Some(id))
+                .or_else(|| items.last())
+        } else {
+            items.last()
+        }
+    })
+}
+
+/// Converts table column options to Iceberg nested fields.
+fn columns_to_nested_fields(
+    columns: &[CreateTableColumnOptions],
+) -> CatalogResult<Vec<Arc<NestedField>>> {
+    let mut fields = Vec::new();
+    for (idx, col) in columns.iter().enumerate() {
+        let CreateTableColumnOptions {
+            name,
+            data_type,
+            nullable,
+            comment,
+            default: _,
+            generated_always_as: _,
+        } = col;
+        let field_id = idx as i32 + 1; // FIXME: Is this wrong?
+        let field_type = arrow_type_to_iceberg(data_type).map_err(|e| {
+            CatalogError::External(format!(
+                "Failed to convert Arrow type to Iceberg type for column '{name}': {e}"
+            ))
+        })?;
+        // TODO: `default` is not supported until Iceberg V3
+        let mut field = NestedField::new(field_id, name.clone(), field_type, !nullable);
+        if let Some(comment) = comment {
+            field = field.with_doc(comment);
+        }
+        fields.push(Arc::new(field));
+    }
+    Ok(fields)
+}
+
+/// Builds an Iceberg partition spec from partition fields and their field ID mappings.
 fn build_partition_spec(
-    partition_by: &[String],
+    partition_by: &[CatalogPartitionField],
     name_to_id: &HashMap<String, i32>,
 ) -> Option<Box<crate::models::PartitionSpec>> {
     if partition_by.is_empty() {
         return None;
     }
     let mut partition_spec_builder = sail_iceberg::PartitionSpec::builder();
-    for partition_by_col in partition_by {
-        if let Some(&source_id) = name_to_id.get(partition_by_col) {
-            partition_spec_builder = partition_spec_builder.add_field(
-                source_id,
-                partition_by_col,
-                sail_iceberg::Transform::Identity, // FIXME: This is wrong, col needs to be parsed.
-            );
+    for field in partition_by {
+        if let Some(&source_id) = name_to_id.get(&field.column) {
+            let (transform, name) = match &field.transform {
+                None | Some(PartitionTransform::Identity) => {
+                    (sail_iceberg::Transform::Identity, field.column.clone())
+                }
+                Some(PartitionTransform::Year) => (
+                    sail_iceberg::Transform::Year,
+                    format!("{}_year", field.column),
+                ),
+                Some(PartitionTransform::Month) => (
+                    sail_iceberg::Transform::Month,
+                    format!("{}_month", field.column),
+                ),
+                Some(PartitionTransform::Day) => (
+                    sail_iceberg::Transform::Day,
+                    format!("{}_day", field.column),
+                ),
+                Some(PartitionTransform::Hour) => (
+                    sail_iceberg::Transform::Hour,
+                    format!("{}_hour", field.column),
+                ),
+                Some(PartitionTransform::Bucket(n)) => (
+                    sail_iceberg::Transform::Bucket(*n),
+                    format!("{}_bucket", field.column),
+                ),
+                Some(PartitionTransform::Truncate(w)) => (
+                    sail_iceberg::Transform::Truncate(*w),
+                    format!("{}_trunc", field.column),
+                ),
+            };
+            partition_spec_builder = partition_spec_builder.add_field(source_id, &name, transform);
         }
     }
     let spec = partition_spec_builder.build();

@@ -1,6 +1,6 @@
 use datafusion_expr::LogicalPlan;
 use sail_catalog::command::CatalogCommand;
-use sail_catalog::provider::{CreateTableColumnOptions, CreateTableOptions};
+use sail_catalog::provider::{CatalogPartitionField, CreateTableColumnOptions, CreateTableOptions};
 use sail_common::spec;
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
@@ -51,7 +51,13 @@ impl PlanResolver<'_> {
             self.resolve_default_table_location(&table)?
         };
         let format = self.resolve_catalog_table_format(file_format)?;
-        let partition_by = partition_by.into_iter().map(|x| x.into()).collect();
+        let partition_by = partition_by
+            .into_iter()
+            .map(|x| CatalogPartitionField {
+                column: x.into(),
+                transform: None,
+            })
+            .collect();
         let sort_by = self.resolve_catalog_table_sort(sort_by)?;
         let bucket_by = self.resolve_catalog_table_bucket_by(bucket_by)?;
 

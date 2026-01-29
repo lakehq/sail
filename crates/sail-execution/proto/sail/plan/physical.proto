@@ -33,7 +33,7 @@ message ExtendedPhysicalPlanNode {
     DeltaScanByAddsExecNode delta_scan_by_adds = 18;
     DeltaDiscoveryExecNode delta_discovery = 19;
     DeltaRemoveActionsExecNode delta_remove_actions = 20;
-    DeltaLogScanExecNode delta_log_scan = 21;
+    DeltaLogReplayExecNode delta_log_replay = 21;
     AvroExecNode avro = 22;
     ConsoleSinkExecNode console_sink = 23;
     SocketSourceExecNode socket_source = 24;
@@ -46,6 +46,7 @@ message ExtendedPhysicalPlanNode {
     IcebergWriterExecNode iceberg_writer = 31;
     IcebergCommitExecNode iceberg_commit = 32;
     MergeCardinalityCheckExecNode merge_cardinality_check = 33;
+ 
   }
 }
 
@@ -507,7 +508,7 @@ message IcebergCommitExecNode {
   string table_url = 2;
 }
 
-message DeltaLogScanExecNode {
+message DeltaLogReplayExecNode {
   bytes input = 1;
   string table_url = 2;
   int64 version = 3;
