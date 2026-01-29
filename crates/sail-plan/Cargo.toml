@@ -23,6 +23,7 @@ datafusion-expr-common = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-functions-nested = { workspace = true }
 datafusion-spark = { workspace = true }
+futures = { workspace = true }
 thiserror = { workspace = true }
 tonic = { workspace = true }
 async-trait = { workspace = true }

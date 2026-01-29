@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING
 
 import pytest
 from jinja2 import Template
 from pytest_bdd import given, parsers, then, when
+from syrupy.extensions.single_file import SingleFileSnapshotExtension
 
+from pysail.tests.spark.steps.plan import normalize_plan_text
 from pysail.tests.spark.utils import escape_sql_string_literal, parse_show_string
+
+if TYPE_CHECKING:
+    from syrupy.assertion import SnapshotAssertion
 
 
 @pytest.fixture
@@ -85,6 +91,15 @@ def query_schema(docstring, query, spark):
     assert docstring.strip() == df.schema.treeString().strip()
 
 
+@then("query columns")
+def query_columns(datatable, query, spark):
+    """Execute the SQL query and compare column list."""
+    _header, *rows = datatable
+    expected = [row[0] for row in rows]
+    df = spark.sql(query)
+    assert expected == df.columns
+
+
 @then(parsers.re("query result(?P<ordered>( ordered)?)"))
 def query_result(datatable, ordered, query, spark):
     """Execute the SQL query and compare result with expected data table."""
@@ -96,6 +111,27 @@ def query_result(datatable, ordered, query, spark):
         assert rows == r
     else:
         assert sorted(rows) == sorted(r)
+
+
+def normalize_query_output(output: str) -> str:
+    return normalize_plan_text(output)
+
+
+class QueryOutputSnapshotExtension(SingleFileSnapshotExtension):
+    """Snapshot extension that stores normalized query output."""
+
+    file_extension = "out"
+
+    def serialize(self, data, **_: object) -> bytes:
+        return normalize_query_output(str(data)).encode()
+
+
+@then("query output matches snapshot")
+def query_output_matches_snapshot(query, spark, snapshot: SnapshotAssertion):
+    """Executes the SQL query and compares output with snapshot."""
+    df = spark.sql(query)
+    output = df._show_string(n=0x7FFFFFFF, truncate=False)  # noqa: SLF001
+    assert snapshot(extension_class=QueryOutputSnapshotExtension) == output
 
 
 @then(parsers.parse("query error {error}"))

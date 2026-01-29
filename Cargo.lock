@@ -6314,6 +6314,7 @@ dependencies = [
  "datafusion-functions-nested",
  "datafusion-spark",
  "either",
+ "futures",
  "half",
  "indexmap 2.13.0",
  "lazy_static",

@@ -14,6 +14,7 @@ use sail_logical_plan::precondition::WithPreconditionsNode;
 use crate::catalog::CatalogCommandNode;
 use crate::config::PlanConfig;
 use crate::error::PlanResult;
+use crate::inspect::InspectNodeOutputNode;
 use crate::resolver::plan::NamedPlan;
 use crate::resolver::PlanResolver;
 use crate::streaming::rewriter::{is_streaming_plan, rewrite_streaming_plan};
@@ -24,6 +25,7 @@ pub mod error;
 pub mod explain;
 pub mod formatter;
 pub mod function;
+mod inspect;
 pub mod resolver;
 mod streaming;
 
@@ -35,6 +37,8 @@ pub async fn execute_logical_plan(ctx: &SessionContext, plan: LogicalPlan) -> Re
     let plan = match plan {
         LogicalPlan::Extension(Extension { node }) => {
             if let Some(n) = node.as_any().downcast_ref::<CatalogCommandNode>() {
+                n.execute(ctx).await?
+            } else if let Some(n) = node.as_any().downcast_ref::<InspectNodeOutputNode>() {
                 n.execute(ctx).await?
             } else if let Some(n) = node.as_any().downcast_ref::<WithPreconditionsNode>() {
                 for plan in n.preconditions() {
