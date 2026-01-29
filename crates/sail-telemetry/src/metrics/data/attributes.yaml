@@ -15,3 +15,9 @@
 
 - name: execution.operator.name
   description: The name of the operator.
+
+- name: execution.expression.id
+  description: The unique identifier for the expression within an operator.
+
+- name: execution.expression.name
+  description: The name of the expression.
