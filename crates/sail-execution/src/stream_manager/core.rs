@@ -192,6 +192,10 @@ impl StreamManager {
         }
     }
 
+    pub async fn stop(&mut self) {
+        // TODO: remove all remote streams
+    }
+
     fn create_local_stream_with_senders(
         storage: LocalStreamStorage,
         senders: Vec<mpsc::Sender<TaskStreamResult<RecordBatch>>>,

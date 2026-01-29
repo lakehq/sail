@@ -17,8 +17,9 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Fields};
 use sail_catalog::provider::{
-    CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions,
-    DropDatabaseOptions, DropTableOptions, Namespace, RuntimeAwareCatalogProvider,
+    CatalogPartitionField, CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions,
+    CreateTableOptions, DropDatabaseOptions, DropTableOptions, Namespace,
+    RuntimeAwareCatalogProvider,
 };
 use sail_catalog_unity::unity::{types, Client};
 use sail_catalog_unity::UnityCatalogProvider;
@@ -833,7 +834,10 @@ async fn test_create_table() {
                 constraints: vec![],
                 location: Some("s3://deltadata/custom/path/meow2".to_string()),
                 format: "delta".to_string(),
-                partition_by: vec!["baz".to_string()],
+                partition_by: vec![CatalogPartitionField {
+                    column: "baz".to_string(),
+                    transform: None,
+                }],
                 sort_by: vec![],
                 bucket_by: None,
                 if_not_exists: false,
@@ -989,7 +993,10 @@ async fn test_get_table() {
                 constraints: vec![],
                 location: Some("s3://deltadata/custom/path/meow2".to_string()),
                 format: "delta".to_string(),
-                partition_by: vec!["baz".to_string()],
+                partition_by: vec![CatalogPartitionField {
+                    column: "baz".to_string(),
+                    transform: None,
+                }],
                 sort_by: vec![],
                 bucket_by: None,
                 if_not_exists: false,

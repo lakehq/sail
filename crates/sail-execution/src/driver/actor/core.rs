@@ -133,6 +133,8 @@ impl Actor for DriverActor {
     }
 
     async fn stop(mut self, ctx: &mut ActorContext<Self>) {
+        self.job_scheduler.stop();
+        self.stream_manager.stop().await;
         if let Err(e) = self.worker_pool.close(ctx).await {
             error!("encountered error while stopping workers: {e}");
         }

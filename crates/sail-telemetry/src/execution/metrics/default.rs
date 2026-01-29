@@ -95,12 +95,24 @@ impl MetricEmitter for DefaultMetricEmitter {
                     )
                     .emit();
             }
-            MetricValue::Count { .. }
-            | MetricValue::Gauge { .. }
-            | MetricValue::Time { .. }
-            | MetricValue::PruningMetrics { .. }
-            | MetricValue::Ratio { .. }
-            | MetricValue::Custom { .. } => {
+            MetricValue::OutputBatches(_count) => {
+                // OutputBatches is now tracked as part of BaselineMetrics
+                // This is already handled by RecordOutput trait, so we just acknowledge it
+                // without incrementing unknown metric count
+            }
+            MetricValue::Count { .. } | MetricValue::Gauge { .. } | MetricValue::Time { .. } => {
+                // These are legitimate operator-specific metrics (like "build_time", "join_time", etc.)
+                // that are emitted by DataFusion operators. We don't handle them explicitly
+                // but they're not "unknown" in the sense that they're expected.
+                // Let specific emitters handle the ones they care about.
+            }
+            MetricValue::Ratio { .. } => {
+                // Ratio metrics are legitimate operator-specific metrics (e.g. selectivity,
+                // probe_hit_rate, avg_fanout). Specific emitters can map ones they care about.
+                // We intentionally do not treat them as "unknown".
+            }
+            MetricValue::PruningMetrics { .. } | MetricValue::Custom { .. } => {
+                // These metric types are not yet handled by any emitter.
                 #[cfg(debug_assertions)]
                 registry.execution_unknown_metric_count.adder(1u64).emit();
             }

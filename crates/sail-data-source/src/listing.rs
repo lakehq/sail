@@ -5,6 +5,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::{ListingOptions, ListingTableConfig, ListingTableUrl};
+use datafusion::execution::cache::TableScopedPath;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{internal_err, plan_err, DataFusionError, GetExt, Result};
 use datafusion_datasource::file_compression_type::FileCompressionType;
@@ -196,13 +197,17 @@ pub async fn list_all_files<'a>(
         true => match ctx.runtime_env().cache_manager.get_list_files_cache() {
             None => store.list(Some(url.prefix())),
             Some(cache) => {
-                if let Some(res) = cache.get(url.prefix()) {
+                let key = TableScopedPath {
+                    table: None,
+                    path: url.prefix().clone(),
+                };
+                if let Some(res) = cache.get(&key) {
                     debug!("Hit list all files cache");
                     futures::stream::iter(res.as_ref().clone().into_iter().map(Ok)).boxed()
                 } else {
                     let list_res = store.list(Some(url.prefix()));
                     let vec = list_res.try_collect::<Vec<ObjectMeta>>().await?;
-                    cache.put(url.prefix(), Arc::new(vec.clone()));
+                    cache.put(&key, Arc::new(vec.clone()));
                     futures::stream::iter(vec.into_iter().map(Ok)).boxed()
                 }
             }

@@ -148,3 +148,40 @@ def data_file_lifecycle(before: str, after: str, operation: str, variables: dict
     assert isinstance(files_before, set), f"Variable {before!r} not found or not a set"
     assert isinstance(files_after, set), f"Variable {after!r} not found or not a set"
     assert_file_lifecycle(files_before, files_after, operation)
+
+
+@then(parsers.parse("CSV files in {location_var} first line is {expected_line}"))
+def csv_files_first_line_is(location_var: str, expected_line: str, variables: dict) -> None:
+    """Verify that the first line of CSV files in the location matches the expected pattern."""
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    real_path = Path(location.path)
+    assert real_path.exists(), f"Directory {real_path} does not exist"
+
+    csv_files = get_data_files(str(real_path), extension=".csv")
+    assert len(csv_files) > 0, f"No CSV files found under {real_path}"
+
+    first_file_rel = csv_files[0]
+    first_file = real_path / first_file_rel
+    assert first_file.exists(), f"CSV file {first_file} does not exist"
+
+    with open(first_file, encoding="utf-8") as f:
+        actual_first_line = f.readline().rstrip("\n\r")
+
+    assert actual_first_line == expected_line, (
+        f"CSV file {first_file} first line is {actual_first_line!r}, expected {expected_line!r}"
+    )
+
+
+@then(parsers.parse("subdirectories in {location_var} count is {n:d}"))
+def subdirectories_count_is(location_var: str, n: int, variables: dict) -> None:
+    """Verify that the location has exactly n subdirectories."""
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    real_path = Path(location.path)
+    assert real_path.exists(), f"Directory {real_path} does not exist"
+
+    subdirs = [p for p in real_path.iterdir() if p.is_dir() and not p.name.startswith(".")]
+    assert len(subdirs) == n, (
+        f"Expected {n} subdirectories under {real_path}, got {len(subdirs)}: {[d.name for d in subdirs]}"
+    )

@@ -31,6 +31,7 @@ use sail_logical_plan::schema_pivot::SchemaPivotNode;
 use sail_logical_plan::show_string::ShowStringNode;
 use sail_logical_plan::sort::SortWithinPartitionsNode;
 use sail_logical_plan::streaming::collector::StreamCollectorNode;
+use sail_logical_plan::streaming::filter::StreamFilterNode;
 use sail_logical_plan::streaming::limit::StreamLimitNode;
 use sail_logical_plan::streaming::source_adapter::StreamSourceAdapterNode;
 use sail_logical_plan::streaming::source_wrapper::StreamSourceWrapperNode;
@@ -42,6 +43,7 @@ use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
 use sail_physical_plan::show_string::ShowStringExec;
 use sail_physical_plan::streaming::collector::StreamCollectorExec;
+use sail_physical_plan::streaming::filter::StreamFilterExec;
 use sail_physical_plan::streaming::limit::StreamLimitExec;
 use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
 use sail_plan_lakehouse::new_lakehouse_extension_planners;
@@ -261,6 +263,19 @@ Ensure expand_merge is enabled; MERGE is currently only supported for Delta tabl
                 node.skip(),
                 node.fetch(),
             )?)
+        } else if let Some(node) = node.as_any().downcast_ref::<StreamFilterNode>() {
+            let [logical_input] = logical_inputs else {
+                return internal_err!("StreamFilterExec requires exactly one logical input");
+            };
+            let [input] = physical_inputs else {
+                return internal_err!("StreamFilterExec requires exactly one physical input");
+            };
+            let predicate = planner.create_physical_expr(
+                node.predicate(),
+                logical_input.schema(),
+                session_state,
+            )?;
+            Arc::new(StreamFilterExec::try_new(input.clone(), predicate)?)
         } else if node.as_any().is::<StreamCollectorNode>() {
             let [input] = physical_inputs else {
                 return internal_err!("StreamCollectorExec requires exactly one physical input");

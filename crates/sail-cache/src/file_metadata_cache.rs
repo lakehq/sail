@@ -24,8 +24,9 @@ impl MokaFileMetadataCache {
         let mut builder = Cache::builder().eviction_policy(EvictionPolicy::lru());
 
         if let Some(ttl) = ttl {
-            debug!("Setting TTL for {} to {ttl} second(s)", Self::NAME);
-            builder = builder.time_to_live(Duration::from_secs(ttl));
+            let ttl = Duration::from_secs(ttl);
+            debug!("Setting TTL for {} to {ttl:?}", Self::NAME);
+            builder = builder.time_to_live(ttl);
         }
         if let Some(size_limit) = size_limit {
             debug!(
@@ -114,7 +115,7 @@ impl CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>> for MokaFileMetadataCache 
         self.put(key, value)
     }
 
-    fn remove(&mut self, k: &ObjectMeta) -> Option<Arc<dyn FileMetadata>> {
+    fn remove(&self, k: &ObjectMeta) -> Option<Arc<dyn FileMetadata>> {
         self.metadata
             .remove(&k.location)
             .map(|(_, metadata)| metadata)
@@ -187,7 +188,7 @@ mod tests {
             metadata: "retrieved_metadata".to_owned(),
         });
 
-        let mut cache = MokaFileMetadataCache::new(None, None);
+        let cache = MokaFileMetadataCache::new(None, None);
         assert!(cache.get(&object_meta).is_none());
 
         // put

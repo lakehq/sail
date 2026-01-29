@@ -219,7 +219,7 @@
   type: number
   default: "0"
   description: |
-    The default parallelism for physical plan execution.
+    The default parallelism used when generating physical plans, which determines the number of partitions a plan node is split into.
     If the value is `0`, the parallelism is determined based on the number of available CPU cores.
     It is recommended to set this value explicitly in the cluster mode since the number of CPU cores
     available to the driver may not be the same as that available to the workers.

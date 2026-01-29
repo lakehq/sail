@@ -1,13 +1,13 @@
 use datafusion::arrow::array::RecordBatch;
 use datafusion::common::Result;
-use log::warn;
+use log::debug;
 use tokio::sync::mpsc;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::stream::error::TaskStreamResult;
 use crate::stream::reader::TaskStreamSource;
-use crate::stream::writer::TaskStreamSink;
+use crate::stream::writer::{TaskStreamSink, TaskStreamSinkState};
 
 pub trait LocalStream: Send {
     fn publish(&mut self) -> ExecutionResult<Box<dyn TaskStreamSink>>;
@@ -70,19 +70,31 @@ struct MemoryStreamReplicaSender {
 
 #[tonic::async_trait]
 impl TaskStreamSink for MemoryStreamReplicaSender {
-    async fn write(&mut self, batch: TaskStreamResult<RecordBatch>) -> Result<()> {
+    async fn write(&mut self, batch: TaskStreamResult<RecordBatch>) -> TaskStreamSinkState {
+        let mut sent = 0;
         for sender in self.senders.iter_mut() {
             if let Some(s) = sender {
-                if s.send(batch.clone()).await.is_err() {
-                    warn!("memory stream replica receiver has been dropped");
-                    *sender = None;
+                match s.send(batch.clone()).await {
+                    Ok(()) => {
+                        sent += 1;
+                    }
+                    Err(_) => {
+                        // This can happen under normal operation when the receiver no longer needs
+                        // more data (e.g., after a LIMIT operator has received enough rows).
+                        debug!("memory stream replica receiver has been dropped");
+                        *sender = None;
+                    }
                 }
             }
         }
-        Ok(())
+        if sent > 0 {
+            TaskStreamSinkState::Ok
+        } else {
+            TaskStreamSinkState::Closed
+        }
     }
 
-    fn close(self: Box<Self>) -> Result<()> {
+    async fn close(self: Box<Self>) -> Result<()> {
         Ok(())
     }
 }
