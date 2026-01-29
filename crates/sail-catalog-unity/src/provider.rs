@@ -551,6 +551,12 @@ impl CatalogProvider for UnityCatalogProvider {
             ));
         }
 
+        if partition_by.iter().any(|f| f.transform.is_some()) {
+            return Err(CatalogError::NotSupported(
+                "partition transforms are not supported by Unity catalog".to_string(),
+            ));
+        }
+
         let client = self
             .get_client()
             .await
@@ -593,7 +599,7 @@ impl CatalogProvider for UnityCatalogProvider {
                 };
                 let partition_index = partition_by
                     .iter()
-                    .position(|p| p.trim().to_lowercase() == col.name.trim().to_lowercase())
+                    .position(|p| p.column.trim().to_lowercase() == col.name.trim().to_lowercase())
                     .map(|i| i as i32);
                 Ok(types::ColumnInfo {
                     comment: col.comment.clone(),

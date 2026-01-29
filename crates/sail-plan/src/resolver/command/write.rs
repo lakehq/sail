@@ -7,7 +7,7 @@ use datafusion_expr::{col, Expr, ExprSchemable, Extension, LogicalPlan, LogicalP
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::error::CatalogError;
 use sail_catalog::manager::CatalogManager;
-use sail_catalog::provider::{CreateTableColumnOptions, CreateTableOptions};
+use sail_catalog::provider::{CatalogPartitionField, CreateTableColumnOptions, CreateTableOptions};
 use sail_common::spec;
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableSort, TableColumnStatus, TableKind,
@@ -325,7 +325,13 @@ impl PlanResolver<'_> {
                         generated_always_as: None,
                     })
                     .collect();
-                let partition_by = partition_by.into_iter().map(|x| x.into()).collect();
+                let partition_by = partition_by
+                    .into_iter()
+                    .map(|x| CatalogPartitionField {
+                        column: x.into(),
+                        transform: None,
+                    })
+                    .collect();
                 let sort_by = self.resolve_catalog_table_sort(sort_by)?;
                 let bucket_by = self.resolve_catalog_table_bucket_by(bucket_by)?;
                 let command = CatalogCommand::CreateTable {

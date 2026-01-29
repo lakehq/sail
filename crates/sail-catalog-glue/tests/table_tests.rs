@@ -21,7 +21,8 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, Fields, TimeUnit};
 use common::{col, setup_with_database, simple_table_options};
 use sail_catalog::provider::{
-    CatalogProvider, CreateTableColumnOptions, CreateTableOptions, DropTableOptions,
+    CatalogPartitionField, CatalogProvider, CreateTableColumnOptions, CreateTableOptions,
+    DropTableOptions,
 };
 
 /// Tests table creation in Glue catalog.
@@ -60,7 +61,10 @@ async fn test_create_table() {
                 constraints: vec![],
                 location: Some("s3://bucket/products".to_string()),
                 format: "parquet".to_string(),
-                partition_by: vec!["category".to_string()],
+                partition_by: vec![CatalogPartitionField {
+                    column: "category".to_string(),
+                    transform: None,
+                }],
                 sort_by: vec![],
                 bucket_by: None,
                 if_not_exists: false,
