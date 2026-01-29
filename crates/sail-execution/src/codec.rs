@@ -2526,7 +2526,7 @@ mod tests {
             assert_eq!(decoded_exec.partitions()[0].partition_id, 0);
             assert_eq!(decoded_exec.partitions()[0].data, vec![1, 2, 3]);
         } else {
-            panic!("Failed to downcast to PythonDataSourceExec");
+            unreachable!("Failed to downcast to PythonDataSourceExec");
         }
 
         Ok(())
