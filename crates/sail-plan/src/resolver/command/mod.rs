@@ -15,6 +15,7 @@ mod delete;
 mod explain;
 mod function;
 mod insert;
+mod inspect_node_output;
 mod merge;
 mod show;
 mod variable;
@@ -202,6 +203,14 @@ impl PlanResolver<'_> {
             }
             CommandNode::Explain { mode, input } => {
                 self.resolve_command_explain(*input, mode, state).await
+            }
+            CommandNode::InspectNodeOutput {
+                node,
+                format,
+                input,
+            } => {
+                self.resolve_command_inspect_node_output(node, format, *input, state)
+                    .await
             }
             CommandNode::InsertOverwriteDirectory {
                 input,

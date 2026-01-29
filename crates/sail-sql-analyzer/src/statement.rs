@@ -441,6 +441,26 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
+        Statement::InspectNodeOutput {
+            inspect: _,
+            node_output: _,
+            node,
+            r#for: _,
+            format,
+            statement,
+        } => {
+            let format = if format.is_some() {
+                spec::InspectNodeOutputFormat::Pretty
+            } else {
+                spec::InspectNodeOutputFormat::Raw
+            };
+            let node = spec::CommandNode::InspectNodeOutput {
+                node: from_ast_string(node)?,
+                format,
+                input: Box::new(from_ast_statement(*statement)?),
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::InsertOverwriteDirectory {
             insert: _,
             overwrite: _,

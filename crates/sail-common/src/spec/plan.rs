@@ -415,6 +415,11 @@ pub enum CommandNode {
         mode: ExplainMode,
         input: Box<Plan>,
     },
+    InspectNodeOutput {
+        node: String,
+        format: InspectNodeOutputFormat,
+        input: Box<Plan>,
+    },
     InsertInto {
         input: Box<QueryPlan>,
         table: ObjectName,
@@ -1250,6 +1255,13 @@ pub enum ExplainMode {
     Codegen,
     Cost,
     Formatted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum InspectNodeOutputFormat {
+    Raw,
+    Pretty,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
