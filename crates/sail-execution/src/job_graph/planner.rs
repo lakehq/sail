@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use datafusion::common::plan_datafusion_err;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion::common::{plan_datafusion_err, JoinType, Result};
 use datafusion::physical_expr::Partitioning;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::joins::{
@@ -11,7 +11,7 @@ use datafusion::physical_plan::limit::GlobalLimitExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion::physical_plan::{
-    with_new_children_if_necessary, ExecutionPlan, ExecutionPlanProperties,
+    with_new_children_if_necessary, ExecutionPlan, ExecutionPlanProperties, PhysicalExpr,
 };
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -24,7 +24,8 @@ use crate::plan::{ShuffleConsumption, StageInputExec};
 
 impl JobGraph {
     pub fn try_new(plan: Arc<dyn ExecutionPlan>) -> ExecutionResult<Self> {
-        let plan = ensure_single_partition_for_fetch(plan)?;
+        let plan = ensure_single_input_partition_for_global_limit(plan)?;
+        let plan = ensure_partitioned_hash_join_if_build_side_emits_unmatched_rows(plan)?;
         let mut graph = Self {
             stages: vec![],
             schema: plan.schema(),
@@ -43,14 +44,28 @@ impl JobGraph {
     }
 }
 
-fn ensure_single_partition_for_fetch(
+fn ensure_single_input_partition_for_global_limit(
     plan: Arc<dyn ExecutionPlan>,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
-    // Rewrite *all* `GlobalLimitExec` nodes in the tree to ensure their input is single-partition
+    // Rewrite *all* `GlobalLimitExec` nodes in the tree to ensure their input is single-partition.
     let result = plan.transform(|node| {
         if let Some(gl) = node.as_any().downcast_ref::<GlobalLimitExec>() {
-            let rebuilt = rebuild_global_limit(gl)?;
-            Ok(Transformed::yes(rebuilt))
+            let skip = gl.skip();
+            let fetch = gl.fetch();
+            let input = gl.input();
+            if fetch.is_none() && skip == 0 {
+                // If there is neither LIMIT nor OFFSET, return the node as is.
+                Ok(Transformed::no(node))
+            } else if input.output_partitioning().partition_count() > 1 {
+                // Keep `LocalLimitExec` (if any) to preserve the per-partition top-k optimization,
+                // but make sure the input to `GlobalLimitExec` is single-partition.
+                let input = Arc::new(CoalescePartitionsExec::new(input.clone()));
+                Ok(Transformed::yes(Arc::new(GlobalLimitExec::new(
+                    input, skip, fetch,
+                ))))
+            } else {
+                Ok(Transformed::no(node))
+            }
         } else {
             Ok(Transformed::no(node))
         }
@@ -58,25 +73,76 @@ fn ensure_single_partition_for_fetch(
     Ok(result.data()?)
 }
 
-fn rebuild_global_limit(
-    gl: &GlobalLimitExec,
-) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
-    let skip = gl.skip();
-    let fetch = gl.fetch();
-    // If there is neither LIMIT nor OFFSET, return as-is.
-    if fetch.is_none() && skip == 0 {
-        return Ok(Arc::new(gl.clone()));
+fn ensure_partitioned_hash_join_if_build_side_emits_unmatched_rows(
+    plan: Arc<dyn ExecutionPlan>,
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    fn repartition(
+        plan: Arc<dyn ExecutionPlan>,
+        exprs: Vec<Arc<dyn PhysicalExpr>>,
+        count: usize,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        // We have to remove unnecessary repartitioning explicitly here
+        // since no physical optimizer will run afterward.
+        let plan = if let Some(coalesce) = plan.as_any().downcast_ref::<CoalescePartitionsExec>() {
+            Arc::clone(coalesce.input())
+        } else if let Some(repartition) = plan.as_any().downcast_ref::<RepartitionExec>() {
+            Arc::clone(repartition.input())
+        } else {
+            plan
+        };
+        Ok(Arc::new(RepartitionExec::try_new(
+            plan,
+            Partitioning::Hash(exprs, count),
+        )?))
     }
 
-    // Keep `LocalLimitExec` (if any) to preserve the per-partition "top-k" optimization, but make
-    // sure the input to `GlobalLimitExec` is single-partition.
-    let mut input: Arc<dyn ExecutionPlan> = gl.input().clone();
+    let result = plan.transform_up(|plan| {
+        let Some(join) = plan.as_any().downcast_ref::<HashJoinExec>() else {
+            return Ok(Transformed::no(plan));
+        };
 
-    if input.output_partitioning().partition_count() > 1 {
-        input = Arc::new(CoalescePartitionsExec::new(input));
-    }
+        if join.mode != PartitionMode::CollectLeft {
+            return Ok(Transformed::no(plan));
+        }
 
-    Ok(Arc::new(GlobalLimitExec::new(input, skip, fetch)))
+        if !matches!(
+            join.join_type,
+            JoinType::Left
+                | JoinType::LeftAnti
+                | JoinType::LeftSemi
+                | JoinType::LeftMark
+                | JoinType::Full
+        ) {
+            // `LEFT` or `FULL` joins need to emit unmatched rows from the build side.
+            // This is not yet possible in distributed execution since the bitmap for
+            // row matching is not shared across partitions.
+            // So we need to turn the join into a partitioned hash join for now.
+            return Ok(Transformed::no(plan));
+        }
+
+        // Convert the join to a partitioned hash join with explicit repartitioning on both sides,
+        // so each output partition can be executed independently in the distributed engine.
+        let partition_count = join.right.output_partitioning().partition_count();
+
+        let (left_exprs, right_exprs): (Vec<_>, Vec<_>) = join
+            .on
+            .iter()
+            .map(|(l, r)| (Arc::clone(l), Arc::clone(r)))
+            .unzip();
+
+        Ok(Transformed::yes(Arc::new(HashJoinExec::try_new(
+            repartition(Arc::clone(&join.left), left_exprs, partition_count)?,
+            repartition(Arc::clone(&join.right), right_exprs, partition_count)?,
+            join.on.clone(),
+            join.filter.clone(),
+            &join.join_type,
+            join.projection.clone(),
+            PartitionMode::Partitioned,
+            join.null_equality,
+        )?)))
+    })?;
+
+    Ok(result.data)
 }
 
 /// A flag to indicate how the partitions from physical plan execution are used.

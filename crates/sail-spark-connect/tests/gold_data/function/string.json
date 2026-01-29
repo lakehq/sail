@@ -2371,7 +2371,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: randstr"
+        "success": "ok"
       }
     },
     {
@@ -2909,7 +2909,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: soundex"
+        "success": "ok"
       }
     },
     {

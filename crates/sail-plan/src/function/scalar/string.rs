@@ -10,6 +10,8 @@ use datafusion_spark::function::string::expr_fn as string_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::string::levenshtein::Levenshtein;
 use sail_function::scalar::string::make_valid_utf8::MakeValidUtf8;
+use sail_function::scalar::string::randstr::Randstr;
+use sail_function::scalar::string::soundex::Soundex;
 use sail_function::scalar::string::spark_base64::{SparkBase64, SparkUnbase64};
 use sail_function::scalar::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use sail_function::scalar::string::spark_mask::SparkMask;
@@ -241,7 +243,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("overlay", F::var_arg(overlay)),
         ("position", F::custom(position)),
         ("printf", F::unknown("printf")),
-        ("randstr", F::unknown("randstr")),
+        ("randstr", F::udf(Randstr::new())),
         ("regexp_count", F::udf(RegexpCountFunc::new())),
         ("regexp_extract", F::unknown("regexp_extract")),
         ("regexp_extract_all", F::unknown("regexp_extract_all")),
@@ -254,7 +256,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("rpad", F::var_arg(expr_fn::rpad)),
         ("rtrim", F::var_arg(rev_args(expr_fn::rtrim))),
         ("sentences", F::unknown("sentences")),
-        ("soundex", F::unknown("soundex")),
+        ("soundex", F::udf(Soundex::new())),
         ("space", F::unary(space)),
         ("split", F::udf(SparkSplit::new())),
         ("split_part", F::ternary(expr_fn::split_part)),

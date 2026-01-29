@@ -72,6 +72,11 @@ impl fmt::Display for JobGraph {
                 writeln!(f, "group={}", stage.group)?;
             }
             writeln!(f, "mode={}", stage.mode)?;
+            writeln!(
+                f,
+                "partitions={}",
+                stage.plan.output_partitioning().partition_count()
+            )?;
             writeln!(f, "distribution={}", stage.distribution)?;
             writeln!(f, "placement={}", stage.placement)?;
             writeln!(f, "{}", displayable.indent(true))?;
