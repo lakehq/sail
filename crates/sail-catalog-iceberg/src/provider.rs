@@ -1108,7 +1108,6 @@ where
     })
 }
 
-
 /// Converts table column options to Iceberg nested fields.
 fn columns_to_nested_fields(
     columns: &[CreateTableColumnOptions],
