@@ -139,6 +139,8 @@ use sail_function::scalar::multi_expr::MultiExpr;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 use sail_function::scalar::string::levenshtein::Levenshtein;
 use sail_function::scalar::string::make_valid_utf8::MakeValidUtf8;
+use sail_function::scalar::string::randstr::Randstr;
+use sail_function::scalar::string::soundex::Soundex;
 use sail_function::scalar::string::spark_base64::{SparkBase64, SparkUnbase64};
 use sail_function::scalar::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use sail_function::scalar::string::spark_mask::SparkMask;
@@ -1435,6 +1437,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "random_poisson" => Ok(Arc::new(ScalarUDF::from(RandPoisson::new()))),
             "randn" => Ok(Arc::new(ScalarUDF::from(Randn::new()))),
             "random" | "rand" => Ok(Arc::new(ScalarUDF::from(Random::new()))),
+            "randstr" => Ok(Arc::new(ScalarUDF::from(Randstr::new()))),
+            "soundex" => Ok(Arc::new(ScalarUDF::from(Soundex::new()))),
             "spark_array" | "spark_make_array" | "array" => {
                 Ok(Arc::new(ScalarUDF::from(SparkArray::new())))
             }
@@ -1569,6 +1573,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<GreatestFunc>()
             || node_inner.is::<LeastFunc>()
             || node_inner.is::<Levenshtein>()
+            || node_inner.is::<Randstr>()
+            || node_inner.is::<Soundex>()
             || node_inner.is::<MakeValidUtf8>()
             || node_inner.is::<MapFromArrays>()
             || node_inner.is::<MapFromEntries>()
