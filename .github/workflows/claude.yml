@@ -27,6 +27,7 @@ jobs:
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'issues' && contains(github.event.issue.body, '@claude'))
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
 
@@ -69,7 +70,6 @@ jobs:
 
       - name: Run Claude Code
         uses: anthropics/claude-code-action@v1
-        timeout-minutes: 60
         with:
           trigger_phrase: "@claude"
           github_token: ${{ steps.app-token.outputs.token }}
