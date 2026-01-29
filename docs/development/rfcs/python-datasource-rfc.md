@@ -8,11 +8,11 @@
 
 ## Executive Summary
 
-This RFC documents Python DataSource support in Sail, enabling users to implement custom data sources in Python while leveraging Sail's distributed execution engine. The implementation provides **100% API compatibility** with the PySpark 4.0+ DataSource API, allowing existing PySpark DataSource implementations to work without modification.
+This RFC documents Python DataSource support in Sail, enabling users to implement custom data sources in Python for AI and data engineering workflows while leveraging Sail's distributed execution engine. The implementation provides **100% API compatibility** with the PySpark 4.0+ DataSource API, allowing existing PySpark DataSource implementations to work without modification.
 
 **Key Benefits:**
 - **Zero-friction PySpark migration**: Existing DataSource code works unchanged
-- **High performance**: Zero-copy data transfer via Arrow C Data Interface
+- **High performance**: In-process Python execution via [PyO3](https://lakesail.com/blog/sail-and-python-udfs) with zero-serialization Arrow DataSource buffers—no inter-process boundary
 - **Distributed execution**: Parallel partition-based reading across workers
 - **Low barrier to entry**: Python developers can extend Sail without Rust knowledge
 - **Ecosystem leverage**: Access to 350,000+ PyPI packages
@@ -162,6 +162,7 @@ Sail must execute Python datasource code. These are **phases**, not competing al
 - Simpler deployment (no worker process management)
 - Zero-copy Arrow transfer (same process = direct pointer access)
 - Sufficient for trusted datasources
+- Sail's Rust-native architecture enables [PyO3](https://lakesail.com/blog/sail-and-python-udfs) to share memory directly with the execution engine—a capability impossible in JVM-based systems
 
 **What changes in Phase 3**:
 - Control plane: gRPC for schema/partition requests
@@ -933,16 +934,106 @@ See [python-datasource-reference.md](./python-datasource-reference.md#complete-e
 
 ## Future Work
 
+### Multimodal DataSource Support (Exploration)
+
+Modern AI pipelines treat **images, audio, and embeddings as first-class data types**. Sail's Python DataSource architecture could potentially support multimodal workloads, drawing inspiration from frameworks like [Daft](https://www.getdaft.io/).
+
+> [!NOTE]
+> This section explores **potential future directions**. Scope and prioritization are subject to community feedback and demand.
+
+#### Phase 2: Binary Type Foundation
+
+The `Binary` type (planned for PR #2) provides the foundation for multimodal data. Images, audio, and other blob data could be handled as raw bytes:
+
+```python
+class ImageDataSource(DataSource):
+    @classmethod
+    def name(cls) -> str:
+        return "images"
+
+    def schema(self):
+        return pa.schema([
+            ("path", pa.string()),
+            ("image_bytes", pa.binary()),  # Raw image data
+            ("metadata", pa.string()),
+        ])
+
+    def reader(self, schema):
+        return ImageReader(self.options.get("base_path", "."))
+
+class ImageReader(DataSourceReader):
+    def __init__(self, base_path):
+        self.base_path = base_path
+
+    def partitions(self):
+        import glob
+        files = glob.glob(f"{self.base_path}/**/*.jpg", recursive=True)
+        # Partition by file chunks for parallelism
+        chunk_size = max(1, len(files) // 4)
+        return [InputPartition(files[i:i+chunk_size]) for i in range(0, len(files), chunk_size)]
+
+    def read(self, partition):
+        for path in partition.value:
+            with open(path, "rb") as f:
+                yield (path, f.read(), "{}")
+```
+
+#### Potential Phase 7: Extension Types & Native Operations
+
+If demand warrants, Sail could explore:
+
+| Feature | Description | Status |
+|---------|-------------|--------|
+| **Arrow Extension Types** | `sail.image`, `sail.audio` with format metadata | Exploring |
+| **`decode_image()`** | SQL function to decode Binary → Image struct | Exploring |
+| **`embed()`** | SQL function for embedding generation | Exploring |
+| **`prompt()`** | LLM inference on multimodal columns | Exploring |
+
+**Extension Type Example:**
+
+```python
+# Future: DataSource returns typed images
+def schema(self):
+    image_type = pa.ExtensionType(pa.binary(), "sail.image", 
+                                   metadata={"format": "jpeg"})
+    return pa.schema([
+        ("path", pa.string()),
+        ("image", image_type),
+    ])
+```
+
+**Potential Native SQL Operations:**
+
+```sql
+-- Decode binary to image, generate embedding, run LLM inference
+SELECT 
+    path,
+    decode_image(image_bytes) AS image,
+    embed(image_bytes, 'clip-vit-base') AS embedding,
+    prompt('Describe this image', image_bytes, model='gpt-4o-mini') AS description
+FROM images.load(path='s3://bucket/images/')
+```
+
+#### Potential Multimodal Use Cases
+
+| Use Case | DataSource Pattern |
+|----------|-------------------|
+| **Image classification** | Yield image bytes, apply model via UDF |
+| **Embedding generation** | Yield content, use `embed()` or Python UDF with CLIP/Sentence-Transformers |
+| **RAG pipelines** | Chunk documents, embed, store in vector DB |
+| **Audio transcription** | Yield audio bytes, apply Whisper via UDF |
+
 ### Roadmap
 
 | Phase | Focus | Scope | Status |
 |-------|-------|-------|--------|
 | **Phase 1** | MVP Batch Read | Discovery, execution, filter infra | ✅ Complete |
-| **Phase 2** | Batch Write | Write exec, commit protocol | Planned |
+| **Phase 2** | Batch Write + Binary | Write exec, commit protocol, Binary type | Planned |
 | **Phase 3** | Subprocess Isolation | gRPC, shared memory, crash isolation | Planned |
 | **Phase 4** | Streaming Read | Offset management | Planned |
 | **Phase 5** | Streaming Write | BatchId protocol | Planned |
-| **Phase 6** | Performance & Polish | Exotic types, metrics | Planned |
+| **Phase 6** | Performance & Polish | Metrics, caching | Planned |
+| **Phase 7** | Multimodal & AI | Extension types, native ops (if demand warrants) | Exploring |
 
 ### Phase 3: Subprocess Isolation (Detailed)
 
@@ -1029,6 +1120,7 @@ pub fn create_executor(config: &Config) -> Result<Arc<dyn PythonExecutor>> {
 - [PEP 703 – Free Threading](https://peps.python.org/pep-0703/)
 - [Connector-X](https://github.com/sfu-db/connector-x)
 - [DuckDB Python API](https://duckdb.org/docs/api/python/overview)
+- [Daft – Multimodal Dataframe](https://www.getdaft.io/) (inspiration for multimodal support)
 
 ---
 

@@ -67,6 +67,16 @@ impl PythonDataSourceExec {
     pub fn num_partitions(&self) -> usize {
         self.partitions.len()
     }
+
+    /// Get the pickled command.
+    pub fn command(&self) -> &[u8] {
+        &self.command
+    }
+
+    /// Get the partitions.
+    pub fn partitions(&self) -> &[InputPartition] {
+        &self.partitions
+    }
 }
 
 impl DisplayAs for PythonDataSourceExec {

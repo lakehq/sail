@@ -76,6 +76,7 @@ use sail_data_source::formats::rate::{RateSourceExec, TableRateOptions};
 use sail_data_source::formats::socket::{SocketSourceExec, TableSocketOptions};
 use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
+use sail_data_source::python_datasource::{InputPartition, PythonDataSourceExec};
 use sail_delta_lake::physical_plan::{
     DeltaCastColumnExpr, DeltaCommitExec, DeltaDiscoveryExec, DeltaLogReplayExec,
     DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
@@ -837,6 +838,25 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
 
                 Ok(Arc::new(IcebergCommitExec::new(input, table_url)))
             }
+            NodeKind::PythonDataSource(gen::PythonDataSourceExecNode {
+                command,
+                schema,
+                partitions,
+            }) => {
+                let schema = self.try_decode_schema(&schema)?;
+                let partitions = partitions
+                    .into_iter()
+                    .map(|p| InputPartition {
+                        partition_id: p.partition_id as usize,
+                        data: p.data,
+                    })
+                    .collect();
+                Ok(Arc::new(PythonDataSourceExec::new(
+                    command,
+                    Arc::new(schema),
+                    partitions,
+                )))
+            }
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
         }
     }
@@ -1288,6 +1308,21 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::IcebergCommit(gen::IcebergCommitExecNode {
                 input,
                 table_url: iceberg_commit_exec.table_url().to_string(),
+            })
+        } else if let Some(python_exec) = node.as_any().downcast_ref::<PythonDataSourceExec>() {
+            let schema = self.try_encode_schema(python_exec.schema().as_ref())?;
+            let partitions = python_exec
+                .partitions()
+                .iter()
+                .map(|p| gen::InputPartitionNode {
+                    partition_id: p.partition_id as u64,
+                    data: p.data.clone(),
+                })
+                .collect();
+            NodeKind::PythonDataSource(gen::PythonDataSourceExecNode {
+                command: python_exec.command().to_vec(),
+                schema,
+                partitions,
             })
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");
@@ -2448,5 +2483,52 @@ impl RemoteExecutionCodec {
         M: Message,
     {
         Ok(message.encode_to_vec())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::datatypes::Field;
+
+    use super::*;
+
+    #[test]
+    fn test_python_datasource_roundtrip() -> Result<()> {
+        let codec = RemoteExecutionCodec;
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let partitions = vec![
+            InputPartition {
+                partition_id: 0,
+                data: vec![1, 2, 3],
+            },
+            InputPartition {
+                partition_id: 1,
+                data: vec![4, 5, 6],
+            },
+        ];
+        let exec = Arc::new(PythonDataSourceExec::new(
+            vec![10, 11, 12], // command
+            schema.clone(),
+            partitions,
+        ));
+
+        let mut buf = Vec::new();
+        codec.try_encode(exec.clone(), &mut buf)?;
+
+        let ctx = TaskContext::default();
+        let decoded = codec.try_decode(&buf, &[], &ctx)?;
+
+        // Downcast and verify
+        // Note: as_any() is on ExecutionPlan
+        if let Some(decoded_exec) = decoded.as_any().downcast_ref::<PythonDataSourceExec>() {
+            assert_eq!(decoded_exec.command(), &[10, 11, 12]);
+            assert_eq!(decoded_exec.num_partitions(), 2);
+            assert_eq!(decoded_exec.partitions()[0].partition_id, 0);
+            assert_eq!(decoded_exec.partitions()[0].data, vec![1, 2, 3]);
+        } else {
+            panic!("Failed to downcast to PythonDataSourceExec");
+        }
+
+        Ok(())
     }
 }
