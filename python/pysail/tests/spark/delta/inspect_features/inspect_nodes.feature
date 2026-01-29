@@ -40,10 +40,10 @@ Feature: Delta Lake Inspect Node Outputs
       | 1  | v1    |
       | 2  | v2    |
 
-  Scenario: INSPECT NODE_OUTPUT captures DeltaLogScanExec columns
+  Scenario: INSPECT NODE_OUTPUT captures DeltaLogReplayExec columns
     When query
       """
-      INSPECT NODE_OUTPUT 'DeltaLogScanExec' FOR
+      INSPECT NODE_OUTPUT 'DeltaLogReplayExec' FOR
       DELETE FROM delta_inspect_nodes WHERE id = 2
       AS PRETTY
       """

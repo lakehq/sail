@@ -118,6 +118,9 @@ def normalize_query_output(output: str) -> str:
     text = normalize_plan_text(output)
     text = re.sub(r"(modification_time: )\d+", r"\1<time_ms>", text)
     text = re.sub(r"(deletion_timestamp: )\d+", r"\1<time_ms>", text)
+    # Some table columns are inherently unstable (e.g. `modification_time`, `_commit_timestamp`),
+    # so normalize any 13-digit epoch-ms timestamp to a placeholder.
+    text = re.sub(r"(?<!\d)\d{13}(?!\d)", "<time_ms>", text)
     text = re.sub(
         r"(\{add=\{[^,]+, \{[^}]*\}, \d+, )\d+",
         r"\1<time_ms>",
