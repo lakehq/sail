@@ -702,6 +702,7 @@ mod tests {
         assert_eq!(optimized_plan.name(), "ProjectionExec");
 
         // The nested region under FilterExec must also be optimized, producing its own ProjectionExec.
+        #[expect(clippy::expect_used)]
         let filter_node = find_node_by_name(optimized_plan, "FilterExec")
             .expect("expected FilterExec leaf to remain in the optimized plan");
         assert_eq!(filter_node.children().len(), 1);
