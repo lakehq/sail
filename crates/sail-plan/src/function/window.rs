@@ -274,7 +274,7 @@ fn count_if(input: WinFunctionInput) -> PlanResult<expr::Expr> {
             Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
                 fun: WindowFunctionDefinition::AggregateUDF(count::count_udaf()),
                 params: WindowFunctionParams {
-                    args: arguments,
+                    args: vec![lit(0)],
                     partition_by,
                     order_by,
                     window_frame,
