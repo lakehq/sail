@@ -59,6 +59,7 @@ impl InspectNodeOutputNode {
         self.format.clone()
     }
 
+    #[allow(unused)]
     pub fn plan(&self) -> &LogicalPlan {
         self.plan.as_ref()
     }

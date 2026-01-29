@@ -141,9 +141,7 @@ def normalize_query_output(output: str) -> str:
             for key in ("executionTimeMs", "writeTimeMs"):
                 if key in obj:
                     obj[key] = "__TIME__"
-            rendered = json.dumps(obj, sort_keys=True, separators=(",", ":")).replace(
-                '"__TIME__"', "<time_ms>"
-            )
+            rendered = json.dumps(obj, sort_keys=True, separators=(",", ":")).replace('"__TIME__"', "<time_ms>")
         else:
             rendered = json.dumps(obj, separators=(",", ":"))
         normalized.append(rendered)
