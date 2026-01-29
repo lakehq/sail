@@ -77,7 +77,13 @@ impl DeltaTableProvider {
         config: DeltaScanConfig,
     ) -> DeltaResult<Self> {
         Ok(DeltaTableProvider {
-            schema: df_logical_schema(&snapshot, &config.file_column_name, config.schema.clone())?,
+            schema: df_logical_schema(
+                &snapshot,
+                &config.file_column_name,
+                &config.commit_version_column_name,
+                &config.commit_timestamp_column_name,
+                config.schema.clone(),
+            )?,
             snapshot,
             log_store,
             config,
@@ -167,42 +173,44 @@ impl TableProvider for DeltaTableProvider {
             None => self.snapshot.input_schema(),
         }?;
 
-        let logical_schema = df_logical_schema(
+        let full_logical_schema = df_logical_schema(
             &self.snapshot,
             &config.file_column_name,
+            &config.commit_version_column_name,
+            &config.commit_timestamp_column_name,
             Some(schema.clone()),
         )?;
 
         let logical_schema = if let Some(used_columns) = projection {
             let mut fields = vec![];
             for idx in used_columns {
-                fields.push(logical_schema.field(*idx).to_owned());
+                fields.push(full_logical_schema.field(*idx).to_owned());
             }
             // partition filters with Exact pushdown were removed from projection by DF optimizer,
             // we need to add them back for the predicate pruning to work
             let filter_expr = conjunction(filters.iter().cloned());
             if let Some(expr) = &filter_expr {
                 for c in expr.column_refs() {
-                    let idx = logical_schema.index_of(c.name.as_str())?;
+                    let idx = full_logical_schema.index_of(c.name.as_str())?;
                     if !used_columns.contains(&idx) {
-                        fields.push(logical_schema.field(idx).to_owned());
+                        fields.push(full_logical_schema.field(idx).to_owned());
                     }
                 }
             }
             // Ensure all partition columns are included in logical schema
             let table_partition_cols = self.snapshot.metadata().partition_columns();
             for partition_col in table_partition_cols.iter() {
-                if let Ok(idx) = logical_schema.index_of(partition_col.as_str()) {
+                if let Ok(idx) = full_logical_schema.index_of(partition_col.as_str()) {
                     if !used_columns.contains(&idx)
                         && !fields.iter().any(|f| f.name() == partition_col)
                     {
-                        fields.push(logical_schema.field(idx).to_owned());
+                        fields.push(full_logical_schema.field(idx).to_owned());
                     }
                 }
             }
             Arc::new(ArrowSchema::new(fields))
         } else {
-            logical_schema
+            Arc::clone(&full_logical_schema)
         };
 
         // Separate filters for pruning vs pushdown
@@ -275,6 +283,7 @@ impl TableProvider for DeltaTableProvider {
                 projection,
                 limit,
                 pushdown_filter,
+                sort_order: None,
             },
             session,
             file_schema,
@@ -286,17 +295,11 @@ impl TableProvider for DeltaTableProvider {
         // TODO: Properly expose these metrics
         let scan_exec = DataSourceExec::from_data_source(file_scan_config);
         // Rename columns from physical back to logical names expected by `schema`
-        let mut logical_names = schema
+        let logical_names = full_logical_schema
             .fields()
             .iter()
-            .filter(|f| !table_partition_cols.contains(f.name()))
             .map(|f| f.name().clone())
             .collect::<Vec<_>>();
-        // append partition column names in order
-        logical_names.extend(table_partition_cols.iter().cloned());
-        if let Some(file_col) = &config.file_column_name {
-            logical_names.push(file_col.clone());
-        }
         let renamed = rename_projected_physical_plan(scan_exec, &logical_names, projection)?;
         Ok(renamed)
     }
