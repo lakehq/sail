@@ -67,7 +67,9 @@ jobs:
           role-to-assume: ${{ vars.CLAUDE_CODE_AWS_ROLE_ARN }}
           aws-region: us-east-1
 
-      - uses: anthropics/claude-code-action@v1
+      - name: Run Claude Code
+        uses: anthropics/claude-code-action@v1
+        timeout-minutes: 60
         with:
           trigger_phrase: "@claude"
           github_token: ${{ steps.app-token.outputs.token }}
