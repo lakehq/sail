@@ -19,6 +19,7 @@ edition = { workspace = true }
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-data-source = { path = "../sail-data-source" }
+sail-physical-plan = { path = "../sail-physical-plan" }
 # Delta Lake
 delta_kernel = { workspace = true }
 
@@ -26,6 +27,7 @@ delta_kernel = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-physical-expr = { workspace = true }
+datafusion-functions-nested = { workspace = true }
 
 # Arrow dependencies
 arrow-schema = { workspace = true }
@@ -48,6 +50,7 @@ log = { workspace = true }
 itertools = { workspace = true }
 percent-encoding = { workspace = true }
 regex = { workspace = true }
+serde_arrow = { workspace = true }
 
 [lints]
 workspace = true

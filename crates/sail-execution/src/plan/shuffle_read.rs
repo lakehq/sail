@@ -14,22 +14,25 @@ use futures::future::try_join_all;
 use futures::TryStreamExt;
 use log::warn;
 
-use crate::plan::write_list_of_lists;
+use crate::plan::ListListDisplay;
 use crate::stream::merge::MergedRecordBatchStream;
 use crate::stream::reader::{TaskReadLocation, TaskStreamReader};
 
 #[derive(Debug, Clone)]
 pub struct ShuffleReadExec {
-    /// The stage to read from.
-    stage: usize,
     /// For each output partition, a list of locations to read from.
     locations: Vec<Vec<TaskReadLocation>>,
     properties: PlanProperties,
-    reader: Option<Arc<dyn TaskStreamReader>>,
+    reader: Arc<dyn TaskStreamReader>,
 }
 
 impl ShuffleReadExec {
-    pub fn new(stage: usize, schema: SchemaRef, partitioning: Partitioning) -> Self {
+    pub fn new(
+        locations: Vec<Vec<TaskReadLocation>>,
+        reader: Arc<dyn TaskStreamReader>,
+        schema: SchemaRef,
+        partitioning: Partitioning,
+    ) -> Self {
         let partitioning = match partitioning {
             Partitioning::Hash(expr, n) if expr.is_empty() => Partitioning::UnknownPartitioning(n),
             Partitioning::Hash(expr, n) => {
@@ -43,41 +46,19 @@ impl ShuffleReadExec {
             }
             _ => partitioning,
         };
-        let partition_count = partitioning.partition_count();
         let properties = PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             partitioning,
             EmissionType::Both,
             Boundedness::Unbounded {
-                requires_infinite_memory: true,
+                requires_infinite_memory: false,
             },
         );
         Self {
-            stage,
-            locations: vec![vec![]; partition_count],
+            locations,
             properties,
-            reader: None,
+            reader,
         }
-    }
-
-    pub fn stage(&self) -> usize {
-        self.stage
-    }
-
-    pub fn partitioning(&self) -> &Partitioning {
-        self.properties.output_partitioning()
-    }
-
-    pub fn locations(&self) -> &[Vec<TaskReadLocation>] {
-        &self.locations
-    }
-
-    pub fn with_locations(self, locations: Vec<Vec<TaskReadLocation>>) -> Self {
-        Self { locations, ..self }
-    }
-
-    pub fn with_reader(self, reader: Option<Arc<dyn TaskStreamReader>>) -> Self {
-        Self { reader, ..self }
     }
 }
 
@@ -85,11 +66,10 @@ impl DisplayAs for ShuffleReadExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
         write!(
             f,
-            "ShuffleReadExec: stage={}, partitioning={}, locations=",
-            self.stage,
-            self.properties.output_partitioning()
-        )?;
-        write_list_of_lists(f, &self.locations)
+            "ShuffleReadExec: partitioning={}, locations={}",
+            self.properties.output_partitioning(),
+            ListListDisplay(&self.locations)
+        )
     }
 }
 
@@ -133,14 +113,9 @@ impl ExecutionPlan for ShuffleReadExec {
             })?
             .clone();
         if locations.is_empty() {
-            let stage = self.stage;
-            warn!("empty read locations for stage {stage} partition {partition}");
+            warn!("empty read locations for partition {partition}");
         }
-        let reader = self
-            .reader
-            .as_ref()
-            .ok_or_else(|| exec_datafusion_err!("reader not set for ShuffleReadExec"))?
-            .clone();
+        let reader = self.reader.clone();
         let output_schema = self.schema();
         let output =
             futures::stream::once(

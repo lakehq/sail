@@ -7,7 +7,7 @@ use datafusion_expr::{col, Expr, ExprSchemable, Extension, LogicalPlan, LogicalP
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::error::CatalogError;
 use sail_catalog::manager::CatalogManager;
-use sail_catalog::provider::{CreateTableColumnOptions, CreateTableOptions};
+use sail_catalog::provider::{CatalogPartitionField, CreateTableColumnOptions, CreateTableOptions};
 use sail_common::spec;
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableSort, TableColumnStatus, TableKind,
@@ -181,6 +181,7 @@ impl PlanResolver<'_> {
         if !cluster_by.is_empty() {
             return Err(PlanError::todo("CLUSTER BY for write"));
         }
+        let input_schema = input.schema().inner().clone();
         let options_map = options
             .clone()
             .into_iter()
@@ -209,7 +210,11 @@ impl PlanResolver<'_> {
                     file_write_options.format = self.config.default_table_file_format.clone();
                 }
                 file_write_options.path = location;
-                file_write_options.mode = self.resolve_write_mode(mode, None, state).await?;
+                let schema_for_cond =
+                    matches!(mode, WriteMode::OverwriteIf { .. }).then_some(input_schema.as_ref());
+                file_write_options.mode = self
+                    .resolve_write_mode(mode, schema_for_cond, state)
+                    .await?;
             }
             WriteTarget::Sink => {
                 if !table_properties.is_empty() {
@@ -220,7 +225,11 @@ impl PlanResolver<'_> {
                 if file_write_options.format.is_empty() {
                     file_write_options.format = self.config.default_table_file_format.clone();
                 }
-                file_write_options.mode = self.resolve_write_mode(mode, None, state).await?;
+                let schema_for_cond =
+                    matches!(mode, WriteMode::OverwriteIf { .. }).then_some(input_schema.as_ref());
+                file_write_options.mode = self
+                    .resolve_write_mode(mode, schema_for_cond, state)
+                    .await?;
             }
             WriteTarget::ExistingTable {
                 table,
@@ -316,7 +325,13 @@ impl PlanResolver<'_> {
                         generated_always_as: None,
                     })
                     .collect();
-                let partition_by = partition_by.into_iter().map(|x| x.into()).collect();
+                let partition_by = partition_by
+                    .into_iter()
+                    .map(|x| CatalogPartitionField {
+                        column: x.into(),
+                        transform: None,
+                    })
+                    .collect();
                 let sort_by = self.resolve_catalog_table_sort(sort_by)?;
                 let bucket_by = self.resolve_catalog_table_bucket_by(bucket_by)?;
                 let command = CatalogCommand::CreateTable {
@@ -417,8 +432,6 @@ impl PlanResolver<'_> {
         };
         match status.kind {
             TableKind::Table {
-                catalog: _,
-                database: _,
                 columns,
                 comment: _,
                 constraints: _,

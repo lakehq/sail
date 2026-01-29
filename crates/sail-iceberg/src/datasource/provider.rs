@@ -392,6 +392,7 @@ impl IcebergTableProvider {
                     .unwrap_or(Precision::Absent),
                 distinct_count: Precision::Absent,
                 sum_value: Precision::Absent,
+                byte_size: Precision::Absent,
             })
             .collect();
 
@@ -449,6 +450,7 @@ impl IcebergTableProvider {
                     min_value,
                     distinct_count,
                     sum_value: Precision::Absent,
+                    byte_size: Precision::Absent,
                 }
             })
             .collect();
@@ -562,14 +564,17 @@ impl TableProvider for IcebergTableProvider {
             ..Default::default()
         };
 
-        let mut parquet_source = ParquetSource::new(parquet_options);
+        let mut parquet_source = ParquetSource::new(Arc::clone(&file_schema))
+            .with_table_parquet_options(parquet_options);
         // Prepare pushdown filter for Parquet
         let pushdown_filter: Option<Arc<dyn PhysicalExpr>> = if !parquet_pushdown_filters.is_empty()
         {
             let logical_schema = self.rebuild_logical_schema_for_filters(projection, filters);
             let df_schema = logical_schema.to_dfschema()?;
             let pushdown_expr = conjunction(parquet_pushdown_filters);
-            pushdown_expr.map(|expr| simplify_expr(session, &df_schema, expr))
+            pushdown_expr
+                .map(|expr| simplify_expr(session, &df_schema, expr))
+                .transpose()?
         } else {
             None
         };
@@ -577,7 +582,8 @@ impl TableProvider for IcebergTableProvider {
             // TODO: Consider expression adapter for Parquet pushdown
             parquet_source = parquet_source.with_predicate(pred);
         }
-        let parquet_source = Arc::new(parquet_source);
+        let parquet_source: Arc<dyn datafusion::datasource::physical_plan::FileSource> =
+            Arc::new(parquet_source);
 
         // Build table statistics from pruned files
         let table_stats = self.aggregate_statistics(&data_files);
@@ -598,19 +604,18 @@ impl TableProvider for IcebergTableProvider {
             None
         };
 
-        let file_scan_config =
-            FileScanConfigBuilder::new(object_store_url, file_schema, parquet_source)
-                .with_file_groups(if file_groups.is_empty() {
-                    vec![FileGroup::from(vec![])]
-                } else {
-                    file_groups
-                })
-                .with_statistics(table_stats)
-                .with_projection_indices(expanded_projection)
-                .with_limit(limit)
-                .with_expr_adapter(Some(Arc::new(IcebergPhysicalExprAdapterFactory {})
-                    as Arc<dyn PhysicalExprAdapterFactory>))
-                .build();
+        let file_scan_config = FileScanConfigBuilder::new(object_store_url, parquet_source)
+            .with_file_groups(if file_groups.is_empty() {
+                vec![FileGroup::from(vec![])]
+            } else {
+                file_groups
+            })
+            .with_statistics(table_stats)
+            .with_projection_indices(expanded_projection)?
+            .with_limit(limit)
+            .with_expr_adapter(Some(Arc::new(IcebergPhysicalExprAdapterFactory {})
+                as Arc<dyn PhysicalExprAdapterFactory>))
+            .build();
 
         Ok(DataSourceExec::from_data_source(file_scan_config))
     }

@@ -1271,6 +1271,10 @@ fn build_merge_projection(
 
         projections.push(expr.alias(name.clone()));
     }
+
+    // Preserve the file path column so downstream physical planning can implement
+    // targeted rewrite (filter writer input to touched files, while keeping inserts).
+    projections.push(col(path_column).alias(path_column.to_string()));
     Ok(projections)
 }
 

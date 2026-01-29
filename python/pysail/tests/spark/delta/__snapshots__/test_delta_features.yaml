@@ -8,11 +8,11 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 1132
-    numAddedFiles: 1
-    numFiles: 1
-    numOutputBytes: 1132
-    numOutputFiles: 1
+    numAddedBytes: 2161
+    numAddedFiles: 2
+    numFiles: 2
+    numOutputBytes: 2161
+    numOutputFiles: 2
     numOutputRows: 4
     numRemovedBytes: 1070
     numRemovedFiles: 1
@@ -27,6 +27,50 @@ data:
       predicate: 't . flag = ''orphan'' '
     notMatchedPredicates:
     - actionType: insert
+  timestamp: <timestamp>
+---
+name: "test_conditional_overwrite_can_replace_all_rows_replace_where_id__cast0_as_bigint"
+data:
+  clientVersion: sail-delta-lake.x.x.x
+  engineInfo: sail-delta-lake:x.x.x
+  isBlindAppend: false
+  operation: WRITE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 1067
+    numAddedFiles: 1
+    numFiles: 1
+    numOutputBytes: 1067
+    numOutputFiles: 1
+    numOutputRows: 2
+    numRemovedBytes: 1093
+    numRemovedFiles: 1
+    writeTimeMs: <time_ms>
+  operationParameters:
+    mode: Overwrite
+    predicate: 'id >= CAST ( 0 AS BIGINT ) '
+  timestamp: <timestamp>
+---
+name: "test_conditional_overwrite_keeps_nonmatching_rows_replace_where"
+data:
+  clientVersion: sail-delta-lake.x.x.x
+  engineInfo: sail-delta-lake:x.x.x
+  isBlindAppend: false
+  operation: WRITE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 2122
+    numAddedFiles: 2
+    numFiles: 2
+    numOutputBytes: 2122
+    numOutputFiles: 2
+    numOutputRows: 4
+    numRemovedBytes: 1093
+    numRemovedFiles: 1
+    writeTimeMs: <time_ms>
+  operationParameters:
+    mode: Overwrite
+    predicate: 'category = ''A'' '
   timestamp: <timestamp>
 ---
 name: "test_create_partitioned_table_with_column_mapping_name_mode_ddl"
@@ -250,11 +294,11 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 1081
-    numAddedFiles: 1
-    numFiles: 1
-    numOutputBytes: 1081
-    numOutputFiles: 1
+    numAddedBytes: 2094
+    numAddedFiles: 2
+    numFiles: 2
+    numOutputBytes: 2094
+    numOutputFiles: 2
     numOutputRows: 3
     numRemovedBytes: 1059
     numRemovedFiles: 1
@@ -300,11 +344,11 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 1419
-    numAddedFiles: 1
-    numFiles: 1
-    numOutputBytes: 1419
-    numOutputFiles: 1
+    numAddedBytes: 2690
+    numAddedFiles: 2
+    numFiles: 2
+    numOutputBytes: 2690
+    numOutputFiles: 2
     numOutputRows: 4
     numRemovedBytes: 1293
     numRemovedFiles: 1
@@ -328,11 +372,11 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 1033
-    numAddedFiles: 1
-    numFiles: 1
-    numOutputBytes: 1033
-    numOutputFiles: 1
+    numAddedBytes: 1988
+    numAddedFiles: 2
+    numFiles: 2
+    numOutputBytes: 1988
+    numOutputFiles: 2
     numOutputRows: 3
     numRemovedBytes: 1017
     numRemovedFiles: 1

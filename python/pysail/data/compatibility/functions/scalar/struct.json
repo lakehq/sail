@@ -7,6 +7,8 @@
   {
     "module": "pyspark.sql.functions",
     "function": "struct",
-    "status": "supported"
+    "status": "partially supported",
+    "note": "`*` wildcard not supported yet",
+    "ref": "https://github.com/lakehq/sail/issues/1153"
   }
 ]

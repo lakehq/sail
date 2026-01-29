@@ -5,8 +5,11 @@ use datafusion::common::{plan_datafusion_err, Result};
 use sail_catalog::error::CatalogResult;
 use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
 use sail_catalog::provider::{CatalogProvider, RuntimeAwareCatalogProvider};
+use sail_catalog_glue::{GlueCatalogConfig, GlueCatalogProvider};
 use sail_catalog_iceberg::IcebergRestCatalogProvider;
 use sail_catalog_memory::MemoryCatalogProvider;
+use sail_catalog_onelake::OneLakeCatalogProvider;
+use sail_catalog_system::{SystemCatalogProvider, SYSTEM_CATALOG_NAME};
 use sail_catalog_unity::UnityCatalogProvider;
 use sail_common::config::{AppConfig, CatalogType};
 use sail_common::runtime::RuntimeHandle;
@@ -16,7 +19,7 @@ pub fn create_catalog_manager(
     config: &AppConfig,
     runtime: RuntimeHandle,
 ) -> Result<CatalogManager> {
-    let catalogs = config
+    let mut catalogs = config
         .catalog
         .list
         .iter()
@@ -87,10 +90,74 @@ pub fn create_catalog_manager(
 
                     Ok((name.to_string(), Arc::new(runtime_aware)))
                 }
+                CatalogType::OneLake {
+                    name,
+                    url,
+                    bearer_token,
+                } => {
+                    // Parse URL format: workspace/item.type (e.g., "duckrun/data.lakehouse", "duckrun/data.datawarehouse")
+                    let (workspace, item) = url.split_once('/').ok_or_else(|| {
+                        plan_datafusion_err!(
+                            "Invalid OneLake URL format: expected 'workspace/item.type', got '{}'",
+                            url
+                        )
+                    })?;
+
+                    // Extract item name and type (e.g., "data.Lakehouse" -> name="data", type="Lakehouse")
+                    let (item_name, item_type) = item.split_once('.').ok_or_else(|| {
+                        plan_datafusion_err!(
+                            "Invalid OneLake item format: expected 'name.type', got '{}'",
+                            item
+                        )
+                    })?;
+
+                    let token = bearer_token.as_ref().map(|t| t.expose_secret().to_string());
+                    let runtime_aware = RuntimeAwareCatalogProvider::try_new(
+                        || {
+                            Ok(OneLakeCatalogProvider::new(
+                                name.clone(),
+                                workspace.to_string(),
+                                item_name.to_string(),
+                                item_type.to_string(),
+                                token.clone(),
+                            ))
+                        },
+                        runtime.io().clone(),
+                    )?;
+
+                    Ok((name.to_string(), Arc::new(runtime_aware)))
+                }
+                CatalogType::Glue {
+                    name,
+                    region,
+                    endpoint_url,
+                } => {
+                    let config = GlueCatalogConfig {
+                        region: region.clone(),
+                        endpoint_url: endpoint_url.clone(),
+                    };
+                    let runtime_aware = RuntimeAwareCatalogProvider::try_new(
+                        || Ok(GlueCatalogProvider::new(name.to_string(), config)),
+                        runtime.io().clone(),
+                    )?;
+                    Ok((name.to_string(), Arc::new(runtime_aware)))
+                }
             }
         })
         .collect::<CatalogResult<HashMap<_, _>>>()
         .map_err(|e| plan_datafusion_err!("failed to create catalog: {e}"))?;
+    if catalogs
+        .insert(
+            SYSTEM_CATALOG_NAME.to_string(),
+            Arc::new(SystemCatalogProvider),
+        )
+        .is_some()
+    {
+        return Err(plan_datafusion_err!(
+            "cannot define catalog with reserved name: {}",
+            SYSTEM_CATALOG_NAME
+        ));
+    }
     let options = CatalogManagerOptions {
         catalogs,
         default_catalog: config.catalog.default_catalog.clone(),
