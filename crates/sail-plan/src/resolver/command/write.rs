@@ -7,9 +7,7 @@ use datafusion_expr::{col, Expr, ExprSchemable, Extension, LogicalPlan, LogicalP
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::error::CatalogError;
 use sail_catalog::manager::CatalogManager;
-use sail_catalog::provider::{
-    CatalogPartitionField, CreateTableColumnOptions, CreateTableOptions,
-};
+use sail_catalog::provider::{CatalogPartitionField, CreateTableColumnOptions, CreateTableOptions};
 use sail_common::spec;
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableSort, TableColumnStatus, TableKind,

@@ -186,7 +186,8 @@ impl IcebergRestCatalogProvider {
             partition_statistics,
         } = *result.metadata;
 
-        let current_schema = find_by_id_or_last(schemas.as_ref(), current_schema_id, |s| s.schema_id);
+        let current_schema =
+            find_by_id_or_last(schemas.as_ref(), current_schema_id, |s| s.schema_id);
         let default_partition_spec =
             find_by_id_or_last(partition_specs.as_ref(), default_spec_id, |s| s.spec_id);
 
@@ -236,7 +237,9 @@ impl IcebergRestCatalogProvider {
         };
 
         let default_sort_order =
-            find_by_id_or_last(sort_orders.as_ref(), default_sort_order_id, |o| Some(o.order_id));
+            find_by_id_or_last(sort_orders.as_ref(), default_sort_order_id, |o| {
+                Some(o.order_id)
+            });
 
         let sort_by: Vec<CatalogTableSort> = default_sort_order
             .map(|order| {
@@ -322,19 +325,52 @@ impl IcebergRestCatalogProvider {
         );
         properties.insert("metadata.table-uuid".to_string(), table_uuid);
 
-        insert_optional_properties(&mut properties, &[
-            ("metadata.last-updated-ms", last_updated_ms.map(|v| v.to_string())),
-            ("metadata.next-row-id", next_row_id.map(|v| v.to_string())),
-            ("metadata.current-schema-id", current_schema_id.map(|v| v.to_string())),
-            ("metadata.last-column-id", last_column_id.map(|v| v.to_string())),
-            ("metadata.default-spec-id", default_spec_id.map(|v| v.to_string())),
-            ("metadata.last-partition-id", last_partition_id.map(|v| v.to_string())),
-            ("metadata.default-sort-order-id", default_sort_order_id.map(|v| v.to_string())),
-            ("metadata.current-snapshot-id", current_snapshot_id.map(|v| v.to_string())),
-            ("metadata.last-sequence-number", last_sequence_number.map(|v| v.to_string())),
-            ("metadata.statistics", statistics.map(|v| serde_json::to_string(&v).unwrap_or_default())),
-            ("metadata.partition-statistics", partition_statistics.map(|v| serde_json::to_string(&v).unwrap_or_default())),
-        ]);
+        insert_optional_properties(
+            &mut properties,
+            &[
+                (
+                    "metadata.last-updated-ms",
+                    last_updated_ms.map(|v| v.to_string()),
+                ),
+                ("metadata.next-row-id", next_row_id.map(|v| v.to_string())),
+                (
+                    "metadata.current-schema-id",
+                    current_schema_id.map(|v| v.to_string()),
+                ),
+                (
+                    "metadata.last-column-id",
+                    last_column_id.map(|v| v.to_string()),
+                ),
+                (
+                    "metadata.default-spec-id",
+                    default_spec_id.map(|v| v.to_string()),
+                ),
+                (
+                    "metadata.last-partition-id",
+                    last_partition_id.map(|v| v.to_string()),
+                ),
+                (
+                    "metadata.default-sort-order-id",
+                    default_sort_order_id.map(|v| v.to_string()),
+                ),
+                (
+                    "metadata.current-snapshot-id",
+                    current_snapshot_id.map(|v| v.to_string()),
+                ),
+                (
+                    "metadata.last-sequence-number",
+                    last_sequence_number.map(|v| v.to_string()),
+                ),
+                (
+                    "metadata.statistics",
+                    statistics.map(|v| serde_json::to_string(&v).unwrap_or_default()),
+                ),
+                (
+                    "metadata.partition-statistics",
+                    partition_statistics.map(|v| serde_json::to_string(&v).unwrap_or_default()),
+                ),
+            ],
+        );
 
         let properties: Vec<_> = properties.into_iter().collect();
 
