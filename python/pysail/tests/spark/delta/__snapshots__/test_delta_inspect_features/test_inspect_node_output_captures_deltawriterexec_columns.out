@@ -1,6 +1,6 @@
 +------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 |action                                                                                                                                                                                                                        |
 +------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-|{add={part-<id>.snappy.parquet, {}, 713, 1769665520583, true, {"numRecords":1,"minValues":{"value":"v3","id":3},"maxValues":{"value":"v3","id":3},"nullCount":{"value":0,"id":0}}}}|
-|{commit_meta={1, {"write":{"mode":"Append"}}, {"numAddedFiles":1,"numOutputFiles":1,"executionTimeMs":5,"writeTimeMs":0,"numAddedBytes":713,"numFiles":1,"numOutputBytes":713,"numOutputRows":1}}}                            |
+|{add={part-<id>.snappy.parquet, {}, 713, <time_ms>, true, {"maxValues":{"id":3,"value":"v3"},"minValues":{"id":3,"value":"v3"},"nullCount":{"id":0,"value":0},"numRecords":1}}}|
+|{commit_meta={1, {"write":{"mode":"Append"}}, {"executionTimeMs":<time_ms>,"numAddedBytes":713,"numAddedFiles":1,"numFiles":1,"numOutputBytes":713,"numOutputFiles":1,"numOutputRows":1,"writeTimeMs":<time_ms>}}}                            |
 +------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+

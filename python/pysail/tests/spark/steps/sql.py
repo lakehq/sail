@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import TYPE_CHECKING
 
 import pytest
@@ -114,7 +115,40 @@ def query_result(datatable, ordered, query, spark):
 
 
 def normalize_query_output(output: str) -> str:
-    return normalize_plan_text(output)
+    text = normalize_plan_text(output)
+    text = re.sub(r"(modification_time: )\d+", r"\1<time_ms>", text)
+    text = re.sub(r"(deletion_timestamp: )\d+", r"\1<time_ms>", text)
+    text = re.sub(
+        r"(\{add=\{[^,]+, \{[^}]*\}, \d+, )\d+",
+        r"\1<time_ms>",
+        text,
+    )
+    decoder = json.JSONDecoder()
+    normalized: list[str] = []
+    idx = 0
+    while idx < len(text):
+        if text[idx] != "{":
+            normalized.append(text[idx])
+            idx += 1
+            continue
+        try:
+            obj, end = decoder.raw_decode(text, idx)
+        except json.JSONDecodeError:
+            normalized.append(text[idx])
+            idx += 1
+            continue
+        if isinstance(obj, dict):
+            for key in ("executionTimeMs", "writeTimeMs"):
+                if key in obj:
+                    obj[key] = "__TIME__"
+            rendered = json.dumps(obj, sort_keys=True, separators=(",", ":")).replace(
+                '"__TIME__"', "<time_ms>"
+            )
+        else:
+            rendered = json.dumps(obj, separators=(",", ":"))
+        normalized.append(rendered)
+        idx = end
+    return "".join(normalized)
 
 
 class QueryOutputSnapshotExtension(SingleFileSnapshotExtension):
