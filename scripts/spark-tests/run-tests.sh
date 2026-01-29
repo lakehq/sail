@@ -2,9 +2,6 @@
 
 set -euo 'pipefail'
 
-# Force consistent timezone across all environments to avoid flaky tests
-export TZ="America/Los_Angeles"
-
 if [ -z "${VIRTUAL_ENV:-}" ]; then
   echo "The tests must be run in a Python virtual environment."
   echo "Please run the script via \`hatch run <env>:<command> <options>\`."
