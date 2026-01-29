@@ -29,6 +29,28 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      - name: Detect fork PR
+        id: fork-check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR_NUMBER=""
+          if [[ "${{ github.event_name }}" == "pull_request_review" || "${{ github.event_name }}" == "pull_request_review_comment" ]]; then
+            PR_NUMBER="${{ github.event.pull_request.number }}"
+          elif [[ "${{ github.event_name }}" == "issue_comment" && -n "${{ github.event.issue.pull_request }}" ]]; then
+            PR_NUMBER="${{ github.event.issue.number }}"
+          fi
+
+          if [[ -z "$PR_NUMBER" ]]; then
+            echo "is_fork=false" >> $GITHUB_OUTPUT
+            echo "pr_number=" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          IS_FORK=$(gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json isCrossRepository -q '.isCrossRepository')
+          echo "is_fork=$IS_FORK" >> $GITHUB_OUTPUT
+
       - uses: actions/checkout@v6
 
       - uses: ./.github/actions/adjust-swap-space
@@ -68,7 +90,44 @@ jobs:
           role-to-assume: ${{ vars.CLAUDE_CODE_AWS_ROLE_ARN }}
           aws-region: us-east-1
 
+      - name: Save PR diff for fork review
+        if: steps.fork-check.outputs.is_fork == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          gh pr diff ${{ steps.fork-check.outputs.pr_number }} > "${{ github.workspace }}/.fork-pr-diff.patch"
+          echo "Saved PR diff to .fork-pr-diff.patch for review"
+
+      - name: Run Claude Code (Fork PR - Review Only)
+        if: steps.fork-check.outputs.is_fork == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          trigger_phrase: "@claude"
+          github_token: ${{ steps.app-token.outputs.token }}
+          use_bedrock: "true"
+          track_progress: false
+          direct_prompt: |
+            SECURITY: This PR is from a fork. You are in READ-ONLY review mode.
+
+            RESTRICTIONS:
+            - DO NOT checkout, fetch, or switch to any branch from the fork
+            - DO NOT run any build commands (cargo build, npm install, etc.)
+            - You can ONLY review code, not execute it
+
+            The PR diff has been saved to .fork-pr-diff.patch in the workspace.
+            Read this file to review the proposed changes.
+
+            Base your review on:
+            1. The diff content in .fork-pr-diff.patch
+            2. The existing codebase (which is safe to read)
+
+            Provide helpful code review feedback via comments.
+          claude_args: |
+            --allowedTools Read,Glob,Grep,LS,mcp__github_inline_comment__create_inline_comment
+            --model us.anthropic.claude-opus-4-5-20251101-v1:0
+
       - name: Run Claude Code
+        if: steps.fork-check.outputs.is_fork != 'true'
         uses: anthropics/claude-code-action@v1
         with:
           trigger_phrase: "@claude"
