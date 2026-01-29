@@ -325,52 +325,45 @@ impl IcebergRestCatalogProvider {
         );
         properties.insert("metadata.table-uuid".to_string(), table_uuid);
 
-        insert_optional_properties(
-            &mut properties,
-            &[
-                (
-                    "metadata.last-updated-ms",
-                    last_updated_ms.map(|v| v.to_string()),
-                ),
-                ("metadata.next-row-id", next_row_id.map(|v| v.to_string())),
-                (
-                    "metadata.current-schema-id",
-                    current_schema_id.map(|v| v.to_string()),
-                ),
-                (
-                    "metadata.last-column-id",
-                    last_column_id.map(|v| v.to_string()),
-                ),
-                (
-                    "metadata.default-spec-id",
-                    default_spec_id.map(|v| v.to_string()),
-                ),
-                (
-                    "metadata.last-partition-id",
-                    last_partition_id.map(|v| v.to_string()),
-                ),
-                (
-                    "metadata.default-sort-order-id",
-                    default_sort_order_id.map(|v| v.to_string()),
-                ),
-                (
-                    "metadata.current-snapshot-id",
-                    current_snapshot_id.map(|v| v.to_string()),
-                ),
-                (
-                    "metadata.last-sequence-number",
-                    last_sequence_number.map(|v| v.to_string()),
-                ),
-                (
-                    "metadata.statistics",
-                    statistics.map(|v| serde_json::to_string(&v).unwrap_or_default()),
-                ),
-                (
-                    "metadata.partition-statistics",
-                    partition_statistics.map(|v| serde_json::to_string(&v).unwrap_or_default()),
-                ),
-            ],
-        );
+        if let Some(v) = last_updated_ms {
+            properties.insert("metadata.last-updated-ms".to_string(), v.to_string());
+        }
+        if let Some(v) = next_row_id {
+            properties.insert("metadata.next-row-id".to_string(), v.to_string());
+        }
+        if let Some(v) = current_schema_id {
+            properties.insert("metadata.current-schema-id".to_string(), v.to_string());
+        }
+        if let Some(v) = last_column_id {
+            properties.insert("metadata.last-column-id".to_string(), v.to_string());
+        }
+        if let Some(v) = default_spec_id {
+            properties.insert("metadata.default-spec-id".to_string(), v.to_string());
+        }
+        if let Some(v) = last_partition_id {
+            properties.insert("metadata.last-partition-id".to_string(), v.to_string());
+        }
+        if let Some(v) = default_sort_order_id {
+            properties.insert("metadata.default-sort-order-id".to_string(), v.to_string());
+        }
+        if let Some(v) = current_snapshot_id {
+            properties.insert("metadata.current-snapshot-id".to_string(), v.to_string());
+        }
+        if let Some(v) = last_sequence_number {
+            properties.insert("metadata.last-sequence-number".to_string(), v.to_string());
+        }
+        if let Some(v) = statistics {
+            properties.insert(
+                "metadata.statistics".to_string(),
+                serde_json::to_string(&v).unwrap_or_default(),
+            );
+        }
+        if let Some(v) = partition_statistics {
+            properties.insert(
+                "metadata.partition-statistics".to_string(),
+                serde_json::to_string(&v).unwrap_or_default(),
+            );
+        }
 
         let properties: Vec<_> = properties.into_iter().collect();
 
@@ -1115,17 +1108,6 @@ where
     })
 }
 
-/// Inserts key-value pairs into a properties map, skipping entries with `None` values.
-fn insert_optional_properties(
-    properties: &mut HashMap<String, String>,
-    entries: &[(&str, Option<String>)],
-) {
-    for (key, value) in entries {
-        if let Some(v) = value {
-            properties.insert(key.to_string(), v.clone());
-        }
-    }
-}
 
 /// Converts table column options to Iceberg nested fields.
 fn columns_to_nested_fields(
