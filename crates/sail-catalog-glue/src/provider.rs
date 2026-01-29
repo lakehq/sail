@@ -435,13 +435,18 @@ impl GlueCatalogProvider {
                 "AWS Glue catalog does not support BUCKET BY".to_string(),
             ));
         }
+        if partition_by.iter().any(|f| f.transform.is_some()) {
+            return Err(CatalogError::NotSupported(
+                "partition transforms are not supported by Glue catalog".to_string(),
+            ));
+        }
 
         Ok(ValidatedCreateTableOptions {
             columns,
             comment,
             location,
             format,
-            partition_by,
+            partition_by: partition_by.into_iter().map(|f| f.column).collect(),
             if_not_exists,
             properties,
         })
