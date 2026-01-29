@@ -33,10 +33,7 @@ impl SparkSignum {
                     TypeSignature::Numeric(1),
                     TypeSignature::Uniform(1, vec![DataType::Interval(IntervalUnit::YearMonth)]),
                     TypeSignature::Uniform(1, vec![DataType::Interval(IntervalUnit::DayTime)]),
-                    TypeSignature::Uniform(
-                        1,
-                        vec![DataType::Interval(IntervalUnit::MonthDayNano)],
-                    ),
+                    TypeSignature::Uniform(1, vec![DataType::Interval(IntervalUnit::MonthDayNano)]),
                     TypeSignature::Uniform(1, vec![DataType::Duration(TimeUnit::Second)]),
                     TypeSignature::Uniform(1, vec![DataType::Duration(TimeUnit::Millisecond)]),
                     TypeSignature::Uniform(1, vec![DataType::Duration(TimeUnit::Microsecond)]),
@@ -216,7 +213,10 @@ impl ScalarUDFImpl for SparkSignum {
                     let nanos = IntervalMonthDayNanoType::to_parts(x).2;
                     if months == 0 && days == 0 && nanos == 0 {
                         0_f64
-                    } else if months > 0 || (months == 0 && days > 0) || (months == 0 && days == 0 && nanos > 0) {
+                    } else if months > 0
+                        || (months == 0 && days > 0)
+                        || (months == 0 && days == 0 && nanos > 0)
+                    {
                         1_f64
                     } else {
                         -1_f64
@@ -400,47 +400,27 @@ impl ScalarUDFImpl for SparkSignum {
                         Ok(Arc::new(result) as ArrayRef)
                     }
                     DataType::Duration(TimeUnit::Second) => {
-                        let result: Float64Array =
-                            array.as_primitive::<DurationSecondType>().unary(|x| {
-                                if x == 0 {
-                                    0_f64
-                                } else {
-                                    x.signum() as f64
-                                }
-                            });
+                        let result: Float64Array = array
+                            .as_primitive::<DurationSecondType>()
+                            .unary(|x| if x == 0 { 0_f64 } else { x.signum() as f64 });
                         Ok(Arc::new(result) as ArrayRef)
                     }
                     DataType::Duration(TimeUnit::Millisecond) => {
-                        let result: Float64Array =
-                            array.as_primitive::<DurationMillisecondType>().unary(|x| {
-                                if x == 0 {
-                                    0_f64
-                                } else {
-                                    x.signum() as f64
-                                }
-                            });
+                        let result: Float64Array = array
+                            .as_primitive::<DurationMillisecondType>()
+                            .unary(|x| if x == 0 { 0_f64 } else { x.signum() as f64 });
                         Ok(Arc::new(result) as ArrayRef)
                     }
                     DataType::Duration(TimeUnit::Microsecond) => {
-                        let result: Float64Array =
-                            array.as_primitive::<DurationMicrosecondType>().unary(|x| {
-                                if x == 0 {
-                                    0_f64
-                                } else {
-                                    x.signum() as f64
-                                }
-                            });
+                        let result: Float64Array = array
+                            .as_primitive::<DurationMicrosecondType>()
+                            .unary(|x| if x == 0 { 0_f64 } else { x.signum() as f64 });
                         Ok(Arc::new(result) as ArrayRef)
                     }
                     DataType::Duration(TimeUnit::Nanosecond) => {
-                        let result: Float64Array =
-                            array.as_primitive::<DurationNanosecondType>().unary(|x| {
-                                if x == 0 {
-                                    0_f64
-                                } else {
-                                    x.signum() as f64
-                                }
-                            });
+                        let result: Float64Array = array
+                            .as_primitive::<DurationNanosecondType>()
+                            .unary(|x| if x == 0 { 0_f64 } else { x.signum() as f64 });
                         Ok(Arc::new(result) as ArrayRef)
                     }
                     other => exec_err!("Unsupported data type {other:?} for function signum"),

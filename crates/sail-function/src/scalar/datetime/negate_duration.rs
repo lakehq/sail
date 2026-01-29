@@ -54,9 +54,9 @@ impl ScalarUDFImpl for NegateDuration {
             );
         };
         match arg {
-            ColumnarValue::Scalar(ScalarValue::DurationSecond(val)) => Ok(
-                ColumnarValue::Scalar(ScalarValue::DurationSecond(val.map(|x| -x))),
-            ),
+            ColumnarValue::Scalar(ScalarValue::DurationSecond(val)) => Ok(ColumnarValue::Scalar(
+                ScalarValue::DurationSecond(val.map(|x| -x)),
+            )),
             ColumnarValue::Scalar(ScalarValue::DurationMillisecond(val)) => Ok(
                 ColumnarValue::Scalar(ScalarValue::DurationMillisecond(val.map(|x| -x))),
             ),
