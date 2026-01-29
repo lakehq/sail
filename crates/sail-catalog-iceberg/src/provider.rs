@@ -1153,24 +1153,30 @@ fn build_partition_spec(
                 None | Some(PartitionTransform::Identity) => {
                     (sail_iceberg::Transform::Identity, field.column.clone())
                 }
-                Some(PartitionTransform::Year) => {
-                    (sail_iceberg::Transform::Year, format!("{}_year", field.column))
-                }
-                Some(PartitionTransform::Month) => {
-                    (sail_iceberg::Transform::Month, format!("{}_month", field.column))
-                }
-                Some(PartitionTransform::Day) => {
-                    (sail_iceberg::Transform::Day, format!("{}_day", field.column))
-                }
-                Some(PartitionTransform::Hour) => {
-                    (sail_iceberg::Transform::Hour, format!("{}_hour", field.column))
-                }
-                Some(PartitionTransform::Bucket(n)) => {
-                    (sail_iceberg::Transform::Bucket(*n), format!("{}_bucket", field.column))
-                }
-                Some(PartitionTransform::Truncate(w)) => {
-                    (sail_iceberg::Transform::Truncate(*w), format!("{}_trunc", field.column))
-                }
+                Some(PartitionTransform::Year) => (
+                    sail_iceberg::Transform::Year,
+                    format!("{}_year", field.column),
+                ),
+                Some(PartitionTransform::Month) => (
+                    sail_iceberg::Transform::Month,
+                    format!("{}_month", field.column),
+                ),
+                Some(PartitionTransform::Day) => (
+                    sail_iceberg::Transform::Day,
+                    format!("{}_day", field.column),
+                ),
+                Some(PartitionTransform::Hour) => (
+                    sail_iceberg::Transform::Hour,
+                    format!("{}_hour", field.column),
+                ),
+                Some(PartitionTransform::Bucket(n)) => (
+                    sail_iceberg::Transform::Bucket(*n),
+                    format!("{}_bucket", field.column),
+                ),
+                Some(PartitionTransform::Truncate(w)) => (
+                    sail_iceberg::Transform::Truncate(*w),
+                    format!("{}_trunc", field.column),
+                ),
             };
             partition_spec_builder = partition_spec_builder.add_field(source_id, &name, transform);
         }
