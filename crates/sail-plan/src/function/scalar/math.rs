@@ -23,6 +23,7 @@ use sail_function::scalar::math::spark_try_add::SparkTryAdd;
 use sail_function::scalar::math::spark_try_div::SparkTryDiv;
 use sail_function::scalar::math::spark_try_mod::SparkTryMod;
 use sail_function::scalar::math::spark_try_mult::SparkTryMult;
+use sail_function::scalar::datetime::negate_duration::NegateDuration;
 use sail_function::scalar::math::spark_try_subtract::SparkTrySubtract;
 use sail_function::scalar::math::spark_unhex::SparkUnHex;
 
@@ -100,7 +101,14 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
         function_context,
     } = input;
     if arguments.len() < 2 {
-        Ok(Expr::Negative(Box::new(arguments.one()?)))
+        let arg = arguments.one()?;
+        // DataFusion's Negative doesn't support Duration types, so we use a custom UDF
+        let arg_type = arg.get_type(function_context.schema);
+        if matches!(arg_type, Ok(DataType::Duration(_))) {
+            Ok(ScalarUDF::from(NegateDuration::new()).call(vec![arg]))
+        } else {
+            Ok(Expr::Negative(Box::new(arg)))
+        }
     } else {
         let (left, right) = arguments.two()?;
         let (left_type, right_type) = (
