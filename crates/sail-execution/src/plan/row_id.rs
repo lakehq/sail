@@ -94,6 +94,15 @@ impl ExecutionPlan for AddRowIdExec {
         let input = self.input.execute(partition, context)?;
         let schema = self.output_schema.clone();
         let output =
+            // TODO: This currently generates row-ids starting from 1 per input partition. 
+            // Correctness for distributed collect-left join relies on upstream planning to ensure 
+            // a single partition before `AddRowIdExec` (e.g. via `CoalescePartitionsExec`), otherwise 
+            // row-ids can collide across partitions.
+            //
+            // Consider encoding partition/stage identity into the row-id (or generating a stable
+            // hash-based id) so we can avoid coalescing wide inputs just to assign unique row-ids.
+            // With that in place, we can also push down projection earlier (while retaining
+            // join keys + `row_id`) to reduce shuffle/broadcast width for wide tables.
             // Start from 1 and reserve 0 as a sentinel value. This keeps the row-id namespace
             // distinct from any "missing" / default materialization that may appear downstream.
             futures::stream::unfold((input, 1u64, schema.clone()), move |state| async move {
