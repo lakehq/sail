@@ -1,20 +1,24 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use aws_config::BehaviorVersion;
 use aws_sdk_glue::config::Region;
 use aws_sdk_glue::types::{
-    SerDeInfo, StorageDescriptor, TableInput, ViewDefinitionInput, ViewRepresentationInput,
+    CreateIcebergTableInput, IcebergInput, IcebergPartitionField, IcebergPartitionSpec,
+    IcebergSchema, IcebergStructField, IcebergStructTypeEnum, MetadataOperation,
+    OpenTableFormatInput, StorageDescriptor, TableInput, ViewDefinitionInput,
+    ViewRepresentationInput,
 };
 use aws_sdk_glue::Client;
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::provider::{
-    CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewColumnOptions,
-    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+    CatalogPartitionField, CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions,
+    CreateTableOptions, CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions,
+    DropTableOptions, DropViewOptions, Namespace, PartitionTransform,
 };
 use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
 use tokio::sync::OnceCell;
 
-use crate::data_type::{arrow_to_glue_type, glue_type_to_arrow};
+use crate::data_type::{arrow_to_glue_type, arrow_to_iceberg_type, glue_type_to_arrow};
 use crate::format::GlueStorageFormat;
 
 /// Configuration for AWS Glue Data Catalog.
@@ -231,96 +235,6 @@ impl GlueCatalogProvider {
         })
     }
 
-    /// Builds Glue columns from CreateTableColumnOptions, separating regular and partition columns.
-    fn build_glue_columns(
-        columns: Vec<sail_catalog::provider::CreateTableColumnOptions>,
-        partition_by: &[String],
-    ) -> CatalogResult<(
-        Vec<aws_sdk_glue::types::Column>,
-        Vec<aws_sdk_glue::types::Column>,
-    )> {
-        let partition_set: HashSet<_> = partition_by.iter().map(|s| s.to_lowercase()).collect();
-
-        let mut regular_columns = Vec::new();
-        let mut partition_columns = Vec::new();
-
-        for col in columns {
-            let glue_type = arrow_to_glue_type(&col.data_type)?;
-            let glue_col = aws_sdk_glue::types::Column::builder()
-                .name(&col.name)
-                .r#type(glue_type)
-                .set_comment(col.comment.clone())
-                .build()
-                .map_err(|e| CatalogError::External(format!("Failed to build column: {e}")))?;
-
-            if partition_set.contains(&col.name.to_lowercase()) {
-                partition_columns.push(glue_col);
-            } else {
-                regular_columns.push(glue_col);
-            }
-        }
-
-        Ok((regular_columns, partition_columns))
-    }
-
-    /// Builds a Glue StorageDescriptor from column definitions and format info.
-    fn build_storage_descriptor(
-        columns: Vec<aws_sdk_glue::types::Column>,
-        format_info: &GlueStorageFormat,
-        location: Option<&str>,
-    ) -> StorageDescriptor {
-        let serde_info = SerDeInfo::builder()
-            .serialization_library(format_info.serde_library)
-            .build();
-
-        let mut builder = StorageDescriptor::builder()
-            .set_columns(Some(columns))
-            .input_format(format_info.input_format)
-            .output_format(format_info.output_format)
-            .serde_info(serde_info);
-
-        if let Some(loc) = location {
-            builder = builder.location(loc);
-        }
-
-        builder.build()
-    }
-
-    /// Builds a Glue TableInput from storage descriptor and metadata.
-    fn build_table_input(
-        table_name: &str,
-        storage_descriptor: StorageDescriptor,
-        partition_columns: Vec<aws_sdk_glue::types::Column>,
-        comment: Option<&str>,
-        properties: Vec<(String, String)>,
-    ) -> CatalogResult<TableInput> {
-        let parameters: Option<HashMap<String, String>> = if properties.is_empty() {
-            None
-        } else {
-            Some(properties.into_iter().collect())
-        };
-
-        let mut builder = TableInput::builder()
-            .name(table_name)
-            .storage_descriptor(storage_descriptor);
-
-        if let Some(desc) = comment {
-            builder = builder.description(desc);
-        }
-
-        if !partition_columns.is_empty() {
-            builder = builder.set_partition_keys(Some(partition_columns));
-        }
-
-        if let Some(params) = parameters {
-            builder = builder.set_parameters(Some(params));
-        }
-
-        builder
-            .build()
-            .map_err(|e| CatalogError::InvalidArgument(format!("Failed to build table input: {e}")))
-    }
-
     /// Builds Glue columns from CreateViewColumnOptions.
     fn build_view_columns(
         columns: Vec<CreateViewColumnOptions>,
@@ -384,6 +298,113 @@ impl GlueCatalogProvider {
             .map_err(|e| CatalogError::InvalidArgument(format!("Failed to build view input: {e}")))
     }
 
+    /// Builds an Iceberg schema from column options.
+    fn build_iceberg_schema(columns: &[CreateTableColumnOptions]) -> CatalogResult<IcebergSchema> {
+        let fields: CatalogResult<Vec<IcebergStructField>> = columns
+            .iter()
+            .enumerate()
+            .map(|(idx, col)| {
+                let type_doc = arrow_to_iceberg_type(&col.data_type)?;
+                let mut builder = IcebergStructField::builder()
+                    .id((idx + 1) as i32)
+                    .name(&col.name)
+                    .required(!col.nullable)
+                    .r#type(type_doc);
+                if let Some(comment) = &col.comment {
+                    builder = builder.doc(comment);
+                }
+                builder.build().map_err(|e| {
+                    CatalogError::InvalidArgument(format!("Failed to build Iceberg field: {e}"))
+                })
+            })
+            .collect();
+
+        IcebergSchema::builder()
+            .schema_id(0)
+            .r#type(IcebergStructTypeEnum::Struct)
+            .set_fields(Some(fields?))
+            .build()
+            .map_err(|e| {
+                CatalogError::InvalidArgument(format!("Failed to build Iceberg schema: {e}"))
+            })
+    }
+
+    /// Builds an Iceberg partition spec from partition fields.
+    fn build_iceberg_partition_spec(
+        partition_by: &[CatalogPartitionField],
+        columns: &[CreateTableColumnOptions],
+    ) -> CatalogResult<Option<IcebergPartitionSpec>> {
+        if partition_by.is_empty() {
+            return Ok(None);
+        }
+
+        let column_name_to_id: HashMap<String, i32> = columns
+            .iter()
+            .enumerate()
+            .map(|(idx, col)| (col.name.clone(), (idx + 1) as i32))
+            .collect();
+
+        let fields: CatalogResult<Vec<IcebergPartitionField>> = partition_by
+            .iter()
+            .map(|p| {
+                let source_id = column_name_to_id.get(&p.column).ok_or_else(|| {
+                    CatalogError::InvalidArgument(format!(
+                        "Partition column '{}' not found in schema",
+                        p.column
+                    ))
+                })?;
+                let (transform, name) = Self::partition_transform_to_string(p);
+                IcebergPartitionField::builder()
+                    .name(name)
+                    .source_id(*source_id)
+                    .transform(transform)
+                    .build()
+                    .map_err(|e| {
+                        CatalogError::InvalidArgument(format!(
+                            "Failed to build Iceberg partition field: {e}"
+                        ))
+                    })
+            })
+            .collect();
+
+        let spec = IcebergPartitionSpec::builder()
+            .spec_id(0)
+            .set_fields(Some(fields?))
+            .build()
+            .map_err(|e| {
+                CatalogError::InvalidArgument(format!(
+                    "Failed to build Iceberg partition spec: {e}"
+                ))
+            })?;
+
+        Ok(Some(spec))
+    }
+
+    /// Converts a CatalogPartitionField to an Iceberg transform string and partition name.
+    fn partition_transform_to_string(field: &CatalogPartitionField) -> (String, String) {
+        match &field.transform {
+            None | Some(PartitionTransform::Identity) => {
+                ("identity".to_string(), field.column.clone())
+            }
+            Some(PartitionTransform::Year) => {
+                ("year".to_string(), format!("{}_year", field.column))
+            }
+            Some(PartitionTransform::Month) => {
+                ("month".to_string(), format!("{}_month", field.column))
+            }
+            Some(PartitionTransform::Day) => ("day".to_string(), format!("{}_day", field.column)),
+            Some(PartitionTransform::Hour) => {
+                ("hour".to_string(), format!("{}_hour", field.column))
+            }
+            Some(PartitionTransform::Bucket(n)) => {
+                (format!("bucket[{n}]"), format!("{}_bucket", field.column))
+            }
+            Some(PartitionTransform::Truncate(w)) => {
+                (format!("truncate[{w}]"), format!("{}_trunc", field.column))
+            }
+        }
+    }
+
     /// Validates CreateTableOptions and returns only the supported fields.
     fn validate_create_table_options(
         options: CreateTableOptions,
@@ -393,7 +414,7 @@ impl GlueCatalogProvider {
             comment,
             constraints,
             location,
-            format,
+            format: _,
             partition_by,
             sort_by,
             bucket_by,
@@ -435,18 +456,18 @@ impl GlueCatalogProvider {
                 "AWS Glue catalog does not support BUCKET BY".to_string(),
             ));
         }
-        if partition_by.iter().any(|f| f.transform.is_some()) {
-            return Err(CatalogError::NotSupported(
-                "partition transforms are not supported by Glue catalog".to_string(),
-            ));
-        }
+
+        let location = location.ok_or_else(|| {
+            CatalogError::InvalidArgument("Location is required for Iceberg tables".to_string())
+        })?;
+
+        // Note: comment is not used for Iceberg tables through the OpenTableFormatInput API
+        let _ = comment;
 
         Ok(ValidatedCreateTableOptions {
             columns,
-            comment,
             location,
-            format,
-            partition_by: partition_by.into_iter().map(|f| f.column).collect(),
+            partition_by,
             if_not_exists,
             properties,
         })
@@ -455,11 +476,9 @@ impl GlueCatalogProvider {
 
 /// Supported fields from CreateTableOptions after validation.
 struct ValidatedCreateTableOptions {
-    pub columns: Vec<sail_catalog::provider::CreateTableColumnOptions>,
-    pub comment: Option<String>,
-    pub location: Option<String>,
-    pub format: String,
-    pub partition_by: Vec<String>,
+    pub columns: Vec<CreateTableColumnOptions>,
+    pub location: String,
+    pub partition_by: Vec<CatalogPartitionField>,
     pub if_not_exists: bool,
     pub properties: Vec<(String, String)>,
 }
@@ -634,34 +653,50 @@ impl CatalogProvider for GlueCatalogProvider {
 
         let ValidatedCreateTableOptions {
             columns,
-            comment,
             location,
-            format,
             partition_by,
             if_not_exists,
             properties,
         } = Self::validate_create_table_options(options)?;
 
-        let format_info = GlueStorageFormat::from_format(&format)?;
+        let iceberg_schema = Self::build_iceberg_schema(&columns)?;
+        let partition_spec = Self::build_iceberg_partition_spec(&partition_by, &columns)?;
 
-        let (regular_columns, partition_columns) =
-            Self::build_glue_columns(columns, &partition_by)?;
+        let mut iceberg_table_builder = CreateIcebergTableInput::builder()
+            .location(&location)
+            .schema(iceberg_schema);
 
-        let storage_descriptor =
-            Self::build_storage_descriptor(regular_columns, &format_info, location.as_deref());
+        if let Some(spec) = partition_spec {
+            iceberg_table_builder = iceberg_table_builder.partition_spec(spec);
+        }
 
-        let table_input = Self::build_table_input(
-            table,
-            storage_descriptor,
-            partition_columns,
-            comment.as_deref(),
-            properties,
-        )?;
+        if !properties.is_empty() {
+            let props: HashMap<String, String> = properties.into_iter().collect();
+            iceberg_table_builder = iceberg_table_builder.set_properties(Some(props));
+        }
+
+        let create_iceberg_table = iceberg_table_builder.build().map_err(|e| {
+            CatalogError::InvalidArgument(format!("Failed to build CreateIcebergTableInput: {e}"))
+        })?;
+
+        let iceberg_input = IcebergInput::builder()
+            .metadata_operation(MetadataOperation::Create)
+            .version("2")
+            .create_iceberg_table_input(create_iceberg_table)
+            .build()
+            .map_err(|e| {
+                CatalogError::InvalidArgument(format!("Failed to build IcebergInput: {e}"))
+            })?;
+
+        let open_format_input = OpenTableFormatInput::builder()
+            .iceberg_input(iceberg_input)
+            .build();
 
         let result = client
             .create_table()
             .database_name(&db_name)
-            .table_input(table_input)
+            .name(table)
+            .open_table_format_input(open_format_input)
             .send()
             .await;
 

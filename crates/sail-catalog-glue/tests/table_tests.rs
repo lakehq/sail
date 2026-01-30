@@ -22,7 +22,7 @@ use arrow::datatypes::{DataType, Field, Fields, TimeUnit};
 use common::{col, setup_with_database, simple_table_options};
 use sail_catalog::provider::{
     CatalogPartitionField, CatalogProvider, CreateTableColumnOptions, CreateTableOptions,
-    DropTableOptions,
+    DropTableOptions, PartitionTransform,
 };
 
 /// Tests table creation in Glue catalog.
@@ -539,4 +539,83 @@ async fn test_drop_table() {
         .drop_table(&namespace, "nonexistent", drop_options)
         .await;
     assert!(result.is_ok());
+}
+
+/// Tests partition transforms with Iceberg tables.
+///
+/// - Creates a table with partition transforms (day, identity, bucket)
+/// - Verifies the table is created successfully
+/// - Note: This test uses the OpenTableFormatInput API for Iceberg tables
+#[tokio::test]
+#[ignore]
+async fn test_partition_transforms() {
+    let (catalog, _container, namespace) = setup_with_database("test_partition_transforms").await;
+
+    let columns = vec![
+        col("id", DataType::Int64),
+        col(
+            "event_time",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+        ),
+        col("category", DataType::Utf8),
+        col("user_id", DataType::Int64),
+    ];
+
+    let created_table = catalog
+        .create_table(
+            &namespace,
+            "events",
+            CreateTableOptions {
+                columns,
+                comment: Some("Events table with partition transforms".to_string()),
+                constraints: vec![],
+                location: Some("s3://bucket/events".to_string()),
+                format: "parquet".to_string(),
+                partition_by: vec![
+                    CatalogPartitionField {
+                        column: "event_time".to_string(),
+                        transform: Some(PartitionTransform::Day),
+                    },
+                    CatalogPartitionField {
+                        column: "category".to_string(),
+                        transform: None,
+                    },
+                    CatalogPartitionField {
+                        column: "user_id".to_string(),
+                        transform: Some(PartitionTransform::Bucket(16)),
+                    },
+                ],
+                sort_by: vec![],
+                bucket_by: None,
+                if_not_exists: false,
+                replace: false,
+                options: vec![],
+                properties: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(created_table.name, "events");
+    assert_eq!(
+        created_table.database,
+        vec!["test_partition_transforms_db".to_string()]
+    );
+
+    match &created_table.kind {
+        sail_common_datafusion::catalog::TableKind::Table {
+            columns,
+            comment,
+            location,
+            ..
+        } => {
+            assert_eq!(columns.len(), 4);
+            assert_eq!(
+                comment,
+                &Some("Events table with partition transforms".to_string())
+            );
+            assert_eq!(location, &Some("s3://bucket/events".to_string()));
+        }
+        _ => panic!("Expected Table kind"),
+    }
 }
