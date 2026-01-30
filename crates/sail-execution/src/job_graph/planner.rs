@@ -285,7 +285,7 @@ fn build_distributed_collect_left_join(
     let optimized_collect_left = matches!(
         join.join_type(),
         JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark
-    );
+    ) && join.filter().is_none();
 
     if optimized_collect_left {
         let left_with_row_id: Arc<dyn ExecutionPlan> = Arc::new(AddRowIdExec::try_new(left_base)?);
