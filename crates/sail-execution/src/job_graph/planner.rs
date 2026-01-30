@@ -930,7 +930,7 @@ fn create_driver_stage(
 #[expect(clippy::unwrap_used, reason = "tests use unwrap for brevity")]
 #[expect(clippy::panic, reason = "tests may use panic for unreachable branches")]
 mod tests {
-    use datafusion::arrow::array::Int32Array;
+    use datafusion::arrow::array::{ArrayRef, BooleanArray, Int32Array};
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::arrow::record_batch::RecordBatch;
     use datafusion::physical_expr::expressions::Column;
@@ -943,11 +943,16 @@ mod tests {
     use super::*;
 
     fn make_exec(schema: Arc<Schema>, partitions: usize) -> Arc<dyn ExecutionPlan> {
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
-        )
-        .unwrap();
+        let columns: Vec<ArrayRef> = schema
+            .fields()
+            .iter()
+            .map(|field| match field.data_type() {
+                DataType::Int32 => Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+                DataType::Boolean => Arc::new(BooleanArray::from(vec![true, false, true])),
+                other => panic!("unsupported test field type: {other:?}"),
+            })
+            .collect();
+        let batch = RecordBatch::try_new(schema.clone(), columns).unwrap();
         let data = vec![vec![batch]; partitions];
         TestMemoryExec::try_new_exec(&data, schema, None).unwrap()
     }
