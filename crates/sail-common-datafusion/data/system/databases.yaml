@@ -124,7 +124,7 @@
         - name: inputs
           description: The input stages for the stage.
           rust_type: Vec<crate::system::types::StageInput>
-          sql_type: "ARRAY<STRUCT<stage: UNSIGNED LONG NOT NULL, mode: STRING NOT NULL>>"
+          sql_type: "ARRAY<STRUCT<stage: UNSIGNED LONG NOT NULL, output: UNSIGNED LONG NOT NULL, mode: STRING NOT NULL>>"
           arrow_type: crate::system::types::stage_input_list()
           nullable: false
         - name: group
