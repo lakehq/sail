@@ -116,7 +116,6 @@ pub struct TaskStreamKey {
     pub stage: usize,
     pub partition: usize,
     pub attempt: usize,
-    pub output: usize,
     pub channel: usize,
 }
 
@@ -126,13 +125,8 @@ impl fmt::Display for TaskStreamKeyDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "job {} stage {} partition {} attempt {} output {} channel {}",
-            self.0.job_id,
-            self.0.stage,
-            self.0.partition,
-            self.0.attempt,
-            self.0.output,
-            self.0.channel
+            "job {} stage {} partition {} attempt {} channel {}",
+            self.0.job_id, self.0.stage, self.0.partition, self.0.attempt, self.0.channel
         )
     }
 }
@@ -143,13 +137,8 @@ impl fmt::Display for TaskStreamKeyDenseDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{}/{}/{}/{}/{}/{}",
-            self.0.job_id,
-            self.0.stage,
-            self.0.partition,
-            self.0.attempt,
-            self.0.output,
-            self.0.channel
+            "{}/{}/{}/{}/{}",
+            self.0.job_id, self.0.stage, self.0.partition, self.0.attempt, self.0.channel
         )
     }
 }

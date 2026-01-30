@@ -99,7 +99,6 @@ impl FlightService for TaskStreamFlightServer {
             stage,
             partition,
             attempt,
-            output,
             channel,
         } = ticket;
         let (tx, rx) = oneshot::channel();
@@ -108,7 +107,6 @@ impl FlightService for TaskStreamFlightServer {
             stage: stage as usize,
             partition: partition as usize,
             attempt: attempt as usize,
-            output: output as usize,
             channel: channel as usize,
         };
         self.fetcher.fetch(key, tx).await?;

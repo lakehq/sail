@@ -18,7 +18,7 @@ use crate::task::gen;
 pub struct TaskDefinition {
     pub plan: Arc<[u8]>,
     pub inputs: Vec<TaskInput>,
-    pub outputs: Vec<TaskOutput>,
+    pub output: TaskOutput,
 }
 
 #[derive(Debug, Clone)]
@@ -47,7 +47,6 @@ pub enum TaskInputLocator {
 pub struct TaskInputKey {
     pub partition: usize,
     pub attempt: usize,
-    pub output: usize,
     pub channel: usize,
 }
 
@@ -79,12 +78,12 @@ impl From<TaskDefinition> for gen::TaskDefinition {
         let TaskDefinition {
             plan,
             inputs,
-            outputs,
+            output,
         } = value;
         gen::TaskDefinition {
             plan: plan.to_vec(),
             inputs: inputs.into_iter().map(|x| x.into()).collect(),
-            outputs: outputs.into_iter().map(|x| x.into()).collect(),
+            output: Some(output.into()),
         }
     }
 }
@@ -98,20 +97,14 @@ impl TryFrom<gen::TaskDefinition> for TaskDefinition {
             .into_iter()
             .map(|x| x.try_into())
             .collect::<ExecutionResult<Vec<_>>>()?;
-        let outputs = value
-            .outputs
-            .into_iter()
-            .map(|x| x.try_into())
-            .collect::<ExecutionResult<Vec<_>>>()?;
-        if outputs.is_empty() {
-            return Err(ExecutionError::InvalidArgument(
-                "cannot decode empty task outputs".to_string(),
-            ));
-        }
+        let output = value.output.ok_or_else(|| {
+            ExecutionError::InvalidArgument("cannot decode empty task output".to_string())
+        })?;
+        let output = output.try_into()?;
         Ok(TaskDefinition {
             plan: Arc::from(value.plan),
             inputs,
-            outputs,
+            output,
         })
     }
 }
@@ -226,13 +219,11 @@ impl From<TaskInputKey> for gen::TaskInputDriverKey {
         let TaskInputKey {
             partition,
             attempt,
-            output,
             channel,
         } = value;
         gen::TaskInputDriverKey {
             partition: partition as u64,
             attempt: attempt as u64,
-            output: output as u64,
             channel: channel as u64,
         }
     }
@@ -245,7 +236,6 @@ impl TryFrom<gen::TaskInputDriverKey> for TaskInputKey {
         Ok(TaskInputKey {
             partition: value.partition as usize,
             attempt: value.attempt as usize,
-            output: value.output as usize,
             channel: value.channel as usize,
         })
     }
@@ -278,7 +268,6 @@ impl From<(WorkerId, TaskInputKey)> for gen::TaskInputWorkerKey {
             TaskInputKey {
                 partition,
                 attempt,
-                output,
                 channel,
             },
         ) = value;
@@ -286,7 +275,6 @@ impl From<(WorkerId, TaskInputKey)> for gen::TaskInputWorkerKey {
             worker_id: worker_id.into(),
             partition: partition as u64,
             attempt: attempt as u64,
-            output: output as u64,
             channel: channel as u64,
         }
     }
@@ -301,7 +289,6 @@ impl TryFrom<gen::TaskInputWorkerKey> for (WorkerId, TaskInputKey) {
             TaskInputKey {
                 partition: value.partition as usize,
                 attempt: value.attempt as usize,
-                output: value.output as usize,
                 channel: value.channel as usize,
             },
         ))
@@ -333,13 +320,11 @@ impl From<TaskInputKey> for gen::TaskInputRemoteKey {
         let TaskInputKey {
             partition,
             attempt,
-            output,
             channel,
         } = value;
         gen::TaskInputRemoteKey {
             partition: partition as u64,
             attempt: attempt as u64,
-            output: output as u64,
             channel: channel as u64,
         }
     }
@@ -352,7 +337,6 @@ impl TryFrom<gen::TaskInputRemoteKey> for TaskInputKey {
         Ok(TaskInputKey {
             partition: value.partition as usize,
             attempt: value.attempt as usize,
-            output: value.output as usize,
             channel: value.channel as usize,
         })
     }
@@ -512,7 +496,6 @@ impl TaskInput {
                                 stage: *stage,
                                 partition: key.partition,
                                 attempt: key.attempt,
-                                output: key.output,
                                 channel: key.channel,
                             },
                         })
@@ -530,7 +513,6 @@ impl TaskInput {
                                 stage: *stage,
                                 partition: key.partition,
                                 attempt: key.attempt,
-                                output: key.output,
                                 channel: key.channel,
                             },
                         })
@@ -548,7 +530,6 @@ impl TaskInput {
                                 stage: *stage,
                                 partition: key.partition,
                                 attempt: key.attempt,
-                                output: key.output,
                                 channel: key.channel,
                             },
                         })
@@ -567,7 +548,7 @@ impl TaskOutput {
         }
     }
 
-    pub fn locations(&self, key: &TaskKey, output: usize) -> Vec<TaskWriteLocation> {
+    pub fn locations(&self, key: &TaskKey) -> Vec<TaskWriteLocation> {
         let channels = self.channels();
         match &self.locator {
             TaskOutputLocator::Local { replicas } => (0..channels)
@@ -580,7 +561,6 @@ impl TaskOutput {
                         stage: key.stage,
                         partition: key.partition,
                         attempt: key.attempt,
-                        output,
                         channel,
                     },
                 })
@@ -593,7 +573,6 @@ impl TaskOutput {
                         stage: key.stage,
                         partition: key.partition,
                         attempt: key.attempt,
-                        output,
                         channel,
                     },
                 })

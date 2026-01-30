@@ -135,14 +135,7 @@ impl fmt::Display for JobGraph {
                 "partitions={}",
                 stage.plan.output_partitioning().partition_count()
             )?;
-            let outputs = stage
-                .outputs
-                .iter()
-                .enumerate()
-                .map(|(index, output)| format!("{index}:{output}"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            writeln!(f, "outputs=[{outputs}]")?;
+            writeln!(f, "distribution={}", stage.distribution)?;
             writeln!(f, "placement={}", stage.placement)?;
             writeln!(f, "{}", displayable.indent(true))?;
         }
@@ -157,7 +150,7 @@ pub struct Stage {
     /// The name of the "slot sharing group" for the stage.
     pub group: String,
     pub mode: OutputMode,
-    pub outputs: Vec<OutputDistribution>,
+    pub distribution: OutputDistribution,
     pub placement: TaskPlacement,
 }
 
@@ -179,17 +172,12 @@ impl fmt::Display for TaskPlacement {
 #[derive(Debug, Clone)]
 pub struct StageInput {
     pub stage: usize,
-    pub output: usize,
     pub mode: InputMode,
 }
 
 impl fmt::Display for StageInput {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "StageInput(stage={}, output={}, mode={})",
-            self.stage, self.output, self.mode
-        )
+        write!(f, "StageInput(stage={}, mode={})", self.stage, self.mode)
     }
 }
 
@@ -198,7 +186,7 @@ impl fmt::Display for StageInput {
 /// So we introduce input mode to describe the expectation how stage inputs (which are
 /// leaf nodes of the physical plan) are executed and which partitions and channels are read
 /// from the dependent stages.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputMode {
     /// For each partition in the current stage, execute the same partition to fetch the input
     /// which reads all channels from the corresponding partition in the input stage.

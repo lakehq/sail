@@ -47,7 +47,7 @@ impl JobGraph {
             plan: last,
             group: String::new(),
             mode: OutputMode::Pipelined,
-            outputs: vec![OutputDistribution::RoundRobin { channels: 1 }],
+            distribution: OutputDistribution::RoundRobin { channels: 1 },
             placement: TaskPlacement::Worker,
         });
         Ok(graph)
@@ -373,29 +373,19 @@ fn build_distributed_collect_left_join(
     let left_with_row_id: Arc<dyn ExecutionPlan> = Arc::new(AddRowIdExec::try_new(left_base)?);
     let row_id_index = left_with_row_id.schema().fields().len() - 1;
     let left_partitioning = left_with_row_id.output_partitioning().clone();
-    let fanout_outputs = vec![
-        FanoutOutputSpec {
-            output_partitioning: left_partitioning.clone(),
-            input_partitioning: left_partitioning.clone(),
-            input_mode: InputMode::Forward,
-        },
-        FanoutOutputSpec {
-            output_partitioning: Partitioning::RoundRobinBatch(1),
-            input_partitioning: Partitioning::RoundRobinBatch(1),
-            input_mode: InputMode::Shuffle,
-        },
-    ];
-    let (fanout_inputs, left_schema) =
-        create_fanout_stage(&left_with_row_id, graph, fanout_outputs)?;
+    let (left_stage_input, left_schema, _) = create_forward_stage_input(&left_with_row_id, graph)?;
     let left_stage_for_apply: Arc<dyn ExecutionPlan> = Arc::new(StageInputExec::new(
-        fanout_inputs[0].input.clone(),
+        left_stage_input.clone(),
         left_schema.clone(),
-        fanout_inputs[0].partitioning.clone(),
+        left_partitioning.clone(),
     ));
     let left_stage_for_probe: Arc<dyn ExecutionPlan> = Arc::new(StageInputExec::new(
-        fanout_inputs[1].input.clone(),
+        StageInput {
+            stage: left_stage_input.stage,
+            mode: InputMode::Shuffle,
+        },
         left_schema,
-        fanout_inputs[1].partitioning.clone(),
+        Partitioning::RoundRobinBatch(1),
     ));
     // The probe stage primarily determines matches, but we intentionally keep FULL here so the
     // produced schema / nullability matches the eventual FULL join output (used by union/projection).
@@ -682,59 +672,6 @@ fn build_projected_partition_exprs(
     Ok(exprs)
 }
 
-struct FanoutOutputSpec {
-    output_partitioning: Partitioning,
-    input_partitioning: Partitioning,
-    input_mode: InputMode,
-}
-
-struct FanoutStageInput {
-    input: StageInput,
-    partitioning: Partitioning,
-}
-
-fn create_fanout_stage(
-    plan: &Arc<dyn ExecutionPlan>,
-    graph: &mut JobGraph,
-    outputs: Vec<FanoutOutputSpec>,
-) -> ExecutionResult<(Vec<FanoutStageInput>, SchemaRef)> {
-    let schema = plan.schema();
-    let (plan, inputs) = rewrite_inputs(plan.clone())?;
-    let distributions = outputs
-        .iter()
-        .map(|output| match output.output_partitioning.clone() {
-            Partitioning::RoundRobinBatch(channels)
-            | Partitioning::UnknownPartitioning(channels) => {
-                OutputDistribution::RoundRobin { channels }
-            }
-            Partitioning::Hash(keys, channels) => OutputDistribution::Hash { keys, channels },
-        })
-        .collect::<Vec<_>>();
-    let stage = Stage {
-        inputs,
-        plan,
-        group: String::new(),
-        mode: OutputMode::Pipelined,
-        outputs: distributions,
-        placement: TaskPlacement::Worker,
-    };
-    let s = graph.stages.len();
-    graph.stages.push(stage);
-    let inputs = outputs
-        .into_iter()
-        .enumerate()
-        .map(|(index, output)| FanoutStageInput {
-            input: StageInput {
-                stage: s,
-                output: index,
-                mode: output.input_mode,
-            },
-            partitioning: output.input_partitioning,
-        })
-        .collect::<Vec<_>>();
-    Ok((inputs, schema))
-}
-
 fn create_forward_stage_input(
     plan: &Arc<dyn ExecutionPlan>,
     graph: &mut JobGraph,
@@ -747,7 +684,7 @@ fn create_forward_stage_input(
         plan,
         group: String::new(),
         mode: OutputMode::Pipelined,
-        outputs: vec![OutputDistribution::RoundRobin { channels: 1 }],
+        distribution: OutputDistribution::RoundRobin { channels: 1 },
         placement: TaskPlacement::Worker,
     };
     let s = graph.stages.len();
@@ -755,7 +692,6 @@ fn create_forward_stage_input(
     Ok((
         StageInput {
             stage: s,
-            output: 0,
             mode: InputMode::Forward,
         },
         schema,
@@ -822,7 +758,7 @@ fn create_merge_input(
         plan,
         group: String::new(),
         mode: OutputMode::Pipelined,
-        outputs: vec![OutputDistribution::RoundRobin { channels: 1 }],
+        distribution: OutputDistribution::RoundRobin { channels: 1 },
         placement: TaskPlacement::Worker,
     };
     let s = graph.stages.len();
@@ -830,7 +766,6 @@ fn create_merge_input(
     Ok(Arc::new(StageInputExec::new(
         StageInput {
             stage: s,
-            output: 0,
             mode: InputMode::Merge,
         },
         schema,
@@ -857,7 +792,7 @@ fn create_shuffle(
         plan,
         group: String::new(),
         mode: OutputMode::Pipelined,
-        outputs: vec![distribution],
+        distribution,
         placement: TaskPlacement::Worker,
     };
     let s = graph.stages.len();
@@ -867,11 +802,7 @@ fn create_shuffle(
         ShuffleConsumption::Multiple => InputMode::Broadcast,
     };
     Ok(Arc::new(StageInputExec::new(
-        StageInput {
-            stage: s,
-            output: 0,
-            mode,
-        },
+        StageInput { stage: s, mode },
         schema,
         partitioning.clone(),
     )))
@@ -910,7 +841,7 @@ fn create_driver_stage(
         plan: plan.clone(),
         group: String::new(),
         mode: OutputMode::Pipelined,
-        outputs: vec![OutputDistribution::RoundRobin { channels: 1 }],
+        distribution: OutputDistribution::RoundRobin { channels: 1 },
         placement: TaskPlacement::Driver,
     };
     let s = graph.stages.len();
@@ -918,7 +849,6 @@ fn create_driver_stage(
     Ok(Arc::new(StageInputExec::new(
         StageInput {
             stage: s,
-            output: 0,
             mode: InputMode::Forward,
         },
         schema,
@@ -1085,7 +1015,7 @@ mod tests {
     }
 
     #[test]
-    fn left_full_uses_fanout_stage() {
+    fn left_full_uses_dual_left_inputs() {
         let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
         let left = make_exec(schema.clone(), 2);
         let right = make_exec(schema.clone(), 1);
@@ -1101,7 +1031,20 @@ mod tests {
         )
         .unwrap();
         let graph = JobGraph::try_new(Arc::new(join)).unwrap();
-        let has_fanout = graph.stages().iter().any(|stage| stage.outputs.len() > 1);
-        assert!(has_fanout, "expected fan-out stage for left join");
+        let has_dual_left_inputs = graph.stages().iter().any(|stage| {
+            let has_forward = stage
+                .inputs
+                .iter()
+                .any(|input| input.mode == InputMode::Forward);
+            let has_shuffle = stage
+                .inputs
+                .iter()
+                .any(|input| input.mode == InputMode::Shuffle);
+            has_forward && has_shuffle
+        });
+        assert!(
+            has_dual_left_inputs,
+            "expected both forward and shuffle inputs for left join"
+        );
     }
 }

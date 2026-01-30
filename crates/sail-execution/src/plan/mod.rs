@@ -1,5 +1,4 @@
 mod match_set;
-mod multi_shuffle_write;
 mod row_id;
 mod shuffle_read;
 mod shuffle_write;
@@ -8,7 +7,6 @@ mod stage_input;
 use std::fmt::Display;
 
 pub(crate) use match_set::{ApplyMatchSetExec, BuildMatchSetExec, MatchSetOrExec};
-pub(crate) use multi_shuffle_write::MultiShuffleWriteExec;
 pub(crate) use row_id::AddRowIdExec;
 pub(crate) use shuffle_read::ShuffleReadExec;
 pub(crate) use shuffle_write::ShuffleWriteExec;
