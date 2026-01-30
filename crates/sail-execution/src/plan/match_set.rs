@@ -28,6 +28,7 @@ pub(crate) fn match_set_schema() -> SchemaRef {
     ]))
 }
 
+#[cfg(test)]
 pub(crate) fn build_match_set_batch<I>(row_ids: I) -> Result<RecordBatch>
 where
     I: IntoIterator<Item = u64>,
@@ -36,22 +37,11 @@ where
     for row_id in row_ids {
         update_match_set_bitmap(&mut combined, row_id);
     }
-    let mut indices = Vec::with_capacity(combined.len());
-    let mut bitmap_builder =
-        BinaryBuilder::with_capacity(combined.len(), combined.len() * MATCH_SET_CHUNK_BYTES);
-    for (chunk_index, bitmap) in combined {
-        indices.push(chunk_index);
-        bitmap_builder.append_value(&bitmap);
-    }
-    let index_array = UInt64Array::from(indices);
-    let bitmap_array = bitmap_builder.finish();
-    Ok(RecordBatch::try_new(
-        match_set_schema(),
-        vec![Arc::new(index_array), Arc::new(bitmap_array)],
-    )?)
+    build_match_set_batch_from_bitmaps(combined)
 }
 
 fn build_match_set_batch_from_bitmaps(combined: BTreeMap<u64, Vec<u8>>) -> Result<RecordBatch> {
+    // log_match_set_stats(&combined, "build");
     let mut indices = Vec::with_capacity(combined.len());
     let mut bitmap_builder =
         BinaryBuilder::with_capacity(combined.len(), combined.len() * MATCH_SET_CHUNK_BYTES);
@@ -438,6 +428,7 @@ async fn read_match_set(mut stream: SendableRecordBatchStream) -> Result<BTreeMa
             }
         }
     }
+    // log_match_set_stats(&combined, "read");
     Ok(combined)
 }
 
@@ -515,6 +506,15 @@ fn match_set_contains(bitmap: &BTreeMap<u64, Vec<u8>>, row_id: u64) -> bool {
     };
     (chunk[byte_index] & (1u8 << bit_index)) != 0
 }
+
+// fn log_match_set_stats(map: &BTreeMap<u64, Vec<u8>>, phase: &str) {
+//     let chunk_count = map.len();
+//     let bitmap_bytes = chunk_count * MATCH_SET_CHUNK_BYTES;
+//     debug!(
+//         "match_set {}: chunks={}, bitmap_bytes={}",
+//         phase, chunk_count, bitmap_bytes
+//     );
+// }
 
 fn update_match_set_bitmap(combined: &mut BTreeMap<u64, Vec<u8>>, row_id: u64) {
     let chunk_index = row_id / MATCH_SET_CHUNK_BITS as u64;

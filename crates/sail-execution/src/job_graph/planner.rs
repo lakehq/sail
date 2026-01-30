@@ -1,12 +1,13 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion::common::{plan_datafusion_err, JoinType, Result};
+use datafusion::common::{plan_datafusion_err, JoinSide, JoinType, Result};
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::Partitioning;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion::physical_plan::joins::utils::build_join_schema;
+use datafusion::physical_plan::joins::utils::{build_join_schema, ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::{
     CrossJoinExec, HashJoinExec, JoinOn, NestedLoopJoinExec, PartitionMode, PiecewiseMergeJoinExec,
 };
@@ -285,10 +286,11 @@ fn build_distributed_collect_left_join(
     let optimized_collect_left = matches!(
         join.join_type(),
         JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark
-    ) && join.filter().is_none();
+    );
 
     if optimized_collect_left {
-        let left_with_row_id: Arc<dyn ExecutionPlan> = Arc::new(AddRowIdExec::try_new(left_base)?);
+        let left_with_row_id: Arc<dyn ExecutionPlan> =
+            Arc::new(AddRowIdExec::try_new(left_base.clone())?);
         let left_row_id_index = left_with_row_id.schema().fields().len() - 1;
 
         let (left_stage_input, left_schema, left_partitioning) =
@@ -304,81 +306,97 @@ fn build_distributed_collect_left_join(
             left_partitioning,
         ));
 
-        let (left_keys, right_keys) =
-            build_projected_join_keys(join.on(), &left_stage_for_probe, &right)?;
-        let partition_count = right_keys.output_partitioning().partition_count();
-        let (left_keys, right_keys) =
-            repartition_join_keys(left_keys, right_keys, join.on().len(), partition_count)?;
-        let join_on = build_projected_join_on(&left_keys, &right_keys, join.on().len())?;
-        let row_id_index = left_keys.schema().fields().len() - 1;
-        let hash_join: Arc<dyn ExecutionPlan> = Arc::new(HashJoinExec::try_new(
-            left_keys,
-            right_keys,
-            join_on,
-            join.filter().cloned(),
-            &JoinType::Inner,
-            None,
-            PartitionMode::Partitioned,
-            join.null_equality(),
-        )?);
-        let join_partitioning = hash_join.output_partitioning().clone();
-        let join_stage = create_shuffle(
-            &hash_join,
-            graph,
-            join_partitioning,
-            ShuffleConsumption::Single,
-        )?;
-        let build_match_set: Arc<dyn ExecutionPlan> =
-            Arc::new(BuildMatchSetExec::new(join_stage.clone(), row_id_index));
-        let match_set_partial = create_shuffle(
-            &build_match_set,
-            graph,
-            Partitioning::RoundRobinBatch(1),
-            ShuffleConsumption::Single,
-        )?;
-        let match_set_plan: Arc<dyn ExecutionPlan> =
-            Arc::new(MatchSetOrExec::new(match_set_partial));
-        let match_set_stage = create_shuffle(
-            &match_set_plan,
-            graph,
-            Partitioning::RoundRobinBatch(1),
-            ShuffleConsumption::Single,
-        )?;
+        match build_projected_join_inputs(join.on(), join.filter(), &left_stage_for_probe, &right) {
+            Ok((left_keys, right_keys, join_on, join_filter, row_id_index)) => {
+                let partition_count = right_keys.output_partitioning().partition_count();
+                let (left_keys, right_keys) =
+                    repartition_join_keys(left_keys, right_keys, join.on().len(), partition_count)?;
+                let hash_join: Arc<dyn ExecutionPlan> = Arc::new(HashJoinExec::try_new(
+                    left_keys,
+                    right_keys,
+                    join_on,
+                    join_filter,
+                    &JoinType::Inner,
+                    None,
+                    PartitionMode::Partitioned,
+                    join.null_equality(),
+                )?);
+                let join_partitioning = hash_join.output_partitioning().clone();
+                let join_stage = create_shuffle(
+                    &hash_join,
+                    graph,
+                    join_partitioning,
+                    ShuffleConsumption::Single,
+                )?;
+                let build_match_set: Arc<dyn ExecutionPlan> =
+                    Arc::new(BuildMatchSetExec::new(join_stage.clone(), row_id_index));
+                let match_set_partial = create_shuffle(
+                    &build_match_set,
+                    graph,
+                    Partitioning::RoundRobinBatch(1),
+                    ShuffleConsumption::Single,
+                )?;
+                let match_set_plan: Arc<dyn ExecutionPlan> =
+                    Arc::new(MatchSetOrExec::new(match_set_partial));
+                let match_set_stage = create_shuffle(
+                    &match_set_plan,
+                    graph,
+                    Partitioning::RoundRobinBatch(1),
+                    ShuffleConsumption::Multiple,
+                )?;
 
-        let (output_schema, _) = build_join_schema(
-            join.left().schema().as_ref(),
-            join.right().schema().as_ref(),
-            &join.join_type(),
-        );
-        let mut output_plan: Arc<dyn ExecutionPlan> = Arc::new(ApplyMatchSetExec::new(
-            left_stage_for_apply,
-            match_set_stage,
-            left_row_id_index,
-            join.join_type(),
-            Arc::new(output_schema),
-        ));
+                let (output_schema, _) = build_join_schema(
+                    join.left().schema().as_ref(),
+                    join.right().schema().as_ref(),
+                    &join.join_type(),
+                );
+                let mut output_plan: Arc<dyn ExecutionPlan> = Arc::new(ApplyMatchSetExec::new(
+                    left_stage_for_apply,
+                    match_set_stage,
+                    left_row_id_index,
+                    join.join_type(),
+                    Arc::new(output_schema),
+                ));
 
-        if let Some(projection) = join.projection() {
-            output_plan = apply_projection_indices(output_plan, projection)?;
+                if let Some(projection) = join.projection() {
+                    output_plan = apply_projection_indices(output_plan, projection)?;
+                }
+
+                return Ok(output_plan);
+            }
+            Err(err) => {
+                log::warn!("optimized collect-left fallback: {err}");
+            }
         }
-
-        return Ok(output_plan);
     }
 
-    let left_base = if left_base.output_partitioning().partition_count() > 1 {
-        Arc::new(CoalescePartitionsExec::new(left_base))
-    } else {
-        left_base
-    };
     let left_with_row_id: Arc<dyn ExecutionPlan> = Arc::new(AddRowIdExec::try_new(left_base)?);
     let row_id_index = left_with_row_id.schema().fields().len() - 1;
-
-    let left_stage = create_shuffle(
-        &left_with_row_id,
-        graph,
-        Partitioning::RoundRobinBatch(1),
-        ShuffleConsumption::Multiple,
-    )?;
+    let left_partitioning = left_with_row_id.output_partitioning().clone();
+    let fanout_outputs = vec![
+        FanoutOutputSpec {
+            output_partitioning: left_partitioning.clone(),
+            input_partitioning: left_partitioning.clone(),
+            input_mode: InputMode::Forward,
+        },
+        FanoutOutputSpec {
+            output_partitioning: Partitioning::RoundRobinBatch(1),
+            input_partitioning: Partitioning::RoundRobinBatch(1),
+            input_mode: InputMode::Shuffle,
+        },
+    ];
+    let (fanout_inputs, left_schema) =
+        create_fanout_stage(&left_with_row_id, graph, fanout_outputs)?;
+    let left_stage_for_apply: Arc<dyn ExecutionPlan> = Arc::new(StageInputExec::new(
+        fanout_inputs[0].input.clone(),
+        left_schema.clone(),
+        fanout_inputs[0].partitioning.clone(),
+    ));
+    let left_stage_for_probe: Arc<dyn ExecutionPlan> = Arc::new(StageInputExec::new(
+        fanout_inputs[1].input.clone(),
+        left_schema,
+        fanout_inputs[1].partitioning.clone(),
+    ));
     // The probe stage primarily determines matches, but we intentionally keep FULL here so the
     // produced schema / nullability matches the eventual FULL join output (used by union/projection).
     let probe_join_type = match join.join_type() {
@@ -386,7 +404,7 @@ fn build_distributed_collect_left_join(
         _ => JoinType::Inner,
     };
     let hash_join: Arc<dyn ExecutionPlan> = Arc::new(HashJoinExec::try_new(
-        left_stage.clone(),
+        left_stage_for_probe,
         right,
         join.on().clone(),
         join.filter().cloned(),
@@ -416,7 +434,7 @@ fn build_distributed_collect_left_join(
         &match_set_plan,
         graph,
         Partitioning::RoundRobinBatch(1),
-        ShuffleConsumption::Single,
+        ShuffleConsumption::Multiple,
     )?;
 
     let (output_schema, _) = build_join_schema(
@@ -425,7 +443,7 @@ fn build_distributed_collect_left_join(
         &join.join_type(),
     );
     let apply_match_set: Arc<dyn ExecutionPlan> = Arc::new(ApplyMatchSetExec::new(
-        left_stage,
+        left_stage_for_apply,
         match_set_stage,
         row_id_index,
         join.join_type(),
@@ -454,17 +472,29 @@ fn build_distributed_collect_left_join(
 }
 
 const JOIN_KEY_PREFIX: &str = "__sail_join_key_";
+const JOIN_FILTER_LEFT_PREFIX: &str = "__sail_join_filter_left_";
+const JOIN_FILTER_RIGHT_PREFIX: &str = "__sail_join_filter_right_";
 
-fn build_projected_join_keys(
+type ProjectedJoinInputs = (
+    Arc<dyn ExecutionPlan>,
+    Arc<dyn ExecutionPlan>,
+    JoinOn,
+    Option<JoinFilter>,
+    usize,
+);
+
+fn build_projected_join_inputs(
     on: &JoinOn,
+    filter: Option<&JoinFilter>,
     left: &Arc<dyn ExecutionPlan>,
     right: &Arc<dyn ExecutionPlan>,
-) -> ExecutionResult<(Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>)> {
+) -> ExecutionResult<ProjectedJoinInputs> {
+    let left_schema = left.schema();
+    let right_schema = right.schema();
     let mut left_exprs = Vec::with_capacity(on.len() + 1);
     for (index, (left_expr, _)) in on.iter().enumerate() {
         left_exprs.push((Arc::clone(left_expr), format!("{JOIN_KEY_PREFIX}{index}")));
     }
-    let left_schema = left.schema();
     let row_id_field = left_schema
         .fields()
         .last()
@@ -472,17 +502,128 @@ fn build_projected_join_keys(
     let row_id_expr = Column::new_with_schema(row_id_field.name(), left_schema.as_ref())
         .map_err(ExecutionError::DataFusionError)?;
     left_exprs.push((Arc::new(row_id_expr), row_id_field.name().clone()));
-    let left_projected: Arc<dyn ExecutionPlan> =
-        Arc::new(ProjectionExec::try_new(left_exprs, left.clone())?);
+    let row_id_index = left_exprs.len() - 1;
 
     let mut right_exprs = Vec::with_capacity(on.len());
     for (index, (_, right_expr)) in on.iter().enumerate() {
         right_exprs.push((Arc::clone(right_expr), format!("{JOIN_KEY_PREFIX}{index}")));
     }
+
+    let mut left_index_map = HashMap::new();
+    let mut right_index_map = HashMap::new();
+    if let Some(filter) = filter {
+        for column_index in filter.column_indices() {
+            match column_index.side {
+                JoinSide::Left => append_projected_column(
+                    &mut left_exprs,
+                    &left_schema,
+                    column_index.index,
+                    JOIN_FILTER_LEFT_PREFIX,
+                    &mut left_index_map,
+                )?,
+                JoinSide::Right => append_projected_column(
+                    &mut right_exprs,
+                    &right_schema,
+                    column_index.index,
+                    JOIN_FILTER_RIGHT_PREFIX,
+                    &mut right_index_map,
+                )?,
+                JoinSide::None => {
+                    return Err(ExecutionError::InternalError(
+                        "join filter column index missing join side".to_string(),
+                    ))
+                }
+            }
+        }
+    }
+
+    let left_projected: Arc<dyn ExecutionPlan> =
+        Arc::new(ProjectionExec::try_new(left_exprs, left.clone())?);
     let right_projected: Arc<dyn ExecutionPlan> =
         Arc::new(ProjectionExec::try_new(right_exprs, right.clone())?);
+    let join_on = build_projected_join_on(&left_projected, &right_projected, on.len())?;
+    let join_filter = filter
+        .map(|filter| {
+            rewrite_join_filter_for_projection(
+                filter,
+                &left_index_map,
+                &right_index_map,
+                &left_projected,
+                &right_projected,
+            )
+        })
+        .transpose()?;
 
-    Ok((left_projected, right_projected))
+    Ok((
+        left_projected,
+        right_projected,
+        join_on,
+        join_filter,
+        row_id_index,
+    ))
+}
+
+fn append_projected_column(
+    exprs: &mut Vec<(Arc<dyn PhysicalExpr>, String)>,
+    schema: &SchemaRef,
+    index: usize,
+    prefix: &str,
+    index_map: &mut HashMap<usize, usize>,
+) -> ExecutionResult<()> {
+    if index_map.contains_key(&index) {
+        return Ok(());
+    }
+    let field = schema.field(index);
+    let expr = Column::new_with_schema(field.name(), schema.as_ref())
+        .map_err(ExecutionError::DataFusionError)?;
+    let output_index = exprs.len();
+    exprs.push((Arc::new(expr), format!("{prefix}{index}")));
+    index_map.insert(index, output_index);
+    Ok(())
+}
+
+fn rewrite_join_filter_for_projection(
+    filter: &JoinFilter,
+    left_index_map: &HashMap<usize, usize>,
+    right_index_map: &HashMap<usize, usize>,
+    left: &Arc<dyn ExecutionPlan>,
+    right: &Arc<dyn ExecutionPlan>,
+) -> ExecutionResult<JoinFilter> {
+    let mut column_indices = Vec::with_capacity(filter.column_indices().len());
+    let mut fields = Vec::with_capacity(filter.column_indices().len());
+    for column_index in filter.column_indices() {
+        let new_index = match column_index.side {
+            JoinSide::Left => left_index_map.get(&column_index.index).copied(),
+            JoinSide::Right => right_index_map.get(&column_index.index).copied(),
+            JoinSide::None => None,
+        }
+        .ok_or_else(|| {
+            ExecutionError::InternalError(format!(
+                "join filter column {} missing from projected inputs",
+                column_index.index
+            ))
+        })?;
+        column_indices.push(ColumnIndex {
+            side: column_index.side,
+            index: new_index,
+        });
+        let field = match column_index.side {
+            JoinSide::Left => left.schema().field(new_index).clone(),
+            JoinSide::Right => right.schema().field(new_index).clone(),
+            JoinSide::None => {
+                return Err(ExecutionError::InternalError(
+                    "join filter column index missing join side".to_string(),
+                ))
+            }
+        };
+        fields.push(field);
+    }
+    let schema = Arc::new(Schema::new(fields));
+    Ok(JoinFilter::new(
+        filter.expression().clone(),
+        column_indices,
+        schema,
+    ))
 }
 
 fn build_projected_join_on(
@@ -539,6 +680,59 @@ fn build_projected_partition_exprs(
         exprs.push(Arc::new(expr) as Arc<dyn PhysicalExpr>);
     }
     Ok(exprs)
+}
+
+struct FanoutOutputSpec {
+    output_partitioning: Partitioning,
+    input_partitioning: Partitioning,
+    input_mode: InputMode,
+}
+
+struct FanoutStageInput {
+    input: StageInput,
+    partitioning: Partitioning,
+}
+
+fn create_fanout_stage(
+    plan: &Arc<dyn ExecutionPlan>,
+    graph: &mut JobGraph,
+    outputs: Vec<FanoutOutputSpec>,
+) -> ExecutionResult<(Vec<FanoutStageInput>, SchemaRef)> {
+    let schema = plan.schema();
+    let (plan, inputs) = rewrite_inputs(plan.clone())?;
+    let distributions = outputs
+        .iter()
+        .map(|output| match output.output_partitioning.clone() {
+            Partitioning::RoundRobinBatch(channels)
+            | Partitioning::UnknownPartitioning(channels) => {
+                OutputDistribution::RoundRobin { channels }
+            }
+            Partitioning::Hash(keys, channels) => OutputDistribution::Hash { keys, channels },
+        })
+        .collect::<Vec<_>>();
+    let stage = Stage {
+        inputs,
+        plan,
+        group: String::new(),
+        mode: OutputMode::Pipelined,
+        outputs: distributions,
+        placement: TaskPlacement::Worker,
+    };
+    let s = graph.stages.len();
+    graph.stages.push(stage);
+    let inputs = outputs
+        .into_iter()
+        .enumerate()
+        .map(|(index, output)| FanoutStageInput {
+            input: StageInput {
+                stage: s,
+                output: index,
+                mode: output.input_mode,
+            },
+            partitioning: output.input_partitioning,
+        })
+        .collect::<Vec<_>>();
+    Ok((inputs, schema))
 }
 
 fn create_forward_stage_input(
@@ -741,6 +935,7 @@ mod tests {
     use datafusion::arrow::record_batch::RecordBatch;
     use datafusion::physical_expr::expressions::Column;
     use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+    use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
     use datafusion::physical_plan::joins::JoinOn;
     use datafusion::physical_plan::test::TestMemoryExec;
     use sail_physical_plan::distributed_collect_left_join::DistributedCollectLeftJoinExec;
@@ -852,5 +1047,56 @@ mod tests {
                 "optimized collect-left should avoid coalesce for {join_type}"
             );
         }
+    }
+
+    #[test]
+    fn optimized_collect_left_rewrites_join_filter_indices() {
+        let left_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("flag", DataType::Boolean, false),
+        ]));
+        let right_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let left = make_exec(left_schema.clone(), 1);
+        let right = make_exec(right_schema.clone(), 1);
+        let join_on = build_join_on(&left, &right);
+
+        let filter_expr =
+            Arc::new(Column::new("flag", 0)) as Arc<dyn datafusion::physical_plan::PhysicalExpr>;
+        let filter = JoinFilter::new(
+            filter_expr,
+            vec![ColumnIndex {
+                side: JoinSide::Left,
+                index: 1,
+            }],
+            Arc::new(Schema::new(vec![left_schema.field(1).clone()])),
+        );
+
+        let (left_projected, _right_projected, _join_on, rewritten, row_id_index) =
+            build_projected_join_inputs(&join_on, Some(&filter), &left, &right).unwrap();
+        assert_eq!(row_id_index, 1);
+        let rewritten = rewritten.unwrap();
+        let new_index = rewritten.column_indices()[0].index;
+        assert_eq!(new_index, left_projected.schema().fields().len() - 1);
+    }
+
+    #[test]
+    fn left_full_uses_fanout_stage() {
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let left = make_exec(schema.clone(), 2);
+        let right = make_exec(schema.clone(), 1);
+        let join_on = build_join_on(&left, &right);
+        let join = DistributedCollectLeftJoinExec::try_new(
+            left,
+            right,
+            join_on,
+            None,
+            JoinType::Left,
+            None,
+            datafusion::common::NullEquality::NullEqualsNothing,
+        )
+        .unwrap();
+        let graph = JobGraph::try_new(Arc::new(join)).unwrap();
+        let has_fanout = graph.stages().iter().any(|stage| stage.outputs.len() > 1);
+        assert!(has_fanout, "expected fan-out stage for left join");
     }
 }

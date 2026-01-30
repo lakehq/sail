@@ -112,17 +112,13 @@ impl ExecutionPlan for AddRowIdExec {
         let input = self.input.execute(partition, context)?;
         let schema = self.output_schema.clone();
         let output =
-            // TODO: This currently generates row-ids starting from 1 per input partition. 
-            // Correctness for distributed collect-left join relies on upstream planning to ensure 
-            // a single partition before `AddRowIdExec` (e.g. via `CoalescePartitionsExec`), otherwise 
-            // row-ids can collide across partitions.
+            // Row IDs are partition-unique via:
+            //   row_id = (partition_id << ROW_ID_OFFSET_BITS) | local_offset
+            // where `local_offset` starts from 1. We reserve 0 as a sentinel value (e.g. "missing")
+            // to keep the row-id namespace distinct from downstream default materialization.
             //
-            // Consider encoding partition/stage identity into the row-id (or generating a stable
-            // hash-based id) so we can avoid coalescing wide inputs just to assign unique row-ids.
-            // With that in place, we can also push down projection earlier (while retaining
-            // join keys + `row_id`) to reduce shuffle/broadcast width for wide tables.
-            // Start from 1 and reserve 0 as a sentinel value. This keeps the row-id namespace
-            // distinct from any "missing" / default materialization that may appear downstream.
+            // NOTE: This is unique within a single execution, but not stable across changes in
+            // partitioning / ordering.
             futures::stream::unfold((input, 1u64, schema.clone()), move |state| async move {
                 let (mut stream, mut offset, schema) = state;
                 let batch = stream.next().await?;
@@ -182,13 +178,14 @@ impl ExecutionPlan for AddRowIdExec {
 #[cfg(test)]
 #[expect(clippy::unwrap_used, reason = "tests use unwrap for brevity")]
 mod tests {
+    use std::collections::HashSet;
+
     use datafusion::arrow::array::Int32Array;
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::arrow::record_batch::RecordBatch;
     use datafusion::execution::context::SessionContext;
     use datafusion::physical_plan::collect;
     use datafusion::physical_plan::test::TestMemoryExec;
-    use std::collections::HashSet;
 
     use super::*;
 
