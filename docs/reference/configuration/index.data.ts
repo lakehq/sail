@@ -1,17 +1,11 @@
-import fs from "fs/promises";
-
-import yaml from "js-yaml";
-
-import type { ConfigItem } from "../../.vitepress/theme/utils/config";
 import {
-  APP_CONFIG_PATH,
   buildConfigGroups,
+  loadConfigItems,
 } from "../../.vitepress/theme/utils/config";
 
 export default {
   async load() {
-    const content = await fs.readFile(APP_CONFIG_PATH, "utf-8");
-    const items = yaml.load(content) as ConfigItem[];
+    const items = await loadConfigItems();
     const grouping = {
       groups: [
         {
