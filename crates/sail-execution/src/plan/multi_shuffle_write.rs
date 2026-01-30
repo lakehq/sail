@@ -155,9 +155,7 @@ impl ExecutionPlan for MultiShuffleWriteExec {
             .iter()
             .map(|output| {
                 let shuffle_partitioning = match &output.shuffle_partitioning {
-                    Partitioning::UnknownPartitioning(size) => {
-                        Partitioning::RoundRobinBatch(*size)
-                    }
+                    Partitioning::UnknownPartitioning(size) => Partitioning::RoundRobinBatch(*size),
                     shuffle_partitioning => shuffle_partitioning.clone(),
                 };
                 BatchPartitioner::try_new(
@@ -241,10 +239,8 @@ async fn multi_shuffle_write(
         }
     }
     for sinks in all_sinks {
-        for sink in sinks {
-            if let Some(sink) = sink {
-                sink.close().await?;
-            }
+        for sink in sinks.into_iter().flatten() {
+            sink.close().await?;
         }
     }
     Ok(())

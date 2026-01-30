@@ -844,7 +844,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let input = self.try_decode_plan(&input, ctx)?;
                 Ok(Arc::new(AddRowIdExec::try_new(input)?))
             }
-            NodeKind::BuildMatchSet(gen::BuildMatchSetExecNode { input, row_id_index }) => {
+            NodeKind::BuildMatchSet(gen::BuildMatchSetExecNode {
+                input,
+                row_id_index,
+            }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 Ok(Arc::new(BuildMatchSetExec::new(
                     input,
@@ -864,9 +867,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }) => {
                 let left = self.try_decode_plan(&left, ctx)?;
                 let match_set = self.try_decode_plan(&match_set, ctx)?;
-                let join_type = ProtoJoinType::from_str_name(&join_type).ok_or_else(|| {
-                    plan_datafusion_err!("invalid join type: {join_type}")
-                })?;
+                let join_type = ProtoJoinType::from_str_name(&join_type)
+                    .ok_or_else(|| plan_datafusion_err!("invalid join type: {join_type}"))?;
                 let join_type: JoinType = join_type.into();
                 let schema = self.try_decode_schema(&schema)?;
                 Ok(Arc::new(ApplyMatchSetExec::new(

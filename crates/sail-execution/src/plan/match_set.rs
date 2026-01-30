@@ -2,8 +2,9 @@ use std::any::Any;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use datafusion::arrow::array::new_null_array;
-use datafusion::arrow::array::{BinaryBuilder, BooleanArray, BooleanBuilder, UInt64Array};
+use datafusion::arrow::array::{
+    new_null_array, BinaryBuilder, BooleanArray, BooleanBuilder, UInt64Array,
+};
 use datafusion::arrow::compute::{concat_batches, filter_record_batch, not};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
@@ -534,14 +535,15 @@ fn append_null_columns(
 #[cfg(test)]
 #[expect(clippy::unwrap_used, reason = "tests use unwrap for brevity")]
 mod tests {
-    use super::super::row_id::BUILD_ROW_ID_COLUMN;
-    use super::*;
     use datafusion::arrow::array::{Int32Array, UInt64Array};
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::execution::context::SessionContext;
     use datafusion::physical_plan::collect;
     use datafusion::physical_plan::joins::utils::build_join_schema;
     use datafusion::physical_plan::test::TestMemoryExec;
+
+    use super::super::row_id::BUILD_ROW_ID_COLUMN;
+    use super::*;
 
     fn make_left_batch() -> RecordBatch {
         let left_values = Int32Array::from(vec![1, 2, 3]);

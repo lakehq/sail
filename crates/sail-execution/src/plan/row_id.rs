@@ -98,9 +98,7 @@ impl ExecutionPlan for AddRowIdExec {
             // distinct from any "missing" / default materialization that may appear downstream.
             futures::stream::unfold((input, 1u64, schema.clone()), move |state| async move {
                 let (mut stream, mut offset, schema) = state;
-                let Some(batch) = stream.next().await else {
-                    return None;
-                };
+                let batch = stream.next().await?;
                 let batch = match batch {
                     Ok(batch) => batch,
                     Err(err) => return Some((Err(err), (stream, offset, schema))),

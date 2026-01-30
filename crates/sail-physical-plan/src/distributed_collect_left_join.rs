@@ -6,10 +6,10 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::joins::utils::{build_join_schema, ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::JoinOn;
-use datafusion::physical_plan::ExecutionPlanProperties;
-use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
-use datafusion_common::internal_err;
-use datafusion_common::NullEquality;
+use datafusion::physical_plan::{
+    DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+};
+use datafusion_common::{internal_err, NullEquality};
 
 #[derive(Debug, Clone)]
 pub struct DistributedCollectLeftJoinExec {

@@ -375,14 +375,13 @@ fn project_drop_row_id(
         .fields()
         .iter()
         .enumerate()
-        .filter_map(|(idx, field)| {
-            (idx != row_id_index).then(|| {
-                Column::new_with_schema(field.name(), schema.as_ref()).map(|expr| {
-                    (
-                        Arc::new(expr) as Arc<dyn PhysicalExpr>,
-                        field.name().clone(),
-                    )
-                })
+        .filter(|&(idx, _field)| idx != row_id_index)
+        .map(|(_idx, field)| {
+            Column::new_with_schema(field.name(), schema.as_ref()).map(|expr| {
+                (
+                    Arc::new(expr) as Arc<dyn PhysicalExpr>,
+                    field.name().clone(),
+                )
             })
         })
         .collect::<std::result::Result<Vec<_>, _>>()
@@ -534,7 +533,6 @@ fn create_driver_stage(
 #[expect(clippy::unwrap_used, reason = "tests use unwrap for brevity")]
 #[expect(clippy::panic, reason = "tests may use panic for unreachable branches")]
 mod tests {
-    use super::*;
     use datafusion::arrow::array::Int32Array;
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::arrow::record_batch::RecordBatch;
@@ -542,6 +540,8 @@ mod tests {
     use datafusion::physical_plan::joins::JoinOn;
     use datafusion::physical_plan::test::TestMemoryExec;
     use sail_physical_plan::distributed_collect_left_join::DistributedCollectLeftJoinExec;
+
+    use super::*;
 
     fn make_exec(schema: Arc<Schema>, partitions: usize) -> Arc<dyn ExecutionPlan> {
         let batch = RecordBatch::try_new(

@@ -397,7 +397,7 @@ impl JobScheduler {
                 continue;
             }
             let partitions = stage.plan.output_partitioning().partition_count();
-            let Some(stage_output) = stage.outputs.get(0) else {
+            let Some(stage_output) = stage.outputs.first() else {
                 continue;
             };
             let channels = stage_output.channels();
