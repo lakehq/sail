@@ -15,6 +15,15 @@ use datafusion::physical_plan::{
 use futures::StreamExt;
 
 pub const BUILD_ROW_ID_COLUMN: &str = "__sail_build_row_id";
+const ROW_ID_OFFSET_BITS: u32 = 40;
+const ROW_ID_OFFSET_MASK: u64 = (1u64 << ROW_ID_OFFSET_BITS) - 1;
+const ROW_ID_PARTITION_BITS: u32 = 64 - ROW_ID_OFFSET_BITS;
+const ROW_ID_PARTITION_LIMIT: u64 = 1u64 << ROW_ID_PARTITION_BITS;
+
+// NOTE: RowID encodes (partition_id, local_offset) as:
+//   row_id = (partition_id << ROW_ID_OFFSET_BITS) | local_offset
+// This assumes a fixed 40/24 split (offset/partition). If needed, we can make the
+// split configurable (e.g. 32/32) once we have a cluster-level config surface.
 
 #[derive(Debug, Clone)]
 pub struct AddRowIdExec {
@@ -91,6 +100,15 @@ impl ExecutionPlan for AddRowIdExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        let partition_id = partition as u64;
+        if partition_id >= ROW_ID_PARTITION_LIMIT {
+            return Err(exec_datafusion_err!(
+                "partition id {} exceeds row id partition limit {}",
+                partition_id,
+                ROW_ID_PARTITION_LIMIT - 1
+            ));
+        }
+        let row_id_base = partition_id << ROW_ID_OFFSET_BITS;
         let input = self.input.execute(partition, context)?;
         let schema = self.output_schema.clone();
         let output =
@@ -112,9 +130,38 @@ impl ExecutionPlan for AddRowIdExec {
                     Ok(batch) => batch,
                     Err(err) => return Some((Err(err), (stream, offset, schema))),
                 };
-                let num_rows = batch.num_rows();
-                let row_ids = UInt64Array::from_iter_values(offset..(offset + num_rows as u64));
-                offset += num_rows as u64;
+                let num_rows = batch.num_rows() as u64;
+                let end_offset = offset.saturating_add(num_rows).saturating_sub(1);
+                if offset == 0 || end_offset > ROW_ID_OFFSET_MASK {
+                    return Some((
+                        Err(exec_datafusion_err!(
+                            "row id offset {} exceeds limit {}",
+                            end_offset,
+                            ROW_ID_OFFSET_MASK
+                        )),
+                        (stream, offset, schema),
+                    ));
+                }
+                let start = match row_id_base.checked_add(offset) {
+                    Some(start) => start,
+                    None => {
+                        return Some((
+                            Err(exec_datafusion_err!("row id base overflow for offset")),
+                            (stream, offset, schema),
+                        ))
+                    }
+                };
+                let end = match start.checked_add(num_rows) {
+                    Some(end) => end,
+                    None => {
+                        return Some((
+                            Err(exec_datafusion_err!("row id range overflow for batch")),
+                            (stream, offset, schema),
+                        ))
+                    }
+                };
+                let row_ids = UInt64Array::from_iter_values(start..end);
+                offset = offset.saturating_add(num_rows);
                 let mut columns = batch.columns().to_vec();
                 columns.push(Arc::new(row_ids));
                 let batch = match RecordBatch::try_new(schema.clone(), columns) {
@@ -129,5 +176,49 @@ impl ExecutionPlan for AddRowIdExec {
                 Some((Ok(batch), (stream, offset, schema)))
             });
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, output)))
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used, reason = "tests use unwrap for brevity")]
+mod tests {
+    use datafusion::arrow::array::Int32Array;
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::execution::context::SessionContext;
+    use datafusion::physical_plan::collect;
+    use datafusion::physical_plan::test::TestMemoryExec;
+    use std::collections::HashSet;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn add_row_id_is_partition_unique() {
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let batch =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(vec![1, 2]))])
+                .unwrap();
+        let data = vec![vec![batch.clone()], vec![batch]];
+        let input = TestMemoryExec::try_new_exec(&data, schema, None).unwrap();
+        let exec = AddRowIdExec::try_new(input).unwrap();
+
+        let ctx = SessionContext::new();
+        let batches = collect(Arc::new(exec), ctx.task_ctx()).await.unwrap();
+        let mut ids = HashSet::new();
+        for batch in batches {
+            let row_ids = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap();
+            for value in row_ids.iter().flatten() {
+                ids.insert(value);
+            }
+        }
+
+        let base_p0 = 0u64 << ROW_ID_OFFSET_BITS;
+        let base_p1 = 1u64 << ROW_ID_OFFSET_BITS;
+        let expected = HashSet::from([base_p0 + 1, base_p0 + 2, base_p1 + 1, base_p1 + 2]);
+        assert_eq!(ids, expected);
     }
 }

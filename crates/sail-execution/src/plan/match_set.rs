@@ -34,14 +34,7 @@ where
 {
     let mut combined: BTreeMap<u64, Vec<u8>> = BTreeMap::new();
     for row_id in row_ids {
-        let chunk_index = row_id / MATCH_SET_CHUNK_BITS as u64;
-        let offset = (row_id % MATCH_SET_CHUNK_BITS as u64) as usize;
-        let byte_index = offset / 8;
-        let bit_index = offset % 8;
-        let entry = combined
-            .entry(chunk_index)
-            .or_insert_with(|| vec![0; MATCH_SET_CHUNK_BYTES]);
-        entry[byte_index] |= 1u8 << bit_index;
+        update_match_set_bitmap(&mut combined, row_id);
     }
     let mut indices = Vec::with_capacity(combined.len());
     let mut bitmap_builder =
@@ -398,7 +391,7 @@ async fn build_match_set_from_row_ids(
     mut stream: SendableRecordBatchStream,
     row_id_index: usize,
 ) -> Result<RecordBatch> {
-    let mut ids = Vec::new();
+    let mut combined: BTreeMap<u64, Vec<u8>> = BTreeMap::new();
     while let Some(batch) = stream.next().await {
         let batch = batch?;
         let row_ids = batch
@@ -406,9 +399,11 @@ async fn build_match_set_from_row_ids(
             .as_any()
             .downcast_ref::<UInt64Array>()
             .ok_or_else(|| exec_datafusion_err!("row id column must be UInt64"))?;
-        ids.extend(row_ids.iter().flatten());
+        for row_id in row_ids.iter().flatten() {
+            update_match_set_bitmap(&mut combined, row_id);
+        }
     }
-    build_match_set_batch(ids)
+    build_match_set_batch_from_bitmaps(combined)
 }
 
 async fn read_match_set(mut stream: SendableRecordBatchStream) -> Result<BTreeMap<u64, Vec<u8>>> {
@@ -519,6 +514,17 @@ fn match_set_contains(bitmap: &BTreeMap<u64, Vec<u8>>, row_id: u64) -> bool {
         return false;
     };
     (chunk[byte_index] & (1u8 << bit_index)) != 0
+}
+
+fn update_match_set_bitmap(combined: &mut BTreeMap<u64, Vec<u8>>, row_id: u64) {
+    let chunk_index = row_id / MATCH_SET_CHUNK_BITS as u64;
+    let offset = (row_id % MATCH_SET_CHUNK_BITS as u64) as usize;
+    let byte_index = offset / 8;
+    let bit_index = offset % 8;
+    let entry = combined
+        .entry(chunk_index)
+        .or_insert_with(|| vec![0; MATCH_SET_CHUNK_BYTES]);
+    entry[byte_index] |= 1u8 << bit_index;
 }
 
 fn append_null_columns(
@@ -637,5 +643,49 @@ mod tests {
             "+---+-------+",
         ];
         datafusion::assert_batches_eq!(expected, &batches);
+    }
+
+    #[tokio::test]
+    async fn test_build_match_set_multiple_batches() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            BUILD_ROW_ID_COLUMN,
+            DataType::UInt64,
+            false,
+        )]));
+        let batch1 = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(UInt64Array::from(vec![1, 2]))],
+        )
+        .unwrap();
+        let batch2 = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(UInt64Array::from(vec![70_000]))],
+        )
+        .unwrap();
+        let exec = TestMemoryExec::try_new_exec(&[vec![batch1, batch2]], schema, None).unwrap();
+        let exec = BuildMatchSetExec::new(exec, 0);
+        let ctx = SessionContext::new();
+        let batches = collect(Arc::new(exec), ctx.task_ctx()).await.unwrap();
+        assert_eq!(batches.len(), 1);
+
+        let batch = &batches[0];
+        let chunk_indices = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .unwrap();
+        let bitmaps = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<datafusion::arrow::array::BinaryArray>()
+            .unwrap();
+        let mut map = BTreeMap::new();
+        for row in 0..batch.num_rows() {
+            map.insert(chunk_indices.value(row), bitmaps.value(row).to_vec());
+        }
+
+        assert!(match_set_contains(&map, 1));
+        assert!(match_set_contains(&map, 2));
+        assert!(match_set_contains(&map, 70_000));
     }
 }
