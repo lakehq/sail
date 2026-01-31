@@ -4142,15 +4142,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
-name = "lru"
-version = "0.12.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "234cf4f4a04dc1f57e24b96cc0cd600cf2af460d4161ac5ecdd0af8e1f3b2a38"
-dependencies = [
- "hashbrown 0.15.5",
-]
-
-[[package]]
 name = "lru-slab"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6000,6 +5991,7 @@ dependencies = [
  "rustls 0.23.36",
  "sail-common",
  "sail-execution",
+ "sail-flight",
  "sail-session",
  "sail-spark-connect",
  "sail-telemetry",
@@ -6176,13 +6168,13 @@ dependencies = [
  "figment",
  "futures",
  "log",
- "lru",
  "prost",
  "sail-catalog",
  "sail-catalog-memory",
  "sail-common",
  "sail-common-datafusion",
  "sail-plan",
+ "sail-server",
  "sail-session",
  "sail-sql-analyzer",
  "sail-telemetry",

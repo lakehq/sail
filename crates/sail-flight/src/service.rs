@@ -41,7 +41,6 @@ use sail_telemetry::telemetry::global_metric_registry;
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status, Streaming};
 
-use crate::cache::{CacheEntry, PreparedStatementCache};
 use crate::session::create_sail_session_context;
 
 /// Sail Flight SQL Service implementation
@@ -72,8 +71,6 @@ use crate::session::create_sail_session_context;
 pub struct SailFlightSqlService {
     ctx: Arc<RwLock<SessionContext>>,
     config: Arc<PlanConfig>,
-    /// Cache for prepared statement results to avoid re-executing DDL statements
-    prepared_cache: Arc<PreparedStatementCache>,
     /// Maximum rows to return per query (0 = unlimited)
     max_rows: usize,
     /// Optional metric registry for OTLP metrics (None if telemetry disabled)
@@ -84,16 +81,10 @@ impl SailFlightSqlService {
     /// Create a new service with the given configuration
     ///
     /// # Arguments
-    /// * `max_cache_size_bytes` - Maximum cache size for prepared statements
-    /// * `enable_cache_stats` - Enable cache statistics logging
     /// * `max_rows` - Maximum rows to return per query (0 = unlimited)
-    pub fn new(max_cache_size_bytes: usize, enable_cache_stats: bool, max_rows: usize) -> Self {
+    pub fn new(max_rows: usize) -> Self {
         let ctx = create_sail_session_context();
         let config = Arc::new(PlanConfig::default());
-        let prepared_cache = Arc::new(PreparedStatementCache::new(
-            max_cache_size_bytes,
-            enable_cache_stats,
-        ));
 
         // Get global metric registry if telemetry is enabled
         let metrics = global_metric_registry();
@@ -104,7 +95,6 @@ impl SailFlightSqlService {
         SailFlightSqlService {
             ctx: Arc::new(RwLock::new(ctx)),
             config,
-            prepared_cache,
             max_rows,
             metrics,
         }
@@ -182,17 +172,6 @@ impl SailFlightSqlService {
     fn record_active_query(&self, delta: i64) {
         if let Some(ref m) = self.metrics {
             m.flight_query_active.adder(delta).emit();
-        }
-    }
-
-    /// Record cache hit/miss
-    fn record_cache_event(&self, hit: bool) {
-        if let Some(ref m) = self.metrics {
-            if hit {
-                m.flight_cache_hits.adder(1u64).emit();
-            } else {
-                m.flight_cache_misses.adder(1u64).emit();
-            }
         }
     }
 
@@ -756,24 +735,8 @@ impl FlightSqlService for SailFlightSqlService {
         };
         let ticket_bytes = ticket.as_any().encode_to_vec();
 
-        // Check if we already have this cached (should always be the case after do_action_create_prepared_statement)
-        let schema = if let Some(entry) = self.prepared_cache.get(&sql).await {
-            self.record_cache_event(true);
-            info!(
-                "✓ CACHE HIT in get_flight_info: Using cached schema (was_executed={}) for: {}",
-                entry.was_executed, sql
-            );
-            entry.schema
-        } else {
-            // This shouldn't happen normally, but handle it gracefully
-            // ⚠️ Important: Only resolve schema, never execute here (could be DDL)
-            self.record_cache_event(false);
-            warn!(
-                "✗ CACHE MISS in get_flight_info: Resolving schema only for: {}",
-                sql
-            );
-            self.get_query_schema(&sql).await?
-        };
+        // Resolve schema for the prepared statement (don't execute yet)
+        let schema = self.get_query_schema(&sql).await?;
 
         let endpoint = FlightEndpoint {
             ticket: Some(Ticket {
@@ -971,30 +934,6 @@ impl FlightSqlService for SailFlightSqlService {
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         let sql = String::from_utf8_lossy(&ticket.statement_handle).to_string();
         debug!("do_get_statement: SQL = {}", sql);
-
-        // Check cache for DDL that was already executed or special cases
-        if let Some(entry) = self.prepared_cache.get(&sql).await {
-            self.record_cache_event(true);
-            if entry.was_executed {
-                // DDL already executed - return empty success batch
-                info!(
-                    "✓ CACHE HIT in do_get: DDL already executed, returning success batch for: {}",
-                    sql
-                );
-                let batch = self.create_success_batch()?;
-                let schema = batch.schema();
-                let batch_stream = futures::stream::iter(vec![Ok(batch)]);
-                let flight_data_stream = FlightDataEncoderBuilder::new()
-                    .with_schema(schema)
-                    .build(batch_stream)
-                    .map(|result| {
-                        result.map_err(|e| Status::internal(format!("Encoding error: {}", e)))
-                    });
-                return Ok(Response::new(Box::pin(flight_data_stream)));
-            }
-        } else {
-            self.record_cache_event(false);
-        }
 
         // Special case for SELECT 1 (common health check)
         if sql.trim().eq_ignore_ascii_case("SELECT 1") {
@@ -1259,28 +1198,21 @@ impl FlightSqlService for SailFlightSqlService {
         let sql = String::from_utf8_lossy(&query.prepared_statement_handle).to_string();
         info!("do_put_prepared_statement_update: SQL = {}", sql);
 
-        // Check if this is a DDL statement that was already executed in do_action_create_prepared_statement
-        if let Some(entry) = self.prepared_cache.get(&sql).await {
-            if entry.was_executed {
-                info!(
-                    "✓ CACHE HIT: DDL already executed in prepare phase, returning success: {}",
-                    sql
-                );
-                // Return 0 for DDL (standard JDBC behavior - no rows affected)
-                return Ok(0);
-            }
+        // DDL statements were already executed in do_action_create_prepared_statement
+        // Don't re-execute them here to avoid "table already exists" errors
+        if Self::is_ddl_statement(&sql) {
+            info!(
+                "DDL already executed in prepare phase, skipping re-execution: {}",
+                sql
+            );
+            return Ok(0);
         }
 
-        // If not cached or not executed, execute now
+        // Execute the update statement (DML only: INSERT/UPDATE/DELETE)
         info!("Executing update statement: {}", sql);
         let _batch = self.execute_sql(&sql).await?;
 
-        // Cache the result
-        let schema = Arc::new(Schema::empty());
-        let entry = CacheEntry::new(schema, true);
-        self.prepared_cache.insert(sql.clone(), entry).await;
-
-        // Return 0 for DDL statements (standard JDBC behavior)
+        // Return 0 for update statements (standard JDBC behavior)
         Ok(0)
     }
 
@@ -1299,33 +1231,6 @@ impl FlightSqlService for SailFlightSqlService {
     ) -> Result<ActionCreatePreparedStatementResult, Status> {
         info!("do_action_create_prepared_statement: SQL = {}", query.query);
 
-        // Check if already in cache
-        if let Some(entry) = self.prepared_cache.get(&query.query).await {
-            self.record_cache_event(true);
-            info!(
-                "✓ CACHE HIT: Using cached schema for '{}' (was_executed={})",
-                query.query, entry.was_executed
-            );
-
-            // Return early with cached schema
-            let handle = query.query.clone().into_bytes();
-            let empty_schema = Schema::empty();
-            let (dataset_schema, parameter_schema) =
-                Self::schemas_to_ipc_bytes(&entry.schema, &empty_schema)?;
-
-            return Ok(ActionCreatePreparedStatementResult {
-                prepared_statement_handle: handle.into(),
-                dataset_schema,
-                parameter_schema,
-            });
-        }
-
-        self.record_cache_event(false);
-        info!(
-            "✗ CACHE MISS: Processing new prepared statement for '{}'",
-            query.query
-        );
-
         let is_ddl = Self::is_ddl_statement(&query.query);
         let is_dml = Self::is_dml_statement(&query.query);
 
@@ -1334,7 +1239,7 @@ impl FlightSqlService for SailFlightSqlService {
         // - DML: Execute now (INSERT/UPDATE/DELETE), return empty schema
         // - SELECT: Only resolve to get schema (don't execute yet)
         let schema = if is_ddl {
-            // DDL: Execute now and cache that it's done
+            // DDL: Execute now
             info!("DDL detected, executing immediately: {}", query.query);
             let _batch = self.execute_sql(&query.query).await?;
             Arc::new(Schema::empty())
@@ -1351,13 +1256,6 @@ impl FlightSqlService for SailFlightSqlService {
             );
             self.get_query_schema(&query.query).await?
         };
-
-        // Cache the schema and execution status
-        // - DDL/DML: was_executed=true (don't re-execute in do_get_statement)
-        // - SELECT: was_executed=false (will execute in do_get_statement)
-        let was_executed = is_ddl || is_dml;
-        let entry = CacheEntry::new(schema.clone(), was_executed);
-        self.prepared_cache.insert(query.query.clone(), entry).await;
 
         // Use the query as the prepared statement handle
         let handle = query.query.clone().into_bytes();

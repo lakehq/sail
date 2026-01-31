@@ -7,12 +7,12 @@ use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
 use sail_catalog::provider::CatalogProvider;
 use sail_catalog_memory::MemoryCatalogProvider;
 use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
-use sail_common_datafusion::session::PlanService;
+use sail_common_datafusion::session::plan::PlanService;
 use sail_plan::catalog::SparkCatalogObjectDisplay;
 use sail_plan::formatter::SparkPlanFormatter;
-use sail_plan::planner::new_query_planner;
 use sail_session::formats::create_table_format_registry;
 use sail_session::optimizer::{default_analyzer_rules, default_optimizer_rules};
+use sail_session::planner::new_query_planner;
 
 /// Creates a SessionContext configured with Sail's optimizers and analyzers.
 ///
@@ -37,6 +37,11 @@ use sail_session::optimizer::{default_analyzer_rules, default_optimizer_rules};
 /// - `sail_plan`: PlanResolver, PlanConfig, execute_logical_plan, query_planner
 /// - `sail_session`: Optimizer rules, analyzer rules, table format registry
 /// - `sail_common_datafusion`: PlanService, catalog display
+///
+/// # Future improvements
+/// TODO: Integrate with SessionManager from sail-session for multi-session support.
+/// This would allow per-connection session isolation, similar to Spark Connect.
+/// See: sail_session::session_manager::SessionManager
 pub fn create_sail_session_context() -> SessionContext {
     // Create the PlanService extension required by the resolver
     let plan_service = PlanService::new(

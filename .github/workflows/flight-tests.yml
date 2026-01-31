@@ -112,8 +112,6 @@ jobs:
         timeout-minutes: 5
         env:
           SAIL_FLIGHT_URI: "grpc://127.0.0.1:32010"
-          TEST_RUN_GIT_COMMIT: ${{ github.sha }}
-          TEST_RUN_GIT_REF: ${{ github.ref }}
         run: |
           hatch run pytest --pyargs pysail.tests.flight -v
 

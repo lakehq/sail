@@ -2,7 +2,7 @@
 
 
 def pytest_configure(config):
-    """Register custom markers and load step definitions for Flight SQL tests."""
+    """Register custom markers for Flight SQL tests."""
     config.addinivalue_line(
         "markers",
         "flight_sql: mark test as requiring a running Flight SQL server",
@@ -12,5 +12,3 @@ def pytest_configure(config):
         "filterwarnings",
         "ignore:Cannot disable autocommit:Warning",
     )
-    # Load pytest-bdd step modules for Flight SQL tests
-    config.pluginmanager.import_plugin("pysail.tests.flight.steps.flight_sql")
