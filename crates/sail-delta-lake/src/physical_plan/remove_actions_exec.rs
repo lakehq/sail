@@ -25,7 +25,7 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     SendableRecordBatchStream,
 };
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{internal_err, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use futures::stream::{self, StreamExt};
 use serde_json::Value;
@@ -33,7 +33,7 @@ use serde_json::Value;
 use crate::kernel::models::{Add, Remove, RemoveOptions};
 use crate::physical_plan::{
     current_timestamp_millis, decode_adds_from_batch, delta_action_schema, encode_actions,
-    CommitMeta, ExecAction, COL_ACTION,
+    meta_adds, CommitMeta, ExecAction, COL_ACTION,
 };
 
 /// Physical execution node to convert Add actions (from FindFiles) into Remove actions
@@ -161,10 +161,12 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
                         adds_to_remove.push(add);
                     }
                 } else {
-                    return Err(DataFusionError::Plan(
-                        "DeltaRemoveActionsExec input must be delta action rows ('action')"
-                            .to_string(),
-                    ));
+                    let adds = meta_adds::decode_adds_from_meta_batch(&batch, None)?;
+                    for add in adds {
+                        num_removed_bytes = num_removed_bytes
+                            .saturating_add(u64::try_from(add.size).unwrap_or_default());
+                        adds_to_remove.push(add);
+                    }
                 }
             }
 

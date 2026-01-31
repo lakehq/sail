@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use chrono::Utc;
 use datafusion::arrow::datatypes::SchemaRef;
 use fastrace::collector::SpanContext;
 use fastrace::Span;
@@ -25,9 +26,10 @@ use crate::worker::{WorkerClientSet, WorkerLocation};
 use crate::worker_manager::WorkerLaunchOptions;
 
 impl WorkerPool {
-    pub async fn close(mut self, ctx: &mut ActorContext<DriverActor>) -> ExecutionResult<()> {
+    pub async fn close(&mut self, ctx: &mut ActorContext<DriverActor>) -> ExecutionResult<()> {
         let worker_ids = self.workers.keys().cloned().collect::<Vec<_>>();
         for worker_id in worker_ids.into_iter() {
+            // TODO: Should we wait for the spawned tasks for stopping the workers?
             self.stop_worker(ctx, worker_id, Some("closing worker pool".to_string()));
         }
         // TODO: support timeout for worker manager stop
@@ -42,13 +44,15 @@ impl WorkerPool {
     pub fn start_worker(&mut self, ctx: &mut ActorContext<DriverActor>) {
         let Ok(worker_id) = self.worker_id_generator.next() else {
             error!("failed to generate worker ID");
-            ctx.send(DriverEvent::Shutdown);
+            ctx.send(DriverEvent::Shutdown { history: None });
             return;
         };
         let descriptor = WorkerDescriptor {
             state: WorkerState::Pending,
             messages: vec![],
             peers: HashSet::new(),
+            created_at: Utc::now(),
+            stopped_at: None,
         };
         self.workers.insert(worker_id, descriptor);
         ctx.send_with_delay(
@@ -119,8 +123,8 @@ impl WorkerPool {
             WorkerState::Running { .. } => Err(ExecutionError::InternalError(format!(
                 "worker {worker_id} is already running"
             ))),
-            WorkerState::Stopped => Err(ExecutionError::InternalError(format!(
-                "worker {worker_id} has stopped"
+            WorkerState::Completed => Err(ExecutionError::InternalError(format!(
+                "worker {worker_id} has completed"
             ))),
             WorkerState::Failed => Err(ExecutionError::InternalError(format!(
                 "worker {worker_id} has failed"
@@ -141,7 +145,8 @@ impl WorkerPool {
         match worker.state {
             WorkerState::Pending => {
                 warn!("trying to stop pending worker {worker_id}");
-                worker.state = WorkerState::Stopped;
+                worker.state = WorkerState::Completed;
+                worker.stopped_at = Some(Utc::now());
                 worker.messages.extend(reason);
             }
             WorkerState::Running { .. } => {
@@ -150,6 +155,8 @@ impl WorkerPool {
                     Ok(x) => x.core,
                     Err(e) => {
                         error!("failed to stop worker {worker_id}: {e}");
+                        worker.state = WorkerState::Failed;
+                        worker.stopped_at = Some(Utc::now());
                         return;
                     }
                 };
@@ -158,10 +165,11 @@ impl WorkerPool {
                         error!("failed to stop worker {worker_id}: {e}");
                     }
                 });
-                worker.state = WorkerState::Stopped;
+                worker.state = WorkerState::Completed;
+                worker.stopped_at = Some(Utc::now());
                 worker.messages.extend(reason);
             }
-            WorkerState::Stopped | WorkerState::Failed => {}
+            WorkerState::Completed | WorkerState::Failed => {}
         }
     }
 

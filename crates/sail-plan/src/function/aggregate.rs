@@ -11,6 +11,7 @@ use datafusion::functions_nested::string::array_to_string;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
 use datafusion_expr::{cast, expr, lit, when, AggregateUDF, ExprSchemable, ScalarUDF};
+use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use lazy_static::lazy_static;
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -20,7 +21,6 @@ use sail_function::aggregate::mode::ModeFunction;
 use sail_function::aggregate::percentile_disc::percentile_disc_udaf;
 use sail_function::aggregate::skewness::SkewnessFunc;
 use sail_function::aggregate::try_avg::TryAvgFunction;
-use sail_function::aggregate::try_sum::TrySumFunction;
 use sail_function::scalar::struct_function::StructFunction;
 
 use crate::error::{PlanError, PlanResult};
@@ -223,7 +223,7 @@ fn try_sum(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let args = input.arguments;
 
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func: Arc::new(AggregateUDF::from(TrySumFunction::new())),
+        func: Arc::new(AggregateUDF::from(SparkTrySum::new())),
         params: AggregateFunctionParams {
             args,
             distinct: input.distinct,
@@ -284,22 +284,23 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 
 fn count_if(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     match input.arguments.len() {
-        1 => Ok(expr::Expr::AggregateFunction(AggregateFunction {
-            func: count::count_udaf(),
-            params: AggregateFunctionParams {
-                args: input.arguments.clone(),
-                distinct: input.distinct,
-                order_by: input.order_by,
-                filter: Some(Box::new(
-                    input
-                        .arguments
-                        .first()
-                        .ok_or_else(|| PlanError::invalid("`count_if` requires 1 argument"))?
-                        .clone(),
-                )),
-                null_treatment: get_null_treatment(input.ignore_nulls),
-            },
-        })),
+        1 => {
+            let filter = input
+                .arguments
+                .first()
+                .ok_or_else(|| PlanError::invalid("`count_if` requires 1 argument"))?
+                .clone();
+            Ok(expr::Expr::AggregateFunction(AggregateFunction {
+                func: count::count_udaf(),
+                params: AggregateFunctionParams {
+                    args: vec![lit(0)],
+                    distinct: input.distinct,
+                    order_by: input.order_by,
+                    filter: Some(Box::new(filter)),
+                    null_treatment: get_null_treatment(input.ignore_nulls),
+                },
+            }))
+        }
         _ => Err(PlanError::invalid("`count_if` requires 1 argument")),
     }
 }

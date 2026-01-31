@@ -27,25 +27,25 @@ impl TimestampParser {
                 let parsed = parse_timestamp(value).and_then(|x| x.into_naive());
                 let (datetime, timezone) = match parsed {
                     Ok(v) => v,
-                    Err(e) if is_try => return Ok(None),
+                    Err(_e) if is_try => return Ok(None),
                     Err(e) => return Err(exec_datafusion_err!("{e}")),
                 };
                 let timezone: Tz = if timezone.is_empty() {
                     match default_timezone.parse() {
                         Ok(v) => v,
-                        Err(e) if is_try => return Ok(None),
+                        Err(_e) if is_try => return Ok(None),
                         Err(e) => return Err(e.into()),
                     }
                 } else {
                     match timezone.parse() {
                         Ok(v) => v,
-                        Err(e) if is_try => return Ok(None),
+                        Err(_e) if is_try => return Ok(None),
                         Err(e) => return Err(e.into()),
                     }
                 };
                 let datetime = match localize_with_fallback(&timezone, &datetime) {
                     Ok(v) => v,
-                    Err(e) if is_try => return Ok(None),
+                    Err(_e) if is_try => return Ok(None),
                     Err(e) => return Err(e),
                 };
                 Ok(Some(datetime.timestamp_micros()))
@@ -54,7 +54,7 @@ impl TimestampParser {
                 let parsed = parse_timestamp(value).and_then(|x| x.into_naive());
                 let (datetime, _timezone) = match parsed {
                     Ok(v) => v,
-                    Err(e) if is_try => return Ok(None),
+                    Err(_e) if is_try => return Ok(None),
                     Err(e) => return Err(exec_datafusion_err!("{e}")),
                 };
                 Ok(Some(datetime.and_utc().timestamp_micros()))

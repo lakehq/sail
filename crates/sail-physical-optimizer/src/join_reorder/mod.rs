@@ -265,6 +265,7 @@ impl JoinReorder {
         )?))
     }
 
+    #[allow(clippy::only_used_in_recursion)]
     fn rewrite_expr_to_final_map(
         &self,
         expr: Arc<dyn datafusion::physical_expr::PhysicalExpr>,

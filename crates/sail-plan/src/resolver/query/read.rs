@@ -54,8 +54,6 @@ impl PlanResolver<'_> {
             .await?;
         let plan = match status.kind {
             TableKind::Table {
-                catalog: _,
-                database: _,
                 columns,
                 comment: _,
                 constraints,

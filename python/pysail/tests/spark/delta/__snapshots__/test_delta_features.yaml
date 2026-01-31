@@ -8,11 +8,11 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 1132
-    numAddedFiles: 1
-    numFiles: 1
-    numOutputBytes: 1132
-    numOutputFiles: 1
+    numAddedBytes: 2161
+    numAddedFiles: 2
+    numFiles: 2
+    numOutputBytes: 2161
+    numOutputFiles: 2
     numOutputRows: 4
     numRemovedBytes: 1070
     numRemovedFiles: 1
@@ -59,11 +59,11 @@ data:
   operation: WRITE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 1093
-    numAddedFiles: 1
-    numFiles: 1
-    numOutputBytes: 1093
-    numOutputFiles: 1
+    numAddedBytes: 2122
+    numAddedFiles: 2
+    numFiles: 2
+    numOutputBytes: 2122
+    numOutputFiles: 2
     numOutputRows: 4
     numRemovedBytes: 1093
     numRemovedFiles: 1
@@ -294,11 +294,11 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 1081
-    numAddedFiles: 1
-    numFiles: 1
-    numOutputBytes: 1081
-    numOutputFiles: 1
+    numAddedBytes: 2094
+    numAddedFiles: 2
+    numFiles: 2
+    numOutputBytes: 2094
+    numOutputFiles: 2
     numOutputRows: 3
     numRemovedBytes: 1059
     numRemovedFiles: 1
@@ -344,11 +344,11 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 1420
-    numAddedFiles: 1
-    numFiles: 1
-    numOutputBytes: 1420
-    numOutputFiles: 1
+    numAddedBytes: 2690
+    numAddedFiles: 2
+    numFiles: 2
+    numOutputBytes: 2690
+    numOutputFiles: 2
     numOutputRows: 4
     numRemovedBytes: 1293
     numRemovedFiles: 1
@@ -372,11 +372,11 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 1033
-    numAddedFiles: 1
-    numFiles: 1
-    numOutputBytes: 1033
-    numOutputFiles: 1
+    numAddedBytes: 1988
+    numAddedFiles: 2
+    numFiles: 2
+    numOutputBytes: 1988
+    numOutputFiles: 2
     numOutputRows: 3
     numRemovedBytes: 1017
     numRemovedFiles: 1

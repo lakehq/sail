@@ -314,6 +314,11 @@ pub enum CatalogType {
         url: String,
         bearer_token: Option<SecretString>,
     },
+    Glue {
+        name: String,
+        region: Option<String>,
+        endpoint_url: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize)]

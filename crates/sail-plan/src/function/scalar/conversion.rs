@@ -11,7 +11,11 @@ use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
 pub(crate) fn cast_to_date(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let arg = input.arguments.one()?;
-    let (data_type, _) = arg.data_type_and_nullable(input.function_context.schema)?;
+    let data_type = arg
+        .to_field(input.function_context.schema)?
+        .1
+        .data_type()
+        .clone();
     if matches!(
         data_type,
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
@@ -30,7 +34,11 @@ pub(crate) fn cast_to_date(input: ScalarFunctionInput) -> PlanResult<expr::Expr>
 
 fn cast_to_timestamp(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let arg = input.arguments.one()?;
-    let (data_type, _) = arg.data_type_and_nullable(input.function_context.schema)?;
+    let data_type = arg
+        .to_field(input.function_context.schema)?
+        .1
+        .data_type()
+        .clone();
     if matches!(
         data_type,
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View

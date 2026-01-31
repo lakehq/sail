@@ -16,6 +16,8 @@ pub struct DatabaseStatus {
 
 #[derive(Debug, Clone)]
 pub struct TableStatus {
+    pub catalog: Option<String>,
+    pub database: Vec<String>,
     pub name: String,
     pub kind: TableKind,
 }
@@ -23,8 +25,6 @@ pub struct TableStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TableKind {
     Table {
-        catalog: String,
-        database: Vec<String>,
         columns: Vec<TableColumnStatus>,
         comment: Option<String>,
         constraints: Vec<CatalogTableConstraint>,
@@ -37,8 +37,6 @@ pub enum TableKind {
         properties: Vec<(String, String)>,
     },
     View {
-        catalog: String,
-        database: Vec<String>,
         definition: String,
         columns: Vec<TableColumnStatus>,
         comment: Option<String>,
@@ -51,7 +49,6 @@ pub enum TableKind {
         properties: Vec<(String, String)>,
     },
     GlobalTemporaryView {
-        database: Vec<String>,
         plan: Arc<LogicalPlan>,
         columns: Vec<TableColumnStatus>,
         comment: Option<String>,
@@ -60,24 +57,6 @@ pub enum TableKind {
 }
 
 impl TableKind {
-    pub fn catalog(&self) -> Option<String> {
-        match &self {
-            TableKind::Table { catalog, .. } => Some(catalog.clone()),
-            TableKind::View { catalog, .. } => Some(catalog.clone()),
-            TableKind::TemporaryView { .. } => None,
-            TableKind::GlobalTemporaryView { .. } => None,
-        }
-    }
-
-    pub fn database(&self) -> Vec<String> {
-        match &self {
-            TableKind::Table { database, .. } => database.clone(),
-            TableKind::View { database, .. } => database.clone(),
-            TableKind::TemporaryView { .. } => vec![],
-            TableKind::GlobalTemporaryView { database, .. } => database.clone(),
-        }
-    }
-
     pub fn columns(&self) -> Vec<TableColumnStatus> {
         match &self {
             TableKind::Table { columns, .. }
