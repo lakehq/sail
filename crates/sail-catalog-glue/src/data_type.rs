@@ -87,7 +87,10 @@ pub fn arrow_to_iceberg_type(data_type: &DataType) -> CatalogResult<Document> {
         }
         DataType::Float16 | DataType::Float32 => Ok(Document::String("float".to_string())),
         DataType::Float64 => Ok(Document::String("double".to_string())),
-        DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale) => {
+        DataType::Decimal32(precision, scale)
+        | DataType::Decimal64(precision, scale)
+        | DataType::Decimal128(precision, scale)
+        | DataType::Decimal256(precision, scale) => {
             Ok(Document::String(format!("decimal({precision},{scale})")))
         }
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
@@ -194,11 +197,9 @@ pub fn arrow_to_iceberg_type(data_type: &DataType) -> CatalogResult<Document> {
             "Union types are not supported by Iceberg".to_string(),
         )),
         DataType::Dictionary(_, value_type) => arrow_to_iceberg_type(value_type),
-        DataType::RunEndEncoded(_, _) | DataType::Decimal32(_, _) | DataType::Decimal64(_, _) => {
-            Err(CatalogError::NotSupported(format!(
-                "Data type {data_type:?} is not supported by Iceberg"
-            )))
-        }
+        DataType::RunEndEncoded(_, _) => Err(CatalogError::NotSupported(format!(
+            "Data type {data_type:?} is not supported by Iceberg"
+        ))),
     }
 }
 
