@@ -8812,6 +8812,19 @@
                   {
                     "sequence": [
                       {
+                        "nonTerminal": "Keyword(Use)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Catalog)"
+                      },
+                      {
+                        "nonTerminal": "Identifier"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
                         "nonTerminal": "Keyword(Create)"
                       },
                       {

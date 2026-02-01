@@ -47,6 +47,16 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
+        Statement::UseCatalog {
+            r#use: _,
+            catalog: _,
+            name,
+        } => {
+            let node = spec::CommandNode::SetCurrentCatalog {
+                catalog: name.value.into(),
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::UseDatabase {
             r#use: _,
             database: _,

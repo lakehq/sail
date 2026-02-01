@@ -43,6 +43,11 @@ pub enum Statement {
         database: Either<Database, Schema>,
         name: ObjectName,
     },
+    UseCatalog {
+        r#use: Use,
+        catalog: Catalog,
+        name: Ident,
+    },
     CreateDatabase {
         create: Create,
         database: Either<Database, Schema>,
