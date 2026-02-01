@@ -42,7 +42,9 @@ def check_is_temporary(catalog_result, expected):
     """Checks that the result contains a table with the expected isTemporary value."""
     expected_bool = expected == "True"
     is_temporary_values = [t.isTemporary for t in catalog_result]
-    assert expected_bool in is_temporary_values, f"Expected isTemporary {expected_bool} not found in {is_temporary_values}"
+    assert expected_bool in is_temporary_values, (
+        f"Expected isTemporary {expected_bool} not found in {is_temporary_values}"
+    )
 
 
 @then(parsers.parse('the result contains a database with name "{expected}"'))
