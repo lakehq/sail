@@ -16,6 +16,7 @@ use sail_common_datafusion::formatter::{
 };
 use sail_common_datafusion::session::plan::PlanFormatter;
 use sail_common_datafusion::utils::items::ItemTaker;
+use serde_json::Value;
 
 #[derive(Debug, PartialEq, Eq, Hash, PartialOrd)]
 pub struct SparkPlanFormatter;
@@ -118,6 +119,26 @@ impl PlanFormatter for SparkPlanFormatter {
                 self.data_type_to_simple_string(key_type)?,
                 self.data_type_to_simple_string(value_type)?
             )),
+            DataType::Extension(extension) if extension.extension_name() == "geoarrow.wkb" => {
+                // Parse geoarrow extension metadata to determine geometry vs geography
+                let metadata = extension
+                    .extension_metadata()
+                    .and_then(|m| serde_json::from_str::<Value>(m).ok())
+                    .unwrap_or_default();
+
+                let edges = metadata
+                    .get("edges")
+                    .and_then(|e| e.as_str())
+                    .unwrap_or("planar");
+
+                let srid = metadata.get("srid").and_then(|s| s.as_i64()).unwrap_or(0);
+
+                if edges == "spherical" {
+                    Ok(format!("geography({})", srid))
+                } else {
+                    Ok(format!("geometry({})", srid))
+                }
+            }
             DataType::RunEndEncoded(_, _)
             | DataType::Decimal32(_, _)
             | DataType::Decimal64(_, _) => {

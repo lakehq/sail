@@ -33,6 +33,8 @@ pub enum JsonDataType {
     #[serde(rename = "interval")]
     CalendarInterval,
     Variant,
+    Geometry,
+    Geography,
     #[serde(untagged, with = "serde_char")]
     Char {
         length: i32,
@@ -513,6 +515,15 @@ fn from_spark_json_data_type(data_type: JsonDataType) -> SparkResult<sc::DataTyp
         },
         JsonDataType::Variant => sc::DataType {
             kind: Some(dt::Kind::Variant(dt::Variant::default())),
+        },
+        JsonDataType::Geometry => sc::DataType {
+            kind: Some(dt::Kind::Geometry(dt::Geometry { srid: 0 })),
+        },
+        JsonDataType::Geography => sc::DataType {
+            kind: Some(dt::Kind::Geography(dt::Geography {
+                srid: 4326,
+                algorithm: 1,
+            })),
         },
         JsonDataType::Array {
             r#type: _,

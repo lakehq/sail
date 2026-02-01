@@ -163,11 +163,41 @@ impl TryFrom<adt::DataType> for DataType {
                     type_variation_reference: 0,
                 }))
             }
+            adt::DataType::Extension(extension) if extension.extension_name() == "geoarrow.wkb" => {
+                // Parse geoarrow extension metadata
+                let metadata = extension
+                    .extension_metadata()
+                    .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
+                    .unwrap_or_default();
+
+                let edges = metadata
+                    .get("edges")
+                    .and_then(|e| e.as_str())
+                    .unwrap_or("planar");
+
+                let srid = metadata
+                    .get("srid")
+                    .and_then(|s| s.as_i64())
+                    .map(|s| s as i32)
+                    .unwrap_or(0);
+
+                let algorithm = match edges {
+                    "spherical" => 1, // SPHERICAL
+                    _ => 0,           // PLANAR
+                };
+
+                if edges == "spherical" {
+                    Kind::Geography(sdt::Geography { srid, algorithm })
+                } else {
+                    Kind::Geometry(sdt::Geometry { srid })
+                }
+            }
             adt::DataType::Union { .. }
             | adt::DataType::Dictionary { .. }
             | adt::DataType::RunEndEncoded(_, _)
             | adt::DataType::Decimal32(_, _)
-            | adt::DataType::Decimal64(_, _) => return Err(error(&data_type)),
+            | adt::DataType::Decimal64(_, _)
+            | adt::DataType::Extension(_) => return Err(error(&data_type)),
         };
         Ok(DataType { kind: Some(kind) })
     }

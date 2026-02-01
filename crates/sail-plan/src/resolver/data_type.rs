@@ -7,6 +7,9 @@ use sail_common::spec::{
     SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME,
 };
 
+use serde_json::json;
+use serde_json::Value;
+
 use crate::config::DefaultTimestampType;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
@@ -199,6 +202,32 @@ impl PlanResolver<'_> {
                     )),
                     *keys_sorted,
                 ))
+            }
+            DataType::Geometry { srid } => {
+                let metadata = json!({
+                    "crs": format!("EPSG:{}", srid),
+                    "edges": "planar"
+                });
+                Ok(adt::DataType::Extension(adt::ExtensionType {
+                    extension_name: "geoarrow.wkb".to_string(),
+                    storage_type: adt::DataType::Binary,
+                    extension_metadata: Some(metadata.to_string()),
+                }))
+            }
+            DataType::Geography { srid, algorithm } => {
+                let edges = match algorithm {
+                    spec::EdgeInterpolationAlgorithm::Spherical => "spherical",
+                    spec::EdgeInterpolationAlgorithm::Planar => "planar",
+                };
+                let metadata = json!({
+                    "crs": format!("EPSG:{}", srid),
+                    "edges": edges
+                });
+                Ok(adt::DataType::Extension(adt::ExtensionType {
+                    extension_name: "geoarrow.wkb".to_string(),
+                    storage_type: adt::DataType::Binary,
+                    extension_metadata: Some(metadata.to_string()),
+                }))
             }
             DataType::ConfiguredUtf8 { utf8_type: _ } => {
                 // FIXME: Currently `length` and `utf8_type` is lost in translation.
