@@ -558,48 +558,48 @@ ColumnPath = Tuple[str, ...]
 
 @dataclass(frozen=True)
 class EqualTo:
-    column: ColumnPath
+    attribute: ColumnPath
     value: Any
 
 @dataclass(frozen=True)
 class EqualNullSafe:
-    """Null-safe equals: column <=> value"""
-    column: ColumnPath
+    """Null-safe equals: attribute <=> value"""
+    attribute: ColumnPath
     value: Any
 
 @dataclass(frozen=True)
 class GreaterThan:
-    column: ColumnPath
+    attribute: ColumnPath
     value: Any
 
 @dataclass(frozen=True)
 class GreaterThanOrEqual:
-    column: ColumnPath
+    attribute: ColumnPath
     value: Any
 
 @dataclass(frozen=True)
 class LessThan:
-    column: ColumnPath
+    attribute: ColumnPath
     value: Any
 
 @dataclass(frozen=True)
 class LessThanOrEqual:
-    column: ColumnPath
+    attribute: ColumnPath
     value: Any
 
 @dataclass(frozen=True)
 class In:
-    """Filter: column IN (values)"""
-    column: ColumnPath
+    """Filter: attribute IN (values)"""
+    attribute: ColumnPath
     values: Tuple[Any, ...]
 
 @dataclass(frozen=True)
 class IsNull:
-    column: ColumnPath
+    attribute: ColumnPath
 
 @dataclass(frozen=True)
 class IsNotNull:
-    column: ColumnPath
+    attribute: ColumnPath
 
 @dataclass(frozen=True)
 class Not:
@@ -617,20 +617,20 @@ class Or:
 
 @dataclass(frozen=True)
 class StringStartsWith:
-    """Filter: column LIKE 'value%'"""
-    column: ColumnPath
+    """Filter: attribute LIKE 'value%'"""
+    attribute: ColumnPath
     value: str
 
 @dataclass(frozen=True)
 class StringEndsWith:
-    """Filter: column LIKE '%value'"""
-    column: ColumnPath
+    """Filter: attribute LIKE '%value'"""
+    attribute: ColumnPath
     value: str
 
 @dataclass(frozen=True)
 class StringContains:
-    """Filter: column LIKE '%value%'"""
-    column: ColumnPath
+    """Filter: attribute LIKE '%value%'"""
+    attribute: ColumnPath
     value: str
 ```
 

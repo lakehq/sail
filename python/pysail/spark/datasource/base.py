@@ -65,72 +65,72 @@ class CaseInsensitiveDict(dict):
 
 @dataclass(frozen=True)
 class EqualTo:
-    """Filter: column == value"""
+    """Filter: attribute == value"""
 
-    column: ColumnPath
+    attribute: ColumnPath
     value: Any
 
 
 @dataclass(frozen=True)
 class EqualNullSafe:
-    """Filter: column <=> value (null-safe equals)"""
+    """Filter: attribute <=> value (null-safe equals)"""
 
-    column: ColumnPath
+    attribute: ColumnPath
     value: Any
 
 
 @dataclass(frozen=True)
 class GreaterThan:
-    """Filter: column > value"""
+    """Filter: attribute > value"""
 
-    column: ColumnPath
+    attribute: ColumnPath
     value: Any
 
 
 @dataclass(frozen=True)
 class GreaterThanOrEqual:
-    """Filter: column >= value"""
+    """Filter: attribute >= value"""
 
-    column: ColumnPath
+    attribute: ColumnPath
     value: Any
 
 
 @dataclass(frozen=True)
 class LessThan:
-    """Filter: column < value"""
+    """Filter: attribute < value"""
 
-    column: ColumnPath
+    attribute: ColumnPath
     value: Any
 
 
 @dataclass(frozen=True)
 class LessThanOrEqual:
-    """Filter: column <= value"""
+    """Filter: attribute <= value"""
 
-    column: ColumnPath
+    attribute: ColumnPath
     value: Any
 
 
 @dataclass(frozen=True)
 class In:
-    """Filter: column IN (values)"""
+    """Filter: attribute IN (values)"""
 
-    column: ColumnPath
+    attribute: ColumnPath
     values: Tuple[Any, ...]
 
 
 @dataclass(frozen=True)
 class IsNull:
-    """Filter: column IS NULL"""
+    """Filter: attribute IS NULL"""
 
-    column: ColumnPath
+    attribute: ColumnPath
 
 
 @dataclass(frozen=True)
 class IsNotNull:
-    """Filter: column IS NOT NULL"""
+    """Filter: attribute IS NOT NULL"""
 
-    column: ColumnPath
+    attribute: ColumnPath
 
 
 @dataclass(frozen=True)
@@ -158,25 +158,25 @@ class Or:
 
 @dataclass(frozen=True)
 class StringStartsWith:
-    """Filter: column LIKE 'value%'"""
+    """Filter: attribute LIKE 'value%'"""
 
-    column: ColumnPath
+    attribute: ColumnPath
     value: str
 
 
 @dataclass(frozen=True)
 class StringEndsWith:
-    """Filter: column LIKE '%value'"""
+    """Filter: attribute LIKE '%value'"""
 
-    column: ColumnPath
+    attribute: ColumnPath
     value: str
 
 
 @dataclass(frozen=True)
 class StringContains:
-    """Filter: column LIKE '%value%'"""
+    """Filter: attribute LIKE '%value%'"""
 
-    column: ColumnPath
+    attribute: ColumnPath
     value: str
 
 

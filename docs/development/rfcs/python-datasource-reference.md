@@ -214,21 +214,21 @@ All filter classes use `ColumnPath = Tuple[str, ...]` for nested column support.
 
 | Class | SQL Equivalent | Example |
 |-------|----------------|---------|
-| `EqualTo(col, val)` | `col = val` | `EqualTo(("id",), 5)` |
-| `EqualNullSafe(col, val)` | `col <=> val` | |
-| `GreaterThan(col, val)` | `col > val` | |
-| `GreaterThanOrEqual(col, val)` | `col >= val` | |
-| `LessThan(col, val)` | `col < val` | |
-| `LessThanOrEqual(col, val)` | `col <= val` | |
-| `In(col, values)` | `col IN (...)` | `In(("status",), ("A", "B"))` |
-| `IsNull(col)` | `col IS NULL` | |
-| `IsNotNull(col)` | `col IS NOT NULL` | |
+| `EqualTo(attr, val)` | `attr = val` | `EqualTo(("id",), 5)` |
+| `EqualNullSafe(attr, val)` | `attr <=> val` | |
+| `GreaterThan(attr, val)` | `attr > val` | |
+| `GreaterThanOrEqual(attr, val)` | `attr >= val` | |
+| `LessThan(attr, val)` | `attr < val` | |
+| `LessThanOrEqual(attr, val)` | `attr <= val` | |
+| `In(attr, values)` | `attr IN (...)` | `In(("status",), ("A", "B"))` |
+| `IsNull(attr)` | `attr IS NULL` | |
+| `IsNotNull(attr)` | `attr IS NOT NULL` | |
 | `Not(child)` | `NOT child` | `Not(IsNull(("id",)))` |
 | `And(left, right)` | `left AND right` | |
 | `Or(left, right)` | `left OR right` | |
-| `StringStartsWith(col, val)` | `col LIKE 'val%'` | |
-| `StringEndsWith(col, val)` | `col LIKE '%val'` | |
-| `StringContains(col, val)` | `col LIKE '%val%'` | |
+| `StringStartsWith(attr, val)` | `attr LIKE 'val%'` | |
+| `StringEndsWith(attr, val)` | `attr LIKE '%val'` | |
+| `StringContains(attr, val)` | `attr LIKE '%val%'` | |
 
 ---
 
