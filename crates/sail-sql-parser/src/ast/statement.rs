@@ -11,13 +11,13 @@ use crate::ast::keywords::{
     Create, Data, Database, Databases, Dbproperties, Default, Defined, Delete, Delimited, Desc,
     Describe, Directory, Distributed, Drop, Escaped, Evolution, Exists, Explain, Extended,
     External, Fields, Fileformat, First, For, Format, Formatted, From, Function, Functions,
-    Generated, Global, If, In, Inpath, Inputformat, Insert, Into, Is, Items, Keys, Lazy, Like,
-    Lines, Load, Local, Location, Map, Matched, Merge, Name, Noscan, Not, Null, On, Options, Or,
-    Outputformat, Overwrite, Partition, Partitioned, Partitions, Properties, Purge, Recover,
-    Refresh, Rename, Replace, Restrict, Row, Schema, Schemas, Serde, Serdeproperties, Set, Show,
-    Sorted, Source, Statistics, Stored, Table, Tables, Target, Tblproperties, Temp, Temporary,
-    Terminated, Then, Time, To, Type, Uncache, Unset, Update, Use, Using, Values, Verbose, View,
-    Views, When, With, Zone,
+    Generated, Global, If, In, Inpath, Inputformat, Insert, Inspect, Into, Is, Items, Keys, Lazy,
+    Like, Lines, Load, Local, Location, Map, Matched, Merge, Name, NodeOutput, Noscan, Not, Null,
+    On, Options, Or, Outputformat, Overwrite, Partition, Partitioned, Partitions, Pretty,
+    Properties, Purge, Recover, Refresh, Rename, Replace, Restrict, Row, Schema, Schemas, Serde,
+    Serdeproperties, Set, Show, Sorted, Source, Statistics, Stored, Table, Tables, Target,
+    Tblproperties, Temp, Temporary, Terminated, Then, Time, To, Type, Uncache, Unset, Update, Use,
+    Using, Values, Verbose, View, Views, When, With, Zone,
 };
 use crate::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
 use crate::ast::operator::{
@@ -193,6 +193,15 @@ pub enum Statement {
         format: Option<ExplainFormat>,
         #[parser(function = |(s, _, _, _), _| boxed(s))]
         statement: Box<Statement>,
+    },
+    InspectNodeOutput {
+        inspect: Inspect,
+        node_output: NodeOutput,
+        node: StringLiteral,
+        r#for: For,
+        #[parser(function = |(s, _, _, _), _| boxed(s))]
+        statement: Box<Statement>,
+        format: Option<(As, Pretty)>,
     },
     InsertOverwriteDirectory {
         insert: Insert,
