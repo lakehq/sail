@@ -94,9 +94,10 @@ impl PlanResolver<'_> {
 
         match subquery_type {
             spec::SubqueryType::In => {
-                let expr = in_subquery_values.into_iter().next().ok_or_else(|| {
-                    PlanError::invalid("IN subquery missing value expression")
-                })?;
+                let expr = in_subquery_values
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| PlanError::invalid("IN subquery missing value expression"))?;
                 self.resolve_expression_in_subquery(expr, subquery_plan, negated, schema, state)
                     .await
             }

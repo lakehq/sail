@@ -17,9 +17,9 @@ impl PlanResolver<'_> {
         let state = scope.state();
 
         for ref_plan in references {
-            let plan_id = ref_plan.plan_id.ok_or_else(|| {
-                PlanError::invalid("subquery reference missing plan_id")
-            })?;
+            let plan_id = ref_plan
+                .plan_id
+                .ok_or_else(|| PlanError::invalid("subquery reference missing plan_id"))?;
             state.insert_subquery_ref(plan_id, ref_plan);
         }
 
