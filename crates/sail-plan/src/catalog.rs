@@ -127,7 +127,9 @@ mod display {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
     pub struct SparkTable {
+        #[serde(rename = "tableName")]
         pub name: String,
         pub catalog: Option<String>,
         pub namespace: Vec<String>,
