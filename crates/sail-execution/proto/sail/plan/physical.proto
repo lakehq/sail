@@ -42,11 +42,11 @@ message ExtendedPhysicalPlanNode {
     BinarySourceExecNode binary_source = 27;
     StreamCollectorExecNode stream_collector = 28;
     StreamLimitExecNode stream_limit = 29;
-    StreamSourceAdapterExecNode stream_source_adapter = 30;
-    IcebergWriterExecNode iceberg_writer = 31;
-    IcebergCommitExecNode iceberg_commit = 32;
-    MergeCardinalityCheckExecNode merge_cardinality_check = 33;
- 
+    StreamFilterExecNode stream_filter = 30;
+    StreamSourceAdapterExecNode stream_source_adapter = 31;
+    IcebergWriterExecNode iceberg_writer = 32;
+    IcebergCommitExecNode iceberg_commit = 33;
+    MergeCardinalityCheckExecNode merge_cardinality_check = 34;
   }
 }
 
@@ -227,6 +227,56 @@ message PySparkUdfConfig {
   uint64 arrow_max_records_per_batch = 5;
 }
 
+message EquivalenceProperties {
+  EquivalenceGroup eq_group = 1;
+  repeated ConstantExpr constants = 2;
+  repeated LexOrdering orderings = 3;
+  repeated Constraint constraints = 4;
+  bytes schema = 5;
+}
+
+message EquivalenceGroup {
+  repeated EquivalenceClass classes = 1;
+}
+
+message EquivalenceClass {
+  repeated bytes exprs = 1;
+}
+
+message ConstantExpr {
+  bytes expr = 1;
+  ConstantAcrossPartitions across_partitions = 2;
+}
+
+message ConstantAcrossPartitions {
+  oneof kind {
+    UniformConstant uniform = 1;
+    HeterogeneousConstant heterogeneous = 2;
+  }
+}
+
+message UniformConstant {
+  optional bytes value = 1;
+}
+
+message HeterogeneousConstant {
+}
+
+message Constraint {
+  oneof kind {
+    PrimaryKeyConstraint primary_key = 1;
+    UniqueConstraint unique = 2;
+  }
+}
+
+message PrimaryKeyConstraint {
+  repeated uint64 indices = 1;
+}
+
+message UniqueConstraint {
+  repeated uint64 indices = 1;
+}
+
 message RangeExecNode {
   int64 start = 1;
   int64 end = 2;
@@ -252,8 +302,9 @@ enum ShowStringStyle {
 
 message StageInputExecNode {
   uint64 input = 1;
-  bytes schema = 2;
+  EquivalenceProperties eq_properties = 2;
   bytes partitioning = 3;
+  bool bounded = 4;
 }
 
 message SystemTableExecNode {
@@ -450,6 +501,11 @@ message StreamLimitExecNode {
   optional uint64 fetch = 3;
 }
 
+message StreamFilterExecNode {
+  bytes input = 1;
+  bytes predicate = 2;
+}
+
 message StreamSourceAdapterExecNode {
   bytes input = 1;
 }
@@ -478,8 +534,8 @@ message ColumnIndex{
 }
 
 message SortOptions {
-    bool descending = 1;
-    bool nulls_first = 2;
+  bool descending = 1;
+  bool nulls_first = 2;
 }
 
 message PhysicalProjection {

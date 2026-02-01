@@ -153,14 +153,12 @@ impl TaskRunner {
                         TaskKeyDisplay(key)
                     );
                 };
-                let partitioning = placeholder.properties().output_partitioning().clone();
                 let locations = input.locations(key.job_id);
                 let accessor = StreamAccessor::new(handle.clone());
                 let shuffle = ShuffleReadExec::new(
                     locations,
                     Arc::new(accessor),
-                    placeholder.schema(),
-                    partitioning,
+                    placeholder.properties().clone(),
                 );
                 Ok(Transformed::yes(Arc::new(shuffle)))
             } else {
