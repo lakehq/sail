@@ -1031,7 +1031,18 @@ impl TryFrom<RelType> for RelationNode {
             RelType::CommonInlineUserDefinedDataSource(_) => {
                 Err(SparkError::todo("common inline user defined data source"))
             }
-            RelType::WithRelations(_) => Err(SparkError::todo("with relations")),
+            RelType::WithRelations(wr) => {
+                let sc::WithRelations { root, references } = *wr;
+                let root = *root.required("with relations root")?;
+                let references: Vec<spec::QueryPlan> = references
+                    .into_iter()
+                    .map(|r| r.try_into())
+                    .collect::<SparkResult<_>>()?;
+                Ok(RelationNode::Query(spec::QueryNode::WithRelations {
+                    root: Box::new(root.try_into()?),
+                    references,
+                }))
+            }
             RelType::Transpose(_) => Err(SparkError::todo("transpose")),
             RelType::UnresolvedTableValuedFunction(_) => {
                 Err(SparkError::todo("unresolved table valued function"))
