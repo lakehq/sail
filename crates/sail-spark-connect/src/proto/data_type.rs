@@ -244,8 +244,18 @@ impl TryFrom<DataType> for spec::DataType {
                     sql_type: Box::new(spec::DataType::try_from(*sql_type)?),
                 })
             }
-            Kind::Geometry(_) => Err(SparkError::todo("geometry data type")),
-            Kind::Geography(_) => Err(SparkError::todo("geography data type")),
+            Kind::Geometry(geometry) => {
+                let sdt::Geometry { srid } = *geometry;
+                Ok(spec::DataType::Geometry { srid })
+            }
+            Kind::Geography(geography) => {
+                let sdt::Geography { srid, algorithm } = *geography;
+                let algorithm = match algorithm {
+                    0 => spec::EdgeInterpolationAlgorithm::Planar,
+                    _ => spec::EdgeInterpolationAlgorithm::Spherical,
+                };
+                Ok(spec::DataType::Geography { srid, algorithm })
+            }
             Kind::Unparsed(sdt::Unparsed { data_type_string }) => {
                 Ok(parse_spark_data_type(data_type_string.as_str())?)
             }

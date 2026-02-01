@@ -28,6 +28,8 @@ pub struct PlanConfig {
     pub default_warehouse_directory: String,
     pub session_user_id: String,
     pub ansi_mode: bool,
+    /// Whether geospatial types and functions are enabled.
+    pub geospatial_enabled: bool,
 }
 
 impl PlanConfig {
@@ -50,6 +52,7 @@ impl Default for PlanConfig {
             default_warehouse_directory: "spark-warehouse".to_string(),
             session_user_id: "".to_string(),
             ansi_mode: false,
+            geospatial_enabled: true,
         }
     }
 }

@@ -258,5 +258,10 @@ pub fn from_ast_data_type(sql_type: DataType) -> SqlResult<spec::DataType> {
                 keys_sorted: false,
             })
         }
+        DataType::Geometry(_) => Ok(spec::DataType::Geometry { srid: 0 }),
+        DataType::Geography(_) => Ok(spec::DataType::Geography {
+            srid: 4326,
+            algorithm: spec::EdgeInterpolationAlgorithm::Spherical,
+        }),
     }
 }
