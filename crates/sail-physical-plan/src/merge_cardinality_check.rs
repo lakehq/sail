@@ -8,8 +8,11 @@ use datafusion::arrow::array::{Array, BooleanArray, LargeStringArray, StringArra
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    RecordBatchStream,
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
 use futures::Stream;
@@ -32,7 +35,14 @@ impl MergeCardinalityCheckExec {
         source_present_col: impl Into<String>,
     ) -> Result<Self> {
         let schema = input.schema();
-        let properties = input.properties().clone();
+        // This exec is logically single-partition: it maintains a global "seen" set and checks
+        // duplicates across the entire input. Its output partitioning must therefore be 1.
+        let properties = PlanProperties::new(
+            EquivalenceProperties::new(schema.clone()),
+            Partitioning::UnknownPartitioning(1),
+            input.pipeline_behavior(),
+            input.boundedness(),
+        );
         Ok(Self {
             input,
             target_row_id_col: target_row_id_col.into(),
@@ -121,7 +131,14 @@ impl ExecutionPlan for MergeCardinalityCheckExec {
             );
         }
 
-        let input = self.input.execute(0, context)?;
+        // Coalesce to a single stream so the check applies to the full input, not per-partition.
+        let input_plan: Arc<dyn ExecutionPlan> =
+            if self.input.output_partitioning().partition_count() > 1 {
+                Arc::new(CoalescePartitionsExec::new(Arc::clone(&self.input)))
+            } else {
+                Arc::clone(&self.input)
+            };
+        let input = input_plan.execute(0, context)?;
         let schema = self.schema.clone();
 
         let row_id_idx = schema

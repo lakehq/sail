@@ -597,6 +597,19 @@ impl JobScheduler {
                 key.job_id, input.stage
             )));
         };
+        let consumer_partitions = job
+            .graph
+            .stages()
+            .get(key.stage)
+            .ok_or_else(|| {
+                ExecutionError::InvalidArgument(format!(
+                    "job {} stage {} not found",
+                    key.job_id, key.stage
+                ))
+            })?
+            .plan
+            .output_partitioning()
+            .partition_count();
         let partitions = producer.plan.output_partitioning().partition_count();
         let channels = producer.distribution.channels();
         let keys = match input.mode {
@@ -640,7 +653,7 @@ impl JobScheduler {
                         })
                     })
                     .collect::<ExecutionResult<Vec<_>>>()?;
-                vec![keys]
+                vec![keys; consumer_partitions]
             }
         };
         let locator = match producer.mode {
@@ -710,7 +723,27 @@ impl JobScheduler {
         key: &TaskKey,
         stage: &Stage,
     ) -> ExecutionResult<TaskOutput> {
-        let replicas = job.graph.replicas(key.stage);
+        let max_channels = stage.distribution.channels();
+        let replicas = job
+            .graph
+            .replicas(key.stage)
+            .max(self.options.task_max_attempts)
+            .max(max_channels);
+        log::debug!(
+            "task output: job={}, stage={}, replicas={}, max_attempts={}, max_channels={}",
+            key.job_id,
+            key.stage,
+            replicas,
+            self.options.task_max_attempts,
+            max_channels
+        );
+        let locator = match stage.mode {
+            OutputMode::Pipelined => TaskOutputLocator::Local { replicas },
+            OutputMode::Blocking => {
+                let uri = Err(ExecutionError::InternalError("not implemented".to_string()))?;
+                TaskOutputLocator::Remote { uri }
+            }
+        };
         let distribution = match &stage.distribution {
             OutputDistribution::Hash { keys, channels } => {
                 let keys = keys
@@ -729,13 +762,6 @@ impl JobScheduler {
             OutputDistribution::RoundRobin { channels } => TaskOutputDistribution::RoundRobin {
                 channels: *channels,
             },
-        };
-        let locator = match stage.mode {
-            OutputMode::Pipelined => TaskOutputLocator::Local { replicas },
-            OutputMode::Blocking => {
-                let uri = Err(ExecutionError::InternalError("not implemented".to_string()))?;
-                TaskOutputLocator::Remote { uri }
-            }
         };
         Ok(TaskOutput {
             distribution,

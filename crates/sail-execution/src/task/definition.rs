@@ -97,14 +97,10 @@ impl TryFrom<gen::TaskDefinition> for TaskDefinition {
             .into_iter()
             .map(|x| x.try_into())
             .collect::<ExecutionResult<Vec<_>>>()?;
-        let output = match value.output {
-            Some(x) => x.try_into()?,
-            None => {
-                return Err(ExecutionError::InvalidArgument(
-                    "cannot decode empty task output".to_string(),
-                ))
-            }
-        };
+        let output = value.output.ok_or_else(|| {
+            ExecutionError::InvalidArgument("cannot decode empty task output".to_string())
+        })?;
+        let output = output.try_into()?;
         Ok(TaskDefinition {
             plan: Arc::from(value.plan),
             inputs,

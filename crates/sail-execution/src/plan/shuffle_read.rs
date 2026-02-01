@@ -12,7 +12,7 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 use futures::future::try_join_all;
 use futures::TryStreamExt;
-use log::warn;
+use log::{debug, warn};
 
 use crate::plan::ListListDisplay;
 use crate::stream::merge::MergedRecordBatchStream;
@@ -105,13 +105,23 @@ impl ExecutionPlan for ShuffleReadExec {
         partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let locations = self
-            .locations
-            .get(partition)
-            .ok_or_else(|| {
-                exec_datafusion_err!("read locations for partition {partition} not found")
-            })?
-            .clone();
+        let locations = if let Some(locations) = self.locations.get(partition) {
+            locations.clone()
+        } else if self.locations.len() == 1 {
+            debug!(
+                "shuffle read falling back to broadcast locations: partition={}, locations_len={}, partitioning={:?}",
+                partition,
+                self.locations.len(),
+                self.properties.output_partitioning()
+            );
+            self.locations[0].clone()
+        } else {
+            return Err(exec_datafusion_err!(
+                "read locations for partition {partition} not found (locations_len={}, partitioning={:?})",
+                self.locations.len(),
+                self.properties.output_partitioning()
+            ));
+        };
         if locations.is_empty() {
             warn!("empty read locations for partition {partition}");
         }

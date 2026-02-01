@@ -170,7 +170,8 @@ impl TaskRunner {
         let plan = result.data()?;
         let schema = plan.schema();
         let accessor = StreamAccessor::new(handle.clone());
-        let mut locations = vec![vec![]; plan.output_partitioning().partition_count()];
+        let partition_count = plan.output_partitioning().partition_count();
+        let mut locations = vec![vec![]; partition_count];
         match locations.get_mut(key.partition) {
             Some(x) => x.extend(output.locations(key)),
             None => {

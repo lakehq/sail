@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
-use log::warn;
+use log::{debug, warn};
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::{Actor, ActorContext};
@@ -33,6 +33,11 @@ impl StreamManager {
         storage: LocalStreamStorage,
         _schema: SchemaRef,
     ) -> ExecutionResult<Box<dyn TaskStreamSink>> {
+        debug!(
+            "create_local_stream: key={}, storage={}",
+            TaskStreamKeyDisplay(&key),
+            storage
+        );
         let create = |senders: Vec<_>| -> ExecutionResult<_> {
             let mut stream =
                 Self::create_local_stream_with_senders(storage, senders, &self.options)?;
@@ -44,6 +49,10 @@ impl StreamManager {
             Entry::Occupied(mut entry) => {
                 let senders = match entry.get_mut() {
                     LocalStreamState::Created { .. } => {
+                        debug!(
+                            "create_local_stream: already created for {}",
+                            TaskStreamKeyDisplay(&key)
+                        );
                         return Err(ExecutionError::InternalError(format!(
                             "local stream {} is already created",
                             TaskStreamKeyDisplay(&key)
@@ -51,6 +60,10 @@ impl StreamManager {
                     }
                     LocalStreamState::Pending { senders } => senders,
                     LocalStreamState::Failed { cause } => {
+                        debug!(
+                            "create_local_stream: failed state for {}",
+                            TaskStreamKeyDisplay(&key)
+                        );
                         return Err(ExecutionError::InternalError(format!(
                             "local stream creation has failed for {}: {}",
                             TaskStreamKeyDisplay(&key),
@@ -73,10 +86,18 @@ impl StreamManager {
             }
             Entry::Vacant(entry) => match create(vec![]) {
                 Ok((stream, sink)) => {
+                    debug!(
+                        "create_local_stream: created new stream for {}",
+                        TaskStreamKeyDisplay(&key)
+                    );
                     entry.insert(LocalStreamState::Created { stream });
                     Ok(sink)
                 }
                 Err(e) => {
+                    debug!(
+                        "create_local_stream: failed to create stream for {}: {e}",
+                        TaskStreamKeyDisplay(&key)
+                    );
                     let cause = CommonErrorCause::new::<PyErrExtractor>(&e);
                     entry.insert(LocalStreamState::Failed { cause });
                     Err(e)
@@ -107,8 +128,24 @@ impl StreamManager {
     {
         match self.local_streams.entry(key.clone()) {
             Entry::Occupied(mut entry) => match entry.get_mut() {
-                LocalStreamState::Created { stream } => stream.subscribe(),
+                LocalStreamState::Created { stream } => {
+                    debug!(
+                        "fetch_local_stream: subscribe to created stream {}",
+                        TaskStreamKeyDisplay(key)
+                    );
+                    stream.subscribe().map_err(|e| {
+                        ExecutionError::InternalError(format!(
+                            "local stream {} subscribe failed: {e}",
+                            TaskStreamKeyDisplay(key)
+                        ))
+                    })
+                }
                 LocalStreamState::Pending { senders } => {
+                    debug!(
+                        "fetch_local_stream: pending stream {}, senders={}",
+                        TaskStreamKeyDisplay(key),
+                        senders.len()
+                    );
                     let (tx, rx) = mpsc::channel(self.options.worker_stream_buffer);
                     senders.push(tx);
                     // There is no need to probe the pending stream again.

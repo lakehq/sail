@@ -46,7 +46,10 @@ message ExtendedPhysicalPlanNode {
     IcebergWriterExecNode iceberg_writer = 31;
     IcebergCommitExecNode iceberg_commit = 32;
     MergeCardinalityCheckExecNode merge_cardinality_check = 33;
- 
+    AddRowIdExecNode add_row_id = 34;
+    BuildMatchSetExecNode build_match_set = 35;
+    MatchSetOrExecNode match_set_or = 36;
+    ApplyMatchSetExecNode apply_match_set = 37;
   }
 }
 
@@ -273,6 +276,27 @@ message MapPartitionsExecNode {
   bytes input = 1;
   ExtendedStreamUdf udf = 2;
   bytes schema = 3;
+}
+
+message AddRowIdExecNode {
+  bytes input = 1;
+}
+
+message BuildMatchSetExecNode {
+  bytes input = 1;
+  uint64 row_id_index = 2;
+}
+
+message MatchSetOrExecNode {
+  bytes input = 1;
+}
+
+message ApplyMatchSetExecNode {
+  bytes left = 1;
+  bytes match_set = 2;
+  uint64 row_id_index = 3;
+  string join_type = 4;
+  bytes schema = 5;
 }
 
 message LexOrdering {
