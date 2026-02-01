@@ -3905,6 +3905,14 @@
               }
             },
             {
+              "name": "Keyword(Catalogs)",
+              "node": {
+                "terminal": {
+                  "keyword": "CATALOGS"
+                }
+              }
+            },
+            {
               "name": "Keyword(Change)",
               "node": {
                 "terminal": {
@@ -8865,6 +8873,19 @@
                       },
                       {
                         "nonTerminal": "Option(Tuple(Either(Keyword(From), Keyword(In)), ObjectName))"
+                      },
+                      {
+                        "nonTerminal": "Option(Tuple(Option(Keyword(Like)), StringLiteral))"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Show)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Catalogs)"
                       },
                       {
                         "nonTerminal": "Option(Tuple(Option(Keyword(Like)), StringLiteral))"
