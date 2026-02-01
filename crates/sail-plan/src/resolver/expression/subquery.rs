@@ -4,7 +4,7 @@ use datafusion_common::DFSchemaRef;
 use datafusion_expr::expr_fn;
 use sail_common::spec;
 
-use crate::error::PlanResult;
+use crate::error::{PlanError, PlanResult};
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
@@ -64,5 +64,50 @@ impl PlanResolver<'_> {
             expr_fn::not_exists(Arc::new(subquery))
         };
         Ok(NamedExpr::new(vec!["exists".to_string()], exists))
+    }
+
+    /// Resolves a SubqueryExpressionRef by looking up the plan_id in the current scope.
+    pub(super) async fn resolve_expression_subquery_ref(
+        &self,
+        plan_id: i64,
+        subquery_type: spec::SubqueryType,
+        in_subquery_values: Vec<spec::Expr>,
+        negated: bool,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        if !state.in_subquery_ref_scope() {
+            return Err(PlanError::invalid(
+                "SubqueryExpression requires enclosing WithRelations",
+            ));
+        }
+
+        let subquery_plan = state
+            .get_subquery_ref(plan_id)
+            .ok_or_else(|| {
+                PlanError::invalid(format!(
+                    "subquery plan_id {} not found in WithRelations references",
+                    plan_id
+                ))
+            })?
+            .clone();
+
+        match subquery_type {
+            spec::SubqueryType::In => {
+                let expr = in_subquery_values.into_iter().next().ok_or_else(|| {
+                    PlanError::invalid("IN subquery missing value expression")
+                })?;
+                self.resolve_expression_in_subquery(expr, subquery_plan, negated, schema, state)
+                    .await
+            }
+            spec::SubqueryType::Scalar => {
+                self.resolve_expression_scalar_subquery(subquery_plan, schema, state)
+                    .await
+            }
+            spec::SubqueryType::Exists => {
+                self.resolve_expression_exists(subquery_plan, negated, schema, state)
+                    .await
+            }
+        }
     }
 }

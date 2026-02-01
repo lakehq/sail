@@ -242,7 +242,27 @@ impl TryFrom<Expression> for spec::Expr {
             ExprType::TypedAggregateExpression(_) => {
                 Err(SparkError::todo("typed aggregate expression"))
             }
-            ExprType::SubqueryExpression(_) => Err(SparkError::todo("subquery expression")),
+            ExprType::SubqueryExpression(se) => {
+                use crate::spark::connect::subquery_expression::SubqueryType;
+                let plan_id = se.plan_id;
+                let subquery_type = match se.subquery_type() {
+                    SubqueryType::In => spec::SubqueryType::In,
+                    SubqueryType::Scalar => spec::SubqueryType::Scalar,
+                    SubqueryType::Exists => spec::SubqueryType::Exists,
+                    _ => return Err(SparkError::unsupported("unsupported subquery type")),
+                };
+                let in_subquery_values: Vec<spec::Expr> = se
+                    .in_subquery_values
+                    .into_iter()
+                    .map(|e| e.try_into())
+                    .collect::<SparkResult<_>>()?;
+                Ok(spec::Expr::SubqueryExpressionRef {
+                    plan_id,
+                    subquery_type,
+                    in_subquery_values,
+                    negated: false,
+                })
+            }
             ExprType::DirectShufflePartitionId(_) => {
                 Err(SparkError::todo("direct shuffle partition ID expression"))
             }
