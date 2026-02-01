@@ -73,6 +73,7 @@ pub(super) fn list_built_in_collection_functions() -> Vec<(&'static str, ScalarF
         ("deep_size", F::unary(expr_fn::cardinality)),
         ("element_at", F::custom(|input| element_at(input, false))),
         ("size", F::custom(size)),
+        ("array_concat", F::udf(SparkConcat::new())),
         ("concat", F::udf(SparkConcat::new())),
         ("reverse", F::udf(SparkReverse::new())),
         ("try_element_at", F::custom(|input| element_at(input, true))),
