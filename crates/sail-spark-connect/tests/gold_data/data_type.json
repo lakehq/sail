@@ -848,6 +848,27 @@
       "output": {
         "success": "null"
       }
+    },
+    {
+      "input": "geometry",
+      "output": {
+        "success": {
+          "geometry": {
+            "srid": 0
+          }
+        }
+      }
+    },
+    {
+      "input": "geography",
+      "output": {
+        "success": {
+          "geography": {
+            "srid": 4326,
+            "algorithm": "spherical"
+          }
+        }
+      }
     }
   ]
 }

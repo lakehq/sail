@@ -265,3 +265,41 @@ pub fn from_ast_data_type(sql_type: DataType) -> SqlResult<spec::DataType> {
         }),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use sail_sql_parser::ast::keywords::{
+        Geography as GeographyKeyword, Geometry as GeometryKeyword,
+    };
+
+    use super::*;
+
+    #[test]
+    fn test_geometry_type_conversion() {
+        let geometry_keyword = GeometryKeyword;
+        let ast_type = DataType::Geometry(geometry_keyword);
+        let spec_type = from_ast_data_type(ast_type).unwrap();
+
+        match spec_type {
+            spec::DataType::Geometry { srid } => {
+                assert_eq!(srid, 0);
+            }
+            _ => panic!("Expected Geometry type"),
+        }
+    }
+
+    #[test]
+    fn test_geography_type_conversion() {
+        let geography_keyword = GeographyKeyword;
+        let ast_type = DataType::Geography(geography_keyword);
+        let spec_type = from_ast_data_type(ast_type).unwrap();
+
+        match spec_type {
+            spec::DataType::Geography { srid, algorithm } => {
+                assert_eq!(srid, 4326);
+                assert_eq!(algorithm, spec::EdgeInterpolationAlgorithm::Spherical);
+            }
+            _ => panic!("Expected Geography type"),
+        }
+    }
+}

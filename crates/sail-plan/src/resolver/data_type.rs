@@ -348,3 +348,132 @@ impl PlanResolver<'_> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_resolver() -> PlanResolver<'static> {
+        let config = PlanConfig::default();
+        PlanResolver { config: &config }
+    }
+
+    #[test]
+    fn test_resolve_geometry_default_srid() {
+        let resolver = create_test_resolver();
+        let mut state = PlanResolverState::new();
+
+        let spec_type = spec::DataType::Geometry { srid: 0 };
+        let arrow_type = resolver.resolve_data_type(&spec_type, &mut state).unwrap();
+
+        match arrow_type {
+            adt::DataType::Extension(ext) => {
+                assert_eq!(ext.extension_name(), "geoarrow.wkb");
+                assert!(ext.extension_metadata().is_some());
+                let metadata = ext.extension_metadata().unwrap();
+                let metadata_json: Value = serde_json::from_str(metadata).unwrap();
+                assert_eq!(metadata_json["edges"], "planar");
+                assert_eq!(metadata_json["crs"], "EPSG:0");
+            }
+            _ => panic!("Expected Extension type for Geometry"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_geometry_with_srid() {
+        let resolver = create_test_resolver();
+        let mut state = PlanResolverState::new();
+
+        let spec_type = spec::DataType::Geometry { srid: 4326 };
+        let arrow_type = resolver.resolve_data_type(&spec_type, &mut state).unwrap();
+
+        match arrow_type {
+            adt::DataType::Extension(ext) => {
+                let metadata = ext.extension_metadata().unwrap();
+                let metadata_json: Value = serde_json::from_str(metadata).unwrap();
+                assert_eq!(metadata_json["crs"], "EPSG:4326");
+                assert_eq!(metadata_json["edges"], "planar");
+            }
+            _ => panic!("Expected Extension type for Geometry"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_geography_default_srid() {
+        let resolver = create_test_resolver();
+        let mut state = PlanResolverState::new();
+
+        let spec_type = spec::DataType::Geography {
+            srid: 4326,
+            algorithm: spec::EdgeInterpolationAlgorithm::Spherical,
+        };
+        let arrow_type = resolver.resolve_data_type(&spec_type, &mut state).unwrap();
+
+        match arrow_type {
+            adt::DataType::Extension(ext) => {
+                assert_eq!(ext.extension_name(), "geoarrow.wkb");
+                let metadata = ext.extension_metadata().unwrap();
+                let metadata_json: Value = serde_json::from_str(metadata).unwrap();
+                assert_eq!(metadata_json["edges"], "spherical");
+                assert_eq!(metadata_json["crs"], "EPSG:4326");
+            }
+            _ => panic!("Expected Extension type for Geography"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_geography_with_planar_algorithm() {
+        let resolver = create_test_resolver();
+        let mut state = PlanResolverState::new();
+
+        let spec_type = spec::DataType::Geography {
+            srid: 4326,
+            algorithm: spec::EdgeInterpolationAlgorithm::Planar,
+        };
+        let arrow_type = resolver.resolve_data_type(&spec_type, &mut state).unwrap();
+
+        match arrow_type {
+            adt::DataType::Extension(ext) => {
+                let metadata = ext.extension_metadata().unwrap();
+                let metadata_json: Value = serde_json::from_str(metadata).unwrap();
+                assert_eq!(metadata_json["edges"], "planar");
+            }
+            _ => panic!("Expected Extension type for Geography"),
+        }
+    }
+
+    #[test]
+    fn test_geometry_storage_type_is_binary() {
+        let resolver = create_test_resolver();
+        let mut state = PlanResolverState::new();
+
+        let spec_type = spec::DataType::Geometry { srid: 0 };
+        let arrow_type = resolver.resolve_data_type(&spec_type, &mut state).unwrap();
+
+        match arrow_type {
+            adt::DataType::Extension(ext) => {
+                assert!(matches!(ext.storage_type(), adt::DataType::Binary));
+            }
+            _ => panic!("Expected Extension type"),
+        }
+    }
+
+    #[test]
+    fn test_geography_storage_type_is_binary() {
+        let resolver = create_test_resolver();
+        let mut state = PlanResolverState::new();
+
+        let spec_type = spec::DataType::Geography {
+            srid: 4326,
+            algorithm: spec::EdgeInterpolationAlgorithm::Spherical,
+        };
+        let arrow_type = resolver.resolve_data_type(&spec_type, &mut state).unwrap();
+
+        match arrow_type {
+            adt::DataType::Extension(ext) => {
+                assert!(matches!(ext.storage_type(), adt::DataType::Binary));
+            }
+            _ => panic!("Expected Extension type"),
+        }
+    }
+}

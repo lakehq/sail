@@ -288,4 +288,92 @@ mod tests {
             |e: String| SparkError::internal(e),
         )
     }
+
+    #[test]
+    fn test_geometry_proto_conversion() -> SparkResult<()> {
+        use crate::spark::connect::data_type::{Geometry, Kind};
+
+        let proto_type = crate::spark::connect::DataType {
+            kind: Some(Kind::Geometry(Box::new(Geometry { srid: 4326 }))),
+        };
+
+        let spec_type = spec::DataType::try_from(proto_type)?;
+
+        match spec_type {
+            spec::DataType::Geometry { srid } => {
+                assert_eq!(srid, 4326);
+            }
+            _ => panic!("Expected Geometry type"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_geography_proto_conversion() -> SparkResult<()> {
+        use crate::spark::connect::data_type::{Geography, Kind};
+
+        let proto_type = crate::spark::connect::DataType {
+            kind: Some(Kind::Geography(Box::new(Geography {
+                srid: 3857,
+                algorithm: 1,
+            }))),
+        };
+
+        let spec_type = spec::DataType::try_from(proto_type)?;
+
+        match spec_type {
+            spec::DataType::Geography { srid, algorithm } => {
+                assert_eq!(srid, 3857);
+                assert_eq!(algorithm, spec::EdgeInterpolationAlgorithm::Spherical);
+            }
+            _ => panic!("Expected Geography type"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_geometry_default_srid() -> SparkResult<()> {
+        use crate::spark::connect::data_type::{Geometry, Kind};
+
+        let proto_type = crate::spark::connect::DataType {
+            kind: Some(Kind::Geometry(Box::new(Geometry { srid: 0 }))),
+        };
+
+        let spec_type = spec::DataType::try_from(proto_type)?;
+
+        match spec_type {
+            spec::DataType::Geometry { srid } => {
+                assert_eq!(srid, 0);
+            }
+            _ => panic!("Expected Geometry type"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_geography_planar_algorithm() -> SparkResult<()> {
+        use crate::spark::connect::data_type::{Geography, Kind};
+
+        let proto_type = crate::spark::connect::DataType {
+            kind: Some(Kind::Geography(Box::new(Geography {
+                srid: 4326,
+                algorithm: 0,
+            }))),
+        };
+
+        let spec_type = spec::DataType::try_from(proto_type)?;
+
+        match spec_type {
+            spec::DataType::Geography { srid, algorithm } => {
+                assert_eq!(srid, 4326);
+                assert_eq!(algorithm, spec::EdgeInterpolationAlgorithm::Planar);
+            }
+            _ => panic!("Expected Geography type"),
+        }
+
+        Ok(())
+    }
 }

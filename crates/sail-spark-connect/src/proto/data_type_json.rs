@@ -1006,6 +1006,21 @@ mod tests {
                     }))),
                 },
             ),
+            (
+                r#""geometry""#,
+                sc::DataType {
+                    kind: Some(dt::Kind::Geometry(dt::Geometry { srid: 0 })),
+                },
+            ),
+            (
+                r#""geography""#,
+                sc::DataType {
+                    kind: Some(dt::Kind::Geography(dt::Geography {
+                        srid: 4326,
+                        algorithm: 1,
+                    })),
+                },
+            ),
         ];
         for (schema, expected) in data {
             // test serde roundtrip
