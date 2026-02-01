@@ -398,10 +398,7 @@ Yes, for PySpark 4.0+ DataSource API. Change import from `pyspark.sql.datasource
 **Q: Supported Python versions?**
 3.9, 3.10, 3.11, 3.12
 
-### Security
-
-**Q: Is cloudpickle safe?**
-Cloudpickle can execute arbitrary code. Only load from trusted packages.
+### Error Handling
 
 **Q: What if Python crashes during read?**
 In-process: Query fails, possible process crash. With subprocess isolation (Phase 3): Worker restarts, partition retried.

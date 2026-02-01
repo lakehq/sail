@@ -87,10 +87,6 @@ impl Default for PythonDataSourceRegistry {
 /// Discover datasources from Python entry points.
 ///
 /// Scans `sail.datasources` entry point group and registers found classes.
-///
-/// # Security Note
-/// This uses cloudpickle to serialize datasource classes. Only load
-/// datasources from trusted packages - cloudpickle can execute arbitrary code.
 #[cfg(feature = "python")]
 pub fn discover_datasources() -> Result<usize> {
     pyo3::Python::attach(|py| {
@@ -211,10 +207,6 @@ fn discover_from_python_registry(py: pyo3::Python<'_>) -> Result<usize> {
 /// Validate that a Python class is a valid datasource.
 ///
 /// Checks for required methods: `name`, `schema`, `reader`.
-///
-/// # Security
-/// This validates the class structure, but cloudpickle can still execute
-/// arbitrary code. Only use with trusted packages.
 #[cfg(feature = "python")]
 pub fn validate_datasource_class(
     py: pyo3::Python<'_>,

@@ -200,12 +200,12 @@ We considered *how* to achieve this:
 
 | Alternative | Pros | Cons | Decision |
 |-------------|------|------|----------|
-| **cloudpickle** | Pickles lambdas/closures, PySpark compatible | Security considerations (same as Spark) | Chosen |
+| **cloudpickle** | Pickles lambdas/closures, PySpark compatible | - | Chosen |
 | **dill** | Similar to cloudpickle | Less maintained, PySpark uses cloudpickle | Rejected |
 | **pickle** | Standard library | Cannot pickle lambdas/closures | Rejected |
 | **JSON + class registry** | Safe, inspectable | Cannot serialize arbitrary Python objects | Rejected |
 
-**Rationale**: PySpark uses cloudpickle; using the same ensures zero-friction migration. Security posture matches Spark—datasources are treated as trusted code.
+**Rationale**: PySpark uses cloudpickle; using the same ensures zero-friction migration and compatibility.
 
 ### 5. Filter Representation (True Alternative)
 
@@ -688,8 +688,6 @@ pub struct DataSourceEntry {
     pub module_path: String,
 }
 ```
-
-**Security**: Cloudpickle can execute arbitrary code. Only load from trusted packages.
 
 #### 2. PythonExecutor Trait ([executor.rs](../../../crates/sail-data-source/src/python_datasource/executor.rs))
 
