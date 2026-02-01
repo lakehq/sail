@@ -201,6 +201,13 @@ pub enum DataType {
         value_type_nullable: bool,
         keys_sorted: bool,
     },
+    Geometry {
+        srid: i32,
+    },
+    Geography {
+        srid: i32,
+        algorithm: EdgeInterpolationAlgorithm,
+    },
     //
     // Everything below this line is not part of the Arrow specification.
     //
