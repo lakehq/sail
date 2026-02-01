@@ -1,11 +1,11 @@
-use sail_catalog::error::{CatalogError, CatalogResult};
-
 /// Storage format information for Glue tables.
 ///
 /// Maps user-friendly format names to Hive/Hadoop Java class names for InputFormat,
 /// OutputFormat, and SerDe (Serializer/Deserializer).
 ///
 /// See: <https://github.com/aws/aws-cdk/blob/main/packages/%40aws-cdk/aws-glue-alpha/lib/data-format.ts>
+use sail_catalog::error::{CatalogError, CatalogResult};
+
 #[derive(Debug, Clone)]
 pub struct GlueStorageFormat {
     pub input_format: &'static str,

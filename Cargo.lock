@@ -5883,6 +5883,7 @@ dependencies = [
  "async-trait",
  "aws-config",
  "aws-sdk-glue",
+ "aws-smithy-types",
  "sail-catalog",
  "sail-common-datafusion",
  "testcontainers",
