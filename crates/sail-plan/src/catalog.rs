@@ -114,6 +114,7 @@ mod display {
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct SparkCatalog {
+        #[serde(rename = "catalog")]
         pub name: String,
         pub description: Option<String>,
     }
