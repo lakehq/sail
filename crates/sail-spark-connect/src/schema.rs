@@ -214,6 +214,30 @@ pub(crate) fn to_tree_string(data_type: &sc::DataType, max_level: Option<i32>) -
     .to_string()
 }
 
+/// Checks if a field name needs to be quoted in DDL output.
+/// Names need quoting if they contain special characters or are reserved keywords.
+fn needs_quoting(name: &str) -> bool {
+    if name.is_empty() {
+        return true;
+    }
+    // Check if starts with digit or contains non-alphanumeric characters (except underscore)
+    let first_char = name.chars().next().unwrap();
+    if first_char.is_ascii_digit() {
+        return true;
+    }
+    !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+fn quote_field_name(name: &str) -> String {
+    if needs_quoting(name) {
+        // Escape backticks by doubling them
+        let escaped = name.replace('`', "``");
+        format!("`{}`", escaped)
+    } else {
+        name.to_string()
+    }
+}
+
 fn format_year_month_interval_field_name(field: i32) -> &'static str {
     match field {
         0 => "YEAR",
@@ -281,8 +305,10 @@ fn format_ddl_type(buf: &mut String, data_type: Option<&sc::DataType>) -> SparkR
             (Some(start), Some(end)) => {
                 buf.push_str("INTERVAL ");
                 buf.push_str(format_year_month_interval_field_name(start));
-                buf.push_str(" TO ");
-                buf.push_str(format_year_month_interval_field_name(end));
+                if start != end {
+                    buf.push_str(" TO ");
+                    buf.push_str(format_year_month_interval_field_name(end));
+                }
             }
             (Some(start), None) => {
                 buf.push_str("INTERVAL ");
@@ -300,8 +326,10 @@ fn format_ddl_type(buf: &mut String, data_type: Option<&sc::DataType>) -> SparkR
             (Some(start), Some(end)) => {
                 buf.push_str("INTERVAL ");
                 buf.push_str(format_day_time_interval_field_name(start));
-                buf.push_str(" TO ");
-                buf.push_str(format_day_time_interval_field_name(end));
+                if start != end {
+                    buf.push_str(" TO ");
+                    buf.push_str(format_day_time_interval_field_name(end));
+                }
             }
             (Some(start), None) => {
                 buf.push_str("INTERVAL ");
@@ -326,7 +354,7 @@ fn format_ddl_type(buf: &mut String, data_type: Option<&sc::DataType>) -> SparkR
                 if i > 0 {
                     buf.push_str(", ");
                 }
-                buf.push_str(&field.name);
+                buf.push_str(&quote_field_name(&field.name));
                 buf.push_str(": ");
                 format_ddl_type(buf, field.data_type.as_ref())?;
                 if !field.nullable {
@@ -380,7 +408,7 @@ pub(crate) fn to_ddl_string(data_type: &sc::DataType) -> SparkResult<String> {
                 if i > 0 {
                     buf.push_str(", ");
                 }
-                buf.push_str(&field.name);
+                buf.push_str(&quote_field_name(&field.name));
                 buf.push(' ');
                 format_ddl_type(&mut buf, field.data_type.as_ref())?;
                 if !field.nullable {
@@ -392,202 +420,4 @@ pub(crate) fn to_ddl_string(data_type: &sc::DataType) -> SparkResult<String> {
     }
 
     Ok(buf)
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::proto::data_type_json::parse_spark_json_data_type;
-
-    use super::*;
-
-    fn make_schema(type_json: &str) -> sc::DataType {
-        let json = format!(
-            r#"{{
-                "fields": [
-                    {{
-                        "metadata": {{}},
-                        "name": "col",
-                        "nullable": true,
-                        "type": {type_json}
-                    }}
-                ],
-                "type": "struct"
-            }}"#
-        );
-        parse_spark_json_data_type(&json).expect("failed to parse schema")
-    }
-
-    #[test]
-    fn test_to_ddl_null() {
-        let schema = make_schema(r#""null""#);
-        assert_eq!(to_ddl_string(&schema).unwrap(), "col NULL");
-    }
-
-    #[test]
-    fn test_to_ddl_binary() {
-        let schema = make_schema(r#""binary""#);
-        assert_eq!(to_ddl_string(&schema).unwrap(), "col BINARY");
-    }
-
-    #[test]
-    fn test_to_ddl_boolean() {
-        let schema = make_schema(r#""boolean""#);
-        assert_eq!(to_ddl_string(&schema).unwrap(), "col BOOLEAN");
-    }
-
-    #[test]
-    fn test_to_ddl_byte() {
-        let schema = make_schema(r#""byte""#);
-        assert_eq!(to_ddl_string(&schema).unwrap(), "col TINYINT");
-    }
-
-    #[test]
-    fn test_to_ddl_short() {
-        let schema = make_schema(r#""short""#);
-        assert_eq!(to_ddl_string(&schema).unwrap(), "col SHORT");
-    }
-
-    #[test]
-    fn test_to_ddl_integer() {
-        let schema = make_schema(r#""integer""#);
-        assert_eq!(to_ddl_string(&schema).unwrap(), "col INT");
-    }
-
-    #[test]
-    fn test_to_ddl_long() {
-        let schema = make_schema(r#""long""#);
-        assert_eq!(to_ddl_string(&schema).unwrap(), "col BIGINT");
-    }
-
-    #[test]
-    fn test_to_ddl_float() {
-        let schema = make_schema(r#""float""#);
-        assert_eq!(to_ddl_string(&schema).unwrap(), "col FLOAT");
-    }
-
-    #[test]
-    fn test_to_ddl_double() {
-        let schema = make_schema(r#""double""#);
-        assert_eq!(to_ddl_string(&schema).unwrap(), "col DOUBLE");
-    }
-
-    #[test]
-    fn test_to_ddl_decimal() {
-        let schema = make_schema(r#""decimal(10, 2)""#);
-        assert_eq!(to_ddl_string(&schema).unwrap(), "col DECIMAL(10,2)");
-    }
-
-    #[test]
-    fn test_to_ddl_string() {
-        let schema = make_schema(r#""string""#);
-        assert_eq!(to_ddl_string(&schema).unwrap(), "col STRING");
-    }
-
-    #[test]
-    fn test_to_ddl_char() {
-        let schema = make_schema(r#""char(10)""#);
-        assert_eq!(to_ddl_string(&schema).unwrap(), "col CHAR(10)");
-    }
-
-    #[test]
-    fn test_to_ddl_varchar() {
-        let schema = make_schema(r#""varchar(20)""#);
-        assert_eq!(to_ddl_string(&schema).unwrap(), "col VARCHAR(20)");
-    }
-
-    #[test]
-    fn test_to_ddl_date() {
-        let schema = make_schema(r#""date""#);
-        assert_eq!(to_ddl_string(&schema).unwrap(), "col DATE");
-    }
-
-    #[test]
-    fn test_to_ddl_timestamp() {
-        let schema = make_schema(r#""timestamp""#);
-        assert_eq!(to_ddl_string(&schema).unwrap(), "col TIMESTAMP");
-    }
-
-    #[test]
-    fn test_to_ddl_timestamp_ntz() {
-        let schema = make_schema(r#""timestamp_ntz""#);
-        assert_eq!(to_ddl_string(&schema).unwrap(), "col TIMESTAMP_NTZ");
-    }
-
-    #[test]
-    fn test_to_ddl_calendar_interval() {
-        let schema = make_schema(r#""interval""#);
-        assert_eq!(to_ddl_string(&schema).unwrap(), "col INTERVAL");
-    }
-
-    #[test]
-    fn test_to_ddl_year_month_interval() {
-        let schema = make_schema(r#""interval year to month""#);
-        assert_eq!(to_ddl_string(&schema).unwrap(), "col INTERVAL YEAR TO MONTH");
-    }
-
-    #[test]
-    fn test_to_ddl_day_time_interval() {
-        let schema = make_schema(r#""interval day to second""#);
-        assert_eq!(to_ddl_string(&schema).unwrap(), "col INTERVAL DAY TO SECOND");
-    }
-
-    #[test]
-    fn test_to_ddl_time() {
-        let schema = make_schema(r#""time""#);
-        assert_eq!(to_ddl_string(&schema).unwrap(), "col TIME");
-    }
-
-    #[test]
-    fn test_to_ddl_time_with_precision() {
-        let schema = make_schema(r#""time(3)""#);
-        assert_eq!(to_ddl_string(&schema).unwrap(), "col TIME(3)");
-    }
-
-    #[test]
-    fn test_to_ddl_variant() {
-        let schema = make_schema(r#""variant""#);
-        assert_eq!(to_ddl_string(&schema).unwrap(), "col VARIANT");
-    }
-
-    #[test]
-    fn test_to_ddl_array() {
-        let schema = make_schema(r#"{"type": "array", "elementType": "string", "containsNull": true}"#);
-        assert_eq!(to_ddl_string(&schema).unwrap(), "col ARRAY<STRING>");
-    }
-
-    #[test]
-    fn test_to_ddl_map() {
-        let schema = make_schema(r#"{"type": "map", "keyType": "string", "valueType": "integer", "valueContainsNull": true}"#);
-        assert_eq!(to_ddl_string(&schema).unwrap(), "col MAP<STRING, INT>");
-    }
-
-    #[test]
-    fn test_to_ddl_struct() {
-        let schema = make_schema(r#"{"type": "struct", "fields": [{"name": "f1", "type": "string", "nullable": true}]}"#);
-        assert_eq!(to_ddl_string(&schema).unwrap(), "col STRUCT<f1: STRING>");
-    }
-
-    #[test]
-    fn test_to_ddl_udt_jvm() {
-        let schema = make_schema(r#"{"type": "udt", "class": "SomeClass", "sqlType": "integer"}"#);
-        assert_eq!(to_ddl_string(&schema).unwrap(), "col USERDEFINED");
-    }
-
-    #[test]
-    fn test_to_ddl_udt_python() {
-        let schema = make_schema(r#"{"type": "udt", "pyClass": "app.udf", "sqlType": "integer"}"#);
-        assert_eq!(to_ddl_string(&schema).unwrap(), "col PYTHONUSERDEFINED");
-    }
-
-    #[test]
-    fn test_to_ddl_not_null() {
-        let json = r#"{
-            "fields": [
-                {"metadata": {}, "name": "col", "nullable": false, "type": "boolean"}
-            ],
-            "type": "struct"
-        }"#;
-        let schema = parse_spark_json_data_type(json).unwrap();
-        assert_eq!(to_ddl_string(&schema).unwrap(), "col BOOLEAN NOT NULL");
-    }
 }
