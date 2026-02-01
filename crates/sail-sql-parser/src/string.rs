@@ -114,12 +114,14 @@ where
         just("\\\"").map(|_| Char::One('"')),
         just("\\?").map(|_| Char::One('?')),
         just("\\\\").map(|_| Char::One('\\')),
-        // Spark does not recognize `\a`, `\f`, `\v`,
-        // but we may allow them under a parser option in the future.
+        // Spark does not recognize `\a`, but we support `\f` and `\v`
+        // for compatibility with tools like Ibis that generate these escapes.
         just("\\b").map(|_| Char::One('\x08')),
+        just("\\f").map(|_| Char::One('\x0c')),
         just("\\n").map(|_| Char::One('\n')),
         just("\\r").map(|_| Char::One('\r')),
         just("\\t").map(|_| Char::One('\t')),
+        just("\\v").map(|_| Char::One('\x0b')),
         just("\\Z").map(|_| Char::One('\x1a')),
         just("\\%").map(|_| Char::Two('\\', '%')),
         just("\\_").map(|_| Char::Two('\\', '_')),
