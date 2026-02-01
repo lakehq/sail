@@ -101,7 +101,9 @@ async fn handle_command(
         CommandType::RemoveCachedRemoteRelationCommand(_) => {
             Err(SparkError::todo("remove cached remote relation command"))
         }
-        CommandType::MergeIntoTableCommand(_) => Err(SparkError::todo("merge into table command")),
+        CommandType::MergeIntoTableCommand(command) => {
+            service::handle_execute_merge_into_table_command(ctx, command, metadata).await
+        }
         CommandType::MlCommand(_) => Err(SparkError::todo("ml command")),
         CommandType::ExecuteExternalCommand(_) => Err(SparkError::todo("execute external command")),
         CommandType::PipelineCommand(_) => Err(SparkError::todo("pipeline command")),
