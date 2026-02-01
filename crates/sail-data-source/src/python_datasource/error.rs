@@ -50,10 +50,10 @@ impl PythonDataSourceContext {
         ))
     }
 
-    /// Wrap a Python error with context information.
+    /// Wrap a Python error with context information, preserving traceback.
     #[cfg(feature = "python")]
     pub fn wrap_py_error(&self, e: pyo3::PyErr) -> PythonDataSourceError {
-        self.wrap_error(e.to_string())
+        self.wrap_error(format_py_error_with_traceback(e))
     }
 }
 
@@ -84,18 +84,61 @@ impl From<PythonDataSourceError> for DataFusionError {
     }
 }
 
+/// Format a Python error with its traceback for better debugging.
+///
+/// This extracts the full Python traceback when available, making it much
+/// easier to debug Python datasource errors.
+#[cfg(feature = "python")]
+pub fn format_py_error_with_traceback(e: pyo3::PyErr) -> String {
+    use pyo3::types::PyTracebackMethods;
+
+    pyo3::Python::attach(|py| {
+        let traceback = e
+            .traceback(py)
+            .and_then(|tb| tb.format().ok())
+            .unwrap_or_default();
+
+        if traceback.is_empty() {
+            e.to_string()
+        } else {
+            format!("{}\nTraceback:\n{}", e, traceback)
+        }
+    })
+}
+
 #[cfg(feature = "python")]
 impl From<pyo3::PyErr> for PythonDataSourceError {
     fn from(e: pyo3::PyErr) -> Self {
-        Self::PythonError(e.to_string())
+        Self::PythonError(format_py_error_with_traceback(e))
     }
 }
 
-/// Convert PyO3 error to DataFusion error.
+/// Convert PyO3 error to DataFusion error, preserving traceback.
 ///
 /// This is a shared helper to avoid duplicating this conversion pattern
 /// across multiple modules (stream.rs, executor.rs, arrow_utils.rs, etc.).
 #[cfg(feature = "python")]
 pub fn py_err(e: pyo3::PyErr) -> DataFusionError {
-    DataFusionError::External(Box::new(std::io::Error::other(e.to_string())))
+    DataFusionError::External(Box::new(std::io::Error::other(
+        format_py_error_with_traceback(e),
+    )))
+}
+
+/// Import cloudpickle with a helpful error message if it's not installed.
+///
+/// cloudpickle is required for serializing Python DataSources between
+/// the client and server. This helper provides clear installation instructions
+/// if the import fails.
+#[cfg(feature = "python")]
+pub fn import_cloudpickle(
+    py: pyo3::Python<'_>,
+) -> std::result::Result<pyo3::Bound<'_, pyo3::types::PyModule>, DataFusionError> {
+    py.import("cloudpickle").map_err(|e| {
+        DataFusionError::Execution(format!(
+            "Failed to import cloudpickle: {}. \
+            cloudpickle is required for Python DataSources. \
+            Install it with: pip install cloudpickle",
+            e
+        ))
+    })
 }

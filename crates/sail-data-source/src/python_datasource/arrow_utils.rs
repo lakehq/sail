@@ -143,7 +143,7 @@ pub fn convert_rows_to_batch(schema: &SchemaRef, pickled_rows: &[Vec<u8>]) -> Re
     }
 
     Python::attach(|py| {
-        let cloudpickle = py.import("cloudpickle").map_err(py_err)?;
+        let cloudpickle = import_cloudpickle(py)?;
 
         // Unpickle all rows
         let rows: Vec<Bound<'_, PyAny>> = pickled_rows
@@ -270,9 +270,9 @@ fn extract_value<'py, T: pyo3::FromPyObject<'py>>(
     item.extract::<T>().map(Some).map_err(py_err)
 }
 
-/// Re-export py_err from error module.
+/// Re-export py_err and import_cloudpickle from error module.
 #[cfg(feature = "python")]
-use super::error::py_err;
+use super::error::{import_cloudpickle, py_err};
 
 #[cfg(test)]
 mod tests {

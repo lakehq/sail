@@ -17,7 +17,7 @@ use pyo3::types::PyBytes;
 #[cfg(feature = "python")]
 use super::arrow_utils::py_schema_to_rust;
 #[cfg(feature = "python")]
-use super::error::{PythonDataSourceContext, PythonDataSourceError};
+use super::error::{import_cloudpickle, PythonDataSourceContext, PythonDataSourceError};
 #[cfg(feature = "python")]
 use super::executor::InputPartition;
 
@@ -277,7 +277,7 @@ impl PythonDataSource {
                 .map_err(|e| ctx.wrap_error(format!("partitions() must return a list: {}", e)))?;
 
             // Pickle each partition
-            let cloudpickle = py.import("cloudpickle").map_err(|e| ctx.wrap_py_error(e))?;
+            let cloudpickle = import_cloudpickle(py).map_err(|e| ctx.wrap_error(e.to_string()))?;
 
             let mut result = Vec::with_capacity(partitions_list.len());
             for (i, partition) in partitions_list.iter().enumerate() {
@@ -357,10 +357,8 @@ impl PythonDataSource {
     /// Deserialize the pickled DataSource from bytes.
     #[cfg(feature = "python")]
     fn deserialize_datasource<'py>(py: Python<'py>, command: &[u8]) -> Result<Bound<'py, PyAny>> {
-        // Import cloudpickle
-        let cloudpickle = py.import("cloudpickle").map_err(|e| {
-            PythonDataSourceError::PythonError(format!("Failed to import cloudpickle: {}", e))
-        })?;
+        // Import cloudpickle with helpful error message
+        let cloudpickle = import_cloudpickle(py)?;
 
         // Deserialize
         let py_bytes = PyBytes::new(py, command);

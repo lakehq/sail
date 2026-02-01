@@ -69,6 +69,44 @@ def spark(remote):
     spark.stop()
 
 
+@pytest.fixture
+def spark_session_factory(remote):
+    """Factory for creating independent SparkSessions.
+    
+    Each call to the factory creates a new SparkSession with a unique session ID,
+    allowing tests to verify session isolation behavior.
+    
+    :param remote: The remote address of the Spark Connect server.
+    :yields: A factory function that creates new SparkSessions.
+    """
+    import uuid
+    
+    sessions = []
+    
+    def create_session():
+        # Use a unique app name to ensure we get a fresh session
+        # The session ID is generated internally by Spark Connect
+        unique_app = f"test_session_{uuid.uuid4().hex[:8]}"
+        session = SparkSession.builder \
+            .appName(unique_app) \
+            .remote(remote) \
+            .create()  # Use create() instead of getOrCreate() to force new session
+        configure_spark_session(session)
+        patch_spark_connect_session(session)
+        sessions.append(session)
+        return session
+    
+    yield create_session
+    
+    # Cleanup all created sessions
+    for session in sessions:
+        try:
+            session.stop()
+        except Exception:
+            pass
+
+
+
 def configure_spark_session(session):
     # Set the Spark session time zone to UTC by default.
     # Some test data (e.g. TPC-DS data) may generate timestamps that is invalid

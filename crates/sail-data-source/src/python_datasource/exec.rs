@@ -3,11 +3,21 @@
 /// This execution plan reads data from a Python datasource in parallel,
 /// with one partition per InputPartition returned by the reader.
 ///
-/// Key patterns (from sail_engineering skill):
-/// - Implements `ExecutionPlan` trait following DataFusion conventions
-/// - Implements `DisplayAs` for clear EXPLAIN output
-/// - Source node with no children
-/// - Uses `PythonDataSourceStream` for actual data reading
+/// # Phase 6 Enhancements (Performance & Polish)
+///
+/// TODO: Expose partitioning metadata from Python datasources.
+/// Currently uses `UnknownPartitioning` which is correct but prevents query optimizations.
+/// If Python datasource provides hash/range partitioning info via an optional `partitioning()`
+/// method, this could enable partition pruning and join optimization in DataFusion.
+/// See: <https://docs.rs/datafusion/latest/datafusion/physical_expr/enum.Partitioning.html>
+///
+/// TODO: Integrate GIL metrics with DataFusion's MetricsSet.
+/// `PythonExecutionMetrics` (gil_wait_ns, gil_hold_ns, etc.) are currently only logged.
+/// Exposing via `fn metrics(&self) -> Option<MetricsSet>` would enable:
+/// - EXPLAIN ANALYZE visibility
+/// - Programmatic access via `ctx.collect_metrics()`
+/// - UI dashboards for execution bottleneck visualization
+///
 use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
@@ -120,8 +130,23 @@ impl ExecutionPlan for PythonDataSourceExec {
     fn execute(
         &self,
         partition: usize,
-        _context: Arc<TaskContext>,
+        context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        // Handle empty partitions case: return empty stream for partition 0
+        if self.partitions.is_empty() {
+            if partition == 0 {
+                return Ok(Box::pin(
+                    datafusion::physical_plan::stream::EmptyRecordBatchStream::new(
+                        self.schema.clone(),
+                    ),
+                ));
+            }
+            return exec_err!(
+                "partition index {} out of range for empty datasource",
+                partition
+            );
+        }
+
         if partition >= self.partitions.len() {
             return exec_err!(
                 "partition index {} out of range (0..{})",
@@ -130,11 +155,15 @@ impl ExecutionPlan for PythonDataSourceExec {
             );
         }
 
+        // Get batch size from TaskContext session config
+        let batch_size = context.session_config().batch_size();
+
         // Create stream for reading from Python
         let stream = PythonDataSourceStream::new(
             self.command.clone(),
             self.partitions[partition].clone(),
             self.schema.clone(),
+            batch_size,
         )?;
 
         Ok(Box::pin(stream))
@@ -202,5 +231,21 @@ mod tests {
         // Verify the struct was created correctly
         assert_eq!(exec.num_partitions(), 3);
         assert_eq!(exec.name(), "PythonDataSourceExec");
+    }
+
+    #[test]
+    fn test_empty_partitions() {
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let partitions: Vec<InputPartition> = vec![];
+
+        let exec = PythonDataSourceExec::new(vec![], schema, partitions);
+
+        // Empty partitions should still report 1 partition for DataFusion
+        assert_eq!(exec.num_partitions(), 0);
+        let props = exec.properties();
+        assert!(matches!(
+            props.partitioning,
+            Partitioning::UnknownPartitioning(1)
+        ));
     }
 }

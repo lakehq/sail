@@ -113,45 +113,7 @@ def test_datasource_basic():
     print("=" * 60)
 
 
-def test_with_sail():
-    """Test datasource with Sail server (if available)."""
-    print("\n" + "=" * 60)
-    print("Testing with Sail Server")
-    print("=" * 60)
-
-    try:
-        from pyspark.sql import SparkSession
-
-        # Connect to Sail server
-        spark = SparkSession.builder \
-            .appName("Python DataSource Test") \
-            .remote("sc://localhost:50051") \
-            .getOrCreate()
-
-        print("\n✅ Connected to Sail server")
-
-        # Test a simple query first
-        df = spark.sql("SELECT 1 as test")
-        print(f"\n1. Simple query result: {df.collect()}")
-
-        # TODO: Once Python DataSource is wired up in Spark Connect,
-        # we can test the actual datasource registration and reading:
-        #
-        # spark.dataSource.register(RangeDataSource)
-        # df = spark.read.format("range_demo").option("start", "0").option("end", "10").load()
-        # df.show()
-
-        print("\n✅ Sail server test passed!")
-
-    except Exception as e:
-        print(f"\n⚠️  Could not connect to Sail server: {e}")
-        print("   Make sure Sail server is running on localhost:50051")
-        print("   Run: cargo run --release -p sail-cli -- spark serve")
-
-
 if __name__ == "__main__":
     # Test 1: Basic API test (no server needed)
     test_datasource_basic()
 
-    # Test 2: Sail server test (requires server running)
-    test_with_sail()

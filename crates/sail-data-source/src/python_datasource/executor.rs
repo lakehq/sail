@@ -16,7 +16,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyAnyMethods;
 
 #[cfg(feature = "python")]
-use super::error::PythonDataSourceContext;
+use super::error::{import_cloudpickle, PythonDataSourceContext};
 
 /// Maximum size for a single partition in bytes (default: 100MB).
 ///
@@ -204,9 +204,14 @@ impl PythonExecutor for InProcessExecutor {
         partition: &InputPartition,
         schema: SchemaRef,
     ) -> Result<BoxStream<'static, Result<RecordBatch>>> {
-        use super::stream::PythonDataSourceStream;
+        use super::stream::{PythonDataSourceStream, DEFAULT_BATCH_SIZE};
 
-        let stream = PythonDataSourceStream::new(command.to_vec(), partition.clone(), schema)?;
+        let stream = PythonDataSourceStream::new(
+            command.to_vec(),
+            partition.clone(),
+            schema,
+            DEFAULT_BATCH_SIZE,
+        )?;
 
         Ok(Box::pin(stream))
     }
@@ -220,7 +225,7 @@ fn deserialize_datasource<'py>(
 ) -> Result<pyo3::Bound<'py, pyo3::PyAny>> {
     use pyo3::types::PyBytes;
 
-    let cloudpickle = py.import("cloudpickle").map_err(py_err)?;
+    let cloudpickle = import_cloudpickle(py)?;
     let py_bytes = PyBytes::new(py, command);
 
     cloudpickle
@@ -231,7 +236,7 @@ fn deserialize_datasource<'py>(
 /// Pickle a Python object for distribution.
 #[cfg(feature = "python")]
 fn pickle_object(py: pyo3::Python<'_>, obj: &pyo3::Bound<'_, pyo3::PyAny>) -> Result<Vec<u8>> {
-    let cloudpickle = py.import("cloudpickle").map_err(py_err)?;
+    let cloudpickle = import_cloudpickle(py)?;
     let pickled = cloudpickle.call_method1("dumps", (obj,)).map_err(py_err)?;
     let bytes = pickled
         .extract::<Vec<u8>>()

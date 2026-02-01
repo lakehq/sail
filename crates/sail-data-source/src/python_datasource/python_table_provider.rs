@@ -58,9 +58,16 @@ impl TableProvider for PythonTableProvider {
     ///
     /// # Arguments
     /// * `state` - Session state
-    /// * `projection` - Optional column projection (TODO: apply in future PR)
-    /// * `filters` - Filter expressions (TODO: pushdown in future PR)
-    /// * `limit` - Optional limit on number of rows (TODO: pushdown in future PR)
+    /// * `projection` - Optional column projection (applied via ProjectionExec wrapper)
+    /// * `filters` - Filter expressions (Phase 2: pushdown to Python)
+    /// * `limit` - Optional limit on number of rows (Phase 2: pushdown to Python)
+    ///
+    /// # Projection Handling
+    ///
+    /// Currently, projection is applied post-read via `ProjectionExec`. This means
+    /// Python reads all columns and DataFusion filters them. Phase 2 will implement
+    /// true projection pushdown by passing projected schema to `reader(schema)`,
+    /// which requires Python DataSources to respect the schema parameter.
     async fn scan(
         &self,
         _state: &dyn datafusion::catalog::Session,

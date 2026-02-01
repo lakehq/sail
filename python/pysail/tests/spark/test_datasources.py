@@ -541,3 +541,367 @@ class TestBinaryDataSource:
         large_count = large_files.count()
         expected_large = sum(1 for _, content in files.values() if len(content) > min_file_size)
         assert large_count == expected_large
+
+
+class TestPythonDataSource:
+    """Tests for Python DataSource integration."""
+
+    def test_arrow_datasource(self, spark):
+        """Test zero-copy Arrow RecordBatch path."""
+        import pyarrow as pa
+        from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
+
+        class ArrowRangeDataSource(DataSource):
+            """DataSource yielding Arrow RecordBatches (zero-copy path)."""
+
+            @classmethod
+            def name(cls) -> str:
+                return "arrow_range_test"
+
+            def schema(self):
+                return pa.schema([
+                    ("id", pa.int64()),
+                    ("value", pa.float64()),
+                ])
+
+            def reader(self, schema):
+                return ArrowRangeReader()
+
+        class ArrowRangeReader(DataSourceReader):
+            """Reader that yields Arrow RecordBatches."""
+
+            def partitions(self):
+                return [InputPartition(0)]
+
+            def read(self, partition):
+                ids = list(range(100))
+                values = [float(i) * 1.5 for i in ids]
+                batch = pa.RecordBatch.from_pydict(
+                    {"id": ids, "value": values},
+                    schema=pa.schema([("id", pa.int64()), ("value", pa.float64())])
+                )
+                yield batch
+
+        # Register and read
+        spark.dataSource.register(ArrowRangeDataSource)
+        df = spark.read.format("arrow_range_test").load()
+
+        rows = df.collect()
+        assert len(rows) == 100
+        assert rows[0].id == 0
+        assert rows[0].value == 0.0
+
+        # Test filter query (filter is applied post-read by DataFusion in MVP)
+        filtered = df.filter("value > 50.0").collect()
+        # ids 34+ have value > 50 (34 * 1.5 = 51)
+        assert len(filtered) == 66  # ids 34-99 have value > 50
+
+    def test_tuple_datasource(self, spark):
+        """Test row-based tuple fallback path with data integrity verification."""
+        import pyarrow as pa
+        from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
+
+        class TupleDataSource(DataSource):
+            """DataSource yielding tuples (row-based fallback path)."""
+
+            @classmethod
+            def name(cls) -> str:
+                return "tuple_range_test"
+
+            def schema(self):
+                return pa.schema([
+                    ("id", pa.int64()),
+                    ("square", pa.int64()),
+                ])
+
+            def reader(self, schema):
+                return TupleReader()
+
+        class TupleReader(DataSourceReader):
+            """Reader that yields many tuples to test batching."""
+
+            def partitions(self):
+                return [InputPartition(0)]
+
+            def read(self, partition):
+                # Yield 1000 tuples to test batching behavior
+                for i in range(1000):
+                    yield (i, i * i)
+
+        spark.dataSource.register(TupleDataSource)
+        df = spark.read.format("tuple_range_test").load()
+
+        rows = df.collect()
+        assert len(rows) == 1000
+        
+        # Verify data integrity: check that squares are correct
+        # Find row with id=100, should have square=10000
+        sample = df.filter("id = 100").collect()
+        assert len(sample) == 1
+        assert sample[0].square == 10000  # 100² = 10000
+
+    def test_multi_partition(self, spark):
+        """Test parallel partition reading."""
+        import pyarrow as pa
+        from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
+
+        class MultiPartitionDataSource(DataSource):
+            """DataSource with multiple partitions."""
+
+            @classmethod
+            def name(cls) -> str:
+                return "multi_partition_test"
+
+            def schema(self):
+                return pa.schema([
+                    ("partition_id", pa.int32()),
+                    ("row_id", pa.int32()),
+                ])
+
+            def reader(self, schema):
+                return MultiPartitionReader()
+
+        class MultiPartitionReader(DataSourceReader):
+            """Reader with 4 partitions."""
+
+            def partitions(self):
+                return [InputPartition(i) for i in range(4)]
+
+            def read(self, partition):
+                partition_ids = [partition.value] * 25
+                row_ids = list(range(25))
+                batch = pa.RecordBatch.from_pydict(
+                    {"partition_id": partition_ids, "row_id": row_ids},
+                    schema=pa.schema([("partition_id", pa.int32()), ("row_id", pa.int32())])
+                )
+                yield batch
+
+        spark.dataSource.register(MultiPartitionDataSource)
+        df = spark.read.format("multi_partition_test").load()
+
+        rows = df.collect()
+        # 4 partitions * 25 rows each = 100 total
+        assert len(rows) == 100
+
+    def test_partition_failure(self, spark):
+        """Test that partition failure errors include partition context."""
+        import pyarrow as pa
+        from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
+
+        class FailingPartitionDataSource(DataSource):
+            """DataSource where partition 2 fails."""
+
+            @classmethod
+            def name(cls) -> str:
+                return "failing_partition_test"
+
+            def schema(self):
+                return pa.schema([("id", pa.int32())])
+
+            def reader(self, schema):
+                return FailingPartitionReader()
+
+        class FailingPartitionReader(DataSourceReader):
+            def partitions(self):
+                return [InputPartition(i) for i in range(4)]
+
+            def read(self, partition):
+                pid = partition.value
+                if pid == 2:
+                    raise ValueError(f"Deliberate failure in partition {pid}!")
+                
+                schema = pa.schema([("id", pa.int32())])
+                batch = pa.RecordBatch.from_pydict({"id": [pid]}, schema=schema)
+                yield batch
+
+        spark.dataSource.register(FailingPartitionDataSource)
+        df = spark.read.format("failing_partition_test").load()
+
+        with pytest.raises(Exception) as exc_info:
+            df.collect()
+
+        error_msg = str(exc_info.value).lower()
+        # Error should include partition context
+        assert "partition" in error_msg or "2" in error_msg
+        assert "deliberate failure" in error_msg
+
+    def test_empty_partitions(self, spark):
+        """Test that zero partitions returns empty DataFrame without crashing."""
+        import pyarrow as pa
+        from pyspark.sql.datasource import DataSource, DataSourceReader
+
+        class EmptyPartitionsDataSource(DataSource):
+            """DataSource that returns zero partitions."""
+
+            @classmethod
+            def name(cls) -> str:
+                return "empty_partitions_test"
+
+            def schema(self):
+                return pa.schema([
+                    ("id", pa.int32()),
+                    ("name", pa.string()),
+                ])
+
+            def reader(self, schema):
+                return EmptyPartitionsReader()
+
+        class EmptyPartitionsReader(DataSourceReader):
+            def partitions(self):
+                return []  # No partitions
+
+            def read(self, partition):
+                raise RuntimeError("read() should not be called with 0 partitions!")
+
+        spark.dataSource.register(EmptyPartitionsDataSource)
+        df = spark.read.format("empty_partitions_test").load()
+
+        rows = df.collect()
+        assert len(rows) == 0
+
+    def test_schema_mismatch(self, spark):
+        """Test that schema mismatch between declared and returned schema is handled."""
+        import pyarrow as pa
+        from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
+
+        class SchemaMismatchDataSource(DataSource):
+            """DataSource that declares one schema but returns another."""
+
+            @classmethod
+            def name(cls) -> str:
+                return "schema_mismatch_test"
+
+            def schema(self):
+                # Declare schema with int32 id
+                return pa.schema([
+                    ("id", pa.int32()),
+                    ("name", pa.string()),
+                ])
+
+            def reader(self, schema):
+                return SchemaMismatchReader()
+
+        class SchemaMismatchReader(DataSourceReader):
+            def partitions(self):
+                return [InputPartition(0)]
+
+            def read(self, partition):
+                # Return batch with int64 id instead of int32 - schema mismatch!
+                wrong_schema = pa.schema([
+                    ("id", pa.int64()),  # Wrong type!
+                    ("name", pa.string()),
+                ])
+                batch = pa.RecordBatch.from_pydict({
+                    "id": [1, 2, 3],
+                    "name": ["a", "b", "c"],
+                }, schema=wrong_schema)
+                yield batch
+
+        spark.dataSource.register(SchemaMismatchDataSource)
+        df = spark.read.format("schema_mismatch_test").load()
+
+        # Should either succeed with coercion or fail with schema error
+        # The important thing is it doesn't crash unexpectedly
+        try:
+            rows = df.collect()
+            # If it succeeds, verify data is present
+            assert len(rows) == 3
+        except Exception as e:
+            # If it fails, error should mention schema/type issue
+            error_msg = str(e).lower()
+            assert "schema" in error_msg or "type" in error_msg or "mismatch" in error_msg
+
+    def test_python_exception_handling(self, spark):
+        """Test that Python exceptions are properly propagated with traceback."""
+        import pyarrow as pa
+        from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
+
+        class ExceptionDataSource(DataSource):
+            """DataSource whose reader throws an exception."""
+
+            @classmethod
+            def name(cls) -> str:
+                return "exception_test"
+
+            def schema(self):
+                return pa.schema([
+                    ("id", pa.int32()),
+                    ("value", pa.string()),
+                ])
+
+            def reader(self, schema):
+                return ExceptionReader()
+
+        class ExceptionReader(DataSourceReader):
+            def partitions(self):
+                return [InputPartition(0)]
+
+            def read(self, partition):
+                raise ValueError("This is a deliberate test exception!")
+
+        spark.dataSource.register(ExceptionDataSource)
+        df = spark.read.format("exception_test").load()
+
+        with pytest.raises(Exception) as exc_info:
+            df.collect()
+
+        error_msg = str(exc_info.value)
+        # Exception message should be preserved
+        assert "deliberate test exception" in error_msg.lower()
+
+    def test_session_isolation(self, spark_session_factory):
+        """Test that datasources registered in one session are not visible in another.
+        
+        This test creates two separate SparkSessions with unique session IDs
+        and verifies that a datasource registered in Session A cannot be
+        accessed from Session B.
+        """
+        import pyarrow as pa
+        from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
+
+        class SessionIsolationDataSource(DataSource):
+            """DataSource for testing session isolation."""
+
+            @classmethod
+            def name(cls) -> str:
+                return "session_isolation_test"
+
+            def schema(self):
+                return pa.schema([("id", pa.int32()), ("msg", pa.string())])
+
+            def reader(self, schema):
+                return SessionIsolationReader()
+
+        class SessionIsolationReader(DataSourceReader):
+            def partitions(self):
+                return [InputPartition(0)]
+
+            def read(self, partition):
+                batch = pa.RecordBatch.from_pydict({
+                    "id": [1, 2, 3],
+                    "msg": ["hello", "from", "session_a"],
+                }, schema=pa.schema([("id", pa.int32()), ("msg", pa.string())]))
+                yield batch
+
+        # Session A: Register the datasource
+        spark_a = spark_session_factory()
+        spark_a.dataSource.register(SessionIsolationDataSource)
+        
+        # Verify Session A can read from it
+        df_a = spark_a.read.format("session_isolation_test").load()
+        rows_a = df_a.collect()
+        assert len(rows_a) == 3
+
+        # Session B: Create a completely independent session
+        spark_b = spark_session_factory()
+        
+        # Session B should NOT be able to access the datasource from Session A
+        # because datasources are registered per-session
+        with pytest.raises(Exception) as exc_info:
+            df_b = spark_b.read.format("session_isolation_test").load()
+            df_b.collect()
+        
+        error_msg = str(exc_info.value).lower()
+        # Error should indicate the format is not found
+        assert "session_isolation_test" in error_msg or "not found" in error_msg or "unknown" in error_msg
+

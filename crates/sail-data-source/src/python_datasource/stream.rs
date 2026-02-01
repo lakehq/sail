@@ -15,10 +15,15 @@ use tokio::sync::{mpsc, oneshot};
 /// This stream reads from a Python datasource in a dedicated thread,
 /// with proper RAII cleanup via the Drop impl.
 ///
-/// Key patterns (from sail_engineering skill):
-/// - std::thread::spawn for Python (GIL constraints)
-/// - oneshot signal for graceful shutdown
-/// - Thread join in Drop to prevent leaks
+/// # Timeout Limitations
+///
+/// In-process Python execution cannot be interrupted mid-operation due to GIL
+/// constraints. The stop_signal is only checked between Python `__next__` calls.
+/// If a single Python operation hangs (e.g., slow network I/O in `read()`),
+/// there is no way to cancel it without subprocess isolation (Phase 2/3).
+///
+/// Configure `SAIL_PYTHON_SLOW_READ_WARN_MS` (default: 30000) to log warnings
+/// when individual Python operations exceed the threshold.
 use super::executor::InputPartition;
 
 /// Metrics for Python execution performance tracking.
@@ -97,17 +102,37 @@ impl PythonDataSourceStream {
     /// Create a new stream for reading from a Python datasource.
     ///
     /// Spawns a dedicated thread for Python execution.
+    ///
+    /// # Arguments
+    /// * `command` - Pickled Python DataSource instance
+    /// * `partition` - The partition to read
+    /// * `schema` - Expected output schema
+    /// * `batch_size` - Batch size for row collection (from TaskContext)
     #[cfg(feature = "python")]
-    pub fn new(command: Vec<u8>, partition: InputPartition, schema: SchemaRef) -> Result<Self> {
+    pub fn new(
+        command: Vec<u8>,
+        partition: InputPartition,
+        schema: SchemaRef,
+        batch_size: usize,
+    ) -> Result<Self> {
         let (tx, rx) = mpsc::channel(16);
         let (stop_tx, stop_rx) = oneshot::channel();
 
         let schema_clone = schema.clone();
+        let partition_id = partition.partition_id;
 
-        // Spawn Python thread
-        let python_thread = std::thread::spawn(move || {
-            Self::run_python_reader(command, partition, schema_clone, tx, stop_rx);
-        });
+        // Spawn named Python thread for debuggability
+        let python_thread = std::thread::Builder::new()
+            .name(format!("python-ds-p{}", partition_id))
+            .spawn(move || {
+                Self::run_python_reader(command, partition, schema_clone, batch_size, tx, stop_rx);
+            })
+            .map_err(|e| {
+                datafusion_common::DataFusionError::Execution(format!(
+                    "Failed to spawn Python reader thread: {}",
+                    e
+                ))
+            })?;
 
         Ok(Self {
             schema,
@@ -125,6 +150,7 @@ impl PythonDataSourceStream {
         command: Vec<u8>,
         partition: InputPartition,
         schema: SchemaRef,
+        batch_size: usize,
         tx: mpsc::Sender<Result<RecordBatch>>,
         mut stop_rx: oneshot::Receiver<()>,
     ) {
@@ -147,7 +173,7 @@ impl PythonDataSourceStream {
             metrics.gil_acquisitions.fetch_add(1, Ordering::Relaxed);
 
             // Deserialize datasource
-            let cloudpickle = py.import("cloudpickle").map_err(py_err)?;
+            let cloudpickle = import_cloudpickle(py)?;
             let command_bytes = PyBytes::new(py, &command);
             let datasource = cloudpickle
                 .call_method1("loads", (command_bytes,))
@@ -173,11 +199,13 @@ impl PythonDataSourceStream {
             let record_batch_type = pyarrow.getattr("RecordBatch").map_err(py_err)?;
 
             // Create row batcher for tuple fallback path
-            let batch_size = std::env::var("SAIL_PYTHON_BATCH_SIZE")
+            let mut row_batcher = RowBatchCollector::new(schema.clone(), batch_size);
+
+            // Slow read warning threshold (default: 30 seconds)
+            let slow_read_warn_ms: u64 = std::env::var("SAIL_PYTHON_SLOW_READ_WARN_MS")
                 .ok()
                 .and_then(|s| s.parse().ok())
-                .unwrap_or(1024);
-            let mut row_batcher = RowBatchCollector::new(schema.clone(), batch_size);
+                .unwrap_or(30_000);
 
             // Iterate over results
             loop {
@@ -189,14 +217,35 @@ impl PythonDataSourceStream {
                     Err(oneshot::error::TryRecvError::Empty) => {}
                 }
 
-                // Get next item from iterator
-                match iterator.call_method0("__next__") {
+                // Get next item from iterator (with slow read detection)
+                let read_start = Instant::now();
+                let next_result = iterator.call_method0("__next__");
+                let read_elapsed_ms = read_start.elapsed().as_millis() as u64;
+
+                if read_elapsed_ms > slow_read_warn_ms {
+                    log::warn!(
+                        "[PythonDataSource:partition={}] Slow read detected: {}ms (threshold: {}ms). \
+                        Consider using faster I/O or subprocess isolation.",
+                        partition_id, read_elapsed_ms, slow_read_warn_ms
+                    );
+                }
+
+                match next_result {
                     Ok(item) => {
                         // Check if item is a RecordBatch (Arrow zero-copy path)
                         // or a tuple (row-based fallback path)
                         if item.is_instance(&record_batch_type).unwrap_or(false) {
                             // Arrow path - zero copy transfer
                             let batch = super::arrow_utils::py_record_batch_to_rust(py, &item)?;
+
+                            // Validate schema matches expected
+                            if let Err(e) =
+                                super::arrow_utils::validate_schema(&schema, batch.schema_ref())
+                            {
+                                let _ =
+                                    tx.blocking_send(Err(with_partition_context(partition_id, e)));
+                                break;
+                            }
 
                             // Track metrics
                             metrics
@@ -246,8 +295,9 @@ impl PythonDataSourceStream {
                             }
                             break;
                         }
-                        // Other error
-                        let _ = tx.blocking_send(Err(py_err(e)));
+                        // Other error - wrap with partition context
+                        let _ =
+                            tx.blocking_send(Err(with_partition_context(partition_id, py_err(e))));
                         break;
                     }
                 }
@@ -264,16 +314,21 @@ impl PythonDataSourceStream {
         // Log metrics summary
         metrics.log_summary(partition_id);
 
-        // Send any error
+        // Send any error with partition context
         if let Err(e) = result {
-            let _ = tx.blocking_send(Err(e));
+            let _ = tx.blocking_send(Err(with_partition_context(partition_id, e)));
         }
     }
 
     /// Create a placeholder stream (for non-Python builds).
     #[cfg(not(feature = "python"))]
-    pub fn new(_command: Vec<u8>, _partition: InputPartition, schema: SchemaRef) -> Result<Self> {
-        Err(DataFusionError::NotImplemented(
+    pub fn new(
+        _command: Vec<u8>,
+        _partition: InputPartition,
+        _schema: SchemaRef,
+        _batch_size: usize,
+    ) -> Result<Self> {
+        Err(datafusion_common::DataFusionError::NotImplemented(
             "Python support not enabled".to_string(),
         ))
     }
@@ -322,9 +377,20 @@ impl Drop for PythonDataSourceStream {
     }
 }
 
-/// Re-export py_err from error module.
+/// Re-export py_err and import_cloudpickle from error module.
 #[cfg(feature = "python")]
-use super::error::py_err;
+use super::error::{import_cloudpickle, py_err};
+
+/// Wrap an error with partition context for better debugging.
+fn with_partition_context(
+    partition_id: usize,
+    err: datafusion_common::DataFusionError,
+) -> datafusion_common::DataFusionError {
+    datafusion_common::DataFusionError::Context(
+        format!("partition {}", partition_id),
+        Box::new(err),
+    )
+}
 
 /// Helper for collecting rows into batches.
 pub struct RowBatchCollector {

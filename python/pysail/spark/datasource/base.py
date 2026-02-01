@@ -211,13 +211,31 @@ class InputPartition:
 
     Users can subclass this to add partition-specific data (e.g., file paths,
     row ranges, etc.). The partition must be picklable for distributed execution.
+
+    Compatible with PySpark's InputPartition API:
+    - `value`: The partition value (any type) - PySpark 4.x API
+    - `partition_id`: Alias for value when it's an int, for convenience
+
+    Example:
+        # Simple integer partition
+        InputPartition(0)  # partition.value == 0, partition.partition_id == 0
+
+        # Rich partition data
+        InputPartition({"file": "data.parquet", "start": 0, "end": 100})
     """
 
-    def __init__(self, partition_id: int = 0):
-        self.partition_id = partition_id
+    def __init__(self, value=0):
+        self.value = value
+
+    @property
+    def partition_id(self) -> int:
+        """Convenience property for integer partition values."""
+        if isinstance(self.value, int):
+            return self.value
+        return 0
 
     def __repr__(self):
-        return f"InputPartition({self.partition_id})"
+        return f"InputPartition({self.value!r})"
 
 
 class DataSourceReader(ABC):
