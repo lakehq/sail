@@ -15,6 +15,7 @@ from pysail.tests.spark.utils import SAIL_ONLY, is_jvm_spark
 
 def pytest_configure(config):
     # Load all pytest-bdd step modules.
+    config.pluginmanager.import_plugin("pysail.tests.spark.steps.catalog")
     config.pluginmanager.import_plugin("pysail.tests.spark.steps.file_tree")
     config.pluginmanager.import_plugin("pysail.tests.spark.steps.sql")
     config.pluginmanager.import_plugin("pysail.tests.spark.steps.plan")

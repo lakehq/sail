@@ -119,6 +119,7 @@ mod display {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
     pub struct SparkDatabase {
         pub name: String,
         pub catalog: Option<String>,
@@ -139,6 +140,7 @@ mod display {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
     pub struct SparkTableColumn {
         pub name: String,
         pub description: Option<String>,
@@ -150,6 +152,7 @@ mod display {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
     pub struct SparkFunction {
         pub name: String,
         pub catalog: Option<String>,
