@@ -17,6 +17,7 @@ default = ["mimalloc"]
 [dependencies]
 sail-common = { path = "../sail-common" }
 sail-execution = { path = "../sail-execution" }
+sail-flight = { path = "../sail-flight" }
 sail-telemetry = { path = "../sail-telemetry" }
 sail-spark-connect = { path = "../sail-spark-connect" }
 sail-session = { path = "../sail-session" }
