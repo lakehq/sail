@@ -22,7 +22,7 @@ use arrow::datatypes::{DataType, Field, Fields, TimeUnit};
 use common::{col, setup_with_database, simple_table_options};
 use sail_catalog::provider::{
     CatalogPartitionField, CatalogProvider, CreateTableColumnOptions, CreateTableOptions,
-    DropTableOptions,
+    DropTableOptions, PartitionTransform,
 };
 
 /// Tests table creation in Glue catalog.
@@ -539,4 +539,176 @@ async fn test_drop_table() {
         .drop_table(&namespace, "nonexistent", drop_options)
         .await;
     assert!(result.is_ok());
+}
+
+/// Tests partition transforms with Iceberg tables.
+///
+/// - Creates a table with partition transforms (day, identity, bucket)
+/// - Verifies the table is created successfully
+/// - Note: This test uses the OpenTableFormatInput API for Iceberg tables
+#[tokio::test]
+#[ignore]
+async fn test_partition_transforms() {
+    let (catalog, _container, namespace) = setup_with_database("test_partition_transforms").await;
+
+    let columns = vec![
+        col("id", DataType::Int64),
+        col(
+            "event_time",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+        ),
+        col("category", DataType::Utf8),
+        col("user_id", DataType::Int64),
+    ];
+
+    let created_table = catalog
+        .create_table(
+            &namespace,
+            "events",
+            CreateTableOptions {
+                columns,
+                comment: Some("Events table with partition transforms".to_string()),
+                constraints: vec![],
+                location: Some("s3://bucket/events".to_string()),
+                format: "iceberg".to_string(),
+                partition_by: vec![
+                    CatalogPartitionField {
+                        column: "event_time".to_string(),
+                        transform: Some(PartitionTransform::Day),
+                    },
+                    CatalogPartitionField {
+                        column: "category".to_string(),
+                        transform: None,
+                    },
+                    CatalogPartitionField {
+                        column: "user_id".to_string(),
+                        transform: Some(PartitionTransform::Bucket(16)),
+                    },
+                ],
+                sort_by: vec![],
+                bucket_by: None,
+                if_not_exists: false,
+                replace: false,
+                options: vec![],
+                properties: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(created_table.name, "events");
+    assert_eq!(
+        created_table.database,
+        vec!["test_partition_transforms_db".to_string()]
+    );
+
+    match &created_table.kind {
+        sail_common_datafusion::catalog::TableKind::Table {
+            columns,
+            comment: _, // Iceberg tables store comments in properties, not the description field
+            location,
+            ..
+        } => {
+            assert_eq!(columns.len(), 4);
+            assert_eq!(location, &Some("s3://bucket/events".to_string()));
+        }
+        _ => panic!("Expected Table kind"),
+    }
+}
+
+/// Tests that Hive-style tables reject non-identity partition transforms.
+///
+/// - Attempts to create a parquet table with partition transforms
+/// - Verifies that it fails with NotSupported error
+#[tokio::test]
+#[ignore]
+async fn test_hive_rejects_transforms() {
+    let (catalog, _container, namespace) =
+        setup_with_database("test_hive_rejects_transforms").await;
+
+    let columns = vec![
+        col("id", DataType::Int64),
+        col(
+            "event_time",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+        ),
+    ];
+
+    let result = catalog
+        .create_table(
+            &namespace,
+            "hive_with_transforms",
+            CreateTableOptions {
+                columns,
+                comment: None,
+                constraints: vec![],
+                location: Some("s3://bucket/hive_with_transforms".to_string()),
+                format: "parquet".to_string(),
+                partition_by: vec![CatalogPartitionField {
+                    column: "event_time".to_string(),
+                    transform: Some(PartitionTransform::Day),
+                }],
+                sort_by: vec![],
+                bucket_by: None,
+                if_not_exists: false,
+                replace: false,
+                options: vec![],
+                properties: vec![],
+            },
+        )
+        .await;
+
+    assert!(
+        result.is_err(),
+        "Expected error for Hive table with partition transforms"
+    );
+    let err = result.unwrap_err();
+    assert!(
+        matches!(err, sail_catalog::error::CatalogError::NotSupported(_)),
+        "Expected NotSupported error, got: {err:?}"
+    );
+}
+
+/// Tests that Iceberg tables require a location.
+///
+/// - Attempts to create an Iceberg table without a location
+/// - Verifies that it fails with InvalidArgument error
+#[tokio::test]
+#[ignore]
+async fn test_iceberg_requires_location() {
+    let (catalog, _container, namespace) =
+        setup_with_database("test_iceberg_requires_location").await;
+
+    let columns = vec![col("id", DataType::Int64)];
+
+    let result = catalog
+        .create_table(
+            &namespace,
+            "iceberg_no_location",
+            CreateTableOptions {
+                columns,
+                comment: None,
+                constraints: vec![],
+                location: None,
+                format: "iceberg".to_string(),
+                partition_by: vec![],
+                sort_by: vec![],
+                bucket_by: None,
+                if_not_exists: false,
+                replace: false,
+                options: vec![],
+                properties: vec![],
+            },
+        )
+        .await;
+
+    assert!(
+        result.is_err(),
+        "Expected error for Iceberg table without location"
+    );
+    let err = result.unwrap_err();
+    assert!(
+        matches!(err, sail_catalog::error::CatalogError::InvalidArgument(_)),
+        "Expected InvalidArgument error, got: {err:?}"
+    );
 }
