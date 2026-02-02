@@ -612,7 +612,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Execution error: to_char only supports date, time, timestamp and duration data types, received Utf8"
       }
     },
     {

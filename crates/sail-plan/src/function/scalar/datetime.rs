@@ -2,15 +2,15 @@ use datafusion::arrow::datatypes::{
     DataType, IntervalDayTimeType, IntervalUnit, IntervalYearMonthType, TimeUnit,
 };
 use datafusion::functions::expr_fn;
-use datafusion_common::ScalarValue;
+use datafusion_common::{Column, ScalarValue};
 use datafusion_expr::expr::{self, Expr};
-use datafusion_common::Column;
 use datafusion_expr::{cast, lit, try_cast, when, BinaryExpr, ExprSchemable, Operator, ScalarUDF};
 use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
 use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
 use sail_common::datetime::time_unit_to_multiplier;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
+use sail_function::scalar::datetime::spark_date_format::SparkDateFormat;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
 use sail_function::scalar::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
@@ -312,8 +312,7 @@ fn to_unix_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
 }
 
 fn date_format(expr: Expr, format: Expr) -> Expr {
-    let format = to_chrono_fmt(format);
-    expr_fn::to_char(expr, format)
+    ScalarUDF::from(SparkDateFormat::new()).call(vec![expr, format])
 }
 
 fn to_timestamp(args: Vec<Expr>) -> PlanResult<Expr> {

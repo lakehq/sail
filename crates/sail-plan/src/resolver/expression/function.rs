@@ -269,9 +269,9 @@ impl PlanResolver<'_> {
         let mut expressions = expressions.into_iter();
 
         // First argument: time unit (could be identifier or string literal)
-        let unit_expr = expressions.next().ok_or_else(|| {
-            PlanError::invalid("datediff requires at least 3 arguments")
-        })?;
+        let unit_expr = expressions
+            .next()
+            .ok_or_else(|| PlanError::invalid("datediff requires at least 3 arguments"))?;
 
         let (unit_name, unit_resolved) = match &unit_expr {
             // Handle identifier: DATEDIFF(DAY, ...) where DAY is parsed as UnresolvedAttribute
@@ -282,7 +282,10 @@ impl PlanResolver<'_> {
                     .first()
                     .map(|id| id.as_ref().to_uppercase())
                     .unwrap_or_default();
-                ("unit".to_string(), expr::Expr::Column(datafusion_common::Column::new_unqualified(&unit_str)))
+                (
+                    "unit".to_string(),
+                    expr::Expr::Column(datafusion_common::Column::new_unqualified(&unit_str)),
+                )
             }
             // For any other expression, resolve it normally
             _ => {
