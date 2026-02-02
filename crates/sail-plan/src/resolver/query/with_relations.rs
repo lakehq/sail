@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_expr::expr::{Exists, InSubquery};
-use datafusion_expr::{Expr as DFExpr, LogicalPlan, Subquery};
+use datafusion_expr::{Expr as DFExpr, LogicalPlan, Projection, Subquery};
 use sail_common::spec;
 use sail_logical_plan::unresolved_subquery_ref::UnresolvedSubqueryRef;
 
@@ -42,13 +42,38 @@ fn replace_subquery_placeholders(
     plan: LogicalPlan,
     resolved_refs: &HashMap<i64, Arc<LogicalPlan>>,
 ) -> PlanResult<LogicalPlan> {
-    // Use transform to walk the entire plan tree, including subqueries
-    plan.transform(|node| {
-        // For each plan node, rewrite its expressions
-        node.map_expressions(|expr| {
-            // Transform each expression to find and replace subquery placeholders
-            expr.transform(|e| replace_placeholder_in_expr(e, resolved_refs))
-        })
+    plan.transform_up(|node| {
+        let old_exprs = node.expressions();
+
+        // Transform each expression
+        let mut any_changed = false;
+        let new_exprs: Vec<DFExpr> = old_exprs
+            .into_iter()
+            .map(|expr| {
+                let result = expr.transform_up(|e| replace_placeholder_in_expr(e, resolved_refs))?;
+                if result.transformed {
+                    any_changed = true;
+                }
+                Ok(result.data)
+            })
+            .collect::<datafusion_common::Result<Vec<_>>>()?;
+
+        if !any_changed {
+            return Ok(Transformed::no(node));
+        }
+
+        // For Projection, we need to reconstruct with try_new to recompute schema
+        match &node {
+            LogicalPlan::Projection(proj) => {
+                let new_proj = Projection::try_new(new_exprs, Arc::clone(&proj.input))?;
+                Ok(Transformed::yes(LogicalPlan::Projection(new_proj)))
+            }
+            _ => {
+                let inputs = node.inputs().into_iter().cloned().collect();
+                let new_node = node.with_new_exprs(new_exprs, inputs)?;
+                Ok(Transformed::yes(new_node))
+            }
+        }
     })
     .map(|t| t.data)
     .map_err(|e| PlanError::invalid(format!("failed to replace subquery placeholders: {e}")))
@@ -98,7 +123,8 @@ fn replace_placeholder_in_expr(
                     outer_ref_columns: sq.outer_ref_columns.clone(),
                     spans: sq.spans.clone(),
                 };
-                Ok(Transformed::yes(DFExpr::ScalarSubquery(new_subquery)))
+                let new_expr = DFExpr::ScalarSubquery(new_subquery);
+                Ok(Transformed::yes(new_expr))
             } else {
                 Ok(Transformed::no(expr))
             }

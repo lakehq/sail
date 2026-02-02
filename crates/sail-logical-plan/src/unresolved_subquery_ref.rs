@@ -1,7 +1,9 @@
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion::common::{DFSchema, DFSchemaRef, Result};
 use datafusion::logical_expr::{Expr, Extension, LogicalPlan, UserDefinedLogicalNodeCore};
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -31,11 +33,18 @@ impl PartialOrd for UnresolvedSubqueryRef {
 
 impl UnresolvedSubqueryRef {
     /// Creates a new unresolved subquery reference with the given plan_id.
-    pub fn new(plan_id: i64) -> Self {
-        Self {
-            plan_id,
-            schema: Arc::new(DFSchema::empty()),
-        }
+    ///
+    /// The placeholder has a dummy schema with one nullable Null column. This is required
+    /// because DataFusion's ScalarSubquery accesses schema.field(0) during construction
+    /// to determine the output type. The actual schema is irrelevant since this node
+    /// will be replaced with the real subquery plan before execution.
+    pub fn try_new(plan_id: i64) -> Result<Self> {
+        let fields = vec![Field::new("_placeholder", DataType::Null, true)];
+        let schema = Arc::new(DFSchema::from_unqualified_fields(
+            fields.into(),
+            HashMap::new(),
+        )?);
+        Ok(Self { plan_id, schema })
     }
 
     /// Returns the plan_id this reference points to.
