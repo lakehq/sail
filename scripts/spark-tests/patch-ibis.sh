@@ -5,8 +5,6 @@
 # Issue: Ibis 11.0.0 generates CAST instead of TRY_CAST because the
 # sqlglot TryCast object is created without safe=True flag.
 #
-# Fix upstream: https://github.com/ibis-project/ibis/commit/fc494985a39d88be9c9e35b342243face78dbfed
-#
 # This patch can be removed once Ibis releases a version >= 11.1.0 that includes the fix.
 #
 
