@@ -128,18 +128,13 @@ impl PythonTableFormat {
         let python_ver = Self::get_python_version()?;
 
         Python::attach(|py| {
-            // Use pysail's compat module to unpickle with PySpark shim support
-            let compat = py
-                .import("pysail.spark.datasource.compat")
-                .map_err(py_err)?;
+            // Use cloudpickle directly (PySpark is a hard requirement)
+            let cloudpickle = py.import("cloudpickle").map_err(py_err)?;
 
             let class_bytes = PyBytes::new(py, pickled_class);
-            let ds_class = compat
-                .call_method1("unpickle_datasource_class", (class_bytes,))
+            let ds_class = cloudpickle
+                .call_method1("loads", (class_bytes,))
                 .map_err(py_err)?;
-
-            // Import cloudpickle for later use (pickling the instance)
-            let cloudpickle = py.import("cloudpickle").map_err(py_err)?;
 
             // Create options dict
             let py_options = PyDict::new(py);

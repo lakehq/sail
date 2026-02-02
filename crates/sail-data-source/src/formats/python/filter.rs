@@ -11,11 +11,8 @@
 /// - String patterns: StartsWith, EndsWith, Contains
 use datafusion::logical_expr::{Expr, Operator};
 use datafusion_common::ScalarValue;
-#[cfg(feature = "python")]
 use pyo3::prelude::*;
-#[cfg(feature = "python")]
 use pyo3::types::{PyAnyMethods, PyList, PyTuple};
-#[cfg(feature = "python")]
 use pyo3::IntoPyObject;
 
 /// Represents a filter that can be pushed to Python.
@@ -124,7 +121,6 @@ impl FilterValue {
     }
 
     /// Convert to Python object.
-    #[cfg(feature = "python")]
     pub fn to_python(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         match self {
             Self::Null => Ok(py.None()),
@@ -159,7 +155,7 @@ pub fn exprs_to_python_filters(exprs: &[Expr]) -> (Vec<PythonFilter>, Vec<Expr>)
 }
 
 /// Convert a single expression to a filter.
-fn expr_to_filter(expr: &Expr) -> Option<PythonFilter> {
+pub fn expr_to_filter(expr: &Expr) -> Option<PythonFilter> {
     match expr {
         // Binary expressions
         Expr::BinaryExpr(binary) => {
@@ -280,13 +276,9 @@ fn expr_to_value(expr: &Expr) -> Option<FilterValue> {
     }
 }
 
-// TODO(Phase 2): Activate filter pushdown - see RFC "Filter Pushdown Pipeline"
 // These functions convert Rust PythonFilter objects to Python filter class instances
-// for passing to DataSourceReader.pushFilters(). Currently all filters are marked
-// Unsupported and DataFusion applies post-read filtering.
+// for passing to DataSourceReader.pushFilters().
 /// Convert Python filters to Python objects.
-#[cfg(feature = "python")]
-#[allow(dead_code)] // Reserved for Phase 2 filter pushdown
 pub fn filters_to_python(py: Python<'_>, filters: &[PythonFilter]) -> PyResult<Py<PyAny>> {
     let datasource_module = py.import("pysail.spark.datasource.base")?;
 
@@ -298,8 +290,6 @@ pub fn filters_to_python(py: Python<'_>, filters: &[PythonFilter]) -> PyResult<P
     Ok(PyList::new(py, py_filters)?.into_any().unbind())
 }
 
-#[cfg(feature = "python")]
-#[allow(dead_code)] // Reserved for Phase 2 filter pushdown
 fn filter_to_python(
     py: Python<'_>,
     module: &Bound<'_, PyAny>,
@@ -403,8 +393,6 @@ fn filter_to_python(
     }
 }
 
-#[cfg(feature = "python")]
-#[allow(dead_code)] // Reserved for Phase 2 filter pushdown
 fn column_to_python(py: Python<'_>, column: &ColumnPath) -> PyResult<Py<PyAny>> {
     let parts: Vec<&str> = column.iter().map(|s| s.as_str()).collect();
     Ok(PyTuple::new(py, parts)?.into_any().unbind())

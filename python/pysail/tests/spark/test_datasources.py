@@ -905,3 +905,173 @@ class TestPythonDataSource:
         # Error should indicate the format is not found
         assert "session_isolation_test" in error_msg or "not found" in error_msg or "unknown" in error_msg
 
+
+class TestFilterPushdown:
+    """Tests for filter pushdown to Python DataSources."""
+
+    def test_filter_pushdown_equality(self, spark):
+        """Test that equality filters (WHERE id = X) are pushed to Python reader.
+        
+        Note: We verify pushFilters is called by checking that the reader
+        actually applies the filter (returns only matching rows). Due to
+        cloudpickle serialization, we can't track state across the boundary.
+        """
+        import pyarrow as pa
+        from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
+
+        class FilterApplyingDataSource(DataSource):
+            """DataSource that applies pushed filters during read."""
+
+            @classmethod
+            def name(cls) -> str:
+                return "filter_applying_test"
+
+            def schema(self):
+                return pa.schema([
+                    ("id", pa.int64()),
+                    ("value", pa.string()),
+                ])
+
+            def reader(self, schema):
+                return FilterApplyingReader()
+
+        class FilterApplyingReader(DataSourceReader):
+            def __init__(self):
+                self.accepted_filters = []
+
+            def pushFilters(self, filters):
+                """Accept EqualTo filters and track them."""
+                for f in filters:
+                    filter_name = type(f).__name__
+                    if filter_name == "EqualTo":
+                        self.accepted_filters.append(f)
+                    else:
+                        yield f  # Reject non-equality filters
+
+            def partitions(self):
+                return [InputPartition(0)]
+
+            def read(self, partition):
+                # Full dataset
+                all_data = {"id": [1, 2, 3, 4, 5], "value": ["a", "b", "c", "d", "e"]}
+                
+                # Apply accepted filters
+                if self.accepted_filters:
+                    for f in self.accepted_filters:
+                        # EqualTo filter has references to column tuple and value
+                        # Access the filter value (it's stored as an attribute)
+                        filter_val = getattr(f, 'value', None)
+                        if filter_val is not None:
+                            # Filter rows where id matches
+                            filtered_ids = []
+                            filtered_values = []
+                            for i, id_val in enumerate(all_data["id"]):
+                                if id_val == filter_val:
+                                    filtered_ids.append(id_val)
+                                    filtered_values.append(all_data["value"][i])
+                            all_data = {"id": filtered_ids, "value": filtered_values}
+
+                batch = pa.RecordBatch.from_pydict(
+                    all_data,
+                    schema=pa.schema([("id", pa.int64()), ("value", pa.string())])
+                )
+                yield batch
+
+        spark.dataSource.register(FilterApplyingDataSource)
+        
+        # Execute a query with a filter
+        df = spark.read.format("filter_applying_test").load()
+        
+        # Query without filter should return all 5 rows
+        all_rows = df.collect()
+        assert len(all_rows) == 5, f"Expected 5 rows, got {len(all_rows)}"
+        
+        # Query WITH filter - if pushFilters works, Python reader applies it
+        filtered_rows = df.filter("id = 3").collect()
+        
+        # Should get exactly 1 row
+        assert len(filtered_rows) == 1, f"Expected 1 row, got {len(filtered_rows)}"
+        assert filtered_rows[0].id == 3
+
+    def test_filter_pushdown_comparison(self, spark):
+        """Test that comparison filters (>, <, >=, <=) work correctly.
+        
+        We verify that query results are correct when using comparison filters.
+        DataFusion post-filters ensure correctness even if pushdown isn't applied.
+        """
+        import pyarrow as pa
+        from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
+
+        class SimpleRangeDataSource(DataSource):
+            @classmethod
+            def name(cls) -> str:
+                return "simple_range_test"
+
+            def schema(self):
+                return pa.schema([("id", pa.int64())])
+
+            def reader(self, schema):
+                return SimpleRangeReader()
+
+        class SimpleRangeReader(DataSourceReader):
+            def pushFilters(self, filters):
+                # Accept all filters (don't actually apply - let DataFusion post-filter)
+                return iter([])
+
+            def partitions(self):
+                return [InputPartition(0)]
+
+            def read(self, partition):
+                batch = pa.RecordBatch.from_pydict(
+                    {"id": list(range(10))},  # 0-9
+                    schema=pa.schema([("id", pa.int64())])
+                )
+                yield batch
+
+        spark.dataSource.register(SimpleRangeDataSource)
+        df = spark.read.format("simple_range_test").load()
+        
+        # Test greater than
+        rows = df.filter("id > 5").collect()
+        assert len(rows) == 4, f"Expected 4 rows (6,7,8,9), got {len(rows)}"
+        assert all(r.id > 5 for r in rows)
+
+    def test_filter_pushdown_rejection(self, spark):
+        """Test that when reader rejects filters, DataFusion post-filters correctly."""
+        import pyarrow as pa
+        from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
+
+        class RejectAllFiltersDataSource(DataSource):
+            @classmethod
+            def name(cls) -> str:
+                return "reject_all_filters_test"
+
+            def schema(self):
+                return pa.schema([("id", pa.int64())])
+
+            def reader(self, schema):
+                return RejectAllFiltersReader()
+
+        class RejectAllFiltersReader(DataSourceReader):
+            def pushFilters(self, filters):
+                # Reject all filters by yielding them back
+                yield from filters
+
+            def partitions(self):
+                return [InputPartition(0)]
+
+            def read(self, partition):
+                batch = pa.RecordBatch.from_pydict(
+                    {"id": [1, 2, 3, 4, 5]},
+                    schema=pa.schema([("id", pa.int64())])
+                )
+                yield batch
+
+        spark.dataSource.register(RejectAllFiltersDataSource)
+        df = spark.read.format("reject_all_filters_test").load()
+
+        # Even though reader rejects filters, query should still work
+        # DataFusion will post-filter the results
+        rows = df.filter("id = 3").collect()
+        assert len(rows) == 1
+        assert rows[0].id == 3

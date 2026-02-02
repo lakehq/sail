@@ -1,6 +1,4 @@
-use std::sync::Arc;
-#[cfg(feature = "python")]
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use arrow_schema::SchemaRef;
 use datafusion_common::Result;
@@ -9,16 +7,11 @@ use datafusion_common::Result;
 /// This module provides the bridge between Rust and Python DataSources, managing
 /// the Python interpreter lifecycle and invoking Python DataSource methods.
 use once_cell::sync::OnceCell;
-#[cfg(feature = "python")]
 use pyo3::prelude::*;
-#[cfg(feature = "python")]
 use pyo3::types::PyBytes;
 
-#[cfg(feature = "python")]
 use super::arrow_utils::py_schema_to_rust;
-#[cfg(feature = "python")]
 use super::error::{import_cloudpickle, PythonDataSourceContext, PythonDataSourceError};
-#[cfg(feature = "python")]
 use super::executor::InputPartition;
 
 /// Represents a Python-defined DataSource.
@@ -42,7 +35,6 @@ pub struct PythonDataSource {
     /// Cached deserialized Python datasource object.
     /// Uses Mutex<Option<Py<PyAny>>> for thread-safe lazy initialization.
     /// Py<PyAny> is Send+Sync when GIL is not held.
-    #[cfg(feature = "python")]
     cached_datasource: Arc<Mutex<Option<Py<PyAny>>>>,
 }
 
@@ -53,7 +45,6 @@ impl Clone for PythonDataSource {
             command: self.command.clone(),
             name: self.name.clone(),
             schema: self.schema.clone(),
-            #[cfg(feature = "python")]
             cached_datasource: Arc::new(Mutex::new(None)), // Don't clone the cache, will re-deserialize
         }
     }
@@ -75,13 +66,6 @@ impl PythonDataSource {
     /// - Command deserialization fails
     /// - DataSource name() method fails
     pub fn new(command: Vec<u8>, python_ver: String) -> Result<Self> {
-        #[cfg(not(feature = "python"))]
-        {
-            let _ = (command, python_ver);
-            datafusion_common::exec_err!("Python support not enabled in this build")
-        }
-
-        #[cfg(feature = "python")]
         {
             // Validate Python version compatibility
             Self::validate_python_version(&python_ver)?;
@@ -105,7 +89,6 @@ impl PythonDataSource {
                 command,
                 name,
                 schema: OnceCell::new(),
-                #[cfg(feature = "python")]
                 cached_datasource: Arc::new(Mutex::new(None)),
             })
         }
@@ -122,7 +105,6 @@ impl PythonDataSource {
     ///
     /// # Returns
     /// * `Result<Bound<'py, PyAny>>` - Bound reference to the cached datasource
-    #[cfg(feature = "python")]
     fn get_cached_datasource<'py>(&self, py: Python<'py>) -> Result<Bound<'py, PyAny>> {
         let mut cache = self.cached_datasource.lock().map_err(|e| {
             PythonDataSourceError::PythonError(format!("Failed to acquire cache lock: {}", e))
@@ -160,12 +142,6 @@ impl PythonDataSource {
     /// - Schema string parsing fails
     /// - Schema conversion fails
     pub fn schema(&self) -> Result<SchemaRef> {
-        #[cfg(not(feature = "python"))]
-        {
-            datafusion_common::exec_err!("Python support not enabled in this build")
-        }
-
-        #[cfg(feature = "python")]
         {
             // Use OnceLock for thread-safe lazy initialization
             self.schema
@@ -210,12 +186,6 @@ impl PythonDataSource {
     /// # Returns
     /// * `Result<usize>` - Number of partitions
     pub fn partition_count(&self) -> Result<usize> {
-        #[cfg(not(feature = "python"))]
-        {
-            datafusion_common::exec_err!("Python support not enabled in this build")
-        }
-
-        #[cfg(feature = "python")]
         {
             let ctx = PythonDataSourceContext::new(&self.name, "partitioning");
 
@@ -253,7 +223,6 @@ impl PythonDataSource {
     ///
     /// # Returns
     /// * `Result<Vec<InputPartition>>` - List of partitions
-    #[cfg(feature = "python")]
     pub fn get_partitions(&self, schema: &SchemaRef) -> Result<Vec<InputPartition>> {
         let ctx = PythonDataSourceContext::new(&self.name, "get_partitions");
 
@@ -310,19 +279,9 @@ impl PythonDataSource {
         })
     }
 
-    /// Get input partitions (non-Python fallback).
-    #[cfg(not(feature = "python"))]
-    pub fn get_partitions(
-        &self,
-        _schema: &SchemaRef,
-    ) -> Result<Vec<super::executor::InputPartition>> {
-        datafusion_common::exec_err!("Python support not enabled in this build")
-    }
-
     /// Validate Python version compatibility.
     ///
     /// Requires Python 3.9+ per RFC (entry_points API changes in 3.9).
-    #[cfg(feature = "python")]
     fn validate_python_version(version: &str) -> Result<()> {
         // Parse version string (e.g., "3.11" -> major=3, minor=11)
         let parts: Vec<&str> = version.split('.').collect();
@@ -355,7 +314,6 @@ impl PythonDataSource {
     }
 
     /// Deserialize the pickled DataSource from bytes.
-    #[cfg(feature = "python")]
     fn deserialize_datasource<'py>(py: Python<'py>, command: &[u8]) -> Result<Bound<'py, PyAny>> {
         // Import cloudpickle with helpful error message
         let cloudpickle = import_cloudpickle(py)?;
@@ -377,7 +335,6 @@ impl PythonDataSource {
     /// Parse DDL schema string to Arrow Schema.
     ///
     /// DDL format: "id INT, name STRING, age INT"
-    #[cfg(feature = "python")]
     fn parse_ddl_schema(ddl: &str) -> Result<SchemaRef> {
         use arrow_schema::Field;
         use datafusion::sql::sqlparser::ast::Statement;
@@ -424,7 +381,6 @@ impl PythonDataSource {
 }
 
 /// Convert SQL column definition to Arrow Field.
-#[cfg(feature = "python")]
 fn sql_column_to_arrow_field(
     col: &datafusion::sql::sqlparser::ast::ColumnDef,
 ) -> Result<arrow_schema::Field> {
@@ -445,7 +401,6 @@ fn sql_column_to_arrow_field(
 }
 
 /// Convert SQL data type to Arrow DataType.
-#[cfg(feature = "python")]
 fn sql_type_to_arrow(
     sql_type: &datafusion::sql::sqlparser::ast::DataType,
 ) -> Result<arrow_schema::DataType> {
@@ -510,7 +465,7 @@ impl std::fmt::Debug for PythonDataSource {
     }
 }
 
-#[cfg(all(test, feature = "python"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 

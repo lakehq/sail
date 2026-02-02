@@ -62,10 +62,6 @@ Issues = "https://github.com/lakehq/sail/issues"
 [project.scripts]
 sail = "pysail.cli:main"
 
-[project.entry-points."sail.datasources"]
-range = "pysail.spark.datasource.examples:RangeDataSource"
-constant = "pysail.spark.datasource.examples:ConstantDataSource"
-flappy_bird = "pysail.spark.datasource.examples:FlappyBirdDataSource"
 
 [build-system]
 requires = ["maturin>=1.0,<2.0"]
@@ -199,6 +195,9 @@ skip-install = true
 dependencies = [
     "pyspark[connect]==3.5.7",
     "ibis-framework[pyspark]>=11,<12",
+    # Pin sqlglot to avoid breaking change in 28.7.0 that breaks ibis Oracle compiler import
+    # See: https://github.com/tobymao/sqlglot/blob/main/CHANGELOG.md
+    "sqlglot<28.7.0",
     # The test dependencies are borrowed from `pyproject.toml` of the Ibis project.
     # They need to be updated accordingly when we update the Ibis version.
     "cloudpickle",

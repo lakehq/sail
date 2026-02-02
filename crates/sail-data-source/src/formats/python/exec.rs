@@ -5,9 +5,11 @@
 ///
 /// # Architecture
 ///
-/// Uses the `PythonExecutor` trait abstraction to enable:
-/// - Phase 1 (MVP): `InProcessExecutor` for direct PyO3 calls
-/// - Phase 3: `RemoteExecutor` for subprocess isolation
+/// Uses `InProcessExecutor` for direct PyO3 calls. The executor is created
+/// lazily in `execute()` rather than at construction time, which:
+/// - Keeps the codec/serialization layer lightweight
+/// - Ensures workers create their own executor at runtime
+/// - Decouples construction from execution context
 ///
 /// # Phase 6 Enhancements (Performance & Polish)
 ///
@@ -35,15 +37,16 @@ use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 use datafusion_common::{exec_err, internal_err, Result};
 
-use super::executor::{InputPartition, PythonExecutor};
+use super::executor::InputPartition;
 
 /// Execution plan for reading from a Python datasource.
 ///
 /// This is a source node (no children) that reads data in parallel
-/// across multiple partitions using the `PythonExecutor` abstraction.
+/// across multiple partitions. The executor is created lazily in
+/// `execute()` to keep construction lightweight and enable proper
+/// worker-side initialization in distributed mode.
+#[derive(Debug)]
 pub struct PythonDataSourceExec {
-    /// Executor for Python operations (in-process or remote)
-    executor: Arc<dyn PythonExecutor>,
     /// Pickled Python DataSource instance
     command: Vec<u8>,
     /// Schema of the output data
@@ -54,31 +57,15 @@ pub struct PythonDataSourceExec {
     properties: PlanProperties,
 }
 
-impl std::fmt::Debug for PythonDataSourceExec {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PythonDataSourceExec")
-            .field("command_len", &self.command.len())
-            .field("schema", &self.schema)
-            .field("partitions", &self.partitions.len())
-            .finish()
-    }
-}
-
 impl PythonDataSourceExec {
     /// Create a new execution plan.
     ///
     /// # Arguments
     ///
-    /// * `executor` - Executor for Python operations
     /// * `command` - Pickled Python DataSource instance
     /// * `schema` - Schema of the output data
     /// * `partitions` - Partitions for parallel reading
-    pub fn new(
-        executor: Arc<dyn PythonExecutor>,
-        command: Vec<u8>,
-        schema: SchemaRef,
-        partitions: Vec<InputPartition>,
-    ) -> Self {
+    pub fn new(command: Vec<u8>, schema: SchemaRef, partitions: Vec<InputPartition>) -> Self {
         let num_partitions = partitions.len().max(1);
         let properties = PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
@@ -88,7 +75,6 @@ impl PythonDataSourceExec {
         );
 
         Self {
-            executor,
             command,
             schema,
             partitions,
@@ -181,8 +167,11 @@ impl ExecutionPlan for PythonDataSourceExec {
         // Get batch size from TaskContext session config
         let _batch_size = context.session_config().batch_size();
 
-        // Use executor to read - this returns a BoxStream
-        let executor = self.executor.clone();
+        // Create executor lazily at execution time
+        // This keeps codec/construction lightweight and ensures proper worker-side initialization
+        let executor: Arc<dyn super::executor::PythonExecutor> =
+            Arc::new(super::executor::InProcessExecutor::new());
+
         let command = self.command.clone();
         let part = self.partitions[partition].clone();
         let schema = self.schema.clone();
@@ -243,7 +232,6 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
 
     use super::*;
-    use crate::python_datasource::executor::InProcessExecutor;
 
     #[test]
     fn test_python_datasource_exec_properties() {
@@ -263,8 +251,7 @@ mod tests {
             },
         ];
 
-        let executor: Arc<dyn PythonExecutor> = Arc::new(InProcessExecutor::new());
-        let exec = PythonDataSourceExec::new(executor, vec![0, 0], schema.clone(), partitions);
+        let exec = PythonDataSourceExec::new(vec![0, 0], schema.clone(), partitions);
 
         assert_eq!(exec.num_partitions(), 2);
         assert_eq!(exec.children().len(), 0);
@@ -296,8 +283,7 @@ mod tests {
             },
         ];
 
-        let executor: Arc<dyn PythonExecutor> = Arc::new(InProcessExecutor::new());
-        let exec = PythonDataSourceExec::new(executor, vec![], schema, partitions);
+        let exec = PythonDataSourceExec::new(vec![], schema, partitions);
 
         // Verify the struct was created correctly
         assert_eq!(exec.num_partitions(), 3);
@@ -309,8 +295,7 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
         let partitions: Vec<InputPartition> = vec![];
 
-        let executor: Arc<dyn PythonExecutor> = Arc::new(InProcessExecutor::new());
-        let exec = PythonDataSourceExec::new(executor, vec![], schema, partitions);
+        let exec = PythonDataSourceExec::new(vec![], schema, partitions);
 
         // Empty partitions reports 0 partitions, but properties use max(1) for DataFusion
         assert_eq!(exec.num_partitions(), 0);

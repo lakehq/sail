@@ -10,19 +10,16 @@ use arrow_schema::SchemaRef;
 use async_trait::async_trait;
 use datafusion_common::Result;
 use futures::stream::BoxStream;
-#[cfg(feature = "python")]
 use pyo3::prelude::*;
-#[cfg(feature = "python")]
 use pyo3::types::PyAnyMethods;
 
-#[cfg(feature = "python")]
 use super::error::{import_cloudpickle, PythonDataSourceContext};
+use super::filter::{filters_to_python, PythonFilter};
 
 /// Maximum size for a single partition in bytes (default: 100MB).
 ///
 /// Partitions exceeding this limit will cause an error to prevent OOM.
 /// This can be overridden via environment variable `SAIL_MAX_PARTITION_SIZE_MB`.
-#[cfg(feature = "python")]
 fn max_partition_size_bytes() -> usize {
     std::env::var("SAIL_MAX_PARTITION_SIZE_MB")
         .ok()
@@ -62,10 +59,12 @@ pub trait PythonExecutor: Send + Sync + std::fmt::Debug {
     /// Get partitions for parallel reading.
     ///
     /// Calls the Python `DataSource.reader(schema).partitions()` method.
+    /// If filters are provided, calls `pushFilters()` on the reader first.
     async fn get_partitions(
         &self,
         command: &[u8],
         schema: &SchemaRef,
+        filters: Vec<PythonFilter>,
     ) -> Result<Vec<InputPartition>>;
 
     /// Execute a read for a specific partition.
@@ -86,11 +85,9 @@ pub trait PythonExecutor: Send + Sync + std::fmt::Debug {
 /// Data plane uses Arrow C Data Interface for efficiency.
 ///
 /// Note: Python version validation happens in PythonDataSource::new(), not here.
-#[cfg(feature = "python")]
 #[derive(Debug, Default)]
 pub struct InProcessExecutor;
 
-#[cfg(feature = "python")]
 impl InProcessExecutor {
     /// Create a new in-process executor.
     pub fn new() -> Self {
@@ -98,7 +95,6 @@ impl InProcessExecutor {
     }
 }
 
-#[cfg(feature = "python")]
 #[async_trait]
 impl PythonExecutor for InProcessExecutor {
     async fn get_schema(&self, command: &[u8]) -> Result<SchemaRef> {
@@ -137,6 +133,7 @@ impl PythonExecutor for InProcessExecutor {
         &self,
         command: &[u8],
         schema: &SchemaRef,
+        filters: Vec<PythonFilter>,
     ) -> Result<Vec<InputPartition>> {
         let command = command.to_vec();
         let schema = schema.clone();
@@ -157,6 +154,35 @@ impl PythonExecutor for InProcessExecutor {
                 let reader = datasource
                     .call_method1("reader", (schema_obj,))
                     .map_err(|e| ctx.wrap_py_error(e))?;
+
+                // Push filters to reader if any were provided
+                if !filters.is_empty() {
+                    let filter_ctx = PythonDataSourceContext::new(&ds_name, "pushFilters");
+
+                    // Convert Rust filters to Python filter objects
+                    let py_filters = filters_to_python(py, &filters)
+                        .map_err(|e| filter_ctx.wrap_error(format!("Failed to convert filters: {}", e)))?;
+
+                    // Call pushFilters on the reader
+                    let rejected = reader
+                        .call_method1("pushFilters", (py_filters,))
+                        .map_err(|e| filter_ctx.wrap_py_error(e))?;
+
+                    // Count rejected filters for logging
+                    use pyo3::types::PyIterator;
+                    let rejected_list = PyIterator::from_object(&rejected)
+                        .map_err(|e| filter_ctx.wrap_error(format!("pushFilters must return an iterator: {}", e)))?;
+                    let rejected_count = rejected_list.count();
+
+                    log::debug!(
+                        "[{}::pushFilters] Pushed {} filters, {} rejected",
+                        ds_name,
+                        filters.len(),
+                        rejected_count
+                    );
+                }
+
+                // Now call partitions() on the same reader that has the filters
                 let partitions = reader
                     .call_method0("partitions")
                     .map_err(|e| ctx.wrap_py_error(e))?;
@@ -228,7 +254,6 @@ impl PythonExecutor for InProcessExecutor {
 }
 
 /// Deserialize a pickled Python datasource.
-#[cfg(feature = "python")]
 fn deserialize_datasource<'py>(
     py: pyo3::Python<'py>,
     command: &[u8],
@@ -244,7 +269,6 @@ fn deserialize_datasource<'py>(
 }
 
 /// Pickle a Python object for distribution.
-#[cfg(feature = "python")]
 fn pickle_object(py: pyo3::Python<'_>, obj: &pyo3::Bound<'_, pyo3::PyAny>) -> Result<Vec<u8>> {
     let cloudpickle = import_cloudpickle(py)?;
     let pickled = cloudpickle.call_method1("dumps", (obj,)).map_err(py_err)?;
@@ -255,7 +279,6 @@ fn pickle_object(py: pyo3::Python<'_>, obj: &pyo3::Bound<'_, pyo3::PyAny>) -> Re
 }
 
 /// Re-export py_err from error module.
-#[cfg(feature = "python")]
 use super::error::py_err;
 
 #[cfg(test)]

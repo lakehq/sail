@@ -10,10 +10,8 @@ use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use datafusion_common::{exec_err, Result};
 use once_cell::sync::Lazy;
-#[cfg(feature = "python")]
 use pyo3::types::PyAnyMethods;
 
-#[cfg(feature = "python")]
 use super::error::py_err;
 
 /// Global registry for Python datasources.
@@ -90,7 +88,6 @@ impl Default for PythonDataSourceRegistry {
 /// Discover datasources from Python entry points.
 ///
 /// Scans `sail.datasources` entry point group and registers found classes.
-#[cfg(feature = "python")]
 pub fn discover_datasources() -> Result<usize> {
     pyo3::Python::attach(|py| {
         let count = discover_from_entry_points(py).unwrap_or(0);
@@ -103,7 +100,6 @@ pub fn discover_datasources() -> Result<usize> {
 ///
 /// Returns the number of successfully registered datasources, or 0 if
 /// the entry points module is not available.
-#[cfg(feature = "python")]
 fn discover_from_entry_points(py: pyo3::Python<'_>) -> Option<usize> {
     let base_module = py.import("pysail.spark.datasource.base").ok()?;
     let discover_fn = base_module.getattr("discover_entry_points").ok()?;
@@ -122,7 +118,6 @@ fn discover_from_entry_points(py: pyo3::Python<'_>) -> Option<usize> {
 /// Discover datasources from the Python-side registry.
 ///
 /// This finds datasources registered via the `@register` decorator in Python.
-#[cfg(feature = "python")]
 fn discover_from_python_registry(py: pyo3::Python<'_>) -> Result<usize> {
     // Try to import the datasource module
     let module = match py.import("pysail.spark.datasource") {
@@ -177,7 +172,6 @@ fn discover_from_python_registry(py: pyo3::Python<'_>) -> Result<usize> {
 ///
 /// Extracts the (name, class) tuple, validates the class, pickles it,
 /// and registers it atomically. Returns true on success.
-#[cfg(feature = "python")]
 fn try_register_entry(
     py: pyo3::Python<'_>,
     entry: pyo3::Bound<'_, pyo3::PyAny>,
@@ -223,7 +217,6 @@ fn try_register_entry(
 /// Validate that a Python class is a valid datasource.
 ///
 /// Checks for required methods: `name`, `schema`, `reader`.
-#[cfg(feature = "python")]
 pub fn validate_datasource_class(
     py: pyo3::Python<'_>,
     cls: &pyo3::Bound<'_, pyo3::PyAny>,
@@ -258,7 +251,6 @@ pub fn validate_datasource_class(
 }
 
 /// Validate a datasource instance has required methods.
-#[cfg(feature = "python")]
 #[allow(dead_code)]
 pub fn validate_datasource_instance(
     _py: pyo3::Python<'_>,
@@ -279,7 +271,6 @@ pub fn validate_datasource_instance(
 }
 
 /// Pickle a Python class for GIL-free storage.
-#[cfg(feature = "python")]
 fn pickle_class(py: pyo3::Python<'_>, cls: &pyo3::Bound<'_, pyo3::PyAny>) -> Result<Vec<u8>> {
     let cloudpickle = super::error::import_cloudpickle(py)?;
 

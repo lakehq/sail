@@ -100,11 +100,4 @@ docs/.vitepress/.temp
 # Claude Code settings
 .claude/
 
-# AI assistant files
 CLAUDE.md
-AGENTS.md
-**/AGENTS.md
-
-# Reference/backup directories
-sail2/
-# hook test - this edit should trigger cargo clippy

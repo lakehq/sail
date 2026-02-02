@@ -12,7 +12,6 @@ path = "src/main.rs"
 
 [features]
 mimalloc = ["dep:mimalloc"]
-python = ["sail-session/python", "sail-spark-connect/python"]
 default = ["mimalloc"]
 
 [dependencies]

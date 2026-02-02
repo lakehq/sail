@@ -50,4 +50,3 @@ futures = { workspace = true }
 
 [features]
 default = []
-python = ["sail-data-source/python"]

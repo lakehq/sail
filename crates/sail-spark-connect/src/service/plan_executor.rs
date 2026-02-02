@@ -627,12 +627,11 @@ pub(crate) async fn handle_execute_register_datasource(
     };
 
     // Register in the session-scoped TableFormatRegistry with embedded pickled bytes
-    #[cfg(feature = "python")]
     {
         use std::sync::Arc;
 
         use sail_common_datafusion::datasource::TableFormatRegistry;
-        use sail_data_source::python_datasource::PythonTableFormat;
+        use sail_data_source::formats::python::PythonTableFormat;
 
         // Register format in session's TableFormatRegistry with embedded pickled class
         // This provides session isolation - the format is only visible to this session
@@ -646,14 +645,6 @@ pub(crate) async fn handle_execute_register_datasource(
                 "TableFormatRegistry not found in session context",
             ));
         }
-    }
-
-    #[cfg(not(feature = "python"))]
-    {
-        let _ = command; // Suppress unused warning
-        return Err(SparkError::unsupported(
-            "RegisterDataSource requires Python feature enabled",
-        ));
     }
 
     // Return empty success response

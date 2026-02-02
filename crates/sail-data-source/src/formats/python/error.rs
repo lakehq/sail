@@ -91,7 +91,6 @@ impl PythonDataSourceContext {
     }
 
     /// Wrap a Python error with context information, preserving traceback.
-    #[cfg(feature = "python")]
     pub fn wrap_py_error(&self, e: pyo3::PyErr) -> PythonDataSourceError {
         self.wrap_error(format_py_error_with_traceback(e))
     }
@@ -107,7 +106,6 @@ impl From<PythonDataSourceError> for DataFusionError {
 ///
 /// This extracts the full Python traceback when available, making it much
 /// easier to debug Python datasource errors.
-#[cfg(feature = "python")]
 pub fn format_py_error_with_traceback(e: pyo3::PyErr) -> String {
     use pyo3::types::PyTracebackMethods;
 
@@ -125,7 +123,6 @@ pub fn format_py_error_with_traceback(e: pyo3::PyErr) -> String {
     })
 }
 
-#[cfg(feature = "python")]
 impl From<pyo3::PyErr> for PythonDataSourceError {
     fn from(e: pyo3::PyErr) -> Self {
         Self::python(format_py_error_with_traceback(e))
@@ -136,7 +133,6 @@ impl From<pyo3::PyErr> for PythonDataSourceError {
 ///
 /// This is a shared helper to avoid duplicating this conversion pattern
 /// across multiple modules (stream.rs, executor.rs, arrow_utils.rs, etc.).
-#[cfg(feature = "python")]
 pub fn py_err(e: pyo3::PyErr) -> DataFusionError {
     DataFusionError::External(Box::new(std::io::Error::other(
         format_py_error_with_traceback(e),
@@ -148,7 +144,6 @@ pub fn py_err(e: pyo3::PyErr) -> DataFusionError {
 /// cloudpickle is required for serializing Python DataSources between
 /// the client and server. This helper provides clear installation instructions
 /// if the import fails.
-#[cfg(feature = "python")]
 pub fn import_cloudpickle(
     py: pyo3::Python<'_>,
 ) -> std::result::Result<pyo3::Bound<'_, pyo3::types::PyModule>, DataFusionError> {

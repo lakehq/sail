@@ -33,23 +33,15 @@ mod table_format;
 
 // Public exports - always available
 // Public exports - require python feature
-#[cfg(feature = "python")]
 pub use discovery::{
     discover_datasources, validate_datasource_class, DataSourceEntry, PythonDataSourceRegistry,
     DATASOURCE_REGISTRY,
 };
 pub use error::PythonDataSourceError;
-#[cfg(feature = "python")]
 pub use exec::PythonDataSourceExec;
-#[cfg(feature = "python")]
 pub use executor::{InProcessExecutor, InputPartition, PythonExecutor};
-#[cfg(feature = "python")]
 pub use filter::{exprs_to_python_filters, ColumnPath, FilterValue, PythonFilter};
-#[cfg(feature = "python")]
 pub use python_datasource::PythonDataSource;
-#[cfg(feature = "python")]
 pub use python_table_provider::PythonTableProvider;
-#[cfg(feature = "python")]
 pub use stream::{PythonDataSourceStream, RowBatchCollector, DEFAULT_BATCH_SIZE};
-#[cfg(feature = "python")]
 pub use table_format::PythonTableFormat;

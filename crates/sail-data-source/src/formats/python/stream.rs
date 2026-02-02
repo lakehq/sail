@@ -58,7 +58,7 @@ impl PythonExecutionMetrics {
         let batches = self.batches_processed.load(Ordering::Relaxed);
         let rows = self.rows_processed.load(Ordering::Relaxed);
 
-        log::info!(
+        log::trace!(
             "[PythonDataSource:partition={}] GIL metrics: wait={}ms, hold={}ms, acquisitions={}, batches={}, rows={}",
             partition_id, wait_ms, hold_ms, acquisitions, batches, rows
         );
@@ -108,7 +108,6 @@ impl PythonDataSourceStream {
     /// * `partition` - The partition to read
     /// * `schema` - Expected output schema
     /// * `batch_size` - Batch size for row collection (from TaskContext)
-    #[cfg(feature = "python")]
     pub fn new(
         command: Vec<u8>,
         partition: InputPartition,
@@ -145,7 +144,6 @@ impl PythonDataSourceStream {
     }
 
     /// Run the Python reader in a dedicated thread.
-    #[cfg(feature = "python")]
     fn run_python_reader(
         command: Vec<u8>,
         partition: InputPartition,
@@ -319,19 +317,6 @@ impl PythonDataSourceStream {
             let _ = tx.blocking_send(Err(with_partition_context(partition_id, e)));
         }
     }
-
-    /// Create a placeholder stream (for non-Python builds).
-    #[cfg(not(feature = "python"))]
-    pub fn new(
-        _command: Vec<u8>,
-        _partition: InputPartition,
-        _schema: SchemaRef,
-        _batch_size: usize,
-    ) -> Result<Self> {
-        Err(datafusion_common::DataFusionError::NotImplemented(
-            "Python support not enabled".to_string(),
-        ))
-    }
 }
 
 impl Stream for PythonDataSourceStream {
@@ -378,7 +363,6 @@ impl Drop for PythonDataSourceStream {
 }
 
 /// Re-export py_err and import_cloudpickle from error module.
-#[cfg(feature = "python")]
 use super::error::{import_cloudpickle, py_err};
 
 /// Wrap an error with partition context for better debugging.
@@ -423,7 +407,6 @@ impl RowBatchCollector {
     }
 
     /// Flush collected rows to a batch.
-    #[cfg(feature = "python")]
     pub fn flush(&mut self) -> Result<Option<RecordBatch>> {
         if self.rows.is_empty() {
             return Ok(None);
@@ -432,13 +415,6 @@ impl RowBatchCollector {
         let rows = std::mem::take(&mut self.rows);
         let batch = super::arrow_utils::convert_rows_to_batch(&self.schema, &rows)?;
         Ok(Some(batch))
-    }
-
-    #[cfg(not(feature = "python"))]
-    pub fn flush(&mut self) -> Result<Option<RecordBatch>> {
-        Err(DataFusionError::NotImplemented(
-            "Python support not enabled".to_string(),
-        ))
     }
 }
 

@@ -24,15 +24,12 @@ use arrow::array::{
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow_schema::SchemaRef;
 use datafusion_common::{DataFusionError, Result};
-#[cfg(feature = "python")]
 use pyo3::prelude::*;
-#[cfg(feature = "python")]
 use pyo3::types::PyAnyMethods;
 
 /// Convert a Python PyArrow RecordBatch to a Rust Arrow RecordBatch.
 ///
 /// Uses the Arrow C Data Interface for zero-copy conversion.
-#[cfg(feature = "python")]
 pub fn py_record_batch_to_rust(
     _py: Python<'_>,
     py_batch: &Bound<'_, PyAny>,
@@ -48,7 +45,6 @@ pub fn py_record_batch_to_rust(
 }
 
 /// Convert a Rust Arrow Schema to a Python PyArrow Schema.
-#[cfg(feature = "python")]
 pub fn rust_schema_to_py(py: Python<'_>, schema: &SchemaRef) -> Result<Py<PyAny>> {
     use arrow_pyarrow::ToPyArrow;
 
@@ -135,7 +131,6 @@ pub fn is_mvp_type(data_type: &DataType) -> bool {
 /// Convert pickled Python rows to a RecordBatch.
 ///
 /// This is used for efficient multi-row batching when Python yields tuples.
-#[cfg(feature = "python")]
 pub fn convert_rows_to_batch(schema: &SchemaRef, pickled_rows: &[Vec<u8>]) -> Result<RecordBatch> {
     use pyo3::types::PyBytes;
 
@@ -186,7 +181,6 @@ macro_rules! build_primitive_array {
 }
 
 /// Build an Arrow array from Python row values.
-#[cfg(feature = "python")]
 fn build_array_from_rows(
     _py: Python<'_>,
     rows: &[Bound<'_, PyAny>],
@@ -221,7 +215,6 @@ fn build_array_from_rows(
 }
 
 /// Extract a value from a Python row tuple.
-#[cfg(feature = "python")]
 fn extract_value<'py, T: pyo3::FromPyObject<'py>>(
     row: &Bound<'py, PyAny>,
     col_idx: usize,
@@ -236,7 +229,6 @@ fn extract_value<'py, T: pyo3::FromPyObject<'py>>(
 }
 
 /// Re-export py_err and import_cloudpickle from error module.
-#[cfg(feature = "python")]
 use super::error::{import_cloudpickle, py_err};
 
 #[cfg(test)]

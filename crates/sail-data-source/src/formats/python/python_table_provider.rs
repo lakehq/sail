@@ -11,6 +11,7 @@ use datafusion_common::Result;
 
 use super::exec::PythonDataSourceExec;
 use super::executor::PythonExecutor;
+use super::filter::{expr_to_filter, exprs_to_python_filters};
 
 /// TableProvider for Python-defined DataSources.
 ///
@@ -71,18 +72,11 @@ impl TableProvider for PythonTableProvider {
     ///
     /// This creates a physical execution plan for reading from the Python DataSource.
     ///
-    /// # Arguments
-    /// * `state` - Session state
-    /// * `projection` - Optional column projection (applied via ProjectionExec wrapper)
-    /// * `filters` - Filter expressions (Phase 2: pushdown to Python)
-    /// * `limit` - Optional limit on number of rows (Phase 2: pushdown to Python)
+    /// # Filter Pushdown
     ///
-    /// # Projection Handling
-    ///
-    /// Currently, projection is applied post-read via `ProjectionExec`. This means
-    /// Python reads all columns and DataFusion filters them. Phase 2 will implement
-    /// true projection pushdown by passing projected schema to `reader(schema)`,
-    /// which requires Python DataSources to respect the schema parameter.
+    /// Filters that can be converted to Python filter objects are pushed down
+    /// to the Python `DataSourceReader.pushFilters()` method. Filters returned
+    /// by that method (rejected) will be applied post-read by DataFusion.
     async fn scan(
         &self,
         _state: &dyn datafusion::catalog::Session,
@@ -90,23 +84,18 @@ impl TableProvider for PythonTableProvider {
         filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // For MVP: we don't push down filters to Python yet
-        // This will be enhanced in future PRs
-        let (_pushed_filters, _unpushed_filters) = self.classify_filters(filters);
+        // Convert filters to Python format
+        let (pushed_filters, _unpushed_exprs) = exprs_to_python_filters(filters);
 
-        // Get partitions from Python via executor
+        // Get partitions from Python via executor, passing filters to push
+        // This ensures pushFilters() and partitions() are called on the same reader instance
         let partitions = self
             .executor
-            .get_partitions(&self.command, &self.schema)
+            .get_partitions(&self.command, &self.schema, pushed_filters)
             .await?;
 
-        // Create execution plan with executor reference
-        let exec = PythonDataSourceExec::new(
-            self.executor.clone(),
-            self.command.clone(),
-            self.schema.clone(),
-            partitions,
-        );
+        // Create execution plan (executor is created lazily in execute())
+        let exec = PythonDataSourceExec::new(self.command.clone(), self.schema.clone(), partitions);
         let exec = Arc::new(exec) as Arc<dyn ExecutionPlan>;
 
         // Apply projection if present
@@ -135,27 +124,25 @@ impl TableProvider for PythonTableProvider {
 
     /// Determine which filters can be pushed down to Python.
     ///
-    /// For MVP, no filters are pushed down yet. This will be enhanced in future PRs.
+    /// Filters that can be converted to Python filter classes (EqualTo, GreaterThan, etc.)
+    /// are marked as `Inexact` (meaning Python will apply them, but DataFusion may also
+    /// apply them to ensure correctness). Filters that cannot be converted are `Unsupported`.
     fn supports_filters_pushdown(
         &self,
         filters: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
-        // For MVP: indicate that filters are not pushed down
-        // They will be applied by DataFusion after reading
-        Ok(vec![
-            TableProviderFilterPushDown::Unsupported;
-            filters.len()
-        ])
-    }
-}
-
-impl PythonTableProvider {
-    /// Classify filters into those that can be pushed down vs those that cannot.
-    ///
-    /// For MVP, no filters are pushed down. Future PRs will implement filter pushdown.
-    fn classify_filters(&self, filters: &[Expr]) -> (Vec<Expr>, Vec<Expr>) {
-        let pushed = vec![];
-        let unpushed = filters.to_vec();
-        (pushed, unpushed)
+        filters
+            .iter()
+            .map(|expr| {
+                if expr_to_filter(expr).is_some() {
+                    // Filter can be pushed - use Inexact since Python may not
+                    // guarantee exact results (DataFusion will post-filter if needed)
+                    Ok(TableProviderFilterPushDown::Inexact)
+                } else {
+                    // Cannot convert to Python filter
+                    Ok(TableProviderFilterPushDown::Unsupported)
+                }
+            })
+            .collect()
     }
 }

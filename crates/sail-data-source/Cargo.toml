@@ -36,8 +36,7 @@ once_cell = { workspace = true }
 thiserror = { workspace = true }
 
 [features]
-default = ["python"]
-python = []
+default = []
 
 [build-dependencies]
 serde = { workspace = true }

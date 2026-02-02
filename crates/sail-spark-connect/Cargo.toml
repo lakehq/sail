@@ -7,7 +7,7 @@ edition = { workspace = true }
 workspace = true
 
 [features]
-python = ["sail-data-source/python"]
+default = []
 
 [dependencies]
 sail-cache = { path = "../sail-cache" }
