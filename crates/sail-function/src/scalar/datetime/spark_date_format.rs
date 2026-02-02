@@ -158,6 +158,20 @@ impl ScalarUDFImpl for SparkDateFormat {
             _ => return exec_err!("spark_date_format: format must be a string"),
         };
 
+        // Cast string inputs to Date (Spark behavior: date_format with string tries to parse as date)
+        let ts_arg = match &ts_arg {
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(_)))
+            | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(_))) => {
+                ts_arg.cast_to(&DataType::Date32, None)?
+            }
+            ColumnarValue::Array(arr)
+                if matches!(arr.data_type(), DataType::Utf8 | DataType::LargeUtf8) =>
+            {
+                ts_arg.cast_to(&DataType::Date32, None)?
+            }
+            _ => ts_arg,
+        };
+
         // Check if we need special handling for fractional seconds
         if !contains_fractional_seconds(&format_str) {
             // No fractional seconds, delegate to standard to_char
