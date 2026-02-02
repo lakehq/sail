@@ -32,6 +32,13 @@ impl SparkDateFormat {
     }
 }
 
+/// Check if the format string contains time patterns (H, h, m, s for hours/minutes/seconds)
+fn contains_time_patterns(format: &str) -> bool {
+    // Check for time-related patterns: H, h (hours), m (minutes), s (seconds)
+    // We need to be careful not to match 'M' (month) or 'S' (fractional seconds)
+    format.contains('H') || format.contains('h') || format.contains('m') || format.contains('s')
+}
+
 /// Check if the format string contains fractional seconds patterns (S, SS, SSS, etc.)
 fn contains_fractional_seconds(format: &str) -> bool {
     // Check for S patterns not preceded by another S (to avoid matching within SSS)
@@ -158,16 +165,29 @@ impl ScalarUDFImpl for SparkDateFormat {
             _ => return exec_err!("spark_date_format: format must be a string"),
         };
 
-        // Cast string inputs to Date (Spark behavior: date_format with string tries to parse as date)
+        // Cast string inputs: if format contains time patterns, cast to Timestamp; otherwise to Date
+        // This preserves the time portion for strings like '2015-04-08 13:08:15' when needed
         let ts_arg = match &ts_arg {
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(_)))
-            | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(_))) => {
-                ts_arg.cast_to(&DataType::Date32, None)?
+            | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(_)))
+            | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(_))) => {
+                if contains_time_patterns(&format_str) {
+                    ts_arg.cast_to(&DataType::Timestamp(TimeUnit::Microsecond, None), None)?
+                } else {
+                    ts_arg.cast_to(&DataType::Date32, None)?
+                }
             }
             ColumnarValue::Array(arr)
-                if matches!(arr.data_type(), DataType::Utf8 | DataType::LargeUtf8) =>
+                if matches!(
+                    arr.data_type(),
+                    DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+                ) =>
             {
-                ts_arg.cast_to(&DataType::Date32, None)?
+                if contains_time_patterns(&format_str) {
+                    ts_arg.cast_to(&DataType::Timestamp(TimeUnit::Microsecond, None), None)?
+                } else {
+                    ts_arg.cast_to(&DataType::Date32, None)?
+                }
             }
             _ => ts_arg,
         };
