@@ -1,10 +1,10 @@
 import pytest
-from pyspark.sql import types as T
+from pyspark.sql import types as T  # noqa: N812
 
 if not hasattr(T.StructType, "toDDL"):
     pytest.skip("`toDDL` is not available in this Spark version",  allow_module_level=True)
 
-def test_null(spark):
+def test_null(spark): # noqa: ARG001
     schema = T.StructType(
         [
             T.StructField("null_col1", T.NullType()),
@@ -13,7 +13,7 @@ def test_null(spark):
     )
     assert schema.toDDL() == "null_col1 NULL, null_col1 NULL"
 
-def test_binary(spark):
+def test_binary(spark): # noqa: ARG001
     schema = T.StructType(
         [
             T.StructField("col", T.BinaryType()),
@@ -21,7 +21,7 @@ def test_binary(spark):
     )
     assert schema.toDDL() == "col BINARY"
 
-def test_boolean(spark):
+def test_boolean(spark): # noqa: ARG001
     schema = T.StructType(
         [
             T.StructField("col", T.BooleanType()),
@@ -30,7 +30,7 @@ def test_boolean(spark):
     assert schema.toDDL() == "col BOOLEAN"
 
 
-def test_byte(spark):
+def test_byte(spark): # noqa: ARG001
     schema = T.StructType(
         [
             T.StructField("col", T.ByteType()),
@@ -39,7 +39,7 @@ def test_byte(spark):
     assert schema.toDDL() == "col TINYINT"
 
 
-def test_short(spark):
+def test_short(spark): # noqa: ARG001
     schema = T.StructType(
         [
             T.StructField("col", T.ShortType()),
@@ -48,7 +48,7 @@ def test_short(spark):
     assert schema.toDDL() == "col SHORT"
 
 
-def test_integer(spark):
+def test_integer(spark): # noqa: ARG001
     schema = T.StructType(
         [
             T.StructField("col", T.IntegerType()),
@@ -57,7 +57,7 @@ def test_integer(spark):
     assert schema.toDDL() == "col INT"
 
 
-def test_long(spark):
+def test_long(spark): # noqa: ARG001
     schema = T.StructType(
         [
             T.StructField("col", T.LongType()),
@@ -66,7 +66,7 @@ def test_long(spark):
     assert schema.toDDL() == "col BIGINT"
 
 
-def test_float(spark):
+def test_float(spark): # noqa: ARG001
     schema = T.StructType(
         [
             T.StructField("col", T.FloatType()),
@@ -75,7 +75,7 @@ def test_float(spark):
     assert schema.toDDL() == "col FLOAT"
 
 
-def test_double(spark):
+def test_double(spark): # noqa: ARG001
     schema = T.StructType(
         [
             T.StructField("col", T.DoubleType()),
@@ -83,7 +83,7 @@ def test_double(spark):
     )
     assert schema.toDDL() == "col DOUBLE"
 
-def test_decimal(spark):
+def test_decimal(spark): # noqa: ARG001
     schema = T.StructType(
         [
             T.StructField("a", T.DecimalType(10, 2)),
@@ -93,7 +93,7 @@ def test_decimal(spark):
     )
     assert schema.toDDL() == "a DECIMAL(10,2), b DECIMAL(15,3), c DECIMAL(20,4)"
 
-def test_string(spark):
+def test_string(spark): # noqa: ARG001
     schema = T.StructType(
         [
             T.StructField("col", T.StringType()),
@@ -102,7 +102,7 @@ def test_string(spark):
     assert schema.toDDL() == "col STRING"
 
 
-def test_char(spark):
+def test_char(spark): # noqa: ARG001
     schema = T.StructType(
         [
             T.StructField("a", T.CharType(1)),
@@ -113,7 +113,7 @@ def test_char(spark):
     assert schema.toDDL() == "a CHAR(1), b CHAR(2), c CHAR(3)"
 
 
-def test_varchar(spark):
+def test_varchar(spark): # noqa: ARG001
     schema = T.StructType(
         [
             T.StructField("a", T.VarcharType(1)),
@@ -123,7 +123,7 @@ def test_varchar(spark):
     )
     assert schema.toDDL() == "a VARCHAR(1), b VARCHAR(2), c VARCHAR(3)"
 
-def test_date(spark):
+def test_date(spark): # noqa: ARG001
     schema = T.StructType(
         [
             T.StructField("col", T.DateType()),
@@ -132,7 +132,7 @@ def test_date(spark):
     assert schema.toDDL() == "col DATE"
 
 
-def test_timestamp(spark):
+def test_timestamp(spark): # noqa: ARG001
     schema = T.StructType(
         [
             T.StructField("col", T.TimestampType()),
@@ -141,7 +141,7 @@ def test_timestamp(spark):
     assert schema.toDDL() == "col TIMESTAMP"
 
 
-def test_timestampntz(spark):
+def test_timestampntz(spark): # noqa: ARG001
     schema = T.StructType(
         [
             T.StructField("col", T.TimestampNTZType()),
@@ -152,7 +152,7 @@ def test_timestampntz(spark):
         == "col TIMESTAMP_NTZ"
     )
 
-def test_year_month_interval(spark):
+def test_year_month_interval(spark): # noqa: ARG001
     schema = T.StructType(
         [
             T.StructField("a", T.YearMonthIntervalType(0, 0)),
@@ -177,7 +177,7 @@ def test_year_month_interval(spark):
     )
 
 
-def test_day_time_interval(spark):
+def test_day_time_interval(spark): # noqa: ARG001
     schema = T.StructType(
         [
             T.StructField("a", T.DayTimeIntervalType(0, 0)),
@@ -239,7 +239,7 @@ def test_day_time_interval(spark):
     assert schema.toDDL() == "p INTERVAL SECOND"
 
 
-def test_array(spark):
+def test_array(spark): # noqa: ARG001
     schema = T.StructType(
         [
             T.StructField("a", T.ArrayType(T.StringType())),
@@ -250,7 +250,7 @@ def test_array(spark):
     assert schema.toDDL() == "a ARRAY<STRING>, b ARRAY<VARCHAR(3)>"
 
 
-def test_struct(spark):
+def test_struct(spark): # noqa: ARG001
     schema = T.StructType(
         [
             T.StructField(
@@ -275,7 +275,7 @@ def test_struct(spark):
     assert schema.toDDL() == "a STRUCT<f1: STRING>, b STRUCT<f2: VARCHAR(3)>"
 
 
-def test_map(spark):
+def test_map(spark): # noqa: ARG001
     schema = T.StructType(
         [
             T.StructField("a", T.MapType(T.StringType(), T.IntegerType(), False)),
@@ -286,7 +286,7 @@ def test_map(spark):
     assert schema.toDDL() == "a MAP<STRING, INT>, b MAP<FLOAT, INT>"
 
 @pytest.mark.skipif(not hasattr(T, "VariantType"), reason="`VariantType` is not available in this Spark version")
-def test_variant(spark):
+def test_variant(spark): # noqa: ARG001
     schema = T.StructType(
         [
             T.StructField("col", T.VariantType()),
@@ -295,11 +295,10 @@ def test_variant(spark):
 
     assert schema.toDDL() == "col VARIANT"
 
-# @pytest.mark.skip(reason="UserDefinedType not yet implemented in PySpark")
-def test_udt(spark):
+def test_udt(spark): # noqa: ARG001
     class UnnamedPythonUDT(T.UserDefinedType):
         @classmethod
-        def sqlType(cls):
+        def sqlType(cls): # noqa: N802
             return T.StringType()
         @classmethod
         def module(cls):
@@ -314,7 +313,7 @@ def test_udt(spark):
     assert schema.toDDL() == "col PYTHONUSERDEFINED"
 
 @pytest.mark.xfail(reason="GeometryType not yet implemented in Sail")
-def test_geometry(spark):
+def test_geometry(spark): # noqa: ARG001
     schema = T.StructType(
         [
             T.StructField("col", T.GeometryType(3857)),
@@ -324,7 +323,7 @@ def test_geometry(spark):
     assert schema.toDDL() == "col GEOMETRY"
 
 @pytest.mark.xfail(reason="GeographyType not yet implemented in Sail")
-def test_geography(spark):
+def test_geography(spark): # noqa: ARG001
     schema = T.StructType(
         [
             T.StructField("col", T.GeographyType(4326)),
@@ -334,7 +333,7 @@ def test_geography(spark):
     assert schema.toDDL() == "col GEOMETRY"
 
 @pytest.mark.skipif(not hasattr(T, "TimeType"), reason="`TimeType` is not available in this Spark version")
-def test_time(spark):
+def test_time(spark): # noqa: ARG001
     schema = T.StructType(
         [
             T.StructField("a", T.TimeType(6)),
@@ -344,7 +343,7 @@ def test_time(spark):
 
     assert schema.toDDL() == "a TIME(6), b TIME(3)"
 
-def test_not_null(spark):
+def test_not_null(spark): # noqa: ARG001
     schema = T.StructType(
         [
             T.StructField("a", T.BooleanType(), True),

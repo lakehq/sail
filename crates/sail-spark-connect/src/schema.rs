@@ -217,15 +217,9 @@ pub(crate) fn to_tree_string(data_type: &sc::DataType, max_level: Option<i32>) -
 /// Checks if a field name needs to be quoted in DDL output.
 /// Names need quoting if they contain special characters or are reserved keywords.
 fn needs_quoting(name: &str) -> bool {
-    if name.is_empty() {
-        return true;
-    }
-    // Check if starts with digit or contains non-alphanumeric characters (except underscore)
-    let first_char = name.chars().next().unwrap();
-    if first_char.is_ascii_digit() {
-        return true;
-    }
-    !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    name.is_empty()
+        || name.starts_with(|c: char| c.is_ascii_digit())
+        || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 fn quote_field_name(name: &str) -> String {
@@ -276,32 +270,32 @@ fn format_ddl_type(buf: &mut String, data_type: Option<&sc::DataType>) -> SparkR
             if let Some(precision) = decimal.precision {
                 buf.push_str(&precision.to_string());
             } else {
-                buf.push_str("?");
+                buf.push('?');
             }
-            buf.push_str(",");
+            buf.push(',');
             if let Some(scale) = decimal.scale {
                 buf.push_str(&scale.to_string());
             } else {
-                buf.push_str("?");
+                buf.push('?');
             }
-            buf.push_str(")");
+            buf.push(')');
         }
         Kind::String(_) => buf.push_str("STRING"),
         Kind::Char(char) => {
             buf.push_str("CHAR(");
             buf.push_str(&char.length.to_string());
-            buf.push_str(")");
+            buf.push(')');
         }
         Kind::VarChar(var_char) => {
             buf.push_str("VARCHAR(");
             buf.push_str(&var_char.length.to_string());
-            buf.push_str(")");
+            buf.push(')');
         }
         Kind::Date(_) => buf.push_str("DATE"),
         Kind::Timestamp(_) => buf.push_str("TIMESTAMP"),
         Kind::TimestampNtz(_) => buf.push_str("TIMESTAMP_NTZ"),
         Kind::CalendarInterval(_) => buf.push_str("INTERVAL"),
-        Kind::YearMonthInterval(interval) => match ( interval.start_field, interval.end_field,) {
+        Kind::YearMonthInterval(interval) => match (interval.start_field, interval.end_field) {
             (Some(start), Some(end)) => {
                 buf.push_str("INTERVAL ");
                 buf.push_str(format_year_month_interval_field_name(start));
@@ -321,7 +315,7 @@ fn format_ddl_type(buf: &mut String, data_type: Option<&sc::DataType>) -> SparkR
             (None, None) => {
                 buf.push_str("INTERVAL");
             }
-        }
+        },
         Kind::DayTimeInterval(interval) => match (interval.start_field, interval.end_field) {
             (Some(start), Some(end)) => {
                 buf.push_str("INTERVAL ");
@@ -342,7 +336,7 @@ fn format_ddl_type(buf: &mut String, data_type: Option<&sc::DataType>) -> SparkR
             (None, None) => {
                 buf.push_str("INTERVAL");
             }
-        }
+        },
         Kind::Array(array) => {
             buf.push_str("ARRAY<");
             format_ddl_type(buf, array.element_type.as_deref())?;
@@ -388,7 +382,7 @@ fn format_ddl_type(buf: &mut String, data_type: Option<&sc::DataType>) -> SparkR
             Some(p) => {
                 buf.push_str("TIME(");
                 buf.push_str(&p.to_string());
-                buf.push_str(")");
+                buf.push(')');
             }
             None => buf.push_str("TIME"),
         },
