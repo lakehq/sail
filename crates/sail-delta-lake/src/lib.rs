@@ -40,6 +40,6 @@ pub fn init_delta_types() {
         let _ = register_format_type::<physical_plan::DeltaDiscoveryExec>(FormatTag::Delta);
         let _ = register_format_type::<physical_plan::DeltaScanByAddsExec>(FormatTag::Delta);
         let _ = register_format_type::<physical_plan::DeltaRemoveActionsExec>(FormatTag::Delta);
-        let _ = register_format_type::<physical_plan::DeltaLogScanExec>(FormatTag::Delta);
+        let _ = register_format_type::<physical_plan::DeltaLogReplayExec>(FormatTag::Delta);
     });
 }

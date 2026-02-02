@@ -15,7 +15,7 @@ use sail_catalog::utils::quote_names_if_needed;
 use sail_common_datafusion::catalog::display::CatalogObjectDisplay;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::session::PlanFormatter;
+use sail_common_datafusion::session::plan::PlanFormatter;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::formatter::SparkPlanFormatter;
@@ -197,8 +197,8 @@ impl CatalogObjectDisplay for SparkCatalogObjectDisplay {
         };
         Self::Table {
             name: status.name,
-            catalog: status.kind.catalog(),
-            namespace: status.kind.database(),
+            catalog: status.catalog,
+            namespace: status.database,
             description: status.kind.comment(),
             table_type: table_type.to_string(),
             is_temporary,

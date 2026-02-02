@@ -27,12 +27,12 @@ use sail_common_datafusion::datasource::{
 use url::Url;
 
 use super::context::PlannerContext;
-use super::log_scan::build_delta_log_datasource_union;
+use super::utils::build_log_replay_pipeline;
 use crate::datasource::{DataFusionMixins, PATH_COLUMN};
 use crate::kernel::{DeltaOperation, MergePredicate};
 use crate::options::TableDeltaOptions;
 use crate::physical_plan::{
-    DeltaCommitExec, DeltaDiscoveryExec, DeltaLogScanExec, DeltaRemoveActionsExec, DeltaWriterExec,
+    DeltaCommitExec, DeltaDiscoveryExec, DeltaRemoveActionsExec, DeltaWriterExec,
 };
 
 /// Entry point for MERGE execution. Expects the logical MERGE to be fully
@@ -240,8 +240,6 @@ async fn finalize_merge(
         writer_input
     };
 
-    // DeltaWriterExec requires single partition input.
-    let writer_input: Arc<dyn ExecutionPlan> = Arc::new(CoalescePartitionsExec::new(writer_input));
     let writer = Arc::new(DeltaWriterExec::new(
         writer_input,
         table_url.clone(),
@@ -256,18 +254,17 @@ async fn finalize_merge(
     let mut action_inputs: Vec<Arc<dyn ExecutionPlan>> = vec![writer.clone()];
 
     if let Some(touched_plan) = &touched_plan_opt {
-        // Build a log-side stream of Add rows using a visible log scan pipeline:
-        // Union(DataSourceExec parquet/json) -> DeltaLogScanExec -> ... -> DeltaDiscoveryExec.
-        let (raw_scan, checkpoint_files, commit_files) =
-            build_delta_log_datasource_union(ctx, checkpoint_files, commit_files).await?;
-        let meta_scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaLogScanExec::new(
-            raw_scan,
+        // Build a log-side stream of active Add rows using a visible log replay pipeline:
+        // Union(DataSourceExec parquet/json) -> DeltaLogReplayExec -> ... -> DeltaDiscoveryExec.
+        let meta_scan: Arc<dyn ExecutionPlan> = build_log_replay_pipeline(
+            ctx,
             table_url.clone(),
             version,
             partition_columns.clone(),
             checkpoint_files,
             commit_files,
-        ));
+        )
+        .await?;
 
         // Restrict to touched file paths by joining touched_paths with the metadata stream.
         let touched_schema = touched_plan.schema();
@@ -330,7 +327,7 @@ async fn finalize_merge(
     };
 
     let commit = Arc::new(DeltaCommitExec::new(
-        commit_input,
+        Arc::new(CoalescePartitionsExec::new(commit_input)),
         table_url,
         partition_columns,
         true, // table exists

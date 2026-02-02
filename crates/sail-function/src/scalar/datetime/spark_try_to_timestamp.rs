@@ -56,7 +56,8 @@ impl ScalarUDFImpl for SparkTryToTimestamp {
             return plan_err!("`try_to_timestamp` function requires at least 1 argument");
         };
         let data_type = first.data_type();
-        let result = ToTimestampMicrosFunc::new().invoke_with_args(args);
+        let result = ToTimestampMicrosFunc::new_with_config(args.config_options.as_ref())
+            .invoke_with_args(args);
         match result {
             Ok(result) => Ok(result),
             Err(_) => match data_type {

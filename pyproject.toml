@@ -194,6 +194,9 @@ skip-install = true
 dependencies = [
     "pyspark[connect]==3.5.7",
     "ibis-framework[pyspark]>=11,<12",
+    # Pin sqlglot to avoid breaking change in 28.7.0 that breaks ibis Oracle compiler import
+    # See: https://github.com/tobymao/sqlglot/blob/main/CHANGELOG.md
+    "sqlglot<28.7.0",
     # The test dependencies are borrowed from `pyproject.toml` of the Ibis project.
     # They need to be updated accordingly when we update the Ibis version.
     "cloudpickle",

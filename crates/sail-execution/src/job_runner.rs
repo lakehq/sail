@@ -5,10 +5,12 @@ use datafusion::common::{internal_datafusion_err, internal_err, Result};
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::{execute_stream, ExecutionPlan};
 use datafusion::prelude::SessionContext;
-use sail_common_datafusion::session::JobRunner;
+use sail_common_datafusion::session::job::{JobRunner, JobRunnerHistory};
+use sail_common_datafusion::system::observable::{JobRunnerObserver, Observer, StateObservable};
 use sail_server::actor::{ActorHandle, ActorSystem};
 use sail_telemetry::telemetry::global_metric_registry;
 use sail_telemetry::{trace_execution_plan, TracingExecOptions};
+use tokio::sync::mpsc::error::SendError;
 use tokio::sync::oneshot;
 
 use crate::driver::{DriverActor, DriverEvent, DriverOptions};
@@ -34,6 +36,13 @@ impl Default for LocalJobRunner {
 }
 
 #[tonic::async_trait]
+impl StateObservable<JobRunnerObserver> for LocalJobRunner {
+    async fn observe(&self, observer: JobRunnerObserver) {
+        observer.nothing()
+    }
+}
+
+#[tonic::async_trait]
 impl JobRunner for LocalJobRunner {
     async fn execute(
         &self,
@@ -55,8 +64,14 @@ impl JobRunner for LocalJobRunner {
         Ok(execute_stream(plan, ctx.task_ctx())?)
     }
 
-    async fn stop(&self) {
+    async fn stop(&self, history: oneshot::Sender<JobRunnerHistory>) {
         self.stopped.store(true, Ordering::Relaxed);
+        let _ = history.send(JobRunnerHistory {
+            jobs: vec![],
+            stages: vec![],
+            tasks: vec![],
+            workers: vec![],
+        });
     }
 }
 
@@ -68,6 +83,21 @@ impl ClusterJobRunner {
     pub fn new(system: &mut ActorSystem, options: DriverOptions) -> Self {
         let driver = system.spawn(options);
         Self { driver }
+    }
+}
+
+#[tonic::async_trait]
+impl StateObservable<JobRunnerObserver> for ClusterJobRunner {
+    async fn observe(&self, observer: JobRunnerObserver) {
+        let result = self
+            .driver
+            .send(DriverEvent::ObserveState { observer })
+            .await;
+        if let Err(SendError(DriverEvent::ObserveState { observer })) = result {
+            observer.fail(internal_datafusion_err!(
+                "failed to observe state for cluster job runner"
+            ));
+        }
     }
 }
 
@@ -93,7 +123,12 @@ impl JobRunner for ClusterJobRunner {
             .map_err(|e| internal_datafusion_err!("{e}"))
     }
 
-    async fn stop(&self) {
-        let _ = self.driver.send(DriverEvent::Shutdown).await;
+    async fn stop(&self, history: oneshot::Sender<JobRunnerHistory>) {
+        let _ = self
+            .driver
+            .send(DriverEvent::Shutdown {
+                history: Some(history),
+            })
+            .await;
     }
 }

@@ -15,6 +15,7 @@ futures = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-datasource = { workspace = true }
+datafusion-session = { workspace = true }
 object_store = { workspace = true }
 chumsky = { workspace = true }
 glob = { workspace = true }

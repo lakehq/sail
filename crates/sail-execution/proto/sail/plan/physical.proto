@@ -15,7 +15,7 @@ message ExtendedPhysicalPlanNode {
     ShowStringExecNode show_string = 2;
     // We have removed shuffle read and write nodes.
     StageInputExecNode stage_input = 3;
-    // TODO: update field number for all subsequent nodes
+    SystemTableExecNode system_table = 4;
     SchemaPivotExecNode schema_pivot = 5;
     MapPartitionsExecNode map_partitions = 6;
     // TODO: This can be removed once it is supported by DataFusion.
@@ -33,7 +33,7 @@ message ExtendedPhysicalPlanNode {
     DeltaScanByAddsExecNode delta_scan_by_adds = 18;
     DeltaDiscoveryExecNode delta_discovery = 19;
     DeltaRemoveActionsExecNode delta_remove_actions = 20;
-    DeltaLogScanExecNode delta_log_scan = 21;
+    DeltaLogReplayExecNode delta_log_replay = 21;
     AvroExecNode avro = 22;
     ConsoleSinkExecNode console_sink = 23;
     SocketSourceExecNode socket_source = 24;
@@ -42,11 +42,23 @@ message ExtendedPhysicalPlanNode {
     BinarySourceExecNode binary_source = 27;
     StreamCollectorExecNode stream_collector = 28;
     StreamLimitExecNode stream_limit = 29;
-    StreamSourceAdapterExecNode stream_source_adapter = 30;
-    IcebergWriterExecNode iceberg_writer = 31;
-    IcebergCommitExecNode iceberg_commit = 32;
-    MergeCardinalityCheckExecNode merge_cardinality_check = 33;
+    StreamFilterExecNode stream_filter = 30;
+    StreamSourceAdapterExecNode stream_source_adapter = 31;
+    IcebergWriterExecNode iceberg_writer = 32;
+    IcebergCommitExecNode iceberg_commit = 33;
+    MergeCardinalityCheckExecNode merge_cardinality_check = 34;
   }
+}
+
+message ExtendedPhysicalExprNode {
+  oneof ExprKind {
+    DeltaCastColumnExprNode delta_cast = 1;
+  }
+}
+
+message DeltaCastColumnExprNode {
+  bytes input_schema = 1;
+  bytes target_schema = 2;
 }
 
 message ExtendedScalarUdf {
@@ -215,6 +227,56 @@ message PySparkUdfConfig {
   uint64 arrow_max_records_per_batch = 5;
 }
 
+message EquivalenceProperties {
+  EquivalenceGroup eq_group = 1;
+  repeated ConstantExpr constants = 2;
+  repeated LexOrdering orderings = 3;
+  repeated Constraint constraints = 4;
+  bytes schema = 5;
+}
+
+message EquivalenceGroup {
+  repeated EquivalenceClass classes = 1;
+}
+
+message EquivalenceClass {
+  repeated bytes exprs = 1;
+}
+
+message ConstantExpr {
+  bytes expr = 1;
+  ConstantAcrossPartitions across_partitions = 2;
+}
+
+message ConstantAcrossPartitions {
+  oneof kind {
+    UniformConstant uniform = 1;
+    HeterogeneousConstant heterogeneous = 2;
+  }
+}
+
+message UniformConstant {
+  optional bytes value = 1;
+}
+
+message HeterogeneousConstant {
+}
+
+message Constraint {
+  oneof kind {
+    PrimaryKeyConstraint primary_key = 1;
+    UniqueConstraint unique = 2;
+  }
+}
+
+message PrimaryKeyConstraint {
+  repeated uint64 indices = 1;
+}
+
+message UniqueConstraint {
+  repeated uint64 indices = 1;
+}
+
 message RangeExecNode {
   int64 start = 1;
   int64 end = 2;
@@ -240,8 +302,16 @@ enum ShowStringStyle {
 
 message StageInputExecNode {
   uint64 input = 1;
-  bytes schema = 2;
+  EquivalenceProperties eq_properties = 2;
   bytes partitioning = 3;
+  bool bounded = 4;
+}
+
+message SystemTableExecNode {
+  string table = 1;
+  optional PhysicalProjection projection = 2;
+  repeated bytes filters = 3;
+  optional uint64 fetch = 4;
 }
 
 message SchemaPivotExecNode {
@@ -431,6 +501,11 @@ message StreamLimitExecNode {
   optional uint64 fetch = 3;
 }
 
+message StreamFilterExecNode {
+  bytes input = 1;
+  bytes predicate = 2;
+}
+
 message StreamSourceAdapterExecNode {
   bytes input = 1;
 }
@@ -459,8 +534,8 @@ message ColumnIndex{
 }
 
 message SortOptions {
-    bool descending = 1;
-    bool nulls_first = 2;
+  bool descending = 1;
+  bool nulls_first = 2;
 }
 
 message PhysicalProjection {
@@ -489,7 +564,7 @@ message IcebergCommitExecNode {
   string table_url = 2;
 }
 
-message DeltaLogScanExecNode {
+message DeltaLogReplayExecNode {
   bytes input = 1;
   string table_url = 2;
   int64 version = 3;
