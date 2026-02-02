@@ -77,7 +77,7 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let placeholder = Arc::new(UnresolvedSubqueryRef::new(plan_id).into_logical_plan());
+        let placeholder = Arc::new(UnresolvedSubqueryRef::try_new(plan_id)?.into_logical_plan());
 
         match subquery_type {
             spec::SubqueryType::In => {
