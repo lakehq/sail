@@ -128,63 +128,33 @@ impl PythonTableFormat {
 
         Python::attach(|py| {
             // Use pysail's compat module to unpickle with PySpark shim support
-            let compat = py.import("pysail.spark.datasource.compat").map_err(|e| {
-                datafusion_common::DataFusionError::External(Box::new(std::io::Error::other(
-                    format!("Failed to import pysail.spark.datasource.compat: {}", e),
-                )))
-            })?;
+            let compat = py
+                .import("pysail.spark.datasource.compat")
+                .map_err(py_err)?;
 
             let class_bytes = PyBytes::new(py, pickled_class);
             let ds_class = compat
                 .call_method1("unpickle_datasource_class", (class_bytes,))
-                .map_err(|e| {
-                    datafusion_common::DataFusionError::External(Box::new(std::io::Error::other(
-                        format!("Failed to deserialize datasource class: {}", e),
-                    )))
-                })?;
+                .map_err(py_err)?;
 
             // Import cloudpickle for later use (pickling the instance)
-            let cloudpickle = py.import("cloudpickle").map_err(|e| {
-                datafusion_common::DataFusionError::External(Box::new(std::io::Error::other(
-                    format!("Failed to import cloudpickle: {}", e),
-                )))
-            })?;
+            let cloudpickle = py.import("cloudpickle").map_err(py_err)?;
 
             // Create options dict
             let py_options = PyDict::new(py);
             for (k, v) in &options {
-                py_options.set_item(k, v).map_err(|e| {
-                    datafusion_common::DataFusionError::External(Box::new(std::io::Error::other(
-                        format!("Failed to set option: {}", e),
-                    )))
-                })?;
+                py_options.set_item(k, v).map_err(py_err)?;
             }
 
             // Instantiate the datasource with options
-            let ds_instance = ds_class.call1((py_options,)).map_err(|e| {
-                datafusion_common::DataFusionError::External(Box::new(std::io::Error::other(
-                    format!("Failed to instantiate datasource: {}", e),
-                )))
-            })?;
+            let ds_instance = ds_class.call1((py_options,)).map_err(py_err)?;
 
             // Pickle the instance for PythonDataSource
-            let pickled_instance =
-                cloudpickle
-                    .call_method1("dumps", (&ds_instance,))
-                    .map_err(|e| {
-                        datafusion_common::DataFusionError::External(Box::new(
-                            std::io::Error::other(format!(
-                                "Failed to pickle datasource instance: {}",
-                                e
-                            )),
-                        ))
-                    })?;
+            let pickled_instance = cloudpickle
+                .call_method1("dumps", (&ds_instance,))
+                .map_err(py_err)?;
 
-            let command: Vec<u8> = pickled_instance.extract().map_err(|e| {
-                datafusion_common::DataFusionError::External(Box::new(std::io::Error::other(
-                    format!("Failed to extract pickled bytes: {}", e),
-                )))
-            })?;
+            let command: Vec<u8> = pickled_instance.extract().map_err(py_err)?;
 
             PythonDataSource::new(command, python_ver)
         })
@@ -192,7 +162,6 @@ impl PythonTableFormat {
 }
 
 /// Re-export py_err from error module for internal use.
-#[allow(unused_imports)]
 use super::error::py_err;
 
 #[async_trait]

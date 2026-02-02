@@ -61,8 +61,12 @@ pub trait PythonExecutor: Send + Sync {
 
     /// Get partitions for parallel reading.
     ///
-    /// Calls the Python `DataSource.reader().partitions()` method.
-    async fn get_partitions(&self, command: &[u8]) -> Result<Vec<InputPartition>>;
+    /// Calls the Python `DataSource.reader(schema).partitions()` method.
+    async fn get_partitions(
+        &self,
+        command: &[u8],
+        schema: &SchemaRef,
+    ) -> Result<Vec<InputPartition>>;
 
     /// Execute a read for a specific partition.
     ///
@@ -129,8 +133,13 @@ impl PythonExecutor for InProcessExecutor {
         .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?
     }
 
-    async fn get_partitions(&self, command: &[u8]) -> Result<Vec<InputPartition>> {
+    async fn get_partitions(
+        &self,
+        command: &[u8],
+        schema: &SchemaRef,
+    ) -> Result<Vec<InputPartition>> {
         let command = command.to_vec();
+        let schema = schema.clone();
 
         tokio::task::spawn_blocking(move || {
             pyo3::Python::attach(|py| {
@@ -143,9 +152,10 @@ impl PythonExecutor for InProcessExecutor {
                     .unwrap_or_else(|_| "<unknown>".to_string());
                 let ctx = PythonDataSourceContext::new(&ds_name, "partitions");
 
-                // Get reader and partitions
+                // Get reader with schema (PySpark 4.x API requires schema argument)
+                let schema_obj = super::arrow_utils::rust_schema_to_py(py, &schema)?;
                 let reader = datasource
-                    .call_method0("reader")
+                    .call_method1("reader", (schema_obj,))
                     .map_err(|e| ctx.wrap_py_error(e))?;
                 let partitions = reader
                     .call_method0("partitions")

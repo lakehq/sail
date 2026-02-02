@@ -240,7 +240,7 @@ mod tests {
 
         let exec = PythonDataSourceExec::new(vec![], schema, partitions);
 
-        // Empty partitions should still report 1 partition for DataFusion
+        // Empty partitions reports 0 partitions, but properties use max(1) for DataFusion
         assert_eq!(exec.num_partitions(), 0);
         let props = exec.properties();
         assert!(matches!(

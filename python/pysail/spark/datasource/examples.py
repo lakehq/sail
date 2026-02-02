@@ -66,7 +66,7 @@ class RangeDataSourceReader(DataSourceReader):
         """
         for f in filters:
             if isinstance(f, (EqualTo, GreaterThan, GreaterThanOrEqual, LessThan, LessThanOrEqual)):
-                if f.column == ("id",):
+                if f.attribute == ("id",):
                     self._filters.append(f)
                     continue
             yield f

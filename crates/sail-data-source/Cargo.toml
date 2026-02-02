@@ -33,6 +33,7 @@ arrow-schema = { workspace = true }
 arrow-pyarrow = { workspace = true }
 dashmap = { workspace = true }
 once_cell = { workspace = true }
+thiserror = { workspace = true }
 
 [features]
 default = ["python"]

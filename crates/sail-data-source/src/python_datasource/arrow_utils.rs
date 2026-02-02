@@ -1,21 +1,22 @@
+//! Arrow conversion utilities for Python DataSources.
+//!
+//! This module provides efficient conversion between Arrow and Python types
+//! using the Arrow C Data Interface for zero-copy transfer.
+//!
+//! ## MVP Data Types (PR #1)
+//!
+//! - Numeric: Int32, Int64, Float32, Float64
+//! - String: Utf8
+//! - Boolean
+//! - Temporal: Date32, Timestamp(Microsecond, None)
+//! - Null
+//!
+//! Additional types are added in later PRs:
+//! - PR #2: Binary, Decimal128, Int8, Int16
+//! - PR #4: List<T>, Struct, Map<K,V>, LargeUtf8
+
 use std::sync::Arc;
 
-/// Arrow conversion utilities for Python DataSources.
-///
-/// This module provides efficient conversion between Arrow and Python types
-/// using the Arrow C Data Interface for zero-copy transfer.
-///
-/// ## MVP Data Types (PR #1)
-///
-/// - Numeric: Int32, Int64, Float32, Float64
-/// - String: Utf8
-/// - Boolean
-/// - Temporal: Date32, Timestamp(Microsecond, None)
-/// - Null
-///
-/// Additional types are added in later PRs:
-/// - PR #2: Binary, Decimal128, Int8, Int16
-/// - PR #4: List<T>, Struct, Map<K,V>, LargeUtf8
 use arrow::array::{
     ArrayRef, BooleanArray, Date32Array, Float32Array, Float64Array, Int32Array, Int64Array,
     NullArray, RecordBatch, StringArray, TimestampMicrosecondArray,
@@ -171,6 +172,19 @@ pub fn convert_rows_to_batch(schema: &SchemaRef, pickled_rows: &[Vec<u8>]) -> Re
     })
 }
 
+/// Macro to reduce boilerplate in build_array_from_rows.
+///
+/// Generates the common pattern of extracting values from rows and building an array.
+macro_rules! build_primitive_array {
+    ($rows:expr, $col_idx:expr, $rust_ty:ty, $array_ty:ty) => {{
+        let values: Vec<Option<$rust_ty>> = $rows
+            .iter()
+            .map(|row| extract_value(row, $col_idx))
+            .collect::<Result<_>>()?;
+        Ok(Arc::new(<$array_ty>::from(values)))
+    }};
+}
+
 /// Build an Arrow array from Python row values.
 #[cfg(feature = "python")]
 fn build_array_from_rows(
@@ -181,47 +195,11 @@ fn build_array_from_rows(
 ) -> Result<ArrayRef> {
     match field.data_type() {
         DataType::Null => Ok(Arc::new(NullArray::new(rows.len()))),
-
-        DataType::Boolean => {
-            let values: Vec<Option<bool>> = rows
-                .iter()
-                .map(|row| extract_value(row, col_idx))
-                .collect::<Result<_>>()?;
-            Ok(Arc::new(BooleanArray::from(values)))
-        }
-
-        DataType::Int32 => {
-            let values: Vec<Option<i32>> = rows
-                .iter()
-                .map(|row| extract_value(row, col_idx))
-                .collect::<Result<_>>()?;
-            Ok(Arc::new(Int32Array::from(values)))
-        }
-
-        DataType::Int64 => {
-            let values: Vec<Option<i64>> = rows
-                .iter()
-                .map(|row| extract_value(row, col_idx))
-                .collect::<Result<_>>()?;
-            Ok(Arc::new(Int64Array::from(values)))
-        }
-
-        DataType::Float32 => {
-            let values: Vec<Option<f32>> = rows
-                .iter()
-                .map(|row| extract_value(row, col_idx))
-                .collect::<Result<_>>()?;
-            Ok(Arc::new(Float32Array::from(values)))
-        }
-
-        DataType::Float64 => {
-            let values: Vec<Option<f64>> = rows
-                .iter()
-                .map(|row| extract_value(row, col_idx))
-                .collect::<Result<_>>()?;
-            Ok(Arc::new(Float64Array::from(values)))
-        }
-
+        DataType::Boolean => build_primitive_array!(rows, col_idx, bool, BooleanArray),
+        DataType::Int32 => build_primitive_array!(rows, col_idx, i32, Int32Array),
+        DataType::Int64 => build_primitive_array!(rows, col_idx, i64, Int64Array),
+        DataType::Float32 => build_primitive_array!(rows, col_idx, f32, Float32Array),
+        DataType::Float64 => build_primitive_array!(rows, col_idx, f64, Float64Array),
         DataType::Utf8 => {
             let values: Vec<Option<String>> = rows
                 .iter()
@@ -231,23 +209,10 @@ fn build_array_from_rows(
                 values.iter().map(|v| v.as_deref()).collect::<Vec<_>>(),
             )))
         }
-
-        DataType::Date32 => {
-            let values: Vec<Option<i32>> = rows
-                .iter()
-                .map(|row| extract_value(row, col_idx))
-                .collect::<Result<_>>()?;
-            Ok(Arc::new(Date32Array::from(values)))
-        }
-
+        DataType::Date32 => build_primitive_array!(rows, col_idx, i32, Date32Array),
         DataType::Timestamp(TimeUnit::Microsecond, None) => {
-            let values: Vec<Option<i64>> = rows
-                .iter()
-                .map(|row| extract_value(row, col_idx))
-                .collect::<Result<_>>()?;
-            Ok(Arc::new(TimestampMicrosecondArray::from(values)))
+            build_primitive_array!(rows, col_idx, i64, TimestampMicrosecondArray)
         }
-
         other => Err(DataFusionError::NotImplemented(format!(
             "Data type {:?} not supported in MVP. Available in later PRs.",
             other

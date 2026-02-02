@@ -1,22 +1,62 @@
-use std::fmt;
+//! Error types for Python DataSource operations.
+//!
+//! Provides structured error types with context for debugging Python datasource issues.
 
 use datafusion_common::DataFusionError;
+use thiserror::Error;
 
-/// Errors specific to Python DataSource operations
-#[derive(Debug)]
+/// Result type alias for Python DataSource operations.
+#[allow(dead_code)]
+pub type PythonDataSourceResult<T> = Result<T, PythonDataSourceError>;
+
+/// Errors specific to Python DataSource operations.
+#[derive(Debug, Error)]
 pub enum PythonDataSourceError {
     /// Error from Python execution
+    #[error("Python error: {0}")]
     PythonError(String),
     /// Schema validation error
+    #[error("Schema error: {0}")]
     SchemaError(String),
     /// Version incompatibility
+    #[error("Version error: {0}")]
     VersionError(String),
     /// Arrow conversion error
+    #[error("Arrow conversion error: {0}")]
     ArrowError(String),
     /// DataFusion error
-    DataFusion(DataFusionError),
+    #[error("DataFusion error: {0}")]
+    DataFusion(#[from] DataFusionError),
     /// Resource exhaustion (e.g., partition too large)
+    #[error("Resource exhausted: {0}")]
     ResourceExhausted(String),
+}
+
+impl PythonDataSourceError {
+    /// Create a Python error with the given message.
+    pub fn python(msg: impl Into<String>) -> Self {
+        Self::PythonError(msg.into())
+    }
+
+    /// Create a schema error with the given message.
+    pub fn schema(msg: impl Into<String>) -> Self {
+        Self::SchemaError(msg.into())
+    }
+
+    /// Create a version error with the given message.
+    pub fn version(msg: impl Into<String>) -> Self {
+        Self::VersionError(msg.into())
+    }
+
+    /// Create an Arrow conversion error with the given message.
+    pub fn arrow(msg: impl Into<String>) -> Self {
+        Self::ArrowError(msg.into())
+    }
+
+    /// Create a resource exhausted error with the given message.
+    pub fn resource_exhausted(msg: impl Into<String>) -> Self {
+        Self::ResourceExhausted(msg.into())
+    }
 }
 
 /// Context for Python datasource operations, used for enhanced error reporting.
@@ -42,7 +82,7 @@ impl PythonDataSourceContext {
 
     /// Wrap an error message with context information.
     pub fn wrap_error(&self, msg: impl Into<String>) -> PythonDataSourceError {
-        PythonDataSourceError::PythonError(format!(
+        PythonDataSourceError::python(format!(
             "[{}::{}] {}",
             self.datasource_name,
             self.operation,
@@ -54,27 +94,6 @@ impl PythonDataSourceContext {
     #[cfg(feature = "python")]
     pub fn wrap_py_error(&self, e: pyo3::PyErr) -> PythonDataSourceError {
         self.wrap_error(format_py_error_with_traceback(e))
-    }
-}
-
-impl fmt::Display for PythonDataSourceError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::PythonError(msg) => write!(f, "Python error: {}", msg),
-            Self::SchemaError(msg) => write!(f, "Schema error: {}", msg),
-            Self::VersionError(msg) => write!(f, "Version error: {}", msg),
-            Self::ArrowError(msg) => write!(f, "Arrow conversion error: {}", msg),
-            Self::DataFusion(e) => write!(f, "DataFusion error: {}", e),
-            Self::ResourceExhausted(msg) => write!(f, "Resource exhausted: {}", msg),
-        }
-    }
-}
-
-impl std::error::Error for PythonDataSourceError {}
-
-impl From<DataFusionError> for PythonDataSourceError {
-    fn from(e: DataFusionError) -> Self {
-        Self::DataFusion(e)
     }
 }
 
@@ -109,7 +128,7 @@ pub fn format_py_error_with_traceback(e: pyo3::PyErr) -> String {
 #[cfg(feature = "python")]
 impl From<pyo3::PyErr> for PythonDataSourceError {
     fn from(e: pyo3::PyErr) -> Self {
-        Self::PythonError(format_py_error_with_traceback(e))
+        Self::python(format_py_error_with_traceback(e))
     }
 }
 
