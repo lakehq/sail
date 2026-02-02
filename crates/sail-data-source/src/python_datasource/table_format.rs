@@ -12,6 +12,7 @@ use datafusion_common::{not_impl_err, Result};
 use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat, TableFormatRegistry};
 
 use super::discovery::DATASOURCE_REGISTRY;
+use super::executor::InProcessExecutor;
 use super::python_datasource::PythonDataSource;
 use super::python_table_provider::PythonTableProvider;
 
@@ -185,8 +186,11 @@ impl TableFormat for PythonTableFormat {
             datasource.schema()?
         };
 
-        // Create TableProvider
-        let provider = PythonTableProvider::new(Arc::new(datasource), schema);
+        // Create executor (MVP: in-process via PyO3)
+        let executor: Arc<dyn super::executor::PythonExecutor> = Arc::new(InProcessExecutor::new());
+
+        // Create TableProvider with executor and command bytes
+        let provider = PythonTableProvider::new(executor, datasource.command().to_vec(), schema);
 
         Ok(Arc::new(provider))
     }

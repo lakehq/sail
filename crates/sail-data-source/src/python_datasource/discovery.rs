@@ -8,10 +8,13 @@
 //! Entry points are registered under the group `sail.datasources`.
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{exec_err, Result};
 use once_cell::sync::Lazy;
 #[cfg(feature = "python")]
 use pyo3::types::PyAnyMethods;
+
+#[cfg(feature = "python")]
+use super::error::py_err;
 
 /// Global registry for Python datasources.
 ///
@@ -238,13 +241,9 @@ pub fn validate_datasource_class(
     }
 
     // Verify it's callable (is a class)
-    let builtins = py
-        .import("builtins")
-        .map_err(|e| DataFusionError::External(Box::new(std::io::Error::other(e.to_string()))))?;
+    let builtins = py.import("builtins").map_err(py_err)?;
 
-    let callable = builtins
-        .getattr("callable")
-        .map_err(|e| DataFusionError::External(Box::new(std::io::Error::other(e.to_string()))))?;
+    let callable = builtins.getattr("callable").map_err(py_err)?;
 
     let is_callable = callable
         .call1((cls,))
@@ -282,26 +281,11 @@ pub fn validate_datasource_instance(
 /// Pickle a Python class for GIL-free storage.
 #[cfg(feature = "python")]
 fn pickle_class(py: pyo3::Python<'_>, cls: &pyo3::Bound<'_, pyo3::PyAny>) -> Result<Vec<u8>> {
-    let cloudpickle = py.import("cloudpickle").map_err(|e| {
-        DataFusionError::External(Box::new(std::io::Error::other(format!(
-            "Failed to import cloudpickle: {}",
-            e
-        ))))
-    })?;
+    let cloudpickle = super::error::import_cloudpickle(py)?;
 
-    let pickled = cloudpickle.call_method1("dumps", (cls,)).map_err(|e| {
-        DataFusionError::External(Box::new(std::io::Error::other(format!(
-            "Failed to pickle datasource class: {}",
-            e
-        ))))
-    })?;
+    let pickled = cloudpickle.call_method1("dumps", (cls,)).map_err(py_err)?;
 
-    pickled.extract::<Vec<u8>>().map_err(|e| {
-        DataFusionError::External(Box::new(std::io::Error::other(format!(
-            "Failed to extract pickled bytes: {}",
-            e
-        ))))
-    })
+    pickled.extract::<Vec<u8>>().map_err(py_err)
 }
 
 #[cfg(test)]

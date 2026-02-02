@@ -9,20 +9,25 @@ use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::Result;
 
-/// TableProvider implementation for Python DataSources.
-///
-/// This integrates Python DataSources with DataFusion's catalog and execution system.
 use super::exec::PythonDataSourceExec;
-use super::python_datasource::PythonDataSource;
+use super::executor::PythonExecutor;
 
 /// TableProvider for Python-defined DataSources.
 ///
 /// This allows Python DataSources to be registered in DataFusion's catalog
 /// and used in SQL queries.
+///
+/// # Architecture
+///
+/// Uses the `PythonExecutor` trait abstraction to enable:
+/// - Phase 1 (MVP): `InProcessExecutor` for direct PyO3 calls
+/// - Phase 3: `RemoteExecutor` for subprocess isolation
 #[derive(Debug)]
 pub struct PythonTableProvider {
-    /// The Python DataSource
-    datasource: Arc<PythonDataSource>,
+    /// Executor for Python operations (in-process or remote)
+    executor: Arc<dyn PythonExecutor>,
+    /// Pickled Python DataSource instance
+    command: Vec<u8>,
     /// Cached schema
     schema: SchemaRef,
 }
@@ -31,10 +36,20 @@ impl PythonTableProvider {
     /// Create a new PythonTableProvider.
     ///
     /// # Arguments
-    /// * `datasource` - The Python DataSource
+    /// * `executor` - The executor for Python operations
+    /// * `command` - Pickled Python DataSource instance
     /// * `schema` - The schema of the data
-    pub fn new(datasource: Arc<PythonDataSource>, schema: SchemaRef) -> Self {
-        Self { datasource, schema }
+    pub fn new(executor: Arc<dyn PythonExecutor>, command: Vec<u8>, schema: SchemaRef) -> Self {
+        Self {
+            executor,
+            command,
+            schema,
+        }
+    }
+
+    /// Get the pickled command bytes.
+    pub fn command(&self) -> &[u8] {
+        &self.command
     }
 }
 
@@ -79,13 +94,16 @@ impl TableProvider for PythonTableProvider {
         // This will be enhanced in future PRs
         let (_pushed_filters, _unpushed_filters) = self.classify_filters(filters);
 
-        // Get partitions from Python
-        // Note: get_partitions needs schema to create the reader
-        let partitions = self.datasource.get_partitions(&self.schema)?;
+        // Get partitions from Python via executor
+        let partitions = self
+            .executor
+            .get_partitions(&self.command, &self.schema)
+            .await?;
 
-        // Create execution plan from Python datasource (always yields full schema)
+        // Create execution plan with executor reference
         let exec = PythonDataSourceExec::new(
-            self.datasource.command().to_vec(),
+            self.executor.clone(),
+            self.command.clone(),
             self.schema.clone(),
             partitions,
         );

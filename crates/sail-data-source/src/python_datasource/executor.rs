@@ -53,7 +53,7 @@ impl InputPartition {
 /// and Python datasource implementations. The MVP uses `InProcessExecutor`,
 /// but the trait is designed for future `RemoteExecutor` implementation.
 #[async_trait]
-pub trait PythonExecutor: Send + Sync {
+pub trait PythonExecutor: Send + Sync + std::fmt::Debug {
     /// Get the schema from the Python datasource.
     ///
     /// Calls the Python `DataSource.schema()` method.

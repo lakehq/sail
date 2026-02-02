@@ -843,7 +843,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 schema,
                 partitions,
             }) => {
-                let schema = self.try_decode_schema(&schema)?;
+                let schema = Arc::new(self.try_decode_schema(&schema)?);
                 let partitions = partitions
                     .into_iter()
                     .map(|p| InputPartition {
@@ -851,10 +851,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         data: p.data,
                     })
                     .collect();
+                // Create executor for remote execution (always in-process on the worker)
+                let executor: Arc<dyn sail_data_source::python_datasource::PythonExecutor> =
+                    Arc::new(sail_data_source::python_datasource::InProcessExecutor::new());
                 Ok(Arc::new(PythonDataSourceExec::new(
-                    command,
-                    Arc::new(schema),
-                    partitions,
+                    executor, command, schema, partitions,
                 )))
             }
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
@@ -2506,7 +2507,10 @@ mod tests {
                 data: vec![4, 5, 6],
             },
         ];
+        let executor: Arc<dyn sail_data_source::python_datasource::PythonExecutor> =
+            Arc::new(sail_data_source::python_datasource::InProcessExecutor::new());
         let exec = Arc::new(PythonDataSourceExec::new(
+            executor,
             vec![10, 11, 12], // command
             schema.clone(),
             partitions,
