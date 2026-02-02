@@ -50,7 +50,8 @@ fn replace_subquery_placeholders(
         let new_exprs: Vec<DFExpr> = old_exprs
             .into_iter()
             .map(|expr| {
-                let result = expr.transform_up(|e| replace_placeholder_in_expr(e, resolved_refs))?;
+                let result =
+                    expr.transform_up(|e| replace_placeholder_in_expr(e, resolved_refs))?;
                 if result.transformed {
                     any_changed = true;
                 }
