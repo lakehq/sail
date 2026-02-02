@@ -4,7 +4,6 @@ use std::sync::Arc;
 use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::{DFSchemaRef, TableReference};
 use datafusion_expr::LogicalPlan;
-use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::expression::NamedExpr;
@@ -75,10 +74,6 @@ pub(super) struct PlanResolverState {
     aggregate_state: AggregateState,
     /// The CTEs for the current query.
     ctes: HashMap<TableReference, Arc<LogicalPlan>>,
-    /// The subquery references for the current WithRelations scope.
-    subquery_refs: HashMap<i64, spec::QueryPlan>,
-    /// The depth of WithRelations scope nesting.
-    subquery_ref_scope_depth: usize,
     config: PlanResolverStateConfig,
 }
 
@@ -96,8 +91,6 @@ impl PlanResolverState {
             outer_query_schema: None,
             aggregate_state: AggregateState::default(),
             ctes: HashMap::new(),
-            subquery_refs: HashMap::new(),
-            subquery_ref_scope_depth: 0,
             config: PlanResolverStateConfig::default(),
         }
     }
@@ -208,22 +201,6 @@ impl PlanResolverState {
 
     pub fn enter_config_scope(&mut self) -> ConfigScope<'_> {
         ConfigScope::new(self)
-    }
-
-    pub fn enter_subquery_ref_scope(&mut self) -> SubqueryRefScope<'_> {
-        SubqueryRefScope::new(self)
-    }
-
-    pub fn in_subquery_ref_scope(&self) -> bool {
-        self.subquery_ref_scope_depth > 0
-    }
-
-    pub fn insert_subquery_ref(&mut self, plan_id: i64, plan: spec::QueryPlan) {
-        self.subquery_refs.insert(plan_id, plan);
-    }
-
-    pub fn get_subquery_ref(&self, plan_id: i64) -> Option<&spec::QueryPlan> {
-        self.subquery_refs.get(&plan_id)
     }
 
     // TODO:
@@ -342,32 +319,5 @@ impl<'a> ConfigScope<'a> {
 impl Drop for ConfigScope<'_> {
     fn drop(&mut self) {
         self.state.config = std::mem::take(&mut self.previous_config);
-    }
-}
-
-pub(crate) struct SubqueryRefScope<'a> {
-    state: &'a mut PlanResolverState,
-    previous_subquery_refs: HashMap<i64, spec::QueryPlan>,
-}
-
-impl<'a> SubqueryRefScope<'a> {
-    fn new(state: &'a mut PlanResolverState) -> Self {
-        state.subquery_ref_scope_depth += 1;
-        let previous_subquery_refs = state.subquery_refs.clone();
-        Self {
-            state,
-            previous_subquery_refs,
-        }
-    }
-
-    pub(crate) fn state(&mut self) -> &mut PlanResolverState {
-        self.state
-    }
-}
-
-impl Drop for SubqueryRefScope<'_> {
-    fn drop(&mut self) {
-        self.state.subquery_ref_scope_depth -= 1;
-        self.state.subquery_refs = std::mem::take(&mut self.previous_subquery_refs);
     }
 }

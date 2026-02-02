@@ -9,3 +9,4 @@ pub mod schema_pivot;
 pub mod show_string;
 pub mod sort;
 pub mod streaming;
+pub mod unresolved_subquery_ref;
