@@ -76,6 +76,12 @@ jobs:
         run: |
           hatch run install-pysail
 
+      - name: Patch Ibis TRY_CAST bug
+        run: |
+          # Workaround for https://github.com/ibis-project/ibis/commit/fc494985
+          # Can be removed when Ibis >= 11.1.0 is released
+          hatch run scripts/spark-tests/patch-ibis.sh
+
       - name: List Python packages
         continue-on-error: true
         run: |
