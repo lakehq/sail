@@ -1,9 +1,15 @@
 use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
+use datafusion::arrow::array::{Array, Float64Array, ListArray};
+use datafusion::arrow::compute::concat_batches;
 use datafusion::prelude::SessionContext;
 use futures::stream;
-use log::debug;
+use lazy_static::lazy_static;
+use log::{debug, info};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::session::job::JobService;
+use sail_plan::resolve_and_execute_plan;
 use uuid::Uuid;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
@@ -14,18 +20,32 @@ use crate::spark::connect::expression::literal::LiteralType;
 use crate::spark::connect::expression::Literal;
 use crate::spark::connect::ml_command::Command;
 use crate::spark::connect::ml_command_result::{MlOperatorInfo, ResultType};
-use crate::spark::connect::{Fetch, MlCommand, MlCommandResult, MlParams, ObjectRef};
+use crate::spark::connect::{Fetch, MlCommand, MlCommandResult, MlParams, ObjectRef, Relation};
+
+lazy_static! {
+    /// Simple in-memory cache for trained ML models.
+    ///
+    /// WARNING: This cache has known limitations:
+    /// - No eviction policy (models stay in memory until explicitly deleted)
+    /// - No persistence (models are lost on server restart)
+    /// - No size limits (could cause OOM with many large models)
+    ///
+    /// For production use, consider:
+    /// - LRU eviction based on model size
+    /// - Disk offloading (see MlCommand::Delete.evict_only)
+    /// - Per-session isolation
+    static ref MODEL_CACHE: RwLock<HashMap<String, TrainedModel>> = RwLock::new(HashMap::new());
+}
+
+/// Represents a trained LinearRegression model.
+#[derive(Debug, Clone)]
+struct TrainedModel {
+    coefficients: Vec<f64>,
+    intercept: f64,
+    num_features: usize,
+}
 
 /// Handle ML command execution.
-///
-/// NOTE: The ML cache mechanism (storing trained models in session state) may have
-/// issues with memory management and lifecycle. Some have noted that caching models
-/// in the session could cause problems with large models or long-running sessions.
-/// For now, we use a simple approach with placeholder model IDs.
-/// A proper implementation might need:
-/// - LRU eviction for cached models
-/// - Offloading to disk (see MlCommand::Delete.evict_only)
-/// - Proper cleanup on session termination
 pub(crate) async fn handle_execute_ml_command(
     ctx: &SessionContext,
     ml_command: MlCommand,
@@ -37,7 +57,7 @@ pub(crate) async fn handle_execute_ml_command(
 
     let result = match command {
         Command::Fit(fit) => handle_ml_fit(ctx, &spark, fit).await?,
-        Command::Fetch(fetch) => handle_ml_fetch(fetch).await?,
+        Command::Fetch(fetch) => handle_ml_fetch(fetch)?,
         Command::Delete(_) => return Err(SparkError::todo("ML delete command")),
         Command::Write(_) => return Err(SparkError::todo("ML write command")),
         Command::Read(_) => return Err(SparkError::todo("ML read command")),
@@ -60,15 +80,15 @@ pub(crate) async fn handle_execute_ml_command(
     ))
 }
 
-/// Handle ML Fit command - trains a model on the dataset.
+/// Handle ML Fit command - trains a LinearRegression model using SGD.
 async fn handle_ml_fit(
-    _ctx: &SessionContext,
-    _spark: &SparkSession,
+    ctx: &SessionContext,
+    spark: &SparkSession,
     fit: crate::spark::connect::ml_command::Fit,
 ) -> SparkResult<MlCommandResult> {
     let estimator = fit.estimator.required("estimator")?;
     let params = fit.params;
-    let _dataset = fit.dataset.required("dataset")?;
+    let dataset = fit.dataset.required("dataset")?;
 
     debug!("ML Fit: estimator={:?}, params={:?}", estimator.name, params);
 
@@ -82,54 +102,254 @@ async fn handle_ml_fit(
 
     // Extract parameters with defaults
     let params_map = extract_params(&params);
-    let max_iter = get_param_i64(&params_map, "maxIter", 100);
-    let learning_rate = get_param_f64(&params_map, "stepSize", 0.01);
-    let _tolerance = get_param_f64(&params_map, "tol", 1e-6);
+    let max_iter = get_param_i64(&params_map, "maxIter", 100) as usize;
+    let learning_rate = get_param_f64(&params_map, "stepSize", 0.1);
+    let tolerance = get_param_f64(&params_map, "tol", 1e-6);
     let features_col = get_param_string(&params_map, "featuresCol", "features");
     let label_col = get_param_string(&params_map, "labelCol", "label");
 
-    debug!(
-        "Training LinearRegression: maxIter={}, stepSize={}, featuresCol={}, labelCol={}",
-        max_iter, learning_rate, features_col, label_col
+    info!(
+        "Training LinearRegression: maxIter={}, stepSize={}, tol={}, featuresCol={}, labelCol={}",
+        max_iter, learning_rate, tolerance, features_col, label_col
     );
 
-    // For now, we return a placeholder result
-    // In a full implementation, we would:
-    // 1. Execute the dataset relation to get the training data
-    // 2. Run the SGD training loop using sgd_gradient_sum
-    // 3. Cache the model and return an ObjectRef
+    // Step 1: Execute dataset and extract training data
+    let (features, labels) =
+        extract_training_data(ctx, spark, &dataset, &features_col, &label_col).await?;
 
-    // Generate a unique model ID
+    let num_samples = labels.len();
+    let num_features = if features.is_empty() {
+        0
+    } else {
+        features[0].len()
+    };
+
+    info!(
+        "Training data extracted: {} samples, {} features",
+        num_samples, num_features
+    );
+
+    if num_samples == 0 {
+        return Err(SparkError::invalid("Training dataset is empty"));
+    }
+
+    // Step 2: Initialize coefficients to zeros
+    let mut coefficients = vec![0.0; num_features];
+
+    // Step 3: Run SGD training loop in pure Rust
+    let trained_model = run_sgd_training(
+        &features,
+        &labels,
+        &mut coefficients,
+        max_iter,
+        learning_rate,
+        tolerance,
+    )?;
+
+    // Step 4: Store model in cache
     let model_id = Uuid::new_v4().to_string();
+    {
+        let mut cache = MODEL_CACHE.write().map_err(|e| {
+            SparkError::internal(format!("Failed to acquire model cache lock: {e}"))
+        })?;
+        cache.insert(model_id.clone(), trained_model.clone());
+    }
 
-    // Create coefficients parameter (placeholder for now)
+    info!(
+        "Model trained and cached: id={}, coefficients={:?}, intercept={}",
+        model_id, trained_model.coefficients, trained_model.intercept
+    );
+
+    // Step 5: Return result
     let mut result_params = HashMap::new();
+    let coef_str = format!("{:?}", trained_model.coefficients);
     result_params.insert(
         "coefficients".to_string(),
         Literal {
             data_type: None,
-            literal_type: Some(LiteralType::String("[]".to_string())),
+            literal_type: Some(LiteralType::String(coef_str)),
         },
     );
 
     Ok(MlCommandResult {
         result_type: Some(ResultType::OperatorInfo(MlOperatorInfo {
-            r#type: Some(crate::spark::connect::ml_command_result::ml_operator_info::Type::ObjRef(
-                ObjectRef { id: model_id },
-            )),
+            r#type: Some(
+                crate::spark::connect::ml_command_result::ml_operator_info::Type::ObjRef(
+                    ObjectRef { id: model_id },
+                ),
+            ),
             uid: Some(estimator.uid),
             params: Some(MlParams {
                 params: result_params,
             }),
-            warning_message: Some(
-                "LinearRegression training is a POC - model coefficients are placeholders".to_string(),
-            ),
+            warning_message: None,
         })),
     })
 }
 
-/// Handle ML Fetch command - retrieves model attributes (coefficients, intercept, etc.).
-async fn handle_ml_fetch(fetch: Fetch) -> SparkResult<MlCommandResult> {
+/// Extract training data (features and labels) from the dataset.
+async fn extract_training_data(
+    ctx: &SessionContext,
+    spark: &SparkSession,
+    dataset: &Relation,
+    features_col: &str,
+    label_col: &str,
+) -> SparkResult<(Vec<Vec<f64>>, Vec<f64>)> {
+    // Execute the dataset plan
+    let plan: sail_common::spec::Plan = dataset.clone().try_into()?;
+    let config = spark.plan_config()?;
+    let (physical_plan, _) = resolve_and_execute_plan(ctx, config, plan).await?;
+
+    // Execute to get data
+    let job_service = ctx.extension::<JobService>()?;
+    let stream = job_service.runner().execute(ctx, physical_plan).await?;
+    let schema = stream.schema();
+
+    // Collect all batches
+    use futures::StreamExt;
+    let batches: Vec<_> = stream.collect().await;
+    let batches: Result<Vec<_>, _> = batches.into_iter().collect();
+    let batches =
+        batches.map_err(|e| SparkError::internal(format!("Failed to collect data: {e}")))?;
+
+    if batches.is_empty() {
+        return Ok((vec![], vec![]));
+    }
+
+    let data = concat_batches(&schema, batches.iter())
+        .map_err(|e| SparkError::internal(format!("Failed to concat batches: {e}")))?;
+
+    // Find column indices
+    let features_idx = schema
+        .fields()
+        .iter()
+        .position(|f| f.name() == features_col)
+        .ok_or_else(|| {
+            SparkError::invalid(format!("Features column '{}' not found", features_col))
+        })?;
+
+    let label_idx = schema
+        .fields()
+        .iter()
+        .position(|f| f.name() == label_col)
+        .ok_or_else(|| SparkError::invalid(format!("Label column '{}' not found", label_col)))?;
+
+    // Extract features (array of arrays)
+    let features_array = data.column(features_idx);
+    let features = extract_features(features_array)?;
+
+    // Extract labels
+    let label_array = data.column(label_idx);
+    let labels = extract_labels(label_array)?;
+
+    Ok((features, labels))
+}
+
+/// Extract features from an array column.
+fn extract_features(array: &Arc<dyn Array>) -> SparkResult<Vec<Vec<f64>>> {
+    let list_array = array
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .ok_or_else(|| SparkError::invalid("Features column must be an array type"))?;
+
+    let mut features = Vec::with_capacity(list_array.len());
+
+    for i in 0..list_array.len() {
+        if list_array.is_null(i) {
+            continue; // Skip null rows
+        }
+        let inner = list_array.value(i);
+        let float_array = inner
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .ok_or_else(|| SparkError::invalid("Feature values must be float64"))?;
+
+        let row: Vec<f64> = float_array.iter().flatten().collect();
+        features.push(row);
+    }
+
+    Ok(features)
+}
+
+/// Extract labels from a column.
+fn extract_labels(array: &Arc<dyn Array>) -> SparkResult<Vec<f64>> {
+    let float_array = array
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .ok_or_else(|| SparkError::invalid("Label column must be float64"))?;
+
+    Ok(float_array.iter().flatten().collect())
+}
+
+/// Run SGD training loop in pure Rust.
+///
+/// Uses batch gradient descent to minimize MSE:
+/// For y = Xβ, the gradient is: ∂MSE/∂β = (2/n) * X^T * (Xβ - y)
+fn run_sgd_training(
+    features: &[Vec<f64>],
+    labels: &[f64],
+    coefficients: &mut [f64],
+    max_iter: usize,
+    learning_rate: f64,
+    tolerance: f64,
+) -> SparkResult<TrainedModel> {
+    let n = labels.len() as f64;
+    let mut prev_loss = f64::MAX;
+
+    for epoch in 0..max_iter {
+        // Compute predictions and gradients
+        let mut gradient = vec![0.0; coefficients.len()];
+        let mut loss_sum = 0.0;
+
+        for (x, &y) in features.iter().zip(labels.iter()) {
+            // Compute prediction: y_pred = x · β
+            let y_pred: f64 = x
+                .iter()
+                .zip(coefficients.iter())
+                .map(|(xi, bi)| xi * bi)
+                .sum();
+
+            // Compute error
+            let error = y_pred - y;
+            loss_sum += error * error;
+
+            // Accumulate gradient: ∂MSE/∂β_j = 2 * error * x_j
+            for (j, xj) in x.iter().enumerate() {
+                gradient[j] += error * xj;
+            }
+        }
+
+        // Update coefficients: β = β - learning_rate * (2/n) * gradient
+        let scale = 2.0 / n;
+        for (coef, grad) in coefficients.iter_mut().zip(gradient.iter()) {
+            *coef -= learning_rate * scale * grad;
+        }
+
+        // Compute average loss (MSE)
+        let avg_loss = loss_sum / n;
+
+        debug!(
+            "Epoch {}: loss={:.6}, coefficients={:?}",
+            epoch, avg_loss, coefficients
+        );
+
+        // Check convergence
+        if (prev_loss - avg_loss).abs() < tolerance {
+            info!("Converged at epoch {} with loss {:.6}", epoch, avg_loss);
+            break;
+        }
+        prev_loss = avg_loss;
+    }
+
+    Ok(TrainedModel {
+        coefficients: coefficients.to_vec(),
+        intercept: 0.0, // No intercept in this simple implementation
+        num_features: coefficients.len(),
+    })
+}
+
+/// Handle ML Fetch command - retrieves model attributes from cache.
+fn handle_ml_fetch(fetch: Fetch) -> SparkResult<MlCommandResult> {
     let obj_ref = fetch.obj_ref.required("object reference")?;
     let methods = fetch.methods;
 
@@ -139,46 +359,45 @@ async fn handle_ml_fetch(fetch: Fetch) -> SparkResult<MlCommandResult> {
         return Err(SparkError::invalid("Fetch requires at least one method"));
     }
 
-    // Get the method name (e.g., "coefficients", "intercept")
+    // Look up model in cache
+    let model = {
+        let cache = MODEL_CACHE
+            .read()
+            .map_err(|e| SparkError::internal(format!("Failed to read model cache: {e}")))?;
+        cache.get(&obj_ref.id).cloned()
+    };
+
+    let model = model
+        .ok_or_else(|| SparkError::invalid(format!("Model not found in cache: {}", obj_ref.id)))?;
+
     let method_name = &methods[0].method;
 
-    // For this POC, return placeholder values based on the method name
-    // In a real implementation, we would look up the cached model by obj_ref.id
-    // and return the actual computed values
-    //
-    // NOTE: PySpark's LinearRegression expects DenseVector for coefficients,
-    // which uses a specialized serialization format. For this POC, we just
-    // log that the fetch was successful and return a placeholder.
     let result_literal = match method_name.as_str() {
         "coefficients" => {
-            debug!("Returning placeholder coefficients [1.0, 1.0]");
-            // Return as a struct that represents DenseVector
-            // Format: {type: 1, size: 2, indices: null, values: [1.0, 1.0]}
-            // For simplicity in POC, return a string representation
+            debug!("Returning coefficients: {:?}", model.coefficients);
+            let coef_str = format!("{:?}", model.coefficients);
             Literal {
                 data_type: None,
-                literal_type: Some(LiteralType::String("[1.0, 1.0]".to_string())),
+                literal_type: Some(LiteralType::String(coef_str)),
             }
         }
         "intercept" => {
-            debug!("Returning placeholder intercept 0.0");
+            debug!("Returning intercept: {}", model.intercept);
             Literal {
                 data_type: None,
-                literal_type: Some(LiteralType::Double(0.0)),
+                literal_type: Some(LiteralType::Double(model.intercept)),
             }
         }
         "numFeatures" => {
-            debug!("Returning placeholder numFeatures 2");
+            debug!("Returning numFeatures: {}", model.num_features);
             Literal {
                 data_type: None,
-                literal_type: Some(LiteralType::Integer(2)),
+                literal_type: Some(LiteralType::Integer(model.num_features as i32)),
             }
         }
         _ => {
-            debug!("Unsupported ML Fetch method: {}", method_name);
             return Err(SparkError::unsupported(format!(
-                "ML Fetch method '{}' is not supported yet. \
-                 This is a POC implementation of LinearRegression.",
+                "ML Fetch method '{}' is not supported",
                 method_name
             )));
         }

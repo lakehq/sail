@@ -14,14 +14,19 @@ os.environ.setdefault("SPARK_REMOTE", "sc://localhost:50051")
 spark = SparkSession.builder.getOrCreate()
 
 # Create simple training data
-data = [(1.0, [1.0, 0.0]), (2.0, [0.0, 1.0]), (3.0, [1.0, 1.0])]
+# Solution: y = 1*x1 + 2*x2, so coefficients should be [1.0, 2.0]
+data = [
+    (1.0, [1.0, 0.0]),
+    (2.0, [0.0, 1.0]),
+    (3.0, [1.0, 1.0]),
+]
 df = spark.createDataFrame(data, ["label", "features"])
 
 print("Training data:")
 df.show()
 
-# Create LinearRegression estimator
-lr = LinearRegression(maxIter=10, regParam=0.0)
+# Create LinearRegression estimator (default maxIter=100)
+lr = LinearRegression(regParam=0.0)
 
 print("Attempting to fit LinearRegression...")
 try:
