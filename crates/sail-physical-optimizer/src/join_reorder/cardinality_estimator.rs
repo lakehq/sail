@@ -437,13 +437,11 @@ mod tests {
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::common::stats::Precision;
-    use datafusion::common::Statistics;
-    use datafusion::physical_plan::empty::EmptyExec;
-    use datafusion::logical_expr::JoinType;
-    use datafusion::physical_expr::PhysicalExpr;
-    use datafusion::logical_expr::Operator;
+    use datafusion::common::{ScalarValue, Statistics};
+    use datafusion::logical_expr::{JoinType, Operator};
     use datafusion::physical_expr::expressions::{BinaryExpr, Column, Literal};
-    use datafusion::common::ScalarValue;
+    use datafusion::physical_expr::PhysicalExpr;
+    use datafusion::physical_plan::empty::EmptyExec;
 
     use super::*;
     use crate::join_reorder::graph::{QueryGraph, RelationNode};

@@ -143,6 +143,11 @@ impl JoinReorder {
 
         let mut reconstructor =
             PlanReconstructor::new(&enumerator.dp_table, &enumerator.query_graph);
+        // Pre-compute required output columns for each join subtree based on the original
+        // region-root output columns. This keeps intermediate join outputs narrow before
+        // `JoinSelection` runs, helping avoid plan-shape regressions when we see through
+        // projection nodes while building the query graph.
+        reconstructor.prepare_required_output_columns(&best_plan, &target_column_map)?;
         let (join_tree, final_map) = reconstructor.reconstruct(&best_plan)?;
 
         trace!(

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use datafusion::common::stats::Precision;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::{JoinType, Operator};
@@ -12,11 +13,9 @@ use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::HashJoinExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::ExecutionPlan;
-use log::trace;
-
-use datafusion::common::stats::Precision;
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::{analyze, AnalysisContext};
+use log::trace;
 
 use crate::join_reorder::graph::{JoinEdge, QueryGraph, RelationNode, StableColumn};
 use crate::join_reorder::join_set::JoinSet;
@@ -117,7 +116,16 @@ impl GraphBuilder {
 
         if let Some(proj_plan) = any_plan.downcast_ref::<ProjectionExec>() {
             trace!("Visiting projection: {}", proj_plan.name());
-            return self.visit_projection(proj_plan);
+            // Only "see through" projections that are a pure column passthrough
+            // (possibly pruning/reordering/renaming/duplicating columns).
+            //
+            // Projections that introduce computed expressions are treated as a boundary leaf:
+            // seeing through them can lose the expression semantics and/or create join keys
+            // we can't reconstruct from stable base columns.
+            if self.is_trivial_projection(proj_plan) {
+                return self.visit_projection(proj_plan);
+            }
+            return self.visit_boundary_or_leaf(plan);
         }
 
         // If it's not a reorderable join or a projection we can see through,
@@ -279,6 +287,30 @@ impl GraphBuilder {
             result.push(Arc::clone(expr));
         }
         result
+    }
+
+    /// Returns true if this projection is a pure column passthrough:
+    /// - each output expression is a Column (aliases may differ)
+    ///
+    /// We allow pruning/reordering/duplication: join reordering will later recompute the
+    /// minimal required columns for the chosen join tree, and re-apply projections during
+    /// reconstruction.
+    fn is_trivial_projection(&self, proj_plan: &ProjectionExec) -> bool {
+        let input_len = proj_plan.input().schema().fields().len();
+        let exprs = proj_plan.expr();
+        if exprs.is_empty() {
+            return false;
+        }
+        for p in exprs.iter() {
+            let Some(c) = p.expr.as_any().downcast_ref::<Column>() else {
+                return false;
+            };
+            let idx = c.index();
+            if idx >= input_len {
+                return false;
+            }
+        }
+        true
     }
 
     /// Return the set of base relations referenced by `expr`.
@@ -531,6 +563,20 @@ impl GraphBuilder {
                 .with_estimated_selectivity(selectivity);
 
             (adjusted, base * selectivity)
+        } else if plan.as_any().is::<ProjectionExec>() {
+            // Preserve ProjectionExec as a relation leaf, but prefer its input statistics
+            // (ProjectionExec may not have accurate stats of its own).
+            let mut cur = plan.clone();
+            while let Some(p) = cur.as_any().downcast_ref::<ProjectionExec>() {
+                cur = p.input().clone();
+            }
+            let stats = cur.partition_statistics(None)?;
+            let initial_cardinality = match stats.num_rows {
+                Precision::Exact(count) => count as f64,
+                Precision::Inexact(count) => count as f64,
+                Precision::Absent => 1000.0, // Default estimation
+            };
+            (stats, initial_cardinality)
         } else {
             let stats = plan.partition_statistics(None)?;
             let initial_cardinality = match stats.num_rows {
@@ -819,12 +865,12 @@ impl Default for GraphBuilder {
 mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::common::ScalarValue;
-    use datafusion::physical_expr::expressions::Column;
-    use datafusion::physical_expr::expressions::Literal;
+    use datafusion::physical_expr::expressions::{Column, Literal};
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::filter::FilterExec;
     use datafusion::physical_plan::joins::HashJoinExec;
     use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
+    use datafusion::physical_plan::projection::ProjectionExpr;
 
     use super::*;
 
@@ -952,6 +998,332 @@ mod tests {
     }
 
     #[test]
+    fn test_trivial_projection_is_seen_through_for_region_building() -> Result<()> {
+        use datafusion::common::NullEquality;
+        use datafusion::physical_plan::joins::PartitionMode;
+
+        let mut builder = GraphBuilder::new();
+
+        // A(a_id) JOIN B(b_id) -> (a_id, b_id)
+        let schema_a = Arc::new(Schema::new(vec![Field::new(
+            "a_id",
+            DataType::Int32,
+            false,
+        )]));
+        let schema_b = Arc::new(Schema::new(vec![Field::new(
+            "b_id",
+            DataType::Int32,
+            false,
+        )]));
+        let schema_c = Arc::new(Schema::new(vec![Field::new(
+            "c_id",
+            DataType::Int32,
+            false,
+        )]));
+
+        let a = Arc::new(EmptyExec::new(schema_a)) as Arc<dyn ExecutionPlan>;
+        let b = Arc::new(EmptyExec::new(schema_b)) as Arc<dyn ExecutionPlan>;
+        let c = Arc::new(EmptyExec::new(schema_c)) as Arc<dyn ExecutionPlan>;
+
+        let ab = Arc::new(HashJoinExec::try_new(
+            a,
+            b,
+            vec![(
+                Arc::new(Column::new("a_id", 0)) as Arc<dyn PhysicalExpr>,
+                Arc::new(Column::new("b_id", 0)) as Arc<dyn PhysicalExpr>,
+            )],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+        )?);
+
+        // Trivial projection over AB: identity (same indices) but with renamed aliases.
+        let ab_proj = Arc::new(ProjectionExec::try_new(
+            [
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("a_id", 0)),
+                    alias: "a_id_renamed".to_string(),
+                },
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("b_id", 1)),
+                    alias: "b_id_renamed".to_string(),
+                },
+            ],
+            ab,
+        )?);
+
+        // (AB_proj) JOIN C on a_id_renamed = c_id
+        let top = Arc::new(HashJoinExec::try_new(
+            ab_proj,
+            c,
+            vec![(
+                Arc::new(Column::new("a_id_renamed", 0)) as Arc<dyn PhysicalExpr>,
+                Arc::new(Column::new("c_id", 0)) as Arc<dyn PhysicalExpr>,
+            )],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+        )?) as Arc<dyn ExecutionPlan>;
+
+        let Some((graph, _col_map)) = builder.build(top)? else {
+            return Err(DataFusionError::Internal("expected a graph".to_string()));
+        };
+        assert_eq!(
+            graph.relation_count(),
+            3,
+            "trivial projection should be seen through so the region includes A, B, and C"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_trivial_projection_permutation_is_seen_through_for_region_building() -> Result<()> {
+        use datafusion::common::NullEquality;
+        use datafusion::physical_plan::joins::PartitionMode;
+
+        let mut builder = GraphBuilder::new();
+
+        // A(a_id) JOIN B(b_id) -> (a_id, b_id)
+        let schema_a = Arc::new(Schema::new(vec![Field::new(
+            "a_id",
+            DataType::Int32,
+            false,
+        )]));
+        let schema_b = Arc::new(Schema::new(vec![Field::new(
+            "b_id",
+            DataType::Int32,
+            false,
+        )]));
+        let schema_c = Arc::new(Schema::new(vec![Field::new(
+            "c_id",
+            DataType::Int32,
+            false,
+        )]));
+
+        let a = Arc::new(EmptyExec::new(schema_a)) as Arc<dyn ExecutionPlan>;
+        let b = Arc::new(EmptyExec::new(schema_b)) as Arc<dyn ExecutionPlan>;
+        let c = Arc::new(EmptyExec::new(schema_c)) as Arc<dyn ExecutionPlan>;
+
+        let ab = Arc::new(HashJoinExec::try_new(
+            a,
+            b,
+            vec![(
+                Arc::new(Column::new("a_id", 0)) as Arc<dyn PhysicalExpr>,
+                Arc::new(Column::new("b_id", 0)) as Arc<dyn PhysicalExpr>,
+            )],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+        )?);
+
+        // Trivial projection over AB: pure permutation of columns (no prune/dup/exprs).
+        let ab_proj = Arc::new(ProjectionExec::try_new(
+            [
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("b_id", 1)),
+                    alias: "b_first".to_string(),
+                },
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("a_id", 0)),
+                    alias: "a_second".to_string(),
+                },
+            ],
+            ab,
+        )?);
+
+        // (AB_proj) JOIN C on a_second (idx=1) = c_id
+        let top = Arc::new(HashJoinExec::try_new(
+            ab_proj,
+            c,
+            vec![(
+                Arc::new(Column::new("a_second", 1)) as Arc<dyn PhysicalExpr>,
+                Arc::new(Column::new("c_id", 0)) as Arc<dyn PhysicalExpr>,
+            )],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+        )?) as Arc<dyn ExecutionPlan>;
+
+        let Some((graph, _col_map)) = builder.build(top)? else {
+            return Err(DataFusionError::Internal("expected a graph".to_string()));
+        };
+        assert_eq!(
+            graph.relation_count(),
+            3,
+            "permutation-only projection should be seen through so the region includes A, B, and C"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_with_expression_is_boundary_leaf() -> Result<()> {
+        use datafusion::common::NullEquality;
+        use datafusion::physical_plan::joins::PartitionMode;
+
+        let mut builder = GraphBuilder::new();
+
+        // A(a_id) JOIN B(b_id) -> (a_id, b_id)
+        let schema_a = Arc::new(Schema::new(vec![Field::new(
+            "a_id",
+            DataType::Int32,
+            false,
+        )]));
+        let schema_b = Arc::new(Schema::new(vec![Field::new(
+            "b_id",
+            DataType::Int32,
+            false,
+        )]));
+        let schema_c = Arc::new(Schema::new(vec![Field::new(
+            "c_id",
+            DataType::Int32,
+            false,
+        )]));
+
+        let a = Arc::new(EmptyExec::new(schema_a)) as Arc<dyn ExecutionPlan>;
+        let b = Arc::new(EmptyExec::new(schema_b)) as Arc<dyn ExecutionPlan>;
+        let c = Arc::new(EmptyExec::new(schema_c)) as Arc<dyn ExecutionPlan>;
+
+        let ab = Arc::new(HashJoinExec::try_new(
+            a,
+            b,
+            vec![(
+                Arc::new(Column::new("a_id", 0)) as Arc<dyn PhysicalExpr>,
+                Arc::new(Column::new("b_id", 0)) as Arc<dyn PhysicalExpr>,
+            )],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+        )?);
+
+        // Non-trivial projection: contains a computed expression.
+        let ab_proj = Arc::new(ProjectionExec::try_new(
+            [
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("a_id", 0)),
+                    alias: "a_id_only".to_string(),
+                },
+                ProjectionExpr {
+                    expr: Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                    alias: "one".to_string(),
+                },
+            ],
+            ab,
+        )?);
+
+        // (AB_proj) JOIN C on a_id_only = c_id
+        let top = Arc::new(HashJoinExec::try_new(
+            ab_proj,
+            c,
+            vec![(
+                Arc::new(Column::new("a_id_only", 0)) as Arc<dyn PhysicalExpr>,
+                Arc::new(Column::new("c_id", 0)) as Arc<dyn PhysicalExpr>,
+            )],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+        )?) as Arc<dyn ExecutionPlan>;
+
+        let Some((graph, _col_map)) = builder.build(top)? else {
+            return Err(DataFusionError::Internal("expected a graph".to_string()));
+        };
+        assert_eq!(
+            graph.relation_count(),
+            2,
+            "projection with expressions should be a boundary leaf so AB is treated as one relation"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_column_only_projection_pruning_is_seen_through_for_region_building() -> Result<()> {
+        use datafusion::common::NullEquality;
+        use datafusion::physical_plan::joins::PartitionMode;
+
+        let mut builder = GraphBuilder::new();
+
+        // A(a_id) JOIN B(b_id) -> (a_id, b_id)
+        let schema_a = Arc::new(Schema::new(vec![Field::new(
+            "a_id",
+            DataType::Int32,
+            false,
+        )]));
+        let schema_b = Arc::new(Schema::new(vec![Field::new(
+            "b_id",
+            DataType::Int32,
+            false,
+        )]));
+        let schema_c = Arc::new(Schema::new(vec![Field::new(
+            "c_id",
+            DataType::Int32,
+            false,
+        )]));
+
+        let a = Arc::new(EmptyExec::new(schema_a)) as Arc<dyn ExecutionPlan>;
+        let b = Arc::new(EmptyExec::new(schema_b)) as Arc<dyn ExecutionPlan>;
+        let c = Arc::new(EmptyExec::new(schema_c)) as Arc<dyn ExecutionPlan>;
+
+        let ab = Arc::new(HashJoinExec::try_new(
+            a,
+            b,
+            vec![(
+                Arc::new(Column::new("a_id", 0)) as Arc<dyn PhysicalExpr>,
+                Arc::new(Column::new("b_id", 0)) as Arc<dyn PhysicalExpr>,
+            )],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+        )?);
+
+        // Column-only projection with pruning (drops b_id).
+        let ab_proj = Arc::new(ProjectionExec::try_new(
+            [ProjectionExpr {
+                expr: Arc::new(Column::new("a_id", 0)),
+                alias: "a_id_only".to_string(),
+            }],
+            ab,
+        )?);
+
+        // (AB_proj) JOIN C on a_id_only = c_id
+        let top = Arc::new(HashJoinExec::try_new(
+            ab_proj,
+            c,
+            vec![(
+                Arc::new(Column::new("a_id_only", 0)) as Arc<dyn PhysicalExpr>,
+                Arc::new(Column::new("c_id", 0)) as Arc<dyn PhysicalExpr>,
+            )],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+        )?) as Arc<dyn ExecutionPlan>;
+
+        let Some((graph, _col_map)) = builder.build(top)? else {
+            return Err(DataFusionError::Internal("expected a graph".to_string()));
+        };
+        assert_eq!(
+            graph.relation_count(),
+            3,
+            "column-only projection with pruning should be seen through so the region includes A, B, and C"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_filter_leaf_adjusts_statistics_and_penalizes_cardinality() -> Result<()> {
         // Build an input plan with exact row count statistics.
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
@@ -989,6 +1361,7 @@ mod tests {
         // Statistics should reflect the estimated selectivity.
         match rel.statistics.num_rows {
             datafusion::common::stats::Precision::Inexact(n) => assert_eq!(n, 1),
+            #[expect(clippy::panic)]
             other => panic!("expected Inexact(1) filtered stats, got {other:?}"),
         }
 
