@@ -90,7 +90,9 @@ impl GlobalState {
     /// since telemetry can only be initialized once. But this likely won't happen
     /// in practice due to how this function is used in the codebase.
     pub fn instance(py: Python<'_>) -> PyResult<&'static GlobalState> {
-        GLOBALS.get_or_try_init(py, Self::initialize)
+        let globals = GLOBALS.get_or_try_init(py, Self::initialize)?;
+        globals.environment.warn_if_changed(py)?;
+        Ok(globals)
     }
 
     fn initialize() -> PyResult<Self> {
