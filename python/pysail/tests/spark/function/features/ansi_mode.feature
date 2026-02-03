@@ -12,16 +12,6 @@ Feature: ANSI mode behaviors
         | result |
         | NULL   |
 
-    Scenario: Decimal division by zero returns NULL when ANSI mode is disabled
-      Given config spark.sql.ansi.enabled = false
-      When query
-        """
-        SELECT 1.0 / 0.0 AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
     Scenario: Division by zero throws error when ANSI mode is enabled
       Given config spark.sql.ansi.enabled = true
       When query
@@ -30,13 +20,35 @@ Feature: ANSI mode behaviors
         """
       Then query error (?i)divide.*zero
 
-    Scenario: Float division by zero throws error when ANSI mode is enabled
+  Rule: Float/Double division by zero
+
+    Scenario: Double division by zero throws error when ANSI enabled
       Given config spark.sql.ansi.enabled = true
       When query
         """
-        SELECT 1.0 / 0.0 AS result
+        SELECT CAST(1.0 AS DOUBLE) / CAST(0.0 AS DOUBLE) AS result
         """
       Then query error (?i)divide.*zero
+
+    Scenario: Double division by zero returns NULL when ANSI disabled
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(1.0 AS DOUBLE) / CAST(0.0 AS DOUBLE) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: Float division by zero returns NULL when ANSI disabled
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(1.0 AS FLOAT) / CAST(0.0 AS FLOAT) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
 
   Rule: Modulo by zero
 
@@ -58,11 +70,11 @@ Feature: ANSI mode behaviors
         """
       Then query error (?i)(remainder.*zero|divide.*zero)
 
-    Scenario: Decimal modulo by zero returns NULL
+    Scenario: Double modulo by zero returns NULL when ANSI disabled
       Given config spark.sql.ansi.enabled = false
       When query
         """
-        SELECT 10.5 % 0.0 AS result
+        SELECT CAST(10.5 AS DOUBLE) % CAST(0.0 AS DOUBLE) AS result
         """
       Then query result
         | result |

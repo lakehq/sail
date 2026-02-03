@@ -6,7 +6,6 @@ use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{cast, expr, lit, Expr, ExprSchemable, Operator, ScalarUDF};
 use datafusion_spark::function::math::expr_fn as math_fn;
-use half::f16;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::error::generic_exec_err;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
@@ -29,6 +28,48 @@ use sail_function::scalar::math::spark_unhex::SparkUnHex;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+
+/// Checks if an expression is a numeric zero literal (any numeric type).
+fn is_numeric_zero_literal(expr: &Expr) -> bool {
+    match expr {
+        Expr::Literal(ScalarValue::Int8(Some(0)), _)
+        | Expr::Literal(ScalarValue::Int16(Some(0)), _)
+        | Expr::Literal(ScalarValue::Int32(Some(0)), _)
+        | Expr::Literal(ScalarValue::Int64(Some(0)), _)
+        | Expr::Literal(ScalarValue::UInt8(Some(0)), _)
+        | Expr::Literal(ScalarValue::UInt16(Some(0)), _)
+        | Expr::Literal(ScalarValue::UInt32(Some(0)), _)
+        | Expr::Literal(ScalarValue::UInt64(Some(0)), _)
+        | Expr::Literal(ScalarValue::Float32(Some(0.0)), _)
+        | Expr::Literal(ScalarValue::Float64(Some(0.0)), _)
+        | Expr::Literal(ScalarValue::Decimal128(Some(0), _, _), _) => true,
+        Expr::Literal(ScalarValue::Decimal256(Some(v), _, _), _) => *v == i256::ZERO,
+        _ => false,
+    }
+}
+
+/// Checks if an expression evaluates to a float/double zero.
+/// This includes direct float literals and CAST expressions to float types.
+fn is_float_zero(expr: &Expr) -> bool {
+    match expr {
+        // Direct float literals
+        Expr::Literal(ScalarValue::Float32(Some(0.0)), _)
+        | Expr::Literal(ScalarValue::Float64(Some(0.0)), _) => true,
+        // CAST to float type with a zero literal inside
+        Expr::Cast(expr::Cast { expr, data_type, .. })
+            if matches!(data_type, DataType::Float32 | DataType::Float64) =>
+        {
+            is_numeric_zero_literal(expr)
+        }
+        // TryCast to float type with a zero literal inside
+        Expr::TryCast(expr::TryCast { expr, data_type, .. })
+            if matches!(data_type, DataType::Float32 | DataType::Float64) =>
+        {
+            is_numeric_zero_literal(expr)
+        }
+        _ => false,
+    }
+}
 
 /// Arguments:
 ///   - left: A numeric, DATE, TIMESTAMP, or INTERVAL expression.
@@ -199,6 +240,7 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
     let (dividend, divisor) = arguments.two()?;
 
+    // Check for literal zero divisor - integer and decimal types
     if matches!(
         &divisor,
         Expr::Literal(ScalarValue::Int8(Some(0)), _metadata)
@@ -209,17 +251,22 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
             | Expr::Literal(ScalarValue::UInt16(Some(0)), _metadata)
             | Expr::Literal(ScalarValue::UInt32(Some(0)), _metadata)
             | Expr::Literal(ScalarValue::UInt64(Some(0)), _metadata)
-            | Expr::Literal(ScalarValue::Float32(Some(0.0)), _metadata)
-            | Expr::Literal(ScalarValue::Float64(Some(0.0)), _metadata)
             | Expr::Literal(ScalarValue::Decimal128(Some(0), _, _), _metadata)
-    ) || matches!(
-        &divisor,
-        Expr::Literal(ScalarValue::Float16(Some(f16)), _metadata) if *f16 == f16::from_f32(0.0)
     ) || matches!(
         &divisor,
         Expr::Literal(ScalarValue::Decimal256(Some(v), _, _), _metadata) if *v == i256::ZERO
     ) {
         // FIXME: Account for array input.
+        return if function_context.plan_config.ansi_mode {
+            Err(PlanError::ArrowError(ArrowError::DivideByZero))
+        } else {
+            Ok(Expr::Literal(ScalarValue::Null, None))
+        };
+    }
+
+    // Check for float/double zero divisor
+    // Spark returns NULL (ANSI=false) or error (ANSI=true) for float/double division by zero
+    if is_float_zero(&divisor) {
         return if function_context.plan_config.ansi_mode {
             Err(PlanError::ArrowError(ArrowError::DivideByZero))
         } else {
@@ -309,7 +356,7 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
     } = input;
     let (dividend, divisor) = arguments.two()?;
 
-    // Check for literal zero divisor
+    // Check for literal zero divisor - integer and decimal types
     if matches!(
         &divisor,
         Expr::Literal(ScalarValue::Int8(Some(0)), _)
@@ -320,16 +367,21 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
             | Expr::Literal(ScalarValue::UInt16(Some(0)), _)
             | Expr::Literal(ScalarValue::UInt32(Some(0)), _)
             | Expr::Literal(ScalarValue::UInt64(Some(0)), _)
-            | Expr::Literal(ScalarValue::Float32(Some(0.0)), _)
-            | Expr::Literal(ScalarValue::Float64(Some(0.0)), _)
             | Expr::Literal(ScalarValue::Decimal128(Some(0), _, _), _)
-    ) || matches!(
-        &divisor,
-        Expr::Literal(ScalarValue::Float16(Some(f16)), _) if *f16 == f16::from_f32(0.0)
     ) || matches!(
         &divisor,
         Expr::Literal(ScalarValue::Decimal256(Some(v), _, _), _) if *v == i256::ZERO
     ) {
+        return if function_context.plan_config.ansi_mode {
+            Err(PlanError::ArrowError(ArrowError::DivideByZero))
+        } else {
+            Ok(Expr::Literal(ScalarValue::Null, None))
+        };
+    }
+
+    // Check for float/double zero divisor
+    // Spark returns NULL (ANSI=false) or error (ANSI=true) for float/double modulo by zero
+    if is_float_zero(&divisor) {
         return if function_context.plan_config.ansi_mode {
             Err(PlanError::ArrowError(ArrowError::DivideByZero))
         } else {
