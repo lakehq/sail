@@ -26,8 +26,8 @@ df = spark.createDataFrame(data, ["label", "features"])
 print("Training data:")
 df.show()
 
-# Create LinearRegression estimator (default maxIter=100)
-lr = LinearRegression(regParam=0.0)
+# Create LinearRegression estimator with more iterations and low tolerance for SGD convergence
+lr = LinearRegression(maxIter=1000, tol=1e-10, regParam=0.0)
 
 print("Attempting to fit LinearRegression...")
 try:
