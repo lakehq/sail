@@ -67,10 +67,10 @@ lexical-core = { version = "1.0.6", default-features = false, features = ["write
 aws-config = "1.8.12"
 aws-credential-types = "1.2.9"
 aws-sdk-glue = "1.135.0"
-aws-smithy-runtime-api = "1.10.0"
+aws-smithy-runtime-api = "1.11.3"
 aws-smithy-types = "1.3.3"
 aws-smithy-async = "1.2.6"
-clap = { version = "4.5.54", features = ["derive"] }
+clap = { version = "4.5.56", features = ["derive"] }
 num_enum = "0.7.4"
 num-traits = "0.2.19"
 log = "0.4.29"
@@ -95,7 +95,7 @@ md-5 = "0.10.6"
 crc32fast = "1.5.0"
 sha1 = "0.10.6"
 half = { version = "2.7.1", features = ["serde", "num-traits", "zerocopy"] }
-iana-time-zone = "0.1.64"
+iana-time-zone = "0.1.65"
 chumsky = { version = "0.11.2", default-features = false, features = ["pratt"] }
 num = "0.4.3"
 hf-hub = { version = "0.4.3", default-features = false, features = ["tokio"] }
@@ -125,13 +125,13 @@ readonly = "0.2.13"
 
 # The `tonic` version must match the one used in `arrow-flight` (replace `RELEASE` with the release we are using):
 #   https://github.com/apache/arrow-rs/blob/RELEASE/arrow-flight/Cargo.toml
-tonic = { version = "0.14.1", features = ["tls-ring", "tls-native-roots", "gzip", "zstd"] }
-tonic-build = "0.14.1"
-tonic-prost-build = "0.14.1"
-tonic-prost = "0.14.1"
-tonic-reflection = "0.14.1"
-tonic-health = "0.14.1"
-tonic-types = "0.14.1"
+tonic = { version = "0.14.3", features = ["tls-ring", "tls-native-roots", "gzip", "zstd"] }
+tonic-build = "0.14.3"
+tonic-prost-build = "0.14.3"
+tonic-prost = "0.14.3"
+tonic-reflection = "0.14.3"
+tonic-health = "0.14.3"
+tonic-types = "0.14.3"
 # The `prost` version must match the one used in `tonic` (replace `RELEASE` with the release we are using):
 #   https://github.com/hyperium/tonic/blob/vRELEASE/tonic/Cargo.toml
 prost-build = "0.14"
