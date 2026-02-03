@@ -18,6 +18,9 @@ jobs:
     outputs:
       build_package: ${{ github.event_name == 'push' || steps.filter.outputs.package == 'true' || steps.baseline-workflow.outputs.workflow_run_id == '' }}
       baseline_run_id: ${{ steps.baseline-workflow.outputs.workflow_run_id }}
+      run_catalog_tests: ${{ ((github.event_name == 'pull_request' && (steps.message.outputs.run_catalog_tests == 'true' || steps.label.outputs.run_catalog_tests == 'true')) || github.event_name == 'push') && 'true' || 'false' }}
+      run_spark_tests: ${{ ((github.event_name == 'pull_request' && (github.event.action == 'opened' || steps.message.outputs.run_spark_tests == 'true' || steps.label.outputs.run_spark_tests == 'true')) || github.event_name == 'push') && 'true' || 'false' }}
+      run_ibis_tests: ${{ ((github.event_name == 'pull_request' && (github.event.action == 'opened' || steps.message.outputs.run_ibis_tests == 'true' || steps.label.outputs.run_ibis_tests == 'true')) || github.event_name == 'push') && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -46,128 +49,59 @@ jobs:
           workflow_name: Build
           artifact_name: python-package
 
+      - uses: actions/github-script@v7
+        id: message
+        with:
+          script: |
+            const { data: commit } = await github.rest.git.getCommit({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              // When the event is `pull_request`, we must extract the commit message from the head branch,
+              // rather than the merge branch created by GitHub.
+              commit_sha: context.payload.pull_request !== undefined ? context.payload.pull_request.head.sha : context.sha,
+            });
+            const patterns = [
+                { name: 'run_catalog_tests', pattern: "\\[catalog tests?\\]", flags: "i" },
+                { name: 'run_spark_tests', pattern: "\\[(spark )?tests?\\]", flags: "i" },
+                { name: 'run_ibis_tests', pattern: "\\[(ibis )?tests?\\]", flags: "i" },
+            ];
+            for (const p of patterns) {
+                const regex = new RegExp(p.pattern, p.flags);
+                core.setOutput(p.name, commit.message.match(regex) !== null ? 'true' : 'false');
+            }
+
+      - uses: actions/github-script@v7
+        id: label
+        with:
+          script: |
+            const labels = context.payload.pull_request?.labels?.map(label => label.name) || [];
+            core.setOutput('run_catalog_tests', labels.includes('run catalog tests') ? 'true' : 'false');
+            core.setOutput('run_spark_tests', labels.includes('run spark tests') ? 'true' : 'false');
+            core.setOutput('run_ibis_tests', labels.includes('run ibis tests') ? 'true' : 'false');
+
   rust-tests:
     name: Rust Tests
     if: ${{ needs.setup.outputs.build_package == 'true' }}
-    runs-on: ubuntu-latest
+    uses: ./.github/workflows/rust-tests.yml
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+    with:
+      run_catalog_tests: ${{ needs.setup.outputs.run_catalog_tests }}
     needs:
       - setup
-    env:
-      # Coverage environment variables
-      RUSTC_WORKSPACE_WRAPPER: ${{ github.workspace }}/.github/scripts/rustc-workspace-wrapper.sh
-      LLVM_PROFILE_FILE: ${{ github.workspace }}/target/llvm-profiles/rust-unit/sail-%p-%m.profraw
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: ./.github/actions/adjust-swap-space
-
-      - uses: ./.github/actions/mount-target-directory
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - uses: ./.github/actions/setup-rust
-        with:
-          cache-key: rust-tests
-
-      - name: Prepare coverage directories
-        run: |
-          mkdir -p target/llvm-profiles/rust-unit
-          mkdir -p target/llvm-profiles/rust-slow
-
-      - name: Run Cargo Test
-        run: cargo nextest run
-
-      # Generate coverage report after unit tests (runs in PRs and pushes)
-      - name: Generate Rust unit coverage report
-        run: |
-          LLVM_PATH=$(.github/scripts/find-llvm-profdata.sh)
-          grcov target/llvm-profiles/rust-unit --binary-path target/debug/ -s . \
-            --llvm-path "$LLVM_PATH" \
-            -t lcov --branch --ignore-not-existing \
-            -o coverage-rust-unit.info
-
-      - name: Upload Rust unit coverage to Codecov
-        # Dependabot does not operate from a fork of the repository, so a token
-        # is required to upload coverage reports to Codecov. However, Dependabot
-        # cannot access Actions secrets. Instead of configuring Dependabot secrets
-        # separately, we skip coverage upload for Dependabot to avoid failures,
-        # since coverage reports from Dependabot runs are not useful.
-        if: ${{ github.actor != 'dependabot[bot]' }}
-        uses: codecov/codecov-action@v5
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage-rust-unit.info
-          flags: rust-unit-tests
-          name: rust-unit-tests
-          fail_ci_if_error: true
-          env_vars: OS
-
-      - name: Run Cargo Test (Ignored)
-        if: ${{ github.event_name == 'push' }}
-        env:
-          LLVM_PROFILE_FILE: ${{ github.workspace }}/target/llvm-profiles/rust-slow/sail-%p-%m.profraw
-        run: cargo nextest run --run-ignored ignored-only -j 6 --no-fail-fast
-
-      # Generate coverage report after ignored tests (push to main only)
-      - name: Generate Rust slow coverage report
-        if: ${{ github.event_name == 'push' }}
-        run: |
-          LLVM_PATH=$(.github/scripts/find-llvm-profdata.sh)
-          grcov target/llvm-profiles/rust-slow --binary-path target/debug/ -s . \
-            --llvm-path "$LLVM_PATH" \
-            -t lcov --branch --ignore-not-existing \
-            -o coverage-rust-slow.info
-
-      - name: Upload Rust slow coverage to Codecov
-        if: ${{ github.event_name == 'push' && github.actor != 'dependabot[bot]' }}
-        uses: codecov/codecov-action@v5
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage-rust-slow.info
-          flags: rust-slow-tests
-          name: rust-slow-tests
-          fail_ci_if_error: true
-          env_vars: OS
 
   rust-build:
     name: Rust Build
     if: ${{ needs.setup.outputs.build_package == 'true' }}
-    runs-on: ubuntu-latest
+    uses: ./.github/workflows/rust-build.yml
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     needs:
       - setup
-    env:
-      RUSTC_WORKSPACE_WRAPPER: ${{ github.workspace }}/.github/scripts/rustc-workspace-wrapper.sh
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: ./.github/actions/adjust-swap-space
-
-      - uses: ./.github/actions/mount-target-directory
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - uses: ./.github/actions/setup-rust
-        with:
-          cache-key: rust-build
-          install-testing-tools: false
-
-      - name: Build Python Package
-        uses: PyO3/maturin-action@v1
-
-      - name: Upload Python Package
-        uses: actions/upload-artifact@v4
-        with:
-          name: python-package
-          path: target/wheels
-          retention-days: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 30 || 1 }}
 
   spark-tests:
     name: Spark Tests
-    if: ${{ needs.setup.outputs.build_package == 'true' }}
+    if: ${{ needs.setup.outputs.build_package == 'true' && needs.setup.outputs.run_spark_tests == 'true' }}
     uses: ./.github/workflows/spark-tests.yml
     secrets:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
@@ -182,7 +116,7 @@ jobs:
 
   ibis-tests:
     name: Ibis Tests
-    if: ${{ needs.setup.outputs.build_package == 'true' }}
+    if: ${{ needs.setup.outputs.build_package == 'true' && needs.setup.outputs.run_ibis_tests == 'true' }}
     uses: ./.github/workflows/ibis-tests.yml
     secrets:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
