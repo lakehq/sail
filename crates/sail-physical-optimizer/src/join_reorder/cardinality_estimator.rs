@@ -50,6 +50,8 @@ pub struct CardinalityEstimator {
     cardinality_cache: HashMap<JoinSet, f64>,
     /// List of equivalence sets.
     equivalence_sets: Vec<EquivalenceSet>,
+    /// Fast lookup from stable column -> equivalence set index.
+    column_to_equiv_set: HashMap<StableColumn, usize>,
     /// Mapping from (relation_id, column_index) to initial distinct_count
     initial_distinct_counts: HashMap<StableColumn, f64>,
 }
@@ -60,6 +62,7 @@ impl CardinalityEstimator {
             graph,
             cardinality_cache: HashMap::new(),
             equivalence_sets: vec![],
+            column_to_equiv_set: HashMap::new(),
             initial_distinct_counts: HashMap::new(),
         };
 
@@ -125,7 +128,16 @@ impl CardinalityEstimator {
             self.estimate_tdom_for_set(set);
         }
 
+        // Build a lookup map for fast edge selectivity estimation.
+        let mut column_to_equiv_set = HashMap::new();
+        for (idx, set) in sets.iter().enumerate() {
+            for col in &set.columns {
+                column_to_equiv_set.insert(col.clone(), idx);
+            }
+        }
+
         self.equivalence_sets = sets;
+        self.column_to_equiv_set = column_to_equiv_set;
     }
 
     /// Merge two columns into equivalence sets using Union-Find like logic.
@@ -186,25 +198,43 @@ impl CardinalityEstimator {
 
     /// Estimate TDom (Total Domain) for an equivalence set.
     fn estimate_tdom_for_set(&self, set: &mut EquivalenceSet) {
-        let mut max_distinct_count = 1.0; // TDom is at least 1
+        let mut max_known_distinct: f64 = 0.0;
+        let mut min_relation_card: f64 = f64::INFINITY;
+        let mut has_known_stats = false;
 
         for stable_col in &set.columns {
             if let Some(distinct_count) = self.initial_distinct_counts.get(stable_col) {
-                if *distinct_count > max_distinct_count {
-                    max_distinct_count = *distinct_count;
-                }
-            } else {
-                // If a column has no statistics, use heuristic based on relation cardinality
-                if let Some(relation) = self.graph.get_relation(stable_col.relation_id) {
-                    let card = relation.initial_cardinality;
-                    if card > max_distinct_count {
-                        max_distinct_count = card;
-                    }
-                }
+                max_known_distinct = max_known_distinct.max(*distinct_count);
+                has_known_stats = true;
+            }
+
+            if let Some(relation) = self.graph.get_relation(stable_col.relation_id) {
+                min_relation_card = min_relation_card.min(relation.initial_cardinality);
             }
         }
 
-        set.set_t_dom_count(max_distinct_count);
+        // If we have any usable distinct-count statistics, prefer them. Importantly we must NOT
+        // "inflate" TDom to a table cardinality just because some columns in the equivalence set
+        // lack column stats, as that would make join selectivity unrealistically tiny and
+        // underestimate join sizes.
+        //
+        // If no stats exist, use a conservative upper bound: the smallest relation cardinality in
+        // the equivalence set. Domain cardinality cannot exceed any participating relation's row
+        // count, and using `min` avoids the pathological underestimation caused by `max`.
+        let mut tdom = if has_known_stats {
+            max_known_distinct.max(1.0)
+        } else if min_relation_card.is_finite() {
+            min_relation_card.max(1.0)
+        } else {
+            1.0
+        };
+
+        // Enforce the obvious upper bound when relation cardinalities are available.
+        if min_relation_card.is_finite() {
+            tdom = tdom.min(min_relation_card).max(1.0);
+        }
+
+        set.set_t_dom_count(tdom);
     }
 
     /// Estimate cardinality after joining a set of relations.
@@ -272,21 +302,30 @@ impl CardinalityEstimator {
             .collect()
     }
 
-    /// Get TDom count for a join edge by finding the equivalence set of its join keys.
+    /// Get a domain cardinality (TDom) for a join edge.
+    ///
+    /// For multi-column equi-joins (e.g. `(a.x = b.x) AND (a.y = b.y)`), we combine
+    /// all involved equivalence sets to avoid underestimating join selectivity by
+    /// accidentally using only one of the keys.
+    ///
+    /// We cap the combined domain by the smallest participating relation cardinality,
+    /// as the distinct count of a composite key cannot exceed the row count of any
+    /// participating relation.
     fn get_tdom_for_edge(&self, edge: &JoinEdge) -> f64 {
-        // Find the equivalence set that contains the join keys from this edge
-        for equiv_set in &self.equivalence_sets {
-            // Check if any equi-pair from the edge is in this equivalence set
-            for (left_col, right_col) in &edge.equi_pairs {
-                if equiv_set.contains(left_col) || equiv_set.contains(right_col) {
-                    return equiv_set.t_dom_count;
-                }
+        // Gather all equivalence sets referenced by this edge's equi-join pairs.
+        let mut used_equiv_sets: HashSet<usize> = HashSet::new();
+        for (left_col, right_col) in &edge.equi_pairs {
+            if let Some(idx) = self.column_to_equiv_set.get(left_col) {
+                used_equiv_sets.insert(*idx);
+            }
+            if let Some(idx) = self.column_to_equiv_set.get(right_col) {
+                used_equiv_sets.insert(*idx);
             }
         }
 
-        // If no equivalence set found, use a conservative estimate
-        // Take the maximum cardinality of relations involved in this edge
-        edge.join_set
+        // Base fallback: smallest relation cardinality in the edge.
+        let min_relation_card = edge
+            .join_set
             .iter()
             .map(|id| {
                 self.graph
@@ -294,7 +333,28 @@ impl CardinalityEstimator {
                     .map(|r| r.initial_cardinality)
                     .unwrap_or(1.0)
             })
-            .fold(1.0, f64::max)
+            .fold(f64::INFINITY, f64::min)
+            .max(1.0);
+
+        if used_equiv_sets.is_empty() {
+            return min_relation_card;
+        }
+
+        // Multiply the domains of each distinct equivalence set used by this edge.
+        let mut tdom_product = 1.0;
+        for idx in used_equiv_sets {
+            let tdom = self
+                .equivalence_sets
+                .get(idx)
+                .map(|s| s.t_dom_count)
+                .unwrap_or(1.0)
+                .max(1.0);
+            tdom_product *= tdom;
+        }
+
+        // Cap by the smallest relation cardinality to avoid unrealistically tiny selectivity
+        // for multi-key joins (composite-key distinct count cannot exceed row count).
+        tdom_product.min(min_relation_card).max(1.0)
     }
 
     /// Estimate join cardinality for a specific split (used by PlanEnumerator).
@@ -354,6 +414,7 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::common::stats::Precision;
     use datafusion::common::Statistics;
     use datafusion::physical_plan::empty::EmptyExec;
 
@@ -591,5 +652,285 @@ mod tests {
             .unwrap()
             .union(&JoinSet::new_singleton(2).unwrap());
         assert_eq!(estimator.get_edges_contained_in_set(s02).len(), 0);
+    }
+
+    #[test]
+    fn test_tdom_prefers_distinct_stats_over_missing_cols() -> Result<()> {
+        use datafusion::logical_expr::JoinType;
+        use datafusion::physical_expr::expressions::{BinaryExpr, Column};
+        use datafusion::physical_expr::PhysicalExpr;
+
+        let mut graph = QueryGraph::new();
+        let schema: Arc<Schema> =
+            Arc::new(Schema::new(vec![Field::new("k", DataType::Int32, false)]));
+
+        // R0 has distinct stats on join key (k): 10
+        let plan0 = Arc::new(EmptyExec::new(schema.clone()));
+        let mut stats0 = Statistics::new_unknown(&schema);
+        stats0.column_statistics[0].distinct_count = Precision::Exact(10);
+        graph.add_relation(RelationNode::new(plan0, 0, 1000.0, stats0));
+
+        // R1 has no distinct stats on join key (k)
+        let plan1 = Arc::new(EmptyExec::new(schema.clone()));
+        let stats1 = Statistics::new_unknown(&schema);
+        graph.add_relation(RelationNode::new(plan1, 1, 2000.0, stats1));
+
+        // Edge R0.k = R1.k
+        let l: Arc<dyn PhysicalExpr> = Arc::new(Column::new("k", 0));
+        let r: Arc<dyn PhysicalExpr> = Arc::new(Column::new("k", 0));
+        let filter = Arc::new(BinaryExpr::new(l, Operator::Eq, r)) as Arc<dyn PhysicalExpr>;
+        let join_set = JoinSet::new_singleton(0)?.union(&JoinSet::new_singleton(1)?);
+        let edge = JoinEdge::new(
+            join_set,
+            filter,
+            JoinType::Inner,
+            vec![(
+                StableColumn {
+                    relation_id: 0,
+                    column_index: 0,
+                    name: "k0".into(),
+                },
+                StableColumn {
+                    relation_id: 1,
+                    column_index: 0,
+                    name: "k1".into(),
+                },
+            )],
+        );
+        graph.add_edge(edge)?;
+
+        let estimator = CardinalityEstimator::new(graph);
+        let s01 = JoinSet::from_iter([0, 1])?;
+        let edges = estimator.get_edges_contained_in_set(s01);
+        assert_eq!(edges.len(), 1);
+
+        // TDom should be the known distinct-count (10), not inflated to a table cardinality.
+        assert!((estimator.get_tdom_for_edge(edges[0]) - 10.0).abs() < 1e-9);
+        Ok(())
+    }
+
+    #[test]
+    fn test_tdom_fallback_uses_min_relation_cardinality() -> Result<()> {
+        use datafusion::logical_expr::JoinType;
+        use datafusion::physical_expr::expressions::{BinaryExpr, Column};
+        use datafusion::physical_expr::PhysicalExpr;
+
+        let mut graph = QueryGraph::new();
+        let schema: Arc<Schema> =
+            Arc::new(Schema::new(vec![Field::new("k", DataType::Int32, false)]));
+
+        // No distinct stats available for either side.
+        let plan0 = Arc::new(EmptyExec::new(schema.clone()));
+        graph.add_relation(RelationNode::new(
+            plan0,
+            0,
+            1_500_000.0,
+            Statistics::new_unknown(&schema),
+        ));
+        let plan1 = Arc::new(EmptyExec::new(schema.clone()));
+        graph.add_relation(RelationNode::new(
+            plan1,
+            1,
+            100_000.0,
+            Statistics::new_unknown(&schema),
+        ));
+
+        // Edge R0.k = R1.k
+        let l: Arc<dyn PhysicalExpr> = Arc::new(Column::new("k", 0));
+        let r: Arc<dyn PhysicalExpr> = Arc::new(Column::new("k", 0));
+        let filter = Arc::new(BinaryExpr::new(l, Operator::Eq, r)) as Arc<dyn PhysicalExpr>;
+        let join_set = JoinSet::new_singleton(0)?.union(&JoinSet::new_singleton(1)?);
+        let edge = JoinEdge::new(
+            join_set,
+            filter,
+            JoinType::Inner,
+            vec![(
+                StableColumn {
+                    relation_id: 0,
+                    column_index: 0,
+                    name: "k0".into(),
+                },
+                StableColumn {
+                    relation_id: 1,
+                    column_index: 0,
+                    name: "k1".into(),
+                },
+            )],
+        );
+        graph.add_edge(edge)?;
+
+        let estimator = CardinalityEstimator::new(graph);
+        let s01 = JoinSet::from_iter([0, 1])?;
+        let edges = estimator.get_edges_contained_in_set(s01);
+        assert_eq!(edges.len(), 1);
+
+        // With no stats, TDom should be bounded by the smaller relation (100k), not the larger.
+        assert!((estimator.get_tdom_for_edge(edges[0]) - 100_000.0).abs() < 1e-9);
+        Ok(())
+    }
+
+    #[test]
+    fn test_tdom_for_multi_key_edge_uses_all_equivalence_sets() -> Result<()> {
+        use datafusion::logical_expr::JoinType;
+        use datafusion::physical_expr::expressions::{BinaryExpr, Column};
+        use datafusion::physical_expr::PhysicalExpr;
+
+        let mut graph = QueryGraph::new();
+        let schema: Arc<Schema> = Arc::new(Schema::new(vec![
+            Field::new("k1", DataType::Int32, false),
+            Field::new("k2", DataType::Int32, false),
+        ]));
+
+        // Ensure edge-level cap doesn't hide the multiplication behavior.
+        let huge_card = 1_000_000_000_000.0;
+
+        // R0: k1 distinct=10, k2 distinct=100
+        let plan0 = Arc::new(EmptyExec::new(schema.clone()));
+        let mut stats0 = Statistics::new_unknown(&schema);
+        stats0.column_statistics[0].distinct_count = Precision::Exact(10);
+        stats0.column_statistics[1].distinct_count = Precision::Exact(100);
+        graph.add_relation(RelationNode::new(plan0, 0, huge_card, stats0));
+
+        // R1: k1 distinct=20, k2 distinct=200
+        let plan1 = Arc::new(EmptyExec::new(schema.clone()));
+        let mut stats1 = Statistics::new_unknown(&schema);
+        stats1.column_statistics[0].distinct_count = Precision::Exact(20);
+        stats1.column_statistics[1].distinct_count = Precision::Exact(200);
+        graph.add_relation(RelationNode::new(plan1, 1, huge_card, stats1));
+
+        // Edge: (R0.k1 = R1.k1) AND (R0.k2 = R1.k2)
+        let k1_l: Arc<dyn PhysicalExpr> = Arc::new(Column::new("k1", 0));
+        let k1_r: Arc<dyn PhysicalExpr> = Arc::new(Column::new("k1", 0));
+        let k2_l: Arc<dyn PhysicalExpr> = Arc::new(Column::new("k2", 1));
+        let k2_r: Arc<dyn PhysicalExpr> = Arc::new(Column::new("k2", 1));
+        let eq1 = Arc::new(BinaryExpr::new(k1_l, Operator::Eq, k1_r)) as Arc<dyn PhysicalExpr>;
+        let eq2 = Arc::new(BinaryExpr::new(k2_l, Operator::Eq, k2_r)) as Arc<dyn PhysicalExpr>;
+        let filter = Arc::new(BinaryExpr::new(eq1, Operator::And, eq2)) as Arc<dyn PhysicalExpr>;
+
+        let join_set = JoinSet::new_singleton(0)?.union(&JoinSet::new_singleton(1)?);
+        graph.add_edge(JoinEdge::new(
+            join_set,
+            filter,
+            JoinType::Inner,
+            vec![
+                (
+                    StableColumn {
+                        relation_id: 0,
+                        column_index: 0,
+                        name: "k1".into(),
+                    },
+                    StableColumn {
+                        relation_id: 1,
+                        column_index: 0,
+                        name: "k1".into(),
+                    },
+                ),
+                (
+                    StableColumn {
+                        relation_id: 0,
+                        column_index: 1,
+                        name: "k2".into(),
+                    },
+                    StableColumn {
+                        relation_id: 1,
+                        column_index: 1,
+                        name: "k2".into(),
+                    },
+                ),
+            ],
+        ))?;
+
+        let estimator = CardinalityEstimator::new(graph);
+        let s01 = JoinSet::from_iter([0, 1])?;
+        let edges = estimator.get_edges_contained_in_set(s01);
+        assert_eq!(edges.len(), 1);
+
+        // For each key, TDom uses the max distinct across the equivalence set: 20 and 200.
+        // Multi-key TDom should combine them (product) and not accidentally use only one key.
+        assert!((estimator.get_tdom_for_edge(edges[0]) - 4000.0).abs() < 1e-9);
+        Ok(())
+    }
+
+    #[test]
+    fn test_tdom_for_multi_key_edge_is_capped_by_min_relation_cardinality() -> Result<()> {
+        use datafusion::logical_expr::JoinType;
+        use datafusion::physical_expr::expressions::{BinaryExpr, Column};
+        use datafusion::physical_expr::PhysicalExpr;
+
+        let mut graph = QueryGraph::new();
+        let schema: Arc<Schema> = Arc::new(Schema::new(vec![
+            Field::new("k1", DataType::Int32, false),
+            Field::new("k2", DataType::Int32, false),
+        ]));
+
+        // Min relation cardinality is small, so the composite-key domain must be capped.
+        let small_card = 1000.0;
+        let huge_card = 1_000_000_000_000.0;
+
+        // R0: k1 distinct=100, k2 distinct=200
+        let plan0 = Arc::new(EmptyExec::new(schema.clone()));
+        let mut stats0 = Statistics::new_unknown(&schema);
+        stats0.column_statistics[0].distinct_count = Precision::Exact(100);
+        stats0.column_statistics[1].distinct_count = Precision::Exact(200);
+        graph.add_relation(RelationNode::new(plan0, 0, small_card, stats0));
+
+        // R1: k1 distinct=100, k2 distinct=200
+        let plan1 = Arc::new(EmptyExec::new(schema.clone()));
+        let mut stats1 = Statistics::new_unknown(&schema);
+        stats1.column_statistics[0].distinct_count = Precision::Exact(100);
+        stats1.column_statistics[1].distinct_count = Precision::Exact(200);
+        graph.add_relation(RelationNode::new(plan1, 1, huge_card, stats1));
+
+        // Edge: (R0.k1 = R1.k1) AND (R0.k2 = R1.k2)
+        let k1_l: Arc<dyn PhysicalExpr> = Arc::new(Column::new("k1", 0));
+        let k1_r: Arc<dyn PhysicalExpr> = Arc::new(Column::new("k1", 0));
+        let k2_l: Arc<dyn PhysicalExpr> = Arc::new(Column::new("k2", 1));
+        let k2_r: Arc<dyn PhysicalExpr> = Arc::new(Column::new("k2", 1));
+        let eq1 = Arc::new(BinaryExpr::new(k1_l, Operator::Eq, k1_r)) as Arc<dyn PhysicalExpr>;
+        let eq2 = Arc::new(BinaryExpr::new(k2_l, Operator::Eq, k2_r)) as Arc<dyn PhysicalExpr>;
+        let filter = Arc::new(BinaryExpr::new(eq1, Operator::And, eq2)) as Arc<dyn PhysicalExpr>;
+
+        let join_set = JoinSet::new_singleton(0)?.union(&JoinSet::new_singleton(1)?);
+        graph.add_edge(JoinEdge::new(
+            join_set,
+            filter,
+            JoinType::Inner,
+            vec![
+                (
+                    StableColumn {
+                        relation_id: 0,
+                        column_index: 0,
+                        name: "k1".into(),
+                    },
+                    StableColumn {
+                        relation_id: 1,
+                        column_index: 0,
+                        name: "k1".into(),
+                    },
+                ),
+                (
+                    StableColumn {
+                        relation_id: 0,
+                        column_index: 1,
+                        name: "k2".into(),
+                    },
+                    StableColumn {
+                        relation_id: 1,
+                        column_index: 1,
+                        name: "k2".into(),
+                    },
+                ),
+            ],
+        ))?;
+
+        let estimator = CardinalityEstimator::new(graph);
+        let s01 = JoinSet::from_iter([0, 1])?;
+        let edges = estimator.get_edges_contained_in_set(s01);
+        assert_eq!(edges.len(), 1);
+
+        // Uncapped product would be 100 * 200 = 20000, but composite-key domain cannot exceed
+        // the smaller input (R0 has 1000 rows).
+        assert!((estimator.get_tdom_for_edge(edges[0]) - 1000.0).abs() < 1e-9);
+        Ok(())
     }
 }
