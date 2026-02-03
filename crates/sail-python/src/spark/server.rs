@@ -45,6 +45,8 @@ pub(super) struct SparkConnectServer {
     ip: String,
     #[pyo3(get)]
     port: u16,
+    config: Arc<AppConfig>,
+    runtime: RuntimeHandle,
     state: Option<SparkConnectServerState>,
 }
 
@@ -53,10 +55,16 @@ impl SparkConnectServer {
     /// Creates a new `SparkConnectServer` instance.
     #[new]
     #[pyo3(signature = (ip, port, /))]
-    fn new(ip: &str, port: u16) -> PyResult<Self> {
+    fn new(py: Python<'_>, ip: &str, port: u16) -> PyResult<Self> {
+        let globals = GlobalState::instance()?;
+        globals.environment.warn_if_changed(py)?;
+        let config = globals.config.clone();
+        let runtime = globals.runtime.handle();
         Ok(Self {
             ip: ip.to_string(),
             port,
+            config,
+            runtime,
             state: None,
         })
     }
@@ -87,10 +95,10 @@ impl SparkConnectServer {
             PyErr::new::<PyValueError, _>(format!("invalid IP address: {}", self.ip))
         })?;
         let address = SocketAddr::new(ip, self.port);
-        let globals = GlobalState::instance()?;
-        globals.environment.warn_if_changed(py)?;
-        let handle = globals.runtime.handle();
-        let listener = handle.primary().block_on(TcpListener::bind(address))?;
+        let listener = self
+            .runtime
+            .primary()
+            .block_on(TcpListener::bind(address))?;
         self.state = Some(self.run(listener)?);
         if !background {
             let state = self.state()?;
@@ -142,17 +150,15 @@ impl SparkConnectServer {
     }
 
     fn run(&self, listener: TcpListener) -> PyResult<SparkConnectServerState> {
-        let globals = GlobalState::instance()?;
-        let runtime = globals.runtime.handle();
         // Get the actual listener address.
         // A port is assigned by the OS if the port is 0 when creating the listener.
         let address = listener.local_addr()?;
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let handle = globals.runtime.handle();
-        let config = globals.config.clone();
+        let config = self.config.clone();
+        let runtime = self.runtime.clone();
         info!("Starting the Spark Connect server on {address}...");
         let handle = thread::Builder::new().spawn(move || {
-            Self::run_blocking(handle.primary().clone(), config, runtime, listener, rx)
+            Self::run_blocking(runtime.primary().clone(), config, runtime, listener, rx)
         })?;
         Ok(SparkConnectServerState {
             address,

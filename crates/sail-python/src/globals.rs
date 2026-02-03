@@ -11,7 +11,7 @@ use sail_telemetry::telemetry::{init_telemetry, ResourceOptions};
 
 static GLOBALS: OnceLock<GlobalState> = OnceLock::new();
 
-/// A snapshot of environment variables for application configuration.
+/// An approximate snapshot of environment variables used for application configuration.
 pub struct EnvironmentSnapshot {
     vars: HashMap<String, String>,
 }

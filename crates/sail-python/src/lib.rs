@@ -6,7 +6,6 @@ mod cli;
 mod globals;
 mod spark;
 
-use log::debug;
 use pyo3::prelude::*;
 
 /// Performs shutdown of telemetry.
