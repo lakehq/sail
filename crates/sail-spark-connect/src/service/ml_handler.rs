@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use datafusion::arrow::array::{Array, Float64Array, ListArray};
+use datafusion::arrow::array::{Array, Float64Array, Int32Array, Int8Array, ListArray, StructArray};
 use datafusion::arrow::compute::concat_batches;
 use datafusion::prelude::SessionContext;
 use futures::stream;
@@ -246,17 +246,33 @@ async fn extract_training_data(
 }
 
 /// Extract features from an array column.
+///
+/// Supports two formats:
+/// - ListArray: Plain array of floats (e.g., from Python lists)
+/// - StructArray: Spark ML VectorUDT (type, size, indices, values)
 fn extract_features(array: &Arc<dyn Array>) -> SparkResult<Vec<Vec<f64>>> {
-    let list_array = array
-        .as_any()
-        .downcast_ref::<ListArray>()
-        .ok_or_else(|| SparkError::invalid("Features column must be an array type"))?;
+    // Try ListArray first (plain arrays)
+    if let Some(list_array) = array.as_any().downcast_ref::<ListArray>() {
+        return extract_features_from_list(list_array);
+    }
 
+    // Try StructArray (VectorUDT)
+    if let Some(struct_array) = array.as_any().downcast_ref::<StructArray>() {
+        return extract_features_from_vector_udt(struct_array);
+    }
+
+    Err(SparkError::invalid(
+        "Features column must be an array type or VectorUDT",
+    ))
+}
+
+/// Extract features from a ListArray (plain Python lists).
+fn extract_features_from_list(list_array: &ListArray) -> SparkResult<Vec<Vec<f64>>> {
     let mut features = Vec::with_capacity(list_array.len());
 
     for i in 0..list_array.len() {
         if list_array.is_null(i) {
-            continue; // Skip null rows
+            continue;
         }
         let inner = list_array.value(i);
         let float_array = inner
@@ -265,6 +281,89 @@ fn extract_features(array: &Arc<dyn Array>) -> SparkResult<Vec<Vec<f64>>> {
             .ok_or_else(|| SparkError::invalid("Feature values must be float64"))?;
 
         let row: Vec<f64> = float_array.iter().flatten().collect();
+        features.push(row);
+    }
+
+    Ok(features)
+}
+
+/// Extract features from a VectorUDT (Spark ML vector format).
+///
+/// VectorUDT struct fields:
+/// - type: Int8 (0=sparse, 1=dense)
+/// - size: Int32 (vector size, used for sparse)
+/// - indices: List<Int32> (non-zero indices for sparse)
+/// - values: List<Float64> (values)
+fn extract_features_from_vector_udt(struct_array: &StructArray) -> SparkResult<Vec<Vec<f64>>> {
+    let type_col = struct_array
+        .column_by_name("type")
+        .ok_or_else(|| SparkError::invalid("VectorUDT missing 'type' field"))?;
+    let type_array = type_col
+        .as_any()
+        .downcast_ref::<Int8Array>()
+        .ok_or_else(|| SparkError::invalid("VectorUDT 'type' must be Int8"))?;
+
+    let size_col = struct_array
+        .column_by_name("size")
+        .ok_or_else(|| SparkError::invalid("VectorUDT missing 'size' field"))?;
+    let size_array = size_col
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .ok_or_else(|| SparkError::invalid("VectorUDT 'size' must be Int32"))?;
+
+    let indices_col = struct_array
+        .column_by_name("indices")
+        .ok_or_else(|| SparkError::invalid("VectorUDT missing 'indices' field"))?;
+    let indices_array = indices_col
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .ok_or_else(|| SparkError::invalid("VectorUDT 'indices' must be List"))?;
+
+    let values_col = struct_array
+        .column_by_name("values")
+        .ok_or_else(|| SparkError::invalid("VectorUDT missing 'values' field"))?;
+    let values_array = values_col
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .ok_or_else(|| SparkError::invalid("VectorUDT 'values' must be List"))?;
+
+    let mut features = Vec::with_capacity(struct_array.len());
+
+    for i in 0..struct_array.len() {
+        if struct_array.is_null(i) {
+            continue;
+        }
+
+        let vec_type = type_array.value(i);
+        let values = values_array.value(i);
+        let float_values = values
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .ok_or_else(|| SparkError::invalid("VectorUDT values must be Float64"))?;
+
+        let row = if vec_type == 1 {
+            // Dense vector: values array contains all elements
+            float_values.iter().flatten().collect()
+        } else {
+            // Sparse vector: need to expand using indices
+            let size = size_array.value(i) as usize;
+            let indices = indices_array.value(i);
+            let int_indices = indices
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .ok_or_else(|| SparkError::invalid("VectorUDT indices must be Int32"))?;
+
+            let mut dense = vec![0.0; size];
+            for (j, idx) in int_indices.iter().enumerate() {
+                if let Some(idx) = idx {
+                    if let Some(val) = float_values.value(j).into() {
+                        dense[idx as usize] = val;
+                    }
+                }
+            }
+            dense
+        };
+
         features.push(row);
     }
 
