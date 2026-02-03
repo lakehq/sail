@@ -1437,8 +1437,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = Explode::new(kind);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
-            UdfKind::SparkUnixTimestamp(gen::SparkUnixTimestampUdf { timezone }) => {
-                let udf = SparkUnixTimestamp::new(Arc::from(timezone));
+            UdfKind::SparkUnixTimestamp(gen::SparkUnixTimestampUdf { timezone, is_try }) => {
+                let udf = SparkUnixTimestamp::new_with_try(Arc::from(timezone), is_try);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
             UdfKind::StructFunction(gen::StructFunctionUdf { field_names }) => {
@@ -1764,7 +1764,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::Explode(gen::ExplodeUdf { name })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkUnixTimestamp>() {
             let timezone = func.timezone().to_string();
-            UdfKind::SparkUnixTimestamp(gen::SparkUnixTimestampUdf { timezone })
+            let is_try = func.is_try();
+            UdfKind::SparkUnixTimestamp(gen::SparkUnixTimestampUdf { timezone, is_try })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<StructFunction>() {
             let field_names = func.field_names().to_vec();
             UdfKind::StructFunction(gen::StructFunctionUdf { field_names })

@@ -5,15 +5,17 @@ use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{plan_datafusion_err, Column, DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::FieldMetadata;
-use datafusion_expr::{expr, lit, BinaryExpr, ExprSchemable, ScalarUDF};
+use datafusion_expr::{expr, lit, when, BinaryExpr, ExprSchemable, ScalarUDF};
 use datafusion_expr_common::operator::Operator;
 use datafusion_functions::core::expr_ext::FieldAccessor;
-use datafusion_functions_nested::expr_fn::{array_element, map_extract};
+use datafusion_functions::math::expr_fn::abs;
+use datafusion_functions_nested::expr_fn::{array_element, array_length, map_extract};
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::drop_struct_field::DropStructField;
+use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::table_input::TableInput;
 use sail_function::scalar::update_struct_field::UpdateStructField;
 
@@ -203,14 +205,30 @@ impl PlanResolver<'_> {
             | DataType::LargeList(_)
             | DataType::FixedSizeList(_, _)
             | DataType::ListView(_)
-            | DataType::LargeListView(_) => array_element(
-                expr,
-                expr::Expr::BinaryExpr(BinaryExpr::new(
-                    Box::new(expr::Expr::Literal(extraction, None)),
+            | DataType::LargeListView(_) => {
+                let index_expr = expr::Expr::Literal(extraction, None);
+                let one_based_index = expr::Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(index_expr.clone()),
                     Operator::Plus,
                     Box::new(lit(1i64)),
-                )),
-            ),
+                ));
+
+                // Out-of-bounds behavior depends on ANSI mode
+                let out_of_bounds_result = if self.config.ansi_mode {
+                    ScalarUDF::from(RaiseError::new())
+                        .call(vec![lit("array subscript: the index is out of bounds")])
+                } else {
+                    lit(ScalarValue::Null)
+                };
+
+                // Check: abs(index) must be between 1 and array_length
+                when(
+                    abs(index_expr).not_between(lit(1i64), array_length(expr.clone())),
+                    out_of_bounds_result,
+                )
+                .when(lit(true), array_element(expr, one_based_index))
+                .end()?
+            }
             DataType::Struct(fields) => {
                 let ScalarValue::Utf8(Some(name)) = extraction else {
                     return Err(PlanError::AnalysisError(format!(

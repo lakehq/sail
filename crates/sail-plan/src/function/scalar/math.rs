@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
+use datafusion::arrow::datatypes::{i256, DataType, IntervalUnit, TimeUnit};
 use datafusion::arrow::error::ArrowError;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
@@ -211,9 +211,13 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
             | Expr::Literal(ScalarValue::UInt64(Some(0)), _metadata)
             | Expr::Literal(ScalarValue::Float32(Some(0.0)), _metadata)
             | Expr::Literal(ScalarValue::Float64(Some(0.0)), _metadata)
+            | Expr::Literal(ScalarValue::Decimal128(Some(0), _, _), _metadata)
     ) || matches!(
         &divisor,
         Expr::Literal(ScalarValue::Float16(Some(f16)), _metadata) if *f16 == f16::from_f32(0.0)
+    ) || matches!(
+        &divisor,
+        Expr::Literal(ScalarValue::Decimal256(Some(v), _, _), _metadata) if *v == i256::ZERO
     ) {
         // FIXME: Account for array input.
         return if function_context.plan_config.ansi_mode {
@@ -293,6 +297,51 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
     };
     // We need this final cast because we are doing integer division.
     Ok(cast(expr, DataType::Int64))
+}
+
+/// Spark modulo behavior:
+/// - ANSI=true: throws error for zero divisor
+/// - ANSI=false: returns NULL for zero divisor
+fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let (dividend, divisor) = arguments.two()?;
+
+    // Check for literal zero divisor
+    if matches!(
+        &divisor,
+        Expr::Literal(ScalarValue::Int8(Some(0)), _)
+            | Expr::Literal(ScalarValue::Int16(Some(0)), _)
+            | Expr::Literal(ScalarValue::Int32(Some(0)), _)
+            | Expr::Literal(ScalarValue::Int64(Some(0)), _)
+            | Expr::Literal(ScalarValue::UInt8(Some(0)), _)
+            | Expr::Literal(ScalarValue::UInt16(Some(0)), _)
+            | Expr::Literal(ScalarValue::UInt32(Some(0)), _)
+            | Expr::Literal(ScalarValue::UInt64(Some(0)), _)
+            | Expr::Literal(ScalarValue::Float32(Some(0.0)), _)
+            | Expr::Literal(ScalarValue::Float64(Some(0.0)), _)
+            | Expr::Literal(ScalarValue::Decimal128(Some(0), _, _), _)
+    ) || matches!(
+        &divisor,
+        Expr::Literal(ScalarValue::Float16(Some(f16)), _) if *f16 == f16::from_f32(0.0)
+    ) || matches!(
+        &divisor,
+        Expr::Literal(ScalarValue::Decimal256(Some(v), _, _), _) if *v == i256::ZERO
+    ) {
+        return if function_context.plan_config.ansi_mode {
+            Err(PlanError::ArrowError(ArrowError::DivideByZero))
+        } else {
+            Ok(Expr::Literal(ScalarValue::Null, None))
+        };
+    }
+
+    Ok(Expr::BinaryExpr(expr::BinaryExpr {
+        left: Box::new(dividend),
+        op: Operator::Modulo,
+        right: Box::new(divisor),
+    }))
 }
 
 fn power(base: Expr, exponent: Expr) -> Expr {
@@ -430,7 +479,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
     use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
-        ("%", F::binary_op(Operator::Modulo)),
+        ("%", F::custom(spark_modulo)),
         ("*", F::custom(spark_multiply)),
         ("+", F::custom(spark_plus)),
         ("-", F::custom(spark_minus)),
@@ -469,7 +518,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("log10", F::unary(double(log10))),
         ("log1p", F::unary(double(log1p))),
         ("log2", F::unary(double(log2))),
-        ("mod", F::binary_op(Operator::Modulo)),
+        ("mod", F::custom(spark_modulo)),
         ("negative", F::unary(|x| Expr::Negative(Box::new(x)))),
         ("pi", F::nullary(expr_fn::pi)),
         ("pmod", F::binary(math_fn::pmod)),
