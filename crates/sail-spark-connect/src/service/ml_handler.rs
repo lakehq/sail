@@ -80,7 +80,17 @@ pub(crate) async fn handle_execute_ml_command(
     ))
 }
 
-/// Handle ML Fit command - trains a LinearRegression model using SGD.
+/// Handle ML Fit command - trains a LinearRegression model.
+///
+/// Supports multiple solvers:
+/// - "normal" / "auto": OLS via Normal Equation (exact closed-form solution)
+/// - "sgd": Stochastic Gradient Descent (iterative approximation)
+///
+/// For distributed OLS with very large datasets, use the `ols_sufficient_stats`
+/// SQL aggregate function which computes X^T X and X^T y in parallel:
+/// ```sql
+/// SELECT ols_sufficient_stats(features, label) FROM training_data
+/// ```
 async fn handle_ml_fit(
     ctx: &SessionContext,
     spark: &SparkSession,

@@ -1,6 +1,7 @@
 pub mod kurtosis;
 pub mod max_min_by;
 pub mod mode;
+pub mod ols_sufficient_stats;
 pub mod percentile_disc;
 pub mod percentile_disc_groups;
 pub mod sgd_gradient;
