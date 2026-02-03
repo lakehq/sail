@@ -153,17 +153,24 @@ impl<'a> PlanReconstructor<'a> {
             DataFusionError::Internal("Right subplan not found in DP table".to_string())
         })?;
 
-        // Recursively reconstruct left and right subplans
-        let (left_plan, left_map) = self.reconstruct(left_dp_plan)?;
-        let (right_plan, right_map) = self.reconstruct(right_dp_plan)?;
+        let (build_set, probe_set, build_dp, probe_dp) =
+            if left_dp_plan.cardinality <= right_dp_plan.cardinality {
+                (left_set, right_set, left_dp_plan, right_dp_plan)
+            } else {
+                (right_set, left_set, right_dp_plan, left_dp_plan)
+            };
+
+        // Recursively reconstruct build and probe subplans
+        let (build_plan, build_map) = self.reconstruct(build_dp)?;
+        let (probe_plan, probe_map) = self.reconstruct(probe_dp)?;
 
         // Build physical join conditions
         let on_conditions = self.build_join_conditions(
             edge_indices,
-            &left_map,
-            &right_map,
-            &left_plan,
-            &right_plan,
+            &build_map,
+            &probe_map,
+            &build_plan,
+            &probe_plan,
         )?;
 
         // Determine join type from edge information
@@ -172,17 +179,17 @@ impl<'a> PlanReconstructor<'a> {
         // Build join filter for non-equi conditions
         let join_filter = self.build_join_filter(
             edge_indices,
-            &left_map,
-            &right_map,
-            &left_plan,
-            &right_plan,
-            left_set,
-            right_set,
+            &build_map,
+            &probe_map,
+            &build_plan,
+            &probe_plan,
+            build_set,
+            probe_set,
         )?;
 
         // Merge left and right ColumnMap to create output ColumnMap for new Join plan
-        let mut join_output_map = left_map;
-        join_output_map.extend(right_map);
+        let mut join_output_map = build_map;
+        join_output_map.extend(probe_map);
 
         // If there are no connecting edges, this is a cartesian product. HashJoinExec does not
         // support empty join keys; use CrossJoinExec instead to avoid optimizer-stage crashes.
@@ -191,22 +198,22 @@ impl<'a> PlanReconstructor<'a> {
                 // Theta join: no equi-join pairs were reconstructed, but we have a join predicate.
                 // Use NestedLoopJoinExec which supports joins without equi-keys.
                 let join_plan = Arc::new(NestedLoopJoinExec::try_new(
-                    left_plan,
-                    right_plan,
+                    build_plan,
+                    probe_plan,
                     Some(join_filter),
                     &join_type,
                     None, // projection
                 )?);
                 return Ok((join_plan, join_output_map));
             }
-            let join_plan = Arc::new(CrossJoinExec::new(left_plan, right_plan));
+            let join_plan = Arc::new(CrossJoinExec::new(build_plan, probe_plan));
             return Ok((join_plan, join_output_map));
         }
 
         // Otherwise, create HashJoinExec
         let join_plan = Arc::new(HashJoinExec::try_new(
-            left_plan,
-            right_plan,
+            build_plan,
+            probe_plan,
             on_conditions,
             join_filter,         // Use JoinEdge.filter for non-equi conditions
             &join_type,          // Use determined join type
@@ -868,10 +875,12 @@ impl<'a> PlanReconstructor<'a> {
 mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::common::Statistics;
+    use datafusion::logical_expr::{JoinType, Operator};
+    use datafusion::physical_expr::expressions::{BinaryExpr, Column};
     use datafusion::physical_plan::empty::EmptyExec;
 
     use super::*;
-    use crate::join_reorder::graph::{QueryGraph, RelationNode};
+    use crate::join_reorder::graph::{JoinEdge, QueryGraph, RelationNode};
     use crate::join_reorder::join_set::JoinSet;
 
     fn create_test_graph() -> QueryGraph {
@@ -908,6 +917,86 @@ mod tests {
         let result = reconstructor.reconstruct(&leaf_plan);
 
         assert!(result.is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn test_hash_join_build_side_prefers_smaller_cardinality() -> Result<()> {
+        // Two relations with different estimated cardinalities. HashJoinExec hashes the LEFT side
+        // (build side), so we want the smaller input on the left.
+
+        let schema_a = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let schema_b = Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, false)]));
+
+        let plan_a: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema_a.clone()));
+        let plan_b: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema_b.clone()));
+
+        let mut graph = QueryGraph::new();
+        graph.add_relation(RelationNode::new(
+            plan_a,
+            0,
+            1_000_000.0,
+            Statistics::new_unknown(&schema_a),
+        ));
+        graph.add_relation(RelationNode::new(
+            plan_b,
+            1,
+            10.0,
+            Statistics::new_unknown(&schema_b),
+        ));
+
+        let join_set = JoinSet::from_iter([0usize, 1usize].into_iter())?;
+        let filter: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("R0.C0", 0)),
+            Operator::Eq,
+            Arc::new(Column::new("R1.C0", 0)),
+        ));
+        graph.add_edge(JoinEdge::new(
+            join_set,
+            filter,
+            JoinType::Inner,
+            vec![(
+                StableColumn {
+                    relation_id: 0,
+                    column_index: 0,
+                    name: "R0.C0".to_string(),
+                },
+                StableColumn {
+                    relation_id: 1,
+                    column_index: 0,
+                    name: "R1.C0".to_string(),
+                },
+            )],
+        ))?;
+
+        // Build a DP table where the solver chose left={0}, right={1}.
+        // Reconstructor should swap to build on the smaller input ({1}).
+        let mut dp_table: HashMap<JoinSet, Arc<DPPlan>> = HashMap::new();
+        let leaf0 = Arc::new(DPPlan::new_leaf(0, 1_000_000.0)?);
+        let leaf1 = Arc::new(DPPlan::new_leaf(1, 10.0)?);
+        dp_table.insert(leaf0.join_set, leaf0);
+        dp_table.insert(leaf1.join_set, leaf1);
+
+        let root = Arc::new(DPPlan::new_join(
+            JoinSet::new_singleton(0)?,
+            JoinSet::new_singleton(1)?,
+            vec![0],
+            0.0,
+            10.0,
+        ));
+        dp_table.insert(root.join_set, root.clone());
+
+        let mut reconstructor = PlanReconstructor::new(&dp_table, &graph);
+        let (plan, _map) = reconstructor.reconstruct(&root)?;
+
+        let hj = plan
+            .as_any()
+            .downcast_ref::<HashJoinExec>()
+            .expect("expected HashJoinExec");
+
+        assert_eq!(hj.left.schema().fields()[0].name(), "b");
+        assert_eq!(hj.right.schema().fields()[0].name(), "a");
+
         Ok(())
     }
 
