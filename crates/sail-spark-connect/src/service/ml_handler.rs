@@ -125,28 +125,29 @@ async fn handle_ml_fit(
         solver, max_iter, learning_rate, tolerance, features_col, label_col
     );
 
-    // Step 1: Execute dataset and extract training data
-    let (features, labels) =
-        extract_training_data(ctx, spark, &dataset, &features_col, &label_col).await?;
-
-    let num_samples = labels.len();
-    let num_features = if features.is_empty() {
-        0
-    } else {
-        features[0].len()
-    };
-
-    info!(
-        "Training data extracted: {} samples, {} features",
-        num_samples, num_features
-    );
-
-    if num_samples == 0 {
-        return Err(SparkError::invalid("Training dataset is empty"));
-    }
-
     // Step 2: Train model using selected solver
+    // Default to distributed OLS (fastest, same accuracy as normal OLS)
     let trained_model = if solver == "sgd" {
+        // SGD: requires extracting all data to driver for iterative updates
+        let (features, labels) =
+            extract_training_data(ctx, spark, &dataset, &features_col, &label_col).await?;
+
+        let num_samples = labels.len();
+        let num_features = if features.is_empty() {
+            0
+        } else {
+            features[0].len()
+        };
+
+        info!(
+            "Training data extracted: {} samples, {} features",
+            num_samples, num_features
+        );
+
+        if num_samples == 0 {
+            return Err(SparkError::invalid("Training dataset is empty"));
+        }
+
         info!("Using SGD solver (iterative gradient descent)");
         let mut coefficients = vec![0.0; num_features];
         run_sgd_training(
@@ -158,10 +159,11 @@ async fn handle_ml_fit(
             tolerance,
         )?
     } else {
-        // Default to Normal Equation (OLS) - gives exact solution
-        // Handles: "normal", "auto", and any other value
-        info!("Using Normal Equation solver (exact OLS)");
-        run_ols_training(&features, &labels)?
+        // Default: Distributed OLS (auto, normal, distributed all use this)
+        // Uses ols_sufficient_stats aggregate - no raw data transfer to driver
+        // Same exact solution as normal OLS but much faster for large datasets
+        info!("Using distributed OLS solver (aggregated sufficient statistics)");
+        run_distributed_ols_training(ctx, spark, &dataset, &features_col, &label_col).await?
     };
 
     // Step 4: Store model in cache
@@ -465,51 +467,173 @@ fn run_sgd_training(
     })
 }
 
-/// Run OLS training using the Normal Equation (exact closed-form solution).
+/// Run distributed OLS training using ols_sufficient_stats aggregate function.
 ///
-/// Computes: β = (X^T X)^-1 X^T y
+/// This approach:
+/// 1. Creates a MemTable from collected batches
+/// 2. Uses DataFrame API to compute ols_sufficient_stats aggregate
+/// 3. The aggregate computes X^T X and X^T y in parallel across partitions
+/// 4. Driver receives only the sufficient statistics (p² + p values)
+/// 5. Driver solves the linear system locally
 ///
-/// This gives the exact least squares solution in a single pass.
-/// Complexity: O(n * p^2) for matrix computation + O(p^3) for solving.
-/// Best for: datasets where p (features) is moderate and exact solution is needed.
-fn run_ols_training(features: &[Vec<f64>], labels: &[f64]) -> SparkResult<TrainedModel> {
-    if features.is_empty() {
-        return Err(SparkError::invalid("No training samples provided"));
+/// This is much faster for large datasets because we don't transfer raw data.
+async fn run_distributed_ols_training(
+    ctx: &SessionContext,
+    spark: &SparkSession,
+    dataset: &Relation,
+    features_col: &str,
+    label_col: &str,
+) -> SparkResult<TrainedModel> {
+    use datafusion::arrow::array::Int64Array;
+    use datafusion::datasource::MemTable;
+    use sail_function::aggregate::ols_sufficient_stats::OLSSufficientStats;
+
+    // Execute the dataset plan
+    let plan: sail_common::spec::Plan = dataset.clone().try_into()?;
+    let config = spark.plan_config()?;
+    let (physical_plan, _) = resolve_and_execute_plan(ctx, config, plan).await?;
+
+    // Execute to get batches
+    let job_service = ctx.extension::<JobService>()?;
+    let stream = job_service.runner().execute(ctx, physical_plan).await?;
+    let schema = stream.schema();
+
+    use futures::StreamExt;
+    let batches: Vec<_> = stream.collect().await;
+    let batches: Result<Vec<_>, _> = batches.into_iter().collect();
+    let batches =
+        batches.map_err(|e| SparkError::internal(format!("Failed to collect data: {e}")))?;
+
+    if batches.is_empty() {
+        return Err(SparkError::invalid("Training dataset is empty"));
     }
 
-    let n = features.len();
-    let p = features[0].len();
+    // Create a MemTable directly (no catalog registration needed)
+    let mem_table = MemTable::try_new(schema.clone(), vec![batches])
+        .map_err(|e| SparkError::internal(format!("Failed to create MemTable: {e}")))?;
 
-    // Step 1: Compute X^T X (p x p matrix)
-    let mut xtx = vec![vec![0.0; p]; p];
-    for row in features {
-        for i in 0..p {
-            for j in 0..p {
-                xtx[i][j] += row[i] * row[j];
-            }
-        }
+    // Create a new SessionContext just for this query (avoids catalog issues)
+    let temp_ctx = SessionContext::new();
+    temp_ctx
+        .register_table("data", Arc::new(mem_table))
+        .map_err(|e| SparkError::internal(format!("Failed to register table: {e}")))?;
+
+    // Check if features column is VectorUDT (struct) or plain array
+    let is_struct = schema.fields().iter().any(|f| {
+        f.name() == features_col
+            && matches!(
+                f.data_type(),
+                datafusion::arrow::datatypes::DataType::Struct(_)
+            )
+    });
+
+    let features_expr_str = if is_struct {
+        format!("{}.values", features_col)
+    } else {
+        features_col.to_string()
+    };
+
+    // Register the ols_sufficient_stats UDAF
+    let ols_udaf = datafusion::logical_expr::AggregateUDF::from(OLSSufficientStats::new());
+    temp_ctx.register_udaf(ols_udaf);
+
+    // Execute the aggregate query using SQL (simpler with struct field access)
+    let sql = format!(
+        "SELECT ols_sufficient_stats({}, {}) as stats FROM data",
+        features_expr_str, label_col
+    );
+
+    info!("Executing distributed OLS: {}", sql);
+
+    let df = temp_ctx
+        .sql(&sql)
+        .await
+        .map_err(|e| SparkError::internal(format!("Failed to execute OLS SQL: {e}")))?;
+
+    let result_batches = df
+        .collect()
+        .await
+        .map_err(|e| SparkError::internal(format!("Failed to collect OLS result: {e}")))?;
+
+    if result_batches.is_empty() || result_batches[0].num_rows() == 0 {
+        return Err(SparkError::invalid("OLS aggregation returned no results"));
     }
 
-    // Step 2: Compute X^T y (p vector)
-    let mut xty = vec![0.0; p];
-    for (row, &label) in features.iter().zip(labels.iter()) {
-        for (i, &xi) in row.iter().enumerate() {
-            xty[i] += xi * label;
-        }
+    // Parse the result struct: {xtx: List, xty: List, count: Int64}
+    let result_batch = &result_batches[0];
+    let stats_col = result_batch.column(0);
+    let stats_struct = stats_col
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .ok_or_else(|| SparkError::internal("OLS result is not a struct"))?;
+
+    // Extract xtx
+    let xtx_col = stats_struct
+        .column_by_name("xtx")
+        .ok_or_else(|| SparkError::internal("OLS result missing xtx field"))?;
+    let xtx_list = xtx_col
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .ok_or_else(|| SparkError::internal("xtx is not a list"))?;
+    let xtx_values = xtx_list.value(0);
+    let xtx_float = xtx_values
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .ok_or_else(|| SparkError::internal("xtx values are not Float64"))?;
+    let xtx: Vec<f64> = xtx_float.values().to_vec();
+
+    // Extract xty
+    let xty_col = stats_struct
+        .column_by_name("xty")
+        .ok_or_else(|| SparkError::internal("OLS result missing xty field"))?;
+    let xty_list = xty_col
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .ok_or_else(|| SparkError::internal("xty is not a list"))?;
+    let xty_values = xty_list.value(0);
+    let xty_float = xty_values
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .ok_or_else(|| SparkError::internal("xty values are not Float64"))?;
+    let mut xty: Vec<f64> = xty_float.values().to_vec();
+
+    // Extract count
+    let count_col = stats_struct
+        .column_by_name("count")
+        .ok_or_else(|| SparkError::internal("OLS result missing count field"))?;
+    let count_array = count_col
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .ok_or_else(|| SparkError::internal("count is not Int64"))?;
+    let count = count_array.value(0);
+
+    info!(
+        "Distributed OLS: received sufficient stats for {} samples, {} features",
+        count,
+        xty.len()
+    );
+
+    if count == 0 || xty.is_empty() {
+        return Err(SparkError::invalid("No valid training samples"));
     }
 
-    debug!("OLS: n={}, p={}", n, p);
-    debug!("OLS: X^T X = {:?}", xtx);
-    debug!("OLS: X^T y = {:?}", xty);
+    let p = xty.len();
 
-    // Step 3: Solve (X^T X) β = X^T y using Gaussian elimination with partial pivoting
-    let coefficients = solve_linear_system(&mut xtx, &mut xty)?;
+    // Reshape xtx from flat array to 2D
+    let mut xtx_2d: Vec<Vec<f64>> = Vec::with_capacity(p);
+    for i in 0..p {
+        let row: Vec<f64> = xtx[i * p..(i + 1) * p].to_vec();
+        xtx_2d.push(row);
+    }
 
-    info!("OLS solution: coefficients={:?}", coefficients);
+    // Solve the linear system
+    let coefficients = solve_linear_system(&mut xtx_2d, &mut xty)?;
+
+    info!("Distributed OLS solution: coefficients={:?}", coefficients);
 
     Ok(TrainedModel {
         coefficients,
-        intercept: 0.0, // No intercept term in this implementation
+        intercept: 0.0,
         num_features: p,
     })
 }

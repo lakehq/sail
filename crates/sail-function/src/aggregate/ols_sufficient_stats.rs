@@ -1,3 +1,14 @@
+// TODO(dependency): Consider adding `faer` crate for optimized linear algebra.
+// faer is a pure-Rust, zero-dependency BLAS/LAPACK alternative with excellent performance.
+// It would enable:
+// - Fast matrix multiplication for batch processing
+// - Optimized symmetric rank-1 updates for X^T X accumulation
+// - SIMD-accelerated vector operations
+// - Efficient linear system solving (Cholesky/LU) for the final β = (X^T X)^-1 X^T y
+//
+// Alternative: Use Arrow's compute kernels where applicable (add, multiply, sum).
+// Arrow has built-in SIMD for Float64Array operations.
+
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -33,6 +44,30 @@ use datafusion_common::scalar::ScalarStructBuilder;
 /// ```
 ///
 /// The final OLS solution is: β = (X^T X)^-1 X^T y
+///
+/// # Performance Optimizations (TODO)
+///
+/// The current implementation uses naive scalar loops. Several optimizations could
+/// significantly improve performance:
+///
+/// 1. **SIMD via Arrow compute kernels**: Instead of converting Arrow arrays to Vec<f64>,
+///    use arrow::compute::kernels::numeric for vectorized operations. Arrow has built-in
+///    SIMD support for arithmetic operations on Float64Array.
+///
+/// 2. **BLAS/LAPACK library**: For matrix operations, consider using:
+///    - `faer` crate: Pure Rust, no dependencies, very fast matrix operations
+///    - `ndarray` with `ndarray-linalg`: Uses system BLAS (OpenBLAS/MKL)
+///    - The outer product (x * x^T) could be computed as a BLAS syrk/ger operation
+///
+/// 3. **Batch processing**: Instead of processing row by row, accumulate multiple rows
+///    in a matrix and compute X_batch^T * X_batch in one BLAS call. This converts
+///    O(n*p²) scalar ops into O(n/batch) matrix multiplications.
+///
+/// 4. **Symmetric matrix optimization**: Since X^T X is symmetric, only compute and
+///    store the upper/lower triangle (p*(p+1)/2 elements instead of p²).
+///
+/// 5. **Avoid Vec allocations**: Use Arrow's PrimitiveArray::values() slice directly
+///    instead of .to_vec() to eliminate memory copies.
 #[derive(PartialEq, Eq, Hash)]
 pub struct OLSSufficientStats {
     name: String,
@@ -160,12 +195,22 @@ impl OLSSufficientStatsAccumulator {
     }
 
     /// Process a single sample and update sufficient statistics.
+    ///
+    /// TODO(perf): This function is the main performance bottleneck.
+    /// Current complexity: O(p²) per sample with scalar operations.
+    ///
+    /// Potential optimizations:
+    /// - Use `faer` crate for BLAS-level outer product: faer::linalg::matmul::matmul()
+    /// - Process samples in batches: X_batch^T * X_batch is faster than n individual updates
+    /// - Use SIMD intrinsics directly for the inner loop (requires unsafe)
     fn update_one(&mut self, features: &[f64], label: f64) {
         self.initialize(features.len());
 
         let p = self.num_features;
 
         // Update X^T X: xtx[i][j] += x[i] * x[j]
+        // TODO(perf): Replace with BLAS syr (symmetric rank-1 update) or ger (outer product)
+        // Example with faer: outer_product(features, features) + xtx
         for (i, &xi) in features.iter().enumerate().take(p) {
             for (j, &xj) in features.iter().enumerate().take(p) {
                 self.xtx[i * p + j] += xi * xj;
@@ -173,6 +218,7 @@ impl OLSSufficientStatsAccumulator {
         }
 
         // Update X^T y: xty[i] += x[i] * y
+        // TODO(perf): Replace with BLAS axpy: xty += label * features
         for (i, &xi) in features.iter().enumerate().take(p) {
             self.xty[i] += xi * label;
         }
@@ -181,6 +227,9 @@ impl OLSSufficientStatsAccumulator {
     }
 
     /// Merge another accumulator's state into this one.
+    ///
+    /// TODO(perf): Use SIMD for vector addition. Arrow's compute::add() or
+    /// faer::zipped!() could vectorize this element-wise addition.
     fn merge_one(&mut self, other_xtx: &[f64], other_xty: &[f64], other_count: i64) {
         if other_count == 0 {
             return;
@@ -259,6 +308,9 @@ impl Accumulator for OLSSufficientStatsAccumulator {
                         "features inner must be Float64".to_string(),
                     )
                 })?;
+            // TODO(perf): Avoid Vec allocation - use features_float.values() slice directly
+            // The .to_vec() copies all p features for every row, which is expensive.
+            // Change update_one to accept &PrimitiveBuffer<f64> or &[f64] from values().
             let features: Vec<f64> = features_float.values().to_vec();
 
             self.update_one(&features, label);

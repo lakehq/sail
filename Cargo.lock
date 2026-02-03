@@ -6482,6 +6482,7 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-execution",
+ "sail-function",
  "sail-plan",
  "sail-python-udf",
  "sail-server",

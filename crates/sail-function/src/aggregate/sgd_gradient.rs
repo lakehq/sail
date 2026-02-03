@@ -1,3 +1,9 @@
+// TODO(perf): Same optimizations as ols_sufficient_stats.rs apply here:
+// 1. Avoid .to_vec() - use Arrow slice directly
+// 2. Use SIMD for dot product and gradient accumulation
+// 3. Consider faer crate for vectorized operations
+// See ols_sufficient_stats.rs for detailed TODO notes.
+
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -136,6 +142,10 @@ impl SGDGradientSumAccumulator {
     }
 
     /// Process a single sample and update the gradient sum.
+    ///
+    /// TODO(perf): This function has optimization opportunities:
+    /// - Dot product (lines below) could use SIMD via arrow::compute or faer
+    /// - Gradient accumulation could use BLAS axpy: gradient += error * features
     fn update_one(&mut self, features: &[f64], label: f64, coefficients: &[f64]) {
         // Initialize gradient_sum if empty
         if self.gradient_sum.is_empty() {
@@ -143,6 +153,7 @@ impl SGDGradientSumAccumulator {
         }
 
         // Compute prediction: x · β
+        // TODO(perf): Use SIMD dot product (faer::inner_prod or arrow compute)
         let prediction: f64 = features
             .iter()
             .zip(coefficients.iter())
@@ -153,6 +164,7 @@ impl SGDGradientSumAccumulator {
         let error = prediction - label;
 
         // Update gradient sum: gradient_sum += x * error
+        // TODO(perf): Use BLAS axpy or SIMD for this operation
         for (i, &x) in features.iter().enumerate() {
             self.gradient_sum[i] += x * error;
         }
@@ -243,6 +255,7 @@ impl Accumulator for SGDGradientSumAccumulator {
                         "features inner must be Float64".to_string(),
                     )
                 })?;
+            // TODO(perf): Avoid .to_vec() - use features_float.values() slice directly
             let features: Vec<f64> = features_float.values().to_vec();
 
             // Extract coefficients for this row (should be same for all rows)
@@ -255,6 +268,7 @@ impl Accumulator for SGDGradientSumAccumulator {
                         "coefficients inner must be Float64".to_string(),
                     )
                 })?;
+            // TODO(perf): Avoid .to_vec() - use coef_float.values() slice directly
             let coefficients: Vec<f64> = coef_float.values().to_vec();
 
             self.update_one(&features, label, &coefficients);
@@ -360,6 +374,7 @@ impl Accumulator for SGDGradientSumAccumulator {
                         "gradient inner must be Float64".to_string(),
                     )
                 })?;
+            // TODO(perf): Avoid .to_vec() - use gradient_float.values() slice directly
             let gradient: Vec<f64> = gradient_float.values().to_vec();
 
             let count = counts.value(i);
