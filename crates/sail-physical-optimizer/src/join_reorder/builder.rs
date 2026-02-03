@@ -8,10 +8,15 @@ use datafusion::physical_expr::expressions::{BinaryExpr, Column};
 use datafusion::physical_expr::utils::collect_columns;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::aggregates::AggregateExec;
+use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::HashJoinExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::ExecutionPlan;
 use log::trace;
+
+use datafusion::common::stats::Precision;
+use datafusion_physical_expr::intervals::utils::check_support;
+use datafusion_physical_expr::{analyze, AnalysisContext};
 
 use crate::join_reorder::graph::{JoinEdge, QueryGraph, RelationNode, StableColumn};
 use crate::join_reorder::join_set::JoinSet;
@@ -493,14 +498,47 @@ impl GraphBuilder {
         let relation_id = self.relation_counter;
         self.relation_counter += 1;
 
-        // Estimate initial cardinality
-        let stats = plan.partition_statistics(None)?;
+        // Estimate initial cardinality and choose statistics for downstream estimation.
+        //
+        // Special-case FilterExec: treat it as a boundary leaf (same as before), but pull
+        // statistics from its *input* (pre-filter) so we retain the most original/accurate
+        // datasource stats (e.g., Parquet), and apply the filter's selectivity as a penalty
+        // factor to initial cardinality.
+        let (stats, initial_cardinality) = if plan.as_any().is::<FilterExec>() {
+            // NOTE: We still keep FilterExec as the boundary leaf (strategy A), but we must avoid
+            // an inconsistent stats state where num_rows is "post-filter" while distinct_count
+            // (and thus TDom) remains "pre-filter". That mismatch can cause greedy join ordering
+            // to prefer catastrophic NLJs.
+            //
+            // We therefore:
+            // - read base (pre-filter) datasource statistics from beneath the filter chain, and
+            // - estimate a selectivity factor for the filter predicate(s), and
+            // - apply that selectivity to num_rows / total_byte_size (inexact) while preserving
+            //   base column stats as a best-effort proxy for join planning.
+            let (pre_filter_plan, selectivity) =
+                self.peel_filter_chain_and_estimate_selectivity(plan.clone())?;
+            let pre_stats = pre_filter_plan.partition_statistics(None)?;
+            let base = match pre_stats.num_rows {
+                Precision::Exact(count) => count as f64,
+                Precision::Inexact(count) => count as f64,
+                Precision::Absent => 1000.0,
+            };
 
-        // FIXME: Initial cardinality estimation does not account for table-level filters.
-        let initial_cardinality = match stats.num_rows {
-            datafusion::common::stats::Precision::Exact(count) => count as f64,
-            datafusion::common::stats::Precision::Inexact(count) => count as f64,
-            datafusion::common::stats::Precision::Absent => 1000.0, // Default estimation
+            let mut adjusted = pre_stats.to_inexact();
+            adjusted.num_rows = adjusted.num_rows.with_estimated_selectivity(selectivity);
+            adjusted.total_byte_size = adjusted
+                .total_byte_size
+                .with_estimated_selectivity(selectivity);
+
+            (adjusted, base * selectivity)
+        } else {
+            let stats = plan.partition_statistics(None)?;
+            let initial_cardinality = match stats.num_rows {
+                Precision::Exact(count) => count as f64,
+                Precision::Inexact(count) => count as f64,
+                Precision::Absent => 1000.0, // Default estimation
+            };
+            (stats, initial_cardinality)
         };
 
         let relation_node =
@@ -522,6 +560,217 @@ impl GraphBuilder {
         }
 
         Ok(output_map)
+    }
+
+    /// If `plan` is a FilterExec (possibly a chain of stacked FilterExecs), returns:
+    /// - the first non-Filter child plan (the "pre-filter" plan), and
+    /// - a multiplicative selectivity factor estimated from filter predicates.
+    ///
+    /// This is used to keep base datasource statistics (e.g., Parquet) while still
+    /// penalizing cardinality for table/subplan filters.
+    fn peel_filter_chain_and_estimate_selectivity(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<(Arc<dyn ExecutionPlan>, f64)> {
+        let mut cur = plan;
+        let mut selectivity: f64 = 1.0;
+
+        while let Some(filter) = cur.as_any().downcast_ref::<FilterExec>() {
+            let input = filter.input().clone();
+            let input_stats = input.partition_statistics(None)?;
+            let input_schema = input.schema();
+
+            let sel = self.estimate_filter_selectivity(
+                filter.predicate(),
+                &input_schema,
+                &input_stats,
+                filter.default_selectivity(),
+            );
+            selectivity *= sel;
+            cur = input;
+        }
+
+        Ok((cur, selectivity.clamp(0.0, 1.0)))
+    }
+
+    /// Estimate selectivity for a Filter predicate using DataFusion's interval analysis when
+    /// possible, falling back to FilterExec's default selectivity otherwise.
+    fn estimate_filter_selectivity(
+        &self,
+        predicate: &Arc<dyn PhysicalExpr>,
+        schema: &datafusion::arrow::datatypes::SchemaRef,
+        input_stats: &datafusion::common::Statistics,
+        default_selectivity: u8,
+    ) -> f64 {
+        // Default: `FilterExec.default_selectivity` is expressed as percent [0, 100].
+        //
+        // In practice this can be configured to 100 (no reduction), which is too optimistic
+        // for join ordering when the predicate is selective but cannot be analyzed.
+        // Cap our fallback to a conservative upper bound.
+        let configured = (default_selectivity as f64 / 100.0).clamp(0.0, 1.0);
+        // If configured to 100% ("no filtering"), use a conservative fallback when we can't
+        // estimate from stats to avoid catastrophic join orderings.
+        let fallback = if configured >= 0.999 { 0.2 } else { configured };
+
+        // First try a small set of cheap, deterministic heuristics that work well for common
+        // predicates (e.g. col = literal, range filters, conjunctions).
+        if let Some(sel) = self.estimate_selectivity_from_stats(predicate, schema, input_stats) {
+            return sel.clamp(0.0, 1.0);
+        }
+
+        if !check_support(predicate, schema) {
+            return fallback;
+        }
+
+        // Best effort: analyze predicate to derive a selectivity from column statistics.
+        let Ok(input_ctx) =
+            AnalysisContext::try_from_statistics(schema, &input_stats.column_statistics)
+        else {
+            return fallback;
+        };
+
+        let Ok(ctx) = analyze(predicate, input_ctx, schema) else {
+            return fallback;
+        };
+
+        ctx.selectivity.unwrap_or(fallback).clamp(0.0, 1.0)
+    }
+
+    fn estimate_selectivity_from_stats(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+        schema: &datafusion::arrow::datatypes::SchemaRef,
+        input_stats: &datafusion::common::Statistics,
+    ) -> Option<f64> {
+        let bin = expr.as_any().downcast_ref::<BinaryExpr>()?;
+        match bin.op() {
+            Operator::And => {
+                let l = self.estimate_selectivity_from_stats(bin.left(), schema, input_stats)?;
+                let r = self.estimate_selectivity_from_stats(bin.right(), schema, input_stats)?;
+                Some((l * r).clamp(0.0, 1.0))
+            }
+            Operator::Or => {
+                let l = self.estimate_selectivity_from_stats(bin.left(), schema, input_stats)?;
+                let r = self.estimate_selectivity_from_stats(bin.right(), schema, input_stats)?;
+                // Independence assumption: P(A ∪ B) = P(A) + P(B) - P(A)P(B)
+                Some((l + r - l * r).clamp(0.0, 1.0))
+            }
+            Operator::Eq | Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq => {
+                self.estimate_binary_selectivity_from_stats(bin, schema, input_stats)
+            }
+            _ => None,
+        }
+    }
+
+    fn estimate_binary_selectivity_from_stats(
+        &self,
+        bin: &BinaryExpr,
+        schema: &datafusion::arrow::datatypes::SchemaRef,
+        input_stats: &datafusion::common::Statistics,
+    ) -> Option<f64> {
+        use datafusion::common::ScalarValue;
+        use datafusion::physical_expr::expressions::Literal;
+
+        // Normalize into (Column, Literal) if possible.
+        let (col, lit) = if let (Some(c), Some(l)) = (
+            bin.left().as_any().downcast_ref::<Column>(),
+            bin.right().as_any().downcast_ref::<Literal>(),
+        ) {
+            (c, l)
+        } else if let (Some(l), Some(c)) = (
+            bin.left().as_any().downcast_ref::<Literal>(),
+            bin.right().as_any().downcast_ref::<Column>(),
+        ) {
+            // Flip operator direction if needed.
+            // For Eq it's symmetric; for inequalities we can invert.
+            let flipped_op = match bin.op() {
+                Operator::Lt => Operator::Gt,
+                Operator::LtEq => Operator::GtEq,
+                Operator::Gt => Operator::Lt,
+                Operator::GtEq => Operator::LtEq,
+                Operator::Eq => Operator::Eq,
+                _ => return None,
+            };
+            let tmp = BinaryExpr::new(
+                Arc::new(Column::new(c.name(), c.index())),
+                flipped_op,
+                Arc::new(Literal::new(l.value().clone())),
+            );
+            return self.estimate_binary_selectivity_from_stats(&tmp, schema, input_stats);
+        } else {
+            return None;
+        };
+
+        let col_idx = schema.index_of(col.name()).ok()?;
+        let stats = input_stats.column_statistics.get(col_idx)?;
+
+        // Prefer distinct_count for equality predicates.
+        if bin.op() == &Operator::Eq {
+            let ndv = match stats.distinct_count {
+                Precision::Exact(v) => v as f64,
+                Precision::Inexact(v) => v as f64,
+                Precision::Absent => 0.0,
+            };
+            if ndv.is_finite() && ndv > 0.0 {
+                return Some((1.0 / ndv).clamp(0.0, 1.0));
+            }
+        }
+
+        // Best-effort range reasoning from min/max for numeric scalars.
+        let (min, max) = match (&stats.min_value, &stats.max_value) {
+            (Precision::Exact(min), Precision::Exact(max))
+            | (Precision::Inexact(min), Precision::Inexact(max))
+            | (Precision::Exact(min), Precision::Inexact(max))
+            | (Precision::Inexact(min), Precision::Exact(max)) => (min, max),
+            _ => return None,
+        };
+
+        // Only implement a small int range model.
+        let (min, max, v) = match (min, max, lit.value()) {
+            (
+                ScalarValue::Int32(Some(min)),
+                ScalarValue::Int32(Some(max)),
+                ScalarValue::Int32(Some(v)),
+            ) => (*min as f64, *max as f64, *v as f64),
+            (
+                ScalarValue::Int64(Some(min)),
+                ScalarValue::Int64(Some(max)),
+                ScalarValue::Int64(Some(v)),
+            ) => (*min as f64, *max as f64, *v as f64),
+            (
+                ScalarValue::UInt32(Some(min)),
+                ScalarValue::UInt32(Some(max)),
+                ScalarValue::UInt32(Some(v)),
+            ) => (*min as f64, *max as f64, *v as f64),
+            (
+                ScalarValue::UInt64(Some(min)),
+                ScalarValue::UInt64(Some(max)),
+                ScalarValue::UInt64(Some(v)),
+            ) => (*min as f64, *max as f64, *v as f64),
+            _ => return None,
+        };
+
+        if !(min.is_finite() && max.is_finite() && v.is_finite()) || max < min {
+            return None;
+        }
+
+        let width = (max - min + 1.0).max(1.0);
+        let frac = match bin.op() {
+            Operator::Eq => {
+                if v < min || v > max {
+                    0.0
+                } else {
+                    1.0 / width
+                }
+            }
+            Operator::Lt => ((v - min) / width).clamp(0.0, 1.0),
+            Operator::LtEq => (((v - min) + 1.0) / width).clamp(0.0, 1.0),
+            Operator::Gt => ((max - v) / width).clamp(0.0, 1.0),
+            Operator::GtEq => (((max - v) + 1.0) / width).clamp(0.0, 1.0),
+            _ => return None,
+        };
+
+        Some(frac.clamp(0.0, 1.0))
     }
 
     /// Helper function to resolve an expression to the set of relation IDs it references.
@@ -569,9 +818,13 @@ impl Default for GraphBuilder {
 #[cfg(test)]
 mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::common::ScalarValue;
     use datafusion::physical_expr::expressions::Column;
+    use datafusion::physical_expr::expressions::Literal;
     use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion::physical_plan::filter::FilterExec;
     use datafusion::physical_plan::joins::HashJoinExec;
+    use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
 
     use super::*;
 
@@ -694,6 +947,57 @@ mod tests {
         assert_eq!(builder.graph.edges.len(), 1);
         // Check that two relations were created (left and right)
         assert_eq!(builder.graph.relation_count(), 2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_leaf_adjusts_statistics_and_penalizes_cardinality() -> Result<()> {
+        // Build an input plan with exact row count statistics.
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let input = Arc::new(PlaceholderRowExec::new(schema));
+
+        // Use a predicate shape that the interval analysis doesn't support so we deterministically
+        // fall back to `default_selectivity`:
+        //
+        // (a > 0) OR (a < 0)
+        let a = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        let gt0 = Arc::new(BinaryExpr::new(
+            a.clone(),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(0)))),
+        )) as Arc<dyn PhysicalExpr>;
+        let lt0 = Arc::new(BinaryExpr::new(
+            a,
+            Operator::Lt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(0)))),
+        )) as Arc<dyn PhysicalExpr>;
+        let pred: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(gt0, Operator::Or, lt0));
+
+        let filter = FilterExec::try_new(pred, input)?.with_default_selectivity(50)?;
+        let filter: Arc<dyn ExecutionPlan> = Arc::new(filter);
+
+        let mut builder = GraphBuilder::new();
+        let _ = builder.visit_plan(filter.clone())?;
+
+        assert_eq!(builder.graph.relation_count(), 1);
+
+        let rel = &builder.graph.relations[0];
+        // Keep the boundary plan as FilterExec (structural behavior unchanged for strategy A).
+        assert_eq!(rel.plan.name(), "FilterExec");
+
+        // Statistics should reflect the estimated selectivity.
+        match rel.statistics.num_rows {
+            datafusion::common::stats::Precision::Inexact(n) => assert_eq!(n, 1),
+            other => panic!("expected Inexact(1) filtered stats, got {other:?}"),
+        }
+
+        // Penalize initial cardinality by default_selectivity (50% here).
+        assert!(
+            (rel.initial_cardinality - 0.5).abs() < 1e-9,
+            "expected initial_cardinality ~= 0.5, got {}",
+            rel.initial_cardinality
+        );
 
         Ok(())
     }

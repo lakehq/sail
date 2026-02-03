@@ -12,6 +12,13 @@ use crate::join_reorder::join_set::JoinSet;
 /// Heuristic selectivity for non-equi filter conditions
 const HEURISTIC_FILTER_SELECTIVITY: f64 = 0.1;
 
+/// Heuristic selectivity for *theta joins* (no equi-join keys, i.e. `equi_pairs` empty).
+///
+/// For safety in greedy join ordering, we assume such predicates are *not very selective*.
+/// Under-estimating theta-join output can cause catastrophic join orders (e.g. joining two
+/// dimensions on `!=` early, materializing a near-cross-product).
+const HEURISTIC_THETA_JOIN_SELECTIVITY: f64 = 1.0;
+
 /// Represents a group of columns that have the same domain due to equi-joins.
 #[derive(Debug, Default, Clone)]
 pub struct EquivalenceSet {
@@ -312,6 +319,12 @@ impl CardinalityEstimator {
     /// as the distinct count of a composite key cannot exceed the row count of any
     /// participating relation.
     fn get_tdom_for_edge(&self, edge: &JoinEdge) -> f64 {
+        // TDom only makes sense for equi-join keys. If this edge has no equi-join pairs, do not
+        // invent a domain from relation cardinalities; treat it as "unknown / not applicable".
+        if edge.equi_pairs.is_empty() {
+            return 1.0;
+        }
+
         // Gather all equivalence sets referenced by this edge's equi-join pairs.
         let mut used_equiv_sets: HashSet<usize> = HashSet::new();
         for (left_col, right_col) in &edge.equi_pairs {
@@ -336,6 +349,8 @@ impl CardinalityEstimator {
             .fold(f64::INFINITY, f64::min)
             .max(1.0);
 
+        // Defensive fallback: should not happen when equi_pairs is non-empty, but avoid returning
+        // an overly-large domain that would make the join appear unrealistically selective.
         if used_equiv_sets.is_empty() {
             return min_relation_card;
         }
@@ -368,20 +383,27 @@ impl CardinalityEstimator {
 
         for &index in connecting_edge_indices {
             let edge = &self.graph.edges[index];
-            // TODO: Implement more granular join selectivity estimation.
-            // TDom-based estimation for equi-joins
-            let tdom = self.get_tdom_for_edge(edge);
-            if tdom > 1.0 {
-                selectivity *= 1.0 / tdom;
+            // Equi-join selectivity (TDom-based).
+            if !edge.equi_pairs.is_empty() {
+                let tdom = self.get_tdom_for_edge(edge);
+                if tdom > 1.0 {
+                    selectivity *= 1.0 / tdom;
+                } else {
+                    // Unknown TDom for equi-joins: use a conservative heuristic (still selective).
+                    selectivity *= HEURISTIC_FILTER_SELECTIVITY;
+                }
             } else {
-                selectivity *= HEURISTIC_FILTER_SELECTIVITY; // Default for unknown TDom
+                // Theta join (no equi keys): assume *not selective* to avoid underestimating output.
+                selectivity *= HEURISTIC_THETA_JOIN_SELECTIVITY;
             }
 
-            // Apply additional selectivity for non-equi filters
-            if self.has_non_equi_filter(edge) {
-                // FIXME: This is too coarse. Non-equi selectivity should be calculated
-                // directly from the predicate instead of applying another generic factor.
-                selectivity *= HEURISTIC_FILTER_SELECTIVITY;
+            // Non-equi residual predicates: do NOT apply an extra aggressive heuristic here.
+            // A fixed 0.1 factor can severely under-estimate output and cause greedy ordering
+            // to pick NLJ-like joins too early (`... filter=... != ...`).
+            if self.has_non_equi_filter(edge) && !edge.equi_pairs.is_empty() {
+                // Keep the original heuristic only when we already have equi-keys, and treat the
+                // residual as a mild additional filter.
+                selectivity *= 0.8;
             }
         }
 
@@ -417,6 +439,11 @@ mod tests {
     use datafusion::common::stats::Precision;
     use datafusion::common::Statistics;
     use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion::logical_expr::JoinType;
+    use datafusion::physical_expr::PhysicalExpr;
+    use datafusion::logical_expr::Operator;
+    use datafusion::physical_expr::expressions::{BinaryExpr, Column, Literal};
+    use datafusion::common::ScalarValue;
 
     use super::*;
     use crate::join_reorder::graph::{QueryGraph, RelationNode};
@@ -440,6 +467,47 @@ mod tests {
         graph.add_relation(relation2);
 
         graph
+    }
+
+    #[test]
+    fn test_theta_join_is_not_treated_as_highly_selective() -> Result<()> {
+        // Two relations with large initial cardinalities.
+        let mut graph = QueryGraph::new();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col1",
+            DataType::Int32,
+            false,
+        )]));
+
+        let stats = Statistics::new_unknown(schema.as_ref());
+        graph.add_relation(RelationNode::new(
+            Arc::new(EmptyExec::new(schema.clone())),
+            0,
+            1_000_000.0,
+            stats.clone(),
+        ));
+        graph.add_relation(RelationNode::new(
+            Arc::new(EmptyExec::new(schema.clone())),
+            1,
+            1_000_000.0,
+            stats,
+        ));
+
+        // A theta predicate with no equi-join pairs.
+        let l: Arc<dyn PhysicalExpr> = Arc::new(Column::new("R0.C0", 0));
+        let r: Arc<dyn PhysicalExpr> = Arc::new(Literal::new(ScalarValue::Int32(Some(1))));
+        let pred: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(l, Operator::Gt, r));
+
+        let join_set = JoinSet::from_iter([0usize, 1usize].into_iter())?;
+        graph.add_edge(JoinEdge::new(join_set, pred, JoinType::Inner, vec![]))?;
+
+        let estimator = CardinalityEstimator::new(graph);
+        let out = estimator.estimate_join_cardinality(1_000_000.0, 1_000_000.0, &[0]);
+
+        // For theta joins, we should not estimate an unrealistically tiny output.
+        // A safe lower bound is that it's at least 1% of the cross product.
+        assert!(out >= 1_000_000.0 * 1_000_000.0 * 0.01, "out={out}");
+        Ok(())
     }
 
     #[test]
