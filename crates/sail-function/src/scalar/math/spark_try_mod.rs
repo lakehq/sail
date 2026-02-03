@@ -2,12 +2,16 @@ use std::any::Any;
 
 use datafusion::arrow::array::builder::PrimitiveBuilder;
 use datafusion::arrow::array::{Array, AsArray, PrimitiveArray};
-use datafusion::arrow::datatypes::{DataType, Decimal128Type, DecimalType, Int32Type, Int64Type};
+use datafusion::arrow::datatypes::{
+    DataType, Decimal128Type, DecimalType, Float64Type, Int32Type, Int64Type,
+};
 use datafusion_common::Result;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_types_exec_err};
-use crate::scalar::math::utils::try_op::{binary_op_scalar_or_array, try_binary_op_primitive};
+use crate::scalar::math::utils::try_op::{
+    binary_op_scalar_or_array, try_binary_op_primitive, try_binary_op_to_float64,
+};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkTryMod {
@@ -60,6 +64,9 @@ impl ScalarUDFImpl for SparkTryMod {
         if let [DataType::Decimal128(pl, sl), DataType::Decimal128(pr, sr)] = arg_types {
             let (result_scale, result_precision) = Self::get_scale_and_precision(pl, sl, pr, sr);
             return Ok(DataType::Decimal128(result_precision, result_scale));
+        }
+        if matches!(arg_types, [DataType::Float64, DataType::Float64]) {
+            return Ok(DataType::Float64);
         }
         if arg_types.contains(&DataType::Int64) {
             Ok(DataType::Int64)
@@ -131,9 +138,21 @@ impl ScalarUDFImpl for SparkTryMod {
                 binary_op_scalar_or_array(left, right, adjusted)
             }
 
+            (DataType::Float64, DataType::Float64) => {
+                let l = left_arr.as_primitive::<Float64Type>();
+                let r = right_arr.as_primitive::<Float64Type>();
+                let result = try_binary_op_to_float64::<Float64Type, _>(l, r, |a, b| {
+                    if b == 0.0 {
+                        None
+                    } else {
+                        Some(a % b)
+                    }
+                });
+                binary_op_scalar_or_array(left, right, result)
+            }
             (l, r) => Err(unsupported_data_types_exec_err(
                 "spark_try_mod",
-                "Int32, Int64 o Decimal128",
+                "Int32, Int64, Float64, or Decimal128",
                 &[l.clone(), r.clone()],
             )),
         }
@@ -179,9 +198,15 @@ impl ScalarUDFImpl for SparkTryMod {
                     Ok(vec![DataType::Int32, DataType::Int32])
                 }
             }
+            (DataType::Float64, DataType::Float64)
+            | (DataType::Float32, DataType::Float32)
+            | (DataType::Float64, DataType::Float32)
+            | (DataType::Float32, DataType::Float64) => {
+                Ok(vec![DataType::Float64, DataType::Float64])
+            }
             _ => Err(unsupported_data_types_exec_err(
                 "spark_try_mod",
-                "Int32, Int64 o Decimal128",
+                "Int32, Int64, Float64, or Decimal128",
                 types,
             )),
         }
