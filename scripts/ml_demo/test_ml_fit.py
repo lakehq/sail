@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+"""
+Test script for MlCommand::Fit handler.
+
+This tests that the ML Fit command is properly routed and handled.
+"""
+
+import os
+from pyspark.sql import SparkSession
+from pyspark.ml.regression import LinearRegression
+
+os.environ.setdefault("SPARK_REMOTE", "sc://localhost:50051")
+
+spark = SparkSession.builder.getOrCreate()
+
+# Create simple training data
+data = [(1.0, [1.0, 0.0]), (2.0, [0.0, 1.0]), (3.0, [1.0, 1.0])]
+df = spark.createDataFrame(data, ["label", "features"])
+
+print("Training data:")
+df.show()
+
+# Create LinearRegression estimator
+lr = LinearRegression(maxIter=10, regParam=0.0)
+
+print("Attempting to fit LinearRegression...")
+try:
+    model = lr.fit(df)
+    print(f"Model trained successfully!")
+    print(f"  UID: {model.uid}")
+
+    # Access model properties
+    # Note: In this POC, coefficients returns a string representation
+    print(f"  Coefficients: {model.coefficients}")
+    print(f"  Intercept: {model.intercept}")
+    print("\nMlCommand::Fit and MlCommand::Fetch are working!")
+
+except Exception as e:
+    print(f"Error: {e}")
+    import traceback
+    traceback.print_exc()
+
+spark.stop()
+print("\nDone!")

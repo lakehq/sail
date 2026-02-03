@@ -88,6 +88,10 @@ impl Stream for ExecutePlanResponseStream {
                         response.response_type =
                             Some(ResponseType::CheckpointCommandResult(*result));
                     }
+                    ExecutorBatch::MlCommandResult(result) => {
+                        response.response_type =
+                            Some(ResponseType::MlCommandResult(*result));
+                    }
                     ExecutorBatch::Schema(schema) => {
                         response.schema = Some(*schema);
                     }
