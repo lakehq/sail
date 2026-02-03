@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
+use datafusion::arrow::datatypes::{i256, DataType, IntervalUnit, TimeUnit};
 use datafusion::arrow::error::ArrowError;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
@@ -199,28 +199,47 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
     let (dividend, divisor) = arguments.two()?;
 
-    if matches!(
+    // Check for literal zero divisor
+    let is_integer_zero = matches!(
         &divisor,
-        Expr::Literal(ScalarValue::Int8(Some(0)), _metadata)
-            | Expr::Literal(ScalarValue::Int16(Some(0)), _metadata)
-            | Expr::Literal(ScalarValue::Int32(Some(0)), _metadata)
-            | Expr::Literal(ScalarValue::Int64(Some(0)), _metadata)
-            | Expr::Literal(ScalarValue::UInt8(Some(0)), _metadata)
-            | Expr::Literal(ScalarValue::UInt16(Some(0)), _metadata)
-            | Expr::Literal(ScalarValue::UInt32(Some(0)), _metadata)
-            | Expr::Literal(ScalarValue::UInt64(Some(0)), _metadata)
-            | Expr::Literal(ScalarValue::Float32(Some(0.0)), _metadata)
-            | Expr::Literal(ScalarValue::Float64(Some(0.0)), _metadata)
+        Expr::Literal(ScalarValue::Int8(Some(0)), _)
+            | Expr::Literal(ScalarValue::Int16(Some(0)), _)
+            | Expr::Literal(ScalarValue::Int32(Some(0)), _)
+            | Expr::Literal(ScalarValue::Int64(Some(0)), _)
+            | Expr::Literal(ScalarValue::UInt8(Some(0)), _)
+            | Expr::Literal(ScalarValue::UInt16(Some(0)), _)
+            | Expr::Literal(ScalarValue::UInt32(Some(0)), _)
+            | Expr::Literal(ScalarValue::UInt64(Some(0)), _)
+    );
+
+    let is_float_zero = matches!(
+        &divisor,
+        Expr::Literal(ScalarValue::Float32(Some(v)), _) if *v == 0.0
     ) || matches!(
         &divisor,
-        Expr::Literal(ScalarValue::Float16(Some(f16)), _metadata) if *f16 == f16::from_f32(0.0)
-    ) {
-        // FIXME: Account for array input.
-        return if function_context.plan_config.ansi_mode {
-            Err(PlanError::ArrowError(ArrowError::DivideByZero))
+        Expr::Literal(ScalarValue::Float64(Some(v)), _) if *v == 0.0
+    ) || matches!(
+        &divisor,
+        Expr::Literal(ScalarValue::Float16(Some(f16)), _) if *f16 == f16::from_f32(0.0)
+    );
+
+    // Check for decimal zero (0.0 literals are typically parsed as Decimal128)
+    let is_decimal_zero = matches!(
+        &divisor,
+        Expr::Literal(ScalarValue::Decimal128(Some(0), _, _), _)
+    ) || matches!(
+        &divisor,
+        Expr::Literal(ScalarValue::Decimal256(Some(v), _, _), _) if *v == i256::ZERO
+    );
+
+    if is_integer_zero || is_float_zero || is_decimal_zero {
+        if function_context.plan_config.ansi_mode {
+            // ANSI mode: throw error for division by zero
+            return Err(PlanError::ArrowError(ArrowError::DivideByZero));
         } else {
-            Ok(Expr::Literal(ScalarValue::Null, None))
-        };
+            // Non-ANSI mode: return NULL for any division by zero (Spark 4.x behavior)
+            return Ok(Expr::Literal(ScalarValue::Null, None));
+        }
     }
 
     let (dividend_type, divisor_type) = (
