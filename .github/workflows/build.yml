@@ -108,7 +108,7 @@ jobs:
         if: ${{ github.event_name == 'push' }}
         env:
           LLVM_PROFILE_FILE: ${{ github.workspace }}/target/llvm-profiles/rust-slow/sail-%p-%m.profraw
-        run: cargo nextest run --run-ignored ignored-only -j 6
+        run: cargo nextest run --run-ignored ignored-only -j 6 --no-fail-fast
 
       # Generate coverage report after ignored tests (push to main only)
       - name: Generate Rust slow coverage report
