@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ops::Sub;
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
@@ -8,7 +9,6 @@ use datafusion_expr::expr::FieldMetadata;
 use datafusion_expr::{expr, lit, when, BinaryExpr, ExprSchemable, ScalarUDF};
 use datafusion_expr_common::operator::Operator;
 use datafusion_functions::core::expr_ext::FieldAccessor;
-use datafusion_functions::math::expr_fn::abs;
 use datafusion_functions_nested::expr_fn::{array_element, array_length, map_extract};
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -207,11 +207,19 @@ impl PlanResolver<'_> {
             | DataType::ListView(_)
             | DataType::LargeListView(_) => {
                 let index_expr = expr::Expr::Literal(extraction, None);
-                let one_based_index = expr::Expr::BinaryExpr(BinaryExpr::new(
-                    Box::new(index_expr.clone()),
-                    Operator::Plus,
-                    Box::new(lit(1i64)),
-                ));
+
+                // Convert 0-based index to 1-based for array_element:
+                // - Non-negative indices: add 1 (0-based 0 -> 1-based 1)
+                // - Negative indices: keep as-is (-1 means last in both systems)
+                let one_based_index = when(
+                    index_expr.clone().gt_eq(lit(0i64)),
+                    expr::Expr::BinaryExpr(BinaryExpr::new(
+                        Box::new(index_expr.clone()),
+                        Operator::Plus,
+                        Box::new(lit(1i64)),
+                    )),
+                )
+                .otherwise(index_expr.clone())?;
 
                 // Out-of-bounds behavior depends on ANSI mode
                 let out_of_bounds_result = if self.config.ansi_mode {
@@ -221,13 +229,17 @@ impl PlanResolver<'_> {
                     lit(ScalarValue::Null)
                 };
 
-                // Check: abs(index) must be between 1 and array_length
-                when(
-                    abs(index_expr).not_between(lit(1i64), array_length(expr.clone())),
-                    out_of_bounds_result,
-                )
-                .when(lit(true), array_element(expr, one_based_index))
-                .end()?
+                let arr_len = array_length(expr.clone());
+                // 0-based bounds check: valid range is [-array_length, array_length - 1]
+                // Out of bounds if: index < -array_length OR index >= array_length
+                let out_of_bounds_condition = index_expr
+                    .clone()
+                    .lt(lit(0i64).sub(arr_len.clone()))
+                    .or(index_expr.gt_eq(arr_len));
+
+                when(out_of_bounds_condition, out_of_bounds_result)
+                    .when(lit(true), array_element(expr, one_based_index))
+                    .end()?
             }
             DataType::Struct(fields) => {
                 let ScalarValue::Utf8(Some(name)) = extraction else {

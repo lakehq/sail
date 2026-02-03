@@ -56,17 +56,17 @@ fn is_float_zero(expr: &Expr) -> bool {
         Expr::Literal(ScalarValue::Float32(Some(0.0)), _)
         | Expr::Literal(ScalarValue::Float64(Some(0.0)), _) => true,
         // CAST to float type with a zero literal inside
-        Expr::Cast(expr::Cast { expr, data_type, .. })
-            if matches!(data_type, DataType::Float32 | DataType::Float64) =>
-        {
-            is_numeric_zero_literal(expr)
-        }
+        Expr::Cast(expr::Cast {
+            expr,
+            data_type: DataType::Float32 | DataType::Float64,
+            ..
+        }) => is_numeric_zero_literal(expr),
         // TryCast to float type with a zero literal inside
-        Expr::TryCast(expr::TryCast { expr, data_type, .. })
-            if matches!(data_type, DataType::Float32 | DataType::Float64) =>
-        {
-            is_numeric_zero_literal(expr)
-        }
+        Expr::TryCast(expr::TryCast {
+            expr,
+            data_type: DataType::Float32 | DataType::Float64,
+            ..
+        }) => is_numeric_zero_literal(expr),
         _ => false,
     }
 }
