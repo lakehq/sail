@@ -119,11 +119,9 @@ impl GlobalState {
             environment,
         };
 
-        if GLOBALS.set(state).is_err() {
-            return Err(PyErr::new::<PyRuntimeError, _>(
-                "global state already initialized",
-            ));
-        }
+        // We ignore the error which indicates the global state has been initialized concurrently
+        // by another thread.
+        let _ = GLOBALS.set(state);
         Ok(())
     }
 }

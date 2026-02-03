@@ -154,7 +154,7 @@ impl SparkConnectServer {
         // A port is assigned by the OS if the port is 0 when creating the listener.
         let address = listener.local_addr()?;
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let config = self.config.clone();
+        let config = Arc::clone(&self.config);
         let runtime = self.runtime.clone();
         info!("Starting the Spark Connect server on {address}...");
         let handle = thread::Builder::new().spawn(move || {
