@@ -4609,6 +4609,14 @@
               }
             },
             {
+              "name": "Keyword(Inspect)",
+              "node": {
+                "terminal": {
+                  "keyword": "INSPECT"
+                }
+              }
+            },
+            {
               "name": "Keyword(Int)",
               "node": {
                 "terminal": {
@@ -4921,6 +4929,14 @@
               }
             },
             {
+              "name": "Keyword(NodeOutput)",
+              "node": {
+                "terminal": {
+                  "keyword": "NODE_OUTPUT"
+                }
+              }
+            },
+            {
               "name": "Keyword(Noscan)",
               "node": {
                 "terminal": {
@@ -5117,6 +5133,14 @@
               "node": {
                 "terminal": {
                   "keyword": "PRECEDING"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Pretty)",
+              "node": {
+                "terminal": {
+                  "keyword": "PRETTY"
                 }
               }
             },
@@ -7118,6 +7142,14 @@
               "node": {
                 "optional": {
                   "nonTerminal": "Tuple(Keyword(As), Keyword(Of))"
+                }
+              }
+            },
+            {
+              "name": "Option(Tuple(Keyword(As), Keyword(Pretty)))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Tuple(Keyword(As), Keyword(Pretty))"
                 }
               }
             },
@@ -9175,6 +9207,28 @@
                   {
                     "sequence": [
                       {
+                        "nonTerminal": "Keyword(Inspect)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(NodeOutput)"
+                      },
+                      {
+                        "nonTerminal": "StringLiteral"
+                      },
+                      {
+                        "nonTerminal": "Keyword(For)"
+                      },
+                      {
+                        "nonTerminal": "Box(Statement)"
+                      },
+                      {
+                        "nonTerminal": "Option(Tuple(Keyword(As), Keyword(Pretty)))"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
                         "nonTerminal": "Keyword(Insert)"
                       },
                       {
@@ -10104,6 +10158,19 @@
                   },
                   {
                     "nonTerminal": "Keyword(Of)"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "Tuple(Keyword(As), Keyword(Pretty))",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Keyword(As)"
+                  },
+                  {
+                    "nonTerminal": "Keyword(Pretty)"
                   }
                 ]
               }
