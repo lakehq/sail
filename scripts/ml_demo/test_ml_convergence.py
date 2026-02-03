@@ -16,10 +16,12 @@ spark = SparkSession.builder.getOrCreate()
 
 # Create training data where y = 1*x1 + 2*x2
 # Solution: β = [1.0, 2.0]
+from pyspark.ml.linalg import Vectors
+
 data = [
-    (1.0, [1.0, 0.0]),  # 1*1 + 2*0 = 1
-    (2.0, [0.0, 1.0]),  # 1*0 + 2*1 = 2
-    (3.0, [1.0, 1.0]),  # 1*1 + 2*1 = 3
+    (1.0, Vectors.dense([1.0, 0.0])),  # 1*1 + 2*0 = 1
+    (2.0, Vectors.dense([0.0, 1.0])),  # 1*0 + 2*1 = 2
+    (3.0, Vectors.dense([1.0, 1.0])),  # 1*1 + 2*1 = 3
 ]
 df = spark.createDataFrame(data, ["label", "features"])
 

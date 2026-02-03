@@ -102,7 +102,7 @@ async fn handle_ml_fit(
 
     // Extract parameters with defaults
     let params_map = extract_params(&params);
-    let max_iter = get_param_i64(&params_map, "maxIter", 100) as usize;
+    let max_iter = get_param_i64(&params_map, "maxIter", 1000) as usize;
     let learning_rate = get_param_f64(&params_map, "stepSize", 0.1);
     let tolerance = get_param_f64(&params_map, "tol", 1e-6);
     let features_col = get_param_string(&params_map, "featuresCol", "features");
