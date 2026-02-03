@@ -1,0 +1,95 @@
+name: Rust Tests
+
+on:
+  workflow_call:
+    inputs:
+      run_catalog_tests:
+        description: "Run catalog tests"
+        type: string
+        required: true
+    secrets:
+      CODECOV_TOKEN:
+        required: false
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    env:
+      # Coverage environment variables
+      RUSTC_WORKSPACE_WRAPPER: ${{ github.workspace }}/.github/scripts/rustc-workspace-wrapper.sh
+      LLVM_PROFILE_FILE: ${{ github.workspace }}/target/llvm-profiles/rust-unit/sail-%p-%m.profraw
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/adjust-swap-space
+
+      - uses: ./.github/actions/mount-target-directory
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: rust-tests
+
+      - name: Prepare coverage directories
+        run: |
+          mkdir -p target/llvm-profiles/rust-unit
+          mkdir -p target/llvm-profiles/rust-slow
+
+      - name: Run Cargo Test
+        run: cargo nextest run
+
+      # Generate coverage report after unit tests (runs in PRs and pushes)
+      - name: Generate Rust unit coverage report
+        run: |
+          LLVM_PATH=$(.github/scripts/find-llvm-profdata.sh)
+          grcov target/llvm-profiles/rust-unit --binary-path target/debug/ -s . \
+            --llvm-path "$LLVM_PATH" \
+            -t lcov --branch --ignore-not-existing \
+            -o coverage-rust-unit.info
+
+      - name: Upload Rust unit coverage to Codecov
+        # Dependabot does not operate from a fork of the repository, so a token
+        # is required to upload coverage reports to Codecov. However, Dependabot
+        # cannot access Actions secrets. Instead of configuring Dependabot secrets
+        # separately, we skip coverage upload for Dependabot to avoid failures,
+        # since coverage reports from Dependabot runs are not useful.
+        if: ${{ github.actor != 'dependabot[bot]' }}
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage-rust-unit.info
+          flags: rust-unit-tests
+          name: rust-unit-tests
+          fail_ci_if_error: true
+          env_vars: OS
+
+      - name: Run Cargo Test (Ignored)
+        if: ${{ inputs.run_catalog_tests == 'true' }}
+        env:
+          LLVM_PROFILE_FILE: ${{ github.workspace }}/target/llvm-profiles/rust-slow/sail-%p-%m.profraw
+        run: cargo nextest run --run-ignored ignored-only -j 6 --no-fail-fast
+
+      # Generate coverage report after ignored tests (push to main only)
+      - name: Generate Rust slow coverage report
+        if: ${{ inputs.run_catalog_tests == 'true' }}
+        run: |
+          LLVM_PATH=$(.github/scripts/find-llvm-profdata.sh)
+          grcov target/llvm-profiles/rust-slow --binary-path target/debug/ -s . \
+            --llvm-path "$LLVM_PATH" \
+            -t lcov --branch --ignore-not-existing \
+            -o coverage-rust-slow.info
+
+      - name: Upload Rust slow coverage to Codecov
+        if: ${{ inputs.run_catalog_tests == 'true' && github.actor != 'dependabot[bot]' }}
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage-rust-slow.info
+          flags: rust-slow-tests
+          name: rust-slow-tests
+          fail_ci_if_error: true
+          env_vars: OS
