@@ -5,7 +5,7 @@ on:
     inputs:
       run_catalog_tests:
         description: "Run catalog tests"
-        type: boolean
+        type: string
         required: true
     secrets:
       CODECOV_TOKEN:
