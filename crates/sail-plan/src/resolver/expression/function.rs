@@ -2,7 +2,7 @@ use datafusion_common::DFSchemaRef;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::utils::{expand_qualified_wildcard, expand_wildcard};
-use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan};
+use datafusion_expr::{expr, lit, EmptyRelation, Expr, LogicalPlan};
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
@@ -275,6 +275,7 @@ impl PlanResolver<'_> {
 
         let (unit_name, unit_resolved) = match &unit_expr {
             // Handle identifier: DATEDIFF(DAY, ...) where DAY is parsed as UnresolvedAttribute
+            // Convert to a string literal so it doesn't participate in column resolution
             spec::Expr::UnresolvedAttribute { name, .. } => {
                 // Get the first part of the object name (e.g., "HOUR" from ObjectName([Identifier("HOUR")]))
                 let parts = name.parts();
@@ -282,10 +283,7 @@ impl PlanResolver<'_> {
                     .first()
                     .map(|id| id.as_ref().to_uppercase())
                     .unwrap_or_default();
-                (
-                    "unit".to_string(),
-                    expr::Expr::Column(datafusion_common::Column::new_unqualified(&unit_str)),
-                )
+                (unit_str.clone(), lit(unit_str))
             }
             // For any other expression, resolve it normally
             _ => {

@@ -27,16 +27,20 @@ impl Default for SparkDateFormat {
 impl SparkDateFormat {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::any(2, Volatility::Immutable),
         }
     }
 }
 
-/// Check if the format string contains time patterns (H, h, m, s for hours/minutes/seconds)
+/// Check if the format string contains time patterns (hours/minutes/seconds or fractional seconds)
 fn contains_time_patterns(format: &str) -> bool {
-    // Check for time-related patterns: H, h (hours), m (minutes), s (seconds)
-    // We need to be careful not to match 'M' (month) or 'S' (fractional seconds)
-    format.contains('H') || format.contains('h') || format.contains('m') || format.contains('s')
+    // Check for time-related patterns: H, h (hours), m (minutes), s (seconds), S (fractional)
+    // We need to be careful not to match 'M' (month)
+    contains_fractional_seconds(format)
+        || format.contains('H')
+        || format.contains('h')
+        || format.contains('m')
+        || format.contains('s')
 }
 
 /// Check if the format string contains fractional seconds patterns (S, SS, SSS, etc.)
@@ -92,6 +96,8 @@ fn extract_fractional_pattern(format: &str) -> Option<(String, usize)> {
 
 /// Format a timestamp with proper fractional seconds handling
 fn format_timestamp_with_millis(micros: i64, format: &str, _tz: Option<&str>) -> Result<String> {
+    use chrono::{DateTime, Utc};
+
     // Check if we have fractional seconds pattern
     let frac_info = extract_fractional_pattern(format);
 
@@ -121,10 +127,28 @@ fn format_timestamp_with_millis(micros: i64, format: &str, _tz: Option<&str>) ->
             return Ok(frac_str);
         }
 
-        // Otherwise, we need to handle mixed formats
-        // For now, just return the fractional part if it's the only thing
-        // A more complete implementation would handle mixed formats like "HH:mm:ss.SSS"
-        Ok(frac_str)
+        // For mixed formats like "HH:mm:ss.SSS", we need to:
+        // 1. Replace the S+ pattern with a placeholder
+        // 2. Convert to chrono format and format the timestamp
+        // 3. Replace the placeholder with the fractional digits
+
+        // Replace S+ pattern with a unique placeholder
+        let placeholder = "\x00FRAC\x00";
+        let format_with_placeholder = format.replace(&pattern, placeholder);
+
+        // Convert the rest to chrono format
+        let chrono_format = spark_datetime_format_to_chrono_strftime(&format_with_placeholder)?;
+
+        // Create datetime from micros
+        let secs = micros / 1_000_000;
+        let nsecs = ((micros % 1_000_000) * 1000) as u32;
+        let dt = DateTime::from_timestamp(secs, nsecs).unwrap_or(DateTime::<Utc>::MIN_UTC);
+
+        // Format using chrono
+        let formatted = dt.format(&chrono_format).to_string();
+
+        // Replace placeholder with fractional digits
+        Ok(formatted.replace(placeholder, &frac_str))
     } else {
         // No fractional seconds - this shouldn't happen since we only call this function
         // when contains_fractional_seconds is true
@@ -149,18 +173,50 @@ impl ScalarUDFImpl for SparkDateFormat {
         Ok(DataType::Utf8)
     }
 
-    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let ScalarFunctionArgs { args, .. } = args;
+    fn invoke_with_args(&self, input_args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs {
+            args,
+            arg_fields,
+            number_rows,
+            return_field,
+            config_options,
+        } = input_args;
         let (ts_arg, format_arg) = args.two()?;
 
-        // Get format string
+        // Get format string - handle all string scalar types
         let format_str = match &format_arg {
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))) => s.clone(),
             ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(s))) => s.clone(),
-            ColumnarValue::Array(arr) => {
-                // For array format, take first element (assume uniform)
-                let str_arr = as_string_array(&arr)?;
-                str_arr.value(0).to_string()
+            ColumnarValue::Scalar(ScalarValue::Utf8View(Some(s))) => s.to_string(),
+            ColumnarValue::Array(arr) if !arr.is_empty() => {
+                // For array format, take first non-null element
+                match arr.data_type() {
+                    DataType::Utf8 => {
+                        let str_arr = as_string_array(&arr)?;
+                        if str_arr.is_null(0) {
+                            return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
+                        }
+                        str_arr.value(0).to_string()
+                    }
+                    DataType::LargeUtf8 => {
+                        let str_arr = datafusion_common::cast::as_large_string_array(&arr)?;
+                        if str_arr.is_null(0) {
+                            return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
+                        }
+                        str_arr.value(0).to_string()
+                    }
+                    DataType::Utf8View => {
+                        let str_arr = datafusion_common::cast::as_string_view_array(&arr)?;
+                        if str_arr.is_null(0) {
+                            return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
+                        }
+                        str_arr.value(0).to_string()
+                    }
+                    _ => return exec_err!("spark_date_format: format must be a string array"),
+                }
+            }
+            ColumnarValue::Array(arr) if arr.is_empty() => {
+                return exec_err!("spark_date_format: format array is empty");
             }
             _ => return exec_err!("spark_date_format: format must be a string"),
         };
@@ -197,18 +253,14 @@ impl ScalarUDFImpl for SparkDateFormat {
             // No fractional seconds, delegate to standard to_char
             let chrono_format = spark_datetime_format_to_chrono_strftime(&format_str)?;
             let format_col = ColumnarValue::Scalar(ScalarValue::Utf8(Some(chrono_format)));
-            // Use DataFusion's to_char
+            // Use DataFusion's to_char, forwarding original context
             return datafusion_functions::datetime::to_char::ToCharFunc::new().invoke_with_args(
                 ScalarFunctionArgs {
                     args: vec![ts_arg, format_col],
-                    arg_fields: vec![],
-                    number_rows: 1,
-                    return_field: Arc::new(datafusion::arrow::datatypes::Field::new(
-                        "result",
-                        DataType::Utf8,
-                        true,
-                    )),
-                    config_options: Arc::new(datafusion::config::ConfigOptions::new()),
+                    arg_fields,
+                    number_rows,
+                    return_field,
+                    config_options,
                 },
             );
         }
