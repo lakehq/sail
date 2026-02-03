@@ -7,8 +7,8 @@ on:
         required: false
 
 jobs:
-  test:
-    name: Rust Build
+  build:
+    name: Build
     runs-on: ubuntu-latest
     env:
       RUSTC_WORKSPACE_WRAPPER: ${{ github.workspace }}/.github/scripts/rustc-workspace-wrapper.sh
