@@ -1,0 +1,39 @@
+name: Rust Build
+
+on:
+  workflow_call:
+    secrets:
+      CODECOV_TOKEN:
+        required: false
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    env:
+      RUSTC_WORKSPACE_WRAPPER: ${{ github.workspace }}/.github/scripts/rustc-workspace-wrapper.sh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/adjust-swap-space
+
+      - uses: ./.github/actions/mount-target-directory
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: rust-build
+          install-testing-tools: false
+
+      - name: Build Python Package
+        uses: PyO3/maturin-action@v1
+
+      - name: Upload Python Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-package
+          path: target/wheels
+          retention-days: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 30 || 1 }}
