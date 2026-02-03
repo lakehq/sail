@@ -61,7 +61,7 @@ jobs:
               commit_sha: context.payload.pull_request !== undefined ? context.payload.pull_request.head.sha : context.sha,
             });
             const patterns = [
-                { name: 'run_catalog_tests', pattern: "\\[(catalog )?tests?\\]", flags: "i" },
+                { name: 'run_catalog_tests', pattern: "\\[catalog tests?\\]", flags: "i" },
                 { name: 'run_spark_tests', pattern: "\\[(spark )?tests?\\]", flags: "i" },
                 { name: 'run_ibis_tests', pattern: "\\[(ibis )?tests?\\]", flags: "i" },
             ];
@@ -86,7 +86,7 @@ jobs:
     secrets:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     with:
-      run_catalog_tests: ${{ needs.setup.outputs.run_catalog_tests && 'true' || 'false' }}
+      run_catalog_tests: ${{ needs.setup.outputs.run_catalog_tests }}
     needs:
       - setup
 
