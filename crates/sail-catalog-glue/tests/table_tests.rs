@@ -549,6 +549,7 @@ async fn test_drop_table() {
 // TODO: fix this test
 // #[tokio::test]
 // #[ignore]
+#[expect(unused)]
 async fn test_partition_transforms() {
     let (catalog, _container, namespace) = setup_with_database("test_partition_transforms").await;
 
