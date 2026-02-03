@@ -18,7 +18,7 @@
     "@typescript-eslint/eslint-plugin": "^8.54.0",
     "@typescript-eslint/parser": "^8.54.0",
     "@viz-js/viz": "^3.24.0",
-    "autoprefixer": "^10.4.23",
+    "autoprefixer": "^10.4.24",
     "eslint": "^9.39.2",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-vue": "^10.7.0",
