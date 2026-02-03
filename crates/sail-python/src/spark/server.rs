@@ -56,7 +56,7 @@ impl SparkConnectServer {
     #[new]
     #[pyo3(signature = (ip, port, /))]
     fn new(py: Python<'_>, ip: &str, port: u16) -> PyResult<Self> {
-        let globals = GlobalState::instance()?;
+        let globals = GlobalState::instance(py)?;
         globals.environment.warn_if_changed(py)?;
         let config = globals.config.clone();
         let runtime = globals.runtime.handle();

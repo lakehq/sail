@@ -1,15 +1,17 @@
 use std::collections::HashMap;
 use std::env;
 use std::ffi::CString;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
+use log::debug;
 use pyo3::exceptions::{PyRuntimeError, PyRuntimeWarning};
 use pyo3::prelude::*;
+use pyo3::sync::PyOnceLock;
 use sail_common::config::{AppConfig, SAIL_ENV_VAR_PREFIX};
 use sail_common::runtime::RuntimeManager;
 use sail_telemetry::telemetry::{init_telemetry, ResourceOptions};
 
-static GLOBALS: OnceLock<GlobalState> = OnceLock::new();
+static GLOBALS: PyOnceLock<GlobalState> = PyOnceLock::new();
 
 /// An approximate snapshot of environment variables used for application configuration.
 pub struct EnvironmentSnapshot {
@@ -77,17 +79,21 @@ pub struct GlobalState {
 }
 
 impl GlobalState {
-    pub fn instance() -> PyResult<&'static GlobalState> {
-        GLOBALS
-            .get()
-            .ok_or_else(|| PyErr::new::<PyRuntimeError, _>("global state not initialized"))
+    /// Gets the global state instance, initializing it if necessary.
+    ///
+    /// The global state is not supposed to be initialized or accessed
+    /// if the current Python interpreter uses the Sail CLI entrypoint.
+    /// Otherwise, an error will be raised due to conflicting telemetry
+    /// initialization.
+    ///
+    /// This function may fail if the global state is initialized concurrently,
+    /// since telemetry can only be initialized once. But this likely won't happen
+    /// in practice due to how this function is used in the codebase.
+    pub fn instance(py: Python<'_>) -> PyResult<&'static GlobalState> {
+        GLOBALS.get_or_try_init(py, Self::initialize)
     }
 
-    pub fn initialize() -> PyResult<()> {
-        if GLOBALS.get().is_some() {
-            return Ok(());
-        }
-
+    fn initialize() -> PyResult<Self> {
         // We capture the environment variables before loading the configuration.
         // It is theoretically possible that the environment variables are modified
         // after we capture the snapshot and before loading the configuration, but
@@ -98,6 +104,7 @@ impl GlobalState {
         let config = AppConfig::load().map_err(|e| {
             PyErr::new::<PyRuntimeError, _>(format!("failed to load configuration: {e}"))
         })?;
+
         let runtime = RuntimeManager::try_new(&config.runtime).map_err(|e| {
             PyErr::new::<PyRuntimeError, _>(format!("failed to create the runtime: {e}"))
         })?;
@@ -113,15 +120,26 @@ impl GlobalState {
                 PyErr::new::<PyRuntimeError, _>(format!("failed to initialize telemetry: {e}"))
             })?;
 
-        let state = GlobalState {
+        // `init_telemetry` would fail if OpenTelemetry is already initialized.
+        // If we reach here, it means OpenTelemetry is initialized successfully
+        // by this function call. So it is guaranteed that the shutdown hook is
+        // registered only once.
+        Python::attach(|py| -> PyResult<()> {
+            let atexit = PyModule::import(py, "atexit")?;
+            atexit.call_method1("register", (wrap_pyfunction!(_shutdown_telemetry, py)?,))?;
+            debug!("OpenTelemetry shutdown hook registered");
+            Ok(())
+        })?;
+
+        Ok(GlobalState {
             config: Arc::new(config),
             runtime,
             environment,
-        };
-
-        // We ignore the error which indicates the global state has been initialized concurrently
-        // by another thread.
-        let _ = GLOBALS.set(state);
-        Ok(())
+        })
     }
+}
+
+#[pyfunction]
+fn _shutdown_telemetry() {
+    sail_telemetry::telemetry::shutdown_telemetry();
 }
