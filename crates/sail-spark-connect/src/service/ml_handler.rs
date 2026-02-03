@@ -107,10 +107,12 @@ async fn handle_ml_fit(
     let tolerance = get_param_f64(&params_map, "tol", 1e-6);
     let features_col = get_param_string(&params_map, "featuresCol", "features");
     let label_col = get_param_string(&params_map, "labelCol", "label");
+    // Solver: "normal" (OLS, exact), "sgd" (gradient descent), "auto" (chooses normal)
+    let solver = get_param_string(&params_map, "solver", "auto");
 
     info!(
-        "Training LinearRegression: maxIter={}, stepSize={}, tol={}, featuresCol={}, labelCol={}",
-        max_iter, learning_rate, tolerance, features_col, label_col
+        "Training LinearRegression: solver={}, maxIter={}, stepSize={}, tol={}, featuresCol={}, labelCol={}",
+        solver, max_iter, learning_rate, tolerance, features_col, label_col
     );
 
     // Step 1: Execute dataset and extract training data
@@ -133,18 +135,24 @@ async fn handle_ml_fit(
         return Err(SparkError::invalid("Training dataset is empty"));
     }
 
-    // Step 2: Initialize coefficients to zeros
-    let mut coefficients = vec![0.0; num_features];
-
-    // Step 3: Run SGD training loop in pure Rust
-    let trained_model = run_sgd_training(
-        &features,
-        &labels,
-        &mut coefficients,
-        max_iter,
-        learning_rate,
-        tolerance,
-    )?;
+    // Step 2: Train model using selected solver
+    let trained_model = if solver == "sgd" {
+        info!("Using SGD solver (iterative gradient descent)");
+        let mut coefficients = vec![0.0; num_features];
+        run_sgd_training(
+            &features,
+            &labels,
+            &mut coefficients,
+            max_iter,
+            learning_rate,
+            tolerance,
+        )?
+    } else {
+        // Default to Normal Equation (OLS) - gives exact solution
+        // Handles: "normal", "auto", and any other value
+        info!("Using Normal Equation solver (exact OLS)");
+        run_ols_training(&features, &labels)?
+    };
 
     // Step 4: Store model in cache
     let model_id = Uuid::new_v4().to_string();
@@ -445,6 +453,118 @@ fn run_sgd_training(
         intercept: 0.0, // No intercept in this simple implementation
         num_features: coefficients.len(),
     })
+}
+
+/// Run OLS training using the Normal Equation (exact closed-form solution).
+///
+/// Computes: β = (X^T X)^-1 X^T y
+///
+/// This gives the exact least squares solution in a single pass.
+/// Complexity: O(n * p^2) for matrix computation + O(p^3) for solving.
+/// Best for: datasets where p (features) is moderate and exact solution is needed.
+fn run_ols_training(features: &[Vec<f64>], labels: &[f64]) -> SparkResult<TrainedModel> {
+    if features.is_empty() {
+        return Err(SparkError::invalid("No training samples provided"));
+    }
+
+    let n = features.len();
+    let p = features[0].len();
+
+    // Step 1: Compute X^T X (p x p matrix)
+    let mut xtx = vec![vec![0.0; p]; p];
+    for row in features {
+        for i in 0..p {
+            for j in 0..p {
+                xtx[i][j] += row[i] * row[j];
+            }
+        }
+    }
+
+    // Step 2: Compute X^T y (p vector)
+    let mut xty = vec![0.0; p];
+    for (row, &label) in features.iter().zip(labels.iter()) {
+        for (i, &xi) in row.iter().enumerate() {
+            xty[i] += xi * label;
+        }
+    }
+
+    debug!("OLS: n={}, p={}", n, p);
+    debug!("OLS: X^T X = {:?}", xtx);
+    debug!("OLS: X^T y = {:?}", xty);
+
+    // Step 3: Solve (X^T X) β = X^T y using Gaussian elimination with partial pivoting
+    let coefficients = solve_linear_system(&mut xtx, &mut xty)?;
+
+    info!("OLS solution: coefficients={:?}", coefficients);
+
+    Ok(TrainedModel {
+        coefficients,
+        intercept: 0.0, // No intercept term in this implementation
+        num_features: p,
+    })
+}
+
+/// Solve a linear system Ax = b using Gaussian elimination with partial pivoting.
+///
+/// Modifies A and b in place. Returns the solution vector x.
+fn solve_linear_system(a: &mut [Vec<f64>], b: &mut [f64]) -> SparkResult<Vec<f64>> {
+    let n = b.len();
+
+    if n == 0 {
+        return Ok(vec![]);
+    }
+
+    // Forward elimination with partial pivoting
+    for col in 0..n {
+        // Find pivot (largest absolute value in column)
+        let (max_row, max_val) = a
+            .iter()
+            .enumerate()
+            .skip(col)
+            .map(|(i, row)| (i, row[col].abs()))
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap_or((col, 0.0));
+
+        // Check for singular matrix
+        if max_val < 1e-10 {
+            return Err(SparkError::invalid(
+                "Matrix is singular or nearly singular - cannot solve OLS",
+            ));
+        }
+
+        // Swap rows if needed
+        if max_row != col {
+            a.swap(col, max_row);
+            b.swap(col, max_row);
+        }
+
+        // Eliminate column entries below pivot
+        let pivot = a[col][col];
+        let pivot_row = a[col].clone();
+        let pivot_b = b[col];
+
+        for (row_idx, (a_row, b_val)) in a.iter_mut().zip(b.iter_mut()).enumerate() {
+            if row_idx > col {
+                let factor = a_row[col] / pivot;
+                for (a_elem, pivot_elem) in a_row.iter_mut().zip(pivot_row.iter()) {
+                    *a_elem -= factor * pivot_elem;
+                }
+                *b_val -= factor * pivot_b;
+            }
+        }
+    }
+
+    // Back substitution
+    let mut x = vec![0.0; n];
+    for i in (0..n).rev() {
+        let mut sum = b[i];
+        for (j, &xj) in x.iter().enumerate().skip(i + 1) {
+            sum -= a[i][j] * xj;
+        }
+        x[i] = sum / a[i][i];
+    }
+
+    Ok(x)
 }
 
 /// Handle ML Fetch command - retrieves model attributes from cache.

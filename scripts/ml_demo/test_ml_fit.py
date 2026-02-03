@@ -24,7 +24,7 @@ data = [
 df = spark.createDataFrame(data, ["label", "features"])
 
 print("Training data:")
-df.show()
+df.show(truncate=False)
 
 # Create LinearRegression estimator with more iterations and low tolerance for SGD convergence
 lr = LinearRegression(maxIter=1000, tol=1e-10, regParam=0.0)
