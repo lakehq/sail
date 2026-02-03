@@ -255,8 +255,8 @@ impl Accumulator for SGDGradientSumAccumulator {
                         "features inner must be Float64".to_string(),
                     )
                 })?;
-            // TODO(perf): Avoid .to_vec() - use features_float.values() slice directly
-            let features: Vec<f64> = features_float.values().to_vec();
+            // Use Arrow slice directly - no allocation needed
+            let features: &[f64] = features_float.values();
 
             // Extract coefficients for this row (should be same for all rows)
             let coef_values = coefficients_list.value(i);
@@ -268,10 +268,10 @@ impl Accumulator for SGDGradientSumAccumulator {
                         "coefficients inner must be Float64".to_string(),
                     )
                 })?;
-            // TODO(perf): Avoid .to_vec() - use coef_float.values() slice directly
-            let coefficients: Vec<f64> = coef_float.values().to_vec();
+            // Use Arrow slice directly - no allocation needed
+            let coefficients: &[f64] = coef_float.values();
 
-            self.update_one(&features, label, &coefficients);
+            self.update_one(features, label, coefficients);
         }
 
         Ok(())
@@ -374,13 +374,13 @@ impl Accumulator for SGDGradientSumAccumulator {
                         "gradient inner must be Float64".to_string(),
                     )
                 })?;
-            // TODO(perf): Avoid .to_vec() - use gradient_float.values() slice directly
-            let gradient: Vec<f64> = gradient_float.values().to_vec();
+            // Use Arrow slice directly - no allocation needed
+            let gradient: &[f64] = gradient_float.values();
 
             let count = counts.value(i);
             let loss = losses.value(i);
 
-            self.merge_one(&gradient, count, loss);
+            self.merge_one(gradient, count, loss);
         }
 
         Ok(())

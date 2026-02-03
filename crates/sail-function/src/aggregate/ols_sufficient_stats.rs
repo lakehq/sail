@@ -308,12 +308,10 @@ impl Accumulator for OLSSufficientStatsAccumulator {
                         "features inner must be Float64".to_string(),
                     )
                 })?;
-            // TODO(perf): Avoid Vec allocation - use features_float.values() slice directly
-            // The .to_vec() copies all p features for every row, which is expensive.
-            // Change update_one to accept &PrimitiveBuffer<f64> or &[f64] from values().
-            let features: Vec<f64> = features_float.values().to_vec();
+            // Use Arrow slice directly - no allocation needed
+            let features: &[f64] = features_float.values();
 
-            self.update_one(&features, label);
+            self.update_one(features, label);
         }
 
         Ok(())
@@ -437,7 +435,7 @@ impl Accumulator for OLSSufficientStatsAccumulator {
                         "xtx inner must be Float64".to_string(),
                     )
                 })?;
-            let xtx: Vec<f64> = xtx_float.values().to_vec();
+            let xtx: &[f64] = xtx_float.values();
 
             // Extract xty
             let xty_values = xty_lists.value(i);
@@ -449,11 +447,11 @@ impl Accumulator for OLSSufficientStatsAccumulator {
                         "xty inner must be Float64".to_string(),
                     )
                 })?;
-            let xty: Vec<f64> = xty_float.values().to_vec();
+            let xty: &[f64] = xty_float.values();
 
             let count = counts.value(i);
 
-            self.merge_one(&xtx, &xty, count);
+            self.merge_one(xtx, xty, count);
         }
 
         Ok(())
