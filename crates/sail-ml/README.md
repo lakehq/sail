@@ -1,0 +1,90 @@
+# sail-ml
+
+Machine Learning library for Sail, compatible with Spark ML.
+
+## Current Status
+
+### Implemented
+
+- **LinearRegression**
+  - OLS solver (Normal Equation) - exact closed-form solution
+  - SGD solver - iterative gradient descent
+  - VectorUDT support for Spark ML compatibility
+
+- **Distributed OLS**
+  - `ols_sufficient_stats` SQL aggregate function
+  - Computes X^T X and X^T y in parallel across partitions
+
+## Next Steps
+
+### Phase 1: Integration
+- [ ] Update `ml_handler.rs` to use `sail-ml` crate instead of inline code
+- [ ] Add `sail-ml` as dependency to `sail-spark-connect`
+
+### Phase 2: More Estimators
+- [ ] **LogisticRegression** - binary/multiclass classification
+  - Sigmoid function for probabilities
+  - Cross-entropy loss
+  - OLS-like closed form or gradient descent
+- [ ] **DecisionTreeRegressor** - tree-based regression
+- [ ] **DecisionTreeClassifier** - tree-based classification
+- [ ] **RandomForest** - ensemble methods
+
+### Phase 3: Transformers
+- [ ] **VectorAssembler** - combine columns into feature vector
+- [ ] **StandardScaler** - normalize features (mean=0, std=1)
+- [ ] **MinMaxScaler** - scale to [0, 1] range
+- [ ] **StringIndexer** - encode strings as integers
+- [ ] **OneHotEncoder** - one-hot encoding for categorical
+
+### Phase 4: Pipeline
+- [ ] **Pipeline** - chain estimators and transformers
+- [ ] **CrossValidator** - k-fold cross-validation
+- [ ] **TrainValidationSplit** - train/validation split
+
+### Phase 5: Model Persistence
+- [ ] Save/load models to disk
+- [ ] Parquet format for model storage
+- [ ] Compatibility with Spark ML model format
+
+## Architecture
+
+```
+sail-ml/
+├── src/
+│   ├── lib.rs              # Public API
+│   ├── model.rs            # Trained model types
+│   ├── estimator/          # Trainable estimators
+│   │   ├── mod.rs
+│   │   └── linear_regression.rs
+│   ├── solver/             # Training algorithms
+│   │   ├── mod.rs
+│   │   ├── ols.rs          # Normal Equation
+│   │   └── sgd.rs          # Gradient Descent
+│   ├── transformer/        # Feature transformers (TODO)
+│   └── pipeline/           # Pipeline support (TODO)
+```
+
+## Usage
+
+```rust
+use sail_ml::estimator::LinearRegression;
+use sail_ml::solver::Solver;
+
+let lr = LinearRegression::new()
+    .with_solver(Solver::OLS);
+
+let model = lr.fit(&features, &labels)?;
+println!("Coefficients: {:?}", model.coefficients());
+```
+
+## Distributed Training
+
+For very large datasets, use the SQL aggregate function:
+
+```sql
+SELECT ols_sufficient_stats(features, label) FROM training_data
+```
+
+This computes sufficient statistics in parallel, which can then be used
+to solve the OLS equation on the driver.
