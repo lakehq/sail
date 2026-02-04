@@ -11,6 +11,8 @@ use crate::error::{CommonError, CommonResult};
 
 const APP_CONFIG: &str = include_str!("application.yaml");
 
+pub const SAIL_ENV_VAR_PREFIX: &str = "SAIL_";
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct AppConfig {
     pub mode: ExecutionMode,
@@ -56,7 +58,7 @@ impl AppConfig {
         //  This causes: `Error: invalid argument: duplicate field...`
         Figment::from(ConfigDefinition::new(APP_CONFIG))
             .merge(InternalConfigPlaceholder)
-            .merge(Env::prefixed("SAIL_").map(|p| p.as_str().replace("__", ".").into()))
+            .merge(Env::prefixed(SAIL_ENV_VAR_PREFIX).map(|p| p.as_str().replace("__", ".").into()))
             .extract()
             .map_err(|e| CommonError::InvalidArgument(e.to_string()))
     }
@@ -105,8 +107,8 @@ pub struct ClusterConfig {
     pub worker_heartbeat_timeout_secs: u64,
     pub worker_launch_timeout_secs: u64,
     pub worker_task_slots: usize,
-    pub worker_stream_buffer: usize,
     pub task_launch_timeout_secs: u64,
+    pub task_stream_buffer: usize,
     pub task_stream_creation_timeout_secs: u64,
     pub task_max_attempts: usize,
     pub job_output_buffer: usize,
@@ -372,7 +374,7 @@ impl ClusterConfigEnv {
         WORKER_LISTEN_HOST,
         WORKER_EXTERNAL_HOST,
         WORKER_HEARTBEAT_INTERVAL_SECS,
-        WORKER_STREAM_BUFFER,
+        TASK_STREAM_BUFFER,
         TASK_STREAM_CREATION_TIMEOUT_SECS,
         RPC_RETRY_STRATEGY,
     }

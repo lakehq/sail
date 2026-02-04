@@ -16,14 +16,10 @@ fn format_raw_metrics(plan: &dyn ExecutionPlan) -> String {
     let Some(metrics) = plan.metrics() else {
         return "[]".to_string();
     };
-    let mut out = vec![];
-    for m in metrics.iter() {
-        out.push(format!(
-            "{{ partition: {:?}, value: {:?} }}",
-            m.partition(),
-            m.value(),
-        ));
-    }
+    let out = metrics
+        .iter()
+        .map(|m| format!("{:?}", m.value().name()))
+        .collect::<Vec<_>>();
     format!("[{}]", out.join(", "))
 }
 
@@ -36,7 +32,6 @@ pub struct MetricEmitterTester {
     registry: Arc<MetricRegistry>,
     plan: Option<Arc<dyn ExecutionPlan>>,
     expected_metrics: Vec<Cow<'static, str>>,
-    unexpected_metrics: Vec<Cow<'static, str>>,
 }
 
 impl MetricEmitterTester {
@@ -51,12 +46,9 @@ impl MetricEmitterTester {
             // Each DataFusion execution plan is expected to at least emit
             // the metrics defined in `BaselineMetrics`.
             registry.execution_output_size.name(),
+            registry.execution_output_batch_count.name(),
             registry.execution_output_row_count.name(),
             registry.execution_elapsed_compute_time.name(),
-        ];
-        let unexpected_metrics = vec![
-            registry.execution_unknown_metric_count.name(),
-            registry.execution_unknown_metric_label_count.name(),
         ];
         Self {
             exporter,
@@ -64,7 +56,6 @@ impl MetricEmitterTester {
             registry,
             plan: None,
             expected_metrics,
-            unexpected_metrics,
         }
     }
 
@@ -85,15 +76,6 @@ impl MetricEmitterTester {
         self
     }
 
-    #[expect(unused)]
-    pub fn with_unexpected_metrics<F: FnOnce(&MetricRegistry) -> Vec<Cow<'static, str>>>(
-        mut self,
-        metrics: F,
-    ) -> Self {
-        self.unexpected_metrics.extend(metrics(&self.registry));
-        self
-    }
-
     pub async fn run(self) -> Result<()> {
         let Some(plan) = self.plan else {
             return plan_err!("missing execution plan");
@@ -111,24 +93,31 @@ impl MetricEmitterTester {
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let mut missing_metrics = self.expected_metrics.clone();
-        let mut actual_unexpected_metrics = vec![];
+        let mut unexpected_metrics = vec![];
         metrics
             .iter()
             .flat_map(|m| m.scope_metrics())
             .flat_map(|m| m.metrics())
             .for_each(|m| {
                 let name = m.name();
-                if self.unexpected_metrics.iter().any(|x| x.as_ref() == name) {
-                    actual_unexpected_metrics.push(name.to_string());
+                let mut unexpected = true;
+                missing_metrics.retain(|x| {
+                    let matched = x.as_ref() == name;
+                    if matched {
+                        unexpected = false;
+                    }
+                    !matched
+                });
+                if unexpected {
+                    unexpected_metrics.push(name.to_string());
                 }
-                missing_metrics.retain(|x| x.as_ref() != name);
             });
         if !missing_metrics.is_empty() {
             return plan_err!("missing expected metrics: {missing_metrics:?}");
         }
-        if !actual_unexpected_metrics.is_empty() {
+        if !unexpected_metrics.is_empty() {
             return plan_err!(
-                "found unexpected metrics: {actual_unexpected_metrics:?}\nraw datafusion metrics: {}",
+                "found unexpected metrics: {unexpected_metrics:?} (raw metrics: {})",
                 format_raw_metrics(plan.as_ref())
             );
         }

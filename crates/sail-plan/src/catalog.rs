@@ -114,11 +114,13 @@ mod display {
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct SparkCatalog {
+        #[serde(rename = "catalog")]
         pub name: String,
         pub description: Option<String>,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
     pub struct SparkDatabase {
         pub name: String,
         pub catalog: Option<String>,
@@ -127,7 +129,9 @@ mod display {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
     pub struct SparkTable {
+        #[serde(rename = "tableName")]
         pub name: String,
         pub catalog: Option<String>,
         pub namespace: Vec<String>,
@@ -137,6 +141,7 @@ mod display {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
     pub struct SparkTableColumn {
         pub name: String,
         pub description: Option<String>,
@@ -148,6 +153,7 @@ mod display {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
     pub struct SparkFunction {
         pub name: String,
         pub catalog: Option<String>,
