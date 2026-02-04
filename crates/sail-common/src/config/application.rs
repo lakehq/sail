@@ -85,6 +85,65 @@ pub enum ExecutionMode {
 pub struct RuntimeConfig {
     pub stack_size: usize,
     pub enable_secondary: bool,
+    pub memory_pool: MemoryPoolConfig,
+    pub temporary_files: TemporaryFilesConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(from = "memory_pool::MemoryPool")]
+pub enum MemoryPoolConfig {
+    Unbounded,
+    Greedy(GreedyMemoryPoolConfig),
+    Fair(FairMemoryPoolConfig),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GreedyMemoryPoolConfig {
+    pub max_size: usize,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FairMemoryPoolConfig {
+    pub max_size: usize,
+}
+
+mod memory_pool {
+    use serde::Deserialize;
+
+    #[derive(Debug, Clone, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum Type {
+        Unbounded,
+        Greedy,
+        Fair,
+    }
+
+    #[derive(Debug, Clone, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct MemoryPool {
+        r#type: Type,
+        greedy: super::GreedyMemoryPoolConfig,
+        fair: super::FairMemoryPoolConfig,
+    }
+
+    impl From<MemoryPool> for super::MemoryPoolConfig {
+        fn from(value: MemoryPool) -> Self {
+            match value.r#type {
+                Type::Unbounded => super::MemoryPoolConfig::Unbounded,
+                Type::Greedy => super::MemoryPoolConfig::Greedy(value.greedy),
+                Type::Fair => super::MemoryPoolConfig::Fair(value.fair),
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TemporaryFilesConfig {
+    pub paths: Vec<String>,
+    pub max_size: usize,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -272,7 +331,8 @@ pub enum CacheType {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CatalogConfig {
-    pub default_catalog: String,
+    #[serde(deserialize_with = "deserialize_non_empty_string")]
+    pub default_catalog: Option<String>,
     pub default_database: Vec<String>,
     pub global_temporary_database: Vec<String>,
     pub list: Vec<CatalogType>,
