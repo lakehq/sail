@@ -51,7 +51,7 @@ DATASETS = [
     {"name": "small", "n": 100_000, "p": 50},
     {"name": "medium", "n": 500_000, "p": 100},
     {"name": "large", "n": 1_000_000, "p": 100},
-    # {"name": "large2", "n": 1_000_000, "p": 500},  # TODO: fix OLS hang with many features
+    {"name": "large2", "n": 1_000_000, "p": 500},  # 500 features - test SIMD with high p
     {"name": "xlarge", "n": 2_000_000, "p": 100},
     {"name": "xxlarge", "n": 5_000_000, "p": 100},
 ]
@@ -328,6 +328,9 @@ def run_benchmarks():
 
     # Save results to JSON for comparison
     backend = "sail" if "localhost:50051" in remote else "spark"
+    # Use --optimized flag to save to separate file for A/B comparison
+    if "--optimized" in sys.argv:
+        backend = f"{backend}_optimized"
     results_file = DATA_DIR / f"results_{backend}.json"
     with open(results_file, "w") as f:
         json.dump(
@@ -424,6 +427,8 @@ def run_single_dataset(dataset_name):
 
     # Load existing results and merge
     backend = "sail" if "localhost:50051" in remote else "spark"
+    if "--optimized" in sys.argv:
+        backend = f"{backend}_optimized"
     results_file = DATA_DIR / f"results_{backend}.json"
 
     if results_file.exists():
@@ -458,8 +463,10 @@ def run_all_clean():
 
     remote = os.environ.get("SPARK_REMOTE", "sc://localhost:50051")
     script_path = __file__
+    is_optimized = "--optimized" in sys.argv
 
-    print(f"Running all datasets with fresh processes (SPARK_REMOTE={remote})")
+    suffix = " (optimized)" if is_optimized else ""
+    print(f"Running all datasets with fresh processes{suffix} (SPARK_REMOTE={remote})")
     print("=" * 60)
 
     for dataset in DATASETS:
@@ -469,8 +476,12 @@ def run_all_clean():
         env = os.environ.copy()
         env["SPARK_REMOTE"] = remote
 
+        cmd = [sys.executable, script_path, "--dataset", name]
+        if is_optimized:
+            cmd.append("--optimized")
+
         result = subprocess.run(
-            [sys.executable, script_path, "--dataset", name],
+            cmd,
             env=env,
             capture_output=False,
         )
