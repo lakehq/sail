@@ -6085,6 +6085,7 @@ dependencies = [
  "datafusion-functions-nested",
  "datafusion-physical-expr",
  "delta_kernel",
+ "educe",
  "futures",
  "indexmap 2.13.0",
  "itertools",

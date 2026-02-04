@@ -2,10 +2,10 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema;
-use datafusion::datasource::{provider_as_source, TableProvider};
+use datafusion::datasource::{provider_as_source, source_as_provider, TableProvider};
 use datafusion_common::{DFSchema, TableReference};
 use datafusion_expr::registry::FunctionRegistry;
-use datafusion_expr::{LogicalPlan, TableScan, UNNAMED_TABLE};
+use datafusion_expr::{LogicalPlan, TableScan, TableSource, UNNAMED_TABLE};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::TableKind;
@@ -81,12 +81,12 @@ impl PlanResolver<'_> {
                     ],
                 };
                 let registry = self.ctx.extension::<TableFormatRegistry>()?;
-                let table_provider = registry
+                let table_source = registry
                     .get(&format)?
-                    .create_provider(&self.ctx.state(), info)
+                    .create_source(&self.ctx.state(), info)
                     .await?;
-                self.resolve_table_provider_with_rename(
-                    table_provider,
+                self.resolve_table_source_with_rename(
+                    table_source,
                     table_reference,
                     None,
                     vec![],
@@ -228,12 +228,12 @@ impl PlanResolver<'_> {
             options: vec![options.into_iter().collect()],
         };
         let registry = self.ctx.extension::<TableFormatRegistry>()?;
-        let table_provider = registry
+        let table_source = registry
             .get(&format)?
-            .create_provider(&self.ctx.state(), info)
+            .create_source(&self.ctx.state(), info)
             .await?;
-        self.resolve_table_provider_with_rename(
-            table_provider,
+        self.resolve_table_source_with_rename(
+            table_source,
             UNNAMED_TABLE,
             None,
             vec![],
@@ -251,23 +251,49 @@ impl PlanResolver<'_> {
         fetch: Option<usize>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let schema = table_provider.schema();
+        self.resolve_table_source_with_rename(
+            provider_as_source(table_provider),
+            table_reference,
+            projection,
+            filters,
+            fetch,
+            state,
+        )
+    }
+
+    pub(super) fn resolve_table_source_with_rename(
+        &self,
+        table_source: Arc<dyn TableSource>,
+        table_reference: impl Into<TableReference>,
+        projection: Option<Vec<usize>>,
+        filters: Vec<datafusion_expr::expr::Expr>,
+        fetch: Option<usize>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let schema = table_source.schema();
 
         let has_duplicates = {
             let mut seen = HashSet::new();
             schema.fields().iter().any(|f| !seen.insert(f.name()))
         };
 
-        let table_provider = if has_duplicates {
+        let table_source: Arc<dyn TableSource> = if has_duplicates {
+            // Preserve existing behavior by wrapping the underlying TableProvider with renaming,
+            // but only if this TableSource is DataFusion's DefaultTableSource.
+            let provider = source_as_provider(&table_source).map_err(|e| {
+                PlanError::unsupported(format!(
+                    "duplicate column names require DefaultTableSource-backed TableProvider: {e}"
+                ))
+            })?;
             let names = state.register_fields(schema.fields());
-            Arc::new(RenameTableProvider::try_new(table_provider, names)?)
+            provider_as_source(Arc::new(RenameTableProvider::try_new(provider, names)?))
         } else {
-            table_provider
+            table_source
         };
 
         let table_scan = LogicalPlan::TableScan(TableScan::try_new(
             table_reference,
-            provider_as_source(table_provider),
+            table_source,
             projection,
             filters,
             fetch,
