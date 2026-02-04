@@ -11,6 +11,8 @@ use crate::error::{CommonError, CommonResult};
 
 const APP_CONFIG: &str = include_str!("application.yaml");
 
+pub const SAIL_ENV_VAR_PREFIX: &str = "SAIL_";
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct AppConfig {
     pub mode: ExecutionMode,
@@ -56,7 +58,7 @@ impl AppConfig {
         //  This causes: `Error: invalid argument: duplicate field...`
         Figment::from(ConfigDefinition::new(APP_CONFIG))
             .merge(InternalConfigPlaceholder)
-            .merge(Env::prefixed("SAIL_").map(|p| p.as_str().replace("__", ".").into()))
+            .merge(Env::prefixed(SAIL_ENV_VAR_PREFIX).map(|p| p.as_str().replace("__", ".").into()))
             .extract()
             .map_err(|e| CommonError::InvalidArgument(e.to_string()))
     }
