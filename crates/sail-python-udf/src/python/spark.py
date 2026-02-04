@@ -740,7 +740,7 @@ class PySparkArrowTableUdf:
             if passthrough is None:
                 passthrough = last  # noqa: PLW2901
             if passthrough is not None:
-                for v, name in zip(passthrough, self._input_names, strict=True):
+                for v, name in zip(passthrough, self._input_names, strict=False):
                     df[name] = [v] * len(out)
             else:
                 for name in self._input_names:
