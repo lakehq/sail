@@ -41,7 +41,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_insert_only/)
         HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(__sail_src_id@0, id@0)]
           ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_value]
             DataSourceExec: partitions=1, partition_sizes=[1]
-          DeltaScanByAddsExec(table_path=file://<tmp>/merge_insert_only/, projection=Some([0, 1, 2]), limit=None, pushdown=false)
+          DeltaScanByAddsExec(table_path=file://<tmp>/merge_insert_only/, version=0, projection=Some([0, 1, 2]), limit=None, pushdown=false)
             DeltaDiscoveryExec(table_path=file://<tmp>/merge_insert_only/)
               DeltaLogReplayExec(table_path=file://<tmp>/merge_insert_only/, version=0)
                 SortExec: expr=[__sail_delta_replay_path@5 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST], preserve_partitioning=[true]

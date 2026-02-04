@@ -367,6 +367,7 @@ async fn build_old_data_plan(
     let scan_exec = Arc::new(DeltaScanByAddsExec::new(
         Arc::clone(&find_files_exec),
         ctx.table_url().clone(),
+        version,
         table_schema.clone(),
         table_schema,
         crate::datasource::DeltaScanConfig::default(),

@@ -17,7 +17,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_partition_pushdown/)
                               ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_year, column3@2 as __sail_src_value, true as __sail_merge_source_row_present]
                                 DataSourceExec: partitions=1, partition_sizes=[1]
                               ProjectionExec: expr=[id@0 as id, value@1 as value, year@2 as year, __sail_file_path@3 as __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_partition_pushdown/, projection=Some([0, 1, 2, 3]), limit=None, pushdown=false)
+                                DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_partition_pushdown/, version=0, projection=Some([0, 1, 2, 3]), limit=None, pushdown=false)
                                   DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_partition_pushdown/)
                                     DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_partition_pushdown/, version=0)
                                       SortExec: expr=[__sail_delta_replay_path@6 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST], preserve_partitioning=[true]
@@ -39,7 +39,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_partition_pushdown/)
                                     ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_year, column3@2 as __sail_src_value, true as __sail_merge_source_row_present]
                                       DataSourceExec: partitions=1, partition_sizes=[1]
                                     ProjectionExec: expr=[id@0 as id, value@1 as value, year@2 as year, __sail_file_path@3 as __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                      DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_partition_pushdown/, projection=Some([0, 1, 2, 3]), limit=None, pushdown=false)
+                                      DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_partition_pushdown/, version=0, projection=Some([0, 1, 2, 3]), limit=None, pushdown=false)
                                         DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_partition_pushdown/)
                                           DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_partition_pushdown/, version=0)
                                             SortExec: expr=[__sail_delta_replay_path@6 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST], preserve_partitioning=[true]
@@ -58,7 +58,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_partition_pushdown/)
                                 ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_year, column3@2 as __sail_src_value, true as __sail_merge_source_row_present]
                                   DataSourceExec: partitions=1, partition_sizes=[1]
                                 ProjectionExec: expr=[id@0 as id, value@1 as value, year@2 as year, __sail_file_path@3 as __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                  DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_partition_pushdown/, projection=Some([0, 1, 2, 3]), limit=None, pushdown=false)
+                                  DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_partition_pushdown/, version=0, projection=Some([0, 1, 2, 3]), limit=None, pushdown=false)
                                     DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_partition_pushdown/)
                                       DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_partition_pushdown/, version=0)
                                         SortExec: expr=[__sail_delta_replay_path@6 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST], preserve_partitioning=[true]
@@ -83,7 +83,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_partition_pushdown/)
                                   ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_year, column3@2 as __sail_src_value, true as __sail_merge_source_row_present]
                                     DataSourceExec: partitions=1, partition_sizes=[1]
                                   ProjectionExec: expr=[id@0 as id, value@1 as value, year@2 as year, __sail_file_path@3 as __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                    DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_partition_pushdown/, projection=Some([0, 1, 2, 3]), limit=None, pushdown=false)
+                                    DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_partition_pushdown/, version=0, projection=Some([0, 1, 2, 3]), limit=None, pushdown=false)
                                       DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_partition_pushdown/)
                                         DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_partition_pushdown/, version=0)
                                           SortExec: expr=[__sail_delta_replay_path@6 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST], preserve_partitioning=[true]

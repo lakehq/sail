@@ -296,6 +296,7 @@ pub(crate) async fn plan_delta_scan(
     let mut scan_exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaScanByAddsExec::new(
         find_files,
         table_url,
+        snapshot.version(),
         table_schema,
         logical_schema.clone(),
         config.clone(),

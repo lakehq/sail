@@ -187,6 +187,23 @@ pub async fn open_table_with_object_store_and_table_config(
     Ok(table)
 }
 
+/// Open and load a Delta table with an explicit kernel load config at a fixed version.
+pub async fn open_table_with_object_store_and_table_config_at_version(
+    location: Url,
+    object_store: Arc<dyn ObjectStore>,
+    storage_options: StorageConfig,
+    table_config: DeltaTableConfig,
+    version: i64,
+) -> DeltaResult<DeltaTable> {
+    let log_store =
+        create_logstore_with_object_store(object_store.clone(), location, storage_options)?;
+
+    let mut table = DeltaTable::new(log_store, table_config);
+    table.load_version(version).await?;
+
+    Ok(table)
+}
+
 pub(crate) async fn create_delta_table_with_object_store(
     location: Url,
     object_store: Arc<dyn ObjectStore>,

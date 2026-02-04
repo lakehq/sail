@@ -619,6 +619,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 projection,
                 limit,
                 pushdown_filter,
+                version,
             }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let table_url = Url::parse(&table_url)
@@ -668,6 +669,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(DeltaScanByAddsExec::new(
                     input,
                     table_url,
+                    version,
                     table_schema,
                     output_schema,
                     scan_config,
@@ -1224,6 +1226,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 projection,
                 limit,
                 pushdown_filter,
+                version: delta_scan_by_adds_exec.version(),
             })
         } else if let Some(delta_discovery_exec) =
             node.as_any().downcast_ref::<DeltaDiscoveryExec>()

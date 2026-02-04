@@ -11,8 +11,9 @@
 // limitations under the License.
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
@@ -30,6 +31,7 @@ use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr
 use futures::stream::{self, StreamExt, TryStreamExt};
 use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
+use tokio::sync::{Mutex, OnceCell};
 use url::Url;
 
 use crate::datasource::scan::FileScanParams;
@@ -40,14 +42,78 @@ use crate::kernel::DeltaTableConfig;
 use crate::physical_plan::{decode_adds_from_batch, meta_adds, COL_ACTION};
 use crate::schema::get_physical_schema;
 use crate::storage::StorageConfig;
-use crate::table::open_table_with_object_store_and_table_config;
+use crate::table::open_table_with_object_store_and_table_config_at_version;
 
 const ADD_SCAN_CHUNK_FILES: usize = 1024;
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+struct TableCacheKey {
+    table_url: String,
+    version: i64,
+}
+
+struct CachedTable {
+    snapshot: crate::table::DeltaTableState,
+    log_store: crate::storage::LogStoreRef,
+}
+
+static TABLE_CACHE: LazyLock<Mutex<HashMap<TableCacheKey, Arc<OnceCell<Arc<CachedTable>>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+async fn get_cached_table(
+    context: &Arc<TaskContext>,
+    table_url: &Url,
+    version: i64,
+) -> Result<Arc<CachedTable>> {
+    let key = TableCacheKey {
+        table_url: table_url.to_string(),
+        version,
+    };
+    let cell = {
+        let mut cache = TABLE_CACHE.lock().await;
+        cache
+            .entry(key)
+            .or_insert_with(|| Arc::new(OnceCell::new()))
+            .clone()
+    };
+    let cached = cell
+        .get_or_try_init(|| async {
+            let object_store = context
+                .runtime_env()
+                .object_store_registry
+                .get_store(table_url)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let table_config = DeltaTableConfig {
+                require_files: false,
+                ..Default::default()
+            };
+            let table = open_table_with_object_store_and_table_config_at_version(
+                table_url.clone(),
+                object_store,
+                StorageConfig,
+                table_config,
+                version,
+            )
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let snapshot_state = table
+                .snapshot()
+                .map_err(|e| DataFusionError::External(Box::new(e)))?
+                .clone();
+            Ok::<Arc<CachedTable>, DataFusionError>(Arc::new(CachedTable {
+                snapshot: snapshot_state,
+                log_store: table.log_store(),
+            }))
+        })
+        .await?;
+    Ok(Arc::clone(cached))
+}
 
 struct ScanByAddsStreamState {
     input: SendableRecordBatchStream,
     context: Arc<TaskContext>,
     table_url: Url,
+    table_version: i64,
     output_schema: SchemaRef,
     scan_config: DeltaScanConfig,
     projection: Option<Vec<usize>>,
@@ -88,6 +154,7 @@ impl ScanByAddsStreamState {
         input: SendableRecordBatchStream,
         context: Arc<TaskContext>,
         table_url: Url,
+        table_version: i64,
         output_schema: SchemaRef,
         scan_config: DeltaScanConfig,
         projection: Option<Vec<usize>>,
@@ -98,6 +165,7 @@ impl ScanByAddsStreamState {
             input,
             context,
             table_url,
+            table_version,
             output_schema,
             scan_config,
             projection,
@@ -122,28 +190,8 @@ impl ScanByAddsStreamState {
         if self.table_opened {
             return Ok(());
         }
-        let object_store = self
-            .context
-            .runtime_env()
-            .object_store_registry
-            .get_store(&self.table_url)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let table_config = DeltaTableConfig {
-            require_files: false,
-            ..Default::default()
-        };
-        let table = open_table_with_object_store_and_table_config(
-            self.table_url.clone(),
-            object_store,
-            StorageConfig,
-            table_config,
-        )
-        .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let snapshot_state = table
-            .snapshot()
-            .map_err(|e| DataFusionError::External(Box::new(e)))?
-            .clone();
+        let cached = get_cached_table(&self.context, &self.table_url, self.table_version).await?;
+        let snapshot_state = cached.snapshot.clone();
         let partition_columns = snapshot_state.metadata().partition_columns().clone();
         let session_state = SessionStateBuilder::new()
             .with_runtime_env(self.context.runtime_env().clone())
@@ -195,7 +243,7 @@ impl ScanByAddsStreamState {
                 .collect::<Vec<_>>(),
         ));
 
-        self.log_store = Some(table.log_store());
+        self.log_store = Some(cached.log_store.clone());
         self.snapshot = Some(snapshot_state);
         self.session_state = Some(session_state);
         self.file_schema = Some(file_schema);
@@ -302,12 +350,10 @@ impl ScanByAddsStreamState {
         &mut self,
         batch: &RecordBatch,
     ) -> Result<Vec<crate::kernel::models::Add>> {
-        self.ensure_table().await?;
         let partition_columns = self
             .partition_columns
-            .as_ref()
-            .ok_or_else(|| DataFusionError::Internal("missing partition_columns".into()))?
-            .clone();
+            .clone()
+            .unwrap_or_else(|| meta_adds::infer_partition_columns_from_schema(&batch.schema()));
         meta_adds::decode_adds_from_meta_batch(batch, Some(&partition_columns))
     }
 }
@@ -321,6 +367,7 @@ impl ScanByAddsStreamState {
 pub struct DeltaScanByAddsExec {
     input: Arc<dyn ExecutionPlan>,
     table_url: Url,
+    version: i64,
     table_schema: SchemaRef,
     output_schema: SchemaRef,
     scan_config: DeltaScanConfig,
@@ -334,6 +381,7 @@ impl DeltaScanByAddsExec {
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         table_url: Url,
+        version: i64,
         table_schema: SchemaRef,
         output_schema: SchemaRef,
         scan_config: DeltaScanConfig,
@@ -348,6 +396,7 @@ impl DeltaScanByAddsExec {
         Self {
             input,
             table_url,
+            version,
             table_schema,
             output_schema,
             scan_config,
@@ -364,6 +413,10 @@ impl DeltaScanByAddsExec {
 
     pub fn table_url(&self) -> &Url {
         &self.table_url
+    }
+
+    pub fn version(&self) -> i64 {
+        self.version
     }
 
     pub fn table_schema(&self) -> &SchemaRef {
@@ -432,6 +485,7 @@ impl ExecutionPlan for DeltaScanByAddsExec {
         Ok(Arc::new(Self::new(
             children[0].clone(),
             self.table_url.clone(),
+            self.version,
             self.table_schema.clone(),
             self.output_schema.clone(),
             self.scan_config.clone(),
@@ -448,6 +502,7 @@ impl ExecutionPlan for DeltaScanByAddsExec {
     ) -> Result<SendableRecordBatchStream> {
         let input_stream = self.input.execute(partition, Arc::clone(&context))?;
         let table_url = self.table_url.clone();
+        let table_version = self.version;
         let output_schema = self.schema();
         let scan_config = self.scan_config.clone();
         let projection = self.projection.clone();
@@ -457,6 +512,7 @@ impl ExecutionPlan for DeltaScanByAddsExec {
             input_stream,
             context,
             table_url,
+            table_version,
             Arc::clone(&output_schema),
             scan_config,
             projection,
@@ -501,6 +557,9 @@ impl ExecutionPlan for DeltaScanByAddsExec {
                             continue;
                         }
                         st.update_partition_scan_from_batch(&batch)?;
+                        if st.partition_scan == Some(true) {
+                            continue;
+                        }
 
                         if batch.column_by_name(COL_ACTION).is_some() {
                             st.pending_adds.extend(decode_adds_from_batch(&batch)?);
@@ -539,8 +598,9 @@ impl DisplayAs for DeltaScanByAddsExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(
                     f,
-                    "DeltaScanByAddsExec(table_path={}, projection={:?}, limit={:?}, pushdown={})",
+                    "DeltaScanByAddsExec(table_path={}, version={}, projection={:?}, limit={:?}, pushdown={})",
                     self.table_url,
+                    self.version,
                     self.projection,
                     self.limit,
                     self.pushdown_filter.is_some()
@@ -549,8 +609,9 @@ impl DisplayAs for DeltaScanByAddsExec {
             DisplayFormatType::TreeRender => {
                 write!(
                     f,
-                    "DeltaScanByAddsExec: table_path={}, projection={:?}, limit={:?}, pushdown={}",
+                    "DeltaScanByAddsExec: table_path={}, version={}, projection={:?}, limit={:?}, pushdown={}",
                     self.table_url,
+                    self.version,
                     self.projection,
                     self.limit,
                     self.pushdown_filter.is_some()

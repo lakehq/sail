@@ -7,7 +7,7 @@ DeltaCommitExec(table_path=file://<tmp>/delta_overwrite/)
           ProjectionExec: expr=[CAST(column1@0 AS Int64) as id, column2@1 as category, CAST(column3@2 AS Int64) as value]
             DataSourceExec: partitions=1, partition_sizes=[1]
           FilterExec: NOT category@1 = A
-            DeltaScanByAddsExec(table_path=file://<tmp>/delta_overwrite/, projection=None, limit=None, pushdown=false)
+            DeltaScanByAddsExec(table_path=file://<tmp>/delta_overwrite/, version=0, projection=None, limit=None, pushdown=false)
               DeltaDiscoveryExec(table_path=file://<tmp>/delta_overwrite/)
                 DeltaLogReplayExec(table_path=file://<tmp>/delta_overwrite/, version=0)
                   SortExec: expr=[__sail_delta_replay_path@6 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST], preserve_partitioning=[true]

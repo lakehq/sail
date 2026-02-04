@@ -122,6 +122,7 @@ pub async fn build_delete_plan(
     let scan_exec = Arc::new(DeltaScanByAddsExec::new(
         Arc::clone(&find_files_exec),
         ctx.table_url().clone(),
+        version,
         table_schema.clone(),
         table_schema.clone(),
         crate::datasource::DeltaScanConfig::default(),

@@ -421,7 +421,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                               ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
                                 ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
                                   ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                    DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                    DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                       RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=4
                                         DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                           DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
@@ -452,7 +452,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                                 ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
                                   ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
                                     ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                      DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                      DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=4
                                           DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                             DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
@@ -481,7 +481,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                                 ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
                                   ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
                                     ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                      DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                      DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=4
                                           DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                             DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
@@ -514,7 +514,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                               ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
                                 ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
                                   ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                    DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                    DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                       RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=4
                                         DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                           DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
@@ -558,7 +558,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/), statistics=[Row
                               ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:)]]
                                 ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:)]]
                                   ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:)]]
-                                    DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:)]]
+                                    DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:)]]
                                       RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=4, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
                                         DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
                                           DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:)]]
@@ -589,7 +589,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/), statistics=[Row
                                 ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:)]]
                                   ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:)]]
                                     ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:)]]
-                                      DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:)]]
+                                      DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:)]]
                                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=4, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
                                           DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
                                             DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:)]]
@@ -618,7 +618,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/), statistics=[Row
                                 ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:)]]
                                   ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:)]]
                                     ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:)]]
-                                      DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:)]]
+                                      DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:)]]
                                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=4, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
                                           DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
                                             DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:)]]
@@ -651,7 +651,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/), statistics=[Row
                               ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:)]]
                                 ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:)]]
                                   ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:)]]
-                                    DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:)]]
+                                    DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:)]]
                                       RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=4, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
                                         DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
                                           DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:)]]
@@ -695,7 +695,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/), schema=[count:U
                               ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
                                 ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path], schema=[#0:Int32;N, #1:Utf8;N, #2:Int32;N, #3:Utf8;N, __sail_file_path:Utf8;N]
                                   ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
-                                    DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false), schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
+                                    DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false), schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
                                       RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=4, schema=[__sail_file_path:Utf8;N, size_bytes:Int64, modification_time:Int64, _commit_version:Int64, _commit_timestamp:Int64, partition_scan:Boolean]
                                         DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/), schema=[__sail_file_path:Utf8;N, size_bytes:Int64, modification_time:Int64, _commit_version:Int64, _commit_timestamp:Int64, partition_scan:Boolean]
                                           DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0), schema=[__sail_file_path:Utf8;N, size_bytes:Int64, modification_time:Int64, _commit_version:Int64, _commit_timestamp:Int64]
@@ -726,7 +726,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/), schema=[count:U
                                 ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
                                   ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path], schema=[#0:Int32;N, #1:Utf8;N, #2:Int32;N, #3:Utf8;N, __sail_file_path:Utf8;N]
                                     ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
-                                      DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false), schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
+                                      DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false), schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
                                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=4, schema=[__sail_file_path:Utf8;N, size_bytes:Int64, modification_time:Int64, _commit_version:Int64, _commit_timestamp:Int64, partition_scan:Boolean]
                                           DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/), schema=[__sail_file_path:Utf8;N, size_bytes:Int64, modification_time:Int64, _commit_version:Int64, _commit_timestamp:Int64, partition_scan:Boolean]
                                             DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0), schema=[__sail_file_path:Utf8;N, size_bytes:Int64, modification_time:Int64, _commit_version:Int64, _commit_timestamp:Int64]
@@ -755,7 +755,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/), schema=[count:U
                                 ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
                                   ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path], schema=[#0:Int32;N, #1:Utf8;N, #2:Int32;N, #3:Utf8;N, __sail_file_path:Utf8;N]
                                     ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
-                                      DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false), schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
+                                      DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false), schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
                                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=4, schema=[__sail_file_path:Utf8;N, size_bytes:Int64, modification_time:Int64, _commit_version:Int64, _commit_timestamp:Int64, partition_scan:Boolean]
                                           DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/), schema=[__sail_file_path:Utf8;N, size_bytes:Int64, modification_time:Int64, _commit_version:Int64, _commit_timestamp:Int64, partition_scan:Boolean]
                                             DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0), schema=[__sail_file_path:Utf8;N, size_bytes:Int64, modification_time:Int64, _commit_version:Int64, _commit_timestamp:Int64]
@@ -788,7 +788,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/), schema=[count:U
                               ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
                                 ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path], schema=[#0:Int32;N, #1:Utf8;N, #2:Int32;N, #3:Utf8;N, __sail_file_path:Utf8;N]
                                   ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
-                                    DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false), schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
+                                    DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false), schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
                                       RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=4, schema=[__sail_file_path:Utf8;N, size_bytes:Int64, modification_time:Int64, _commit_version:Int64, _commit_timestamp:Int64, partition_scan:Boolean]
                                         DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/), schema=[__sail_file_path:Utf8;N, size_bytes:Int64, modification_time:Int64, _commit_version:Int64, _commit_timestamp:Int64, partition_scan:Boolean]
                                           DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0), schema=[__sail_file_path:Utf8;N, size_bytes:Int64, modification_time:Int64, _commit_version:Int64, _commit_timestamp:Int64]
@@ -833,7 +833,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                 ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
                                   ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
                                     ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                      DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                      DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=4
                                           DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                             DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
@@ -864,7 +864,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                   ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
                                     ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
                                       ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                        DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                        DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=4
                                             DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                               DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
@@ -893,7 +893,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                   ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
                                     ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
                                       ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                        DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                        DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=4
                                             DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                               DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
@@ -926,7 +926,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                 ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
                                   ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
                                     ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                      DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                      DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=4
                                           DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                             DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
@@ -985,7 +985,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                   ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
                                     ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
                                       ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                        DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                        DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=4
                                             DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                               DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
@@ -1017,7 +1017,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                     ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
                                       ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
                                         ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                          DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                          DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                             RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=4
                                               DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                                 DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
@@ -1047,7 +1047,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                     ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
                                       ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
                                         ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                          DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                          DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                             RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=4
                                               DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                                 DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
@@ -1081,7 +1081,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                   ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
                                     ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
                                       ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                        DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                        DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=4
                                             DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                               DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
@@ -1129,7 +1129,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                 ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
                                   ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
                                     ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                      DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                      DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=4
                                           DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                             DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
@@ -1161,7 +1161,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                     ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
                                       ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
                                         ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                          DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                          DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                             RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=4
                                               DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                                 DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
@@ -1191,7 +1191,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                     ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
                                       ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
                                         ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                          DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                          DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                             RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=4
                                               DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                                 DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
@@ -1225,7 +1225,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                   ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
                                     ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
                                       ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                        DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                        DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=4
                                             DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                               DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
@@ -1272,7 +1272,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                     ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
                                       ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
                                         ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                          DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                          DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                             DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                               DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                                                 SortExec: expr=[__sail_delta_replay_path@5 ASC NULLS LAST, __sail_delta_log_version@7 DESC NULLS LAST], preserve_partitioning=[true]
@@ -1309,7 +1309,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                             ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
                                               ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
                                                 ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                                  DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                                  DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                                     DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                                       DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                                                         SortExec: expr=[__sail_delta_replay_path@5 ASC NULLS LAST, __sail_delta_log_version@7 DESC NULLS LAST], preserve_partitioning=[true]
@@ -1342,7 +1342,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                         ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
                                           ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
                                             ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                              DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                              DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                                 DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                                   DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                                                     SortExec: expr=[__sail_delta_replay_path@5 ASC NULLS LAST, __sail_delta_log_version@7 DESC NULLS LAST], preserve_partitioning=[true]
@@ -1382,7 +1382,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                             ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
                                               ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
                                                 ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                                  DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                                  DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                                     DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                                       DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                                                         SortExec: expr=[__sail_delta_replay_path@5 ASC NULLS LAST, __sail_delta_log_version@7 DESC NULLS LAST], preserve_partitioning=[true]
@@ -1435,7 +1435,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                     ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
                                       ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
                                         ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                          DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                          DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                             DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                               DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                                                 SortExec: expr=[__sail_delta_replay_path@5 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST], preserve_partitioning=[true]
@@ -1471,7 +1471,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                             ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
                                               ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
                                                 ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                                  DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                                  DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                                     DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                                       DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                                                         SortExec: expr=[__sail_delta_replay_path@5 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST], preserve_partitioning=[true]
@@ -1503,7 +1503,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                         ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
                                           ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
                                             ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                              DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                              DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                                 DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                                   DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                                                     SortExec: expr=[__sail_delta_replay_path@5 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST], preserve_partitioning=[true]
@@ -1542,7 +1542,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                             ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path]
                                               ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path]
                                                 ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
-                                                  DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                                  DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                                     DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                                       DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                                                         SortExec: expr=[__sail_delta_replay_path@5 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST], preserve_partitioning=[true]
@@ -1581,7 +1581,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                 FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
                                   DataSourceExec: partitions=1, partition_sizes=[1]
                               ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                   DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                     DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                                       SortExec: expr=[__sail_delta_replay_path@5 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST], preserve_partitioning=[true]
@@ -1604,7 +1604,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                     FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
                                       DataSourceExec: partitions=1, partition_sizes=[1]
                                   ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                    DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                    DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                       DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                         DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                                           SortExec: expr=[__sail_delta_replay_path@5 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST], preserve_partitioning=[true]
@@ -1625,7 +1625,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                   FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
                                     DataSourceExec: partitions=1, partition_sizes=[1]
                                 ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                  DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                  DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                     DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                       DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                                         SortExec: expr=[__sail_delta_replay_path@5 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST], preserve_partitioning=[true]
@@ -1651,7 +1651,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                       FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
                                         DataSourceExec: partitions=1, partition_sizes=[1]
                                     ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                      DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                      DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                         DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                           DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                                             SortExec: expr=[__sail_delta_replay_path@5 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST], preserve_partitioning=[true]
@@ -1689,7 +1689,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                               FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
                                 DataSourceExec: partitions=1, partition_sizes=[1]
                             ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                              DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                              DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                 DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                   DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                                     SortExec: expr=[__sail_delta_replay_path@5 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST], preserve_partitioning=[true]
@@ -1712,7 +1712,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                                   FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
                                     DataSourceExec: partitions=1, partition_sizes=[1]
                                 ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                  DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                  DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                     DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                       DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                                         SortExec: expr=[__sail_delta_replay_path@5 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST], preserve_partitioning=[true]
@@ -1733,7 +1733,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                                 FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
                                   DataSourceExec: partitions=1, partition_sizes=[1]
                               ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                   DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                     DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                                       SortExec: expr=[__sail_delta_replay_path@5 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST], preserve_partitioning=[true]
@@ -1759,7 +1759,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                                     FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
                                       DataSourceExec: partitions=1, partition_sizes=[1]
                                   ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                    DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                    DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                       DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                         DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                                           SortExec: expr=[__sail_delta_replay_path@5 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST], preserve_partitioning=[true]
@@ -1821,7 +1821,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                               FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
                                 DataSourceExec: partitions=1, partition_sizes=[1]
                             ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                              DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                              DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                 DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                   DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                                     SortExec: expr=[__sail_delta_replay_path@5 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST], preserve_partitioning=[true]
@@ -1844,7 +1844,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                                   FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
                                     DataSourceExec: partitions=1, partition_sizes=[1]
                                 ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                  DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                  DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                     DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                       DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                                         SortExec: expr=[__sail_delta_replay_path@5 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST], preserve_partitioning=[true]
@@ -1865,7 +1865,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                                 FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
                                   DataSourceExec: partitions=1, partition_sizes=[1]
                               ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                   DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                     DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                                       SortExec: expr=[__sail_delta_replay_path@5 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST], preserve_partitioning=[true]
@@ -1891,7 +1891,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                                     FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
                                       DataSourceExec: partitions=1, partition_sizes=[1]
                                   ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                    DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                    DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                       DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                         DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                                           SortExec: expr=[__sail_delta_replay_path@5 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST], preserve_partitioning=[true]
@@ -1926,7 +1926,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                               FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
                                 DataSourceExec: partitions=1, partition_sizes=[1]
                             ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                              DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                              DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                 DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                   DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                                     SortExec: expr=[__sail_delta_replay_path@5 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST], preserve_partitioning=[true]
@@ -1949,7 +1949,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                                   FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
                                     DataSourceExec: partitions=1, partition_sizes=[1]
                                 ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                  DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                  DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                     DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                       DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                                         SortExec: expr=[__sail_delta_replay_path@5 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST], preserve_partitioning=[true]
@@ -1970,7 +1970,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                                 FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
                                   DataSourceExec: partitions=1, partition_sizes=[1]
                               ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                   DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                     DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                                       SortExec: expr=[__sail_delta_replay_path@5 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST], preserve_partitioning=[true]
@@ -1996,7 +1996,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                                     FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
                                       DataSourceExec: partitions=1, partition_sizes=[1]
                                   ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                    DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                    DeltaScanByAddsExec(table_path=file://<tmp>/merge_explain_codegen/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
                                       DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                                         DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
                                           SortExec: expr=[__sail_delta_replay_path@5 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST], preserve_partitioning=[true]

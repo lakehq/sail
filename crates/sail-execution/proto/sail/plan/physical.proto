@@ -451,6 +451,8 @@ message DeltaScanByAddsExecNode {
   repeated uint64 projection = 6;
   optional uint64 limit = 7;
   optional bytes pushdown_filter = 8;
+  int64 version = 9;
+  // TODO: Consider snapshot hints (partition columns, kernel schema) to avoid worker log reads.
 }
 
 message DeltaDiscoveryExecNode {
