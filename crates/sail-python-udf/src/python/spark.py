@@ -308,7 +308,7 @@ class MapConverter(Converter):
                 result.append(None)
             else:
                 (start, end) = (offsets[i], offsets[i + 1])
-                result.append(dict(zip(keys[start:end], values[start:end], strict=False)))
+                result.append(dict(zip(keys[start:end], values[start:end], strict=True)))
         return result
 
     def from_pyspark(self, data: Sequence[Any]) -> pa.Array:
@@ -345,8 +345,8 @@ class StructConverter(Converter):
         if not isinstance(array, pa.StructArray):
             msg = f"invalid data type for struct: {type(array)}"
             raise TypeError(msg)
-        columns = [c.to_pyspark(col) for col, c in zip(array.flatten(), self._field_converters, strict=False)]
-        return [self._spark_data_type.fromInternal(x) for x in zip(*columns, strict=False)]
+        columns = [c.to_pyspark(col) for col, c in zip(array.flatten(), self._field_converters, strict=True)]
+        return [self._spark_data_type.fromInternal(x) for x in zip(*columns, strict=True)]
 
     def from_pyspark(self, data: Sequence[Any]) -> pa.Array:
         n = len(self._fields)
@@ -362,7 +362,7 @@ class StructConverter(Converter):
                 for i, v in enumerate(self._spark_data_type.toInternal(x)):
                     columns[i].append(v)
         return pa.StructArray.from_arrays(
-            [c.from_pyspark(col) for col, c in zip(columns, self._field_converters, strict=False)],
+            [c.from_pyspark(col) for col, c in zip(columns, self._field_converters, strict=True)],
             fields=self._fields,
             mask=pa.array(mask, type=pa.bool_()),
         )
@@ -419,7 +419,7 @@ def _named_arrays_to_pandas(
     data: Sequence[pa.Array], names: Sequence[str], serializer: ArrowStreamPandasUDFSerializer
 ) -> Sequence[pd.Series]:
     inputs = [_arrow_column_to_pandas(x, serializer) for x in data]
-    for x, name in zip(inputs, names, strict=False):
+    for x, name in zip(inputs, names, strict=True):
         x.name = name
     return inputs
 
@@ -432,8 +432,8 @@ class PySparkBatchUdf:
 
     def __call__(self, args: list[pa.Array], num_rows: int) -> pa.Array:
         if len(args) > 0:
-            inputs = [c.to_pyspark(a) for a, c in zip(args, self._input_converters, strict=False)]
-            output = list(self._udf(None, zip(*inputs, strict=False)))
+            inputs = [c.to_pyspark(a) for a, c in zip(args, self._input_converters, strict=True)]
+            output = list(self._udf(None, zip(*inputs, strict=True)))
         else:
             output = list(self._udf(None, itertools.repeat((), num_rows)))
         return self._output_converter.from_pyspark(output)
@@ -671,8 +671,8 @@ class PySparkTableUdf:
         for batch in args:
             arrays = batch.to_struct_array().flatten()
             if len(arrays) > 0:
-                inputs = tuple(c.to_pyspark(a) for a, c in zip(arrays, self._input_converters, strict=False))
-                yield from zip(*inputs, strict=False)
+                inputs = tuple(c.to_pyspark(a) for a, c in zip(arrays, self._input_converters, strict=True))
+                yield from zip(*inputs, strict=True)
             else:
                 yield ()
 
@@ -740,7 +740,7 @@ class PySparkArrowTableUdf:
             if passthrough is None:
                 passthrough = last  # noqa: PLW2901
             if passthrough is not None:
-                for v, name in zip(passthrough, self._input_names, strict=False):
+                for v, name in zip(passthrough, self._input_names, strict=True):
                     df[name] = [v] * len(out)
             else:
                 for name in self._input_names:
@@ -753,7 +753,7 @@ class PySparkArrowTableUdf:
     def _iter_passthrough(self, batches: Iterator[tuple[pd.Series]]) -> Iterator[tuple]:
         if self._passthrough_columns > 0:
             for batch in batches:
-                yield from zip(*batch[: self._passthrough_columns], strict=False)
+                yield from zip(*batch[: self._passthrough_columns], strict=True)
         else:
             for batch in batches:
                 if len(batch) > 0:
