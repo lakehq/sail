@@ -11,9 +11,8 @@
 // limitations under the License.
 
 use std::any::Any;
-use std::collections::HashMap;
 use std::fmt;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
@@ -30,84 +29,19 @@ use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
-use tokio::sync::{Mutex, OnceCell};
 use url::Url;
 
 use crate::datasource::scan::FileScanParams;
 use crate::datasource::{
     build_file_scan_config, df_logical_schema, DataFusionMixins, DeltaScanConfig,
 };
-use crate::kernel::DeltaTableConfig;
 use crate::physical_plan::{decode_adds_from_batch, meta_adds, COL_ACTION};
 use crate::schema::get_physical_schema;
-use crate::storage::StorageConfig;
-use crate::table::open_table_with_object_store_and_table_config_at_version;
+use crate::session_extension::{load_table_uncached, DeltaTableCache};
 
 const ADD_SCAN_CHUNK_FILES: usize = 1024;
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-struct TableCacheKey {
-    table_url: String,
-    version: i64,
-}
-
-struct CachedTable {
-    snapshot: crate::table::DeltaTableState,
-    log_store: crate::storage::LogStoreRef,
-}
-
-static TABLE_CACHE: LazyLock<Mutex<HashMap<TableCacheKey, Arc<OnceCell<Arc<CachedTable>>>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-async fn get_cached_table(
-    context: &Arc<TaskContext>,
-    table_url: &Url,
-    version: i64,
-) -> Result<Arc<CachedTable>> {
-    let key = TableCacheKey {
-        table_url: table_url.to_string(),
-        version,
-    };
-    let cell = {
-        let mut cache = TABLE_CACHE.lock().await;
-        cache
-            .entry(key)
-            .or_insert_with(|| Arc::new(OnceCell::new()))
-            .clone()
-    };
-    let cached = cell
-        .get_or_try_init(|| async {
-            let object_store = context
-                .runtime_env()
-                .object_store_registry
-                .get_store(table_url)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            let table_config = DeltaTableConfig {
-                require_files: false,
-                ..Default::default()
-            };
-            let table = open_table_with_object_store_and_table_config_at_version(
-                table_url.clone(),
-                object_store,
-                StorageConfig,
-                table_config,
-                version,
-            )
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            let snapshot_state = table
-                .snapshot()
-                .map_err(|e| DataFusionError::External(Box::new(e)))?
-                .clone();
-            Ok::<Arc<CachedTable>, DataFusionError>(Arc::new(CachedTable {
-                snapshot: snapshot_state,
-                log_store: table.log_store(),
-            }))
-        })
-        .await?;
-    Ok(Arc::clone(cached))
-}
 
 struct ScanByAddsStreamState {
     input: SendableRecordBatchStream,
@@ -190,7 +124,25 @@ impl ScanByAddsStreamState {
         if self.table_opened {
             return Ok(());
         }
-        let cached = get_cached_table(&self.context, &self.table_url, self.table_version).await?;
+        // Prefer a session-scoped cache. This avoids leaking state across sessions / RuntimeEnvs.
+        // If the cache extension is not installed, fall back to no caching.
+        let cached = match self.context.as_ref().extension::<DeltaTableCache>() {
+            Ok(cache) => {
+                cache
+                    .get(self.context.as_ref(), &self.table_url, self.table_version)
+                    .await?
+            }
+            Err(e) => {
+                log::debug!("delta_table_cache extension not found; disabling snapshot cache: {e}");
+                load_table_uncached(
+                    self.context.runtime_env(),
+                    &self.table_url,
+                    self.table_version,
+                )
+                .await?
+            }
+        };
+
         let snapshot_state = cached.snapshot.clone();
         let partition_columns = snapshot_state.metadata().partition_columns().clone();
         let session_state = SessionStateBuilder::new()

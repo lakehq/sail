@@ -52,6 +52,7 @@ itertools = { workspace = true }
 percent-encoding = { workspace = true }
 regex = { workspace = true }
 serde_arrow = { workspace = true }
+moka = { workspace = true }
 
 [lints]
 workspace = true

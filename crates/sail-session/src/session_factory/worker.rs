@@ -5,6 +5,7 @@ use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use sail_common::runtime::RuntimeHandle;
+use sail_delta_lake::session_extension::DeltaTableCache;
 use sail_object_store::DynamicObjectStoreRegistry;
 
 use crate::session_factory::SessionFactory;
@@ -27,7 +28,7 @@ impl<'a> SessionFactory<()> for WorkerSessionFactory<'a> {
                 RuntimeEnvBuilder::default().with_object_store_registry(Arc::new(registry));
             Arc::new(builder.build()?)
         };
-        let config = SessionConfig::default();
+        let config = SessionConfig::default().with_extension(Arc::new(DeltaTableCache::default()));
         let state = SessionStateBuilder::new()
             .with_config(config)
             .with_runtime_env(runtime)

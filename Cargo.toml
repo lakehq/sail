@@ -104,7 +104,7 @@ percent-encoding = "2.3.2"
 rustls = "0.23.36"
 dashmap = "6.1.0"
 itertools = "0.14.0"
-moka = { version = "0.12.13", features = ["sync"] }
+moka = { version = "0.12.13", features = ["sync", "future"] }
 bytes = "1.11.1"
 indexmap = "2.13.0"
 pin-project-lite = "0.2.16"
