@@ -51,6 +51,26 @@ Feature: Division by zero behavior
         | result |
         | NULL   |
 
+    Scenario: Decimal divided by decimal zero returns NULL
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(1.0 AS DECIMAL(10,2)) / CAST(0.0 AS DECIMAL(10,2)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: Decimal divided by integer zero returns NULL
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(100.50 AS DECIMAL(10,2)) / 0 AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
   Rule: Division by zero throws error when ANSI mode is enabled
     Scenario: Integer divided by zero throws error in ANSI mode
       Given config spark.sql.ansi.enabled = true
@@ -65,5 +85,21 @@ Feature: Division by zero behavior
       When query
         """
         SELECT 1.0 / 0.0 AS result
+        """
+      Then query error (?i)divide.*zero
+
+    Scenario: Decimal divided by decimal zero throws error in ANSI mode
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST(1.0 AS DECIMAL(10,2)) / CAST(0.0 AS DECIMAL(10,2)) AS result
+        """
+      Then query error (?i)divide.*zero
+
+    Scenario: Decimal divided by integer zero throws error in ANSI mode
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST(100.50 AS DECIMAL(10,2)) / 0 AS result
         """
       Then query error (?i)divide.*zero

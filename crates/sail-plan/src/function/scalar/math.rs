@@ -178,6 +178,52 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
     })
 }
 
+/// Check if an expression represents a zero literal value.
+/// Handles both direct literals and CAST expressions wrapping literals.
+fn is_zero_literal(expr: &Expr) -> bool {
+    // Helper to check if a ScalarValue is zero
+    fn is_scalar_zero(scalar: &ScalarValue) -> bool {
+        match scalar {
+            ScalarValue::Int8(Some(0))
+            | ScalarValue::Int16(Some(0))
+            | ScalarValue::Int32(Some(0))
+            | ScalarValue::Int64(Some(0))
+            | ScalarValue::UInt8(Some(0))
+            | ScalarValue::UInt16(Some(0))
+            | ScalarValue::UInt32(Some(0))
+            | ScalarValue::UInt64(Some(0))
+            | ScalarValue::Decimal128(Some(0), _, _) => true,
+            ScalarValue::Float32(Some(v)) if *v == 0.0 => true,
+            ScalarValue::Float64(Some(v)) if *v == 0.0 => true,
+            ScalarValue::Float16(Some(f)) if *f == f16::from_f32(0.0) => true,
+            ScalarValue::Decimal256(Some(v), _, _) if *v == i256::ZERO => true,
+            _ => false,
+        }
+    }
+
+    match expr {
+        // Direct literal
+        Expr::Literal(scalar, _) => is_scalar_zero(scalar),
+        // CAST(literal AS type) - unwrap the cast and check the inner literal
+        Expr::Cast(cast_expr) => {
+            if let Expr::Literal(scalar, _) = cast_expr.expr.as_ref() {
+                is_scalar_zero(scalar)
+            } else {
+                false
+            }
+        }
+        // TryCast is similar to Cast
+        Expr::TryCast(try_cast_expr) => {
+            if let Expr::Literal(scalar, _) = try_cast_expr.expr.as_ref() {
+                is_scalar_zero(scalar)
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
+}
+
 /// Arguments:
 ///   - dividend: A numeric or INTERVAL expression.
 ///   - divisor: A numeric expression.
@@ -199,40 +245,8 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
     let (dividend, divisor) = arguments.two()?;
 
-    // Check for literal zero divisor
-    let is_integer_zero = matches!(
-        &divisor,
-        Expr::Literal(ScalarValue::Int8(Some(0)), _)
-            | Expr::Literal(ScalarValue::Int16(Some(0)), _)
-            | Expr::Literal(ScalarValue::Int32(Some(0)), _)
-            | Expr::Literal(ScalarValue::Int64(Some(0)), _)
-            | Expr::Literal(ScalarValue::UInt8(Some(0)), _)
-            | Expr::Literal(ScalarValue::UInt16(Some(0)), _)
-            | Expr::Literal(ScalarValue::UInt32(Some(0)), _)
-            | Expr::Literal(ScalarValue::UInt64(Some(0)), _)
-    );
-
-    let is_float_zero = matches!(
-        &divisor,
-        Expr::Literal(ScalarValue::Float32(Some(v)), _) if *v == 0.0
-    ) || matches!(
-        &divisor,
-        Expr::Literal(ScalarValue::Float64(Some(v)), _) if *v == 0.0
-    ) || matches!(
-        &divisor,
-        Expr::Literal(ScalarValue::Float16(Some(f16)), _) if *f16 == f16::from_f32(0.0)
-    );
-
-    // Check for decimal zero (0.0 literals are typically parsed as Decimal128)
-    let is_decimal_zero = matches!(
-        &divisor,
-        Expr::Literal(ScalarValue::Decimal128(Some(0), _, _), _)
-    ) || matches!(
-        &divisor,
-        Expr::Literal(ScalarValue::Decimal256(Some(v), _, _), _) if *v == i256::ZERO
-    );
-
-    if is_integer_zero || is_float_zero || is_decimal_zero {
+    // Check if the divisor is a zero literal (handles both direct literals and CAST expressions)
+    if is_zero_literal(&divisor) {
         if function_context.plan_config.ansi_mode {
             // ANSI mode: throw error for division by zero
             return Err(PlanError::ArrowError(ArrowError::DivideByZero));
