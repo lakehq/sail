@@ -4,7 +4,6 @@ import os
 import sys
 import time
 from pathlib import Path
-from tempfile import gettempdir
 
 import numpy as np
 import pyarrow as pa
@@ -25,19 +24,26 @@ Usage:
   # Step 1: Generate test data (only once, uses PyArrow)
   hatch run python python/pysail/examples/spark/ml/regresion/benchmark_solvers.py --generate
 
-  # Step 2: Run benchmark against Sail
+  # Step 2a: Run ALL datasets with fresh processes (RECOMMENDED - cleanest)
+  SPARK_REMOTE="sc://localhost:50051" hatch run python python/pysail/examples/spark/ml/regresion/benchmark_solvers.py --clean
+  SPARK_REMOTE="local" hatch run python python/pysail/examples/spark/ml/regresion/benchmark_solvers.py --clean
+
+  # Step 2b: Run single dataset (for testing)
+  SPARK_REMOTE="sc://localhost:50051" hatch run python python/pysail/examples/spark/ml/regresion/benchmark_solvers.py --dataset large
+
+  # Step 2c: Run all datasets in single process (faster but less clean)
   SPARK_REMOTE="sc://localhost:50051" hatch run python python/pysail/examples/spark/ml/regresion/benchmark_solvers.py
 
-  # Step 3: Run benchmark against Spark JVM (requires Java 17)
-  SPARK_REMOTE="local" hatch run python python/pysail/examples/spark/ml/regresion/benchmark_solvers.py
-
-  # Step 4: Compare results (after running both)
+  # Step 3: Compare results (after running both Sail and Spark)
   hatch run python python/pysail/examples/spark/ml/regresion/benchmark_solvers.py --compare
 """
 
 
-# Data directory (in temp to avoid polluting the repo)
-DATA_DIR = Path(gettempdir()) / "sail_benchmark"
+# Data directory (persistent, in same folder as this script)
+DATA_DIR = Path(__file__).parent / "benchmark_data"
+
+# Parallelism configuration
+NUM_PARTITIONS = 12  # Match CPU cores for optimal parallelism
 
 # Configuration - can be large since we read from Parquet
 DATASETS = [
@@ -45,6 +51,9 @@ DATASETS = [
     {"name": "small", "n": 100_000, "p": 50},
     {"name": "medium", "n": 500_000, "p": 100},
     {"name": "large", "n": 1_000_000, "p": 100},
+    # {"name": "large2", "n": 1_000_000, "p": 500},  # TODO: fix OLS hang with many features
+    {"name": "xlarge", "n": 2_000_000, "p": 100},
+    {"name": "xxlarge", "n": 5_000_000, "p": 100},
 ]
 
 
@@ -54,34 +63,65 @@ def generate_true_coefficients(p):
     return np.arange(1, p + 1, dtype=np.float64)
 
 
-def generate_and_save_data(dataset, seed=42):
-    """Generate synthetic data and save to Parquet using PyArrow (no Spark needed)"""
+def generate_and_save_data(dataset, seed=42, num_partitions=NUM_PARTITIONS):
+    """Generate synthetic data and save to multiple Parquet files for parallel reading"""
+    import gc
 
     n, p, name = dataset["n"], dataset["p"], dataset["name"]
 
     np.random.seed(seed)
     true_coefs = generate_true_coefficients(p)
 
-    print(f"  Generating {n:,} samples with {p} features...")
+    output_path = DATA_DIR / name
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # Calculate rows per partition
+    rows_per_partition = (n + num_partitions - 1) // num_partitions
+
+    print(f"  Generating {n:,} samples with {p} features into {num_partitions} files...")
     start = time.time()
 
-    # Generate all data at once (more efficient)
-    x_big = np.random.randn(n, p)
-    y = x_big @ true_coefs + np.random.randn(n) * 0.1  # Small noise
+    for i in range(num_partitions):
+        partition_start = i * rows_per_partition
+        partition_end = min((i + 1) * rows_per_partition, n)
+        partition_n = partition_end - partition_start
+
+        if partition_n <= 0:
+            break
+
+        print(f"    Partition {i + 1}/{num_partitions}: rows {partition_start:,}-{partition_end:,}...")
+
+        # Generate partition data
+        x_partition = np.random.randn(partition_n, p)
+        y_partition = x_partition @ true_coefs + np.random.randn(partition_n) * 0.1
+
+        # Convert to Arrow and save
+        table = _create_arrow_table(x_partition, y_partition, partition_n)
+        pq.write_table(table, output_path / f"part-{i:05d}.parquet")
+
+        # Free memory
+        del x_partition, y_partition, table
+        gc.collect()
 
     gen_time = time.time() - start
     print(f"  Data generated in {gen_time:.1f}s")
 
-    # Create Arrow table with VectorUDT-compatible structure
+    # Save coefficients for validation
+    coef_path = DATA_DIR / f"{name}_coefs.npy"
+    np.save(coef_path, true_coefs)
+    print(f"  Saved {n:,} rows in {num_partitions} files to {output_path}")
+
+
+def _create_arrow_table(x_data, y_data, n):
+    """Create Arrow table with VectorUDT-compatible structure"""
     # VectorUDT: struct{type: int8, size: int32, indices: list<int32>, values: list<float64>}
-    print("  Converting to Arrow format...")
 
     # For dense vectors: type=1, size=0, indices=null, values=features
     types = np.ones(n, dtype=np.int8)  # 1 = dense
     sizes = np.zeros(n, dtype=np.int32)  # 0 for dense
 
     # Create list arrays for values (each row is a list of floats)
-    values_list = [x_big[i].tolist() for i in range(n)]
+    values_list = [x_data[i].tolist() for i in range(n)]
 
     # Build the struct array for features
     features_struct = pa.StructArray.from_arrays(
@@ -94,24 +134,12 @@ def generate_and_save_data(dataset, seed=42):
         names=["type", "size", "indices", "values"],
     )
 
-    table = pa.table(
+    return pa.table(
         {
-            "label": pa.array(y),
+            "label": pa.array(y_data),
             "features": features_struct,
         }
     )
-
-    # Save to Parquet
-    output_path = DATA_DIR / name
-    print(f"  Saving to {output_path}...")
-    output_path.mkdir(parents=True, exist_ok=True)
-    pq.write_table(table, output_path / "data.parquet")
-
-    # Save coefficients for validation
-    coef_path = DATA_DIR / f"{name}_coefs.npy"
-    np.save(coef_path, true_coefs)
-
-    print(f"  Saved {n:,} rows to {output_path}")
 
 
 def load_data(spark, dataset):
@@ -148,6 +176,15 @@ def coefficient_error(predicted, true_coefs):
 
 def run_benchmark(spark, dataset):
     """Run benchmark for a single dataset size"""
+    import gc
+
+    # Clear caches for fair comparison (Sail doesn't support clearCache yet)
+    try:
+        spark.catalog.clearCache()
+    except Exception:
+        pass  # Sail: UnsupportedOperationException
+    gc.collect()
+
     n, p = dataset["n"], dataset["p"]
     name = dataset["name"]
 
@@ -172,7 +209,7 @@ def run_benchmark(spark, dataset):
         # Sail: OLS now uses distributed by default (auto/normal/distributed all use it)
         solvers = [
             ("OLS (Sail)", {"solver": "auto", "regParam": 0.0}),  # Uses distributed OLS
-            ("SGD (Sail)", {"solver": "sgd", "maxIter": 1000, "regParam": 0.0}),
+            # ("SGD (Sail)", {"solver": "sgd", "maxIter": 1000, "regParam": 0.0}),  # 4-5x slower
         ]
     else:
         # Spark JVM: convert struct to proper Vector using Python UDF
@@ -246,7 +283,17 @@ def run_benchmarks():
     os.environ.setdefault("SPARK_REMOTE", remote)
 
     print(f"Connecting to: {remote}")
-    spark = SparkSession.builder.getOrCreate()
+
+    # Configure Spark for optimal performance
+    builder = SparkSession.builder
+    if remote == "local":
+        builder = (
+            builder.config("spark.driver.memory", "16g")
+            .config("spark.sql.shuffle.partitions", str(NUM_PARTITIONS))
+            .config("spark.default.parallelism", str(NUM_PARTITIONS))
+        )
+
+    spark = builder.getOrCreate()
 
     all_results = {}
 
@@ -349,11 +396,121 @@ def compare_results():
     print("-" * 80)
 
 
+def run_single_dataset(dataset_name):
+    """Run benchmark for a single dataset (cleanest - fresh process)"""
+    dataset = next((d for d in DATASETS if d["name"] == dataset_name), None)
+    if not dataset:
+        print(f"Unknown dataset: {dataset_name}")
+        print(f"Available: {[d['name'] for d in DATASETS]}")
+        return
+
+    remote = os.environ.get("SPARK_REMOTE", "sc://localhost:50051")
+    os.environ.setdefault("SPARK_REMOTE", remote)
+
+    print(f"Connecting to: {remote}")
+
+    # Configure Spark for optimal performance
+    builder = SparkSession.builder
+    if remote == "local":
+        builder = (
+            builder.config("spark.driver.memory", "16g")
+            .config("spark.sql.shuffle.partitions", str(NUM_PARTITIONS))
+            .config("spark.default.parallelism", str(NUM_PARTITIONS))
+        )
+
+    spark = builder.getOrCreate()
+
+    results = run_benchmark(spark, dataset)
+
+    # Load existing results and merge
+    backend = "sail" if "localhost:50051" in remote else "spark"
+    results_file = DATA_DIR / f"results_{backend}.json"
+
+    if results_file.exists():
+        with open(results_file) as f:
+            all_results = json.load(f)
+    else:
+        all_results = {
+            "backend": backend,
+            "remote": remote,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "results": {},
+        }
+
+    # Update with new results
+    if results:
+        all_results["results"][dataset_name] = {
+            sk: {kk: vv for kk, vv in sv.items() if kk != "coefficients"}
+            for sk, sv in results.items()
+        }
+        all_results["timestamp"] = time.strftime("%Y-%m-%d %H:%M:%S")
+
+    with open(results_file, "w") as f:
+        json.dump(all_results, f, indent=2)
+
+    print(f"\nResults saved to: {results_file}")
+    spark.stop()
+
+
+def run_all_clean():
+    """Run all datasets as separate subprocesses (cleanest benchmarking)"""
+    import subprocess
+
+    remote = os.environ.get("SPARK_REMOTE", "sc://localhost:50051")
+    script_path = __file__
+
+    print(f"Running all datasets with fresh processes (SPARK_REMOTE={remote})")
+    print("=" * 60)
+
+    for dataset in DATASETS:
+        name = dataset["name"]
+        print(f"\n>>> Starting {name} ({dataset['n']:,} x {dataset['p']})...")
+
+        env = os.environ.copy()
+        env["SPARK_REMOTE"] = remote
+
+        result = subprocess.run(
+            [sys.executable, script_path, "--dataset", name],
+            env=env,
+            capture_output=False,
+        )
+
+        if result.returncode != 0:
+            print(f"  WARNING: {name} failed with code {result.returncode}")
+
+    print("\n" + "=" * 60)
+    print("All datasets complete! Run --compare to see results.")
+
+
+def cleanup_data():
+    """Delete all benchmark data"""
+    import shutil
+
+    if DATA_DIR.exists():
+        size = sum(f.stat().st_size for f in DATA_DIR.rglob("*") if f.is_file())
+        print(f"Deleting {DATA_DIR} ({size / 1024 / 1024 / 1024:.2f} GB)...")
+        shutil.rmtree(DATA_DIR)
+        print("Done!")
+    else:
+        print(f"Nothing to delete: {DATA_DIR} does not exist")
+
+
 def main():
     if "--generate" in sys.argv:
         generate_all_data()
     elif "--compare" in sys.argv:
         compare_results()
+    elif "--cleanup" in sys.argv:
+        cleanup_data()
+    elif "--dataset" in sys.argv:
+        idx = sys.argv.index("--dataset")
+        if idx + 1 < len(sys.argv):
+            run_single_dataset(sys.argv[idx + 1])
+        else:
+            print("Usage: --dataset <name>")
+            print(f"Available: {[d['name'] for d in DATASETS]}")
+    elif "--clean" in sys.argv:
+        run_all_clean()
     else:
         run_benchmarks()
 
