@@ -37,7 +37,10 @@ impl PlanResolver<'_> {
     }
 }
 
-/// Replaces all placeholder subquery LogicalPlans in the plan tree with actual plans.
+/// Replaces placeholder subqueries in expressions with resolved plans.
+///
+/// Walks the plan tree bottom-up and substitutes UnresolvedSubqueryRef nodes
+/// inside ScalarSubquery, InSubquery, and Exists expressions.
 fn replace_subquery_placeholders(
     plan: LogicalPlan,
     resolved_refs: &HashMap<i64, Arc<LogicalPlan>>,
@@ -52,9 +55,7 @@ fn replace_subquery_placeholders(
             .map(|expr| {
                 let result =
                     expr.transform_up(|e| replace_placeholder_in_expr(e, resolved_refs))?;
-                if result.transformed {
-                    any_changed = true;
-                }
+                any_changed |= result.transformed;
                 Ok(result.data)
             })
             .collect::<datafusion_common::Result<Vec<_>>>()?;
@@ -80,6 +81,28 @@ fn replace_subquery_placeholders(
     .map_err(|e| PlanError::invalid(format!("failed to replace subquery placeholders: {e}")))
 }
 
+/// Attempts to replace a placeholder subquery with the resolved plan.
+fn try_replace_subquery(
+    subquery: &Subquery,
+    resolved_refs: &HashMap<i64, Arc<LogicalPlan>>,
+) -> datafusion_common::Result<Option<Subquery>> {
+    if let Some(plan_id) = UnresolvedSubqueryRef::extract_plan_id(&subquery.subquery) {
+        let actual_plan = resolved_refs.get(&plan_id).ok_or_else(|| {
+            datafusion_common::DataFusionError::Plan(format!(
+                "subquery plan_id {} not found in WithRelations references",
+                plan_id
+            ))
+        })?;
+        Ok(Some(Subquery {
+            subquery: Arc::clone(actual_plan),
+            outer_ref_columns: subquery.outer_ref_columns.clone(),
+            spans: subquery.spans.clone(),
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
 /// Replaces placeholder subqueries within a single expression.
 fn replace_placeholder_in_expr(
     expr: DFExpr,
@@ -87,69 +110,29 @@ fn replace_placeholder_in_expr(
 ) -> datafusion_common::Result<Transformed<DFExpr>> {
     match &expr {
         DFExpr::InSubquery(in_sq) => {
-            if let Some(plan_id) =
-                UnresolvedSubqueryRef::try_from_logical_plan(&in_sq.subquery.subquery)
-            {
-                let actual_plan = resolved_refs.get(&plan_id).ok_or_else(|| {
-                    datafusion_common::DataFusionError::Plan(format!(
-                        "subquery plan_id {} not found in WithRelations references",
-                        plan_id
-                    ))
-                })?;
-                let new_subquery = Subquery {
-                    subquery: Arc::clone(actual_plan),
-                    outer_ref_columns: in_sq.subquery.outer_ref_columns.clone(),
-                    spans: in_sq.subquery.spans.clone(),
-                };
-                let new_expr = DFExpr::InSubquery(InSubquery {
+            if let Some(new_subquery) = try_replace_subquery(&in_sq.subquery, resolved_refs)? {
+                Ok(Transformed::yes(DFExpr::InSubquery(InSubquery {
                     expr: in_sq.expr.clone(),
                     subquery: new_subquery,
                     negated: in_sq.negated,
-                });
-                Ok(Transformed::yes(new_expr))
+                })))
             } else {
                 Ok(Transformed::no(expr))
             }
         }
         DFExpr::ScalarSubquery(sq) => {
-            if let Some(plan_id) = UnresolvedSubqueryRef::try_from_logical_plan(&sq.subquery) {
-                let actual_plan = resolved_refs.get(&plan_id).ok_or_else(|| {
-                    datafusion_common::DataFusionError::Plan(format!(
-                        "subquery plan_id {} not found in WithRelations references",
-                        plan_id
-                    ))
-                })?;
-                let new_subquery = Subquery {
-                    subquery: Arc::clone(actual_plan),
-                    outer_ref_columns: sq.outer_ref_columns.clone(),
-                    spans: sq.spans.clone(),
-                };
-                let new_expr = DFExpr::ScalarSubquery(new_subquery);
-                Ok(Transformed::yes(new_expr))
+            if let Some(new_subquery) = try_replace_subquery(sq, resolved_refs)? {
+                Ok(Transformed::yes(DFExpr::ScalarSubquery(new_subquery)))
             } else {
                 Ok(Transformed::no(expr))
             }
         }
         DFExpr::Exists(ex) => {
-            if let Some(plan_id) =
-                UnresolvedSubqueryRef::try_from_logical_plan(&ex.subquery.subquery)
-            {
-                let actual_plan = resolved_refs.get(&plan_id).ok_or_else(|| {
-                    datafusion_common::DataFusionError::Plan(format!(
-                        "subquery plan_id {} not found in WithRelations references",
-                        plan_id
-                    ))
-                })?;
-                let new_subquery = Subquery {
-                    subquery: Arc::clone(actual_plan),
-                    outer_ref_columns: ex.subquery.outer_ref_columns.clone(),
-                    spans: ex.subquery.spans.clone(),
-                };
-                let new_expr = DFExpr::Exists(Exists {
+            if let Some(new_subquery) = try_replace_subquery(&ex.subquery, resolved_refs)? {
+                Ok(Transformed::yes(DFExpr::Exists(Exists {
                     subquery: new_subquery,
                     negated: ex.negated,
-                });
-                Ok(Transformed::yes(new_expr))
+                })))
             } else {
                 Ok(Transformed::no(expr))
             }
