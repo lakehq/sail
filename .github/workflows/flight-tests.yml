@@ -7,33 +7,9 @@ on:
         required: false
 
 jobs:
-  setup:
-    name: Setup
-    runs-on: ubuntu-slim
-    outputs:
-      run_tests: ${{ ((github.event_name == 'pull_request' && (github.event.action == 'opened' || steps.match.outputs.result == 'true' || steps.label.outputs.has_label == 'true')) || github.event_name == 'push') && 'true' || 'false' }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: ./.github/actions/commit-message-match
-        id: match
-        with:
-          pattern: "\\[(flight )?tests?\\]"
-          ignore_case: true
-
-      - uses: actions/github-script@v7
-        id: label
-        with:
-          script: |
-            const labels = context.payload.pull_request?.labels?.map(label => label.name) || [];
-            core.setOutput('has_label', labels.includes('run flight tests') ? 'true' : 'false');
-
   test:
     name: Test
-    if: needs.setup.outputs.run_tests == 'true'
     runs-on: ubuntu-latest
-    needs:
-      - setup
     env:
       # Coverage environment variables
       RUSTC_WORKSPACE_WRAPPER: ${{ github.workspace }}/.github/scripts/rustc-workspace-wrapper.sh
@@ -73,13 +49,13 @@ jobs:
           chmod +x /usr/local/bin/grpc_health_probe
           grpc_health_probe -version
 
-      - name: Build sail-flight binary
+      - name: Build sail-cli binary
         env:
           RUSTFLAGS: "-C instrument-coverage"
         run: |
           # Wait for background Rust toolchain installation to complete
           wait
-          cargo build --bin sail-flight
+          cargo build -p sail-cli
 
       - name: Download Python Package
         uses: actions/download-artifact@v4
@@ -125,7 +101,7 @@ jobs:
         run: |
           # Wait for background Rust toolchain installation to complete
           wait
-          BINARY_PATH=$(find target -name "sail-flight" -type f -executable | head -n 1)
+          BINARY_PATH=$(find target -name "sail" -type f -executable | head -n 1)
           echo "Binary path: $BINARY_PATH"
           LLVM_PATH=$(.github/scripts/find-llvm-profdata.sh)
           grcov target --binary-path "$(dirname $BINARY_PATH)" -s . \
