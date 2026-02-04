@@ -105,8 +105,8 @@ pub struct ClusterConfig {
     pub worker_heartbeat_timeout_secs: u64,
     pub worker_launch_timeout_secs: u64,
     pub worker_task_slots: usize,
-    pub worker_stream_buffer: usize,
     pub task_launch_timeout_secs: u64,
+    pub task_stream_buffer: usize,
     pub task_stream_creation_timeout_secs: u64,
     pub task_max_attempts: usize,
     pub job_output_buffer: usize,
@@ -372,7 +372,7 @@ impl ClusterConfigEnv {
         WORKER_LISTEN_HOST,
         WORKER_EXTERNAL_HOST,
         WORKER_HEARTBEAT_INTERVAL_SECS,
-        WORKER_STREAM_BUFFER,
+        TASK_STREAM_BUFFER,
         TASK_STREAM_CREATION_TIMEOUT_SECS,
         RPC_RETRY_STRATEGY,
     }
