@@ -11,9 +11,9 @@ Machine Learning library for Sail, compatible with Spark ML.
   - SGD solver - iterative gradient descent
   - VectorUDT support for Spark ML compatibility
 
-- **Distributed OLS**
-  - `ols_sufficient_stats` SQL aggregate function
-  - Computes X^T X and X^T y in parallel across partitions
+- **Distributed Aggregate Functions**
+  - `ols_sufficient_stats` - Computes X^T X and X^T y for OLS
+  - `sgd_gradient_sum` - Computes gradient sums for SGD
 
 ## Next Steps
 
@@ -80,11 +80,25 @@ println!("Coefficients: {:?}", model.coefficients());
 
 ## Distributed Training
 
-For very large datasets, use the SQL aggregate function:
+For very large datasets, use the SQL aggregate functions:
+
+### OLS (Single-pass, exact solution)
 
 ```sql
 SELECT ols_sufficient_stats(features, label) FROM training_data
 ```
 
-This computes sufficient statistics in parallel, which can then be used
-to solve the OLS equation on the driver.
+Computes X^T X and X^T y in parallel across partitions. The driver merges
+the results and solves β = (X^T X)^-1 X^T y.
+
+### SGD (Iterative)
+
+```sql
+SELECT sgd_gradient_sum(features, label, coefficients) FROM training_data
+```
+
+Computes gradient sums in parallel for each epoch. The driver updates
+coefficients and iterates until convergence.
+
+Both functions support distributed execution - workers compute partial
+statistics, driver merges and updates the model.
