@@ -14,11 +14,11 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, Float64Array, ListArray};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
-use faer::Mat;
 use datafusion::common::{exec_err, Result, ScalarValue};
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 use datafusion_common::scalar::ScalarStructBuilder;
+use faer::Mat;
 
 /// OLS Sufficient Statistics aggregate function for distributed linear regression.
 ///
@@ -247,7 +247,11 @@ impl OLSSufficientStatsAccumulator {
     ///
     /// Best for p < 200 where LLVM auto-vectorization is efficient
     /// and matrix copy overhead would dominate GEMM benefits.
-    fn update_batch_simd(&mut self, labels: &Float64Array, features_list: &ListArray) -> Result<()> {
+    fn update_batch_simd(
+        &mut self,
+        labels: &Float64Array,
+        features_list: &ListArray,
+    ) -> Result<()> {
         for i in 0..labels.len() {
             if labels.is_null(i) || features_list.is_null(i) {
                 continue;

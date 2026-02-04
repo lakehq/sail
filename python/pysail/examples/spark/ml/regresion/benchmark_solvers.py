@@ -1,6 +1,10 @@
 import ast
+import contextlib
+import gc
 import json
 import os
+import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -65,7 +69,6 @@ def generate_true_coefficients(p):
 
 def generate_and_save_data(dataset, seed=42, num_partitions=NUM_PARTITIONS):
     """Generate synthetic data and save to multiple Parquet files for parallel reading"""
-    import gc
 
     n, p, name = dataset["n"], dataset["p"], dataset["name"]
 
@@ -176,13 +179,10 @@ def coefficient_error(predicted, true_coefs):
 
 def run_benchmark(spark, dataset):
     """Run benchmark for a single dataset size"""
-    import gc
 
     # Clear caches for fair comparison (Sail doesn't support clearCache yet)
-    try:
+    with contextlib.suppress(Exception):
         spark.catalog.clearCache()
-    except Exception:
-        pass  # Sail: UnsupportedOperationException
     gc.collect()
 
     n, p = dataset["n"], dataset["p"]
@@ -453,8 +453,7 @@ def run_single_dataset(dataset_name):
     # Update with new results
     if results:
         all_results["results"][dataset_name] = {
-            sk: {kk: vv for kk, vv in sv.items() if kk != "coefficients"}
-            for sk, sv in results.items()
+            sk: {kk: vv for kk, vv in sv.items() if kk != "coefficients"} for sk, sv in results.items()
         }
         all_results["timestamp"] = time.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -467,7 +466,6 @@ def run_single_dataset(dataset_name):
 
 def run_all_clean():
     """Run all datasets as separate subprocesses (cleanest benchmarking)"""
-    import subprocess
 
     remote = os.environ.get("SPARK_REMOTE", "sc://localhost:50051")
     script_path = __file__
@@ -500,6 +498,7 @@ def run_all_clean():
 
         result = subprocess.run(
             cmd,
+            check=False,
             env=env,
             capture_output=False,
         )
@@ -513,7 +512,6 @@ def run_all_clean():
 
 def cleanup_data():
     """Delete all benchmark data"""
-    import shutil
 
     if DATA_DIR.exists():
         size = sum(f.stat().st_size for f in DATA_DIR.rglob("*") if f.is_file())
