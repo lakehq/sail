@@ -7,18 +7,17 @@ use chrono::ParseError;
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::*;
 use datafusion::error::{DataFusionError, Result};
-use datafusion::logical_expr::sqlparser::tokenizer::Token;
 use datafusion_common::{exec_err, internal_err, plan_err, ScalarValue};
-use datafusion_expr::sqlparser::ast::{ArrayElemTypeDef, DataType as SQLType};
-use datafusion_expr::sqlparser::dialect::GenericDialect;
-use datafusion_expr::sqlparser::parser::{Parser, ParserOptions};
-use datafusion_expr::sqlparser::tokenizer::Tokenizer;
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
 use datafusion_expr_common::signature::Volatility;
-use regex::{Error, Regex};
-use sail_common::spec::{SAIL_LIST_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
+use sail_common::spec::{
+    self, SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME,
+    SAIL_MAP_VALUE_FIELD_NAME,
+};
+use sail_sql_analyzer::data_type::from_ast_data_type;
+use sail_sql_analyzer::parser as sail_parser;
 
 use crate::functions_nested_utils::*;
 use crate::functions_utils::make_scalar_function;
@@ -377,81 +376,42 @@ fn parse_timestamp(
 /// Returns an error if the schema string is invalid, such as if it contains
 /// duplicate field names or uses an unsupported field type syntax.
 fn parse_fields(schema: &str) -> Result<Fields> {
-    let schema: Result<Fields> = parse_schema_string(schema);
-    schema.map(|fields| {
-        let vec_fields: Vec<Arc<Field>> = fields.iter().cloned().collect();
-        Fields::from(vec_fields)
-    })
-}
-
-/// Parses a schema definition string into Arrow `Fields` with support for complex types.
-///
-/// This function interprets a schema string and converts it into `Fields`,
-/// handling both standard field types and complex structures like `STRUCT<...>`.
-/// It uses regular expressions to identify field names and types, and it processes
-/// optional colons that may appear in type definitions.
-///
-/// # Parameters
-/// - `schema_str`: A string representing the schema definition, which may include
-///   structures as `STRUCT<field1 TYPE, field2 TYPE>` or simple field declarations
-///   like `name STRING, age INT`.
-///
-/// # Returns
-/// A `Result` containing the parsed `Fields`. The `Fields` are a collection
-/// of `Field` items, each detailing a single attribute with a name and a data type.
-///
-/// # Errors
-/// The function returns an error if:
-/// - The regex for field parsing fails to compile.
-/// - The schema contains duplicate field names.
-/// - An unsupported type or incorrectly formatted string is encountered.
-fn parse_schema_string(schema_str: &str) -> Result<Fields> {
-    let trimmed_schema: &str = schema_str.trim();
-
-    // Check for STRUCT pattern and remove enclosing tags
-    let schema_content: &str =
-        if trimmed_schema.starts_with("STRUCT<") && trimmed_schema.ends_with('>') {
-            &trimmed_schema[7..trimmed_schema.len() - 1] // Remove "STRUCT<" prefix and ">" suffix
-        } else {
-            trimmed_schema
-        };
-
-    // Allow for optional colons between names and types
-    let field_regex: std::result::Result<Regex, Error> =
-        Regex::new(r"\s*([a-zA-Z_]\w*)\s*:?\s*([a-zA-Z_]+(?:\s*\([^)]*\))?)\s*");
-
-    if let Ok(field_regex) = field_regex {
-        field_regex
-            .captures_iter(schema_content)
-            .map(|cap| {
-                let name = &cap[1];
-                let type_str = &cap[2];
-                let data_type = parse_data_type(type_str)?;
-                Ok((name.to_string(), Field::new(name, data_type, true)))
-            })
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .try_fold(
-                (HashSet::new(), Vec::new()),
-                |(seen, mut acc), (name, field)| {
-                    if seen.contains(&name) {
-                        Err(DataFusionError::Plan(format!(
-                            "Duplicate field name '{name}'"
-                        )))
-                    } else {
-                        let mut seen = seen;
-                        seen.insert(name);
-                        acc.push(field);
-                        Ok((seen, acc))
-                    }
-                },
-            )
-            .map(|(_, fields)| Fields::from(fields))
+    let schema = schema.trim();
+    let type_str = if schema
+        .get(..6)
+        .is_some_and(|p| p.eq_ignore_ascii_case("struct"))
+        && schema.get(6..).is_some_and(|p| p.starts_with('<'))
+        && schema.ends_with('>')
+    {
+        schema.to_string()
     } else {
-        Err(DataFusionError::Plan(format!(
-            "Invalid schema string '{schema_content}'"
-        )))
+        // Schema string is a list of fields. Wrap it into `STRUCT<...>`.
+        format!("STRUCT<{schema}>")
+    };
+
+    let ast = sail_parser::parse_data_type(&type_str)
+        .map_err(|e| DataFusionError::Plan(format!("Failed to parse schema '{schema}': {e}")))?;
+    let spec_dt = from_ast_data_type(ast)
+        .map_err(|e| DataFusionError::Plan(format!("Failed to analyze schema '{schema}': {e}")))?;
+    let spec::DataType::Struct { fields } = spec_dt else {
+        return Err(DataFusionError::Plan(format!(
+            "Expected STRUCT schema, got: {spec_dt:?}"
+        )));
+    };
+
+    let mut out: Vec<Arc<Field>> = Vec::with_capacity(fields.len());
+    let mut seen: HashSet<String> = HashSet::with_capacity(fields.len());
+    for f in fields.iter() {
+        let name = f.name.clone();
+        if !seen.insert(name.clone()) {
+            return Err(DataFusionError::Plan(format!(
+                "Duplicate field name '{name}'"
+            )));
+        }
+        let dt = spec_to_arrow_data_type(&f.data_type)?;
+        out.push(Arc::new(Field::new(name, dt, f.nullable)));
     }
+    Ok(Fields::from(out))
 }
 
 /// Parses a raw SQL type string into an Arrow `DataType`.
@@ -474,133 +434,139 @@ fn parse_schema_string(schema_str: &str) -> Result<Fields> {
 /// - Parsing fails, suggesting that the SQL type is not recognized or improperly formatted.
 /// - Conversion to an Arrow `DataType` fails because the SQL type is unsupported.
 pub fn parse_data_type(raw: &str) -> Result<DataType> {
-    let dialect: GenericDialect = GenericDialect {};
-    let mut tokenizer: Tokenizer = Tokenizer::new(&dialect, raw);
-    let tokens: Vec<Token> = tokenizer
-        .tokenize()
-        .map_err(|e| DataFusionError::Plan(format!("Tokenization error: {e}")))?;
-
-    let mut parser: Parser = Parser::new(&dialect)
-        .with_options(ParserOptions::default())
-        .with_tokens(tokens);
-
-    let sql_type: datafusion::logical_expr::sqlparser::ast::DataType = parser
-        .parse_data_type()
+    let ast = sail_parser::parse_data_type(raw)
         .map_err(|e| DataFusionError::Plan(format!("Failed to parse SQL type '{raw}': {e}")))?;
-
-    convert_sql_type(&sql_type)
+    let spec_dt = from_ast_data_type(ast)
+        .map_err(|e| DataFusionError::Plan(format!("Failed to analyze SQL type '{raw}': {e}")))?;
+    spec_to_arrow_data_type(&spec_dt)
 }
 
-/// Converts a `sqlparser::ast::DataType` into an Arrow `DataType`.
-///
-/// This function processes various SQL data types as defined in the
-/// `sqlparser` library and translates them into corresponding Arrow `DataType`
-/// variants for further processing within Arrow-based applications.
-///
-/// # Parameters
-/// - `sql_type`: The `SQLType` from `sqlparser`, which represents a parsed
-///   SQL data type such as `INT`, `VARCHAR`, `STRUCT`, etc.
-///
-/// # Returns
-/// A `Result` containing the corresponding Arrow `DataType`. Arrow `DataType`
-/// variants include structures that can represent integers, floats, strings,
-/// timestamps, arrays, and more sophisticated types like `Struct` and `Array`.
-///
-/// # Errors
-/// Returns an error if:
-/// - The SQL type contains unsupported or unknown types.
-/// - A required detail for a type, such as the inner type for an array, is missing.
-/// - There's a syntax issue or missing information in the definition of complex types.
-fn convert_sql_type(sql_type: &SQLType) -> Result<DataType> {
-    match sql_type {
-        SQLType::Int(_) | SQLType::Integer(_) | SQLType::Int4(_) => Ok(DataType::Int32),
-        SQLType::BigInt(_) | SQLType::Int8(_) | SQLType::Int64 => Ok(DataType::Int64),
-        SQLType::SmallInt(_) | SQLType::Int2(_) | SQLType::Int16 => Ok(DataType::Int16),
-        SQLType::TinyInt(_) => Ok(DataType::Int8),
+fn spec_to_arrow_data_type(dt: &spec::DataType) -> Result<DataType> {
+    use spec::DataType as SDT;
 
-        SQLType::UInt8 => Ok(DataType::UInt8),
-        SQLType::UInt16 => Ok(DataType::UInt16),
-        SQLType::UInt32 | SQLType::UnsignedInteger => Ok(DataType::UInt32),
-        SQLType::UInt64 | SQLType::BigIntUnsigned(_) => Ok(DataType::UInt64),
-
-        SQLType::Float(_)
-        | SQLType::Float64
-        | SQLType::Double(_)
-        | SQLType::DoublePrecision
-        | SQLType::Float8 => Ok(DataType::Float64),
-        SQLType::Float32 | SQLType::Real | SQLType::Float4 => Ok(DataType::Float32),
-
-        SQLType::Decimal(info) | SQLType::Numeric(info) => {
-            let precision_scale = match info {
-                datafusion_expr::sqlparser::ast::ExactNumberInfo::Precision(p) => Ok((*p, 10)), // default scale
-                datafusion_expr::sqlparser::ast::ExactNumberInfo::PrecisionAndScale(p, s) => {
-                    Ok((*p, *s))
-                }
-                datafusion_expr::sqlparser::ast::ExactNumberInfo::None => Err(
-                    DataFusionError::Plan("Decimal type missing precision and scale".to_string()),
-                ),
-            };
-
-            precision_scale
-                .map(|(precision, scale)| DataType::Decimal128(precision as u8, scale as i8))
+    fn to_time_unit(unit: &spec::TimeUnit) -> TimeUnit {
+        match unit {
+            spec::TimeUnit::Second => TimeUnit::Second,
+            spec::TimeUnit::Millisecond => TimeUnit::Millisecond,
+            spec::TimeUnit::Microsecond => TimeUnit::Microsecond,
+            spec::TimeUnit::Nanosecond => TimeUnit::Nanosecond,
         }
+    }
 
-        SQLType::Char(_)
-        | SQLType::Character(_)
-        | SQLType::Varchar(_)
-        | SQLType::CharacterVarying(_)
-        | SQLType::CharVarying(_)
-        | SQLType::Text
-        | SQLType::String(_)
-        | SQLType::Nvarchar(_) => Ok(DataType::Utf8),
-
-        SQLType::Binary(_) | SQLType::Varbinary(_) => Ok(DataType::Binary),
-
-        SQLType::Boolean | SQLType::Bool => Ok(DataType::Boolean),
-
-        SQLType::Date | SQLType::Date32 => Ok(DataType::Date32),
-        SQLType::Timestamp(_, _) | SQLType::Datetime(_) | SQLType::Datetime64(_, _) => Ok(
-            DataType::Timestamp(TimeUnit::Nanosecond, Some(Arc::from("UTC"))),
-        ),
-
-        SQLType::Array(inner) => {
-            let inner_type = match inner {
-                ArrayElemTypeDef::AngleBracket(t)
-                | ArrayElemTypeDef::SquareBracket(t, _)
-                | ArrayElemTypeDef::Parenthesis(t) => convert_sql_type(t)?,
-                ArrayElemTypeDef::None => {
-                    return Err(DataFusionError::Plan(
-                        "ARRAY type missing inner element type".to_string(),
-                    ));
+    match dt {
+        SDT::Null => Ok(DataType::Null),
+        SDT::Boolean => Ok(DataType::Boolean),
+        SDT::Int8 => Ok(DataType::Int8),
+        SDT::Int16 => Ok(DataType::Int16),
+        SDT::Int32 => Ok(DataType::Int32),
+        SDT::Int64 => Ok(DataType::Int64),
+        SDT::UInt8 => Ok(DataType::UInt8),
+        SDT::UInt16 => Ok(DataType::UInt16),
+        SDT::UInt32 => Ok(DataType::UInt32),
+        SDT::UInt64 => Ok(DataType::UInt64),
+        SDT::Float16 => Ok(DataType::Float16),
+        SDT::Float32 => Ok(DataType::Float32),
+        SDT::Float64 => Ok(DataType::Float64),
+        SDT::Binary | SDT::ConfiguredBinary => Ok(DataType::Binary),
+        SDT::FixedSizeBinary { size } => Ok(DataType::FixedSizeBinary(*size)),
+        SDT::LargeBinary => Ok(DataType::LargeBinary),
+        SDT::BinaryView => Ok(DataType::BinaryView),
+        SDT::Utf8 | SDT::ConfiguredUtf8 { .. } => Ok(DataType::Utf8),
+        SDT::LargeUtf8 => Ok(DataType::LargeUtf8),
+        SDT::Utf8View => Ok(DataType::Utf8View),
+        SDT::Date32 => Ok(DataType::Date32),
+        SDT::Date64 => Ok(DataType::Date64),
+        SDT::Timestamp {
+            time_unit,
+            timestamp_type,
+        } => {
+            let tz = match timestamp_type {
+                spec::TimestampType::WithoutTimeZone => None,
+                // Keep historical behavior of `from_csv`: interpret TIMESTAMP-ish types as UTC.
+                spec::TimestampType::WithLocalTimeZone | spec::TimestampType::Configured => {
+                    Some(Arc::from("UTC"))
                 }
             };
-            Ok(DataType::List(Arc::new(Field::new(
+            Ok(DataType::Timestamp(to_time_unit(time_unit), tz))
+        }
+        SDT::Time32 { time_unit: u } => Ok(DataType::Time32(to_time_unit(u))),
+        SDT::Time64 { time_unit: u } => Ok(DataType::Time64(to_time_unit(u))),
+        SDT::Duration { time_unit: u } => Ok(DataType::Duration(to_time_unit(u))),
+        SDT::Interval { interval_unit, .. } => Ok(DataType::Interval(match interval_unit {
+            spec::IntervalUnit::YearMonth => IntervalUnit::YearMonth,
+            spec::IntervalUnit::DayTime => IntervalUnit::DayTime,
+            spec::IntervalUnit::MonthDayNano => IntervalUnit::MonthDayNano,
+        })),
+        SDT::Decimal128 { precision, scale } => Ok(DataType::Decimal128(*precision, *scale)),
+        SDT::Decimal256 { precision, scale } => Ok(DataType::Decimal256(*precision, *scale)),
+        SDT::List {
+            data_type,
+            nullable,
+        } => Ok(DataType::List(Arc::new(Field::new(
+            SAIL_LIST_FIELD_NAME,
+            spec_to_arrow_data_type(data_type.as_ref())?,
+            *nullable,
+        )))),
+        SDT::FixedSizeList {
+            data_type,
+            nullable,
+            length,
+        } => Ok(DataType::FixedSizeList(
+            Arc::new(Field::new(
                 SAIL_LIST_FIELD_NAME,
-                inner_type,
-                true,
-            ))))
+                spec_to_arrow_data_type(data_type.as_ref())?,
+                *nullable,
+            )),
+            *length,
+        )),
+        SDT::LargeList {
+            data_type,
+            nullable,
+        } => Ok(DataType::LargeList(Arc::new(Field::new(
+            SAIL_LIST_FIELD_NAME,
+            spec_to_arrow_data_type(data_type.as_ref())?,
+            *nullable,
+        )))),
+        SDT::Struct { fields } => {
+            let mut out: Vec<Arc<Field>> = Vec::with_capacity(fields.len());
+            for f in fields.iter() {
+                out.push(Arc::new(Field::new(
+                    f.name.clone(),
+                    spec_to_arrow_data_type(&f.data_type)?,
+                    f.nullable,
+                )));
+            }
+            Ok(DataType::Struct(Fields::from(out)))
         }
-
-        SQLType::Struct(fields, _) => {
-            let parsed_fields: Result<Vec<Field>> = fields
-                .iter()
-                .map(|f| {
-                    let dt = convert_sql_type(&f.field_type)?;
-                    let name = f
-                        .field_name
-                        .as_ref()
-                        .map(|id| id.value.clone())
-                        .ok_or_else(|| {
-                            DataFusionError::Plan("Missing field name in STRUCT".to_string())
-                        })?;
-                    Ok(Field::new(&name, dt, true))
-                })
-                .collect();
-            Ok(DataType::Struct(Fields::from(parsed_fields?)))
+        SDT::Map {
+            key_type,
+            value_type,
+            value_type_nullable,
+            keys_sorted,
+        } => {
+            let fields = Fields::from(vec![
+                Arc::new(Field::new(
+                    SAIL_MAP_KEY_FIELD_NAME,
+                    spec_to_arrow_data_type(key_type.as_ref())?,
+                    false,
+                )),
+                Arc::new(Field::new(
+                    SAIL_MAP_VALUE_FIELD_NAME,
+                    spec_to_arrow_data_type(value_type.as_ref())?,
+                    *value_type_nullable,
+                )),
+            ]);
+            Ok(DataType::Map(
+                Arc::new(Field::new(
+                    SAIL_MAP_FIELD_NAME,
+                    DataType::Struct(fields),
+                    false,
+                )),
+                *keys_sorted,
+            ))
         }
-
-        _ => Err(DataFusionError::Plan(format!(
-            "Unsupported SQL type: {sql_type:?}"
+        other => Err(DataFusionError::Plan(format!(
+            "Unsupported data type in from_csv schema: {other:?}"
         ))),
     }
 }
