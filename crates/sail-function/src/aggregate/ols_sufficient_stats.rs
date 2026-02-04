@@ -397,18 +397,14 @@ impl Accumulator for OLSSufficientStatsAccumulator {
             .as_any()
             .downcast_ref::<ListArray>()
             .ok_or_else(|| {
-                datafusion::error::DataFusionError::Execution(
-                    "xtx state must be List".to_string(),
-                )
+                datafusion::error::DataFusionError::Execution("xtx state must be List".to_string())
             })?;
 
         let xty_lists = states[1]
             .as_any()
             .downcast_ref::<ListArray>()
             .ok_or_else(|| {
-                datafusion::error::DataFusionError::Execution(
-                    "xty state must be List".to_string(),
-                )
+                datafusion::error::DataFusionError::Execution("xty state must be List".to_string())
             })?;
 
         let counts = states[2]

@@ -1,4 +1,7 @@
-#!/usr/bin/env python3
+from dataclasses import dataclass
+
+from pyspark.sql import SparkSession
+
 """
 Demo: Distributed Linear Regression Training with Sail
 
@@ -12,7 +15,7 @@ Usage:
 
     2. Run this script:
        export SPARK_REMOTE="sc://localhost:50051"
-       hatch run python scripts/ml_demo/train_linear_regression.py
+       hatch run python python/pysail/examples/spark/ml/regresion/train_linear_regression.py
 
 Algorithm:
     For y = X*beta, we minimize MSE using batch gradient descent:
@@ -25,15 +28,11 @@ Algorithm:
     manner across all partitions.
 """
 
-from dataclasses import dataclass
-from typing import Optional
-
-from pyspark.sql import SparkSession
-
 
 @dataclass
 class LinearRegressionModel:
     """Trained linear regression model."""
+
     coefficients: list[float]
     intercept: float
     num_epochs: int
@@ -43,6 +42,7 @@ class LinearRegressionModel:
 @dataclass
 class TrainingConfig:
     """Configuration for training."""
+
     learning_rate: float = 0.01
     max_epochs: int = 100
     tolerance: float = 1e-6
@@ -54,7 +54,7 @@ def train_linear_regression(
     table_name: str,
     feature_cols: list[str],
     label_col: str,
-    config: Optional[TrainingConfig] = None,
+    config: TrainingConfig | None = None,
 ) -> LinearRegressionModel:
     """
     Train a linear regression model using distributed gradient descent.
@@ -76,14 +76,14 @@ def train_linear_regression(
     beta = [0.0] * num_features
 
     if config.verbose:
-        print(f"Training Linear Regression")
+        print("Training Linear Regression")
         print(f"  Features: {feature_cols}")
         print(f"  Label: {label_col}")
         print(f"  Learning rate: {config.learning_rate}")
         print(f"  Max epochs: {config.max_epochs}")
         print()
 
-    prev_mse = float('inf')
+    prev_mse = float("inf")
 
     for epoch in range(config.max_epochs):
         # Build feature array expression
@@ -98,13 +98,13 @@ def train_linear_regression(
                 ARRAY({beta_expr})
             ) AS result
             FROM {table_name}
-        """
+        """  # noqa: S608
 
-        result = spark.sql(query).collect()[0]['result']
+        result = spark.sql(query).collect()[0]["result"]
 
-        gradient_sum = result['gradient_sum']
-        count = result['count']
-        loss_sum = result['loss_sum']
+        gradient_sum = result["gradient_sum"]
+        count = result["count"]
+        loss_sum = result["loss_sum"]
         mse = loss_sum / count
 
         # Update coefficients: beta = beta - lr * (2/n) * gradient_sum
@@ -127,7 +127,7 @@ def train_linear_regression(
 
     if config.verbose:
         print()
-        print(f"Training complete!")
+        print("Training complete!")
         print(f"  Final coefficients: {beta}")
         print(f"  Final MSE: {mse:.6f}")
 
@@ -141,14 +141,12 @@ def train_linear_regression(
 
 def predict(model: LinearRegressionModel, features: list[float]) -> float:
     """Make a prediction using the trained model."""
-    return sum(c * f for c, f in zip(model.coefficients, features)) + model.intercept
+    return sum(c * f for c, f in zip(model.coefficients, features, strict=False)) + model.intercept
 
 
 def main():
     # Connect to Sail server
-    spark = SparkSession.builder \
-        .remote("sc://localhost:50051") \
-        .getOrCreate()
+    spark = SparkSession.builder.remote("sc://localhost:50051").getOrCreate()
 
     print("=" * 60)
     print("Sail Linear Regression Demo")
@@ -208,17 +206,14 @@ def main():
         [5.0, 5.0],  # Expected: ~25 (2*5 + 3*5)
     ]
 
-    print("Model: y = {:.4f}*x1 + {:.4f}*x2".format(
-        model.coefficients[0], model.coefficients[1]
-    ))
+    print(f"Model: y = {model.coefficients[0]:.4f}*x1 + {model.coefficients[1]:.4f}*x2")
     print("Expected: y = 2*x1 + 3*x2")
     print()
 
     for features in test_cases:
         pred = predict(model, features)
         expected = 2 * features[0] + 3 * features[1]
-        print(f"  x1={features[0]}, x2={features[1]} -> "
-              f"pred={pred:.2f}, expected={expected:.2f}")
+        print(f"  x1={features[0]}, x2={features[1]} -> pred={pred:.2f}, expected={expected:.2f}")
 
 
 if __name__ == "__main__":

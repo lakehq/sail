@@ -88,8 +88,8 @@ use sail_delta_lake::physical_plan::{
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
-use sail_function::aggregate::percentile_disc::PercentileDisc;
 use sail_function::aggregate::ols_sufficient_stats::OLSSufficientStats;
+use sail_function::aggregate::percentile_disc::PercentileDisc;
 use sail_function::aggregate::sgd_gradient::SGDGradientSum;
 use sail_function::aggregate::skewness::SkewnessFunc;
 use sail_function::aggregate::try_avg::TryAvgFunction;
@@ -1808,7 +1808,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 "max_by" => Ok(Arc::new(AggregateUDF::from(MaxByFunction::new()))),
                 "min_by" => Ok(Arc::new(AggregateUDF::from(MinByFunction::new()))),
                 "mode" => Ok(Arc::new(AggregateUDF::from(ModeFunction::new()))),
-                "ols_sufficient_stats" => Ok(Arc::new(AggregateUDF::from(OLSSufficientStats::new()))),
+                "ols_sufficient_stats" => {
+                    Ok(Arc::new(AggregateUDF::from(OLSSufficientStats::new())))
+                }
                 "percentile_disc" => Ok(Arc::new(AggregateUDF::from(PercentileDisc::new()))),
                 "sgd_gradient_sum" => Ok(Arc::new(AggregateUDF::from(SGDGradientSum::new()))),
                 "skewness" => Ok(Arc::new(AggregateUDF::from(SkewnessFunc::new()))),

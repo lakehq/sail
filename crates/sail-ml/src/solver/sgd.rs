@@ -99,11 +99,7 @@ mod tests {
     #[allow(clippy::unwrap_used)]
     fn test_sgd_simple() {
         // y = 1*x1 + 2*x2
-        let features = vec![
-            vec![1.0, 0.0],
-            vec![0.0, 1.0],
-            vec![1.0, 1.0],
-        ];
+        let features = vec![vec![1.0, 0.0], vec![0.0, 1.0], vec![1.0, 1.0]];
         let labels = vec![1.0, 2.0, 3.0];
 
         let params = SGDParams {

@@ -102,3 +102,32 @@ coefficients and iterates until convergence.
 
 Both functions support distributed execution - workers compute partial
 statistics, driver merges and updates the model.
+
+## Examples
+
+### Demo: Train Linear Regression step by step
+
+```bash
+# Start Sail server
+RUST_LOG='sail=debug' cargo run -p sail-cli -- spark server --port 50051
+
+# Run demo (shows SGD training step by step)
+export SPARK_REMOTE="sc://localhost:50051"
+hatch run python python/pysail/examples/spark/ml/regresion/train_linear_regression.py
+```
+
+### Benchmark: Sail vs Spark
+
+```bash
+# 1. Generate test data (once)
+hatch run python python/pysail/examples/spark/ml/regresion/benchmark_solvers.py --generate
+
+# 2. Run against Sail
+SPARK_REMOTE="sc://localhost:50051" hatch run python python/pysail/examples/spark/ml/regresion/benchmark_solvers.py
+
+# 3. Run against Spark JVM (requires Java 17)
+SPARK_REMOTE="local" hatch run python python/pysail/examples/spark/ml/regresion/benchmark_solvers.py
+
+# 4. Compare results
+hatch run python python/pysail/examples/spark/ml/regresion/benchmark_solvers.py --compare
+```

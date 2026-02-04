@@ -1,4 +1,19 @@
-#!/usr/bin/env python3
+import ast
+import json
+import os
+import sys
+import time
+from pathlib import Path
+from tempfile import gettempdir
+
+import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
+from pyspark.ml.linalg import Vectors, VectorUDT
+from pyspark.ml.regression import LinearRegression
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import udf
+
 """
 Benchmark: Sail (OLS, SGD) vs Spark (L-BFGS)
 
@@ -8,26 +23,21 @@ Generates synthetic data and compares:
 
 Usage:
   # Step 1: Generate test data (only once, uses PyArrow)
-  hatch run python scripts/ml_demo/benchmark_solvers.py --generate
+  hatch run python python/pysail/examples/spark/ml/regresion/benchmark_solvers.py --generate
 
   # Step 2: Run benchmark against Sail
-  SPARK_REMOTE="sc://localhost:50051" hatch run python scripts/ml_demo/benchmark_solvers.py
+  SPARK_REMOTE="sc://localhost:50051" hatch run python python/pysail/examples/spark/ml/regresion/benchmark_solvers.py
 
   # Step 3: Run benchmark against Spark JVM (requires Java 17)
-  SPARK_REMOTE="local" hatch run python scripts/ml_demo/benchmark_solvers.py
+  SPARK_REMOTE="local" hatch run python python/pysail/examples/spark/ml/regresion/benchmark_solvers.py
 
   # Step 4: Compare results (after running both)
-  hatch run python scripts/ml_demo/benchmark_solvers.py --compare
+  hatch run python python/pysail/examples/spark/ml/regresion/benchmark_solvers.py --compare
 """
 
-import os
-import sys
-import time
-import numpy as np
-from pathlib import Path
 
-# Data directory (in /tmp to avoid polluting the repo)
-DATA_DIR = Path("/tmp/sail_benchmark")
+# Data directory (in temp to avoid polluting the repo)
+DATA_DIR = Path(gettempdir()) / "sail_benchmark"
 
 # Configuration - can be large since we read from Parquet
 DATASETS = [
@@ -37,6 +47,7 @@ DATASETS = [
     {"name": "large", "n": 1_000_000, "p": 100},
 ]
 
+
 # True coefficients for validation
 def generate_true_coefficients(p):
     """Generate known coefficients: [1, 2, 3, ..., p]"""
@@ -45,8 +56,6 @@ def generate_true_coefficients(p):
 
 def generate_and_save_data(dataset, seed=42):
     """Generate synthetic data and save to Parquet using PyArrow (no Spark needed)"""
-    import pyarrow as pa
-    import pyarrow.parquet as pq
 
     n, p, name = dataset["n"], dataset["p"], dataset["name"]
 
@@ -57,22 +66,22 @@ def generate_and_save_data(dataset, seed=42):
     start = time.time()
 
     # Generate all data at once (more efficient)
-    X = np.random.randn(n, p)
-    y = X @ true_coefs + np.random.randn(n) * 0.1  # Small noise
+    x_big = np.random.randn(n, p)
+    y = x_big @ true_coefs + np.random.randn(n) * 0.1  # Small noise
 
     gen_time = time.time() - start
     print(f"  Data generated in {gen_time:.1f}s")
 
     # Create Arrow table with VectorUDT-compatible structure
     # VectorUDT: struct{type: int8, size: int32, indices: list<int32>, values: list<float64>}
-    print(f"  Converting to Arrow format...")
+    print("  Converting to Arrow format...")
 
     # For dense vectors: type=1, size=0, indices=null, values=features
     types = np.ones(n, dtype=np.int8)  # 1 = dense
     sizes = np.zeros(n, dtype=np.int32)  # 0 for dense
 
     # Create list arrays for values (each row is a list of floats)
-    values_list = [X[i].tolist() for i in range(n)]
+    values_list = [x_big[i].tolist() for i in range(n)]
 
     # Build the struct array for features
     features_struct = pa.StructArray.from_arrays(
@@ -82,13 +91,15 @@ def generate_and_save_data(dataset, seed=42):
             pa.array([None] * n, type=pa.list_(pa.int32())),  # indices (null for dense)
             pa.array(values_list, type=pa.list_(pa.float64())),  # values
         ],
-        names=["type", "size", "indices", "values"]
+        names=["type", "size", "indices", "values"],
     )
 
-    table = pa.table({
-        "label": pa.array(y),
-        "features": features_struct,
-    })
+    table = pa.table(
+        {
+            "label": pa.array(y),
+            "features": features_struct,
+        }
+    )
 
     # Save to Parquet
     output_path = DATA_DIR / name
@@ -110,9 +121,8 @@ def load_data(spark, dataset):
     coef_path = DATA_DIR / f"{name}_coefs.npy"
 
     if not data_path.exists():
-        raise FileNotFoundError(
-            f"Data not found at {data_path}. Run with --generate first."
-        )
+        msg = f"Data not found at {data_path}. Run with --generate first."
+        raise FileNotFoundError(msg)
 
     df = spark.read.parquet(str(data_path))
     true_coefs = np.load(coef_path)
@@ -124,11 +134,9 @@ def parse_coefficients(coefs):
     """Parse coefficients - handles both array and string format"""
     if isinstance(coefs, str):
         # Sail returns string like "[1.0, 2.0, 3.0]"
-        import ast
         return ast.literal_eval(coefs)
-    else:
-        # Spark returns DenseVector
-        return list(coefs)
+    # Spark returns DenseVector
+    return list(coefs)
 
 
 def coefficient_error(predicted, true_coefs):
@@ -143,11 +151,9 @@ def run_benchmark(spark, dataset):
     n, p = dataset["n"], dataset["p"]
     name = dataset["name"]
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"DATASET: {name} ({n:,} rows x {p} features)")
-    print(f"{'='*60}")
-
-    from pyspark.ml.regression import LinearRegression
+    print(f"{'=' * 60}")
 
     # Load data from Parquet (no gRPC transfer!)
     try:
@@ -170,8 +176,6 @@ def run_benchmark(spark, dataset):
         ]
     else:
         # Spark JVM: convert struct to proper Vector using Python UDF
-        from pyspark.ml.linalg import Vectors, VectorUDT
-        from pyspark.sql.functions import udf
 
         @udf(returnType=VectorUDT())
         def to_vector(struct):
@@ -212,7 +216,7 @@ def run_benchmark(spark, dataset):
                 "coefficients": coefs,
             }
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             print(f"  ERROR: {e}")
             results[solver_name] = {"error": str(e)}
 
@@ -229,15 +233,14 @@ def generate_all_data():
         print(f"\n{dataset['name'].upper()}: {dataset['n']:,} rows x {dataset['p']} features")
         generate_and_save_data(dataset)
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("Data generation complete!")
     print(f"Files saved in: {DATA_DIR}")
-    print("="*60)
+    print("=" * 60)
 
 
 def run_benchmarks():
     """Run benchmarks against Sail or Spark"""
-    from pyspark.sql import SparkSession
 
     remote = os.environ.get("SPARK_REMOTE", "sc://localhost:50051")
     os.environ.setdefault("SPARK_REMOTE", remote)
@@ -253,9 +256,9 @@ def run_benchmarks():
             all_results[dataset["name"]] = results
 
     # Summary table
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print("BENCHMARK SUMMARY")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
 
     # Header
     print(f"\n{'Dataset':<10} {'Rows':>10} {'Features':>8} {'Solver':<15} {'Time (s)':>10} {'MAE':>12}")
@@ -268,25 +271,31 @@ def run_benchmarks():
             continue
         for solver, data in all_results[ds_name].items():
             if "time" in data:
-                print(f"{ds_name:<10} {ds['n']:>10,} {ds['p']:>8} {solver:<15} {data['time']:>10.2f} {data['error']:>12.6f}")
+                print(
+                    f"{ds_name:<10} {ds['n']:>10,} {ds['p']:>8} {solver:<15} {data['time']:>10.2f} {data['error']:>12.6f}"
+                )
             else:
                 print(f"{ds_name:<10} {ds['n']:>10,} {ds['p']:>8} {solver:<15} {'FAILED':>10} {'-':>12}")
 
     print("-" * 70)
 
     # Save results to JSON for comparison
-    import json
     backend = "sail" if "localhost:50051" in remote else "spark"
     results_file = DATA_DIR / f"results_{backend}.json"
     with open(results_file, "w") as f:
-        json.dump({
-            "backend": backend,
-            "remote": remote,
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "results": {k: {sk: {kk: vv for kk, vv in sv.items() if kk != "coefficients"}
-                           for sk, sv in v.items()}
-                       for k, v in all_results.items()}
-        }, f, indent=2)
+        json.dump(
+            {
+                "backend": backend,
+                "remote": remote,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "results": {
+                    k: {sk: {kk: vv for kk, vv in sv.items() if kk != "coefficients"} for sk, sv in v.items()}
+                    for k, v in all_results.items()
+                },
+            },
+            f,
+            indent=2,
+        )
     print(f"\nResults saved to: {results_file}")
 
     spark.stop()
@@ -295,7 +304,6 @@ def run_benchmarks():
 
 def compare_results():
     """Compare Sail vs Spark results if both exist"""
-    import json
 
     sail_file = DATA_DIR / "results_sail.json"
     spark_file = DATA_DIR / "results_spark.json"
@@ -311,9 +319,9 @@ def compare_results():
     with open(spark_file) as f:
         spark = json.load(f)
 
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print("SAIL vs SPARK COMPARISON")
-    print(f"{'='*80}")
+    print(f"{'=' * 80}")
     print(f"Sail run:  {sail['timestamp']}")
     print(f"Spark run: {spark['timestamp']}")
 

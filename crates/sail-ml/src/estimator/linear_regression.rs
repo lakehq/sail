@@ -85,7 +85,11 @@ impl LinearRegression {
     }
 
     /// Train the model on the given data.
-    pub fn fit(&self, features: &[Vec<f64>], labels: &[f64]) -> CommonResult<LinearRegressionModel> {
+    pub fn fit(
+        &self,
+        features: &[Vec<f64>],
+        labels: &[f64],
+    ) -> CommonResult<LinearRegressionModel> {
         match self.solver.effective() {
             Solver::OLS | Solver::Auto => {
                 log::info!("Using OLS solver (exact solution)");

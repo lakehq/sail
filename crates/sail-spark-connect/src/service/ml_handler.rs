@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use datafusion::arrow::array::{Array, Float64Array, Int32Array, Int8Array, ListArray, StructArray};
+use datafusion::arrow::array::{
+    Array, Float64Array, Int32Array, Int8Array, ListArray, StructArray,
+};
 use datafusion::arrow::compute::concat_batches;
 use datafusion::prelude::SessionContext;
 use futures::stream;
@@ -100,7 +102,10 @@ async fn handle_ml_fit(
     let params = fit.params;
     let dataset = fit.dataset.required("dataset")?;
 
-    debug!("ML Fit: estimator={:?}, params={:?}", estimator.name, params);
+    debug!(
+        "ML Fit: estimator={:?}, params={:?}",
+        estimator.name, params
+    );
 
     // Check if this is a LinearRegression estimator
     if !estimator.name.contains("LinearRegression") {
@@ -512,12 +517,6 @@ async fn run_distributed_ols_training(
     let mem_table = MemTable::try_new(schema.clone(), vec![batches])
         .map_err(|e| SparkError::internal(format!("Failed to create MemTable: {e}")))?;
 
-    // Create a new SessionContext just for this query (avoids catalog issues)
-    let temp_ctx = SessionContext::new();
-    temp_ctx
-        .register_table("data", Arc::new(mem_table))
-        .map_err(|e| SparkError::internal(format!("Failed to register table: {e}")))?;
-
     // Check if features column is VectorUDT (struct) or plain array
     let is_struct = schema.fields().iter().any(|f| {
         f.name() == features_col
@@ -527,29 +526,60 @@ async fn run_distributed_ols_training(
             )
     });
 
-    let features_expr_str = if is_struct {
-        format!("{}.values", features_col)
-    } else {
-        features_col.to_string()
+    // Build the features expression: either col.values (for struct) or col (for array)
+    use datafusion::logical_expr::expr::{AggregateFunctionParams, ScalarFunction};
+    use datafusion::prelude::{col, Expr};
+    let lit_str = |s: &str| {
+        Expr::Literal(
+            datafusion::common::ScalarValue::Utf8(Some(s.to_string())),
+            None,
+        )
     };
+    let get_field_expr = |struct_expr: Expr, field_name: &str| {
+        Expr::ScalarFunction(ScalarFunction::new_udf(
+            datafusion::functions::core::get_field(),
+            vec![struct_expr, lit_str(field_name)],
+        ))
+    };
+    let features_expr: Expr = if is_struct {
+        get_field_expr(col(features_col), "values")
+    } else {
+        col(features_col)
+    };
+    let label_expr = col(label_col);
 
-    // Register the ols_sufficient_stats UDAF
-    let ols_udaf = datafusion::logical_expr::AggregateUDF::from(OLSSufficientStats::new());
-    temp_ctx.register_udaf(ols_udaf);
+    // Create the OLS UDAF and build the aggregate expression
+    let ols_udaf = Arc::new(datafusion::logical_expr::AggregateUDF::from(
+        OLSSufficientStats::new(),
+    ));
+    let agg_expr = Expr::AggregateFunction(datafusion::logical_expr::expr::AggregateFunction {
+        func: ols_udaf,
+        params: AggregateFunctionParams {
+            args: vec![features_expr, label_expr],
+            distinct: false,
+            filter: None,
+            order_by: vec![],
+            null_treatment: None,
+        },
+    })
+    .alias("stats");
 
-    // Execute the aggregate query using SQL (simpler with struct field access)
-    let sql = format!(
-        "SELECT ols_sufficient_stats({}, {}) as stats FROM data",
-        features_expr_str, label_col
-    );
+    info!("Executing distributed OLS aggregation");
 
-    info!("Executing distributed OLS: {}", sql);
+    // Build and execute the aggregate plan using LogicalPlanBuilder
+    use datafusion::logical_expr::LogicalPlanBuilder;
+    let table_source = Arc::new(datafusion::datasource::DefaultTableSource::new(Arc::new(
+        mem_table,
+    )));
+    let plan = LogicalPlanBuilder::scan("data", table_source, None)
+        .map_err(|e| SparkError::internal(format!("Failed to create scan: {e}")))?
+        .aggregate(Vec::<Expr>::new(), vec![agg_expr])
+        .map_err(|e| SparkError::internal(format!("Failed to create aggregate: {e}")))?
+        .build()
+        .map_err(|e| SparkError::internal(format!("Failed to build plan: {e}")))?;
 
-    let df = temp_ctx
-        .sql(&sql)
-        .await
-        .map_err(|e| SparkError::internal(format!("Failed to execute OLS SQL: {e}")))?;
-
+    // Execute the plan
+    let df = datafusion::dataframe::DataFrame::new(ctx.state(), plan);
     let result_batches = df
         .collect()
         .await
