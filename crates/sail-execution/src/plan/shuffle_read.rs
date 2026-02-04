@@ -5,9 +5,6 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{exec_datafusion_err, internal_err, Result};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::expressions::UnKnownColumn;
-use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
-use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 use futures::future::try_join_all;
@@ -30,30 +27,8 @@ impl ShuffleReadExec {
     pub fn new(
         locations: Vec<Vec<TaskReadLocation>>,
         reader: Arc<dyn TaskStreamReader>,
-        schema: SchemaRef,
-        partitioning: Partitioning,
+        properties: PlanProperties,
     ) -> Self {
-        let partitioning = match partitioning {
-            Partitioning::Hash(expr, n) if expr.is_empty() => Partitioning::UnknownPartitioning(n),
-            Partitioning::Hash(expr, n) => {
-                // https://github.com/apache/arrow-datafusion/issues/5184
-                Partitioning::Hash(
-                    expr.into_iter()
-                        .filter(|e| e.as_any().downcast_ref::<UnKnownColumn>().is_none())
-                        .collect(),
-                    n,
-                )
-            }
-            _ => partitioning,
-        };
-        let properties = PlanProperties::new(
-            EquivalenceProperties::new(schema.clone()),
-            partitioning,
-            EmissionType::Both,
-            Boundedness::Unbounded {
-                requires_infinite_memory: false,
-            },
-        );
         Self {
             locations,
             properties,

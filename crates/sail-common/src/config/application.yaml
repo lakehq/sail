@@ -121,18 +121,16 @@
   default: "8"
   description: The maximum number of tasks that can be launched on a worker.
 
-# TODO: This should be renamed to `cluster.task_stream_buffer`
-#   since we now can run tasks on the driver as well.
-- key: cluster.worker_stream_buffer
-  type: number
-  default: "16"
-  description: The number of batches to buffer in the worker shuffle stream.
-  experimental: true
-
 - key: cluster.task_launch_timeout_secs
   type: number
   default: "120"
   description: The timeout in seconds for launching a task.
+
+- key: cluster.task_stream_buffer
+  type: number
+  default: "16"
+  description: The number of batches to buffer in the task stream.
+  experimental: true
 
 - key: cluster.task_stream_creation_timeout_secs
   type: number

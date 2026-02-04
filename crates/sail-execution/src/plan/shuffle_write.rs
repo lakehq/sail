@@ -157,11 +157,10 @@ impl ExecutionPlan for ShuffleWriteExec {
             partition,
             num_input_partitions,
         )?;
-        let output_schema = Arc::new(Schema::empty());
-        let output_data = RecordBatch::new_empty(output_schema.clone());
+        let empty = RecordBatch::new_empty(self.schema());
         let output = futures::stream::once(async move {
             shuffle_write(writer, stream, &locations, partitioner).await?;
-            Ok(output_data)
+            Ok(empty)
         });
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),
