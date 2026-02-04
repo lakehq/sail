@@ -22,6 +22,53 @@
     Use a secondary Tokio runtime to separate object storage I/O tasks from other operations.
   experimental: true
 
+- key: runtime.memory_pool.type
+  type: string
+  default: "unbounded"
+  description: |
+    The type of memory pool to use for managing memory allocations during query execution.
+    Valid values are `unbounded`, `greedy`, and `fair`.
+    If the value is `unbounded`, there is no limit on memory usage.
+    If the value is `greedy`, the memory pool will allocate memory up to a limit on a
+    first come, first served basis.
+    If the value is `fair`, the memory pool will allocate memory up to a limit and ensure
+    that a single operator does not use too much memory.
+  experimental: true
+
+- key: runtime.memory_pool.greedy.max_size
+  type: number
+  default: "68719476736"
+  description: |
+    The maximum size in bytes if the `greedy` memory pool is in use.
+  experimental: true
+
+- key: runtime.memory_pool.fair.max_size
+  type: number
+  default: "68719476736"
+  description: |
+    The maximum size in bytes if the `fair` memory pool is in use.
+  experimental: true
+
+- key: runtime.temporary_files.paths
+  type: array
+  default: "[]"
+  description: |
+    The list of local directories for storing temporary files.
+    If multiple directories are specified, temporary files are distributed
+    across the directories.
+    If no directory is specified, the operating system default temporary directory is used.
+  experimental: true
+
+- key: runtime.temporary_files.max_size
+  type: number
+  default: "68719476736"
+  description: |
+    The maximum total size in bytes for temporary files.
+    If the size of temporary files exceeds this limit, an error will be raised.
+    If the value is `0`, writing to temporary files is disabled and an error
+    will be raised if a query attempts to spill to disk.
+  experimental: true
+
 - key: cluster.enable_tls
   type: boolean
   default: "false"
@@ -644,9 +691,11 @@
 
 - key: catalog.default_catalog
   type: string
-  default: "sail"
+  default: ""
   description: |
     The name of the default catalog to use.
+    If this is not set and there is only one catalog, that only catalog is used as the default catalog.
+    If this is not set and there are multiple catalogs, an error will be raised when a session is created.
   experimental: true
 
 - key: catalog.default_database
