@@ -3,10 +3,10 @@ DeltaCommitExec(table_path=file://<tmp>/x/)
   CoalescePartitionsExec
     UnionExec
       DeltaWriterExec(table_path=file://<tmp>/x/)
-        SortExec: expr=[year@3 ASC NULLS LAST, month@4 ASC NULLS LAST], preserve_partitioning=[true]
-          RepartitionExec: partitioning=Hash([year@3, month@4], 4), input_partitions=4
-            FilterExec: NOT year@3 = 2024 AND value@2 > 650
-              DeltaScanByAddsExec(table_path=file://<tmp>/x/)
+        SortExec: expr=[year@2 ASC NULLS LAST, month@3 ASC NULLS LAST], preserve_partitioning=[true]
+          RepartitionExec: partitioning=Hash([year@2, month@3], 4), input_partitions=4
+            FilterExec: NOT year@2 = 2024 AND value@4 > 650
+              DeltaScanByAddsExec(table_path=file://<tmp>/x/, projection=None, limit=None, pushdown=false)
                 DeltaDiscoveryExec(table_path=file://<tmp>/x/)
                   DeltaLogReplayExec(table_path=file://<tmp>/x/, version=2)
                     SortExec: expr=[__sail_delta_replay_path@8 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST], preserve_partitioning=[true]

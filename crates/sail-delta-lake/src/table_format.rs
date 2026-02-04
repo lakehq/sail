@@ -274,6 +274,21 @@ fn apply_delta_read_options(from: DeltaReadOptions, to: &mut TableDeltaOptions) 
     Ok(())
 }
 
+fn apply_serverless_read_option(
+    opts: &HashMap<String, String>,
+    to: &mut TableDeltaOptions,
+) -> Result<()> {
+    let key = "serverlessRead";
+    if let Some(raw) = opts.get(key) {
+        match raw.to_ascii_lowercase().as_str() {
+            "true" | "1" | "yes" => to.serverless_read = true,
+            "false" | "0" | "no" => to.serverless_read = false,
+            other => return plan_err!("invalid value for {key}: '{other}', expected true/false"),
+        }
+    }
+    Ok(())
+}
+
 fn apply_delta_write_options(from: DeltaWriteOptions, to: &mut TableDeltaOptions) -> Result<()> {
     if let Some(merge_schema) = from.merge_schema {
         to.merge_schema = merge_schema;
@@ -306,6 +321,7 @@ pub fn resolve_delta_read_options(
     let mut delta_options = TableDeltaOptions::default();
     apply_delta_read_options(load_default_options()?, &mut delta_options)?;
     for opt in options {
+        apply_serverless_read_option(&opt, &mut delta_options)?;
         apply_delta_read_options(load_options(opt)?, &mut delta_options)?;
     }
     Ok(delta_options)

@@ -7,15 +7,22 @@ use datafusion::common::{Result, ToDFSchema};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::Expr;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_plan::filter::FilterExec;
+use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_plan::repartition::RepartitionExec;
+use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use delta_kernel::table_features::ColumnMappingMode;
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
 
 use crate::datasource::scan::{build_file_scan_config, FileScanParams};
-use crate::datasource::{
-    df_logical_schema, prune_files, simplify_expr, DataFusionMixins, DeltaScanConfig,
-};
+use crate::datasource::{df_logical_schema, simplify_expr, DataFusionMixins, DeltaScanConfig};
 use crate::kernel::models::Add;
+use crate::options::TableDeltaOptions;
+use crate::physical_plan::planner::utils::{LogReplayFilter, LogReplayOptions};
+use crate::physical_plan::planner::{DeltaTableConfig as PlannerTableConfig, PlannerContext};
+use crate::physical_plan::{DeltaDiscoveryExec, DeltaScanByAddsExec};
 use crate::schema::get_physical_schema;
 use crate::storage::LogStoreRef;
 use crate::table::DeltaTableState;
@@ -46,6 +53,8 @@ pub(crate) async fn plan_delta_scan(
         Some(schema.clone()),
     )?;
 
+    let table_partition_cols = snapshot.metadata().partition_columns().clone();
+
     let logical_schema = if let Some(used_columns) = projection {
         let mut fields = vec![];
         for idx in used_columns {
@@ -63,7 +72,6 @@ pub(crate) async fn plan_delta_scan(
             }
         }
         // Ensure all partition columns are included in logical schema
-        let table_partition_cols = snapshot.metadata().partition_columns();
         for partition_col in table_partition_cols.iter() {
             if let Ok(idx) = full_logical_schema.index_of(partition_col.as_str()) {
                 if !used_columns.contains(&idx) && !fields.iter().any(|f| f.name() == partition_col)
@@ -77,10 +85,33 @@ pub(crate) async fn plan_delta_scan(
         Arc::clone(&full_logical_schema)
     };
 
+    let (scan_projection, projection_prefix_len) = if let Some(used_columns) = projection {
+        let mut scan_projection = used_columns.clone();
+        let filter_expr = conjunction(filters.iter().cloned());
+        if let Some(expr) = &filter_expr {
+            for c in expr.column_refs() {
+                let idx = full_logical_schema.index_of(c.name.as_str())?;
+                if !scan_projection.contains(&idx) {
+                    scan_projection.push(idx);
+                }
+            }
+        }
+        for partition_col in table_partition_cols.iter() {
+            if let Ok(idx) = full_logical_schema.index_of(partition_col.as_str()) {
+                if !scan_projection.contains(&idx) {
+                    scan_projection.push(idx);
+                }
+            }
+        }
+        (Some(scan_projection), Some(used_columns.len()))
+    } else {
+        (None, None)
+    };
+
     // Separate filters for pruning vs pushdown.
     //
     // Exact and Inexact filters are used for pruning; Inexact are additionally pushed down.
-    let partition_cols = snapshot.metadata().partition_columns();
+    let partition_cols = &table_partition_cols;
     let predicates: Vec<&Expr> = filters.iter().collect();
     let pushdown_filters =
         crate::datasource::get_pushdown_filters(&predicates, partition_cols.as_slice());
@@ -100,31 +131,9 @@ pub(crate) async fn plan_delta_scan(
         }
     }
 
-    let (files, pruning_mask) = match files {
-        Some(files) => (files, None),
-        None => {
-            let result = prune_files(
-                snapshot,
-                log_store,
-                session,
-                &pruning_filters,
-                limit,
-                logical_schema.clone(),
-            )
-            .await?;
-            (Arc::new(result.files), result.pruning_mask)
-        }
-    };
-
-    // Prepare pushdown filter for Parquet.
-    let pushdown_filter = if !parquet_pushdown_filters.is_empty() {
-        let df_schema = logical_schema.clone().to_dfschema()?;
-        let pushdown_expr = conjunction(parquet_pushdown_filters);
-        pushdown_expr
-            .map(|expr| simplify_expr(session, &df_schema, expr))
-            .transpose()?
-    } else {
-        None
+    let (files, pruning_mask): (Option<Arc<Vec<Add>>>, Option<Vec<bool>>) = match files {
+        Some(files) => (Some(files), None),
+        None => (None, None),
     };
 
     // Build physical file schema (non-partition columns)
@@ -150,30 +159,166 @@ pub(crate) async fn plan_delta_scan(
         .collect::<Vec<_>>();
     let file_schema = Arc::new(ArrowSchema::new(file_fields));
 
-    let file_scan_config = build_file_scan_config(
-        snapshot,
-        log_store,
-        &files,
-        &config,
-        FileScanParams {
-            pruning_mask: pruning_mask.as_deref(),
-            projection,
-            limit,
-            pushdown_filter,
-            sort_order: None,
-        },
-        session,
-        file_schema,
-    )?;
+    // Prepare pushdown filter for Parquet.
+    let pushdown_filter = if !parquet_pushdown_filters.is_empty() {
+        let df_schema = logical_schema.clone().to_dfschema()?;
+        let pushdown_expr = conjunction(parquet_pushdown_filters);
+        pushdown_expr
+            .map(|expr| simplify_expr(session, &df_schema, expr))
+            .transpose()?
+    } else {
+        None
+    };
 
-    let scan_exec = DataSourceExec::from_data_source(file_scan_config);
+    if let Some(files) = files {
+        let file_scan_config = build_file_scan_config(
+            snapshot,
+            log_store,
+            &files,
+            &config,
+            FileScanParams {
+                pruning_mask: pruning_mask.as_deref(),
+                projection,
+                limit,
+                pushdown_filter,
+                sort_order: None,
+            },
+            session,
+            file_schema,
+        )?;
 
-    // Rename columns from physical back to logical names expected by `schema`
-    let logical_names = full_logical_schema
-        .fields()
+        let scan_exec = DataSourceExec::from_data_source(file_scan_config);
+
+        // Rename columns from physical back to logical names expected by `schema`
+        let logical_names = full_logical_schema
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect::<Vec<_>>();
+        let renamed = rename_projected_physical_plan(scan_exec, &logical_names, projection)?;
+        return Ok(renamed);
+    }
+
+    // Serverless metadata path: log scan -> replay -> discovery -> scan by adds.
+    let table_url = log_store.config().location.clone();
+    let table_schema = snapshot
+        .input_schema()
+        .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
+    let kernel_snapshot = snapshot.snapshot().snapshot().inner.clone();
+    let log_segment = kernel_snapshot.log_segment();
+    let checkpoint_files = log_segment
+        .checkpoint_parts
         .iter()
-        .map(|f| f.name().clone())
+        .map(|p| p.filename.clone())
         .collect::<Vec<_>>();
-    let renamed = rename_projected_physical_plan(scan_exec, &logical_names, projection)?;
-    Ok(renamed)
+    let commit_files = log_segment
+        .ascending_commit_files
+        .iter()
+        .map(|p| p.filename.clone())
+        .collect::<Vec<_>>();
+
+    let planner_ctx = PlannerContext::new(
+        session,
+        PlannerTableConfig::new(
+            table_url.clone(),
+            TableDeltaOptions::default(),
+            table_partition_cols.clone(),
+            None,
+            true,
+        ),
+    );
+
+    let pruning_expr = conjunction(pruning_filters);
+    let pruning_predicate = if let Some(expr) = pruning_expr {
+        let df_schema = logical_schema.clone().to_dfschema()?;
+        Some(simplify_expr(session, &df_schema, expr)?)
+    } else {
+        None
+    };
+
+    let mut log_replay_options = LogReplayOptions::default();
+    if let Some(predicate) = pruning_predicate.as_ref() {
+        let mut expr_props =
+            crate::datasource::PredicateProperties::new(table_partition_cols.clone());
+        expr_props
+            .analyze_predicate(predicate)
+            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
+        log_replay_options.include_stats_json = !expr_props.partition_only;
+        if expr_props.partition_only {
+            log_replay_options.log_filter = Some(LogReplayFilter {
+                predicate: Arc::clone(predicate),
+                table_schema: table_schema.clone(),
+            });
+        }
+    } else {
+        log_replay_options.include_stats_json = false;
+    }
+
+    let partition_columns_map = table_partition_cols
+        .iter()
+        .map(|col| {
+            let physical = kschema_arc
+                .field(col)
+                .map(|f| f.physical_name(kmode).to_string())
+                .unwrap_or_else(|| col.clone());
+            (col.clone(), physical)
+        })
+        .collect::<Vec<_>>();
+
+    let meta_scan: Arc<dyn ExecutionPlan> =
+        crate::physical_plan::planner::utils::build_log_replay_pipeline_with_options(
+            &planner_ctx,
+            table_url.clone(),
+            snapshot.version(),
+            partition_columns_map,
+            checkpoint_files,
+            commit_files,
+            log_replay_options,
+        )
+        .await?;
+
+    let find_files: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
+        meta_scan,
+        table_url.clone(),
+        pruning_predicate.clone(),
+        Some(table_schema.clone()),
+        snapshot.version(),
+        table_partition_cols.clone(),
+        false,
+    )?);
+
+    let target_partitions = session.config().target_partitions().max(1);
+    let find_files: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+        find_files,
+        Partitioning::RoundRobinBatch(target_partitions),
+    )?);
+
+    let mut scan_exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaScanByAddsExec::new(
+        find_files,
+        table_url,
+        table_schema,
+        logical_schema.clone(),
+        config.clone(),
+        scan_projection.clone(),
+        limit,
+        pushdown_filter,
+    ));
+
+    if let Some(expr) = conjunction(filters.iter().cloned()) {
+        let df_schema = logical_schema.clone().to_dfschema()?;
+        let predicate = simplify_expr(session, &df_schema, expr)?;
+        scan_exec = Arc::new(FilterExec::try_new(predicate, scan_exec)?);
+    }
+
+    if let Some(prefix_len) = projection_prefix_len {
+        let mut proj_exprs = Vec::with_capacity(prefix_len);
+        for idx in 0..prefix_len {
+            let field = logical_schema.field(idx);
+            let expr = Arc::new(Column::new(field.name(), idx)) as Arc<dyn PhysicalExpr>;
+            proj_exprs.push((expr, field.name().clone()));
+        }
+        scan_exec = Arc::new(ProjectionExec::try_new(proj_exprs, scan_exec)?);
+    }
+
+    Ok(scan_exec)
 }

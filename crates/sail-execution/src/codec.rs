@@ -614,15 +614,66 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 table_url,
                 table_schema,
+                output_schema,
+                scan_config_json,
+                projection,
+                limit,
+                pushdown_filter,
             }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
                 let table_schema = Arc::new(self.try_decode_schema(&table_schema)?);
+                let output_schema = if let Some(schema_bytes) = output_schema {
+                    Arc::new(self.try_decode_schema(&schema_bytes)?)
+                } else {
+                    Arc::clone(&table_schema)
+                };
+                let scan_config: sail_delta_lake::datasource::DeltaScanConfig =
+                    if scan_config_json.is_empty() {
+                        sail_delta_lake::datasource::DeltaScanConfig::default()
+                    } else {
+                        serde_json::from_str(&scan_config_json).map_err(|e| {
+                            plan_datafusion_err!("failed to decode Delta scan config: {e}")
+                        })?
+                    };
+                let projection = if projection.is_empty() {
+                    None
+                } else {
+                    Some(
+                        projection
+                            .iter()
+                            .map(|v| usize::try_from(*v))
+                            .collect::<std::result::Result<Vec<_>, _>>()
+                            .map_err(|_| {
+                                plan_datafusion_err!("invalid projection for DeltaScanByAddsExec")
+                            })?,
+                    )
+                };
+                let limit = limit
+                    .map(usize::try_from)
+                    .transpose()
+                    .map_err(|_| plan_datafusion_err!("invalid limit for DeltaScanByAddsExec"))?;
+                let pushdown_filter = if let Some(pred_bytes) = pushdown_filter {
+                    let predicate = parse_physical_expr(
+                        &self.try_decode_message(&pred_bytes)?,
+                        ctx,
+                        &output_schema,
+                        self,
+                    )?;
+                    Some(predicate)
+                } else {
+                    None
+                };
                 Ok(Arc::new(DeltaScanByAddsExec::new(
                     input,
                     table_url,
                     table_schema,
+                    output_schema,
+                    scan_config,
+                    projection,
+                    limit,
+                    pushdown_filter,
                 )))
             }
             NodeKind::DeltaDiscovery(gen::DeltaDiscoveryExecNode {
@@ -1146,10 +1197,33 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         {
             let input = self.try_encode_plan(delta_scan_by_adds_exec.input().clone())?;
             let table_schema = self.try_encode_schema(delta_scan_by_adds_exec.table_schema())?;
+            let output_schema = self.try_encode_schema(delta_scan_by_adds_exec.output_schema())?;
+            let scan_config_json = serde_json::to_string(delta_scan_by_adds_exec.scan_config())
+                .map_err(|e| plan_datafusion_err!("failed to encode Delta scan config: {e}"))?;
+            let projection = delta_scan_by_adds_exec
+                .projection()
+                .map(|p| p.iter().map(|v| *v as u64).collect())
+                .unwrap_or_default();
+            let limit = delta_scan_by_adds_exec
+                .limit()
+                .map(u64::try_from)
+                .transpose()
+                .map_err(|_| plan_datafusion_err!("invalid limit for DeltaScanByAddsExec"))?;
+            let pushdown_filter = if let Some(pred) = delta_scan_by_adds_exec.pushdown_filter() {
+                let predicate_node = serialize_physical_expr(pred, self)?;
+                Some(self.try_encode_message(predicate_node)?)
+            } else {
+                None
+            };
             NodeKind::DeltaScanByAdds(gen::DeltaScanByAddsExecNode {
                 input,
                 table_url: delta_scan_by_adds_exec.table_url().to_string(),
                 table_schema,
+                output_schema: Some(output_schema),
+                scan_config_json,
+                projection,
+                limit,
+                pushdown_filter,
             })
         } else if let Some(delta_discovery_exec) =
             node.as_any().downcast_ref::<DeltaDiscoveryExec>()

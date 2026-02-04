@@ -318,9 +318,14 @@ impl PruningStatistics for AddStatsPruningStatistics {
             let name = column.name();
             // Partition columns: all rows in file share same partition value.
             if let Some(pv) = a.partition_values.get(name) {
-                let n = s.map(|s| s.num_records).unwrap_or(0);
-                let cnt = if pv.is_none() { n } else { 0 };
-                return ScalarValue::UInt64(Some(cnt.max(0) as u64));
+                if pv.is_none() {
+                    if let Some(s) = s {
+                        let n = s.num_records;
+                        return ScalarValue::UInt64(Some(n.max(0) as u64));
+                    }
+                    return ScalarValue::UInt64(None);
+                }
+                return ScalarValue::UInt64(Some(0));
             }
             if let Some(s) = s {
                 if let Some(v) = Self::lookup_count_stat(&s.null_count, name) {

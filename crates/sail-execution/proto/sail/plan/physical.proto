@@ -446,6 +446,11 @@ message DeltaScanByAddsExecNode {
   bytes input = 1;
   string table_url = 2;
   bytes table_schema = 3;
+  optional bytes output_schema = 4;
+  string scan_config_json = 5;
+  repeated uint64 projection = 6;
+  optional uint64 limit = 7;
+  optional bytes pushdown_filter = 8;
 }
 
 message DeltaDiscoveryExecNode {

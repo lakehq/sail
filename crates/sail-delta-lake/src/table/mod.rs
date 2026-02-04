@@ -268,7 +268,16 @@ pub async fn create_delta_source(
         create_logstore_with_object_store(object_store, table_url.clone(), storage_config)?;
 
     // Create a new DeltaTable instance but do not load it yet.
-    let mut deltalake_table = DeltaTable::new(log_store.clone(), Default::default());
+    // For serverless reads, avoid eagerly loading active file metadata on the driver.
+    let table_config = if options.serverless_read {
+        DeltaTableConfig {
+            require_files: false,
+            ..Default::default()
+        }
+    } else {
+        Default::default()
+    };
+    let mut deltalake_table = DeltaTable::new(log_store.clone(), table_config);
 
     // Load the table state according to the provided time travel options.
     load_table_by_options(&mut deltalake_table, &options).await?;

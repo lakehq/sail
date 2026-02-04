@@ -24,9 +24,17 @@ pub struct TableDeltaOptions {
     pub version_as_of: Option<i64>,
     pub timestamp_as_of: Option<String>,
 
+    /// Enable metadata-as-data read path for Delta tables.
+    #[serde(default = "default_serverless_read")]
+    pub serverless_read: bool,
+
     /// Column mapping mode for new tables (dataframe API only)
     #[serde(default)]
     pub column_mapping_mode: ColumnMappingModeOption,
+}
+
+fn default_serverless_read() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]

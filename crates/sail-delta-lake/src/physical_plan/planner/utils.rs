@@ -174,6 +174,10 @@ pub async fn build_log_replay_pipeline(
     checkpoint_files: Vec<String>,
     commit_files: Vec<String>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
+    let partition_columns = partition_columns
+        .into_iter()
+        .map(|col| (col.clone(), col))
+        .collect::<Vec<_>>();
     build_log_replay_pipeline_with_options(
         ctx,
         table_url,
@@ -191,7 +195,7 @@ pub async fn build_log_replay_pipeline_with_options(
     ctx: &PlannerContext<'_>,
     table_url: Url,
     version: i64,
-    partition_columns: Vec<String>,
+    partition_columns: Vec<(String, String)>,
     checkpoint_files: Vec<String>,
     commit_files: Vec<String>,
     options: LogReplayOptions,
@@ -326,15 +330,27 @@ pub async fn build_log_replay_pipeline_with_options(
     };
 
     let part_values = guard_add(get_add_field(part_values_field));
-    let part_expr_for = |key: &str| -> Result<Arc<dyn PhysicalExpr>> {
-        let extracted = Expr::ScalarFunction(ScalarFunction::new_udf(
-            map_extract_udf(),
-            vec![part_values.clone(), lit_str(key)],
-        ));
-        let elem = Expr::ScalarFunction(ScalarFunction::new_udf(
-            array_element_udf(),
-            vec![extracted, lit_i64(1)],
-        ));
+    let part_expr_for = |logical: &str, physical: &str| -> Result<Arc<dyn PhysicalExpr>> {
+        let extract_elem = |key: &str| {
+            let extracted = Expr::ScalarFunction(ScalarFunction::new_udf(
+                map_extract_udf(),
+                vec![part_values.clone(), lit_str(key)],
+            ));
+            Expr::ScalarFunction(ScalarFunction::new_udf(
+                array_element_udf(),
+                vec![extracted, lit_i64(1)],
+            ))
+        };
+        let physical_elem = extract_elem(physical);
+        let elem = if physical == logical {
+            physical_elem
+        } else {
+            let logical_elem = extract_elem(logical);
+            Expr::ScalarFunction(ScalarFunction::new_udf(
+                datafusion::functions::core::coalesce(),
+                vec![physical_elem, logical_elem],
+            ))
+        };
         simplify(Expr::Cast(Cast::new(Box::new(elem), DataType::Utf8)))
     };
 
@@ -353,8 +369,8 @@ pub async fn build_log_replay_pipeline_with_options(
         Arc::clone(&mod_time_expr),
         COMMIT_TIMESTAMP_COLUMN.to_string(),
     ));
-    for col in &partition_columns {
-        final_proj.push((part_expr_for(col)?, col.clone()));
+    for (logical, physical) in &partition_columns {
+        final_proj.push((part_expr_for(logical, physical)?, logical.clone()));
     }
     if let Some(stats_expr) = stats_expr {
         final_proj.push((stats_expr, "stats_json".to_string()));
@@ -408,11 +424,15 @@ pub async fn build_log_replay_pipeline_with_options(
     let log_scan: Arc<dyn ExecutionPlan> =
         Arc::new(SortExec::new(ordering, log_scan).with_preserve_partitioning(true));
 
+    let replay_partition_cols = partition_columns
+        .iter()
+        .map(|(logical, _)| logical.clone())
+        .collect::<Vec<_>>();
     let replay: Arc<dyn ExecutionPlan> = Arc::new(DeltaLogReplayExec::new(
         log_scan,
         table_url,
         version,
-        partition_columns.clone(),
+        replay_partition_cols,
         checkpoint_files,
         commit_files,
     ));
