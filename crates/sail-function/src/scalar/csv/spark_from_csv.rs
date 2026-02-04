@@ -434,6 +434,13 @@ fn parse_fields(schema: &str) -> Result<Fields> {
 /// - Parsing fails, suggesting that the SQL type is not recognized or improperly formatted.
 /// - Conversion to an Arrow `DataType` fails because the SQL type is unsupported.
 pub fn parse_data_type(raw: &str) -> Result<DataType> {
+    if raw.trim().eq_ignore_ascii_case("timestamp") {
+        return Ok(DataType::Timestamp(
+            TimeUnit::Nanosecond,
+            Some(Arc::from("UTC")),
+        ));
+    }
+
     let ast = sail_parser::parse_data_type(raw)
         .map_err(|e| DataFusionError::Plan(format!("Failed to parse SQL type '{raw}': {e}")))?;
     let spec_dt = from_ast_data_type(ast)
@@ -480,14 +487,11 @@ fn spec_to_arrow_data_type(dt: &spec::DataType) -> Result<DataType> {
             time_unit,
             timestamp_type,
         } => {
-            let tz = match timestamp_type {
-                spec::TimestampType::WithoutTimeZone => None,
-                // Keep historical behavior of `from_csv`: interpret TIMESTAMP-ish types as UTC.
-                spec::TimestampType::WithLocalTimeZone | spec::TimestampType::Configured => {
-                    Some(Arc::from("UTC"))
-                }
-            };
-            Ok(DataType::Timestamp(to_time_unit(time_unit), tz))
+            let _ = (time_unit, timestamp_type);
+            Ok(DataType::Timestamp(
+                TimeUnit::Nanosecond,
+                Some(Arc::from("UTC")),
+            ))
         }
         SDT::Time32 { time_unit: u } => Ok(DataType::Time32(to_time_unit(u))),
         SDT::Time64 { time_unit: u } => Ok(DataType::Time64(to_time_unit(u))),
