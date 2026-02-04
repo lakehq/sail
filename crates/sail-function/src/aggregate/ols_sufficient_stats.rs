@@ -1,5 +1,12 @@
-// SIMD-optimized OLS sufficient statistics.
-// Uses iterator patterns that LLVM auto-vectorizes effectively.
+// Hybrid OLS sufficient statistics with automatic algorithm selection.
+//
+// Strategy selection based on benchmarks:
+// - SIMD row-by-row: Best for p < 200 (most common cases)
+// - Batch GEMM: Best for p >= 200 (high-dimensional data, cache blocking helps)
+//
+// Benchmark results (1M rows):
+//   p=100: SIMD 20.5s vs Batch GEMM 25.0s → SIMD wins
+//   p=500: SIMD 426.6s vs Batch GEMM 334.9s → Batch GEMM wins
 
 use std::any::Any;
 use std::fmt::Debug;
@@ -7,6 +14,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, Float64Array, ListArray};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use faer::Mat;
 use datafusion::common::{exec_err, Result, ScalarValue};
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
@@ -39,10 +47,14 @@ use datafusion_common::scalar::ScalarStructBuilder;
 ///
 /// # Performance
 ///
-/// This implementation uses faer for SIMD-accelerated linear algebra operations:
-/// - Outer product (rank-1 update) uses vectorized multiply-add
-/// - Element-wise matrix/vector addition uses SIMD
-/// - Arrow slices are used directly without allocation
+/// This implementation uses a hybrid approach with automatic algorithm selection:
+/// - **SIMD row-by-row**: Best for p < 200, uses LLVM auto-vectorization
+/// - **Batch GEMM**: Best for p >= 200, uses faer's cache-blocked matrix multiplication
+///
+/// The strategy can be overridden with `SAIL_OLS_STRATEGY` environment variable:
+/// - `auto` (default): Choose based on p (threshold = 200)
+/// - `simd`: Force SIMD row-by-row processing
+/// - `gemm`: Force batch GEMM processing
 #[derive(PartialEq, Eq, Hash)]
 pub struct OLSSufficientStats {
     name: String,
@@ -169,9 +181,10 @@ impl OLSSufficientStatsAccumulator {
         }
     }
 
-    /// Process a single sample and update sufficient statistics.
+    /// Process a single sample and update sufficient statistics (SIMD path).
     ///
     /// Optimized for SIMD auto-vectorization by LLVM.
+    /// Best for p < 200 where matrix copy overhead dominates GEMM benefits.
     /// Complexity: O(p²) per sample, but with vectorized inner loops.
     #[inline]
     fn update_one(&mut self, features: &[f64], label: f64) {
@@ -229,6 +242,129 @@ impl OLSSufficientStatsAccumulator {
 
         self.count += other_count;
     }
+
+    /// SIMD-optimized batch processing using row-by-row updates.
+    ///
+    /// Best for p < 200 where LLVM auto-vectorization is efficient
+    /// and matrix copy overhead would dominate GEMM benefits.
+    fn update_batch_simd(&mut self, labels: &Float64Array, features_list: &ListArray) -> Result<()> {
+        for i in 0..labels.len() {
+            if labels.is_null(i) || features_list.is_null(i) {
+                continue;
+            }
+
+            let label = labels.value(i);
+            let features_values = features_list.value(i);
+            let features_float = features_values
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .ok_or_else(|| {
+                    datafusion::error::DataFusionError::Execution(
+                        "features inner must be Float64".to_string(),
+                    )
+                })?;
+            let features: &[f64] = features_float.values();
+
+            self.update_one(features, label);
+        }
+        Ok(())
+    }
+
+    /// Batch GEMM processing using faer's cache-blocked matrix multiplication.
+    ///
+    /// Best for p >= 200 where cache blocking in GEMM provides significant speedup
+    /// over row-by-row rank-1 updates that cause cache misses.
+    fn update_batch_gemm(
+        &mut self,
+        labels: &Float64Array,
+        features_list: &ListArray,
+        n_valid: usize,
+        p: usize,
+    ) -> Result<()> {
+        // Build batch matrices using faer
+        // X_batch: n_valid x p (each row is one sample)
+        // y_batch: n_valid x 1
+        let mut x_batch = Mat::<f64>::zeros(n_valid, p);
+        let mut y_batch = Mat::<f64>::zeros(n_valid, 1);
+
+        let mut row_idx = 0usize;
+        for i in 0..labels.len() {
+            if labels.is_null(i) || features_list.is_null(i) {
+                continue;
+            }
+
+            let label = labels.value(i);
+            let features_values = features_list.value(i);
+            let features_float = features_values
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .ok_or_else(|| {
+                    datafusion::error::DataFusionError::Execution(
+                        "features inner must be Float64".to_string(),
+                    )
+                })?;
+            let features: &[f64] = features_float.values();
+
+            // Fill row in X_batch
+            for (j, &f) in features.iter().enumerate() {
+                x_batch[(row_idx, j)] = f;
+            }
+            y_batch[(row_idx, 0)] = label;
+            row_idx += 1;
+        }
+
+        // Compute X^T * X using GEMM (cache-blocked matrix multiplication)
+        let xtx_batch = x_batch.transpose() * &x_batch;
+
+        // Compute X^T * y using GEMM
+        let xty_batch = x_batch.transpose() * &y_batch;
+
+        // Add batch results to accumulator (vectorized)
+        for i in 0..p {
+            for j in 0..p {
+                self.xtx[i * p + j] += xtx_batch[(i, j)];
+            }
+            self.xty[i] += xty_batch[(i, 0)];
+        }
+        self.count += n_valid as i64;
+
+        Ok(())
+    }
+}
+
+/// OLS computation strategy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OlsStrategy {
+    /// Automatic selection based on p (default)
+    Auto,
+    /// Force SIMD row-by-row processing
+    Simd,
+    /// Force batch GEMM processing
+    Gemm,
+}
+
+impl OlsStrategy {
+    /// Read strategy from SAIL_OLS_STRATEGY environment variable.
+    fn from_env() -> Self {
+        match std::env::var("SAIL_OLS_STRATEGY")
+            .unwrap_or_default()
+            .to_lowercase()
+            .as_str()
+        {
+            "simd" => OlsStrategy::Simd,
+            "gemm" => OlsStrategy::Gemm,
+            _ => OlsStrategy::Auto, // "auto" or unset
+        }
+    }
+
+    /// Determine whether to use GEMM based on strategy and feature count.
+    fn use_gemm(self, p: usize) -> bool {
+        match self {
+            OlsStrategy::Auto => p >= 200, // Threshold based on benchmarks
+            OlsStrategy::Simd => false,
+            OlsStrategy::Gemm => true,
+        }
+    }
 }
 
 impl Accumulator for OLSSufficientStatsAccumulator {
@@ -261,28 +397,36 @@ impl Accumulator for OLSSufficientStatsAccumulator {
                 )
             })?;
 
-        // Process each row
+        // First pass: count valid rows and get feature dimension
+        let mut n_valid = 0usize;
+        let mut p = 0usize;
         for i in 0..labels.len() {
             if labels.is_null(i) || features_list.is_null(i) {
                 continue;
             }
+            if p == 0 {
+                let features_values = features_list.value(i);
+                p = features_values.len();
+            }
+            n_valid += 1;
+        }
 
-            let label = labels.value(i);
+        if n_valid == 0 || p == 0 {
+            return Ok(());
+        }
 
-            // Extract features for this row
-            let features_values = features_list.value(i);
-            let features_float = features_values
-                .as_any()
-                .downcast_ref::<Float64Array>()
-                .ok_or_else(|| {
-                    datafusion::error::DataFusionError::Execution(
-                        "features inner must be Float64".to_string(),
-                    )
-                })?;
-            // Use Arrow slice directly - no allocation needed
-            let features: &[f64] = features_float.values();
+        // Initialize accumulator if needed
+        self.initialize(p);
 
-            self.update_one(features, label);
+        // Choose strategy based on environment variable and feature count
+        let strategy = OlsStrategy::from_env();
+
+        if strategy.use_gemm(p) {
+            // Batch GEMM path: best for high-dimensional data (p >= 200)
+            self.update_batch_gemm(labels, features_list, n_valid, p)?;
+        } else {
+            // SIMD row-by-row path: best for most cases (p < 200)
+            self.update_batch_simd(labels, features_list)?;
         }
 
         Ok(())

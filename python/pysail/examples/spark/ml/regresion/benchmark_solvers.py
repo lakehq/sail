@@ -328,8 +328,12 @@ def run_benchmarks():
 
     # Save results to JSON for comparison
     backend = "sail" if "localhost:50051" in remote else "spark"
-    # Use --optimized flag to save to separate file for A/B comparison
-    if "--optimized" in sys.argv:
+    # Use --optimized, --optimized2, or --optimized3 flag to save to separate file for A/B comparison
+    if "--optimized3" in sys.argv:
+        backend = f"{backend}_optimized3"
+    elif "--optimized2" in sys.argv:
+        backend = f"{backend}_optimized2"
+    elif "--optimized" in sys.argv:
         backend = f"{backend}_optimized"
     results_file = DATA_DIR / f"results_{backend}.json"
     with open(results_file, "w") as f:
@@ -427,7 +431,11 @@ def run_single_dataset(dataset_name):
 
     # Load existing results and merge
     backend = "sail" if "localhost:50051" in remote else "spark"
-    if "--optimized" in sys.argv:
+    if "--optimized3" in sys.argv:
+        backend = f"{backend}_optimized3"
+    elif "--optimized2" in sys.argv:
+        backend = f"{backend}_optimized2"
+    elif "--optimized" in sys.argv:
         backend = f"{backend}_optimized"
     results_file = DATA_DIR / f"results_{backend}.json"
 
@@ -463,9 +471,15 @@ def run_all_clean():
 
     remote = os.environ.get("SPARK_REMOTE", "sc://localhost:50051")
     script_path = __file__
+    is_optimized3 = "--optimized3" in sys.argv
+    is_optimized2 = "--optimized2" in sys.argv
     is_optimized = "--optimized" in sys.argv
 
-    suffix = " (optimized)" if is_optimized else ""
+    suffix = (
+        " (optimized3/hybrid)"
+        if is_optimized3
+        else (" (optimized2/gemm)" if is_optimized2 else (" (optimized/simd)" if is_optimized else ""))
+    )
     print(f"Running all datasets with fresh processes{suffix} (SPARK_REMOTE={remote})")
     print("=" * 60)
 
@@ -477,7 +491,11 @@ def run_all_clean():
         env["SPARK_REMOTE"] = remote
 
         cmd = [sys.executable, script_path, "--dataset", name]
-        if is_optimized:
+        if is_optimized3:
+            cmd.append("--optimized3")
+        elif is_optimized2:
+            cmd.append("--optimized2")
+        elif is_optimized:
             cmd.append("--optimized")
 
         result = subprocess.run(
