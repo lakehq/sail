@@ -26,7 +26,6 @@ use arrow_flight::{
     Action, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse,
     Ticket,
 };
-use datafusion::prelude::SessionContext;
 use futures::{stream, Stream, StreamExt};
 use log::{debug, error, info, warn};
 use prost::Message;
@@ -34,14 +33,12 @@ use sail_plan::config::PlanConfig;
 use sail_plan::execute_logical_plan;
 use sail_plan::resolver::plan::NamedPlan;
 use sail_plan::resolver::PlanResolver;
+use sail_session::session_manager::SessionManager;
 use sail_sql_analyzer::parser::parse_one_statement;
 use sail_sql_analyzer::statement::from_ast_statement;
 use sail_telemetry::metrics::{MetricAttribute, MetricRegistry};
 use sail_telemetry::telemetry::global_metric_registry;
-use tokio::sync::RwLock;
 use tonic::{Request, Response, Status, Streaming};
-
-use crate::session::create_sail_session_context;
 
 /// Sail Flight SQL Service implementation
 ///
@@ -56,20 +53,21 @@ use crate::session::create_sail_session_context;
 /// 3. Resolve plan using `PlanResolver` (shared - handles Spark semantics)
 /// 4. Execute via DataFusion (shared)
 ///
-/// # Differences with sail-spark-connect
+/// # Session Management
 ///
-/// - **NO SessionManager**: We use a simple shared `SessionContext` instead of
-///   the actor-based multi-session manager (overkill for Flight SQL)
-/// - **NO SparkSession extension**: No job tracking, streaming queries, or heartbeats
-/// - **Simpler session model**: Flight SQL requests are typically stateless
+/// Uses `SessionManager` from `sail-session` for multi-session support:
+/// - Actor-based session management for concurrent requests
+/// - Per-connection session isolation
+/// - Automatic session cleanup and lifecycle management
 ///
 /// # Shared components with sail-spark-connect
 ///
+/// - `sail_session::SessionManager`: Multi-session orchestration
 /// - `sail_plan`: PlanResolver, PlanConfig, execute_logical_plan
 /// - `sail_sql_analyzer`: SQL parser and AST conversion
 /// - `sail_session`: Optimizer and analyzer rules
 pub struct SailFlightSqlService {
-    ctx: Arc<RwLock<SessionContext>>,
+    session_manager: SessionManager,
     config: Arc<PlanConfig>,
     /// Maximum rows to return per query (0 = unlimited)
     max_rows: usize,
@@ -81,9 +79,9 @@ impl SailFlightSqlService {
     /// Create a new service with the given configuration
     ///
     /// # Arguments
+    /// * `session_manager` - SessionManager for multi-session support
     /// * `max_rows` - Maximum rows to return per query (0 = unlimited)
-    pub fn new(max_rows: usize) -> Self {
-        let ctx = create_sail_session_context();
+    pub fn new(session_manager: SessionManager, max_rows: usize) -> Self {
         let config = Arc::new(PlanConfig::default());
 
         // Get global metric registry if telemetry is enabled
@@ -93,11 +91,27 @@ impl SailFlightSqlService {
         }
 
         SailFlightSqlService {
-            ctx: Arc::new(RwLock::new(ctx)),
+            session_manager,
             config,
             max_rows,
             metrics,
         }
+    }
+
+    /// Default session ID for Flight SQL connections
+    const DEFAULT_SESSION_ID: &'static str = "flight-default";
+    /// Default user ID for Flight SQL connections
+    const DEFAULT_USER_ID: &'static str = "flight-user";
+
+    /// Get or create a session context for this request
+    async fn get_session_context(&self) -> Result<datafusion::prelude::SessionContext, Status> {
+        self.session_manager
+            .get_or_create_session_context(
+                Self::DEFAULT_SESSION_ID.to_string(),
+                Self::DEFAULT_USER_ID.to_string(),
+            )
+            .await
+            .map_err(|e| Status::internal(format!("Session error: {}", e)))
     }
 
     // =========================================================================
@@ -312,7 +326,7 @@ impl SailFlightSqlService {
 
         // Step 3: Resolve the plan using PlanResolver
         let resolve_start = Instant::now();
-        let ctx = self.ctx.read().await;
+        let ctx = self.get_session_context().await?;
         let resolver = PlanResolver::new(&ctx, self.config.clone());
         let NamedPlan {
             plan: logical_plan,
@@ -452,7 +466,7 @@ impl SailFlightSqlService {
         })?;
 
         // Step 3: Resolve the plan
-        let ctx = self.ctx.read().await;
+        let ctx = self.get_session_context().await?;
         let resolver = PlanResolver::new(&ctx, self.config.clone());
         let NamedPlan {
             plan: logical_plan,
@@ -524,7 +538,7 @@ impl SailFlightSqlService {
         })?;
 
         // Step 3: Resolve the plan to get logical plan (and schema)
-        let ctx = self.ctx.read().await;
+        let ctx = self.get_session_context().await?;
         let resolver = PlanResolver::new(&ctx, self.config.clone());
         let NamedPlan {
             plan: logical_plan,

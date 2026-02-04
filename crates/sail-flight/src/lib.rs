@@ -1,12 +1,18 @@
 pub mod config;
+pub mod error;
 pub mod service;
 pub mod session;
+
+use std::sync::Arc;
 
 use arrow_flight::flight_service_server::FlightServiceServer;
 use config::FlightSqlServerConfig;
 use log::info;
+use sail_common::config::AppConfig;
+use sail_common::runtime::RuntimeManager;
 use sail_server::{ServerBuilder, ServerBuilderOptions};
 use service::SailFlightSqlService;
+use session::create_flight_session_manager;
 use tokio::net::TcpListener;
 
 /// Serve the Flight SQL server
@@ -41,6 +47,14 @@ where
         }
     );
 
+    // Load application config and create runtime
+    let app_config = Arc::new(AppConfig::load()?);
+    let runtime = RuntimeManager::try_new(&app_config.runtime)?;
+
+    // Create session manager for multi-session support
+    let session_manager =
+        create_flight_session_manager(app_config.clone(), runtime.handle().clone())?;
+
     let addr = config.bind_address()?;
     let listener = TcpListener::bind(addr).await?;
     let local_addr = listener.local_addr()?;
@@ -55,7 +69,7 @@ where
     info!("");
     info!("Press Ctrl+C to stop the server");
 
-    let service = SailFlightSqlService::new(config.limits.max_rows);
+    let service = SailFlightSqlService::new(session_manager, config.limits.max_rows);
     let flight_service = FlightServiceServer::new(service);
 
     // Use ServerBuilder for consistent server configuration

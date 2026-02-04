@@ -6163,7 +6163,6 @@ version = "0.4.6"
 dependencies = [
  "arrow",
  "arrow-flight",
- "clap",
  "datafusion",
  "env_logger",
  "figment",

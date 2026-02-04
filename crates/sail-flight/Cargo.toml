@@ -9,10 +9,6 @@ description = "Arrow Flight SQL server for Sail"
 name = "sail_flight"
 path = "src/lib.rs"
 
-[[bin]]
-name = "sail-flight"
-path = "src/main.rs"
-
 [dependencies]
 # Sail crates
 sail-common = { path = "../sail-common" }
@@ -36,9 +32,6 @@ tonic = { workspace = true }
 tonic-health = { workspace = true }
 futures = { workspace = true }
 prost = { workspace = true }
-
-# CLI
-clap = { workspace = true }
 
 # Logging & Tracing
 log = { workspace = true }
