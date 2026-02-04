@@ -33,6 +33,7 @@ use url::Url;
 
 use crate::datasource::{DeltaScanConfig, DeltaTableProvider};
 use crate::kernel::{DeltaResult, DeltaTableConfig, DeltaTableError};
+use crate::logical::table_source::DeltaTableSource;
 use crate::options::TableDeltaOptions;
 use crate::storage::{commit_uri_from_version, default_logstore, LogStoreRef, StorageConfig};
 mod state;
@@ -251,6 +252,47 @@ pub async fn create_delta_provider(
     let table_provider = DeltaTableProvider::try_new(snapshot, log_store, scan_config)?;
 
     Ok(Arc::new(table_provider))
+}
+
+/// Creates a Delta Lake table source for logical planning.
+pub async fn create_delta_source(
+    ctx: &dyn Session,
+    table_url: Url,
+    schema: Option<Schema>,
+    options: TableDeltaOptions,
+) -> Result<Arc<dyn datafusion::logical_expr::TableSource>> {
+    let url = ListingTableUrl::try_new(table_url.clone(), None)?;
+    let object_store = ctx.runtime_env().object_store(&url)?;
+    let storage_config = StorageConfig;
+    let log_store =
+        create_logstore_with_object_store(object_store, table_url.clone(), storage_config)?;
+
+    // Create a new DeltaTable instance but do not load it yet.
+    let mut deltalake_table = DeltaTable::new(log_store.clone(), Default::default());
+
+    // Load the table state according to the provided time travel options.
+    load_table_by_options(&mut deltalake_table, &options).await?;
+
+    let snapshot = deltalake_table.snapshot()?.clone();
+
+    let scan_config = DeltaScanConfig {
+        file_column_name: None,
+        wrap_partition_values: false,
+        enable_parquet_pushdown: true,
+        schema: match schema {
+            Some(ref s) if s.fields().is_empty() => None,
+            Some(s) => Some(Arc::new(s)),
+            None => None,
+        },
+        commit_version_column_name: None,
+        commit_timestamp_column_name: None,
+    };
+
+    Ok(Arc::new(DeltaTableSource::try_new(
+        snapshot,
+        log_store,
+        scan_config,
+    )?))
 }
 
 /// Helper function to load a DeltaTable based on version or timestamp options.
