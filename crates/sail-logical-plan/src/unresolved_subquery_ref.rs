@@ -60,7 +60,7 @@ impl UnresolvedSubqueryRef {
     }
 
     /// Extracts the plan_id from a LogicalPlan if it is an UnresolvedSubqueryRef.
-    pub fn try_from_logical_plan(plan: &LogicalPlan) -> Option<i64> {
+    pub fn extract_plan_id(plan: &LogicalPlan) -> Option<i64> {
         if let LogicalPlan::Extension(ext) = plan {
             if let Some(node) = ext.node.as_any().downcast_ref::<UnresolvedSubqueryRef>() {
                 return Some(node.plan_id);
