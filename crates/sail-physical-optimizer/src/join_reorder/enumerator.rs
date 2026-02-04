@@ -74,18 +74,43 @@ impl PlanEnumerator {
         self.init_leaf_plans()?;
 
         // Run DPhyp join enumeration
-        if !self.join_reorder_by_dphyp()? {
-            return Ok(None);
-        }
+        let completed = self.join_reorder_by_dphyp()?;
 
-        // Return the plan containing all relations if found; otherwise fallback to greedy
+        // Return the plan containing all relations if found; otherwise fallback to greedy.
         let all_relations_set = self.create_all_relations_set();
         if let Some(result) = self.dp_table.get(&all_relations_set).cloned() {
             Ok(Some(result))
+        } else if !completed {
+            Ok(None)
         } else {
             let greedy_plan = self.solve_greedy()?;
             Ok(Some(greedy_plan))
         }
+    }
+
+    /// Ensure leaf plans exist for all single relations without overwriting existing entries.
+    ///
+    /// This is used by greedy fallback so it can reuse any DP results that already exist.
+    fn ensure_leaf_plans(&mut self) -> Result<()> {
+        for relation in &self.query_graph.relations {
+            let relation_id = relation.relation_id;
+            let join_set = JoinSet::new_singleton(relation_id)?;
+
+            if self.dp_table.contains_key(&join_set) {
+                continue;
+            }
+
+            // Estimate cardinality for single relation
+            let cardinality = self.cardinality_estimator.estimate_cardinality(join_set)?;
+
+            // Create leaf plan (cost is set to cardinality in DPPlan::new_leaf)
+            let plan = Arc::new(DPPlan::new_leaf(relation_id, cardinality)?);
+
+            // Insert into DP table
+            self.dp_table.insert(join_set, plan);
+        }
+
+        Ok(())
     }
 
     /// Initialize leaf plans for all single relations.
@@ -382,9 +407,17 @@ impl PlanEnumerator {
             ));
         }
 
+        // Ensure leaf plans exist so greedy can run even when called standalone.
+        self.ensure_leaf_plans()?;
+
+        // If DP (even partial) already produced a full plan, prefer it directly.
+        let all_relations_set = self.create_all_relations_set();
+        if let Some(plan) = self.dp_table.get(&all_relations_set).cloned() {
+            return Ok(plan);
+        }
+
         if relation_count == 1 {
-            // Initialize leaf plans and return the single relation
-            self.init_leaf_plans()?;
+            // Return the single relation
             let single_relation_set = JoinSet::new_singleton(0)?;
             return self
                 .dp_table
@@ -393,13 +426,46 @@ impl PlanEnumerator {
                 .ok_or_else(|| DataFusionError::Internal("Single relation not found".to_string()));
         }
 
-        // Initialize leaf plans for all single relations
-        self.init_leaf_plans()?;
+        // Create an initial list of disjoint subplans.
+        let mut remaining = all_relations_set;
+        let mut current_plans: Vec<JoinSet> = Vec::new();
 
-        // Create a list of current subplans (initially all single relations)
-        let mut current_plans: Vec<JoinSet> = (0..relation_count)
-            .map(JoinSet::new_singleton)
-            .collect::<Result<Vec<_>, _>>()?;
+        while remaining.bits() != 0 {
+            let mut best_set: Option<JoinSet> = None;
+            let mut best_cardinality: u32 = 0;
+            let mut best_cost: f64 = f64::INFINITY;
+
+            // Prefer larger subgraphs; tie-break by lower cost.
+            for (set, plan) in &self.dp_table {
+                if set.cardinality() <= 1 {
+                    continue;
+                }
+                let set_bits = set.bits();
+                if (set_bits & remaining.bits()) != set_bits {
+                    continue; // not a subset of remaining
+                }
+
+                let card = set.cardinality();
+                if card > best_cardinality || (card == best_cardinality && plan.cost < best_cost) {
+                    best_set = Some(*set);
+                    best_cardinality = card;
+                    best_cost = plan.cost;
+                }
+            }
+
+            let chosen = if let Some(s) = best_set {
+                s
+            } else {
+                // Fallback: pick one remaining relation.
+                let rel = remaining.iter().next().ok_or_else(|| {
+                    DataFusionError::Internal("Remaining set is empty".to_string())
+                })?;
+                JoinSet::new_singleton(rel)?
+            };
+
+            current_plans.push(chosen);
+            remaining -= chosen;
+        }
 
         // Repeatedly find and merge the best pair until only one plan remains
         while current_plans.len() > 1 {

@@ -25,6 +25,9 @@ type EquiPair = (StableColumn, StableColumn);
 type PhysicalExprWithEquiPairs = (PhysicalExprRef, Vec<EquiPair>);
 type GroupedPredicates = HashMap<JoinSet, Vec<PhysicalExprWithEquiPairs>>;
 
+/// Hard limit on the number of base relations in a single reorderable graph.
+const MAX_RELATIONS: usize = 12;
+
 /// Maps an output column from an ExecutionPlan back to a stable identifier.
 /// The vector is indexed by the column index in the plan's output schema.
 pub type ColumnMap = Vec<ColumnMapEntry>;
@@ -123,6 +126,15 @@ impl GraphBuilder {
             // seeing through them can lose the expression semantics and/or create join keys
             // we can't reconstruct from stable base columns.
             if self.is_trivial_projection(proj_plan) {
+                //TODO: consider apply this limit in different levels of the plan.
+                if self.graph.relation_count() >= MAX_RELATIONS {
+                    trace!(
+                        "GraphBuilder: relation_count={} >= MAX_RELATIONS={}, treating ProjectionExec as boundary leaf",
+                        self.graph.relation_count(),
+                        MAX_RELATIONS
+                    );
+                    return self.visit_boundary_or_leaf(plan);
+                }
                 return self.visit_projection(proj_plan);
             }
             return self.visit_boundary_or_leaf(plan);
