@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use chrono::Utc;
 use datafusion::prelude::SessionContext;
@@ -77,7 +76,7 @@ impl SessionManagerActor {
                         session_id,
                         instant: active_at,
                     },
-                    Duration::from_secs(self.options.config.spark.session_timeout_secs),
+                    self.options.session_timeout,
                 );
             }
         }

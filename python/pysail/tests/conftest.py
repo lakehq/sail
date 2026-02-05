@@ -1,3 +1,8 @@
+import importlib
+import os
+import sys
+
+
 def pytest_configure(config):
     """Configure pytest.
 
@@ -21,3 +26,26 @@ def pytest_configure(config):
     default_ext = getattr(config.option, "default_extension", None)
     if default_ext is None:
         config.option.default_extension = "pysail.tests.snapshot_yaml.YamlSnapshotExtension"
+
+    configure_sail_environment()
+
+
+def configure_sail_environment():
+    """Configure environment variables for PySail tests."""
+
+    module = "pysail._native"
+
+    if module in sys.modules:
+        msg = "The PySail native module should not be imported before configuring the environment."
+        raise RuntimeError(msg)
+
+    # Set the default parallelism to a fixed value regardless of the
+    # number of CPU cores to ensure deterministic test results, especially for
+    # snapshot tests involving execution plans.
+    os.environ["SAIL_EXECUTION__DEFAULT_PARALLELISM"] = "4"
+
+    # Ensure the native module can be imported successfully.
+    # This allows this function to be future-proof in case we ever change the native module name.
+    # If the native module fails to load, an exception will be raised here, so that we can
+    # remember to change the module name used in this function accordingly.
+    importlib.import_module(module)

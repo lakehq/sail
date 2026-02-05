@@ -26,15 +26,6 @@ if TYPE_CHECKING:
     import pyspark.sql.connect.session
 
 
-@pytest.fixture(scope="session", autouse=True)
-def sail_default_parallelism():
-    """Sets the default parallelism to a fixed value regardless of the
-    number of CPU cores to ensure deterministic test results, especially for
-    snapshot tests involving execution plans.
-    """
-    os.environ["SAIL_EXECUTION__DEFAULT_PARALLELISM"] = "4"
-
-
 @pytest.fixture(scope="session")
 def remote():
     """Creates a Spark Connect server if there is not one already running
@@ -46,8 +37,6 @@ def remote():
         yield r
     else:
         server = SparkConnectServer("127.0.0.1", 0)
-        if os.environ.get("SAIL_TEST_INIT_TELEMETRY") == "1":
-            server.init_telemetry()
         server.start(background=True)
         _, port = server.listening_address
         yield f"sc://localhost:{port}"

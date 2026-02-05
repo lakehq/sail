@@ -7,12 +7,13 @@ use log::info;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use sail_common::config::AppConfig;
-use sail_common::runtime::{RuntimeHandle, RuntimeManager};
+use sail_common::runtime::RuntimeHandle;
 use sail_spark_connect::entrypoint::serve;
-use sail_telemetry::telemetry::{init_telemetry, ResourceOptions};
 use tokio::net::TcpListener;
 use tokio::runtime::Handle;
 use tokio::sync::oneshot::{Receiver, Sender};
+
+use crate::globals::GlobalState;
 
 struct SparkConnectServerState {
     address: SocketAddr,
@@ -45,39 +46,25 @@ pub(super) struct SparkConnectServer {
     #[pyo3(get)]
     port: u16,
     config: Arc<AppConfig>,
-    runtime: RuntimeManager,
+    runtime: RuntimeHandle,
     state: Option<SparkConnectServerState>,
 }
 
 #[pymethods]
 impl SparkConnectServer {
-    /// Creates a new SparkConnectServer instance.
-    ///
-    /// # Arguments
-    ///
-    /// * `ip` - The IP address to bind the server to.
-    /// * `port` - The port to bind the server to.
-    ///
-    /// # Errors
-    ///
-    /// Returns a `PyRuntimeError` if:
-    /// - The application config fails to load.
-    /// - The runtime manager fails to initialize.
+    /// Creates a new `SparkConnectServer` instance.
     #[new]
     #[pyo3(signature = (ip, port, /))]
-    fn new(ip: &str, port: u16) -> PyResult<Self> {
-        let config = AppConfig::load().map_err(|e| {
-            PyErr::new::<PyRuntimeError, _>(format!("failed to load the application config: {e}"))
-        })?;
-        let runtime = RuntimeManager::try_new(&config.runtime).map_err(|e| {
-            PyErr::new::<PyRuntimeError, _>(format!("failed to create the runtime: {e}"))
-        })?;
+    fn new(py: Python<'_>, ip: &str, port: u16) -> PyResult<Self> {
+        let globals = GlobalState::instance(py)?;
+        let config = globals.config.clone();
+        let runtime = globals.runtime.handle();
         Ok(Self {
             ip: ip.to_string(),
             port,
-            state: None,
-            config: Arc::new(config),
+            config,
             runtime,
+            state: None,
         })
     }
 
@@ -94,8 +81,8 @@ impl SparkConnectServer {
         }
     }
 
-    /// Actually starts the server. Sets some config then calls 'run' (not available in the Python API)
-    /// If background is False, will not return until the server finishes.
+    /// Starts the server.
+    /// If `background` is `False`, the method will not return until the server stops.
     #[pyo3(signature = (*, background))]
     fn start(&mut self, py: Python<'_>, background: bool) -> PyResult<()> {
         if self.state.is_some() {
@@ -107,8 +94,10 @@ impl SparkConnectServer {
             PyErr::new::<PyValueError, _>(format!("invalid IP address: {}", self.ip))
         })?;
         let address = SocketAddr::new(ip, self.port);
-        let handle = self.runtime.handle();
-        let listener = handle.primary().block_on(TcpListener::bind(address))?;
+        let listener = self
+            .runtime
+            .primary()
+            .block_on(TcpListener::bind(address))?;
         self.state = Some(self.run(listener)?);
         if !background {
             let state = self.state()?;
@@ -121,19 +110,6 @@ impl SparkConnectServer {
         let state = self.state()?;
         py.detach(move || state.wait(true))?;
         Ok(())
-    }
-
-    fn init_telemetry(&self) -> PyResult<()> {
-        // TODO: configure Python logging to work with OpenTelemetry
-        // FIXME: avoid affecting the global telemetry configuration
-        let handle = self.runtime.handle();
-        handle
-            .primary()
-            .block_on(async {
-                let resource = ResourceOptions { kind: "server" };
-                init_telemetry(&self.config.telemetry, resource)
-            })
-            .map_err(|e| PyErr::new::<PyRuntimeError, _>(format!("{e:?}")))
     }
 }
 
@@ -155,7 +131,6 @@ impl SparkConnectServer {
         info!("Shutting down the Spark Connect server...");
     }
 
-    /// Thin wrapper on block_on
     fn run_blocking(
         handle: Handle,
         config: Arc<AppConfig>,
@@ -173,18 +148,16 @@ impl SparkConnectServer {
         Ok(())
     }
 
-    /// Starts the server, not available in the Python API.
     fn run(&self, listener: TcpListener) -> PyResult<SparkConnectServerState> {
-        let runtime = self.runtime.handle();
         // Get the actual listener address.
         // A port is assigned by the OS if the port is 0 when creating the listener.
         let address = listener.local_addr()?;
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let handle = self.runtime.handle();
         let config = Arc::clone(&self.config);
+        let runtime = self.runtime.clone();
         info!("Starting the Spark Connect server on {address}...");
         let handle = thread::Builder::new().spawn(move || {
-            Self::run_blocking(handle.primary().clone(), config, runtime, listener, rx)
+            Self::run_blocking(runtime.primary().clone(), config, runtime, listener, rx)
         })?;
         Ok(SparkConnectServerState {
             address,
