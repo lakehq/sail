@@ -352,7 +352,7 @@ def normalize_show_string(s: str) -> str:
 
     def join_row(columns: list[str], widths: list[int]) -> str:
         """Join columns back into a row with proper spacing."""
-        parts = [f"|{col:>{width}}" for col, width in zip(columns, widths)]
+        parts = [f"|{col:>{width}}" for col, width in zip(columns, widths, strict=True)]
         return "".join(parts) + "|"
 
     header_row = split_row(lines[1])
