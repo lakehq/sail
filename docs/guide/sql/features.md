@@ -116,8 +116,6 @@ Currently, Sail only supports in-memory catalog, which means the databases and t
 session.
 Remote catalog support is in our roadmap.
 
-For the `CREATE TABLE` statement, the `CREATE TABLE ... AS ...` syntax is not supported yet.
-
 ### Configuration Management
 
 | Statement                   | Supported      |
