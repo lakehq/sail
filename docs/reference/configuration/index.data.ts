@@ -39,6 +39,11 @@ export default {
           pattern: /^execution\./,
         },
         {
+          id: "optimizer",
+          title: "Optimizer Options",
+          pattern: /^optimizer\./,
+        },
+        {
           id: "parquet",
           title: "Parquet Options",
           pattern: /^parquet\./,
@@ -47,6 +52,11 @@ export default {
           id: "catalog",
           title: "Catalog Options",
           pattern: /^catalog\./,
+        },
+        {
+          id: "telemetry",
+          title: "Telemetry Options",
+          pattern: /^telemetry\./,
         },
       ],
       fallbackGroup: {
