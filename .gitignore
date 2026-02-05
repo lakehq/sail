@@ -28,6 +28,7 @@ out/
 /opt/
 
 # Editor directories and files
+.cursor/
 .idea/
 .vscode/*
 *.iml

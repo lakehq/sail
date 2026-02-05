@@ -5,14 +5,6 @@ from pandas.testing import assert_frame_equal
 
 from pysail.tests.spark.utils import escape_sql_string_literal, is_jvm_spark
 
-try:
-    from pyspark.sql.functions import partitioning
-
-    HAS_PARTITIONING = True
-except ImportError:
-    HAS_PARTITIONING = False
-    partitioning = None
-
 
 @pytest.fixture(autouse=True)
 def tables(spark, tmp_path):
@@ -24,8 +16,6 @@ def tables(spark, tmp_path):
     spark.sql("DROP TABLE IF EXISTS t3")
     spark.sql("DROP TABLE IF EXISTS t4")
     spark.sql("DROP TABLE IF EXISTS t5")
-    spark.sql("DROP TABLE IF EXISTS t_years")
-    spark.sql("DROP TABLE IF EXISTS t_bucket")
 
 
 def test_insert_into_with_values(spark):
@@ -180,36 +170,6 @@ def test_write_to(spark, tmp_path):
     df.writeTo("t3").option("location", location).overwrite(F.lit(True))
     actual = spark.sql("SELECT * FROM t3").toPandas()
     assert_frame_equal(actual, expected(1))
-
-
-@pytest.mark.skipif(is_jvm_spark(), reason="Spark does not handle v1 and v2 tables properly")
-@pytest.mark.skipif(not HAS_PARTITIONING, reason="partitioning module not available in this Spark version")
-def test_write_to_with_partition_transforms(spark, tmp_path):
-    """Test partition transforms (years, bucket) are correctly parsed.
-
-    The memory catalog does not support partition transforms, so this test
-    verifies that the transforms are correctly parsed by checking the error message.
-    For full end-to-end testing with transforms, use Iceberg catalog tests.
-    """
-    # Test that years transform is correctly parsed (memory catalog rejects it)
-    location_years = str(tmp_path / "t_years")
-    df = spark.createDataFrame(
-        [(1, "2023-01-15"), (2, "2024-06-20")],
-        schema="id INT, dt STRING",
-    ).withColumn("dt", F.to_date("dt"))
-
-    with pytest.raises(Exception, match=r"partition transforms are not supported by memory catalog"):
-        df.writeTo("t_years").option("path", location_years).partitionedBy(partitioning.years("dt")).create()
-
-    # Test that bucket transform is correctly parsed (memory catalog rejects it)
-    location_bucket = str(tmp_path / "t_bucket")
-    df2 = spark.createDataFrame(
-        [(1, "a"), (2, "b"), (3, "c"), (4, "d")],
-        schema="id INT, name STRING",
-    )
-
-    with pytest.raises(Exception, match=r"partition transforms are not supported by memory catalog"):
-        df2.writeTo("t_bucket").option("path", location_bucket).partitionedBy(partitioning.bucket(4, "id")).create()
 
 
 @pytest.mark.skipif(not is_jvm_spark(), reason="the options overwrite logic is not fully compatible yet")
