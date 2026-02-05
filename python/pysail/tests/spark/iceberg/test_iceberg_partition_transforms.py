@@ -52,5 +52,3 @@ def test_partition_transform_bucket(spark, tmp_path):
 
     with pytest.raises(Exception, match=r"partition transforms are not supported by memory catalog"):
         df.writeTo("t_bucket").option("path", location).partitionedBy(partitioning.bucket(10, "id")).create()
-
-
