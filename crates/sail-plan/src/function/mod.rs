@@ -12,7 +12,7 @@ use crate::function::common::ScalarFunction;
 mod aggregate;
 pub(crate) mod common;
 mod generator;
-mod scalar;
+pub(crate) mod scalar;
 mod table;
 mod window;
 

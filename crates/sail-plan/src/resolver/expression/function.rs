@@ -12,6 +12,7 @@ use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{AggFunctionInput, FunctionContextInput, ScalarFunctionInput};
+use crate::function::scalar::lambda::create_array_filter_expr;
 use crate::function::{get_built_in_aggregate_function, get_built_in_function};
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::function::PythonUdf;
@@ -46,6 +47,31 @@ impl PlanResolver<'_> {
             return Err(PlanError::todo("named function arguments"));
         }
         let canonical_function_name = function_name.to_ascii_lowercase();
+
+        // Special handling for higher-order functions with lambdas
+        // These need to intercept the lambda BEFORE normal argument resolution
+        if canonical_function_name == "filter" && arguments.len() == 2 {
+            if let spec::Expr::LambdaFunction {
+                function: lambda_body,
+                arguments: lambda_args,
+            } = &arguments[1]
+            {
+                // Resolve only the array argument (first arg)
+                let array_expr = self
+                    .resolve_expression(arguments[0].clone(), schema, state)
+                    .await?;
+
+                // Create the filter expression using the lambda
+                let filter_expr =
+                    create_array_filter_expr(array_expr, lambda_body.as_ref(), lambda_args)?;
+
+                return Ok(NamedExpr::new(
+                    vec![format!("filter({}, <lambda>)", function_name)],
+                    filter_expr,
+                ));
+            }
+        }
+
         if let Ok(udf) = self.ctx.udf(&canonical_function_name) {
             if udf.inner().as_any().is::<PySparkUnresolvedUDF>() {
                 state.config_mut().arrow_allow_large_var_types = true;
