@@ -26,7 +26,12 @@ impl PlanResolver<'_> {
                 .plan_id
                 .ok_or_else(|| PlanError::invalid("subquery reference missing plan_id"))?;
             let resolved = self.resolve_query_plan(ref_plan, state).await?;
-            resolved_refs.insert(plan_id, Arc::new(resolved));
+            let previous = resolved_refs.insert(plan_id, Arc::new(resolved));
+            if previous.is_some() {
+                return Err(PlanError::invalid(format!(
+                    "duplicate subquery reference plan_id: {plan_id}"
+                )));
+            }
         }
 
         // Step 2: Resolve the root plan (which will contain placeholders)
