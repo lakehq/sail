@@ -58,8 +58,8 @@ def glue_remote(moto_endpoint: str) -> Generator[str, None, None]:
     old_parallelism = os.environ.get("SAIL_EXECUTION__DEFAULT_PARALLELISM")
 
     os.environ["SAIL_CATALOG__LIST"] = catalogs_config
-    os.environ["AWS_ACCESS_KEY_ID"] = "testing"  # noqa: S105
-    os.environ["AWS_SECRET_ACCESS_KEY"] = "testing"  # noqa: S105
+    os.environ["AWS_ACCESS_KEY_ID"] = "testing"
+    os.environ["AWS_SECRET_ACCESS_KEY"] = "testing"
     os.environ["SAIL_EXECUTION__DEFAULT_PARALLELISM"] = "4"
 
     server = SparkConnectServer("127.0.0.1", 0)
@@ -101,6 +101,6 @@ def glue_spark(glue_remote: str) -> Generator[SparkSession, None, None]:
     yield spark
 
     # Cleanup - ignore errors during teardown
-    with contextlib.suppress(Exception):  # noqa: BLE001
+    with contextlib.suppress(Exception):
         spark.sql("DROP DATABASE test_db CASCADE")
     spark.stop()

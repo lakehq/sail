@@ -99,13 +99,14 @@ def test_glue_partition_transform_time_based(
 def test_glue_partition_transform_bucket(glue_spark, moto_endpoint):
     """Test bucket partition transform via PySpark V2 API with Glue catalog."""
     table_name = "t_bucket"
+    num_buckets = 10
 
     # Create dataframe
     df = glue_spark.createDataFrame([(1, "a"), (2, "b"), (3, "c"), (4, "d")], schema="id INT, name STRING")
 
     # Create table with bucket partition
     # Note: Glue catalog doesn't support OPTIONS, so we don't specify a location
-    df.writeTo(f"test_db.{table_name}").using("iceberg").partitionedBy(partitioning.bucket(10, "id")).create()
+    df.writeTo(f"test_db.{table_name}").using("iceberg").partitionedBy(partitioning.bucket(num_buckets, "id")).create()
 
     try:
         # Verify with pyiceberg
@@ -125,7 +126,7 @@ def test_glue_partition_transform_bucket(glue_spark, moto_endpoint):
         assert isinstance(
             spec.fields[0].transform, BucketTransform
         ), f"Expected BucketTransform, got {type(spec.fields[0].transform).__name__}"
-        assert spec.fields[0].transform.num_buckets == 10, f"Expected 10 buckets, got {spec.fields[0].transform.num_buckets}"
+        assert spec.fields[0].transform.num_buckets == num_buckets
 
         # Verify data can be read back via table name
         result = glue_spark.table(f"test_db.{table_name}").select("id").orderBy("id").collect()
