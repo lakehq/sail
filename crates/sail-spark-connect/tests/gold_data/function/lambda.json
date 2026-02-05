@@ -255,7 +255,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "success": "ok"
       }
     },
     {
@@ -281,7 +281,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"x\")])"
       }
     },
     {
@@ -307,7 +307,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "success": "ok"
       }
     },
     {

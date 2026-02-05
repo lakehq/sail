@@ -113,3 +113,39 @@ Feature: array filter with lambda
       Then query result
         | result      |
         | [2, 4, 6]   |
+
+  Rule: Filter with external column references
+
+    Scenario: Filter using external column as threshold
+      When query
+        """
+        SELECT filter(arr, x -> x > threshold) AS result
+        FROM (SELECT array(1, 2, 3, 4, 5) AS arr, 2 AS threshold)
+        """
+      Then query result
+        | result    |
+        | [3, 4, 5] |
+
+    Scenario: Filter using multiple external columns
+      When query
+        """
+        SELECT filter(arr, x -> x > min_val AND x < max_val) AS result
+        FROM (SELECT array(1, 2, 3, 4, 5) AS arr, 1 AS min_val, 5 AS max_val)
+        """
+      Then query result
+        | result      |
+        | [2, 3, 4]   |
+
+    Scenario: Filter with varying thresholds per row
+      When query
+        """
+        SELECT filter(arr, x -> x > threshold) AS result
+        FROM VALUES
+          (array(1, 2, 3, 4, 5), 2),
+          (array(10, 20, 30), 15)
+        AS t(arr, threshold)
+        """
+      Then query result
+        | result       |
+        | [3, 4, 5]    |
+        | [20, 30]     |

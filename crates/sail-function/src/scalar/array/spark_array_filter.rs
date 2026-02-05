@@ -23,6 +23,7 @@ pub enum FilterOp {
 }
 
 impl FilterOp {
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             ">" => Some(FilterOp::GreaterThan),
@@ -255,9 +256,14 @@ impl SparkArrayFilter {
 
         match (values.data_type(), &self.compare_value) {
             (DataType::Int32, ScalarValue::Int32(Some(v))) => {
-                let arr = values.as_any().downcast_ref::<Int32Array>().ok_or_else(|| {
-                    datafusion_common::DataFusionError::Execution("Expected Int32Array".to_string())
-                })?;
+                let arr = values
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .ok_or_else(|| {
+                        datafusion_common::DataFusionError::Execution(
+                            "Expected Int32Array".to_string(),
+                        )
+                    })?;
                 let elem = arr.value(idx);
                 Ok(if self.reversed {
                     self.op.apply_i32(*v, elem)
@@ -266,9 +272,14 @@ impl SparkArrayFilter {
                 })
             }
             (DataType::Int64, ScalarValue::Int64(Some(v))) => {
-                let arr = values.as_any().downcast_ref::<Int64Array>().ok_or_else(|| {
-                    datafusion_common::DataFusionError::Execution("Expected Int64Array".to_string())
-                })?;
+                let arr = values
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .ok_or_else(|| {
+                        datafusion_common::DataFusionError::Execution(
+                            "Expected Int64Array".to_string(),
+                        )
+                    })?;
                 let elem = arr.value(idx);
                 Ok(if self.reversed {
                     self.op.apply_i64(*v, elem)
@@ -278,9 +289,14 @@ impl SparkArrayFilter {
             }
             // Int64 array with Int32 scalar (common from PySpark)
             (DataType::Int64, ScalarValue::Int32(Some(v))) => {
-                let arr = values.as_any().downcast_ref::<Int64Array>().ok_or_else(|| {
-                    datafusion_common::DataFusionError::Execution("Expected Int64Array".to_string())
-                })?;
+                let arr = values
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .ok_or_else(|| {
+                        datafusion_common::DataFusionError::Execution(
+                            "Expected Int64Array".to_string(),
+                        )
+                    })?;
                 let elem = arr.value(idx);
                 let v64 = *v as i64;
                 Ok(if self.reversed {
@@ -352,10 +368,11 @@ impl SparkArrayFilter {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
+    use datafusion::arrow::array::{Int32Builder, ListBuilder};
+
     use super::*;
-    use datafusion::arrow::array::Int32Builder;
-    use datafusion::arrow::array::ListBuilder;
 
     #[test]
     fn test_filter_array_greater_than() -> Result<()> {

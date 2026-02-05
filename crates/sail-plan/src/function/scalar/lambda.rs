@@ -4,7 +4,7 @@ use datafusion_functions_nested::expr_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{ScalarFunction as ScalarFunctionType, ScalarFunctionInput};
+use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
 /// Spark's array_sort always puts NULLs last, regardless of sort direction
 /// https://spark.apache.org/docs/latest/api/sql/index.html#array_sort
@@ -42,7 +42,7 @@ fn array_sort(input: ScalarFunctionInput) -> PlanResult<datafusion_expr::Expr> {
     array_sort_spark(array, lit(true))
 }
 
-pub(super) fn list_built_in_lambda_functions() -> Vec<(&'static str, ScalarFunctionType)> {
+pub(super) fn list_built_in_lambda_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
