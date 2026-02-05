@@ -125,6 +125,20 @@ impl PlanResolverState {
         self.register_field_info(name, true)
     }
 
+    /// Registers a synthetic field where the field_id is also used as the field name.
+    /// This is useful for lambda variables and other synthetic fields that need
+    /// to be resolved by their generated ID rather than a semantic name.
+    pub fn register_synthetic_field(&mut self) -> String {
+        let field_id = self.next_field_id();
+        let info = FieldInfo {
+            plan_ids: HashSet::new(),
+            name: field_id.clone(),
+            hidden: false,
+        };
+        self.fields.insert(field_id.clone(), info);
+        field_id
+    }
+
     pub fn register_field(&mut self, field: impl AsRef<Field>) -> String {
         self.register_field_info(field.as_ref().name(), false)
     }
