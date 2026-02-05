@@ -59,7 +59,7 @@ def glue_remote(moto_endpoint: str) -> Generator[str, None, None]:
 
     os.environ["SAIL_CATALOG__LIST"] = catalogs_config
     os.environ["AWS_ACCESS_KEY_ID"] = "testing"
-    os.environ["AWS_SECRET_ACCESS_KEY"] = "testing"
+    os.environ["AWS_SECRET_ACCESS_KEY"] = "testing"  # noqa: S105
     os.environ["SAIL_EXECUTION__DEFAULT_PARALLELISM"] = "4"
 
     server = SparkConnectServer("127.0.0.1", 0)
