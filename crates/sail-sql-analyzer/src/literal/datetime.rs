@@ -224,3 +224,10 @@ where
 {
     timestamp().then_ignore(end())
 }
+
+pub fn create_time_parser<'a, E>() -> impl Parser<'a, &'a str, TimeValue, E>
+where
+    E: ParserExtra<'a, &'a str> + 'a,
+{
+    time().then_ignore(end())
+}

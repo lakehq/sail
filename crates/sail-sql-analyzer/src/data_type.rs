@@ -55,6 +55,19 @@ fn from_ast_timestamp_precision(
     }
 }
 
+fn from_ast_time_precision(
+    precision: Option<(LeftParenthesis, IntegerLiteral, RightParenthesis)>,
+) -> SqlResult<spec::TimeUnit> {
+    let precision = precision.as_ref().map(|(_, p, _)| p.value);
+    match precision {
+        Some(0) => Ok(spec::TimeUnit::Second),
+        Some(3) => Ok(spec::TimeUnit::Millisecond),
+        None | Some(6) => Ok(spec::TimeUnit::Microsecond), // Default to microsecond
+        Some(9) => Ok(spec::TimeUnit::Nanosecond),
+        _ => Err(SqlError::invalid("invalid TIME precision"))?,
+    }
+}
+
 pub fn from_ast_data_type(sql_type: DataType) -> SqlResult<spec::DataType> {
     match sql_type {
         DataType::Null(_) | DataType::Void(_) => Ok(spec::DataType::Null),
@@ -163,6 +176,17 @@ pub fn from_ast_data_type(sql_type: DataType) -> SqlResult<spec::DataType> {
                 time_unit,
                 timestamp_type: spec::TimestampType::WithLocalTimeZone,
             })
+        }
+        DataType::Time(_, precision) => {
+            let time_unit = from_ast_time_precision(precision)?;
+            match time_unit {
+                spec::TimeUnit::Second | spec::TimeUnit::Millisecond => {
+                    Ok(spec::DataType::Time32 { time_unit })
+                }
+                spec::TimeUnit::Microsecond | spec::TimeUnit::Nanosecond => {
+                    Ok(spec::DataType::Time64 { time_unit })
+                }
+            }
         }
         DataType::Date(_) | DataType::Date32(_) => Ok(spec::DataType::Date32),
         DataType::Date64(_) => Ok(spec::DataType::Date64),

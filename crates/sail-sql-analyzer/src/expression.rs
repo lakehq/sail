@@ -814,6 +814,9 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         AtomExpr::DateLiteral(_, value) => Ok(spec::Expr::UnresolvedDate {
             value: from_ast_string(value)?,
         }),
+        AtomExpr::TimeLiteral(_, value) => Ok(spec::Expr::UnresolvedTime {
+            value: from_ast_string(value)?,
+        }),
         AtomExpr::Function(function) => {
             let FunctionExpr {
                 name,
