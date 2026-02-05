@@ -157,11 +157,21 @@ impl PlanResolver<'_> {
             match ch {
                 '%' => out.push_str(".*"),
                 '_' => out.push('.'),
-                _ => out.push_str(&regex::escape(&ch.to_string())),
+                ch => Self::escape_regex_char(&mut out, ch),
             }
         }
         out.push('$');
         Regex::new(&out).map_err(|e| PlanError::invalid(format!("invalid ILIKE pattern: {e}")))
+    }
+
+    fn escape_regex_char(out: &mut String, ch: char) {
+        if matches!(
+            ch,
+            '\\' | '.' | '^' | '$' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|'
+        ) {
+            out.push('\\');
+        }
+        out.push(ch);
     }
 
     fn resolve_wildcard_or_nested_field_wildcard(
