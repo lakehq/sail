@@ -1,6 +1,6 @@
 [project]
 name = "pysail"
-version = "0.4.6"
+version = "0.5.0"
 description = "Sail Python library"
 authors = [
     { name = "LakeSail", email = "hello@lakesail.com" },
