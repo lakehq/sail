@@ -72,6 +72,12 @@ def final_statement(template, docstring, spark, variables):
     spark.sql(s)
 
 
+@given(parsers.parse("config {key} = {value}"))
+def config_set(key, value, spark):
+    """Sets a Spark configuration value using spark.conf.set()."""
+    spark.conf.set(key, value)
+
+
 @when(parsers.re("query(?P<template>( template)?)"), target_fixture="query")
 def query(template, docstring, variables):
     """Defines a SQL query (not executed here)."""

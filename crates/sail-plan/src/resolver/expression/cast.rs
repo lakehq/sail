@@ -104,15 +104,24 @@ impl PlanResolver<'_> {
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Date32,
                 is_try,
-            ) => ScalarUDF::new_from_impl(SparkDate::new(is_try)).call(vec![expr]),
+            ) => {
+                // ANSI=false means CAST behaves like TRY_CAST (returns NULL on invalid)
+                let effective_is_try = is_try || !self.config.ansi_mode;
+                ScalarUDF::new_from_impl(SparkDate::new(effective_is_try)).call(vec![expr])
+            }
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Timestamp(TimeUnit::Microsecond, tz),
                 is_try,
-            ) => Arc::new(ScalarUDF::new_from_impl(SparkTimestamp::try_new(
-                tz, is_try,
-            )?))
-            .call(vec![expr]),
+            ) => {
+                // ANSI=false means CAST behaves like TRY_CAST (returns NULL on invalid)
+                let effective_is_try = is_try || !self.config.ansi_mode;
+                Arc::new(ScalarUDF::new_from_impl(SparkTimestamp::try_new(
+                    tz,
+                    effective_is_try,
+                )?))
+                .call(vec![expr])
+            }
             (_, DataType::Utf8, _) if override_string_cast => {
                 ScalarUDF::new_from_impl(SparkToUtf8::new()).call(vec![expr])
             }
@@ -123,6 +132,7 @@ impl PlanResolver<'_> {
                 ScalarUDF::new_from_impl(SparkToUtf8View::new()).call(vec![expr])
             }
             (_, to, true) => try_cast(expr, to),
+            (_, to, false) if !self.config.ansi_mode => try_cast(expr, to),
             (_, to, _) => cast(expr, to),
         };
         Ok(NamedExpr::new(name, expr))
