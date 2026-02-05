@@ -25,7 +25,7 @@ use crate::spark::connect::expression::{
 use crate::spark::connect::{
     common_inline_user_defined_function as udf, common_inline_user_defined_table_function as udtf,
     CallFunction, CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction,
-    Expression, JavaUdf, PythonUdf, PythonUdtf, ScalarScalaUdf,
+    Expression, JavaUdf, PythonUdf, PythonUdtf, ScalarScalaUdf, SubqueryExpression,
 };
 
 impl TryFrom<Expression> for spec::Expr {
@@ -242,17 +242,20 @@ impl TryFrom<Expression> for spec::Expr {
             ExprType::TypedAggregateExpression(_) => {
                 Err(SparkError::todo("typed aggregate expression"))
             }
-            ExprType::SubqueryExpression(se) => {
+            ExprType::SubqueryExpression(SubqueryExpression {
+                plan_id,
+                subquery_type: raw_subquery_type,
+                in_subquery_values,
+                ..
+            }) => {
                 use crate::spark::connect::subquery_expression::SubqueryType;
-                let plan_id = se.plan_id;
-                let subquery_type = match se.subquery_type() {
-                    SubqueryType::In => spec::SubqueryType::In,
-                    SubqueryType::Scalar => spec::SubqueryType::Scalar,
-                    SubqueryType::Exists => spec::SubqueryType::Exists,
+                let subquery_type = match SubqueryType::try_from(raw_subquery_type) {
+                    Ok(SubqueryType::In) => spec::SubqueryType::In,
+                    Ok(SubqueryType::Scalar) => spec::SubqueryType::Scalar,
+                    Ok(SubqueryType::Exists) => spec::SubqueryType::Exists,
                     _ => return Err(SparkError::unsupported("unsupported subquery type")),
                 };
-                let in_subquery_values: Vec<spec::Expr> = se
-                    .in_subquery_values
+                let in_subquery_values: Vec<spec::Expr> = in_subquery_values
                     .into_iter()
                     .map(|e| e.try_into())
                     .collect::<SparkResult<_>>()?;
