@@ -99,6 +99,31 @@ impl SparkArrayFilterExpr {
             outer_columns,
         }
     }
+
+    /// Returns a reference to the lambda expression.
+    pub fn lambda_expr(&self) -> &Expr {
+        &self.lambda_expr
+    }
+
+    /// Returns a reference to the element data type.
+    pub fn element_type(&self) -> &DataType {
+        &self.element_type
+    }
+
+    /// Returns a reference to the column name.
+    pub fn column_name(&self) -> &str {
+        &self.column_name
+    }
+
+    /// Returns a reference to the optional index column name.
+    pub fn index_column_name(&self) -> Option<&str> {
+        self.index_column_name.as_deref()
+    }
+
+    /// Returns a reference to the outer columns.
+    pub fn outer_columns(&self) -> &[(String, DataType)] {
+        &self.outer_columns
+    }
 }
 
 impl Clone for SparkArrayFilterExpr {

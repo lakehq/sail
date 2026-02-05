@@ -12,13 +12,16 @@ use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::array::spark_array_filter_expr::SparkArrayFilterExpr;
 use sail_function::scalar::multi_expr::MultiExpr;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{AggFunctionInput, FunctionContextInput, ScalarFunctionInput};
-use crate::function::{get_built_in_aggregate_function, get_built_in_function};
+use crate::function::common::{
+    AggFunctionInput, FunctionContextInput, LambdaFunctionInput, ScalarFunctionInput,
+};
+use crate::function::{
+    get_built_in_aggregate_function, get_built_in_function, get_built_in_lambda_function,
+};
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::function::PythonUdf;
 use crate::resolver::state::PlanResolverState;
@@ -55,118 +58,121 @@ impl PlanResolver<'_> {
 
         // Special handling for higher-order functions with lambdas
         // These need to intercept the lambda BEFORE normal argument resolution
-        if canonical_function_name == "filter" && arguments.len() == 2 {
-            if let spec::Expr::LambdaFunction {
-                function: lambda_body,
-                arguments: lambda_args,
-            } = &arguments[1]
-            {
-                // Resolve only the array argument (first arg)
-                let array_expr = self
-                    .resolve_expression(arguments[0].clone(), schema, state)
-                    .await?;
+        if let Some(lambda_handler) = get_built_in_lambda_function(&canonical_function_name) {
+            // Check if the last argument is a lambda
+            if arguments.len() >= 2 {
+                if let spec::Expr::LambdaFunction {
+                    function: lambda_body,
+                    arguments: lambda_args,
+                } = &arguments[arguments.len() - 1]
+                {
+                    // Resolve only the array argument (first arg)
+                    let array_expr = self
+                        .resolve_expression(arguments[0].clone(), schema, state)
+                        .await?;
 
-                // Get the element type from the array expression
-                let array_type = array_expr.get_type(schema.as_ref())?;
-                let element_type = match &array_type {
-                    DataType::List(field) | DataType::LargeList(field) => field.data_type().clone(),
-                    other => {
-                        return Err(PlanError::invalid(format!(
-                            "filter() first argument must be an array, got {:?}",
-                            other
-                        )))
-                    }
-                };
+                    // Get the element type from the array expression
+                    let array_type = array_expr.get_type(schema.as_ref())?;
+                    let element_type = match &array_type {
+                        DataType::List(field) | DataType::LargeList(field) => {
+                            field.data_type().clone()
+                        }
+                        other => {
+                            return Err(PlanError::invalid(format!(
+                                "{}() first argument must be an array, got {:?}",
+                                canonical_function_name, other
+                            )))
+                        }
+                    };
 
-                // Extract lambda variable names - supports (element) or (element, index)
-                let var_names: Vec<String> = lambda_args
-                    .iter()
-                    .flat_map(|v| {
-                        let names: Vec<String> = v.name.clone().into();
-                        names
-                    })
-                    .collect();
-
-                // Register synthetic fields for the lambda variables
-                let element_field_id = state.register_synthetic_field();
-                let index_field_id = if var_names.len() >= 2 {
-                    Some(state.register_synthetic_field())
-                } else {
-                    None
-                };
-
-                // Transform the lambda body to replace variable references with field_ids
-                let transformed_body = transform_lambda_variables_with_index(
-                    lambda_body.as_ref(),
-                    &var_names,
-                    &element_field_id,
-                    index_field_id.as_deref(),
-                )?;
-
-                // Create schema with element column (and optionally index column)
-                let mut lambda_schema_fields =
-                    vec![Field::new(&element_field_id, element_type.clone(), true)];
-                if let Some(ref idx_id) = index_field_id {
-                    // Use Int32 to match common array element types for better type compatibility
-                    lambda_schema_fields.push(Field::new(idx_id, DataType::Int32, false));
-                }
-                let lambda_only_schema =
-                    DFSchema::try_from(Arc::new(Schema::new(lambda_schema_fields.clone())))?;
-
-                // Combine lambda schema with outer schema for resolving external column references
-                let mut combined_schema = lambda_only_schema.clone();
-                combined_schema.merge(schema.as_ref());
-                let combined_schema = Arc::new(combined_schema);
-
-                // Resolve the transformed lambda body against the combined schema
-                let resolved_lambda = self
-                    .resolve_expression(transformed_body, &combined_schema, state)
-                    .await?;
-
-                // Find which columns from the outer schema are referenced in the lambda
-                let mut referenced_columns: HashSet<Column> = HashSet::new();
-                let _ = expr_to_columns(&resolved_lambda, &mut referenced_columns);
-
-                // Determine which are external (not lambda variables)
-                let lambda_column_names: HashSet<&str> = {
-                    let mut names = HashSet::new();
-                    names.insert(element_field_id.as_str());
-                    if let Some(ref idx_id) = index_field_id {
-                        names.insert(idx_id.as_str());
-                    }
-                    names
-                };
-
-                // Collect external columns with their full Column reference (including qualifier)
-                let outer_columns_with_refs: Vec<(Column, DataType)> = referenced_columns
-                    .iter()
-                    .filter(|c| !lambda_column_names.contains(c.name.as_str()))
-                    .filter_map(|c| {
-                        // Try to find the column in the outer schema (with or without qualifier)
-                        schema.index_of_column(c).ok().map(|idx| {
-                            let field = schema.field(idx);
-                            (c.clone(), field.data_type().clone())
+                    // Extract lambda variable names - supports (element) or (element, index)
+                    let var_names: Vec<String> = lambda_args
+                        .iter()
+                        .flat_map(|v| {
+                            let names: Vec<String> = v.name.clone().into();
+                            names
                         })
-                    })
-                    .collect();
+                        .collect();
 
-                // Extract just the names and types for the UDF (uses column name as schema field)
-                let outer_columns: Vec<(String, DataType)> = outer_columns_with_refs
-                    .iter()
-                    .map(|(c, dt)| (c.name.clone(), dt.clone()))
-                    .collect();
+                    // Register synthetic fields for the lambda variables
+                    let element_field_id = state.register_synthetic_field();
+                    let index_field_id = if var_names.len() >= 2 {
+                        Some(state.register_synthetic_field())
+                    } else {
+                        None
+                    };
 
-                // Build a map of qualified column names to unqualified for rewriting
-                let outer_column_set: HashSet<Column> = outer_columns_with_refs
-                    .iter()
-                    .map(|(c, _)| c.clone())
-                    .collect();
+                    // Transform the lambda body to replace variable references with field_ids
+                    let transformed_body = transform_lambda_variables_with_index(
+                        lambda_body.as_ref(),
+                        &var_names,
+                        &element_field_id,
+                        index_field_id.as_deref(),
+                    )?;
 
-                // Rewrite the lambda expression to remove qualifiers from outer columns
-                // This is necessary because the UDF's internal schema uses unqualified names
-                let resolved_lambda = resolved_lambda
-                    .transform(|e| {
-                        match &e {
+                    // Create schema with element column (and optionally index column)
+                    let mut lambda_schema_fields =
+                        vec![Field::new(&element_field_id, element_type.clone(), true)];
+                    if let Some(ref idx_id) = index_field_id {
+                        // Use Int32 to match common array element types for better type compatibility
+                        lambda_schema_fields.push(Field::new(idx_id, DataType::Int32, false));
+                    }
+                    let lambda_only_schema =
+                        DFSchema::try_from(Arc::new(Schema::new(lambda_schema_fields.clone())))?;
+
+                    // Combine lambda schema with outer schema for resolving external column references
+                    let mut combined_schema = lambda_only_schema.clone();
+                    combined_schema.merge(schema.as_ref());
+                    let combined_schema = Arc::new(combined_schema);
+
+                    // Resolve the transformed lambda body against the combined schema
+                    let resolved_lambda = self
+                        .resolve_expression(transformed_body, &combined_schema, state)
+                        .await?;
+
+                    // Find which columns from the outer schema are referenced in the lambda
+                    let mut referenced_columns: HashSet<Column> = HashSet::new();
+                    let _ = expr_to_columns(&resolved_lambda, &mut referenced_columns);
+
+                    // Determine which are external (not lambda variables)
+                    let lambda_column_names: HashSet<&str> = {
+                        let mut names = HashSet::new();
+                        names.insert(element_field_id.as_str());
+                        if let Some(ref idx_id) = index_field_id {
+                            names.insert(idx_id.as_str());
+                        }
+                        names
+                    };
+
+                    // Collect external columns with their full Column reference (including qualifier)
+                    let outer_columns_with_refs: Vec<(Column, DataType)> = referenced_columns
+                        .iter()
+                        .filter(|c| !lambda_column_names.contains(c.name.as_str()))
+                        .filter_map(|c| {
+                            // Try to find the column in the outer schema (with or without qualifier)
+                            schema.index_of_column(c).ok().map(|idx| {
+                                let field = schema.field(idx);
+                                (c.clone(), field.data_type().clone())
+                            })
+                        })
+                        .collect();
+
+                    // Extract just the names and types for the UDF (uses column name as schema field)
+                    let outer_columns: Vec<(String, DataType)> = outer_columns_with_refs
+                        .iter()
+                        .map(|(c, dt)| (c.name.clone(), dt.clone()))
+                        .collect();
+
+                    // Build a map of qualified column names to unqualified for rewriting
+                    let outer_column_set: HashSet<Column> = outer_columns_with_refs
+                        .iter()
+                        .map(|(c, _)| c.clone())
+                        .collect();
+
+                    // Rewrite the lambda expression to remove qualifiers from outer columns
+                    // This is necessary because the UDF's internal schema uses unqualified names
+                    let resolved_lambda = resolved_lambda
+                        .transform(|e| match &e {
                             Expr::Column(col) if outer_column_set.contains(col) => {
                                 // Replace qualified column with unqualified version
                                 Ok(Transformed::yes(Expr::Column(Column::new_unqualified(
@@ -174,52 +180,33 @@ impl PlanResolver<'_> {
                                 ))))
                             }
                             _ => Ok(Transformed::no(e)),
-                        }
-                    })?
-                    .data;
+                        })?
+                        .data;
 
-                // Build arguments: array + outer columns (using full column expressions)
-                let mut udf_args = vec![array_expr];
-                for (column, _) in &outer_columns_with_refs {
-                    udf_args.push(Expr::Column(column.clone()));
-                }
+                    // Build outer column expressions for UDF arguments
+                    let outer_column_exprs: Vec<Expr> = outer_columns_with_refs
+                        .iter()
+                        .map(|(column, _)| Expr::Column(column.clone()))
+                        .collect();
 
-                // Create the filter UDF with appropriate constructor
-                let filter_udf = if outer_columns.is_empty() {
-                    if let Some(idx_id) = index_field_id {
-                        SparkArrayFilterExpr::with_index_column(
-                            resolved_lambda,
-                            element_type,
-                            element_field_id,
-                            idx_id,
-                        )
-                    } else {
-                        SparkArrayFilterExpr::with_column_name(
-                            resolved_lambda,
-                            element_type,
-                            element_field_id,
-                        )
-                    }
-                } else {
-                    SparkArrayFilterExpr::with_outer_columns(
+                    // Create the lambda function input and call the handler
+                    let lambda_input = LambdaFunctionInput {
+                        array_expr,
                         resolved_lambda,
                         element_type,
-                        element_field_id,
-                        index_field_id,
+                        element_column_name: element_field_id,
+                        index_column_name: index_field_id,
                         outer_columns,
-                    )
-                };
-                let udf = Arc::new(datafusion_expr::ScalarUDF::new_from_impl(filter_udf));
+                        outer_column_exprs,
+                    };
 
-                let filter_expr = expr::Expr::ScalarFunction(ScalarFunction {
-                    func: udf,
-                    args: udf_args,
-                });
+                    let result_expr = lambda_handler(lambda_input)?;
 
-                return Ok(NamedExpr::new(
-                    vec![format!("filter({}, <lambda>)", function_name)],
-                    filter_expr,
-                ));
+                    return Ok(NamedExpr::new(
+                        vec![format!("{}(<lambda>)", canonical_function_name)],
+                        result_expr,
+                    ));
+                }
             }
         }
 

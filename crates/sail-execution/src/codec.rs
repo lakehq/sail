@@ -20,7 +20,9 @@ use datafusion::execution::TaskContext;
 use datafusion::functions::core::greatest::GreatestFunc;
 use datafusion::functions::core::least::LeastFunc;
 use datafusion::functions::string::overlay::OverlayFunc;
-use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl};
+use datafusion::logical_expr::{
+    AggregateUDF, AggregateUDFImpl, Expr as LogicalExpr, ScalarUDF, ScalarUDFImpl,
+};
 use datafusion::physical_expr::equivalence::{EquivalenceClass, EquivalenceGroup};
 use datafusion::physical_expr::{
     AcrossPartitions, ConstExpr, EquivalenceProperties, LexOrdering, LexRequirement, Partitioning,
@@ -33,7 +35,11 @@ use datafusion::physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion::physical_plan::sorts::partial_sort::PartialSortExec;
 use datafusion::physical_plan::work_table::WorkTableExec;
 use datafusion::physical_plan::{ExecutionPlan, PlanProperties};
+use datafusion::prelude::SessionContext;
 use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
+use datafusion_proto::logical_plan::from_proto::parse_expr as parse_logical_expr;
+use datafusion_proto::logical_plan::to_proto::serialize_expr as serialize_logical_expr;
+use datafusion_proto::logical_plan::DefaultLogicalExtensionCodec;
 use datafusion_proto::physical_plan::from_proto::{
     parse_physical_expr, parse_physical_sort_exprs, parse_protobuf_file_scan_config,
     parse_protobuf_file_scan_schema, parse_protobuf_partitioning,
@@ -44,7 +50,7 @@ use datafusion_proto::physical_plan::to_proto::{
 };
 use datafusion_proto::physical_plan::{AsExecutionPlan, PhysicalExtensionCodec};
 use datafusion_proto::protobuf::{
-    JoinType as ProtoJoinType, PhysicalPlanNode, PhysicalSortExprNode,
+    JoinType as ProtoJoinType, LogicalExprNode, PhysicalPlanNode, PhysicalSortExprNode,
 };
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use datafusion_spark::function::array::shuffle::SparkShuffle;
@@ -93,6 +99,7 @@ use sail_function::aggregate::skewness::SkewnessFunc;
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
 use sail_function::scalar::array::spark_array::SparkArray;
+use sail_function::scalar::array::spark_array_filter_expr::SparkArrayFilterExpr;
 use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
 use sail_function::scalar::array::spark_array_min_max::{ArrayMax, ArrayMin};
 use sail_function::scalar::array::spark_sequence::SparkSequence;
@@ -1466,6 +1473,32 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkDate(gen::SparkDateUdf { is_try }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkDate::new(is_try))));
             }
+            UdfKind::SparkArrayFilter(gen::SparkArrayFilterUdf {
+                lambda_expr,
+                element_type,
+                column_name,
+                index_column_name,
+                outer_columns,
+            }) => {
+                let lambda_expr = self.try_decode_logical_expr(&lambda_expr)?;
+                let element_type = self.try_decode_data_type(&element_type)?;
+                let outer_columns = outer_columns
+                    .into_iter()
+                    .map(|col| {
+                        let data_type = self.try_decode_data_type(&col.data_type)?;
+                        Ok((col.name, data_type))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                let udf = SparkArrayFilterExpr::with_outer_columns(
+                    lambda_expr,
+                    element_type,
+                    column_name,
+                    index_column_name,
+                    outer_columns,
+                );
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
         };
         match name {
             "array_item_with_position" => {
@@ -1786,6 +1819,29 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkDate>() {
             let is_try = func.is_try();
             UdfKind::SparkDate(gen::SparkDateUdf { is_try })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkArrayFilterExpr>() {
+            let lambda_expr = self.try_encode_logical_expr(func.lambda_expr())?;
+            let element_type = self.try_encode_data_type(func.element_type())?;
+            let column_name = func.column_name().to_string();
+            let index_column_name = func.index_column_name().map(|s| s.to_string());
+            let outer_columns = func
+                .outer_columns()
+                .iter()
+                .map(|(name, dt)| {
+                    let data_type = self.try_encode_data_type(dt)?;
+                    Ok(gen::OuterColumnRef {
+                        name: name.clone(),
+                        data_type,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            UdfKind::SparkArrayFilter(gen::SparkArrayFilterUdf {
+                lambda_expr,
+                element_type,
+                column_name,
+                index_column_name,
+                outer_columns,
+            })
         } else {
             return Ok(());
         };
@@ -2707,6 +2763,22 @@ impl RemoteExecutionCodec {
 
     fn try_encode_schema(&self, schema: &Schema) -> Result<Vec<u8>> {
         self.try_encode_message::<gen_datafusion_common::Schema>(schema.try_into()?)
+    }
+
+    fn try_decode_logical_expr(&self, buf: &[u8]) -> Result<LogicalExpr> {
+        let expr_node = self.try_decode_message::<LogicalExprNode>(buf)?;
+        let codec = DefaultLogicalExtensionCodec {};
+        // Use SessionContext as the function registry for parsing expressions
+        let ctx = SessionContext::new();
+        parse_logical_expr(&expr_node, &ctx.state(), &codec)
+            .map_err(|e| plan_datafusion_err!("failed to decode logical expr: {e}"))
+    }
+
+    fn try_encode_logical_expr(&self, expr: &LogicalExpr) -> Result<Vec<u8>> {
+        let codec = DefaultLogicalExtensionCodec {};
+        let expr_node = serialize_logical_expr(expr, &codec)
+            .map_err(|e| plan_datafusion_err!("failed to encode logical expr: {e}"))?;
+        self.try_encode_message(expr_node)
     }
 
     fn try_decode_message<M>(&self, buf: &[u8]) -> Result<M>
