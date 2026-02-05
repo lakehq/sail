@@ -807,10 +807,14 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             )
             .await
             .map_err(|e| match e {
-                apis::Error::ResponseError(apis::ResponseContent { status, .. }) if status == 404 => {
+                apis::Error::ResponseError(apis::ResponseContent { status, .. })
+                    if status == 404 =>
+                {
                     CatalogError::NotFound("table", format!("{database}.{table}"))
                 }
-                _ => CatalogError::External(format!("Failed to load table {database}.{table}: {e}")),
+                _ => {
+                    CatalogError::External(format!("Failed to load table {database}.{table}: {e}"))
+                }
             })?;
         self.load_table_result_to_status(table, database, result)
     }

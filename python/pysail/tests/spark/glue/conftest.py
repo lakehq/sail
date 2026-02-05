@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 from typing import TYPE_CHECKING
 
@@ -57,17 +58,14 @@ def glue_remote(moto_endpoint: str) -> Generator[str, None, None]:
     old_parallelism = os.environ.get("SAIL_EXECUTION__DEFAULT_PARALLELISM")
 
     os.environ["SAIL_CATALOG__LIST"] = catalogs_config
-    os.environ["AWS_ACCESS_KEY_ID"] = "testing"
-    os.environ["AWS_SECRET_ACCESS_KEY"] = "testing"
+    os.environ["AWS_ACCESS_KEY_ID"] = "testing"  # noqa: S105
+    os.environ["AWS_SECRET_ACCESS_KEY"] = "testing"  # noqa: S105
     os.environ["SAIL_EXECUTION__DEFAULT_PARALLELISM"] = "4"
-
-    print(f"\n[DEBUG] SAIL_CATALOG__LIST = {os.environ.get('SAIL_CATALOG__LIST')}")
 
     server = SparkConnectServer("127.0.0.1", 0)
     server.start(background=True)
     _, port = server.listening_address
     remote_url = f"sc://localhost:{port}"
-    print(f"[DEBUG] Glue server started at {remote_url}")
     yield remote_url
     server.stop()
 
@@ -93,23 +91,16 @@ def glue_remote(moto_endpoint: str) -> Generator[str, None, None]:
 @pytest.fixture(scope="module")
 def glue_spark(glue_remote: str) -> Generator[SparkSession, None, None]:
     """Create a Spark session connected to Sail with Glue catalog as default."""
-    # Use a unique app name to avoid session caching issues
     spark = SparkSession.builder.remote(glue_remote).appName("glue_test").getOrCreate()
     configure_spark_session(spark)
     patch_spark_connect_session(spark)
-
-    # Debug: show what catalogs are available
-    catalogs = spark.sql("SHOW CATALOGS").collect()
-    print(f"[DEBUG] Available catalogs: {catalogs}")
 
     # Create test database in the default Glue catalog
     spark.sql("CREATE DATABASE test_db")
 
     yield spark
 
-    # Cleanup
-    try:
+    # Cleanup - ignore errors during teardown
+    with contextlib.suppress(Exception):  # noqa: BLE001
         spark.sql("DROP DATABASE test_db CASCADE")
-    except Exception:
-        pass
     spark.stop()
