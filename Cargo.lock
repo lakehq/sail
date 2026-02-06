@@ -6782,7 +6782,7 @@ dependencies = [
 
 [[package]]
 name = "sail-ml"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "log",
  "sail-common",
