@@ -1,32 +1,28 @@
 use std::sync::Arc;
 
 use datafusion::common::Result;
-use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
+use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
-use sail_object_store::DynamicObjectStoreRegistry;
 
+use crate::runtime::RuntimeEnvFactory;
 use crate::session_factory::SessionFactory;
 
-pub struct WorkerSessionFactory<'a> {
-    runtime: &'a RuntimeHandle,
+pub struct WorkerSessionFactory {
+    runtime_env: RuntimeEnvFactory,
 }
 
-impl<'a> WorkerSessionFactory<'a> {
-    pub fn new(runtime: &'a RuntimeHandle) -> Self {
-        Self { runtime }
+impl WorkerSessionFactory {
+    pub fn new(config: Arc<AppConfig>, runtime: RuntimeHandle) -> Self {
+        let runtime_env = RuntimeEnvFactory::new(config, runtime.clone());
+        Self { runtime_env }
     }
 }
 
-impl<'a> SessionFactory<()> for WorkerSessionFactory<'a> {
+impl SessionFactory<()> for WorkerSessionFactory {
     fn create(&mut self, _info: ()) -> Result<SessionContext> {
-        let runtime = {
-            let registry = DynamicObjectStoreRegistry::new(self.runtime.clone());
-            let builder =
-                RuntimeEnvBuilder::default().with_object_store_registry(Arc::new(registry));
-            Arc::new(builder.build()?)
-        };
+        let runtime = self.runtime_env.create(Ok)?;
         let config = SessionConfig::default();
         let state = SessionStateBuilder::new()
             .with_config(config)

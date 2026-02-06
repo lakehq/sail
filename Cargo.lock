@@ -4763,9 +4763,9 @@ dependencies = [
 
 [[package]]
 name = "num-conv"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51d515d32fb182ee37cda2ccdcb92950d6a3c2893aa280e540671c2cd0f3b1d9"
+checksum = "cf97ec579c3c42f953ef76dbf8d55ac91fb219dde70e49aa4a6b7d74e9919050"
 
 [[package]]
 name = "num-integer"
@@ -6383,7 +6383,7 @@ checksum = "a50f4cf475b65d88e057964e0e9bb1f0aa9bbb2036dc65c64596b42932536984"
 
 [[package]]
 name = "sail-cache"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "datafusion",
@@ -6396,7 +6396,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "datafusion",
@@ -6413,7 +6413,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-glue"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -6428,7 +6428,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-iceberg"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -6449,7 +6449,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-memory"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "dashmap",
@@ -6459,7 +6459,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-onelake"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -6472,7 +6472,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-system"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "datafusion",
@@ -6486,7 +6486,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-unity"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -6511,7 +6511,7 @@ dependencies = [
 
 [[package]]
 name = "sail-cli"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "clap",
  "log",
@@ -6528,7 +6528,7 @@ dependencies = [
 
 [[package]]
 name = "sail-common"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -6549,7 +6549,7 @@ dependencies = [
 
 [[package]]
 name = "sail-common-datafusion"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -6580,7 +6580,7 @@ dependencies = [
 
 [[package]]
 name = "sail-data-source"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -6610,7 +6610,7 @@ dependencies = [
 
 [[package]]
 name = "sail-delta-lake"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "arrow-schema",
  "async-trait",
@@ -6644,7 +6644,7 @@ dependencies = [
 
 [[package]]
 name = "sail-execution"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "arrow-flight",
  "chrono",
@@ -6686,7 +6686,7 @@ dependencies = [
 
 [[package]]
 name = "sail-function"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -6720,7 +6720,7 @@ dependencies = [
 
 [[package]]
 name = "sail-gold-test"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "clap",
  "lazy_static",
@@ -6732,7 +6732,7 @@ dependencies = [
 
 [[package]]
 name = "sail-iceberg"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "apache-avro",
  "async-trait",
@@ -6760,14 +6760,14 @@ dependencies = [
 
 [[package]]
 name = "sail-logical-optimizer"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "datafusion",
 ]
 
 [[package]]
 name = "sail-logical-plan"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "comfy-table",
  "datafusion",
@@ -6790,7 +6790,7 @@ dependencies = [
 
 [[package]]
 name = "sail-object-store"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -6824,7 +6824,7 @@ dependencies = [
 
 [[package]]
 name = "sail-physical-optimizer"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "datafusion",
  "datafusion-physical-expr",
@@ -6834,7 +6834,7 @@ dependencies = [
 
 [[package]]
 name = "sail-physical-plan"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "datafusion",
  "datafusion-common",
@@ -6848,7 +6848,7 @@ dependencies = [
 
 [[package]]
 name = "sail-plan"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "arrow",
  "async-recursion",
@@ -6886,7 +6886,7 @@ dependencies = [
 
 [[package]]
 name = "sail-plan-lakehouse"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "datafusion",
@@ -6902,7 +6902,7 @@ dependencies = [
 
 [[package]]
 name = "sail-python"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "fastrace",
  "log",
@@ -6916,7 +6916,7 @@ dependencies = [
 
 [[package]]
 name = "sail-python-udf"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "arrow-pyarrow",
  "datafusion",
@@ -6935,7 +6935,7 @@ dependencies = [
 
 [[package]]
 name = "sail-server"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "axum",
  "fastrace",
@@ -6951,7 +6951,7 @@ dependencies = [
 
 [[package]]
 name = "sail-session"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -6996,7 +6996,7 @@ dependencies = [
 
 [[package]]
 name = "sail-spark-connect"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "async-stream",
  "datafusion",
@@ -7039,7 +7039,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-analyzer"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "chumsky",
@@ -7053,7 +7053,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-macro"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7062,7 +7062,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-parser"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "chumsky",
  "either",
@@ -7079,7 +7079,7 @@ dependencies = [
 
 [[package]]
 name = "sail-telemetry"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "datafusion",
  "env_logger",
@@ -7863,9 +7863,9 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.3.45"
+version = "0.3.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9e442fc33d7fdb45aa9bfeb312c095964abdf596f7567261062b2a7107aaabd"
+checksum = "743bd48c283afc0388f9b8827b976905fb217ad9e647fae3a379a9283c4def2c"
 dependencies = [
  "deranged",
  "itoa",
@@ -7878,15 +7878,15 @@ dependencies = [
 
 [[package]]
 name = "time-core"
-version = "0.1.7"
+version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b36ee98fd31ec7426d599183e8fe26932a8dc1fb76ddb6214d05493377d34ca"
+checksum = "7694e1cfe791f8d31026952abf09c69ca6f6fa4e1a1229e18988f06a04a12dca"
 
 [[package]]
 name = "time-macros"
-version = "0.2.25"
+version = "0.2.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71e552d1249bf61ac2a52db88179fd0673def1e1ad8243a00d9ec9ed71fee3dd"
+checksum = "2e70e4c5a0e0a8a4823ad65dfe1a6930e4f4d756dcd9dd7939022b5e8c501215"
 dependencies = [
  "num-conv",
  "time-core",
