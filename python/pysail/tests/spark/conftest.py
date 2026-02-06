@@ -35,7 +35,8 @@ def remote():
     if r := os.environ.get("SPARK_REMOTE"):
         yield r
     else:
-        from pysail.spark import SparkConnectServer
+        from pysail.spark import SparkConnectServer  # noqa: PLC0415
+
         server = SparkConnectServer("127.0.0.1", 0)
         server.start(background=True)
         _, port = server.listening_address
