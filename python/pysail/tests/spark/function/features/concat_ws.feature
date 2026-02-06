@@ -38,6 +38,15 @@ Feature: concat_ws function
         | result  |
         |         |
 
+    Scenario: concat_ws with null separator returns null
+      When query
+        """
+        SELECT concat_ws(NULL, 'a', 'b', 'c') AS result
+        """
+      Then query result
+        | result  |
+        | NULL    |
+
   Rule: concat_ws with array arguments
 
     Scenario: concat_ws with array argument

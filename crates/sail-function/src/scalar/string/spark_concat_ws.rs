@@ -62,13 +62,13 @@ impl ScalarUDFImpl for SparkConcatWs {
         // First argument is the delimiter
         let delimiter = match &args[0] {
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))) => s.clone(),
-            ColumnarValue::Scalar(ScalarValue::Utf8(None)) => {
+            ColumnarValue::Scalar(
+                ScalarValue::Null | ScalarValue::Utf8(None) | ScalarValue::LargeUtf8(None),
+            ) => {
+                // Null separator returns null
                 return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
             }
             ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(s))) => s.clone(),
-            ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)) => {
-                return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
-            }
             ColumnarValue::Array(arr) => {
                 // For array delimiter, we need to process row by row
                 return self.invoke_with_array_delimiter(arr, &args[1..]);
