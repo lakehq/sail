@@ -56,7 +56,7 @@ _February 6, 2026_
 ### Breaking Changes
 
 - Python 3.9 is no longer supported since this version has reached its end-of-life (EOL) ([#1302](https://github.com/lakehq/sail/pull/1302)).
-- The `SparkConnectServer.init_telemetry()` method was removed from the Python API ([#1302](https://github.com/lakehq/sail/pull/1302) and [#1319](https://github.com/lakehq/sail/pull/1319)). OpenTelemetry is now initialized automatically when the `pysail.spark` module is imported, and OpenTelemetry shutdown is registered as a Python `atexit` handler.
+- The `SparkConnectServer.init_telemetry()` method was removed from the Python API ([#1302](https://github.com/lakehq/sail/pull/1302) and [#1319](https://github.com/lakehq/sail/pull/1319)). OpenTelemetry is now initialized automatically when the first `SparkConnectServer` instance is created, and OpenTelemetry shutdown is registered as a Python `atexit` handler.
 - The `cluster.worker_stream_buffer` configuration option was renamed to `cluster.task_stream_buffer` ([#1309](https://github.com/lakehq/sail/pull/1309)).
 - The `cluster.job_output_buffer` configuration option was removed since it is no longer needed ([#1316](https://github.com/lakehq/sail/pull/1316)).
 
