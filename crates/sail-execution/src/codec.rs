@@ -85,6 +85,7 @@ use sail_delta_lake::physical_plan::{
     DeltaCastColumnExpr, DeltaCommitExec, DeltaDiscoveryExec, DeltaLogReplayExec,
     DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
 };
+use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
@@ -1802,6 +1803,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         let ExtendedAggregateUdf { udaf_kind } = udaf;
         match udaf_kind {
             Some(UdafKind::Standard(gen::StandardUdaf {})) => match name {
+                "histogram_numeric" => Ok(Arc::new(AggregateUDF::from(
+                    HistogramNumericFunction::new(),
+                ))),
                 "kurtosis" => Ok(Arc::new(AggregateUDF::from(KurtosisFunction::new()))),
                 "max_by" => Ok(Arc::new(AggregateUDF::from(MaxByFunction::new()))),
                 "min_by" => Ok(Arc::new(AggregateUDF::from(MinByFunction::new()))),
@@ -1888,7 +1892,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
-        let udaf_kind = if node.inner().as_any().is::<KurtosisFunction>()
+        let udaf_kind = if node.inner().as_any().is::<HistogramNumericFunction>()
+            || node.inner().as_any().is::<KurtosisFunction>()
             || node.inner().as_any().is::<MaxByFunction>()
             || node.inner().as_any().is::<MinByFunction>()
             || node.inner().as_any().is::<ModeFunction>()

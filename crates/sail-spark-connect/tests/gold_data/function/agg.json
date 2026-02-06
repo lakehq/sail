@@ -1389,7 +1389,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: histogram_numeric"
+        "success": "ok"
       }
     },
     {
