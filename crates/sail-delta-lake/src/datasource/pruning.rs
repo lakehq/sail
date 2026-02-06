@@ -270,10 +270,16 @@ impl AddStatsPruningStatistics {
     fn build_array(
         &self,
         column: &Column,
+        count_stat: bool,
         f: impl Fn(&Add, Option<&Stats>, &datafusion::arrow::datatypes::DataType) -> ScalarValue,
     ) -> Option<datafusion::arrow::array::ArrayRef> {
         let field = self.field_for(column)?;
-        let dt = field.data_type();
+        let field_dt = field.data_type();
+
+        // DataFusion expects null/row count stats as UInt64 arrays, independent of the
+        // corresponding column's logical data type.
+        let count_dt = datafusion::arrow::datatypes::DataType::UInt64;
+        let target_dt = if count_stat { &count_dt } else { field_dt };
 
         // Only compute arrays for columns that are actually referenced by the predicate. This
         // reduces repeated stats parsing work in `PruningPredicate`.
@@ -284,16 +290,16 @@ impl AddStatsPruningStatistics {
         let mut has_value = false;
         let mut scalars = Vec::with_capacity(self.adds.len());
         for (a, s) in self.adds.iter().zip(self.stats.iter()) {
-            let sv = f(a, s.as_ref(), dt);
-            let sv = Self::coerce_scalar_to_type(dt, sv);
+            let sv = f(a, s.as_ref(), field_dt);
+            let sv = Self::coerce_scalar_to_type(target_dt, sv);
 
             if sv.data_type() == datafusion::arrow::datatypes::DataType::Null
-                && *dt != datafusion::arrow::datatypes::DataType::Null
+                && *target_dt != datafusion::arrow::datatypes::DataType::Null
             {
                 return None;
             }
 
-            if !sv.is_null() && sv.data_type() != *dt {
+            if !sv.is_null() && sv.data_type() != *target_dt {
                 return None;
             }
 
@@ -307,8 +313,8 @@ impl AddStatsPruningStatistics {
 
         let array = ScalarValue::iter_to_array(scalars).ok()?;
 
-        if array.data_type() != dt {
-            return datafusion::arrow::compute::cast(&array, dt).ok();
+        if array.data_type() != target_dt {
+            return datafusion::arrow::compute::cast(&array, target_dt).ok();
         }
 
         Some(array)
@@ -317,7 +323,7 @@ impl AddStatsPruningStatistics {
 
 impl PruningStatistics for AddStatsPruningStatistics {
     fn min_values(&self, column: &Column) -> Option<datafusion::arrow::array::ArrayRef> {
-        self.build_array(column, |a, s, dt| {
+        self.build_array(column, false, |a, s, dt| {
             let name = column.name();
             if let Some(pv) = a.partition_values.get(name) {
                 return Self::scalar_from_partition_value(dt, pv);
@@ -332,7 +338,7 @@ impl PruningStatistics for AddStatsPruningStatistics {
     }
 
     fn max_values(&self, column: &Column) -> Option<datafusion::arrow::array::ArrayRef> {
-        self.build_array(column, |a, s, dt| {
+        self.build_array(column, false, |a, s, dt| {
             let name = column.name();
             if let Some(pv) = a.partition_values.get(name) {
                 return Self::scalar_from_partition_value(dt, pv);
@@ -351,7 +357,7 @@ impl PruningStatistics for AddStatsPruningStatistics {
     }
 
     fn null_counts(&self, column: &Column) -> Option<datafusion::arrow::array::ArrayRef> {
-        self.build_array(column, |a, s, _dt| {
+        self.build_array(column, true, |a, s, _dt| {
             let name = column.name();
             // Partition columns: all rows in file share same partition value.
             if let Some(pv) = a.partition_values.get(name) {
@@ -374,7 +380,7 @@ impl PruningStatistics for AddStatsPruningStatistics {
     }
 
     fn row_counts(&self, column: &Column) -> Option<datafusion::arrow::array::ArrayRef> {
-        self.build_array(column, |_a, s, _dt| {
+        self.build_array(column, true, |_a, s, _dt| {
             let Some(s) = s else {
                 return ScalarValue::UInt64(None);
             };
@@ -388,5 +394,89 @@ impl PruningStatistics for AddStatsPruningStatistics {
         _values: &std::collections::HashSet<ScalarValue>,
     ) -> Option<datafusion::arrow::array::BooleanArray> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{HashMap, HashSet};
+    use std::sync::Arc;
+
+    use datafusion::arrow::array::UInt64Array;
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::pruning::PruningStatistics;
+    use datafusion_common::Column;
+
+    use super::AddStatsPruningStatistics;
+    use crate::kernel::models::Add;
+
+    fn add_with_stats(stats_json: &str) -> Add {
+        Add {
+            path: "part-00000.parquet".to_string(),
+            partition_values: HashMap::new(),
+            size: 1,
+            modification_time: 0,
+            data_change: true,
+            stats: Some(stats_json.to_string()),
+            tags: None,
+            deletion_vector: None,
+            base_row_id: None,
+            default_row_commit_version: None,
+            clustering_provider: None,
+            commit_version: None,
+            commit_timestamp: None,
+        }
+    }
+
+    #[test]
+    fn row_counts_use_uint64_for_decimal_columns() {
+        let table_schema = Arc::new(Schema::new(vec![Field::new(
+            "dec_col",
+            DataType::Decimal128(7, 2),
+            true,
+        )]));
+        let adds = vec![add_with_stats(r#"{"numRecords":2382848}"#)];
+        let mut referenced_columns = HashSet::new();
+        referenced_columns.insert("dec_col".to_string());
+
+        let stats = AddStatsPruningStatistics::try_new(table_schema, adds, referenced_columns)
+            .expect("stats should parse");
+        let array = stats
+            .row_counts(&Column::from_name("dec_col"))
+            .expect("row count stats should be available");
+
+        assert_eq!(array.data_type(), &DataType::UInt64);
+        let values = array
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .expect("array should be UInt64");
+        assert_eq!(values.value(0), 2_382_848);
+    }
+
+    #[test]
+    fn null_counts_use_uint64_for_date_columns() {
+        let table_schema = Arc::new(Schema::new(vec![Field::new(
+            "date_col",
+            DataType::Date32,
+            true,
+        )]));
+        let adds = vec![add_with_stats(
+            r#"{"numRecords":10,"nullCount":{"date_col":0}}"#,
+        )];
+        let mut referenced_columns = HashSet::new();
+        referenced_columns.insert("date_col".to_string());
+
+        let stats = AddStatsPruningStatistics::try_new(table_schema, adds, referenced_columns)
+            .expect("stats should parse");
+        let array = stats
+            .null_counts(&Column::from_name("date_col"))
+            .expect("null count stats should be available");
+
+        assert_eq!(array.data_type(), &DataType::UInt64);
+        let values = array
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .expect("array should be UInt64");
+        assert_eq!(values.value(0), 0);
     }
 }
