@@ -7,7 +7,7 @@ use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
-use sail_sql_analyzer::parser::{parse_date, parse_timestamp};
+use sail_sql_analyzer::parser::{parse_date, parse_time, parse_timestamp};
 
 use crate::config::DefaultTimestampType;
 use crate::error::PlanResult;
@@ -78,6 +78,26 @@ impl PlanResolver<'_> {
         let literal = spec::Literal::TimestampMicrosecond {
             microseconds: Some(datetime.timestamp_micros()),
             timestamp_type,
+        };
+        self.resolve_expression_literal(literal, state)
+    }
+
+    pub(super) fn resolve_expression_time(
+        &self,
+        value: String,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        // parse_time already validates hour (0-23), minute/second (0-59) internally
+        let time = parse_time(&value)?;
+
+        // Convert to microseconds since midnight
+        // Formula: (hour * 3600 + minute * 60 + second) * 1_000_000 + nanoseconds / 1_000
+        let total_seconds =
+            (time.hour as i64 * 3600) + (time.minute as i64 * 60) + (time.second as i64);
+        let microseconds = total_seconds * 1_000_000 + (time.nanoseconds as i64 / 1_000);
+
+        let literal = spec::Literal::Time64Microsecond {
+            microseconds: Some(microseconds),
         };
         self.resolve_expression_literal(literal, state)
     }
