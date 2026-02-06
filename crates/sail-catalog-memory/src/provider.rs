@@ -160,6 +160,11 @@ impl CatalogProvider for MemoryCatalogProvider {
             options,
             properties,
         } = options;
+        if partition_by.iter().any(|f| f.transform.is_some()) {
+            return Err(CatalogError::NotSupported(
+                "partition transforms are not supported by memory catalog".to_string(),
+            ));
+        }
         let mut db = self
             .databases
             .get_mut(database)
@@ -184,7 +189,9 @@ impl CatalogProvider for MemoryCatalogProvider {
                     default,
                     generated_always_as,
                 } = x;
-                let is_partition = partition_by.iter().any(|x| x.eq_ignore_ascii_case(&name));
+                let is_partition = partition_by
+                    .iter()
+                    .any(|x| x.column.eq_ignore_ascii_case(&name));
                 let is_bucket = bucket_by
                     .as_ref()
                     .is_some_and(|b| b.columns.iter().any(|x| x.eq_ignore_ascii_case(&name)));
@@ -211,7 +218,7 @@ impl CatalogProvider for MemoryCatalogProvider {
                 constraints,
                 location,
                 format,
-                partition_by,
+                partition_by: partition_by.into_iter().map(|f| f.column).collect(),
                 sort_by,
                 bucket_by,
                 options,

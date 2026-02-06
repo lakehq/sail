@@ -9,6 +9,7 @@ use datafusion_spark::function::math::expr_fn as math_fn;
 use half::f16;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::error::generic_exec_err;
+use sail_function::scalar::datetime::negate_duration::NegateDuration;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
 use sail_function::scalar::math::random::Random;
@@ -100,7 +101,14 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
         function_context,
     } = input;
     if arguments.len() < 2 {
-        Ok(Expr::Negative(Box::new(arguments.one()?)))
+        let arg = arguments.one()?;
+        // DataFusion's Negative doesn't support Duration types, so we use a custom UDF
+        let arg_type = arg.get_type(function_context.schema);
+        if matches!(arg_type, Ok(DataType::Duration(_))) {
+            Ok(ScalarUDF::from(NegateDuration::new()).call(vec![arg]))
+        } else {
+            Ok(Expr::Negative(Box::new(arg)))
+        }
     } else {
         let (left, right) = arguments.two()?;
         let (left_type, right_type) = (

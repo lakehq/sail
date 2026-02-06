@@ -11,6 +11,8 @@ use crate::error::{CommonError, CommonResult};
 
 const APP_CONFIG: &str = include_str!("application.yaml");
 
+pub const SAIL_ENV_VAR_PREFIX: &str = "SAIL_";
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct AppConfig {
     pub mode: ExecutionMode,
@@ -56,7 +58,7 @@ impl AppConfig {
         //  This causes: `Error: invalid argument: duplicate field...`
         Figment::from(ConfigDefinition::new(APP_CONFIG))
             .merge(InternalConfigPlaceholder)
-            .merge(Env::prefixed("SAIL_").map(|p| p.as_str().replace("__", ".").into()))
+            .merge(Env::prefixed(SAIL_ENV_VAR_PREFIX).map(|p| p.as_str().replace("__", ".").into()))
             .extract()
             .map_err(|e| CommonError::InvalidArgument(e.to_string()))
     }
@@ -83,6 +85,65 @@ pub enum ExecutionMode {
 pub struct RuntimeConfig {
     pub stack_size: usize,
     pub enable_secondary: bool,
+    pub memory_pool: MemoryPoolConfig,
+    pub temporary_files: TemporaryFilesConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(from = "memory_pool::MemoryPool")]
+pub enum MemoryPoolConfig {
+    Unbounded,
+    Greedy(GreedyMemoryPoolConfig),
+    Fair(FairMemoryPoolConfig),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GreedyMemoryPoolConfig {
+    pub max_size: usize,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FairMemoryPoolConfig {
+    pub max_size: usize,
+}
+
+mod memory_pool {
+    use serde::Deserialize;
+
+    #[derive(Debug, Clone, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum Type {
+        Unbounded,
+        Greedy,
+        Fair,
+    }
+
+    #[derive(Debug, Clone, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct MemoryPool {
+        r#type: Type,
+        greedy: super::GreedyMemoryPoolConfig,
+        fair: super::FairMemoryPoolConfig,
+    }
+
+    impl From<MemoryPool> for super::MemoryPoolConfig {
+        fn from(value: MemoryPool) -> Self {
+            match value.r#type {
+                Type::Unbounded => super::MemoryPoolConfig::Unbounded,
+                Type::Greedy => super::MemoryPoolConfig::Greedy(value.greedy),
+                Type::Fair => super::MemoryPoolConfig::Fair(value.fair),
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TemporaryFilesConfig {
+    pub paths: Vec<String>,
+    pub max_size: usize,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -105,11 +166,10 @@ pub struct ClusterConfig {
     pub worker_heartbeat_timeout_secs: u64,
     pub worker_launch_timeout_secs: u64,
     pub worker_task_slots: usize,
-    pub worker_stream_buffer: usize,
     pub task_launch_timeout_secs: u64,
+    pub task_stream_buffer: usize,
     pub task_stream_creation_timeout_secs: u64,
     pub task_max_attempts: usize,
-    pub job_output_buffer: usize,
     pub rpc_retry_strategy: RetryStrategy,
 }
 
@@ -270,7 +330,8 @@ pub enum CacheType {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CatalogConfig {
-    pub default_catalog: String,
+    #[serde(deserialize_with = "deserialize_non_empty_string")]
+    pub default_catalog: Option<String>,
     pub default_database: Vec<String>,
     pub global_temporary_database: Vec<String>,
     pub list: Vec<CatalogType>,
@@ -372,7 +433,7 @@ impl ClusterConfigEnv {
         WORKER_LISTEN_HOST,
         WORKER_EXTERNAL_HOST,
         WORKER_HEARTBEAT_INTERVAL_SECS,
-        WORKER_STREAM_BUFFER,
+        TASK_STREAM_BUFFER,
         TASK_STREAM_CREATION_TIMEOUT_SECS,
         RPC_RETRY_STRATEGY,
     }

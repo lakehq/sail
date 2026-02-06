@@ -11,6 +11,18 @@
     - execution.operator.id
     - execution.operator.name
 
+- name: execution.output_batch_count
+  description: The total number of output batches.
+  type: Gauge
+  value_type: u64
+  attributes:
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
+
 - name: execution.output_row_count
   description: The total number of output rows.
   type: Gauge
@@ -86,6 +98,21 @@
     - execution.operator.id
     - execution.operator.name
 
+- name: execution.expression_evaluation_time
+  description: The elapsed compute time for evaluating an expression.
+  unit: s
+  type: Gauge
+  value_type: f64
+  attributes:
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
+    - execution.expression.id
+    - execution.expression.name
+
 - name: execution.filter.input_row_count
   description: |
     The number of input rows for the filter operation.
@@ -151,6 +178,20 @@
     - execution.operator.id
     - execution.operator.name
 
+- name: execution.join.build_side_match_count
+  description: |
+    The number of times a build-side row is matched by a probe-side row.
+    A build-side row matched by multiple probe-side rows is counted multiple times.
+  type: Gauge
+  value_type: u64
+  attributes:
+    - execution.job.id
+    - execution.stage
+    - execution.partition
+    - execution.attempt
+    - execution.operator.id
+    - execution.operator.name
+
 - name: execution.join.build_side_memory_used
   description: The amount of memory used by the build side of a build-probe join.
   unit: byte
@@ -188,11 +229,14 @@
     - execution.operator.id
     - execution.operator.name
 
-- name: execution.join.operation_time
-  description: The time taken to perform the join operation.
-  unit: s
+- name: execution.join.probe_side_matched_row_count
+  description: |
+    The number of rows in the probe side that matches at least
+    one row in the build side of a build-probe join.
+    Each probe-side row is counted only once even if it matches
+    multiple build-side rows.
   type: Gauge
-  value_type: f64
+  value_type: u64
   attributes:
     - execution.job.id
     - execution.stage
@@ -201,10 +245,11 @@
     - execution.operator.id
     - execution.operator.name
 
-- name: execution.join.output_batch_count
-  description: The number of output batches from the join operation.
+- name: execution.join.operation_time
+  description: The time taken to perform the join operation.
+  unit: s
   type: Gauge
-  value_type: u64
+  value_type: f64
   attributes:
     - execution.job.id
     - execution.stage

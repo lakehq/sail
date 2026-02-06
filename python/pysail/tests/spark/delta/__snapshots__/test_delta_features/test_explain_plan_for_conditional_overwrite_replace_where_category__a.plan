@@ -3,21 +3,24 @@ DeltaCommitExec(table_path=file://<tmp>/delta_overwrite/)
   CoalescePartitionsExec
     UnionExec
       DeltaWriterExec(table_path=file://<tmp>/delta_overwrite/)
-        CoalescePartitionsExec
-          UnionExec
-            ProjectionExec: expr=[CAST(column1@0 AS Int64) as id, column2@1 as category, CAST(column3@2 AS Int64) as value]
-              DataSourceExec: partitions=1, partition_sizes=[1]
-            FilterExec: NOT category@1 = A
-              DeltaScanByAddsExec(table_path=file://<tmp>/delta_overwrite/)
-                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                  DeltaDiscoveryExec(table_path=file://<tmp>/delta_overwrite/)
-                    CoalescePartitionsExec
-                      DeltaLogScanExec(table_path=file://<tmp>/delta_overwrite/, version=0)
+        UnionExec
+          ProjectionExec: expr=[CAST(column1@0 AS Int64) as id, column2@1 as category, CAST(column3@2 AS Int64) as value]
+            DataSourceExec: partitions=1, partition_sizes=[1]
+          FilterExec: NOT category@1 = A
+            DeltaScanByAddsExec(table_path=file://<tmp>/delta_overwrite/)
+              DeltaDiscoveryExec(table_path=file://<tmp>/delta_overwrite/)
+                DeltaLogReplayExec(table_path=file://<tmp>/delta_overwrite/, version=0)
+                  SortExec: expr=[__sail_delta_replay_path@6 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST], preserve_partitioning=[true]
+                    RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
+                      ProjectionExec: expr=[CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END as __sail_file_path, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END ELSE 0 END as size_bytes, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as modification_time, __sail_delta_log_version@2 as _commit_version, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as _commit_timestamp, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, stats) END as stats_json, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END ELSE CASE WHEN remove@1 IS NOT NULL THEN get_field(remove@1, path) END END as __sail_delta_replay_path, remove@1 IS NOT NULL as __sail_delta_is_remove, __sail_delta_log_version@2 as __sail_delta_log_version]
                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                          DataSourceExec: file_groups={1 group: [[<tmp>/delta_overwrite/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+                          DataSourceExec: file_groups={1 group: [[<tmp>/delta_overwrite/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, __sail_delta_log_version], file_type=parquet
       DeltaRemoveActionsExec
-        DeltaDiscoveryExec(table_path=file://<tmp>/delta_overwrite/)
-          CoalescePartitionsExec
-            DeltaLogScanExec(table_path=file://<tmp>/delta_overwrite/, version=0)
-              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                DataSourceExec: file_groups={1 group: [[<tmp>/delta_overwrite/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+        CoalescePartitionsExec
+          DeltaDiscoveryExec(table_path=file://<tmp>/delta_overwrite/)
+            DeltaLogReplayExec(table_path=file://<tmp>/delta_overwrite/, version=0)
+              SortExec: expr=[__sail_delta_replay_path@6 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST], preserve_partitioning=[true]
+                RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
+                  ProjectionExec: expr=[CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END as __sail_file_path, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END ELSE 0 END as size_bytes, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as modification_time, __sail_delta_log_version@2 as _commit_version, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as _commit_timestamp, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, stats) END as stats_json, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END ELSE CASE WHEN remove@1 IS NOT NULL THEN get_field(remove@1, path) END END as __sail_delta_replay_path, remove@1 IS NOT NULL as __sail_delta_is_remove, __sail_delta_log_version@2 as __sail_delta_log_version]
+                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                      DataSourceExec: file_groups={1 group: [[<tmp>/delta_overwrite/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, __sail_delta_log_version], file_type=parquet

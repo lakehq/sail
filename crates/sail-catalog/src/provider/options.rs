@@ -21,6 +21,27 @@ pub struct DropDatabaseOptions {
     pub cascade: bool,
 }
 
+// TODO: Upstream changes in sail-plan are needed to expose partition transforms to users
+// via SQL or DataFrame APIs.
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Default)]
+pub enum PartitionTransform {
+    #[default]
+    Identity,
+    Year,
+    Month,
+    Day,
+    Hour,
+    Bucket(u32),
+    Truncate(u32),
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd)]
+pub struct CatalogPartitionField {
+    pub column: String,
+    pub transform: Option<PartitionTransform>,
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd)]
 pub struct CreateTableOptions {
     pub columns: Vec<CreateTableColumnOptions>,
@@ -28,7 +49,7 @@ pub struct CreateTableOptions {
     pub constraints: Vec<CatalogTableConstraint>,
     pub location: Option<String>,
     pub format: String,
-    pub partition_by: Vec<String>,
+    pub partition_by: Vec<CatalogPartitionField>,
     pub sort_by: Vec<CatalogTableSort>,
     pub bucket_by: Option<CatalogTableBucketBy>,
     pub if_not_exists: bool,

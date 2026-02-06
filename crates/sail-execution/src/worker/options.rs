@@ -19,7 +19,7 @@ pub struct WorkerOptions {
     pub worker_external_host: String,
     pub worker_external_port: u16,
     pub worker_heartbeat_interval: Duration,
-    pub worker_stream_buffer: usize,
+    pub task_stream_buffer: usize,
     pub task_stream_creation_timeout: Duration,
     pub rpc_retry_strategy: RetryStrategy,
     pub runtime: RuntimeHandle,
@@ -44,7 +44,7 @@ impl WorkerOptions {
             worker_heartbeat_interval: Duration::from_secs(
                 config.cluster.worker_heartbeat_interval_secs,
             ),
-            worker_stream_buffer: config.cluster.worker_stream_buffer,
+            task_stream_buffer: config.cluster.task_stream_buffer,
             task_stream_creation_timeout: Duration::from_secs(
                 config.cluster.task_stream_creation_timeout_secs,
             ),
@@ -70,7 +70,7 @@ impl WorkerOptions {
             worker_external_host: "127.0.0.1".to_string(),
             worker_external_port: 0,
             worker_heartbeat_interval: options.worker_heartbeat_interval,
-            worker_stream_buffer: options.worker_stream_buffer,
+            task_stream_buffer: options.task_stream_buffer,
             task_stream_creation_timeout: options.task_stream_creation_timeout,
             rpc_retry_strategy: options.rpc_retry_strategy,
             runtime: runtime.clone(),

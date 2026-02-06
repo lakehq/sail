@@ -148,6 +148,11 @@ pub fn encode_actions(actions: Vec<ExecAction>) -> Result<RecordBatch> {
         .map_err(|e| DataFusionError::External(Box::new(e)))
 }
 
+pub fn encode_add_actions(adds: Vec<Add>) -> Result<RecordBatch> {
+    let actions: Vec<ExecAction> = adds.into_iter().map(ExecAction::from).collect();
+    encode_actions(actions)
+}
+
 impl From<Add> for ExecAction {
     fn from(add: Add) -> Self {
         ExecAction::Add(AddAction {
@@ -255,6 +260,8 @@ pub fn decode_actions_and_meta_from_batch(
                     base_row_id: None,
                     default_row_commit_version: None,
                     clustering_provider: None,
+                    commit_version: None,
+                    commit_timestamp: None,
                 }));
             }
             ExecAction::Remove(r) => {
@@ -321,6 +328,8 @@ mod tests {
             base_row_id: None,
             default_row_commit_version: None,
             clustering_provider: None,
+            commit_version: None,
+            commit_timestamp: None,
         }];
 
         let exec_actions: Vec<ExecAction> = adds.into_iter().map(|add| add.into()).collect();
@@ -345,6 +354,8 @@ mod tests {
             base_row_id: None,
             default_row_commit_version: None,
             clustering_provider: None,
+            commit_version: None,
+            commit_timestamp: None,
         }];
         let removes = vec![Remove {
             path: "a.parquet".to_string(),

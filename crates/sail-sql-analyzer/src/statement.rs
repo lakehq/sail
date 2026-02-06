@@ -47,6 +47,16 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
+        Statement::UseCatalog {
+            r#use: _,
+            catalog: _,
+            name,
+        } => {
+            let node = spec::CommandNode::SetCurrentCatalog {
+                catalog: name.value.into(),
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::UseDatabase {
             r#use: _,
             database: _,
@@ -118,6 +128,17 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 .map(|(_, pattern)| from_ast_string(pattern))
                 .transpose()?;
             let node = spec::CommandNode::ListDatabases { qualifier, pattern };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::ShowCatalogs {
+            show: _,
+            catalogs: _,
+            like,
+        } => {
+            let pattern = like
+                .map(|(_, pattern)| from_ast_string(pattern))
+                .transpose()?;
+            let node = spec::CommandNode::ListCatalogs { pattern };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
         Statement::CreateTable {

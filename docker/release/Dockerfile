@@ -4,7 +4,7 @@ ARG RUST_PROFILE=release
 ARG RUSTFLAGS=""
 ARG PYSPARK_VERSION=4.1.1
 
-FROM python:3.11-slim AS builder
+FROM python:3.14-slim AS builder
 
 ARG RELEASE_TAG
 ARG RUST_VERSION
@@ -45,11 +45,11 @@ RUN --mount=type=cache,target=/root/.cargo/registry/ \
     cargo build -p sail-cli --profile ${RUST_PROFILE} --bins && \
     cp /app/target/${RUST_TARGET_SUBDIR}/sail /usr/local/bin
 
-FROM python:3.11-slim
+FROM python:3.14-slim
 
 ARG PYSPARK_VERSION
 
-RUN python3 -m pip install --no-cache-dir "pyspark[connect]==${PYSPARK_VERSION}"
+RUN python3 -m pip install --no-cache-dir "pyspark-client==${PYSPARK_VERSION}"
 
 COPY --from=builder /usr/local/bin/sail /usr/local/bin
 

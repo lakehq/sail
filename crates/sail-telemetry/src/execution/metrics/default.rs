@@ -1,4 +1,4 @@
-use datafusion::physical_plan::metrics::MetricValue;
+use datafusion::physical_plan::metrics::{Label, MetricValue};
 use datafusion::physical_plan::Metric;
 
 use crate::common::KeyValue;
@@ -95,23 +95,23 @@ impl MetricEmitter for DefaultMetricEmitter {
                     )
                     .emit();
             }
-            MetricValue::OutputBatches(_count) => {
-                // OutputBatches is now tracked as part of BaselineMetrics
-                // This is already handled by RecordOutput trait, so we just acknowledge it
-                // without incrementing unknown metric count
+            MetricValue::OutputBatches(count) => {
+                registry
+                    .execution_output_batch_count
+                    .recorder(count)
+                    .with_attributes(attributes)
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
+                    .emit();
             }
-            MetricValue::Count { .. } | MetricValue::Gauge { .. } | MetricValue::Time { .. } => {
-                // These are legitimate operator-specific metrics (like "build_time", "join_time", etc.)
-                // that are emitted by DataFusion operators. We don't handle them explicitly
-                // but they're not "unknown" in the sense that they're expected.
-                // Let specific emitters handle the ones they care about.
-            }
-            MetricValue::Ratio { .. } => {
-                // Ratio metrics are legitimate operator-specific metrics (e.g. selectivity,
-                // probe_hit_rate, avg_fanout). Specific emitters can map ones they care about.
-                // We intentionally do not treat them as "unknown".
-            }
-            MetricValue::PruningMetrics { .. } | MetricValue::Custom { .. } => {
+            MetricValue::Count { .. }
+            | MetricValue::Gauge { .. }
+            | MetricValue::Time { .. }
+            | MetricValue::Ratio { .. }
+            | MetricValue::PruningMetrics { .. }
+            | MetricValue::Custom { .. } => {
                 // These metric types are not yet handled by any emitter.
                 #[cfg(debug_assertions)]
                 registry.execution_unknown_metric_count.adder(1u64).emit();
@@ -126,31 +126,38 @@ impl MetricEmitter for DefaultMetricEmitter {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
+#[derive(Default)]
+pub struct LabelExtractor {
+    extractors: Vec<(&'static str, &'static str)>,
+}
 
-    use datafusion::arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::common::Result;
-    use datafusion::physical_expr::expressions::Column;
-    use datafusion::physical_plan::empty::EmptyExec;
-    use datafusion::physical_plan::projection::ProjectionExec;
-    use datafusion::physical_plan::PhysicalExpr;
+impl LabelExtractor {
+    pub fn new() -> Self {
+        Self::default()
+    }
 
-    use crate::execution::metrics::testing::MetricEmitterTester;
+    pub fn with_extractor(mut self, from: &'static str, to: &'static str) -> Self {
+        self.extractors.push((from, to));
+        self
+    }
 
-    #[tokio::test]
-    async fn test_projection_metrics() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, true)]));
-        let plan = Arc::new(EmptyExec::new(schema));
-        let plan = Arc::new(ProjectionExec::try_new(
-            vec![(
-                Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
-                "b".to_string(),
-            )],
-            plan,
-        )?);
-
-        MetricEmitterTester::new().with_plan(plan).run().await
+    pub fn extract(&self, labels: &[Label], registry: &MetricRegistry) -> Vec<KeyValue> {
+        #[cfg(not(debug_assertions))]
+        let _ = registry;
+        let mut attributes = vec![];
+        'outer: for label in labels {
+            for (from, to) in &self.extractors {
+                if label.name() == *from {
+                    attributes.push((*to, label.value().to_string().into()));
+                    continue 'outer;
+                }
+            }
+            #[cfg(debug_assertions)]
+            registry
+                .execution_unknown_metric_label_count
+                .adder(1u64)
+                .emit();
+        }
+        attributes
     }
 }

@@ -7,7 +7,7 @@ use std::time::Duration;
 use datafusion::common::runtime::set_join_set_tracer;
 use fastrace::collector::{Config, Reporter, SpanRecord};
 use fastrace_opentelemetry::OpenTelemetryReporter;
-use log::Log;
+use log::{debug, Log};
 use opentelemetry::metrics::Meter;
 use opentelemetry::{global, InstrumentationScope};
 use opentelemetry_appender_log::OpenTelemetryLogBridge;
@@ -58,6 +58,7 @@ pub fn init_telemetry(config: &TelemetryConfig, resource: ResourceOptions) -> Te
                 .and_then(|()| init_datafusion_telemetry())
             {
                 Ok(()) => {
+                    debug!("OpenTelemetry initialized");
                     *status = TelemetryStatus::Initialized(state);
                     Ok(())
                 }
@@ -202,6 +203,7 @@ fn init_datafusion_telemetry() -> TelemetryResult<()> {
 }
 
 pub fn shutdown_telemetry() {
+    debug!("Shutting down OpenTelemetry...");
     fastrace::flush();
     if let Ok(mut status) = TELEMETRY_STATUS.lock() {
         if let TelemetryStatus::Initialized(ref state) = *status {

@@ -53,7 +53,7 @@ def dataframe_data_matches(datatable, df):
 
     assert len(actual_data) == len(expected_rows), f"Expected {len(expected_rows)} rows, got {len(actual_data)}"
 
-    for i, (expected, actual) in enumerate(zip(expected_rows, actual_data)):
+    for i, (expected, actual) in enumerate(zip(expected_rows, actual_data, strict=True)):
         assert expected == actual, f"Row {i}: expected {expected}, got {actual}"
 
 

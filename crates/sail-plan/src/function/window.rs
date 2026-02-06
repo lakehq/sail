@@ -266,18 +266,24 @@ fn count_if(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         function_context: _,
     } = input;
     match arguments.len() {
-        1 => Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
-            fun: WindowFunctionDefinition::AggregateUDF(count::count_udaf()),
-            params: WindowFunctionParams {
-                args: arguments,
-                partition_by,
-                order_by,
-                window_frame,
-                filter: None,
-                null_treatment: get_null_treatment(ignore_nulls),
-                distinct,
-            },
-        }))),
+        1 => {
+            let filter = arguments
+                .first()
+                .ok_or_else(|| PlanError::invalid("`count_if` requires 1 argument"))?
+                .clone();
+            Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
+                fun: WindowFunctionDefinition::AggregateUDF(count::count_udaf()),
+                params: WindowFunctionParams {
+                    args: vec![lit(0)],
+                    partition_by,
+                    order_by,
+                    window_frame,
+                    filter: Some(Box::new(filter)),
+                    null_treatment: get_null_treatment(ignore_nulls),
+                    distinct,
+                },
+            })))
+        }
         _ => Err(PlanError::invalid("`count_if` requires 1 argument")),
     }
 }

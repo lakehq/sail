@@ -284,22 +284,23 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 
 fn count_if(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     match input.arguments.len() {
-        1 => Ok(expr::Expr::AggregateFunction(AggregateFunction {
-            func: count::count_udaf(),
-            params: AggregateFunctionParams {
-                args: input.arguments.clone(),
-                distinct: input.distinct,
-                order_by: input.order_by,
-                filter: Some(Box::new(
-                    input
-                        .arguments
-                        .first()
-                        .ok_or_else(|| PlanError::invalid("`count_if` requires 1 argument"))?
-                        .clone(),
-                )),
-                null_treatment: get_null_treatment(input.ignore_nulls),
-            },
-        })),
+        1 => {
+            let filter = input
+                .arguments
+                .first()
+                .ok_or_else(|| PlanError::invalid("`count_if` requires 1 argument"))?
+                .clone();
+            Ok(expr::Expr::AggregateFunction(AggregateFunction {
+                func: count::count_udaf(),
+                params: AggregateFunctionParams {
+                    args: vec![lit(0)],
+                    distinct: input.distinct,
+                    order_by: input.order_by,
+                    filter: Some(Box::new(filter)),
+                    null_treatment: get_null_treatment(input.ignore_nulls),
+                },
+            }))
+        }
         _ => Err(PlanError::invalid("`count_if` requires 1 argument")),
     }
 }
