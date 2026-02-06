@@ -130,6 +130,19 @@ impl PlanResolver<'_> {
             }
         }
 
+        Self::apply_sample_to_plan(input, lower_bound, upper_bound, with_replacement, seed, state)
+    }
+
+    /// Apply sampling to an existing LogicalPlan.
+    /// This is used by both `resolve_query_sample` and TABLESAMPLE clause handling.
+    pub(super) fn apply_sample_to_plan(
+        input: LogicalPlan,
+        lower_bound: f64,
+        upper_bound: f64,
+        with_replacement: bool,
+        seed: i64,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
         let rand_column_name: String = state.register_field_name("rand_value");
         let rand_expr: Expr = if with_replacement {
             Expr::ScalarFunction(ScalarFunction {

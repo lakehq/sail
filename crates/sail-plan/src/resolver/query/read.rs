@@ -6,6 +6,7 @@ use datafusion::datasource::{provider_as_source, TableProvider};
 use datafusion_common::{DFSchema, TableReference};
 use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::{LogicalPlan, TableScan, UNNAMED_TABLE};
+use rand::{rng, Rng};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::TableKind;
@@ -37,13 +38,15 @@ impl PlanResolver<'_> {
         if temporal.is_some() {
             return Err(PlanError::todo("read table AS OF clause"));
         }
-        if sample.is_some() {
-            return Err(PlanError::todo("read table TABLESAMPLE clause"));
-        }
 
         let table_reference = self.resolve_table_reference(&name)?;
         if let Some(cte) = state.get_cte(&table_reference) {
-            return Ok(cte.clone());
+            let plan = cte.clone();
+            return if let Some(table_sample) = sample {
+                self.apply_table_sample(plan, table_sample, state)
+            } else {
+                Ok(plan)
+            };
         }
 
         let reference: Vec<String> = name.clone().into();
@@ -100,7 +103,107 @@ impl PlanResolver<'_> {
                 rename_logical_plan(plan.as_ref().clone(), &names)?
             }
         };
-        Ok(plan)
+
+        if let Some(table_sample) = sample {
+            self.apply_table_sample(plan, table_sample, state)
+        } else {
+            Ok(plan)
+        }
+    }
+
+    /// Apply TABLESAMPLE clause to a LogicalPlan
+    fn apply_table_sample(
+        &self,
+        plan: LogicalPlan,
+        table_sample: spec::TableSample,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let spec::TableSample { method, seed } = table_sample;
+
+        // Convert TableSampleMethod to sample bounds
+        let (lower_bound, upper_bound) = match method {
+            spec::TableSampleMethod::Percent { value } => {
+                // Evaluate the percent expression to get a literal value
+                let percent = self.evaluate_sample_expr_to_f64(&value)?;
+                if !(0.0..=100.0).contains(&percent) {
+                    return Err(PlanError::invalid(format!(
+                        "TABLESAMPLE percent must be between 0 and 100, got {percent}"
+                    )));
+                }
+                (0.0, percent / 100.0)
+            }
+            spec::TableSampleMethod::Rows { value: _ } => {
+                // ROWS sampling is complex - it requires knowing total row count
+                // For now, return a todo error
+                return Err(PlanError::todo("TABLESAMPLE with ROWS"));
+            }
+            spec::TableSampleMethod::Bucket {
+                numerator,
+                denominator,
+            } => {
+                if numerator == 0 || numerator > denominator {
+                    return Err(PlanError::invalid(format!(
+                        "invalid TABLESAMPLE bucket: {numerator} out of {denominator}"
+                    )));
+                }
+                let fraction = 1.0 / denominator as f64;
+                let lower = (numerator - 1) as f64 * fraction;
+                let upper = numerator as f64 * fraction;
+                (lower, upper)
+            }
+        };
+
+        // Use random seed if not provided
+        let seed: i64 = seed.unwrap_or_else(|| {
+            let mut r = rng();
+            r.random::<i64>()
+        });
+
+        // TABLESAMPLE is without replacement
+        Self::apply_sample_to_plan(plan, lower_bound, upper_bound, false, seed, state)
+    }
+
+    /// Evaluate a sample expression to get a float value
+    fn evaluate_sample_expr_to_f64(&self, expr: &spec::Expr) -> PlanResult<f64> {
+        match expr {
+            spec::Expr::Literal(lit) => match lit {
+                spec::Literal::Int8 { value: Some(i) } => Ok(*i as f64),
+                spec::Literal::Int16 { value: Some(i) } => Ok(*i as f64),
+                spec::Literal::Int32 { value: Some(i) } => Ok(*i as f64),
+                spec::Literal::Int64 { value: Some(l) } => Ok(*l as f64),
+                spec::Literal::Float32 { value: Some(f) } => Ok(*f as f64),
+                spec::Literal::Float64 { value: Some(d) } => Ok(*d),
+                spec::Literal::Decimal128 {
+                    value: Some(value),
+                    scale,
+                    ..
+                } => {
+                    let divisor = 10_f64.powi(*scale as i32);
+                    Ok(*value as f64 / divisor)
+                }
+                spec::Literal::Decimal256 {
+                    value: Some(value),
+                    scale,
+                    ..
+                } => {
+                    let divisor = 10_f64.powi(*scale as i32);
+                    // i256 doesn't implement Into<f64>, use string conversion
+                    let value_str = value.to_string();
+                    let value_f64: f64 = value_str
+                        .parse()
+                        .map_err(|_| PlanError::invalid("invalid decimal value"))?;
+                    Ok(value_f64 / divisor)
+                }
+                _ => Err(PlanError::invalid(
+                    "TABLESAMPLE requires a numeric literal",
+                )),
+            },
+            // Handle Cast expressions (e.g., CAST(10 AS DOUBLE))
+            spec::Expr::Cast { expr, .. } => self.evaluate_sample_expr_to_f64(expr),
+            _ => Err(PlanError::invalid(
+                "TABLESAMPLE requires a literal expression",
+            )),
+        }
     }
 
     pub(super) async fn resolve_query_read_udtf(
