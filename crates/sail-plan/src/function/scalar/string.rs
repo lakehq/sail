@@ -51,6 +51,16 @@ fn regexp_extract(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr_fn::coalesce(vec![element, lit("")]))
 }
 
+fn regexp_substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (string, pattern) = input
+        .arguments
+        .two()
+        .map_err(|_| PlanError::invalid("regexp_substr requires 2 arguments"))?;
+    let wrapped_pattern = expr_fn::concat_ws(lit(""), vec![lit("("), pattern, lit(")")]);
+    let matches = regex_fn::regexp_match(string, wrapped_pattern, None);
+    Ok(array_element(matches, lit(1i64)))
+}
+
 fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
         mut arguments,
@@ -273,7 +283,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("regexp_extract_all", F::unknown("regexp_extract_all")),
         ("regexp_instr", F::udf(RegexpInstrFunc::new())),
         ("regexp_replace", F::ternary(regexp_replace)),
-        ("regexp_substr", F::unknown("regexp_substr")),
+        ("regexp_substr", F::custom(regexp_substr)),
         ("repeat", F::binary(expr_fn::repeat)),
         ("replace", F::var_arg(replace)),
         ("right", F::binary(expr_fn::right)),
