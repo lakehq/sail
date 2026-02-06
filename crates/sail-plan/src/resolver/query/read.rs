@@ -194,9 +194,7 @@ impl PlanResolver<'_> {
                         .map_err(|_| PlanError::invalid("invalid decimal value"))?;
                     Ok(value_f64 / divisor)
                 }
-                _ => Err(PlanError::invalid(
-                    "TABLESAMPLE requires a numeric literal",
-                )),
+                _ => Err(PlanError::invalid("TABLESAMPLE requires a numeric literal")),
             },
             // Handle Cast expressions (e.g., CAST(10 AS DOUBLE))
             spec::Expr::Cast { expr, .. } => self.evaluate_sample_expr_to_f64(expr),

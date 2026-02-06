@@ -130,7 +130,14 @@ impl PlanResolver<'_> {
             }
         }
 
-        Self::apply_sample_to_plan(input, lower_bound, upper_bound, with_replacement, seed, state)
+        Self::apply_sample_to_plan(
+            input,
+            lower_bound,
+            upper_bound,
+            with_replacement,
+            seed,
+            state,
+        )
     }
 
     /// Apply sampling to an existing LogicalPlan.
