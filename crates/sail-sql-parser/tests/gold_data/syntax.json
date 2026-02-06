@@ -2071,6 +2071,38 @@
                         "nonTerminal": "Operator(GreaterThan)"
                       }
                     ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Geometry)"
+                      },
+                      {
+                        "nonTerminal": "Operator(LeftParenthesis)"
+                      },
+                      {
+                        "nonTerminal": "GeometrySrid"
+                      },
+                      {
+                        "nonTerminal": "Operator(RightParenthesis)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Geography)"
+                      },
+                      {
+                        "nonTerminal": "Operator(LeftParenthesis)"
+                      },
+                      {
+                        "nonTerminal": "GeographySrid"
+                      },
+                      {
+                        "nonTerminal": "Operator(RightParenthesis)"
+                      }
+                    ]
                   }
                 ]
               }
@@ -3027,6 +3059,48 @@
                   },
                   {
                     "nonTerminal": "Option(OverClause)"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "GeographySrid",
+              "node": {
+                "choice": [
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "IntegerLiteral"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Any)"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "name": "GeometrySrid",
+              "node": {
+                "choice": [
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "IntegerLiteral"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Any)"
+                      }
+                    ]
                   }
                 ]
               }
@@ -4485,6 +4559,22 @@
               "node": {
                 "terminal": {
                   "keyword": "GENERATED"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Geography)",
+              "node": {
+                "terminal": {
+                  "keyword": "GEOGRAPHY"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Geometry)",
+              "node": {
+                "terminal": {
+                  "keyword": "GEOMETRY"
                 }
               }
             },
