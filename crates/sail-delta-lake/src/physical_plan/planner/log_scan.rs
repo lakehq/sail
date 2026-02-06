@@ -246,12 +246,16 @@ pub async fn build_delta_log_datasource_scans_with_options(
                 indices.push(file_schema_len);
                 continue;
             }
-            let idx = merged.index_of(col).map_err(|_| {
-                DataFusionError::Plan(format!(
-                    "log scan projection column '{col}' not found in merged schema"
-                ))
-            })?;
-            indices.push(idx);
+
+            match merged.index_of(col) {
+                Ok(idx) => indices.push(idx),
+                Err(_) => {
+                    // Some Delta writers/checkpoint formats may omit an action column
+                    // (for example, no `remove` records in a newly created table).
+                    // Skip missing projected columns and let downstream replay logic
+                    // treat them as absent.
+                }
+            }
         }
         Some(indices)
     } else {

@@ -236,6 +236,8 @@ pub async fn build_log_replay_pipeline_with_options(
     let col_expr = |name: &str| Expr::Column(LogicalColumn::new_unqualified(name));
     let lit_str = |s: &str| Expr::Literal(ScalarValue::Utf8(Some(s.to_string())), None);
     let lit_i64 = |v: i64| Expr::Literal(ScalarValue::Int64(Some(v)), None);
+    let lit_bool = |v: bool| Expr::Literal(ScalarValue::Boolean(Some(v)), None);
+    let lit_utf8_null = || Expr::Literal(ScalarValue::Utf8(None), None);
     let get_field_expr = |struct_expr: Expr, field_name: &str| {
         Expr::ScalarFunction(ScalarFunction::new_udf(
             datafusion::functions::core::get_field(),
@@ -250,10 +252,16 @@ pub async fn build_log_replay_pipeline_with_options(
         ))
     };
 
+    // `add` is required for replay payload extraction.
     let add_col_expr = col_expr("add");
-    let remove_col_expr = col_expr("remove");
+    let has_remove_column = input_schema.field_with_name("remove").is_ok();
+
     let add_is_not_null = add_col_expr.clone().is_not_null();
-    let remove_is_not_null = remove_col_expr.clone().is_not_null();
+    let remove_col_expr = has_remove_column.then(|| col_expr("remove"));
+    let remove_is_not_null = remove_col_expr
+        .as_ref()
+        .map(|e| e.clone().is_not_null())
+        .unwrap_or_else(|| lit_bool(false));
 
     // NOTE: `get_field(struct, 'child')` does not apply the parent struct's
     // null buffer to the returned child array. We must guard child extraction with the
@@ -262,10 +270,15 @@ pub async fn build_log_replay_pipeline_with_options(
         add_is_not_null.clone(),
         get_field_expr(add_col_expr.clone(), "path"),
     );
-    let remove_path = guard_with(
-        remove_is_not_null.clone(),
-        get_field_expr(remove_col_expr.clone(), "path"),
-    );
+    let remove_path = remove_col_expr
+        .as_ref()
+        .map(|e| {
+            guard_with(
+                remove_is_not_null.clone(),
+                get_field_expr(e.clone(), "path"),
+            )
+        })
+        .unwrap_or_else(lit_utf8_null);
 
     let replay_path = simplify(Expr::ScalarFunction(ScalarFunction::new_udf(
         datafusion::functions::core::coalesce(),

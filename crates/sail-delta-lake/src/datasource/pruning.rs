@@ -194,7 +194,25 @@ impl AddStatsPruningStatistics {
     }
 
     fn null_scalar(dt: &datafusion::arrow::datatypes::DataType) -> ScalarValue {
-        ScalarValue::try_from(dt).unwrap_or_else(|_| ScalarValue::Null)
+        ScalarValue::try_new_null(dt).unwrap_or(ScalarValue::Null)
+    }
+
+    fn coerce_scalar_to_type(
+        dt: &datafusion::arrow::datatypes::DataType,
+        value: ScalarValue,
+    ) -> ScalarValue {
+        if value.is_null() {
+            return Self::null_scalar(dt);
+        }
+
+        if value.data_type() == *dt {
+            return value;
+        }
+
+        match value.cast_to(dt) {
+            Ok(casted) if !casted.is_null() => casted,
+            Ok(_) | Err(_) => Self::null_scalar(dt),
+        }
     }
 
     fn scalar_from_json(
@@ -267,6 +285,18 @@ impl AddStatsPruningStatistics {
         let mut scalars = Vec::with_capacity(self.adds.len());
         for (a, s) in self.adds.iter().zip(self.stats.iter()) {
             let sv = f(a, s.as_ref(), dt);
+            let sv = Self::coerce_scalar_to_type(dt, sv);
+
+            if sv.data_type() == datafusion::arrow::datatypes::DataType::Null
+                && *dt != datafusion::arrow::datatypes::DataType::Null
+            {
+                return None;
+            }
+
+            if !sv.is_null() && sv.data_type() != *dt {
+                return None;
+            }
+
             has_value |= !sv.is_null();
             scalars.push(sv);
         }
@@ -274,7 +304,14 @@ impl AddStatsPruningStatistics {
         if !has_value {
             return None;
         }
-        ScalarValue::iter_to_array(scalars).ok()
+
+        let array = ScalarValue::iter_to_array(scalars).ok()?;
+
+        if array.data_type() != dt {
+            return datafusion::arrow::compute::cast(&array, dt).ok();
+        }
+
+        Some(array)
     }
 }
 

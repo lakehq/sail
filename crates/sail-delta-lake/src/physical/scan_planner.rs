@@ -9,15 +9,17 @@ use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::Expr;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use delta_kernel::table_features::ColumnMappingMode;
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
 
+use crate::datasource::scan::TableStatsMode;
 use crate::datasource::scan::{build_file_scan_config, FileScanParams};
-use crate::datasource::{df_logical_schema, simplify_expr, DataFusionMixins, DeltaScanConfig};
+use crate::datasource::{
+    df_logical_schema, simplify_expr, DataFusionMixins, DeltaScanConfig, DeltaTableStateExt,
+};
 use crate::kernel::models::Add;
 use crate::options::TableDeltaOptions;
 use crate::physical_plan::planner::utils::{LogReplayFilter, LogReplayOptions};
@@ -164,7 +166,13 @@ pub(crate) async fn plan_delta_scan(
         let df_schema = logical_schema.clone().to_dfschema()?;
         let pushdown_expr = conjunction(parquet_pushdown_filters);
         pushdown_expr
-            .map(|expr| simplify_expr(session, &df_schema, expr))
+            .map(|expr| {
+                simplify_expr(session, &df_schema, expr).map_err(|e| {
+                    datafusion::common::DataFusionError::Plan(format!(
+                        "failed to simplify parquet pushdown filter: {e}"
+                    ))
+                })
+            })
             .transpose()?
     } else {
         None
@@ -182,6 +190,7 @@ pub(crate) async fn plan_delta_scan(
                 limit,
                 pushdown_filter,
                 sort_order: None,
+                table_stats_mode: TableStatsMode::Snapshot,
             },
             session,
             file_schema,
@@ -231,7 +240,11 @@ pub(crate) async fn plan_delta_scan(
     let pruning_expr = conjunction(pruning_filters);
     let pruning_predicate = if let Some(expr) = pruning_expr {
         let df_schema = logical_schema.clone().to_dfschema()?;
-        Some(simplify_expr(session, &df_schema, expr)?)
+        Some(simplify_expr(session, &df_schema, expr).map_err(|e| {
+            datafusion::common::DataFusionError::Plan(format!(
+                "failed to simplify metadata pruning filter: {e}"
+            ))
+        })?)
     } else {
         None
     };
@@ -275,7 +288,12 @@ pub(crate) async fn plan_delta_scan(
             commit_files,
             log_replay_options,
         )
-        .await?;
+        .await
+        .map_err(|e| {
+            datafusion::common::DataFusionError::Plan(format!(
+                "failed to build log replay pipeline: {e}"
+            ))
+        })?;
 
     let find_files: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
         meta_scan,
@@ -293,23 +311,25 @@ pub(crate) async fn plan_delta_scan(
         Partitioning::RoundRobinBatch(target_partitions),
     )?);
 
-    let mut scan_exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaScanByAddsExec::new(
-        find_files,
-        table_url,
-        snapshot.version(),
-        table_schema,
-        logical_schema.clone(),
-        config.clone(),
-        scan_projection.clone(),
-        limit,
-        pushdown_filter,
-    ));
+    let mut scan_exec: Arc<dyn ExecutionPlan> = Arc::new(
+        DeltaScanByAddsExec::new(
+            find_files,
+            table_url,
+            snapshot.version(),
+            table_schema,
+            logical_schema.clone(),
+            config.clone(),
+            scan_projection.clone(),
+            limit,
+            pushdown_filter,
+        )
+        .with_table_statistics(snapshot.datafusion_table_statistics(None)),
+    );
 
-    if let Some(expr) = conjunction(filters.iter().cloned()) {
-        let df_schema = logical_schema.clone().to_dfschema()?;
-        let predicate = simplify_expr(session, &df_schema, expr)?;
-        scan_exec = Arc::new(FilterExec::try_new(predicate, scan_exec)?);
-    }
+    // NOTE: Keep filtering inside DeltaScanByAddsExec pushdown path for now.
+    // Wrapping an additional FilterExec here can trigger DataFusion interval
+    // inference assertion failures on some nullable predicates in serverless
+    // scans (tracked separately).
 
     if let Some(prefix_len) = projection_prefix_len {
         let mut proj_exprs = Vec::with_capacity(prefix_len);

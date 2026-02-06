@@ -194,3 +194,7 @@ codegen-units = 1
 [profile.coverage]
 inherits = "dev"
 incremental = false
+
+[profile.profiling]
+inherits = "release"
+strip = false

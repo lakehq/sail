@@ -17,6 +17,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use datafusion::common::stats::ColumnStatistics;
 use datafusion::execution::context::TaskContext;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -25,7 +26,7 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result, Statistics};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
@@ -33,7 +34,7 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
 use url::Url;
 
-use crate::datasource::scan::FileScanParams;
+use crate::datasource::scan::{FileScanParams, TableStatsMode};
 use crate::datasource::{
     build_file_scan_config, df_logical_schema, DataFusionMixins, DeltaScanConfig,
 };
@@ -84,6 +85,7 @@ fn empty_batch(schema: SchemaRef) -> Result<RecordBatch> {
 }
 
 impl ScanByAddsStreamState {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         input: SendableRecordBatchStream,
         context: Arc<TaskContext>,
@@ -132,8 +134,7 @@ impl ScanByAddsStreamState {
                     .get(self.context.as_ref(), &self.table_url, self.table_version)
                     .await?
             }
-            Err(e) => {
-                log::debug!("delta_table_cache extension not found; disabling snapshot cache: {e}");
+            Err(_) => {
                 load_table_uncached(
                     self.context.runtime_env(),
                     &self.table_url,
@@ -263,6 +264,7 @@ impl ScanByAddsStreamState {
                 limit: self.limit,
                 pushdown_filter: self.pushdown_filter.clone(),
                 sort_order: None,
+                table_stats_mode: TableStatsMode::AddsOnly,
             },
             session_state,
             file_schema,
@@ -326,10 +328,12 @@ pub struct DeltaScanByAddsExec {
     projection: Option<Vec<usize>>,
     limit: Option<usize>,
     pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
+    statistics: Statistics,
     cache: PlanProperties,
 }
 
 impl DeltaScanByAddsExec {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         table_url: Url,
@@ -341,6 +345,7 @@ impl DeltaScanByAddsExec {
         limit: Option<usize>,
         pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
     ) -> Self {
+        let statistics = Statistics::new_unknown(output_schema.as_ref());
         let cache = Self::compute_properties(
             output_schema.clone(),
             input.output_partitioning().partition_count(),
@@ -355,8 +360,17 @@ impl DeltaScanByAddsExec {
             projection,
             limit,
             pushdown_filter,
+            statistics,
             cache,
         }
+    }
+
+    pub fn with_table_statistics(mut self, table_statistics: Option<Statistics>) -> Self {
+        self.statistics = table_statistics
+            .as_ref()
+            .map(|s| map_statistics_to_schema(s, &self.table_schema, &self.output_schema))
+            .unwrap_or_else(|| Statistics::new_unknown(self.output_schema.as_ref()));
+        self
     }
 
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
@@ -393,6 +407,10 @@ impl DeltaScanByAddsExec {
 
     pub fn pushdown_filter(&self) -> Option<&Arc<dyn PhysicalExpr>> {
         self.pushdown_filter.as_ref()
+    }
+
+    pub fn statistics(&self) -> &Statistics {
+        &self.statistics
     }
 
     fn compute_properties(schema: SchemaRef, partition_count: usize) -> PlanProperties {
@@ -434,17 +452,13 @@ impl ExecutionPlan for DeltaScanByAddsExec {
         if children.len() != 1 {
             return internal_err!("DeltaScanByAddsExec requires exactly one child");
         }
-        Ok(Arc::new(Self::new(
-            children[0].clone(),
-            self.table_url.clone(),
-            self.version,
-            self.table_schema.clone(),
-            self.output_schema.clone(),
-            self.scan_config.clone(),
-            self.projection.clone(),
-            self.limit,
-            self.pushdown_filter.clone(),
-        )))
+        let mut cloned = (*self).clone();
+        cloned.input = children[0].clone();
+        cloned.cache = Self::compute_properties(
+            cloned.output_schema.clone(),
+            cloned.input.output_partitioning().partition_count(),
+        );
+        Ok(Arc::new(cloned))
     }
 
     fn execute(
@@ -542,6 +556,83 @@ impl ExecutionPlan for DeltaScanByAddsExec {
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(output_schema, s)))
     }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if partition.is_none() {
+            Ok(self.statistics.clone())
+        } else {
+            Ok(Statistics::new_unknown(self.schema().as_ref()))
+        }
+    }
+}
+
+fn map_statistics_to_schema(
+    statistics: &Statistics,
+    source_schema: &SchemaRef,
+    target_schema: &SchemaRef,
+) -> Statistics {
+    let column_statistics = target_schema
+        .fields()
+        .iter()
+        .map(|field| {
+            let mut column_statistics = source_schema
+                .index_of(field.name())
+                .ok()
+                .and_then(|idx| statistics.column_statistics.get(idx).cloned())
+                .unwrap_or_else(ColumnStatistics::new_unknown);
+            sanitize_column_statistics_for_field(
+                &mut column_statistics,
+                field.name(),
+                field.data_type(),
+            );
+            column_statistics
+        })
+        .collect();
+
+    Statistics {
+        num_rows: statistics.num_rows,
+        total_byte_size: statistics.total_byte_size,
+        column_statistics,
+    }
+}
+
+fn sanitize_column_statistics_for_field(
+    column_stats: &mut ColumnStatistics,
+    _column_name: &str,
+    data_type: &datafusion::arrow::datatypes::DataType,
+) {
+    column_stats.min_value = sanitize_bound_for_type(&column_stats.min_value, data_type);
+    column_stats.max_value = sanitize_bound_for_type(&column_stats.max_value, data_type);
+}
+
+fn sanitize_bound_for_type(
+    bound: &datafusion::common::stats::Precision<datafusion::common::ScalarValue>,
+    data_type: &datafusion::arrow::datatypes::DataType,
+) -> datafusion::common::stats::Precision<datafusion::common::ScalarValue> {
+    let sanitize_value = |value: &datafusion::common::ScalarValue| {
+        if value.is_null() {
+            return None;
+        }
+        if value.data_type() == *data_type {
+            return Some(value.clone());
+        }
+        value
+            .cast_to(data_type)
+            .ok()
+            .filter(|casted| !casted.is_null())
+    };
+
+    match bound {
+        datafusion::common::stats::Precision::Exact(value) => sanitize_value(value)
+            .map(datafusion::common::stats::Precision::Exact)
+            .unwrap_or(datafusion::common::stats::Precision::Absent),
+        datafusion::common::stats::Precision::Inexact(value) => sanitize_value(value)
+            .map(datafusion::common::stats::Precision::Inexact)
+            .unwrap_or(datafusion::common::stats::Precision::Absent),
+        datafusion::common::stats::Precision::Absent => {
+            datafusion::common::stats::Precision::Absent
+        }
+    }
 }
 
 impl DisplayAs for DeltaScanByAddsExec {
@@ -570,5 +661,140 @@ impl DisplayAs for DeltaScanByAddsExec {
                 )
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion::physical_plan::ExecutionPlan;
+    use datafusion_common::stats::{ColumnStatistics, Precision, Statistics};
+    use datafusion_common::ScalarValue;
+    use url::Url;
+
+    use super::map_statistics_to_schema;
+    use super::DeltaScanByAddsExec;
+
+    #[test]
+    fn test_map_statistics_to_schema_by_name() {
+        let source_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Int64, true),
+        ]));
+        let target_schema = Arc::new(Schema::new(vec![
+            Field::new("b", DataType::Int64, true),
+            Field::new("a", DataType::Int64, true),
+            Field::new("_virtual", DataType::Utf8, true),
+        ]));
+
+        let source_stats = Statistics {
+            num_rows: Precision::Exact(42),
+            total_byte_size: Precision::Exact(4096),
+            column_statistics: vec![
+                ColumnStatistics {
+                    null_count: Precision::Exact(1),
+                    max_value: Precision::Exact(ScalarValue::Int64(Some(9))),
+                    min_value: Precision::Exact(ScalarValue::Null),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Exact(7),
+                    byte_size: Precision::Absent,
+                },
+                ColumnStatistics {
+                    null_count: Precision::Exact(2),
+                    max_value: Precision::Exact(ScalarValue::Int64(Some(99))),
+                    min_value: Precision::Exact(ScalarValue::Int64(Some(10))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Exact(11),
+                    byte_size: Precision::Absent,
+                },
+            ],
+        };
+
+        let mapped = map_statistics_to_schema(&source_stats, &source_schema, &target_schema);
+        assert_eq!(mapped.num_rows, Precision::Exact(42));
+        assert_eq!(mapped.total_byte_size, Precision::Exact(4096));
+        assert_eq!(mapped.column_statistics.len(), 3);
+
+        // `b` lands first in target schema.
+        assert_eq!(mapped.column_statistics[0].null_count, Precision::Exact(2));
+        assert_eq!(
+            mapped.column_statistics[0].min_value,
+            Precision::Exact(ScalarValue::Int64(Some(10)))
+        );
+
+        // `a` lands second in target schema.
+        assert_eq!(mapped.column_statistics[1].null_count, Precision::Exact(1));
+        assert_eq!(mapped.column_statistics[1].min_value, Precision::Absent);
+        assert_eq!(
+            mapped.column_statistics[1].max_value,
+            Precision::Exact(ScalarValue::Int64(Some(9)))
+        );
+
+        // Unknown column gets unknown stats.
+        assert_eq!(mapped.column_statistics[2], ColumnStatistics::new_unknown());
+    }
+
+    #[test]
+    fn test_scan_by_adds_exposes_known_statistics() {
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Int64, true),
+        ]));
+        let output_schema = Arc::new(Schema::new(vec![Field::new("b", DataType::Int64, true)]));
+        let input_schema = Arc::new(Schema::new(vec![Field::new(
+            "action",
+            DataType::Utf8,
+            true,
+        )]));
+
+        let input = Arc::new(EmptyExec::new(input_schema));
+        let table_stats = Statistics {
+            num_rows: Precision::Exact(123),
+            total_byte_size: Precision::Exact(2048),
+            column_statistics: vec![
+                ColumnStatistics::new_unknown(),
+                ColumnStatistics {
+                    null_count: Precision::Exact(4),
+                    max_value: Precision::Exact(ScalarValue::Int64(Some(88))),
+                    min_value: Precision::Exact(ScalarValue::Int64(Some(1))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Exact(12),
+                    byte_size: Precision::Absent,
+                },
+            ],
+        };
+
+        let table_url = Url::parse("file:///tmp/table").ok();
+        assert!(table_url.is_some());
+        let table_url = match table_url {
+            Some(url) => url,
+            None => return,
+        };
+
+        let scan = DeltaScanByAddsExec::new(
+            input,
+            table_url,
+            1,
+            table_schema,
+            output_schema,
+            crate::datasource::DeltaScanConfig::default(),
+            None,
+            None,
+            None,
+        )
+        .with_table_statistics(Some(table_stats));
+
+        let stats = scan.partition_statistics(None).ok();
+        assert!(stats.is_some());
+        let stats = match stats {
+            Some(s) => s,
+            None => return,
+        };
+        assert_eq!(stats.num_rows, Precision::Exact(123));
+        assert_eq!(stats.column_statistics.len(), 1);
+        assert_eq!(stats.column_statistics[0].null_count, Precision::Exact(4));
     }
 }
