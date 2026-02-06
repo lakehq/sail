@@ -2621,7 +2621,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: regexp_substr"
+        "success": "ok"
       }
     },
     {
@@ -2643,7 +2643,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: regexp_substr"
+        "success": "ok"
       }
     },
     {
