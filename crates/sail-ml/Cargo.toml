@@ -1,0 +1,12 @@
+[package]
+name = "sail-ml"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+sail-common = { path = "../sail-common" }
+
+log = { workspace = true }

@@ -15,6 +15,7 @@ sail-plan = { path = "../sail-plan" }
 sail-python-udf = { path = "../sail-python-udf" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 sail-execution = { path = "../sail-execution" }
+sail-function = { path = "../sail-function" }
 sail-session = { path = "../sail-session" }
 
 thiserror = { workspace = true }

@@ -822,6 +822,16 @@ impl<'a> DisplayIndexState<'a> for &'a FixedSizeListArray {
 /// Pairs a boxed [`DisplayIndex`] with its field name
 type FieldDisplay<'a> = (&'a str, Box<dyn DisplayIndex + 'a>);
 
+/// Check if a struct has the VectorUDT schema (Spark ML vector format).
+/// VectorUDT has fields: type (Int8), size (Int32), indices (List<Int32>), values (List<Float64>)
+fn is_vector_udt(fields: &datafusion::arrow::datatypes::Fields) -> bool {
+    if fields.len() != 4 {
+        return false;
+    }
+    let names: Vec<&str> = fields.iter().map(|f| f.name().as_str()).collect();
+    names == ["type", "size", "indices", "values"]
+}
+
 impl<'a> DisplayIndexState<'a> for &'a StructArray {
     type State = Vec<FieldDisplay<'a>>;
 
@@ -842,6 +852,21 @@ impl<'a> DisplayIndexState<'a> for &'a StructArray {
     }
 
     fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
+        // Check if this is a VectorUDT - if so, format as [val1, val2, ...]
+        let fields = match (*self).data_type() {
+            DataType::Struct(f) => f,
+            _ => unreachable!(),
+        };
+
+        if is_vector_udt(fields) {
+            // VectorUDT: display only the values array as [v1, v2, ...]
+            // The "values" field is at index 3
+            if let Some((_name, display)) = s.get(3) {
+                return display.as_ref().write(idx, f);
+            }
+        }
+
+        // Default struct formatting: {field1, field2, ...}
         let mut iter = s.iter();
         f.write_char('{')?;
         if let Some((_name, display)) = iter.next() {

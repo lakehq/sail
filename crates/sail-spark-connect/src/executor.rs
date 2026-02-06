@@ -22,7 +22,7 @@ use crate::error::{SparkError, SparkResult};
 use crate::schema::to_spark_schema;
 use crate::spark::connect::execute_plan_response::{ArrowBatch, SqlCommandResult};
 use crate::spark::connect::{
-    CheckpointCommandResult, DataType, StreamingQueryCommandResult,
+    CheckpointCommandResult, DataType, MlCommandResult, StreamingQueryCommandResult,
     StreamingQueryManagerCommandResult, WriteStreamOperationStartResult,
 };
 
@@ -34,6 +34,7 @@ pub enum ExecutorBatch {
     StreamingQueryCommandResult(Box<StreamingQueryCommandResult>),
     StreamingQueryManagerCommandResult(Box<StreamingQueryManagerCommandResult>),
     CheckpointCommandResult(Box<CheckpointCommandResult>),
+    MlCommandResult(Box<MlCommandResult>),
     Schema(Box<DataType>),
     Complete,
 }

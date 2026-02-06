@@ -18,7 +18,9 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
+use sail_function::aggregate::ols_sufficient_stats::OLSSufficientStats;
 use sail_function::aggregate::percentile_disc::percentile_disc_udaf;
+use sail_function::aggregate::sgd_gradient::SGDGradientSum;
 use sail_function::aggregate::skewness::SkewnessFunc;
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::scalar::struct_function::StructFunction;
@@ -209,6 +211,34 @@ fn skewness(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         .collect();
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(SkewnessFunc::new())),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
+fn ols_sufficient_stats(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let args = input.arguments;
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(OLSSufficientStats::new())),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
+fn sgd_gradient_sum(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let args = input.arguments;
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(SGDGradientSum::new())),
         params: AggregateFunctionParams {
             args,
             distinct: input.distinct,
@@ -517,6 +547,8 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("regr_sxx", F::default(regr::regr_sxx_udaf)),
         ("regr_sxy", F::default(regr::regr_sxy_udaf)),
         ("regr_syy", F::default(regr::regr_syy_udaf)),
+        ("ols_sufficient_stats", F::custom(ols_sufficient_stats)),
+        ("sgd_gradient_sum", F::custom(sgd_gradient_sum)),
         ("skewness", F::custom(skewness)),
         ("some", F::default(bool_and_or::bool_or_udaf)),
         ("std", F::default(stddev::stddev_udaf)),
