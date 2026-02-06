@@ -22,6 +22,7 @@ use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use lazy_static::lazy_static;
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
@@ -502,7 +503,10 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
         ("first_value", F::custom(first_value)),
         ("grouping", F::aggregate(grouping::grouping_udaf)),
         ("grouping_id", F::unknown("grouping_id")),
-        ("histogram_numeric", F::unknown("histogram_numeric")),
+        (
+            "histogram_numeric",
+            F::aggregate(|| Arc::new(AggregateUDF::from(HistogramNumericFunction::new()))),
+        ),
         ("hll_sketch_agg", F::unknown("hll_sketch_agg")),
         ("hll_union_agg", F::unknown("hll_union_agg")),
         ("kurtosis", F::custom(kurtosis)),

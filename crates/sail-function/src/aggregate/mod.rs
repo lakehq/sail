@@ -1,3 +1,4 @@
+pub mod histogram_numeric;
 pub mod kurtosis;
 pub mod max_min_by;
 pub mod mode;
