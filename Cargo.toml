@@ -148,7 +148,6 @@ datafusion-expr-common = { version = "52.1.0" }
 datafusion-proto = { version = "52.1.0" }
 datafusion-functions = { version = "52.1.0" }
 datafusion-functions-nested = { version = "52.1.0" }
-datafusion-functions-window-common = { version = "52.1.0" }
 datafusion-physical-expr = { version = "52.1.0" }
 datafusion-session = { version = "52.1.0" }
 datafusion-spark = { version = "52.1.0" }
