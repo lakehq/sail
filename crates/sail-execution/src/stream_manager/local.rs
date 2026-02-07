@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use datafusion::arrow::array::RecordBatch;
 use datafusion::common::Result;
 use log::debug;
@@ -41,8 +43,9 @@ impl MemoryStream {
             senders.push(Some(tx));
             receivers.push(rx);
         }
+        let overflow = vec![VecDeque::new(); senders.len()];
         Self {
-            sender: Some(MemoryStreamReplicaSender { senders }),
+            sender: Some(MemoryStreamReplicaSender { senders, overflow }),
             receivers,
         }
     }
@@ -66,35 +69,100 @@ impl LocalStream for MemoryStream {
 
 struct MemoryStreamReplicaSender {
     senders: Vec<Option<mpsc::Sender<TaskStreamResult<RecordBatch>>>>,
+    overflow: Vec<VecDeque<TaskStreamResult<RecordBatch>>>,
 }
 
 #[tonic::async_trait]
 impl TaskStreamSink for MemoryStreamReplicaSender {
     async fn write(&mut self, batch: TaskStreamResult<RecordBatch>) -> TaskStreamSinkState {
-        let mut sent = 0;
-        for sender in self.senders.iter_mut() {
-            if let Some(s) = sender {
-                match s.send(batch.clone()).await {
-                    Ok(()) => {
-                        sent += 1;
-                    }
-                    Err(_) => {
-                        // This can happen under normal operation when the receiver no longer needs
-                        // more data (e.g., after a LIMIT operator has received enough rows).
-                        debug!("memory stream replica receiver has been dropped");
-                        *sender = None;
+        let mut active = false;
+        for (i, sender) in self.senders.iter_mut().enumerate() {
+            if sender.is_none() {
+                continue;
+            }
+
+            let overflow = &mut self.overflow[i];
+            let mut dropped = false;
+
+            if let Some(tx) = sender.as_ref() {
+                // Try to flush overflow first
+                while let Some(item) = overflow.front() {
+                    match tx.try_send(item.clone()) {
+                        Ok(_) => {
+                            overflow.pop_front();
+                        }
+                        Err(mpsc::error::TrySendError::Full(_)) => break,
+                        Err(mpsc::error::TrySendError::Closed(_)) => {
+                            dropped = true;
+                            break;
+                        }
                     }
                 }
             }
+
+            // A dropped receiver can happen under normal operation when the receiver no longer
+            // needs more data (e.g., after a LIMIT operator has received enough rows).
+
+            if dropped {
+                debug!("memory stream replica receiver has been dropped");
+                *sender = None;
+                overflow.clear();
+                continue;
+            }
+
+            if let Some(tx) = sender.as_ref() {
+                if overflow.is_empty() {
+                    match tx.try_send(batch.clone()) {
+                        Ok(_) => {}
+                        Err(mpsc::error::TrySendError::Full(_)) => {
+                            overflow.push_back(batch.clone());
+                        }
+                        Err(mpsc::error::TrySendError::Closed(_)) => {
+                            dropped = true;
+                        }
+                    }
+                } else {
+                    overflow.push_back(batch.clone());
+                }
+            }
+
+            if dropped {
+                debug!("memory stream replica receiver has been dropped");
+                *sender = None;
+                overflow.clear();
+            } else {
+                active = true;
+            }
         }
-        if sent > 0 {
+        if active {
             TaskStreamSinkState::Ok
         } else {
             TaskStreamSinkState::Closed
         }
     }
 
-    async fn close(self: Box<Self>) -> Result<()> {
+    async fn close(mut self: Box<Self>) -> Result<()> {
+        for (i, sender) in self.senders.iter_mut().enumerate() {
+            if sender.is_none() {
+                continue;
+            }
+
+            let overflow = &mut self.overflow[i];
+            let mut dropped = false;
+            while let Some(item) = overflow.pop_front() {
+                if let Some(tx) = sender.as_ref() {
+                    if tx.send(item).await.is_err() {
+                        dropped = true;
+                        break;
+                    }
+                }
+            }
+
+            if dropped {
+                *sender = None;
+                overflow.clear();
+            }
+        }
         Ok(())
     }
 }
