@@ -27,6 +27,8 @@ bytes = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 chrono = { workspace = true }
+vortex = { workspace = true }
+vortex-datafusion = { workspace = true }
 
 [build-dependencies]
 serde = { workspace = true }
