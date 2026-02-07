@@ -13,6 +13,12 @@ from pysail.tests.spark.utils import SAIL_ONLY, is_jvm_spark
 
 
 def pytest_configure(config):
+    # Register custom markers.
+    # Note: pytest-bdd converts @sail-only tag to "sail-only" marker (preserves hyphen)
+    config.addinivalue_line(
+        "markers",
+        "sail-only: mark test as Sail-only (skipped when running against Spark JVM)",
+    )
     # Load all pytest-bdd step modules.
     config.pluginmanager.import_plugin("pysail.tests.spark.steps.file_tree")
     config.pluginmanager.import_plugin("pysail.tests.spark.steps.sql")
@@ -113,8 +119,13 @@ def local_timezone(request):
 
 def pytest_collection_modifyitems(session, config, items):  # noqa: ARG001
     if is_jvm_spark():
+        skip_sail_only = pytest.mark.skip(reason="Sail-only feature, not supported by Spark")
         for item in items:
             if isinstance(item, DoctestItem):
                 for example in item.dtest.examples:
                     if example.options.get(SAIL_ONLY):
                         example.options[doctest.SKIP] = True
+            # Skip pytest-bdd scenarios with @sail-only tag
+            # Note: pytest-bdd preserves the hyphen in marker names
+            elif item.get_closest_marker("sail-only"):
+                item.add_marker(skip_sail_only)
