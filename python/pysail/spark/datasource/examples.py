@@ -15,11 +15,10 @@ except ImportError:
     HAS_PYARROW = False
     pa = None
 
-from .base import (
+from pyspark.sql.datasource import (
     DataSource,
     DataSourceReader,
     InputPartition,
-    register,
     EqualTo,
     GreaterThan,
     GreaterThanOrEqual,
@@ -127,7 +126,6 @@ class RangeDataSourceReader(DataSourceReader):
             yield pa.RecordBatch.from_pydict({"id": batch_values}, schema=schema)
 
 
-@register
 class RangeDataSource(DataSource):
     """
     A data source that generates sequential integers.
@@ -202,7 +200,6 @@ class ConstantDataSourceReader(DataSourceReader):
             yield pa.RecordBatch.from_pydict({"id": ids, "value": values}, schema=schema)
 
 
-@register
 class ConstantDataSource(DataSource):
     """
     A data source that returns constant values.
@@ -325,7 +322,6 @@ class FlappyBirdReader(DataSourceReader):
             )
 
 
-@register
 class FlappyBirdDataSource(DataSource):
     """
     A fun datasource that generates Flappy Bird game data.
