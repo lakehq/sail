@@ -38,6 +38,7 @@ use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, Pla
 use datafusion_common::{exec_err, internal_err, Result};
 
 use super::executor::InputPartition;
+use super::filter::PythonFilter;
 
 /// Execution plan for reading from a Python datasource.
 ///
@@ -53,6 +54,8 @@ pub struct PythonDataSourceExec {
     schema: SchemaRef,
     /// Partitions for parallel reading
     partitions: Vec<InputPartition>,
+    /// Filters to push down
+    filters: Vec<PythonFilter>,
     /// Execution plan properties
     properties: PlanProperties,
 }
@@ -65,7 +68,13 @@ impl PythonDataSourceExec {
     /// * `command` - Pickled Python DataSource instance
     /// * `schema` - Schema of the output data
     /// * `partitions` - Partitions for parallel reading
-    pub fn new(command: Vec<u8>, schema: SchemaRef, partitions: Vec<InputPartition>) -> Self {
+    /// * `filters` - Filters to push down
+    pub fn new(
+        command: Vec<u8>,
+        schema: SchemaRef,
+        partitions: Vec<InputPartition>,
+        filters: Vec<PythonFilter>,
+    ) -> Self {
         let num_partitions = partitions.len().max(1);
         let properties = PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
@@ -78,6 +87,7 @@ impl PythonDataSourceExec {
             command,
             schema,
             partitions,
+            filters,
             properties,
         }
     }
@@ -95,6 +105,11 @@ impl PythonDataSourceExec {
     /// Get the partitions.
     pub fn partitions(&self) -> &[InputPartition] {
         &self.partitions
+    }
+
+    /// Get the filters.
+    pub fn filters(&self) -> &[PythonFilter] {
+        &self.filters
     }
 }
 
@@ -165,7 +180,8 @@ impl ExecutionPlan for PythonDataSourceExec {
         }
 
         // Get batch size from TaskContext session config
-        let _batch_size = context.session_config().batch_size();
+        // Get batch size from TaskContext session config
+        let batch_size = context.session_config().batch_size();
 
         // Create executor lazily at execution time
         // This keeps codec/construction lightweight and ensures proper worker-side initialization
@@ -179,11 +195,13 @@ impl ExecutionPlan for PythonDataSourceExec {
         // Create async stream that uses the executor
         // We need to handle the Result<BoxStream> properly
         use futures::TryStreamExt;
-        let stream =
-            futures::stream::once(
-                async move { executor.execute_read(&command, &part, schema).await },
-            )
-            .try_flatten();
+        let filters = self.filters.clone();
+        let stream = futures::stream::once(async move {
+            executor
+                .execute_read(&command, &part, schema, filters, batch_size)
+                .await
+        })
+        .try_flatten();
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema.clone(),
@@ -251,7 +269,7 @@ mod tests {
             },
         ];
 
-        let exec = PythonDataSourceExec::new(vec![0, 0], schema.clone(), partitions);
+        let exec = PythonDataSourceExec::new(vec![0, 0], schema.clone(), partitions, vec![]);
 
         assert_eq!(exec.num_partitions(), 2);
         assert_eq!(exec.children().len(), 0);
@@ -283,7 +301,7 @@ mod tests {
             },
         ];
 
-        let exec = PythonDataSourceExec::new(vec![], schema, partitions);
+        let exec = PythonDataSourceExec::new(vec![], schema, partitions, vec![]);
 
         // Verify the struct was created correctly
         assert_eq!(exec.num_partitions(), 3);
@@ -295,7 +313,7 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
         let partitions: Vec<InputPartition> = vec![];
 
-        let exec = PythonDataSourceExec::new(vec![], schema, partitions);
+        let exec = PythonDataSourceExec::new(vec![], schema, partitions, vec![]);
 
         // Empty partitions reports 0 partitions, but properties use max(1) for DataFusion
         assert_eq!(exec.num_partitions(), 0);

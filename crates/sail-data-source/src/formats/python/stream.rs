@@ -25,6 +25,7 @@ use tokio::sync::{mpsc, oneshot};
 /// Configure `SAIL_PYTHON_SLOW_READ_WARN_MS` (default: 30000) to log warnings
 /// when individual Python operations exceed the threshold.
 use super::executor::InputPartition;
+use super::filter::PythonFilter;
 
 /// Metrics for Python execution performance tracking.
 ///
@@ -112,6 +113,7 @@ impl PythonDataSourceStream {
         command: Vec<u8>,
         partition: InputPartition,
         schema: SchemaRef,
+        filters: Vec<PythonFilter>,
         batch_size: usize,
     ) -> Result<Self> {
         let (tx, rx) = mpsc::channel(16);
@@ -121,10 +123,19 @@ impl PythonDataSourceStream {
         let partition_id = partition.partition_id;
 
         // Spawn named Python thread for debuggability
+        let filters_clone = filters.clone();
         let python_thread = std::thread::Builder::new()
             .name(format!("python-ds-p{}", partition_id))
             .spawn(move || {
-                Self::run_python_reader(command, partition, schema_clone, batch_size, tx, stop_rx);
+                Self::run_python_reader(
+                    command,
+                    partition,
+                    schema_clone,
+                    filters_clone,
+                    batch_size,
+                    tx,
+                    stop_rx,
+                );
             })
             .map_err(|e| {
                 datafusion_common::DataFusionError::Execution(format!(
@@ -148,12 +159,16 @@ impl PythonDataSourceStream {
         command: Vec<u8>,
         partition: InputPartition,
         schema: SchemaRef,
+        filters: Vec<PythonFilter>,
         batch_size: usize,
         tx: mpsc::Sender<Result<RecordBatch>>,
         mut stop_rx: oneshot::Receiver<()>,
     ) {
         use pyo3::prelude::*;
         use pyo3::types::PyBytes;
+
+        use super::error::PythonDataSourceContext;
+        use super::filter::filters_to_python;
 
         let partition_id = partition.partition_id;
         let metrics = PythonExecutionMetrics::new();
@@ -177,6 +192,13 @@ impl PythonDataSourceStream {
                 .call_method1("loads", (command_bytes,))
                 .map_err(py_err)?;
 
+            // Get datasource name for error context
+            let ds_name = datasource
+                .call_method0("name")
+                .and_then(|n| n.extract::<String>())
+                .unwrap_or_else(|_| "<unknown>".to_string());
+            let ctx = PythonDataSourceContext::new(&ds_name, "read");
+
             // Deserialize partition
             let partition_bytes = PyBytes::new(py, &partition.data);
             let py_partition = cloudpickle
@@ -187,10 +209,46 @@ impl PythonDataSourceStream {
             let schema_obj = super::arrow_utils::rust_schema_to_py(py, &schema)?;
             let reader = datasource
                 .call_method1("reader", (schema_obj,))
-                .map_err(py_err)?;
+                .map_err(|e| ctx.wrap_py_error(e))?;
+
+            // Push filters to reader if any were provided
+            if !filters.is_empty() {
+                let filter_ctx = PythonDataSourceContext::new(&ds_name, "pushFilters");
+
+                // Convert Rust filters to Python filter objects
+                let py_filters = filters_to_python(py, &filters).map_err(|e| {
+                    filter_ctx.wrap_error(format!("Failed to convert filters: {}", e))
+                })?;
+
+                // Call pushFilters on the reader
+                // Note: This matches the logic in executor.get_partitions()
+                // We must apply filters here too because the reader instance is new
+                let rejected = reader
+                    .call_method1("pushFilters", (py_filters,))
+                    .map_err(|e| filter_ctx.wrap_py_error(e))?;
+
+                // Log rejected filters (optional, duplicative of get_partitions log but good for debugging worker execution)
+                let rejected_count = rejected
+                    .call_method0("__len__")
+                    .unwrap_or_else(|_| {
+                        pyo3::types::PyAnyMethods::getattr(rejected.as_any(), "__len__")
+                            .and_then(|l| l.call0())
+                            .unwrap_or(pyo3::types::PyInt::new(py, 0).into_any())
+                    })
+                    .extract::<usize>()
+                    .unwrap_or(0);
+
+                log::debug!(
+                    "[{}::pushFilters] Pushed {} filters, {} rejected (worker execution)",
+                    ds_name,
+                    filters.len(),
+                    rejected_count
+                );
+            }
+
             let iterator = reader
                 .call_method1("read", (py_partition,))
-                .map_err(py_err)?;
+                .map_err(|e| ctx.wrap_py_error(e))?;
 
             // Get pyarrow.RecordBatch type for isinstance check
             let pyarrow = py.import("pyarrow").map_err(py_err)?;
@@ -261,7 +319,7 @@ impl PythonDataSourceStream {
                                 .call_method1("dumps", (&item,))
                                 .map_err(py_err)?
                                 .extract::<Vec<u8>>()
-                                .map_err(py_err)?;
+                                .map_err(|e| ctx.wrap_py_error(e))?;
 
                             row_batcher.add_row(row_bytes);
 

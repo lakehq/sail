@@ -122,13 +122,7 @@ fn discover_from_python_registry(py: pyo3::Python<'_>) -> Result<usize> {
     // Try to import the datasource module
     let module = match py.import("pysail.spark.datasource") {
         Ok(m) => m,
-        Err(_) => {
-            // Module not available, try direct path
-            match py.import("datasource") {
-                Ok(m) => m,
-                Err(_) => return Ok(0), // Neither import works, skip
-            }
-        }
+        Err(_) => return Ok(0),
     };
 
     // Get the _REGISTERED_DATASOURCES dict from base module

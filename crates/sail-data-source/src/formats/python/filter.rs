@@ -14,9 +14,10 @@ use datafusion_common::ScalarValue;
 use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyList, PyTuple};
 use pyo3::IntoPyObject;
+use serde::{Deserialize, Serialize};
 
 /// Represents a filter that can be pushed to Python.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PythonFilter {
     // Comparison filters
     EqualTo {
@@ -90,7 +91,7 @@ pub enum PythonFilter {
 pub type ColumnPath = Vec<String>;
 
 /// Filter value that can be compared.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FilterValue {
     Null,
     Bool(bool),
@@ -264,6 +265,7 @@ pub fn expr_to_filter(expr: &Expr) -> Option<PythonFilter> {
 fn expr_to_column(expr: &Expr) -> Option<ColumnPath> {
     match expr {
         Expr::Column(col) => Some(vec![col.name.clone()]),
+        Expr::Cast(cast) => expr_to_column(&cast.expr),
         _ => None,
     }
 }
@@ -272,6 +274,7 @@ fn expr_to_column(expr: &Expr) -> Option<ColumnPath> {
 fn expr_to_value(expr: &Expr) -> Option<FilterValue> {
     match expr {
         Expr::Literal(scalar, _) => FilterValue::from_scalar(scalar),
+        Expr::Cast(cast) => expr_to_value(&cast.expr),
         _ => None,
     }
 }

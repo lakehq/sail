@@ -583,4 +583,5 @@ message PythonDataSourceExecNode {
   bytes command = 1;
   bytes schema = 2;
   repeated InputPartitionNode partitions = 3;
+  bytes filters = 4;
 }

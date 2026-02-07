@@ -45,17 +45,41 @@ ColumnPath = Tuple[str, ...]
 class CaseInsensitiveDict(dict):
     """A dictionary with case-insensitive keys."""
 
-    def __getitem__(self, key):
-        return super().__getitem__(key.lower())
+    def __init__(self, data=None, **kwargs):
+        super().__init__()
+        if data is not None:
+            self.update(data)
+        if kwargs:
+            self.update(kwargs)
 
     def __setitem__(self, key, value):
         super().__setitem__(key.lower(), value)
+
+    def __getitem__(self, key):
+        return super().__getitem__(key.lower())
+
+    def __delitem__(self, key):
+        super().__delitem__(key.lower())
 
     def __contains__(self, key):
         return super().__contains__(key.lower())
 
     def get(self, key, default=None):
         return super().get(key.lower(), default)
+
+    def pop(self, key, default=None):
+        return super().pop(key.lower(), default)
+
+    def update(self, other=None, **kwargs):
+        if other is not None:
+            if hasattr(other, "keys"):
+                for k in other:
+                    self[k] = other[k]
+            else:
+                for k, v in other:
+                    self[k] = v
+        for k, v in kwargs.items():
+            self[k] = v
 
 
 # ============================================================================
@@ -330,7 +354,7 @@ class DataSource(ABC):
         pass
 
     @abstractmethod
-    def schema(self) -> str:
+    def schema(self) -> Union[str, "pa.Schema"]:
         """
         Return the schema of the data source.
 

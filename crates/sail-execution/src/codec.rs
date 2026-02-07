@@ -877,6 +877,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 command,
                 schema,
                 partitions,
+                filters,
             }) => {
                 let schema = Arc::new(self.try_decode_schema(&schema)?);
                 let partitions = partitions
@@ -886,9 +887,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         data: p.data,
                     })
                     .collect();
+                let filters = if filters.is_empty() {
+                    vec![]
+                } else {
+                    serde_json::from_slice(&filters)
+                        .map_err(|e| plan_datafusion_err!("failed to decode Python filters: {e}"))?
+                };
                 // Note: executor is created lazily in execute() on the worker
                 Ok(Arc::new(PythonDataSourceExec::new(
-                    command, schema, partitions,
+                    command, schema, partitions, filters,
                 )))
             }
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
@@ -1367,10 +1374,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     data: p.data.clone(),
                 })
                 .collect();
+            let filters = serde_json::to_vec(python_exec.filters())
+                .map_err(|e| plan_datafusion_err!("failed to encode Python filters: {e}"))?;
             NodeKind::PythonDataSource(gen::PythonDataSourceExecNode {
                 command: python_exec.command().to_vec(),
                 schema,
                 partitions,
+                filters,
             })
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");

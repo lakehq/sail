@@ -638,7 +638,9 @@ pub(crate) async fn handle_execute_register_datasource(
         if let Ok(registry) = ctx.extension::<TableFormatRegistry>() {
             let format = Arc::new(PythonTableFormat::with_pickled_class(name.clone(), command));
             // Ignore error if already registered (allows re-registration to update)
-            let _ = registry.register(format);
+            if let Err(e) = registry.register(format) {
+                warn!("Failed to register python datasource {}: {}", name, e);
+            }
             log::info!("Registered session-scoped datasource: {}", name);
         } else {
             return Err(SparkError::internal(

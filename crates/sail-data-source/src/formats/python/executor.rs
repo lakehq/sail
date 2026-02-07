@@ -70,11 +70,16 @@ pub trait PythonExecutor: Send + Sync + std::fmt::Debug {
     /// Execute a read for a specific partition.
     ///
     /// Returns a stream of RecordBatches from Python.
+    /// Execute a read for a specific partition.
+    ///
+    /// Returns a stream of RecordBatches from Python.
     async fn execute_read(
         &self,
         command: &[u8],
         partition: &InputPartition,
         schema: SchemaRef,
+        filters: Vec<PythonFilter>,
+        batch_size: usize,
     ) -> Result<BoxStream<'static, Result<RecordBatch>>>;
 }
 
@@ -239,14 +244,17 @@ impl PythonExecutor for InProcessExecutor {
         command: &[u8],
         partition: &InputPartition,
         schema: SchemaRef,
+        filters: Vec<PythonFilter>,
+        batch_size: usize,
     ) -> Result<BoxStream<'static, Result<RecordBatch>>> {
-        use super::stream::{PythonDataSourceStream, DEFAULT_BATCH_SIZE};
+        use super::stream::PythonDataSourceStream;
 
         let stream = PythonDataSourceStream::new(
             command.to_vec(),
             partition.clone(),
             schema,
-            DEFAULT_BATCH_SIZE,
+            filters,
+            batch_size,
         )?;
 
         Ok(Box::pin(stream))

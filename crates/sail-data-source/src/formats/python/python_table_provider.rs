@@ -91,11 +91,17 @@ impl TableProvider for PythonTableProvider {
         // This ensures pushFilters() and partitions() are called on the same reader instance
         let partitions = self
             .executor
-            .get_partitions(&self.command, &self.schema, pushed_filters)
+            .get_partitions(&self.command, &self.schema, pushed_filters.clone())
             .await?;
 
         // Create execution plan (executor is created lazily in execute())
-        let exec = PythonDataSourceExec::new(self.command.clone(), self.schema.clone(), partitions);
+        // Create execution plan (executor is created lazily in execute())
+        let exec = PythonDataSourceExec::new(
+            self.command.clone(),
+            self.schema.clone(),
+            partitions,
+            pushed_filters,
+        );
         let exec = Arc::new(exec) as Arc<dyn ExecutionPlan>;
 
         // Apply projection if present
