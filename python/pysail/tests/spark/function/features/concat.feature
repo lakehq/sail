@@ -1,13 +1,8 @@
-@sail-only
-Feature: array_concat() concatenates arrays (Sail extension)
-
-  Note: array_concat is a Sail extension not available in standard Spark.
-  Use concat() for Spark-compatible array concatenation.
+Feature: concat() concatenates arrays
 
   Rule: Basic concatenation
 
-    @sail-only
-    Scenario: array_concat two integer arrays
+    Scenario: concat two integer arrays
       When query
       """
       SELECT concat(array(1, 2, 3), array(4, 5)) AS result
@@ -16,8 +11,7 @@ Feature: array_concat() concatenates arrays (Sail extension)
       | result          |
       | [1, 2, 3, 4, 5] |
 
-    @sail-only
-    Scenario: array_concat two string arrays
+    Scenario: concat two string arrays
       When query
       """
       SELECT concat(array('a', 'b'), array('c')) AS result
@@ -28,21 +22,19 @@ Feature: array_concat() concatenates arrays (Sail extension)
 
   Rule: Empty array handling
 
-    @sail-only
-    Scenario: array_concat empty array with typed array
+    Scenario: concat empty array with typed array
       When query
       """
-      SELECT array_concat(array(), array(1, 2, 3)) AS result
+      SELECT concat(array(), array(1, 2, 3)) AS result
       """
       Then query result
       | result    |
       | [1, 2, 3] |
 
-    @sail-only
-    Scenario: array_concat typed array with empty array
+    Scenario: concat typed array with empty array
       When query
       """
-      SELECT array_concat(array(1, 2), array()) AS result
+      SELECT concat(array(1, 2), array()) AS result
       """
       Then query result
       | result |
@@ -50,8 +42,7 @@ Feature: array_concat() concatenates arrays (Sail extension)
 
   Rule: Null propagation
 
-    @sail-only
-    Scenario: array_concat array with null returns null
+    Scenario: concat array with null returns null
       When query
       """
       SELECT concat(array(1, 2), CAST(NULL AS ARRAY<INT>)) AS result
@@ -60,8 +51,7 @@ Feature: array_concat() concatenates arrays (Sail extension)
       | result |
       | NULL   |
 
-    @sail-only
-    Scenario: array_concat null with array returns null
+    Scenario: concat null with array returns null
       When query
       """
       SELECT concat(CAST(NULL AS ARRAY<INT>), array(1, 2)) AS result
