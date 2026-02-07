@@ -574,7 +574,7 @@ message DeltaLogReplayExecNode {
   repeated string commit_files = 6;
 }
 
-message InputPartitionNode {
+message PythonDataSourceInputPartition {
   uint64 partition_id = 1;
   bytes data = 2;
 }
@@ -582,6 +582,6 @@ message InputPartitionNode {
 message PythonDataSourceExecNode {
   bytes command = 1;
   bytes schema = 2;
-  repeated InputPartitionNode partitions = 3;
+  repeated PythonDataSourceInputPartition partitions = 3;
   bytes filters = 4;
 }

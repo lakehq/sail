@@ -35,8 +35,6 @@ dashmap = { workspace = true }
 once_cell = { workspace = true }
 thiserror = { workspace = true }
 
-[features]
-default = []
 
 [build-dependencies]
 serde = { workspace = true }

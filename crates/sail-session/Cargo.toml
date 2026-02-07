@@ -48,5 +48,3 @@ chrono = { workspace = true }
 indexmap = { workspace = true }
 futures = { workspace = true }
 
-[features]
-default = []

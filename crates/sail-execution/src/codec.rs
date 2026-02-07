@@ -1369,7 +1369,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let partitions = python_exec
                 .partitions()
                 .iter()
-                .map(|p| gen::InputPartitionNode {
+                .map(|p| gen::PythonDataSourceInputPartition {
                     partition_id: p.partition_id as u64,
                     data: p.data.clone(),
                 })
