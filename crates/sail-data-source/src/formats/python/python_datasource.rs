@@ -12,7 +12,6 @@ use pyo3::types::PyBytes;
 
 use super::arrow_utils::py_schema_to_rust;
 use super::error::{import_cloudpickle, PythonDataSourceContext, PythonDataSourceError};
-use super::executor::InputPartition;
 
 /// Represents a Python-defined DataSource.
 ///
@@ -216,72 +215,9 @@ impl PythonDataSource {
         &self.command
     }
 
-    /// Get input partitions for parallel reading.
-    ///
-    /// Calls the Python DataSource's reader().partitions() method
-    /// and pickles each partition for distribution.
-    ///
-    /// # Returns
-    /// * `Result<Vec<InputPartition>>` - List of partitions
-    pub fn get_partitions(&self, schema: &SchemaRef) -> Result<Vec<InputPartition>> {
-        let ctx = PythonDataSourceContext::new(&self.name, "get_partitions");
-
-        Python::attach(|py| {
-            let ds = self.get_cached_datasource(py)?;
-
-            // Get reader with schema
-            let schema_obj = super::arrow_utils::rust_schema_to_py(py, schema)?;
-            let reader = ds
-                .call_method1("reader", (schema_obj,))
-                .map_err(|e| ctx.wrap_py_error(e))?;
-
-            // Get partitions
-            let partitions = reader
-                .call_method0("partitions")
-                .map_err(|e| ctx.wrap_py_error(e))?;
-
-            // Convert to list
-            let partitions_list = partitions
-                .downcast::<pyo3::types::PyList>()
-                .map_err(|e| ctx.wrap_error(format!("partitions() must return a list: {}", e)))?;
-
-            // Pickle each partition
-            let cloudpickle = import_cloudpickle(py).map_err(|e| ctx.wrap_error(e.to_string()))?;
-
-            let mut result = Vec::with_capacity(partitions_list.len());
-            for (i, partition) in partitions_list.iter().enumerate() {
-                let pickled = cloudpickle
-                    .call_method1("dumps", (&partition,))
-                    .map_err(|e| {
-                        ctx.wrap_error(format!("Failed to pickle partition {}: {}", i, e))
-                    })?;
-
-                let bytes: Vec<u8> = pickled.extract().map_err(|e| {
-                    ctx.wrap_error(format!(
-                        "Failed to extract pickled bytes for partition {}: {}",
-                        i, e
-                    ))
-                })?;
-
-                result.push(InputPartition {
-                    partition_id: i,
-                    data: bytes,
-                });
-            }
-
-            log::debug!(
-                "[{}::get_partitions] Created {} partitions",
-                self.name,
-                result.len()
-            );
-
-            Ok(result)
-        })
-    }
-
     /// Validate Python version compatibility.
     ///
-    /// Requires Python 3.9+ per RFC (entry_points API changes in 3.9).
+    /// Requires Python 3.10+ (3.9 reached end-of-life, dropped in Sail 0.5).
     fn validate_python_version(version: &str) -> Result<()> {
         // Parse version string (e.g., "3.11" -> major=3, minor=11)
         let parts: Vec<&str> = version.split('.').collect();
@@ -301,10 +237,10 @@ impl PythonDataSource {
             PythonDataSourceError::VersionError(format!("Invalid minor version: {}", parts[1]))
         })?;
 
-        // Require Python 3.9+ (entry_points API changed in 3.9)
-        if major < 3 || (major == 3 && minor < 9) {
+        // Require Python 3.10+ (3.9 reached end-of-life, dropped in Sail 0.5)
+        if major < 3 || (major == 3 && minor < 10) {
             return Err(PythonDataSourceError::VersionError(format!(
-                "Python {} is not supported. Require Python 3.9+",
+                "Python {} is not supported. Require Python 3.10+",
                 version
             ))
             .into());
@@ -471,8 +407,7 @@ mod tests {
 
     #[test]
     fn test_validate_python_version() {
-        // Valid versions (3.9+)
-        assert!(PythonDataSource::validate_python_version("3.9").is_ok());
+        // Valid versions (3.10+)
         assert!(PythonDataSource::validate_python_version("3.10").is_ok());
         assert!(PythonDataSource::validate_python_version("3.11").is_ok());
         assert!(PythonDataSource::validate_python_version("3.12").is_ok());
@@ -480,7 +415,8 @@ mod tests {
         // Invalid versions
         assert!(PythonDataSource::validate_python_version("2.7").is_err());
         assert!(PythonDataSource::validate_python_version("3.6").is_err());
-        assert!(PythonDataSource::validate_python_version("3.8").is_err()); // 3.8 no longer supported
+        assert!(PythonDataSource::validate_python_version("3.8").is_err());
+        assert!(PythonDataSource::validate_python_version("3.9").is_err()); // 3.9 no longer supported
         assert!(PythonDataSource::validate_python_version("invalid").is_err());
     }
 
