@@ -68,3 +68,43 @@ Feature: CTE (Common Table Expressions) support
       Then query result
       | val   |
       | inner |
+
+  Rule: CTE shadowing
+
+    Scenario: duplicate CTE name keeps the last definition
+      When query
+      """
+      WITH
+        x AS (SELECT 1 AS value),
+        x AS (SELECT 2 AS value)
+      SELECT * FROM x
+      """
+      Then query result
+      | value |
+      | 2     |
+
+    Scenario: duplicate CTE name with intermediate CTEs
+      When query
+      """
+      WITH
+        x AS (SELECT 'first' AS label),
+        y AS (SELECT 'middle' AS label),
+        x AS (SELECT 'last' AS label)
+      SELECT * FROM x
+      """
+      Then query result
+      | label |
+      | last  |
+
+    Scenario: multiple shadowed CTEs preserve non-duplicate order
+      When query
+      """
+      WITH
+        a AS (SELECT 1 AS val),
+        b AS (SELECT 2 AS val),
+        a AS (SELECT 3 AS val)
+      SELECT a.val AS a_val, b.val AS b_val FROM a, b
+      """
+      Then query result
+      | a_val | b_val |
+      | 3     | 2     |
