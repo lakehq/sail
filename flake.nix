@@ -1,5 +1,5 @@
 {
-  description = "Sail dev shell (Spark/Ibis tests) with reproducible Rust nightly";
+  description = "Sail – Spark-compatible compute engine (dev shell + package)";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -14,15 +14,56 @@
         lib = pkgs.lib;
 
         isLinux = pkgs.stdenv.isLinux;
+        isDarwin = pkgs.stdenv.isDarwin;
 
         rustStable = fenix.packages.${system}.stable.toolchain;
         rustNightly = fenix.packages.${system}.latest.toolchain;
 
         py = pkgs.python313;
         pyp = pkgs.python313Packages;
-	py311 = pkgs.python311;
+        py311 = pkgs.python311;
+
+        version = "0.5.0";
 
       in {
+        # ── Package ────────────────────────────────────────────────────
+        packages.default = pkgs.rustPlatform.buildRustPackage {
+          pname = "sail";
+          inherit version;
+          src = lib.cleanSource ./.;
+
+          cargoLock.lockFile = ./Cargo.lock;
+
+          # Only build the CLI binary
+          cargoBuildFlags = [ "-p" "sail-cli" ];
+          cargoTestFlags = [ "-p" "sail-cli" ];
+
+          nativeBuildInputs = [
+            pkgs.protobuf   # protoc – required by tonic-build / prost-build
+            pkgs.pkg-config
+          ];
+
+          buildInputs = [
+            py               # PyO3 links against libpython at build time
+          ];
+
+          # PyO3 configuration
+          env = {
+            PYO3_PYTHON = "${py}/bin/python";
+          };
+
+          # Some proto builds look for protoc via this env var
+          PROTOC = "${pkgs.protobuf}/bin/protoc";
+
+          meta = with lib; {
+            description = "Spark-compatible compute engine built on Apache Arrow and DataFusion";
+            homepage = "https://github.com/lakehq/sail";
+            license = licenses.asl20;
+            mainProgram = "sail";
+          };
+        };
+
+        # ── Dev shell (unchanged) ─────────────────────────────────────
         devShells.default = pkgs.mkShell {
           buildInputs =
             (with pkgs; [
