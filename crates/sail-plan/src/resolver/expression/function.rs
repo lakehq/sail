@@ -2,7 +2,7 @@ use datafusion_common::DFSchemaRef;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::utils::{expand_qualified_wildcard, expand_wildcard};
-use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan};
+use datafusion_expr::{expr, lit, EmptyRelation, Expr, LogicalPlan};
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
@@ -54,6 +54,12 @@ impl PlanResolver<'_> {
 
         let (argument_display_names, arguments) = if canonical_function_name == "struct" {
             self.resolve_struct_expressions_and_names(arguments, schema, state)
+                .await?
+        } else if canonical_function_name == "datediff" && arguments.len() == 3 {
+            // Special handling for DATEDIFF(unit, start, end)
+            // The first argument (unit) may be an identifier like HOUR, DAY, etc.
+            // Convert it to a string literal instead of resolving it as a column
+            self.resolve_datediff_expressions(arguments, schema, state)
                 .await?
         } else {
             self.resolve_expressions_and_names(arguments, schema, state)
@@ -248,6 +254,55 @@ impl PlanResolver<'_> {
                 }
             }
         }
+
+        Ok((names, exprs))
+    }
+
+    /// Special resolver for DATEDIFF(unit, start, end) where unit is a time unit identifier.
+    /// Converts the first argument from an identifier (HOUR, DAY, etc.) to a string literal.
+    async fn resolve_datediff_expressions(
+        &self,
+        expressions: Vec<spec::Expr>,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<(Vec<String>, Vec<expr::Expr>)> {
+        let mut expressions = expressions.into_iter();
+
+        // First argument: time unit (could be identifier or string literal)
+        let unit_expr = expressions
+            .next()
+            .ok_or_else(|| PlanError::invalid("datediff requires at least 3 arguments"))?;
+
+        let (unit_name, unit_resolved) = match &unit_expr {
+            // Handle identifier: DATEDIFF(DAY, ...) where DAY is parsed as UnresolvedAttribute
+            // Convert to a string literal so it doesn't participate in column resolution
+            spec::Expr::UnresolvedAttribute { name, .. } => {
+                // Get the first part of the object name (e.g., "HOUR" from ObjectName([Identifier("HOUR")]))
+                let parts = name.parts();
+                let unit_str = parts
+                    .first()
+                    .map(|id| id.as_ref().to_uppercase())
+                    .unwrap_or_default();
+                (unit_str.clone(), lit(unit_str))
+            }
+            // For any other expression, resolve it normally
+            _ => {
+                let NamedExpr { name, expr, .. } = self
+                    .resolve_named_expression(unit_expr, schema, state)
+                    .await?;
+                (name.one()?, expr)
+            }
+        };
+
+        // Resolve remaining arguments normally
+        let remaining: Vec<spec::Expr> = expressions.collect();
+        let (mut names, mut exprs) = self
+            .resolve_expressions_and_names(remaining, schema, state)
+            .await?;
+
+        // Prepend unit argument
+        names.insert(0, unit_name);
+        exprs.insert(0, unit_resolved);
 
         Ok((names, exprs))
     }

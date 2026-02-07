@@ -2,7 +2,7 @@ use datafusion::arrow::datatypes::{
     DataType, IntervalDayTimeType, IntervalUnit, IntervalYearMonthType, TimeUnit,
 };
 use datafusion::functions::expr_fn;
-use datafusion_common::ScalarValue;
+use datafusion_common::{Column, ScalarValue};
 use datafusion_expr::expr::{self, Expr};
 use datafusion_expr::{cast, lit, try_cast, when, BinaryExpr, ExprSchemable, Operator, ScalarUDF};
 use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
@@ -10,6 +10,7 @@ use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
 use sail_common::datetime::time_unit_to_multiplier;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
+use sail_function::scalar::datetime::spark_date_format::SparkDateFormat;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
 use sail_function::scalar::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
@@ -155,6 +156,97 @@ fn date_days_arithmetic(dt1: Expr, dt2: Expr, op: Operator) -> Expr {
     })
 }
 
+/// Extracts unit name from expression (handles both string literals and column identifiers)
+fn extract_unit_name(expr: &Expr) -> Option<String> {
+    match expr {
+        // Handle string literal: DATEDIFF('day', ...)
+        Expr::Literal(ScalarValue::Utf8(Some(s)), _)
+        | Expr::Literal(ScalarValue::LargeUtf8(Some(s)), _) => Some(s.to_uppercase()),
+        // Handle identifier: DATEDIFF(DAY, ...) where DAY is parsed as column name
+        Expr::Column(Column { name, .. }) => Some(name.to_uppercase()),
+        _ => None,
+    }
+}
+
+/// DATEDIFF with unit support: DATEDIFF(unit, start, end) or DATEDIFF(start, end)
+fn datediff(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    match input.arguments.len() {
+        // DATEDIFF(start, end) - Spark style, returns days
+        2 => {
+            let (start, end) = input.arguments.two()?;
+            Ok(date_days_arithmetic(start, end, Operator::Minus))
+        }
+        // DATEDIFF(unit, start, end) - SQL Server/Ibis style
+        3 => {
+            let (unit_expr, start, end) = input.arguments.three()?;
+            let unit = extract_unit_name(&unit_expr).ok_or_else(|| {
+                PlanError::invalid(format!(
+                    "datediff: first argument must be a time unit (DAY, HOUR, etc.), got {:?}",
+                    unit_expr
+                ))
+            })?;
+
+            // Convert timestamps to the appropriate precision and compute difference
+            // TIMESTAMPDIFF convention: TIMESTAMPDIFF(unit, start, end) = end - start
+            match unit.as_str() {
+                "DAY" | "DAYS" => Ok(date_days_arithmetic(end, start, Operator::Minus)),
+                "HOUR" | "HOURS" => {
+                    // (end_timestamp - start_timestamp) in seconds / 3600
+                    let start_sec = cast(start, DataType::Timestamp(TimeUnit::Second, None));
+                    let end_sec = cast(end, DataType::Timestamp(TimeUnit::Second, None));
+                    let start_int = cast(start_sec, DataType::Int64);
+                    let end_int = cast(end_sec, DataType::Int64);
+                    let diff = Expr::BinaryExpr(BinaryExpr {
+                        left: Box::new(end_int),
+                        op: Operator::Minus,
+                        right: Box::new(start_int),
+                    });
+                    Ok(Expr::BinaryExpr(BinaryExpr {
+                        left: Box::new(diff),
+                        op: Operator::Divide,
+                        right: Box::new(lit(3600i64)),
+                    }))
+                }
+                "MINUTE" | "MINUTES" => {
+                    let start_sec = cast(start, DataType::Timestamp(TimeUnit::Second, None));
+                    let end_sec = cast(end, DataType::Timestamp(TimeUnit::Second, None));
+                    let start_int = cast(start_sec, DataType::Int64);
+                    let end_int = cast(end_sec, DataType::Int64);
+                    let diff = Expr::BinaryExpr(BinaryExpr {
+                        left: Box::new(end_int),
+                        op: Operator::Minus,
+                        right: Box::new(start_int),
+                    });
+                    Ok(Expr::BinaryExpr(BinaryExpr {
+                        left: Box::new(diff),
+                        op: Operator::Divide,
+                        right: Box::new(lit(60i64)),
+                    }))
+                }
+                "SECOND" | "SECONDS" => {
+                    let start_sec = cast(start, DataType::Timestamp(TimeUnit::Second, None));
+                    let end_sec = cast(end, DataType::Timestamp(TimeUnit::Second, None));
+                    let start_int = cast(start_sec, DataType::Int64);
+                    let end_int = cast(end_sec, DataType::Int64);
+                    Ok(Expr::BinaryExpr(BinaryExpr {
+                        left: Box::new(end_int),
+                        op: Operator::Minus,
+                        right: Box::new(start_int),
+                    }))
+                }
+                _ => Err(PlanError::invalid(format!(
+                    "datediff: unsupported time unit '{}'. Supported: DAY, HOUR, MINUTE, SECOND",
+                    unit
+                ))),
+            }
+        }
+        n => Err(PlanError::invalid(format!(
+            "datediff requires 2 or 3 arguments, got {}",
+            n
+        ))),
+    }
+}
+
 fn session_timezone(input: &ScalarFunctionInput) -> Expr {
     lit(input
         .function_context
@@ -220,8 +312,7 @@ fn to_unix_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
 }
 
 fn date_format(expr: Expr, format: Expr) -> Expr {
-    let format = to_chrono_fmt(format);
-    expr_fn::to_char(expr, format)
+    ScalarUDF::from(SparkDateFormat::new()).call(vec![expr, format])
 }
 
 fn to_timestamp(args: Vec<Expr>) -> PlanResult<Expr> {
@@ -490,10 +581,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             "dateadd",
             F::custom(|input| interval_arithmetic(input, "days", Operator::Plus)),
         ),
-        (
-            "datediff",
-            F::binary(|start, end| date_days_arithmetic(start, end, Operator::Minus)),
-        ),
+        ("datediff", F::custom(datediff)),
         ("datepart", F::binary(date_part)),
         ("day", F::unary(|arg| integer_part(arg, "DAY"))),
         ("dayname", F::unary(|arg| expr_fn::to_char(arg, lit("%a")))),
