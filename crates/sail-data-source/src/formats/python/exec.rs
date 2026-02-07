@@ -34,6 +34,7 @@ use arrow_schema::SchemaRef;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 use datafusion_common::{exec_err, internal_err, Result};
 
@@ -207,41 +208,6 @@ impl ExecutionPlan for PythonDataSourceExec {
             self.schema.clone(),
             stream,
         )))
-    }
-}
-
-/// Adapter to convert a Stream<Item=Result<RecordBatch>> to SendableRecordBatchStream
-struct RecordBatchStreamAdapter {
-    schema: SchemaRef,
-    inner: std::pin::Pin<Box<dyn futures::Stream<Item = Result<arrow::array::RecordBatch>> + Send>>,
-}
-
-impl RecordBatchStreamAdapter {
-    fn new(
-        schema: SchemaRef,
-        stream: impl futures::Stream<Item = Result<arrow::array::RecordBatch>> + Send + 'static,
-    ) -> Self {
-        Self {
-            schema,
-            inner: Box::pin(stream),
-        }
-    }
-}
-
-impl futures::Stream for RecordBatchStreamAdapter {
-    type Item = Result<arrow::array::RecordBatch>;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        self.inner.as_mut().poll_next(cx)
-    }
-}
-
-impl datafusion::physical_plan::RecordBatchStream for RecordBatchStreamAdapter {
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
     }
 }
 
