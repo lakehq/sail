@@ -10,7 +10,7 @@ Feature: array_concat() concatenates arrays (Sail extension)
     Scenario: array_concat two integer arrays
       When query
       """
-      SELECT concat(array(1, 2, 3), array(4, 5)) AS result
+      SELECT array_concat(array(1, 2, 3), array(4, 5)) AS result
       """
       Then query result
       | result          |
@@ -20,7 +20,7 @@ Feature: array_concat() concatenates arrays (Sail extension)
     Scenario: array_concat two string arrays
       When query
       """
-      SELECT concat(array('a', 'b'), array('c')) AS result
+      SELECT array_concat(array('a', 'b'), array('c')) AS result
       """
       Then query result
       | result    |
@@ -54,7 +54,7 @@ Feature: array_concat() concatenates arrays (Sail extension)
     Scenario: array_concat array with null returns null
       When query
       """
-      SELECT concat(array(1, 2), CAST(NULL AS ARRAY<INT>)) AS result
+      SELECT array_concat(array(1, 2), CAST(NULL AS ARRAY<INT>)) AS result
       """
       Then query result
       | result |
@@ -64,7 +64,7 @@ Feature: array_concat() concatenates arrays (Sail extension)
     Scenario: array_concat null with array returns null
       When query
       """
-      SELECT concat(CAST(NULL AS ARRAY<INT>), array(1, 2)) AS result
+      SELECT array_concat(CAST(NULL AS ARRAY<INT>), array(1, 2)) AS result
       """
       Then query result
       | result |
