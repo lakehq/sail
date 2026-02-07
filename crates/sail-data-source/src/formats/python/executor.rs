@@ -16,17 +16,6 @@ use pyo3::types::PyAnyMethods;
 use super::error::{import_cloudpickle, PythonDataSourceContext};
 use super::filter::{filters_to_python, PythonFilter};
 
-/// Maximum size for a single partition in bytes (default: 100MB).
-///
-/// Partitions exceeding this limit will cause an error to prevent OOM.
-/// This can be overridden via environment variable `SAIL_MAX_PARTITION_SIZE_MB`.
-fn max_partition_size_bytes() -> usize {
-    std::env::var("SAIL_MAX_PARTITION_SIZE_MB")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .map(|mb| mb * 1024 * 1024)
-        .unwrap_or(100 * 1024 * 1024) // 100MB default
-}
 
 /// Input partition for parallel reading.
 #[derive(Debug, Clone)]
@@ -197,7 +186,6 @@ impl PythonExecutor for InProcessExecutor {
                     ctx.wrap_error(format!("partitions() must return a list: {}", e))
                 })?;
 
-                let max_size = max_partition_size_bytes();
                 let mut result = Vec::with_capacity(partitions_list.len());
                 let mut total_size: usize = 0;
 
@@ -205,18 +193,6 @@ impl PythonExecutor for InProcessExecutor {
                     // Pickle each partition for distribution
                     let pickled = pickle_object(py, &partition)?;
                     let partition_size = pickled.len();
-
-                    // Check partition size limit
-                    if partition_size > max_size {
-                        return Err(super::error::PythonDataSourceError::ResourceExhausted(
-                            format!(
-                                "[{}::partitions] Partition {} exceeds size limit: {} bytes (max: {} bytes). \
-                                Set SAIL_MAX_PARTITION_SIZE_MB to increase limit.",
-                                ds_name, i, partition_size, max_size
-                            ),
-                        )
-                        .into());
-                    }
 
                     total_size += partition_size;
                     result.push(InputPartition {
