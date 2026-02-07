@@ -283,7 +283,7 @@ fn expr_to_value(expr: &Expr) -> Option<FilterValue> {
 // for passing to DataSourceReader.pushFilters().
 /// Convert Python filters to Python objects.
 pub fn filters_to_python(py: Python<'_>, filters: &[PythonFilter]) -> PyResult<Py<PyAny>> {
-    let datasource_module = py.import("pysail.spark.datasource.base")?;
+    let datasource_module = py.import("pyspark.sql.datasource")?;
 
     let py_filters: Vec<Py<PyAny>> = filters
         .iter()
