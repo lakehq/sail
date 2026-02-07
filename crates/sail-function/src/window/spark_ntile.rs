@@ -5,11 +5,16 @@ use std::sync::Arc;
 use datafusion::arrow::array::{ArrayRef, UInt64Array};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::error::Result;
-use datafusion::logical_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
+use datafusion::logical_expr::function::{PartitionEvaluatorArgs, WindowUDFFieldArgs};
+use datafusion::logical_expr::{
+    PartitionEvaluator, Signature, Volatility, WindowUDF, WindowUDFImpl,
+};
 use datafusion::scalar::ScalarValue;
-use datafusion_functions_window_common::field::WindowUDFFieldArgs;
-use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_physical_expr::expressions::Literal;
+
+pub fn spark_ntile_udwf() -> Arc<WindowUDF> {
+    Arc::new(WindowUDF::from(SparkNtile::new()))
+}
 
 /// Spark-compatible NTILE window function.
 ///

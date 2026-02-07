@@ -15,7 +15,7 @@ use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::WindowFunctionParams;
 use datafusion_expr::{
-    cast, expr, lit, when, AggregateUDF, ExprSchemable, WindowFunctionDefinition, WindowUDF,
+    cast, expr, lit, when, AggregateUDF, ExprSchemable, WindowFunctionDefinition,
 };
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use lazy_static::lazy_static;
@@ -26,7 +26,7 @@ use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
 use sail_function::aggregate::skewness::SkewnessFunc;
 use sail_function::aggregate::try_avg::TryAvgFunction;
-use sail_function::window::SparkNtile;
+use sail_function::window::spark_ntile_udwf;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
@@ -467,10 +467,7 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
         ("last_value", F::window(last_value_udwf)),
         ("lead", F::window(lead_udwf)),
         ("nth_value", F::custom(nth_value)),
-        (
-            "ntile",
-            F::window(|| Arc::new(WindowUDF::from(SparkNtile::new()))),
-        ),
+        ("ntile", F::window(spark_ntile_udwf)),
         ("rank", F::window(rank_udwf)),
         ("row_number", F::window(row_number_udwf)),
         ("percent_rank", F::window(percent_rank_udwf)),

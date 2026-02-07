@@ -6164,7 +6164,6 @@ dependencies = [
  "datafusion-expr-common",
  "datafusion-functions",
  "datafusion-functions-nested",
- "datafusion-functions-window-common",
  "datafusion-physical-expr",
  "half",
  "jiter",
