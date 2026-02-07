@@ -18,6 +18,7 @@ sail-function = { path = "../sail-function" }
 sail-logical-plan = { path = "../sail-logical-plan" }
 sail-physical-plan = { path = "../sail-physical-plan" }
 sail-telemetry = { path = "../sail-telemetry" }
+sail-catalog-system = { path = "../sail-catalog-system" }
 
 thiserror = { workspace = true }
 tokio = { workspace = true }
@@ -40,6 +41,7 @@ rand = { workspace = true }
 url = { workspace = true }
 readonly = { workspace = true }
 indexmap = { workspace = true }
+chrono = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }

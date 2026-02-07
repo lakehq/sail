@@ -247,10 +247,10 @@ impl OneLakeCatalogProvider {
             .collect();
 
         Ok(TableStatus {
+            catalog: Some(self.name.clone()),
+            database: vec![schema_name],
             name,
             kind: TableKind::Table {
-                catalog: self.name.clone(),
-                database: vec![schema_name],
                 columns,
                 comment: info.comment,
                 constraints: vec![],

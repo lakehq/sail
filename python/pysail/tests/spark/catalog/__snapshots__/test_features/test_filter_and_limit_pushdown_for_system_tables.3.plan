@@ -1,0 +1,6 @@
+== Physical Plan ==
+ProjectionExec: expr=[#12@0 as session_id, #13@1 as job_id, #14@2 as stage, #15@3 as partitions, #16@4 as inputs, #17@5 as group, #18@6 as mode, #19@7 as distribution, #20@8 as placement, #21@9 as status, #22@10 as created_at, #23@11 as stopped_at]
+  ProjectionExec: expr=[session_id@0 as #12, job_id@1 as #13, stage@2 as #14, partitions@3 as #15, inputs@4 as #16, group@5 as #17, mode@6 as #18, distribution@7 as #19, placement@8 as #20, status@9 as #21, created_at@10 as #22, stopped_at@11 as #23]
+    GlobalLimitExec: skip=0, fetch=1
+      CooperativeExec
+        SystemTableExec: table=stages, projection=Some([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]), filters=[BinaryExpr { left: Column { name: "session_id", index: 0 }, op: Eq, right: Literal { value: Utf8(""), field: Field { name: "lit", data_type: Utf8 } }, fail_on_overflow: false }, BinaryExpr { left: Column { name: "job_id", index: 1 }, op: Eq, right: Literal { value: UInt64(0), field: Field { name: "lit", data_type: UInt64 } }, fail_on_overflow: false }], fetch=Some(1)

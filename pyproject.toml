@@ -1,13 +1,13 @@
 [project]
 name = "pysail"
-version = "0.4.6"
+version = "0.5.0"
 description = "Sail Python library"
 authors = [
     { name = "LakeSail", email = "hello@lakesail.com" },
 ]
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.9,<3.15"
+requires-python = ">=3.10,<3.15"
 dependencies = []
 keywords = ["data", "big data", "sql", "spark", "pyspark", "arrow", "datafusion"]
 classifiers = [
@@ -20,7 +20,6 @@ classifiers = [
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -36,6 +35,7 @@ test = [
     # PySpark 4.1.0 does not work on Windows.
     #   https://issues.apache.org/jira/browse/SPARK-54745
     "pyspark-client>=4.0,<4.2,!=4.1.0",
+    "pandas<3",
     "duckdb>=1.0,<2",
     "pytest>=8.4,<9",
     "pytest-bdd>=8.1,<9",
@@ -82,6 +82,7 @@ skip-install = true
 dependencies = [
     "pyspark[connect]==4.1.1",
     "ibis-framework>=11,<12",
+    "pandas<3",
     "pytest>=8.4,<9",
     "pytest-bdd>=8.1,<9",
     "syrupy>=5.0,<6",
@@ -130,6 +131,7 @@ python = "3.11"
 installer = "pip"
 skip-install = true
 dependencies = [
+    "pandas<3",
     "pytest>=8.4,<9",
     "pytest-bdd>=8.1,<9",
     "syrupy>=5.0,<6",
@@ -175,7 +177,7 @@ dependencies = [
 spark = ["3.5.7", "4.1.1"]
 
 [tool.hatch.envs.test-spark.extra-scripts]
-install-pyspark = "\"{env:HATCH_UV}\" pip install --force-reinstall 'pyspark[connect] @ opt/spark/python/dist/pyspark-{matrix:spark}.tar.gz'"
+install-pyspark = "\"{env:HATCH_UV}\" pip install --force-reinstall 'pyspark[connect] @ opt/spark/python/dist/pyspark-{matrix:spark}.tar.gz' 'pandas<3'"
 
 [tool.hatch.envs.test-spark.overrides]
 matrix.spark.path = [
@@ -191,6 +193,9 @@ skip-install = true
 dependencies = [
     "pyspark[connect]==3.5.7",
     "ibis-framework[pyspark]>=11,<12",
+    # Pin sqlglot to avoid breaking change in 28.7.0 that breaks ibis Oracle compiler import
+    # See: https://github.com/tobymao/sqlglot/blob/main/CHANGELOG.md
+    "sqlglot<28.7.0",
     # The test dependencies are borrowed from `pyproject.toml` of the Ibis project.
     # They need to be updated accordingly when we update the Ibis version.
     "cloudpickle",

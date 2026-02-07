@@ -35,14 +35,18 @@ impl<T: ArrowNumericType + Send> PercentileDiscGroupsAccumulator<T> {
     /// This processes data in 64-element chunks, checking the null bitmap via
     /// bitwise operations rather than per-element validity calls. The pattern
     /// is borrowed from DataFusion's `percentile_cont` implementation.
-    #[allow(clippy::unwrap_used)]
     fn accumulate_with_nulls_chunked(
         &mut self,
         group_indices: &[usize],
         values: &PrimitiveArray<T>,
     ) {
         let data = values.values();
-        let nulls = values.nulls().unwrap();
+        // SAFETY: his function represents an infallible situation.
+        // When the null count is greater than zero, the null buffer must exist.
+        #[allow(clippy::expect_used)]
+        let nulls = values
+            .nulls()
+            .expect("null buffer must exist when null_count > 0");
 
         let group_indices_chunks = group_indices.chunks_exact(64);
         let data_chunks = data.chunks_exact(64);

@@ -43,9 +43,9 @@ pub fn build_partition_dir(
     spec: &PartitionSpec,
     _iceberg_schema: &IcebergSchema,
     values: &[Option<Literal>],
-) -> String {
+) -> Result<String, String> {
     if spec.fields.is_empty() {
-        return String::new();
+        return Ok(String::new());
     }
     let mut segs = Vec::new();
     for (i, f) in spec.fields.iter().enumerate() {
@@ -75,15 +75,17 @@ pub fn build_partition_dir(
                     s
                 }
             },
-            #[allow(clippy::unwrap_used)]
             Some(Literal::Struct(_)) | Some(Literal::List(_)) | Some(Literal::Map(_)) => {
                 // Fallback debug formatting for complex types
-                format!("{:?}", val.unwrap())
+                format!(
+                    "{:?}",
+                    val.ok_or_else(|| "Invalid partition literal".to_string())?
+                )
             }
         };
         segs.push(format!("{}={}", f.name, human));
     }
-    segs.join("/")
+    Ok(segs.join("/"))
 }
 
 #[allow(dead_code)]
@@ -109,7 +111,7 @@ pub fn compute_partition_values(
             .unwrap_or(&Type::Primitive(PrimitiveType::String));
         values.push(apply_transform(f.transform, field_type, lit));
     }
-    let dir = build_partition_dir(spec, iceberg_schema, &values);
+    let dir = build_partition_dir(spec, iceberg_schema, &values)?;
     Ok((values, dir))
 }
 
@@ -154,7 +156,7 @@ pub fn split_record_batch_by_partition(
                 .unwrap_or(&Type::Primitive(PrimitiveType::String));
             vals.push(apply_transform(f.transform, field_type, lit));
         }
-        let dir = build_partition_dir(spec, iceberg_schema, &vals);
+        let dir = build_partition_dir(spec, iceberg_schema, &vals)?;
         let entry = groups.entry(dir).or_insert_with(|| Group {
             values: vals.clone(),
             indices: Vec::new(),

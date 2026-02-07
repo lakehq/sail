@@ -1,4 +1,5 @@
 mod core;
+mod observer;
 mod options;
 mod state;
 mod topology;

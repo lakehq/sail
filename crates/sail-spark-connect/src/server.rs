@@ -10,7 +10,6 @@ use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::executor::ExecutorMetadata;
 use crate::service;
 use crate::service::ExecutePlanResponseStream;
-use crate::session::SparkSessionKey;
 use crate::spark::connect::analyze_plan_request::Analyze;
 use crate::spark::connect::interrupt_request::{Interrupt, InterruptType};
 use crate::spark::connect::release_execute_request::{Release, ReleaseAll, ReleaseUntil};
@@ -26,11 +25,11 @@ use crate::spark::connect::{
 
 #[derive(Debug)]
 pub struct SparkConnectServer {
-    session_manager: SessionManager<SparkSessionKey>,
+    session_manager: SessionManager,
 }
 
 impl SparkConnectServer {
-    pub fn new(session_manager: SessionManager<SparkSessionKey>) -> Self {
+    pub fn new(session_manager: SessionManager) -> Self {
         Self { session_manager }
     }
 }
@@ -122,10 +121,8 @@ impl SparkConnectService for SparkConnectServer {
     ) -> Result<Response<Self::ExecutePlanStream>, Status> {
         let request = request.into_inner();
         debug!("{request:?}");
-        let session_key = SparkSessionKey {
-            user_id: request.user_context.map(|u| u.user_id).unwrap_or_default(),
-            session_id: request.session_id,
-        };
+        let session_id = request.session_id;
+        let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
         let metadata = ExecutorMetadata {
             operation_id: request
                 .operation_id
@@ -135,7 +132,7 @@ impl SparkConnectService for SparkConnectServer {
         };
         let ctx = self
             .session_manager
-            .get_or_create_session_context(session_key)
+            .get_or_create_session_context(session_id, user_id)
             .await
             .map_err(SparkError::from)?;
         let Plan { op_type: op } = request.plan.required("plan")?;
@@ -165,13 +162,11 @@ impl SparkConnectService for SparkConnectServer {
 
         let request = request.into_inner();
         debug!("{request:?}");
-        let session_key = SparkSessionKey {
-            user_id: request.user_context.map(|u| u.user_id).unwrap_or_default(),
-            session_id: request.session_id.clone(),
-        };
+        let session_id = request.session_id.clone();
+        let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
         let ctx = self
             .session_manager
-            .get_or_create_session_context(session_key)
+            .get_or_create_session_context(session_id, user_id)
             .await
             .map_err(SparkError::from)?;
         let analyze = request.analyze.required("analyze")?;
@@ -250,13 +245,11 @@ impl SparkConnectService for SparkConnectServer {
 
         let request = request.into_inner();
         debug!("{request:?}");
-        let session_key = SparkSessionKey {
-            user_id: request.user_context.map(|u| u.user_id).unwrap_or_default(),
-            session_id: request.session_id.clone(),
-        };
+        let session_id = request.session_id.clone();
+        let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
         let ctx = self
             .session_manager
-            .get_or_create_session_context(session_key)
+            .get_or_create_session_context(session_id, user_id)
             .await
             .map_err(SparkError::from)?;
         let config_request::Operation { op_type: op } = request.operation.required("operation")?;
@@ -301,17 +294,14 @@ impl SparkConnectService for SparkConnectServer {
             }
         };
         debug!("{first:?}");
-        let session_key = SparkSessionKey {
-            user_id: first.user_context.map(|u| u.user_id).unwrap_or_default(),
-            session_id: first.session_id.clone(),
-        };
+        let session_id = first.session_id.clone();
+        let user_id = first.user_context.map(|u| u.user_id).unwrap_or_default();
         let ctx = self
             .session_manager
-            .get_or_create_session_context(session_key)
+            .get_or_create_session_context(session_id.clone(), user_id)
             .await
             .map_err(SparkError::from)?;
         let payload = first.payload;
-        let session_id = first.session_id.clone();
         let stream = async_stream::try_stream! {
             if let Some(payload) = payload {
                 yield payload;
@@ -343,13 +333,11 @@ impl SparkConnectService for SparkConnectServer {
     ) -> Result<Response<ArtifactStatusesResponse>, Status> {
         let request = request.into_inner();
         debug!("{request:?}");
-        let session_key = SparkSessionKey {
-            user_id: request.user_context.map(|u| u.user_id).unwrap_or_default(),
-            session_id: request.session_id.clone(),
-        };
+        let session_id = request.session_id.clone();
+        let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
         let ctx = self
             .session_manager
-            .get_or_create_session_context(session_key)
+            .get_or_create_session_context(session_id, user_id)
             .await
             .map_err(SparkError::from)?;
         let statuses = service::handle_artifact_statuses(&ctx, request.names).await?;
@@ -368,13 +356,11 @@ impl SparkConnectService for SparkConnectServer {
     ) -> Result<Response<InterruptResponse>, Status> {
         let request = request.into_inner();
         debug!("{request:?}");
-        let session_key = SparkSessionKey {
-            user_id: request.user_context.map(|u| u.user_id).unwrap_or_default(),
-            session_id: request.session_id.clone(),
-        };
+        let session_id = request.session_id.clone();
+        let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
         let ctx = self
             .session_manager
-            .get_or_create_session_context(session_key)
+            .get_or_create_session_context(session_id, user_id)
             .await
             .map_err(SparkError::from)?;
         let ids = match InterruptType::try_from(request.interrupt_type) {
@@ -414,13 +400,11 @@ impl SparkConnectService for SparkConnectServer {
     ) -> Result<Response<Self::ReattachExecuteStream>, Status> {
         let request = request.into_inner();
         debug!("{request:?}");
-        let session_key = SparkSessionKey {
-            user_id: request.user_context.map(|u| u.user_id).unwrap_or_default(),
-            session_id: request.session_id,
-        };
+        let session_id = request.session_id;
+        let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
         let ctx = self
             .session_manager
-            .get_or_create_session_context(session_key)
+            .get_or_create_session_context(session_id, user_id)
             .await
             .map_err(SparkError::from)?;
         let stream =
@@ -435,13 +419,11 @@ impl SparkConnectService for SparkConnectServer {
     ) -> Result<Response<ReleaseExecuteResponse>, Status> {
         let request = request.into_inner();
         debug!("{request:?}");
-        let session_key = SparkSessionKey {
-            user_id: request.user_context.map(|u| u.user_id).unwrap_or_default(),
-            session_id: request.session_id.clone(),
-        };
+        let session_id = request.session_id.clone();
+        let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
         let ctx = self
             .session_manager
-            .get_or_create_session_context(session_key)
+            .get_or_create_session_context(session_id, user_id)
             .await
             .map_err(SparkError::from)?;
         let response_id = match request.release.required("release")? {
@@ -467,12 +449,10 @@ impl SparkConnectService for SparkConnectServer {
         if request.allow_reconnect {
             Err(SparkError::unsupported("reconnect session"))?;
         }
-        let session_key = SparkSessionKey {
-            user_id: request.user_context.map(|u| u.user_id).unwrap_or_default(),
-            session_id: request.session_id.clone(),
-        };
+        let session_id = request.session_id.clone();
+        let _user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
         self.session_manager
-            .delete_session(session_key)
+            .delete_session(session_id)
             .await
             .map_err(SparkError::from)?;
         let response = ReleaseSessionResponse {

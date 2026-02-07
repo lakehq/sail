@@ -7,7 +7,7 @@ use datafusion_expr::{cast, expr, lit, try_cast, ExprSchemable, ScalarUDF};
 use sail_common::datetime::time_unit_to_multiplier;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::session::PlanService;
+use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_interval::{

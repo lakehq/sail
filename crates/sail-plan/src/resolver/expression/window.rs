@@ -9,7 +9,7 @@ use datafusion_expr::{
 };
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::session::PlanService;
+use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;
@@ -305,7 +305,7 @@ impl PlanResolver<'_> {
                             "range window frame requires exactly one order by expression",
                         ));
                     };
-                    let (data_type, _) = order_by.expr.data_type_and_nullable(schema)?;
+                    let data_type = order_by.expr.to_field(schema)?.1.data_type().clone();
                     let value = value.cast_to(&data_type)?;
                     let zero = ScalarValue::new_zero(&data_type)?;
                     match value.partial_cmp(&zero) {

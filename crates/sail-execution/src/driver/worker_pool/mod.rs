@@ -1,10 +1,11 @@
 mod core;
+mod observer;
 mod options;
 mod state;
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
+use indexmap::IndexMap;
 pub use options::WorkerPoolOptions;
 
 use crate::driver::worker_pool::state::WorkerDescriptor;
@@ -15,7 +16,7 @@ pub struct WorkerPool {
     options: WorkerPoolOptions,
     driver_server_port: Option<u16>,
     worker_manager: Arc<dyn WorkerManager>,
-    workers: HashMap<WorkerId, WorkerDescriptor>,
+    workers: IndexMap<WorkerId, WorkerDescriptor>,
     worker_id_generator: IdGenerator<WorkerId>,
 }
 
@@ -25,7 +26,7 @@ impl WorkerPool {
             options,
             driver_server_port: None,
             worker_manager,
-            workers: HashMap::new(),
+            workers: IndexMap::new(),
             worker_id_generator: IdGenerator::new(),
         }
     }

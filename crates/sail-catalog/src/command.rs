@@ -3,7 +3,7 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::prelude::SessionContext;
 use datafusion_expr::ScalarUDF;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::session::PlanService;
+use sail_common_datafusion::session::plan::PlanService;
 
 use crate::error::{CatalogError, CatalogResult};
 use crate::manager::CatalogManager;

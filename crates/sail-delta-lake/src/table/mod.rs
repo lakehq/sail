@@ -244,6 +244,8 @@ pub async fn create_delta_provider(
             Some(s) => Some(Arc::new(s)),
             None => None,
         },
+        commit_version_column_name: None,
+        commit_timestamp_column_name: None,
     };
 
     let table_provider = DeltaTableProvider::try_new(snapshot, log_store, scan_config)?;

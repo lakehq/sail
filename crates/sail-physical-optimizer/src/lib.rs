@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use datafusion::physical_optimizer::aggregate_statistics::AggregateStatistics;
-use datafusion::physical_optimizer::coalesce_async_exec_input::CoalesceAsyncExecInput;
 use datafusion::physical_optimizer::coalesce_batches::CoalesceBatches;
 use datafusion::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
 use datafusion::physical_optimizer::enforce_distribution::EnforceDistribution;
@@ -10,10 +9,11 @@ use datafusion::physical_optimizer::ensure_coop::EnsureCooperative;
 use datafusion::physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion::physical_optimizer::join_selection::JoinSelection;
 use datafusion::physical_optimizer::limit_pushdown::LimitPushdown;
+use datafusion::physical_optimizer::limit_pushdown_past_window::LimitPushPastWindows;
 use datafusion::physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggregation;
-use datafusion::physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion::physical_optimizer::output_requirements::OutputRequirements;
 use datafusion::physical_optimizer::projection_pushdown::ProjectionPushdown;
+use datafusion::physical_optimizer::pushdown_sort::PushdownSort;
 use datafusion::physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion::physical_optimizer::topk_aggregation::TopKAggregation;
 use datafusion::physical_optimizer::update_aggr_exprs::OptimizeAggregateOrder;
@@ -21,27 +21,13 @@ use datafusion::physical_optimizer::PhysicalOptimizerRule;
 
 use crate::explicit_repartition::RewriteExplicitRepartition;
 use crate::join_reorder::JoinReorder;
-use crate::rewrite_delta_collect_left::RewriteDeltaCollectLeft;
 
 mod explicit_repartition;
 mod join_reorder;
-mod rewrite_delta_collect_left;
 
 #[derive(Debug, Clone, Default)]
 pub struct PhysicalOptimizerOptions {
     pub enable_join_reorder: bool,
-}
-
-#[expect(clippy::unwrap_used)]
-fn limit_push_past_windows() -> Arc<dyn PhysicalOptimizerRule + Send + Sync> {
-    // TODO: remove this workaround after the rule is made public in DataFusion
-    //   https://github.com/apache/datafusion/pull/17736
-    PhysicalOptimizer::default()
-        .rules
-        .iter()
-        .find(|rule| rule.name() == "LimitPushPastWindows")
-        .cloned()
-        .unwrap()
 }
 
 pub fn get_physical_optimizers(
@@ -55,7 +41,6 @@ pub fn get_physical_optimizers(
         rules.push(Arc::new(JoinReorder::new()));
     }
     rules.push(Arc::new(JoinSelection::new()));
-    rules.push(Arc::new(RewriteDeltaCollectLeft::new()));
     rules.push(Arc::new(LimitedDistinctAggregation::new()));
     rules.push(Arc::new(FilterPushdown::new()));
     rules.push(Arc::new(EnforceDistribution::new()));
@@ -64,12 +49,12 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(OptimizeAggregateOrder::new()));
     rules.push(Arc::new(ProjectionPushdown::new()));
     rules.push(Arc::new(CoalesceBatches::new()));
-    rules.push(Arc::new(CoalesceAsyncExecInput::new()));
     rules.push(Arc::new(OutputRequirements::new_remove_mode()));
     rules.push(Arc::new(TopKAggregation::new()));
-    rules.push(limit_push_past_windows());
+    rules.push(Arc::new(LimitPushPastWindows::new()));
     rules.push(Arc::new(LimitPushdown::new()));
     rules.push(Arc::new(ProjectionPushdown::new()));
+    rules.push(Arc::new(PushdownSort::new()));
     rules.push(Arc::new(EnsureCooperative::new()));
     rules.push(Arc::new(FilterPushdown::new_post_optimization()));
     rules.push(Arc::new(RewriteExplicitRepartition::new()));

@@ -72,6 +72,11 @@ impl fmt::Display for JobGraph {
                 writeln!(f, "group={}", stage.group)?;
             }
             writeln!(f, "mode={}", stage.mode)?;
+            writeln!(
+                f,
+                "partitions={}",
+                stage.plan.output_partitioning().partition_count()
+            )?;
             writeln!(f, "distribution={}", stage.distribution)?;
             writeln!(f, "placement={}", stage.placement)?;
             writeln!(f, "{}", displayable.indent(true))?;
@@ -93,7 +98,6 @@ pub struct Stage {
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum TaskPlacement {
-    #[expect(unused)]
     Driver,
     Worker,
 }
@@ -128,7 +132,6 @@ impl fmt::Display for StageInput {
 pub enum InputMode {
     /// For each partition in the current stage, execute the same partition to fetch the input
     /// which reads all channels from the corresponding partition in the input stage.
-    #[expect(unused)]
     Forward,
     /// For each partition in the current stage, execute all partitions to fetch the input
     /// which each reads all channels from the corresponding partition in the input stage.

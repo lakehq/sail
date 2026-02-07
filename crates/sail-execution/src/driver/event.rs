@@ -7,6 +7,8 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::error::CommonErrorCause;
+use sail_common_datafusion::session::job::JobRunnerHistory;
+use sail_common_datafusion::system::observable::JobRunnerObserver;
 use sail_telemetry::common::{SpanAssociation, SpanAttribute};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
@@ -99,7 +101,12 @@ pub enum DriverEvent {
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     },
-    Shutdown,
+    ObserveState {
+        observer: JobRunnerObserver,
+    },
+    Shutdown {
+        history: Option<oneshot::Sender<JobRunnerHistory>>,
+    },
 }
 
 /// The observed task status that drives the task state transition.
@@ -164,7 +171,8 @@ impl SpanAssociation for DriverEvent {
             DriverEvent::FetchDriverStream { .. } => "FetchDriverStream",
             DriverEvent::FetchWorkerStream { .. } => "FetchWorkerStream",
             DriverEvent::FetchRemoteStream { .. } => "FetchRemoteStream",
-            DriverEvent::Shutdown => "Shutdown",
+            DriverEvent::ObserveState { .. } => "ObserveState",
+            DriverEvent::Shutdown { .. } => "Shutdown",
         };
         name.into()
     }
@@ -367,7 +375,8 @@ impl SpanAssociation for DriverEvent {
                 p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
                 p.push((SpanAttribute::EXECUTION_STREAM_REMOTE_URI, uri.clone()));
             }
-            DriverEvent::Shutdown => {}
+            DriverEvent::ObserveState { observer: _ } => {}
+            DriverEvent::Shutdown { .. } => {}
         }
         p.into_iter().map(|(k, v)| (k.into(), v.into()))
     }

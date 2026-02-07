@@ -1,4 +1,5 @@
 import doctest
+import itertools
 import os
 from typing import Any
 
@@ -106,12 +107,12 @@ def parse_show_string(text) -> list[list[str]]:
     # determine column width by the positions of the `+` character in the first line
     positions = [i for i, c in enumerate(border) if c == "+"]
     columns = []
-    for start, end in zip(positions, positions[1:]):
+    for start, end in itertools.pairwise(positions):
         columns.append(header[start + 1 : end].strip())
     result = [columns]
     for line in data:
         row = []
-        for start, end in zip(positions, positions[1:]):
+        for start, end in itertools.pairwise(positions):
             row.append(line[start + 1 : end].strip())
         result.append(row)
     return result

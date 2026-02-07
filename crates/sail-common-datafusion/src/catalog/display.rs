@@ -1,14 +1,9 @@
-use std::ops::Deref;
-use std::sync::Arc;
-
-use datafusion::arrow::array::{RecordBatch, RecordBatchOptions};
-use datafusion::arrow::datatypes::{FieldRef, Schema, SchemaRef};
+use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::Result;
-use datafusion_common::internal_datafusion_err;
 use serde::{Deserialize, Serialize};
-use serde_arrow::schema::{SchemaLike, TracingOptions};
-use serde_arrow::to_arrow;
 
+use crate::array::serde::ArrowSerializer;
 use crate::catalog::{DatabaseStatus, TableColumnStatus, TableStatus};
 
 /// A trait for displaying catalog objects in a structured format.
@@ -56,6 +51,7 @@ pub trait OutputDisplay<T> {
 struct MappedOutputDisplay<T, U, F> {
     phantom: std::marker::PhantomData<(T, U)>,
     mapper: F,
+    serializer: ArrowSerializer,
 }
 
 impl<T, U, F> MappedOutputDisplay<T, U, F> {
@@ -63,6 +59,7 @@ impl<T, U, F> MappedOutputDisplay<T, U, F> {
         Self {
             phantom: std::marker::PhantomData,
             mapper,
+            serializer: ArrowSerializer::default(),
         }
     }
 }
@@ -73,13 +70,12 @@ where
     F: Fn(T) -> U,
 {
     fn schema(&self) -> Result<SchemaRef> {
-        build_schema::<U>()
+        self.serializer.schema::<U>()
     }
 
     fn to_record_batch(&self, items: Vec<T>) -> Result<RecordBatch> {
-        let schema = self.schema()?;
         let items = items.into_iter().map(&self.mapper).collect::<Vec<_>>();
-        build_record_batch(schema, &items)
+        self.serializer.build_record_batch(&items)
     }
 }
 
@@ -143,26 +139,4 @@ pub struct EmptyOutput {}
 #[derive(Serialize, Deserialize)]
 pub struct SingleValueOutput<T> {
     pub value: T,
-}
-
-fn build_schema<T>() -> Result<SchemaRef>
-where
-    T: Serialize + for<'de> Deserialize<'de>,
-{
-    let fields = Vec::<FieldRef>::from_type::<T>(TracingOptions::default())
-        .map_err(|e| internal_datafusion_err!("{e}"))?;
-    Ok(Arc::new(Schema::new(fields)))
-}
-
-fn build_record_batch<T>(schema: SchemaRef, items: &[T]) -> Result<RecordBatch>
-where
-    T: Serialize,
-{
-    let arrays = to_arrow(schema.fields().deref(), items)
-        .map_err(|e| internal_datafusion_err!("failed to create record batch: {e}"))?;
-    // We must specify the row count if the schema has no fields.
-    let options = RecordBatchOptions::new().with_row_count(Some(items.len()));
-    let batch = RecordBatch::try_new_with_options(schema, arrays, &options)
-        .map_err(|e| internal_datafusion_err!("failed to create record batch: {e}"))?;
-    Ok(batch)
 }

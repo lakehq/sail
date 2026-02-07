@@ -360,7 +360,7 @@ mod tests {
     use datafusion_expr::{BinaryExpr, Operator};
     use sail_common::spec;
     use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
-    use sail_common_datafusion::session::PlanService;
+    use sail_common_datafusion::session::plan::PlanService;
 
     use crate::catalog::SparkCatalogObjectDisplay;
     use crate::config::PlanConfig;

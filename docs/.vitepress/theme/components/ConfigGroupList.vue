@@ -1,6 +1,13 @@
 <template>
   <div v-for="group in props.groups" :key="group.id">
-    <h2 :id="group.id">{{ group.title }}</h2>
+    <h2 :id="group.id">
+      {{ group.title }}
+      <a
+        class="header-anchor"
+        :href="`#${group.id}`"
+        :aria-label="`Permalink to &quot;${group.title}&quot;`"
+      ></a>
+    </h2>
     <ConfigList :items="group.items" />
   </div>
 </template>

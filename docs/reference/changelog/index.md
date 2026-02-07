@@ -5,6 +5,65 @@ next: false
 
 # Changelog
 
+## 0.5.0
+
+_February 6, 2026_
+
+- Redesigned the control plane for distributed query execution ([#1164](https://github.com/lakehq/sail/pull/1164), [#1242](https://github.com/lakehq/sail/pull/1242), [#1247](https://github.com/lakehq/sail/pull/1247), [#1265](https://github.com/lakehq/sail/pull/1265), and [#1280](https://github.com/lakehq/sail/pull/1280)).
+- Supported system catalog ([#1216](https://github.com/lakehq/sail/pull/1216)).
+- Supported AWS Glue catalog ([#1254](https://github.com/lakehq/sail/pull/1254) and [#1279](https://github.com/lakehq/sail/pull/1279)).
+- Supported OneLake catalog ([#1217](https://github.com/lakehq/sail/pull/1217) and [#1228](https://github.com/lakehq/sail/pull/1228)).
+- Supported partition transforms for Iceberg REST catalog ([#1269](https://github.com/lakehq/sail/pull/1269)).
+- Supported `SHOW CATALOGS` and `USE CATALOG` SQL statements ([#1288](https://github.com/lakehq/sail/pull/1288)).
+- Improved Delta Lake integration ([#1222](https://github.com/lakehq/sail/pull/1222)).
+- Improved Iceberg integration ([#1169](https://github.com/lakehq/sail/pull/1169)).
+- Supported the `CREATE TABLE ... AS SELECT ...` (CTAS) statement ([#1236](https://github.com/lakehq/sail/pull/1236)).
+- Supported the `inferSchema` option for CSV data source ([#1223](https://github.com/lakehq/sail/pull/1223)).
+- Supported `DataFrame.colRegex()` in the Spark DataFrame API ([#1243](https://github.com/lakehq/sail/pull/1243)).
+- Supported `StructType.toDDL()` in the Spark DataFrame API ([#1285](https://github.com/lakehq/sail/pull/1285)).
+- Added support for the following SQL functions ([#1200](https://github.com/lakehq/sail/pull/1200), [#1206](https://github.com/lakehq/sail/pull/1206), [#1218](https://github.com/lakehq/sail/pull/1218), [#1253](https://github.com/lakehq/sail/pull/1253), [#1258](https://github.com/lakehq/sail/pull/1258), [#1263](https://github.com/lakehq/sail/pull/1263), [#1268](https://github.com/lakehq/sail/pull/1268), and [#1276](https://github.com/lakehq/sail/pull/1276)):
+  - `percentile_disc`
+  - `to_json`
+  - `regex_extract`
+  - `soundex`
+  - `randstr`
+  - `array_sort` (without the lambda argument)
+  - `array_join`
+  - `array_concat`
+  - `try_url_decode`
+- Improved the following SQL functions ([#1186](https://github.com/lakehq/sail/pull/1186), [#1187](https://github.com/lakehq/sail/pull/1187), [#1252](https://github.com/lakehq/sail/pull/1252), [#1256](https://github.com/lakehq/sail/pull/1256), [#1257](https://github.com/lakehq/sail/pull/1257), [#1260](https://github.com/lakehq/sail/pull/1260), [#1262](https://github.com/lakehq/sail/pull/1262), [#1277](https://github.com/lakehq/sail/pull/1277), and [#1282](https://github.com/lakehq/sail/pull/1282)):
+  - `json_array_length`
+  - `get_json_object`
+  - `json_object_keys`
+  - `first_value`
+  - `last_value`
+  - `skewness`
+  - `kurtosis`
+  - `collect_set`
+  - `collect_list`
+  - `max_by`
+  - `min_by`
+  - `count_if`
+  - `arrays_zip`
+  - `flatten`
+- Supported negation and the `signum` SQL function for interval data types ([#1275](https://github.com/lakehq/sail/pull/1275)).
+- Fixed issues with the `Column.try_cast()` method in the Spark DataFrame API to handle invalid date and timestamp values correctly ([#1221](https://github.com/lakehq/sail/pull/1221)).
+- Ensure deterministic order for the `DataFrame.randomSplit()` method in the Spark DataFrame API ([#1235](https://github.com/lakehq/sail/pull/1235)).
+- Fixed issues with the join reorder optimizer ([#1234](https://github.com/lakehq/sail/pull/1234)).
+- Added memory and disk configuration options ([#1311](https://github.com/lakehq/sail/pull/1311)).
+- Supported inferring default catalog when only one catalog is configured ([#1311](https://github.com/lakehq/sail/pull/1311)).
+
+### Breaking Changes
+
+- Python 3.9 is no longer supported since this version has reached its end-of-life (EOL) ([#1302](https://github.com/lakehq/sail/pull/1302)).
+- The `SparkConnectServer.init_telemetry()` method was removed from the Python API ([#1302](https://github.com/lakehq/sail/pull/1302) and [#1319](https://github.com/lakehq/sail/pull/1319)). OpenTelemetry is now initialized automatically when the first `SparkConnectServer` instance is created, and OpenTelemetry shutdown is registered as a Python `atexit` handler.
+- The `cluster.worker_stream_buffer` configuration option was renamed to `cluster.task_stream_buffer` ([#1309](https://github.com/lakehq/sail/pull/1309)).
+- The `cluster.job_output_buffer` configuration option was removed since it is no longer needed ([#1316](https://github.com/lakehq/sail/pull/1316)).
+
+### Contributors
+
+Huge thanks to [@davidlghellin](https://github.com/davidlghellin), [@pomykalakyle](https://github.com/pomykalakyle), [@djouallah](https://github.com/djouallah) (_first-time contributor_), [@fafacao86](https://github.com/fafacao86) (_first-time contributor_), and [@wudihero2](https://github.com/wudihero2) (_first-time contributor_) for your contributions!
+
 ## 0.4.6
 
 _January 13, 2026_
@@ -148,7 +207,7 @@ Huge thanks to [@SparkApplicationMaster](https://github.com/SparkApplicationMast
 _October 3, 2025_
 
 - Improved error reporting for the SQL parser ([#938](https://github.com/lakehq/sail/pull/938)).
-- Supported the `df.unpivot()` method in the Spark DataFrame API ([#948](https://github.com/lakehq/sail/pull/948)).
+- Supported the `DataFrame.unpivot()` method in the Spark DataFrame API ([#948](https://github.com/lakehq/sail/pull/948)).
 
 ### Contributors
 
@@ -220,8 +279,8 @@ _September 3, 2025_
 - Fixed performance issues with the `DataFrame.show()` method in the Spark DataFrame API ([#790](https://github.com/lakehq/sail/pull/790)).
 - Fixed issues with reading and writing compressed files ([#760](https://github.com/lakehq/sail/pull/760)).
 - Fixed SQL parsing issues with negated predicates ([#776](https://github.com/lakehq/sail/pull/776)).
-- Fixed issues with the `DataFrame.withColumnsRenamed` method in the Spark DataFrame API ([#764](https://github.com/lakehq/sail/pull/764)).
-- Fixed issues with the `DataFrame.withColumns` method in the Spark DataFrame API ([#814](https://github.com/lakehq/sail/pull/814)).
+- Fixed issues with the `DataFrame.withColumnsRenamed()` method in the Spark DataFrame API ([#764](https://github.com/lakehq/sail/pull/764)).
+- Fixed issues with the `DataFrame.withColumns()` method in the Spark DataFrame API ([#814](https://github.com/lakehq/sail/pull/814)).
 - Added support for the following SQL functions ([#727](https://github.com/lakehq/sail/pull/727), [#682](https://github.com/lakehq/sail/pull/682), [#774](https://github.com/lakehq/sail/pull/774), [#777](https://github.com/lakehq/sail/pull/777), [#779](https://github.com/lakehq/sail/pull/779), [#787](https://github.com/lakehq/sail/pull/787), [#762](https://github.com/lakehq/sail/pull/762), [#795](https://github.com/lakehq/sail/pull/795), and [#798](https://github.com/lakehq/sail/pull/798)):
   - `try_mod`
   - `make_interval`
@@ -396,7 +455,7 @@ _July 7, 2025_
   - `collect_set`
   - `count_if`
 - Fixed issues with the `from_utc_timestamp` SQL function ([#596](https://github.com/lakehq/sail/pull/596)).
-- Added support for the `DataFrame.sampleBy` method in the Spark DataFrame API ([#547](https://github.com/lakehq/sail/pull/547)).
+- Added support for the `DataFrame.sampleBy()` method in the Spark DataFrame API ([#547](https://github.com/lakehq/sail/pull/547)).
 - Added support for the following SQL statements ([#588](https://github.com/lakehq/sail/pull/588)):
   - `SHOW COLUMNS`
   - `SHOW DATABASES`
@@ -427,7 +486,7 @@ Here is a summary of the new features and improvements in this release.
   - `sha1`
 - Fixed issues with casting integers to timestamps ([#533](https://github.com/lakehq/sail/pull/533)).
 - Fixed issues with the `random` and `randn` SQL functions ([#530](https://github.com/lakehq/sail/pull/530)).
-- Added support for the `DataFrame.sample` method in the Spark DataFrame API ([#496](https://github.com/lakehq/sail/pull/496)).
+- Added support for the `DataFrame.sample()` method in the Spark DataFrame API ([#496](https://github.com/lakehq/sail/pull/496)).
 - Added support for Spark 4.0 ([#467](https://github.com/lakehq/sail/pull/467), [#498](https://github.com/lakehq/sail/pull/498), and [#559](https://github.com/lakehq/sail/pull/559)).
 - Updated the default value of a few configuration options ([#565](https://github.com/lakehq/sail/pull/565)).
 

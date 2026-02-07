@@ -19,10 +19,6 @@ class SparkConnectServer:
         """
         self._inner = _native.spark.SparkConnectServer(ip, port)
 
-    def init_telemetry(self) -> None:
-        """Initialize OpenTelemetry for the server."""
-        self._inner.init_telemetry()
-
     def start(self, *, background=True) -> None:
         """Start the server.
 
