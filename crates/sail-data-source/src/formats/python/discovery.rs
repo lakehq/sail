@@ -101,7 +101,7 @@ pub fn discover_datasources() -> Result<usize> {
 /// Returns the number of successfully registered datasources, or 0 if
 /// the entry points module is not available.
 fn discover_from_entry_points(py: pyo3::Python<'_>) -> Option<usize> {
-    let base_module = py.import("pysail.spark.datasource.base").ok()?;
+    let base_module = py.import("pysail.spark.datasource.registry").ok()?;
     let discover_fn = base_module.getattr("discover_entry_points").ok()?;
     let entries = discover_fn.call0().ok()?;
     let iter = entries.try_iter().ok()?;
