@@ -4,9 +4,8 @@ Verification script for Python DataSource implementation.
 This script creates a simple Python datasource and tests it with Sail.
 """
 
-from pysail.spark.datasource.base import (
+from pyspark.sql.datasource import (
     DataSource, DataSourceReader, InputPartition,
-    register
 )
 
 
@@ -46,6 +45,7 @@ class RangePartition(InputPartition):
 
     def __init__(self, partition_id: int, start: int, end: int):
         super().__init__(partition_id)
+        self.partition_id = partition_id
         self.start = start
         self.end = end
 
@@ -53,7 +53,6 @@ class RangePartition(InputPartition):
         return f"RangePartition({self.partition_id}, {self.start}, {self.end})"
 
 
-@register
 class RangeDataSource(DataSource):
     """
     A simple datasource that generates a range of integers.
@@ -89,7 +88,7 @@ def test_datasource_basic():
     print("=" * 60)
 
     # Create datasource
-    ds = RangeDataSource({"start": "0", "end": "10", "partitions": "2"})
+    ds = RangeDataSource(options={"start": "0", "end": "10", "partitions": "2"})
 
     print(f"\n1. DataSource name: {ds.name()}")
     print(f"2. DataSource schema: {ds.schema()}")
@@ -116,4 +115,3 @@ def test_datasource_basic():
 if __name__ == "__main__":
     # Test 1: Basic API test (no server needed)
     test_datasource_basic()
-
