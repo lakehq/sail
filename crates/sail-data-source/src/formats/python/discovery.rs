@@ -91,8 +91,7 @@ impl Default for PythonDataSourceRegistry {
 pub fn discover_datasources() -> Result<usize> {
     pyo3::Python::attach(|py| {
         let count = discover_from_entry_points(py).unwrap_or(0);
-        let registry_count = discover_from_python_registry(py)?;
-        Ok(count + registry_count)
+        Ok(count)
     })
 }
 
@@ -113,53 +112,6 @@ fn discover_from_entry_points(py: pyo3::Python<'_>) -> Option<usize> {
         }
     }
     Some(count)
-}
-
-/// Discover datasources from the Python-side registry.
-///
-/// This finds datasources registered via the `@register` decorator in Python.
-fn discover_from_python_registry(py: pyo3::Python<'_>) -> Result<usize> {
-    // Try to import the datasource module
-    let module = match py.import("pysail.spark.datasource") {
-        Ok(m) => m,
-        Err(_) => return Ok(0),
-    };
-
-    // Get the _REGISTERED_DATASOURCES dict from base module
-    let base_module = match module.getattr("base") {
-        Ok(m) => m,
-        Err(_) => {
-            // Try getting from the module directly (if it re-exports)
-            match module.getattr("_REGISTERED_DATASOURCES") {
-                Ok(_) => module.clone().into_any(),
-                Err(_) => return Ok(0),
-            }
-        }
-    };
-
-    let registry = match base_module.getattr("_REGISTERED_DATASOURCES") {
-        Ok(r) => r,
-        Err(_) => return Ok(0),
-    };
-
-    let items = match registry.call_method0("items") {
-        Ok(i) => i,
-        Err(_) => return Ok(0),
-    };
-
-    let items_iter = match items.try_iter() {
-        Ok(i) => i,
-        Err(_) => return Ok(0),
-    };
-
-    let mut count = 0;
-    for item in items_iter.flatten() {
-        if try_register_entry(py, item, "registry") {
-            count += 1;
-        }
-    }
-
-    Ok(count)
 }
 
 /// Try to register a single datasource entry.
