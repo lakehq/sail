@@ -7,13 +7,7 @@ They can also be used for testing and demonstration purposes.
 
 from typing import Iterator, List, Any
 
-try:
-    import pyarrow as pa
-
-    HAS_PYARROW = True
-except ImportError:
-    HAS_PYARROW = False
-    pa = None
+import pyarrow as pa
 
 from pyspark.sql.datasource import (
     DataSource,
@@ -154,9 +148,7 @@ class RangeDataSource(DataSource):
 
     def schema(self):
         # PyArrow Schema preferred; DDL string fallback also works for basic types
-        if HAS_PYARROW:
-            return pa.schema([("id", pa.int64())])
-        return "id BIGINT"
+        return pa.schema([("id", pa.int64())])
 
     def reader(self, schema) -> DataSourceReader:
         """Create a reader for this range."""
@@ -222,9 +214,7 @@ class ConstantDataSource(DataSource):
         return "constant"
 
     def schema(self):
-        if HAS_PYARROW:
-            return pa.schema([("id", pa.int32()), ("value", pa.string())])
-        return "id INT, value STRING"
+        return pa.schema([("id", pa.int32()), ("value", pa.string())])
 
     def reader(self, schema) -> DataSourceReader:
         """Create a reader."""
@@ -342,17 +332,15 @@ class FlappyBirdDataSource(DataSource):
         return "flappy_bird"
 
     def schema(self):
-        if HAS_PYARROW:
-            return pa.schema(
-                [
-                    ("bird_id", pa.int32()),
-                    ("name", pa.string()),
-                    ("score", pa.int32()),
-                    ("pipes_passed", pa.int32()),
-                    ("is_alive", pa.bool_()),
-                ]
-            )
-        return "bird_id INT, name STRING, score INT, pipes_passed INT, is_alive BOOLEAN"
+        return pa.schema(
+            [
+                ("bird_id", pa.int32()),
+                ("name", pa.string()),
+                ("score", pa.int32()),
+                ("pipes_passed", pa.int32()),
+                ("is_alive", pa.bool_()),
+            ]
+        )
 
     def reader(self, schema) -> DataSourceReader:
         num_birds = int(self.options.get("numBirds", "20"))
