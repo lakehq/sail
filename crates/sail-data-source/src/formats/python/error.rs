@@ -139,19 +139,17 @@ pub fn py_err(e: pyo3::PyErr) -> DataFusionError {
     )))
 }
 
-/// Import cloudpickle with a helpful error message if it's not installed.
+/// Import cloudpickle from PySpark.
 ///
-/// cloudpickle is required for serializing Python DataSources between
-/// the client and server. This helper provides clear installation instructions
-/// if the import fails.
+/// Uses `pyspark.cloudpickle` which is bundled with PySpark, avoiding
+/// the need for a separate cloudpickle package installation.
 pub fn import_cloudpickle(
     py: pyo3::Python<'_>,
 ) -> std::result::Result<pyo3::Bound<'_, pyo3::types::PyModule>, DataFusionError> {
-    py.import("cloudpickle").map_err(|e| {
+    py.import("pyspark.cloudpickle").map_err(|e| {
         DataFusionError::Execution(format!(
-            "Failed to import cloudpickle: {}. \
-            cloudpickle is required for Python DataSources. \
-            Install it with: pip install cloudpickle",
+            "Failed to import pyspark.cloudpickle: {}. \
+            PySpark must be installed to use Python DataSources.",
             e
         ))
     })
