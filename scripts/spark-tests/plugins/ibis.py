@@ -86,12 +86,51 @@ SKIPPED_IBIS_TESTS = [
     ),
 ]
 
+# Tests that need spark.sql.ansi.enabled=false because they expect non-ANSI behavior.
+ANSI_DISABLED_IBIS_TESTS = [
+    TestMarker(
+        keywords=["test_divide_by_zero", "pyspark"],
+        reason="Ibis expects non-ANSI division by zero behavior",
+    ),
+]
+
 
 def add_ibis_test_markers(items: list[pytest.Item]):
     for item in items:
         for test in SKIPPED_IBIS_TESTS:
             if all(k in item.keywords for k in test.keywords):
                 item.add_marker(pytest.mark.skip(reason=test.reason))
+
+
+def _needs_ansi_disabled(item: pytest.Item) -> bool:
+    return any(all(k in item.name for k in test.keywords) for test in ANSI_DISABLED_IBIS_TESTS)
+
+
+@pytest.fixture(autouse=True)
+def _manage_ansi_mode(request):
+    """Toggle ANSI mode off for specific Ibis tests that expect non-ANSI behavior."""
+    if not _is_ibis_testing() or not _needs_ansi_disabled(request.node):
+        yield
+        return
+
+    try:
+        con = request.getfixturevalue("con")
+    except pytest.FixtureLookupError:
+        yield
+        return
+
+    session = getattr(con, "_session", None)
+    if session is None:
+        yield
+        return
+
+    try:
+        original = session.conf.get("spark.sql.ansi.enabled")
+    except (ValueError, RuntimeError):
+        original = "false"
+    session.conf.set("spark.sql.ansi.enabled", "false")
+    yield
+    session.conf.set("spark.sql.ansi.enabled", original)
 
 
 def pytest_collection_modifyitems(session: pytest.Session, config: pytest.Config, items: list[pytest.Item]) -> None:  # noqa: ARG001
