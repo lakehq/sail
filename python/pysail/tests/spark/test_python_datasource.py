@@ -10,17 +10,21 @@ from typing import Any
 
 import pyarrow as pa
 import pytest
-from pyspark.sql.datasource import (
-    DataSource,
-    DataSourceReader,
-    EqualTo,
-    Filter,
-    GreaterThan,
-    GreaterThanOrEqual,
-    InputPartition,
-    LessThan,
-    LessThanOrEqual,
-)
+
+try:
+    from pyspark.sql.datasource import (
+        DataSource,
+        DataSourceReader,
+        EqualTo,
+        Filter,
+        GreaterThan,
+        GreaterThanOrEqual,
+        InputPartition,
+        LessThan,
+        LessThanOrEqual,
+    )
+except ImportError:
+    pytest.skip("Python DataSource API is not available in this Spark version", allow_module_level=True)
 
 # ============================================================================
 # RangeDataSource - Example datasource that generates sequential integers
