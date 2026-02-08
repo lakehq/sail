@@ -52,44 +52,60 @@ impl ScalarUDFImpl for FormatNumber {
         }
 
         match &args[1] {
-            ColumnarValue::Scalar(ScalarValue::Int32(Some(d))) => {
-                format_with_decimal_places(&args[0], *d)
-            }
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(pattern))) => {
-                format_with_pattern(&args[0], pattern)
-            }
-            ColumnarValue::Scalar(ScalarValue::Int32(None) | ScalarValue::Utf8(None)) => {
-                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
-            }
-            ColumnarValue::Array(arr) if *arr.data_type() == DataType::Int32 => {
-                format_with_decimal_places_array(&args[0], arr)
-            }
-            ColumnarValue::Array(arr)
-                if matches!(
-                    arr.data_type(),
-                    DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8
-                ) =>
-            {
-                format_with_pattern_array(&args[0], arr)
-            }
-            other => {
-                exec_err!(
-                    "`format_number` second argument must be INT or STRING, got {:?}",
+            ColumnarValue::Scalar(s) => match s {
+                ScalarValue::Int8(Some(d)) => {
+                    format_with_scalar_spec(&args[0], |v| format_number_fixed(v, *d as i32))
+                }
+                ScalarValue::Int16(Some(d)) => {
+                    format_with_scalar_spec(&args[0], |v| format_number_fixed(v, *d as i32))
+                }
+                ScalarValue::Int32(Some(d)) => {
+                    format_with_scalar_spec(&args[0], |v| format_number_fixed(v, *d))
+                }
+                ScalarValue::Int64(Some(d)) => {
+                    format_with_scalar_spec(&args[0], |v| format_number_fixed(v, *d as i32))
+                }
+                ScalarValue::Utf8(Some(pattern)) => {
+                    format_with_scalar_spec(&args[0], |v| Some(format_number_pattern(v, pattern)))
+                }
+                ScalarValue::Int8(None)
+                | ScalarValue::Int16(None)
+                | ScalarValue::Int32(None)
+                | ScalarValue::Int64(None)
+                | ScalarValue::Utf8(None) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
+                other => exec_err!(
+                    "`format_number` second argument must be INT or STRING, got {}",
                     other.data_type()
-                )
+                ),
+            },
+            ColumnarValue::Array(arr) => {
+                let dt = arr.data_type();
+                if dt.is_integer() {
+                    format_with_per_row_decimal_places(&args[0], arr)
+                } else if matches!(
+                    dt,
+                    DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8
+                ) {
+                    format_with_per_row_pattern(&args[0], arr)
+                } else {
+                    exec_err!(
+                        "`format_number` second argument must be INT or STRING, got {:?}",
+                        dt
+                    )
+                }
             }
         }
     }
 }
 
 /// Formats a number with `d` decimal places and comma-separated thousands.
-fn format_number_fixed(value: f64, decimal_places: i32) -> String {
+fn format_number_fixed(value: f64, decimal_places: i32) -> Option<String> {
     if decimal_places < 0 {
-        return "null".to_string();
+        return None;
     }
     let d = decimal_places as usize;
     let rounded = format!("{:.prec$}", value, prec = d);
-    insert_commas(&rounded)
+    Some(insert_commas(&rounded))
 }
 
 /// Inserts comma grouping into the integer part of a formatted number string.
@@ -129,22 +145,9 @@ fn insert_commas(s: &str) -> String {
 /// Formats a number using a Java DecimalFormat-style pattern string.
 fn format_number_pattern(value: f64, pattern: &str) -> String {
     let has_grouping = pattern.contains(',');
-
-    let decimal_digits = match pattern.rfind('.') {
-        Some(dot_pos) => {
-            let frac = &pattern[dot_pos + 1..];
-            frac.chars().filter(|c| *c == '#' || *c == '0').count()
-        }
-        None => 0,
-    };
-
-    let min_decimal_digits = match pattern.rfind('.') {
-        Some(dot_pos) => {
-            let frac = &pattern[dot_pos + 1..];
-            frac.chars().filter(|c| *c == '0').count()
-        }
-        None => 0,
-    };
+    let frac = pattern.rfind('.').map(|pos| &pattern[pos + 1..]);
+    let decimal_digits = frac.map_or(0, |f| f.chars().filter(|c| *c == '#' || *c == '0').count());
+    let min_decimal_digits = frac.map_or(0, |f| f.chars().filter(|c| *c == '0').count());
 
     let formatted = format!("{:.prec$}", value, prec = decimal_digits);
 
@@ -172,77 +175,49 @@ fn format_number_pattern(value: f64, pattern: &str) -> String {
     }
 }
 
-/// Handles scalar or array first argument with a scalar decimal places value.
-fn format_with_decimal_places(
+/// Formats numbers using a single scalar format spec broadcast across all rows.
+fn format_with_scalar_spec(
     number: &ColumnarValue,
-    decimal_places: i32,
+    fmt: impl Fn(f64) -> Option<String>,
 ) -> Result<ColumnarValue> {
     match number {
         ColumnarValue::Scalar(scalar) => {
             let value = scalar_to_f64(scalar)?;
-            match value {
-                Some(v) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                    format_number_fixed(v, decimal_places),
-                )))),
-                None => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
-            }
+            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(
+                value.and_then(&fmt),
+            )))
         }
         ColumnarValue::Array(arr) => {
-            let f64_arr = arrow_cast_to_f64(arr)?;
-            let result: StringArray = f64_arr
-                .iter()
-                .map(|opt| opt.map(|v| format_number_fixed(v, decimal_places)))
-                .collect();
+            let f64_arr = cast_arrow_array_to_f64(arr)?;
+            let result: StringArray = f64_arr.iter().map(|opt| opt.and_then(&fmt)).collect();
             Ok(ColumnarValue::Array(Arc::new(result)))
         }
     }
 }
 
-/// Handles scalar or array first argument with a scalar pattern string.
-fn format_with_pattern(number: &ColumnarValue, pattern: &str) -> Result<ColumnarValue> {
-    match number {
-        ColumnarValue::Scalar(scalar) => {
-            let value = scalar_to_f64(scalar)?;
-            match value {
-                Some(v) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                    format_number_pattern(v, pattern),
-                )))),
-                None => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
-            }
-        }
-        ColumnarValue::Array(arr) => {
-            let f64_arr = arrow_cast_to_f64(arr)?;
-            let result: StringArray = f64_arr
-                .iter()
-                .map(|opt| opt.map(|v| format_number_pattern(v, pattern)))
-                .collect();
-            Ok(ColumnarValue::Array(Arc::new(result)))
-        }
-    }
-}
-
-/// Handles array first argument with an array of decimal places.
-fn format_with_decimal_places_array(
+/// Formats numbers where each row has its own decimal places spec.
+fn format_with_per_row_decimal_places(
     number: &ColumnarValue,
     decimal_arr: &ArrayRef,
 ) -> Result<ColumnarValue> {
-    let d_arr = decimal_arr
+    let casted = datafusion::arrow::compute::cast(decimal_arr, &DataType::Int32)?;
+    let d_arr = casted
         .as_any()
         .downcast_ref::<Int32Array>()
         .ok_or_else(|| {
             datafusion_common::DataFusionError::Internal(
-                "Expected Int32Array for decimal places".to_string(),
+                "Failed to cast decimal places to Int32Array".to_string(),
             )
         })?;
 
     match number {
         ColumnarValue::Array(arr) => {
-            let f64_arr = arrow_cast_to_f64(arr)?;
+            let f64_arr = cast_arrow_array_to_f64(arr)?;
             let result: StringArray = f64_arr
                 .iter()
                 .zip(d_arr.iter())
                 .map(|(v_opt, d_opt)| match (v_opt, d_opt) {
-                    (Some(v), Some(d)) => Some(format_number_fixed(v, d)),
+                    (Some(v), Some(d)) => format_number_fixed(v, d),
                     _ => None,
                 })
                 .collect();
@@ -253,7 +228,7 @@ fn format_with_decimal_places_array(
             let result: StringArray = d_arr
                 .iter()
                 .map(|d_opt| match (value, d_opt) {
-                    (Some(v), Some(d)) => Some(format_number_fixed(v, d)),
+                    (Some(v), Some(d)) => format_number_fixed(v, d),
                     _ => None,
                 })
                 .collect();
@@ -262,23 +237,24 @@ fn format_with_decimal_places_array(
     }
 }
 
-/// Handles array first argument with an array of pattern strings.
-fn format_with_pattern_array(
+/// Formats numbers where each row has its own pattern string spec.
+fn format_with_per_row_pattern(
     number: &ColumnarValue,
     pattern_arr: &ArrayRef,
 ) -> Result<ColumnarValue> {
-    let p_arr = pattern_arr
+    let casted = datafusion::arrow::compute::cast(pattern_arr, &DataType::Utf8)?;
+    let p_arr = casted
         .as_any()
         .downcast_ref::<StringArray>()
         .ok_or_else(|| {
             datafusion_common::DataFusionError::Internal(
-                "Expected StringArray for pattern".to_string(),
+                "Failed to cast pattern to StringArray".to_string(),
             )
         })?;
 
     match number {
         ColumnarValue::Array(arr) => {
-            let f64_arr = arrow_cast_to_f64(arr)?;
+            let f64_arr = cast_arrow_array_to_f64(arr)?;
             let result: StringArray = f64_arr
                 .iter()
                 .zip(p_arr.iter())
@@ -312,7 +288,22 @@ fn scalar_to_f64(scalar: &ScalarValue) -> Result<Option<f64>> {
         ScalarValue::Int16(v) => Ok(v.map(|x| x as f64)),
         ScalarValue::Int32(v) => Ok(v.map(|x| x as f64)),
         ScalarValue::Int64(v) => Ok(v.map(|x| x as f64)),
+        ScalarValue::UInt8(v) => Ok(v.map(|x| x as f64)),
+        ScalarValue::UInt16(v) => Ok(v.map(|x| x as f64)),
+        ScalarValue::UInt32(v) => Ok(v.map(|x| x as f64)),
+        ScalarValue::UInt64(v) => Ok(v.map(|x| x as f64)),
         ScalarValue::Decimal128(v, _, scale) => Ok(v.map(|x| x as f64 / 10f64.powi(*scale as i32))),
+        ScalarValue::Decimal256(v, _, scale) => match v {
+            Some(x) => {
+                let f = x.to_string().parse::<f64>().map_err(|e| {
+                    datafusion_common::DataFusionError::Internal(format!(
+                        "failed to parse Decimal256 as f64: {e}"
+                    ))
+                })?;
+                Ok(Some(f / 10f64.powi(*scale as i32)))
+            }
+            None => Ok(None),
+        },
         ScalarValue::Null => Ok(None),
         other => exec_err!(
             "`format_number` first argument must be numeric, got {}",
@@ -322,7 +313,7 @@ fn scalar_to_f64(scalar: &ScalarValue) -> Result<Option<f64>> {
 }
 
 /// Casts an Arrow array to Float64Array using Arrow's cast kernel.
-fn arrow_cast_to_f64(arr: &ArrayRef) -> Result<Float64Array> {
+fn cast_arrow_array_to_f64(arr: &ArrayRef) -> Result<Float64Array> {
     let casted = datafusion::arrow::compute::cast(arr, &DataType::Float64)?;
     let f64_arr = as_float64_array(&casted)?;
     Ok(f64_arr.clone())

@@ -32,3 +32,10 @@ def test_format_number_null_input(spark):
     actual = spark.sql("SELECT format_number(NULL, 2) AS result").toPandas()
 
     assert pd.isna(actual["result"].iloc[0])
+
+
+def test_format_number_negative_decimal_places(spark):
+    """Returns NULL when decimal places is negative."""
+    actual = spark.sql("SELECT format_number(12345.678, -1) AS result").toPandas()
+
+    assert pd.isna(actual["result"].iloc[0])
