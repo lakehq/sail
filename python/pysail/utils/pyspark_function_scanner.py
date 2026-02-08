@@ -48,7 +48,7 @@ class CallSiteLocator(ast.NodeVisitor):
         # Using a set to avoid duplicate coordinates
         self.locations: set[tuple[int, int]] = set()
 
-    def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
+    def visit_Call(self, node: ast.Call) -> None:
         """
         Identify the 'hotspot' of the function call.
         """
