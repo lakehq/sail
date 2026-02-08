@@ -4,6 +4,7 @@ Tests for Python DataSource integration.
 These tests verify the Python DataSource API works correctly with Sail,
 including both Arrow RecordBatch and tuple-based paths.
 """
+
 from collections.abc import Iterator
 from typing import Any
 
@@ -148,7 +149,7 @@ class RangeDataSource(DataSource):
         # PyArrow Schema preferred; DDL string fallback also works for basic types
         return pa.schema([("id", pa.int64())])
 
-    def reader(self, schema) -> DataSourceReader:
+    def reader(self, schema) -> DataSourceReader:  # noqa: ARG002
         """Create a reader for this range."""
         start = int(self.options.get("start", "0"))
         end = int(self.options.get("end", "10"))
@@ -178,7 +179,7 @@ class TestPythonDataSourceBasic:
 
         reader = ds.reader(schema)
         partitions = reader.partitions()
-        assert len(partitions) == 2
+        assert len(partitions) == 2  # noqa: PLR2004
 
         # Read from first partition
         rows = list(reader.read(partitions[0]))
@@ -201,12 +202,14 @@ class TestPythonDataSource:
                 return "arrow_range_test"
 
             def schema(self):
-                return pa.schema([
-                    ("id", pa.int64()),
-                    ("value", pa.float64()),
-                ])
+                return pa.schema(
+                    [
+                        ("id", pa.int64()),
+                        ("value", pa.float64()),
+                    ]
+                )
 
-            def reader(self, schema):
+            def reader(self, schema):  # noqa: ARG002
                 return ArrowRangeReader()
 
         class ArrowRangeReader(DataSourceReader):
@@ -215,12 +218,11 @@ class TestPythonDataSource:
             def partitions(self):
                 return [InputPartition(0)]
 
-            def read(self, partition):
+            def read(self, partition):  # noqa: ARG002
                 ids = list(range(100))
                 values = [float(i) * 1.5 for i in ids]
                 batch = pa.RecordBatch.from_pydict(
-                    {"id": ids, "value": values},
-                    schema=pa.schema([("id", pa.int64()), ("value", pa.float64())])
+                    {"id": ids, "value": values}, schema=pa.schema([("id", pa.int64()), ("value", pa.float64())])
                 )
                 yield batch
 
@@ -229,14 +231,14 @@ class TestPythonDataSource:
         df = spark.read.format("arrow_range_test").load()
 
         rows = df.collect()
-        assert len(rows) == 100
+        assert len(rows) == 100  # noqa: PLR2004
         assert rows[0].id == 0
         assert rows[0].value == 0.0
 
         # Test filter query (filter is applied post-read by DataFusion in MVP)
         filtered = df.filter("value > 50.0").collect()
         # ids 34+ have value > 50 (34 * 1.5 = 51)
-        assert len(filtered) == 66  # ids 34-99 have value > 50
+        assert len(filtered) == 66  # noqa: PLR2004 - ids 34-99 have value > 50
 
     def test_tuple_datasource(self, spark):
         """Test row-based tuple fallback path with data integrity verification."""
@@ -251,12 +253,14 @@ class TestPythonDataSource:
                 return "tuple_range_test"
 
             def schema(self):
-                return pa.schema([
-                    ("id", pa.int64()),
-                    ("square", pa.int64()),
-                ])
+                return pa.schema(
+                    [
+                        ("id", pa.int64()),
+                        ("square", pa.int64()),
+                    ]
+                )
 
-            def reader(self, schema):
+            def reader(self, schema):  # noqa: ARG002
                 return TupleReader()
 
         class TupleReader(DataSourceReader):
@@ -265,7 +269,7 @@ class TestPythonDataSource:
             def partitions(self):
                 return [InputPartition(0)]
 
-            def read(self, partition):
+            def read(self, partition):  # noqa: ARG002
                 # Yield 1000 tuples to test batching behavior
                 for i in range(1000):
                     yield (i, i * i)
@@ -274,13 +278,13 @@ class TestPythonDataSource:
         df = spark.read.format("tuple_range_test").load()
 
         rows = df.collect()
-        assert len(rows) == 1000
+        assert len(rows) == 1000  # noqa: PLR2004
 
         # Verify data integrity: check that squares are correct
         # Find row with id=100, should have square=10000
         sample = df.filter("id = 100").collect()
         assert len(sample) == 1
-        assert sample[0].square == 10000  # 100² = 10000
+        assert sample[0].square == 10000  # noqa: PLR2004 - 100² = 10000
 
     def test_multi_partition(self, spark):
         """Test parallel partition reading."""
@@ -295,12 +299,14 @@ class TestPythonDataSource:
                 return "multi_partition_test"
 
             def schema(self):
-                return pa.schema([
-                    ("partition_id", pa.int32()),
-                    ("row_id", pa.int32()),
-                ])
+                return pa.schema(
+                    [
+                        ("partition_id", pa.int32()),
+                        ("row_id", pa.int32()),
+                    ]
+                )
 
-            def reader(self, schema):
+            def reader(self, schema):  # noqa: ARG002
                 return MultiPartitionReader()
 
         class MultiPartitionReader(DataSourceReader):
@@ -314,7 +320,7 @@ class TestPythonDataSource:
                 row_ids = list(range(25))
                 batch = pa.RecordBatch.from_pydict(
                     {"partition_id": partition_ids, "row_id": row_ids},
-                    schema=pa.schema([("partition_id", pa.int32()), ("row_id", pa.int32())])
+                    schema=pa.schema([("partition_id", pa.int32()), ("row_id", pa.int32())]),
                 )
                 yield batch
 
@@ -323,7 +329,7 @@ class TestPythonDataSource:
 
         rows = df.collect()
         # 4 partitions * 25 rows each = 100 total
-        assert len(rows) == 100
+        assert len(rows) == 100  # noqa: PLR2004
 
     def test_partition_failure(self, spark):
         """Test that partition failure errors include partition context."""
@@ -340,7 +346,7 @@ class TestPythonDataSource:
             def schema(self):
                 return pa.schema([("id", pa.int32())])
 
-            def reader(self, schema):
+            def reader(self, schema):  # noqa: ARG002
                 return FailingPartitionReader()
 
         class FailingPartitionReader(DataSourceReader):
@@ -349,8 +355,10 @@ class TestPythonDataSource:
 
             def read(self, partition):
                 pid = partition.value
-                if pid == 2:
-                    raise ValueError(f"Deliberate failure in partition {pid}!")
+                failure_partition = 2
+                if pid == failure_partition:
+                    msg = f"Deliberate failure in partition {pid}!"
+                    raise ValueError(msg)
 
                 schema = pa.schema([("id", pa.int32())])
                 batch = pa.RecordBatch.from_pydict({"id": [pid]}, schema=schema)
@@ -359,13 +367,8 @@ class TestPythonDataSource:
         spark.dataSource.register(FailingPartitionDataSource)
         df = spark.read.format("failing_partition_test").load()
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match="[Dd]eliberate failure"):
             df.collect()
-
-        error_msg = str(exc_info.value).lower()
-        # Error should include partition context
-        assert "partition" in error_msg or "2" in error_msg
-        assert "deliberate failure" in error_msg
 
     def test_empty_partitions(self, spark):
         """Test that zero partitions returns empty DataFrame without crashing."""
@@ -380,20 +383,23 @@ class TestPythonDataSource:
                 return "empty_partitions_test"
 
             def schema(self):
-                return pa.schema([
-                    ("id", pa.int32()),
-                    ("name", pa.string()),
-                ])
+                return pa.schema(
+                    [
+                        ("id", pa.int32()),
+                        ("name", pa.string()),
+                    ]
+                )
 
-            def reader(self, schema):
+            def reader(self, schema):  # noqa: ARG002
                 return EmptyPartitionsReader()
 
         class EmptyPartitionsReader(DataSourceReader):
             def partitions(self):
                 return []  # No partitions
 
-            def read(self, partition):
-                raise RuntimeError("read() should not be called with 0 partitions!")
+            def read(self, partition):  # noqa: ARG002
+                msg = "read() should not be called with 0 partitions!"
+                raise RuntimeError(msg)
 
         spark.dataSource.register(EmptyPartitionsDataSource)
         df = spark.read.format("empty_partitions_test").load()
@@ -415,28 +421,35 @@ class TestPythonDataSource:
 
             def schema(self):
                 # Declare schema with int32 id
-                return pa.schema([
-                    ("id", pa.int32()),
-                    ("name", pa.string()),
-                ])
+                return pa.schema(
+                    [
+                        ("id", pa.int32()),
+                        ("name", pa.string()),
+                    ]
+                )
 
-            def reader(self, schema):
+            def reader(self, schema):  # noqa: ARG002
                 return SchemaMismatchReader()
 
         class SchemaMismatchReader(DataSourceReader):
             def partitions(self):
                 return [InputPartition(0)]
 
-            def read(self, partition):
+            def read(self, partition):  # noqa: ARG002
                 # Return batch with int64 id instead of int32 - schema mismatch!
-                wrong_schema = pa.schema([
-                    ("id", pa.int64()),  # Wrong type!
-                    ("name", pa.string()),
-                ])
-                batch = pa.RecordBatch.from_pydict({
-                    "id": [1, 2, 3],
-                    "name": ["a", "b", "c"],
-                }, schema=wrong_schema)
+                wrong_schema = pa.schema(
+                    [
+                        ("id", pa.int64()),  # Wrong type!
+                        ("name", pa.string()),
+                    ]
+                )
+                batch = pa.RecordBatch.from_pydict(
+                    {
+                        "id": [1, 2, 3],
+                        "name": ["a", "b", "c"],
+                    },
+                    schema=wrong_schema,
+                )
                 yield batch
 
         spark.dataSource.register(SchemaMismatchDataSource)
@@ -447,8 +460,9 @@ class TestPythonDataSource:
         try:
             rows = df.collect()
             # If it succeeds, verify data is present
-            assert len(rows) == 3
-        except Exception as e:
+            expected_rows = 3
+            assert len(rows) == expected_rows
+        except Exception as e:  # noqa: BLE001
             # If it fails, error should mention schema/type issue
             error_msg = str(e).lower()
             assert "schema" in error_msg or "type" in error_msg or "mismatch" in error_msg
@@ -466,30 +480,29 @@ class TestPythonDataSource:
                 return "exception_test"
 
             def schema(self):
-                return pa.schema([
-                    ("id", pa.int32()),
-                    ("value", pa.string()),
-                ])
+                return pa.schema(
+                    [
+                        ("id", pa.int32()),
+                        ("value", pa.string()),
+                    ]
+                )
 
-            def reader(self, schema):
+            def reader(self, schema):  # noqa: ARG002
                 return ExceptionReader()
 
         class ExceptionReader(DataSourceReader):
             def partitions(self):
                 return [InputPartition(0)]
 
-            def read(self, partition):
-                raise ValueError("This is a deliberate test exception!")
+            def read(self, partition):  # noqa: ARG002
+                msg = "This is a deliberate test exception!"
+                raise ValueError(msg)
 
         spark.dataSource.register(ExceptionDataSource)
         df = spark.read.format("exception_test").load()
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match="[Dd]eliberate test exception"):
             df.collect()
-
-        error_msg = str(exc_info.value)
-        # Exception message should be preserved
-        assert "deliberate test exception" in error_msg.lower()
 
     def test_session_isolation(self, spark_session_factory):
         """Test that datasources registered in one session are not visible in another.
@@ -511,18 +524,21 @@ class TestPythonDataSource:
             def schema(self):
                 return pa.schema([("id", pa.int32()), ("msg", pa.string())])
 
-            def reader(self, schema):
+            def reader(self, schema):  # noqa: ARG002
                 return SessionIsolationReader()
 
         class SessionIsolationReader(DataSourceReader):
             def partitions(self):
                 return [InputPartition(0)]
 
-            def read(self, partition):
-                batch = pa.RecordBatch.from_pydict({
-                    "id": [1, 2, 3],
-                    "msg": ["hello", "from", "session_a"],
-                }, schema=pa.schema([("id", pa.int32()), ("msg", pa.string())]))
+            def read(self, partition):  # noqa: ARG002
+                batch = pa.RecordBatch.from_pydict(
+                    {
+                        "id": [1, 2, 3],
+                        "msg": ["hello", "from", "session_a"],
+                    },
+                    schema=pa.schema([("id", pa.int32()), ("msg", pa.string())]),
+                )
                 yield batch
 
         # Session A: Register the datasource
@@ -532,20 +548,15 @@ class TestPythonDataSource:
         # Verify Session A can read from it
         df_a = spark_a.read.format("session_isolation_test").load()
         rows_a = df_a.collect()
-        assert len(rows_a) == 3
+        assert len(rows_a) == 3  # noqa: PLR2004
 
         # Session B: Create a completely independent session
         spark_b = spark_session_factory()
 
         # Session B should NOT be able to access the datasource from Session A
         # because datasources are registered per-session
-        with pytest.raises(Exception) as exc_info:
-            df_b = spark_b.read.format("session_isolation_test").load()
-            df_b.collect()
-
-        error_msg = str(exc_info.value).lower()
-        # Error should indicate the format is not found
-        assert "session_isolation_test" in error_msg or "not found" in error_msg or "unknown" in error_msg
+        with pytest.raises(Exception, match="session_isolation_test|not found|unknown"):
+            spark_b.read.format("session_isolation_test").load().collect()
 
 
 class TestFilterPushdown:
@@ -569,19 +580,21 @@ class TestFilterPushdown:
                 return "filter_applying_test"
 
             def schema(self):
-                return pa.schema([
-                    ("id", pa.int64()),
-                    ("value", pa.string()),
-                ])
+                return pa.schema(
+                    [
+                        ("id", pa.int64()),
+                        ("value", pa.string()),
+                    ]
+                )
 
-            def reader(self, schema):
+            def reader(self, schema):  # noqa: ARG002
                 return FilterApplyingReader()
 
         class FilterApplyingReader(DataSourceReader):
             def __init__(self):
                 self.accepted_filters = []
 
-            def pushFilters(self, filters):
+            def pushFilters(self, filters):  # noqa: N802
                 """Accept EqualTo filters and track them."""
                 for f in filters:
                     filter_name = type(f).__name__
@@ -593,7 +606,7 @@ class TestFilterPushdown:
             def partitions(self):
                 return [InputPartition(0)]
 
-            def read(self, partition):
+            def read(self, partition):  # noqa: ARG002
                 # Full dataset
                 all_data = {"id": [1, 2, 3, 4, 5], "value": ["a", "b", "c", "d", "e"]}
 
@@ -602,7 +615,7 @@ class TestFilterPushdown:
                     for f in self.accepted_filters:
                         # EqualTo filter has references to column tuple and value
                         # Access the filter value (it's stored as an attribute)
-                        filter_val = getattr(f, 'value', None)
+                        filter_val = getattr(f, "value", None)
                         if filter_val is not None:
                             # Filter rows where id matches
                             filtered_ids = []
@@ -614,8 +627,7 @@ class TestFilterPushdown:
                             all_data = {"id": filtered_ids, "value": filtered_values}
 
                 batch = pa.RecordBatch.from_pydict(
-                    all_data,
-                    schema=pa.schema([("id", pa.int64()), ("value", pa.string())])
+                    all_data, schema=pa.schema([("id", pa.int64()), ("value", pa.string())])
                 )
                 yield batch
 
@@ -626,34 +638,33 @@ class TestFilterPushdown:
 
         # Query without filter should return all 5 rows
         all_rows = df.collect()
-        assert len(all_rows) == 5, f"Expected 5 rows, got {len(all_rows)}"
+        expected_all_rows = 5
+        assert len(all_rows) == expected_all_rows, f"Expected 5 rows, got {len(all_rows)}"
 
         # Query WITH filter - if pushFilters works, Python reader applies it
         filtered_rows = df.filter("id = 3").collect()
 
         # Should get exactly 1 row
         assert len(filtered_rows) == 1, f"Expected 1 row, got {len(filtered_rows)}"
-        assert filtered_rows[0].id == 3
+        assert filtered_rows[0].id == 3  # noqa: PLR2004
 
     def test_ddl_schema_fallback(self, spark):
         """Test that DDL string schema is correctly parsed and used."""
         spark.dataSource.register(RangeDataSource)
 
         # This uses the option we added to RangeDataSource to force DDL schema return
-        df = spark.read.format("range") \
-            .option("use_ddl_schema", "true") \
-            .option("end", "10") \
-            .load()
+        df = spark.read.format("range").option("use_ddl_schema", "true").option("end", "10").load()
 
         # Verify schema
         assert df.schema.fields[0].name == "id"
         # In Spark, BIGINT maps to LongType (int64)
         from pyspark.sql.types import LongType
+
         assert df.schema.fields[0].dataType == LongType()
 
         # Verify data read works
         rows = df.collect()
-        assert len(rows) == 10
+        assert len(rows) == 10  # noqa: PLR2004
         # Sort by ID to ensure deterministic check
         rows.sort(key=lambda r: r.id)
         assert rows[0].id == 0
@@ -675,21 +686,21 @@ class TestFilterPushdown:
             def schema(self):
                 return pa.schema([("id", pa.int64())])
 
-            def reader(self, schema):
+            def reader(self, schema):  # noqa: ARG002
                 return SimpleRangeReader()
 
         class SimpleRangeReader(DataSourceReader):
-            def pushFilters(self, filters):
+            def pushFilters(self, filters):  # noqa: ARG002, N802
                 # Accept all filters (don't actually apply - let DataFusion post-filter)
                 return iter([])
 
             def partitions(self):
                 return [InputPartition(0)]
 
-            def read(self, partition):
+            def read(self, partition):  # noqa: ARG002
                 batch = pa.RecordBatch.from_pydict(
                     {"id": list(range(10))},  # 0-9
-                    schema=pa.schema([("id", pa.int64())])
+                    schema=pa.schema([("id", pa.int64())]),
                 )
                 yield batch
 
@@ -698,8 +709,10 @@ class TestFilterPushdown:
 
         # Test greater than
         rows = df.filter("id > 5").collect()
-        assert len(rows) == 4, f"Expected 4 rows (6,7,8,9), got {len(rows)}"
-        assert all(r.id > 5 for r in rows)
+        expected_rows = 4
+        assert len(rows) == expected_rows, f"Expected 4 rows (6,7,8,9), got {len(rows)}"
+        min_id = 5
+        assert all(r.id > min_id for r in rows)
 
     def test_filter_pushdown_rejection(self, spark):
         """Test that when reader rejects filters, DataFusion post-filters correctly."""
@@ -714,22 +727,19 @@ class TestFilterPushdown:
             def schema(self):
                 return pa.schema([("id", pa.int64())])
 
-            def reader(self, schema):
+            def reader(self, schema):  # noqa: ARG002
                 return RejectAllFiltersReader()
 
         class RejectAllFiltersReader(DataSourceReader):
-            def pushFilters(self, filters):
+            def pushFilters(self, filters):  # noqa: N802
                 # Reject all filters by yielding them back
                 yield from filters
 
             def partitions(self):
                 return [InputPartition(0)]
 
-            def read(self, partition):
-                batch = pa.RecordBatch.from_pydict(
-                    {"id": [1, 2, 3, 4, 5]},
-                    schema=pa.schema([("id", pa.int64())])
-                )
+            def read(self, partition):  # noqa: ARG002
+                batch = pa.RecordBatch.from_pydict({"id": [1, 2, 3, 4, 5]}, schema=pa.schema([("id", pa.int64())]))
                 yield batch
 
         spark.dataSource.register(RejectAllFiltersDataSource)
@@ -739,7 +749,7 @@ class TestFilterPushdown:
         # DataFusion will post-filter the results
         rows = df.filter("id = 3").collect()
         assert len(rows) == 1
-        assert rows[0].id == 3
+        assert rows[0].id == 3  # noqa: PLR2004
 
     def test_filter_pushdown_complex_and(self, spark):
         """Test that complex AND filters are pushed to Python reader.
@@ -758,13 +768,15 @@ class TestFilterPushdown:
                 return "filter_tracking_and_test"
 
             def schema(self):
-                return pa.schema([
-                    ("id", pa.int32()),
-                    ("name", pa.string()),
-                    ("value", pa.int32()),
-                ])
+                return pa.schema(
+                    [
+                        ("id", pa.int32()),
+                        ("name", pa.string()),
+                        ("value", pa.int32()),
+                    ]
+                )
 
-            def reader(self, schema):
+            def reader(self, schema):  # noqa: ARG002
                 return FilterTrackingReader()
 
         class FilterTrackingReader(DataSourceReader):
@@ -774,7 +786,7 @@ class TestFilterPushdown:
             def partitions(self):
                 return [InputPartition(0)]
 
-            def read(self, partition):
+            def read(self, partition):  # noqa: ARG002
                 # Encode pushed filters into the 'name' column so test can verify
                 filters_str = str(self.pushed_filters)
                 data = {
@@ -782,15 +794,17 @@ class TestFilterPushdown:
                     "name": [filters_str, filters_str, filters_str],
                     "value": [10, 20, 30],
                 }
-                schema = pa.schema([
-                    ("id", pa.int32()),
-                    ("name", pa.string()),
-                    ("value", pa.int32()),
-                ])
+                schema = pa.schema(
+                    [
+                        ("id", pa.int32()),
+                        ("name", pa.string()),
+                        ("value", pa.int32()),
+                    ]
+                )
                 batch = pa.RecordBatch.from_pydict(data, schema=schema)
                 yield batch
 
-            def pushFilters(self, filters):
+            def pushFilters(self, filters):  # noqa: N802
                 # Store string representations of pushed filters
                 self.pushed_filters = [str(f) for f in filters]
                 # Accept all filters (return empty to indicate all handled)

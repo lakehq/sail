@@ -541,5 +541,3 @@ class TestBinaryDataSource:
         large_count = large_files.count()
         expected_large = sum(1 for _, content in files.values() if len(content) > min_file_size)
         assert large_count == expected_large
-
-

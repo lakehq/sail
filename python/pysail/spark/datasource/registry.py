@@ -22,6 +22,6 @@ def discover_entry_points(group: str = "sail.datasources") -> list[tuple[str, ty
         try:
             cls = ep.load()
             result.append((ep.name, cls))
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.warning("Failed to load datasource entry point: %s", ep.name, exc_info=True)
     return result
