@@ -116,7 +116,7 @@ def create_spark_mcp_server(host: str, port: int, spark_remote: str):
             Please concatenate the key prefix with the directory name (without any separator) to get the full path.
         """
         try:
-            import boto3  # noqa: PLC0415
+            import boto3
         except ImportError as e:
             message = "Please install boto3 to use AWS functionalities in the MCP server."
             raise RuntimeError(message) from e
@@ -337,7 +337,7 @@ def main():
     This is used when running the Python script directly during development.
     It is not used by the Sail CLI to start the MCP server.
     """
-    import argparse  # noqa: PLC0415
+    import argparse
 
     parser = argparse.ArgumentParser(description="Spark MCP server")
     parser.add_argument("--transport", default="sse", help="The transport for the MCP server", choices=["stdio", "sse"])

@@ -6,7 +6,6 @@ edition = { workspace = true }
 [lints]
 workspace = true
 
-
 [dependencies]
 sail-cache = { path = "../sail-cache" }
 sail-common = { path = "../sail-common" }
