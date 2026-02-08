@@ -20,9 +20,11 @@ use datafusion::physical_optimizer::update_aggr_exprs::OptimizeAggregateOrder;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 
 use crate::explicit_repartition::RewriteExplicitRepartition;
+use crate::join_collect_left::RewriteCollectLeftHashJoin;
 use crate::join_reorder::JoinReorder;
 
 mod explicit_repartition;
+mod join_collect_left;
 mod join_reorder;
 
 #[derive(Debug, Clone, Default)]
@@ -57,6 +59,7 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(PushdownSort::new()));
     rules.push(Arc::new(EnsureCooperative::new()));
     rules.push(Arc::new(FilterPushdown::new_post_optimization()));
+    rules.push(Arc::new(RewriteCollectLeftHashJoin::new()));
     rules.push(Arc::new(RewriteExplicitRepartition::new()));
     rules.push(Arc::new(SanityCheckPlan::new()));
 
