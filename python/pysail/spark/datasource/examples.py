@@ -147,6 +147,9 @@ class RangeDataSource(DataSource):
         return "range"
 
     def schema(self):
+        # Allow testing DDL string fallback via options
+        if self.options.get("use_ddl_schema", "false").lower() == "true":
+            return "id BIGINT"
         # PyArrow Schema preferred; DDL string fallback also works for basic types
         return pa.schema([("id", pa.int64())])
 

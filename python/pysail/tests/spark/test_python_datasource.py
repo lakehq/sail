@@ -16,11 +16,18 @@ class TestPythonDataSourceBasic:
         """Test RangeDataSource API without server."""
         from pysail.spark.datasource.examples import RangeDataSource
 
+        # Test with default PyArrow schema
         ds = RangeDataSource(options={"start": "0", "end": "10", "numPartitions": "2"})
         assert ds.name() == "range"
-
         schema = ds.schema()
-        assert schema is not None
+        assert isinstance(schema, pa.Schema)
+        assert schema.names == ["id"]
+
+        # Test with DDL string schema
+        ds_ddl = RangeDataSource(options={"start": "0", "end": "10", "use_ddl_schema": "true"})
+        schema_ddl = ds_ddl.schema()
+        assert isinstance(schema_ddl, str)
+        assert schema_ddl == "id BIGINT"
 
         reader = ds.reader(schema)
         partitions = reader.partitions()
@@ -480,6 +487,30 @@ class TestFilterPushdown:
         # Should get exactly 1 row
         assert len(filtered_rows) == 1, f"Expected 1 row, got {len(filtered_rows)}"
         assert filtered_rows[0].id == 3
+
+    def test_ddl_schema_fallback(self, spark):
+        """Test that DDL string schema is correctly parsed and used."""
+        from pysail.spark.datasource.examples import RangeDataSource
+        spark.dataSource.register(RangeDataSource)
+
+        # This uses the option we added to RangeDataSource to force DDL schema return
+        df = spark.read.format("range") \
+            .option("use_ddl_schema", "true") \
+            .option("end", "10") \
+            .load()
+
+        # Verify schema
+        assert df.schema.fields[0].name == "id"
+        # In Spark, BIGINT maps to LongType (int64)
+        from pyspark.sql.types import LongType
+        assert df.schema.fields[0].dataType == LongType()
+
+        # Verify data read works
+        rows = df.collect()
+        assert len(rows) == 10
+        # Sort by ID to ensure deterministic check
+        rows.sort(key=lambda r: r.id)
+        assert rows[0].id == 0
 
     def test_filter_pushdown_comparison(self, spark):
         """Test that comparison filters (>, <, >=, <=) work correctly.
