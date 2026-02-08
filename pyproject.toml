@@ -1,13 +1,13 @@
 [project]
 name = "pysail"
-version = "0.4.6"
+version = "0.5.0"
 description = "Sail Python library"
 authors = [
     { name = "LakeSail", email = "hello@lakesail.com" },
 ]
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.9,<3.15"
+requires-python = ">=3.10,<3.15"
 dependencies = []
 keywords = ["data", "big data", "sql", "spark", "pyspark", "arrow", "datafusion"]
 classifiers = [
@@ -20,7 +20,6 @@ classifiers = [
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -144,6 +143,7 @@ dependencies = [
     "jedi>=0.19.2,<0.20",
     "jsonpath-ng>=1.6,<2",
     "PyYAML>=6.0,<7",
+    "cloudpickle",
 ]
 
 [[tool.hatch.envs.test.matrix]]
@@ -239,9 +239,10 @@ line-length = 120
 [tool.ruff.lint.per-file-ignores]
 "crates/**/*.py" = ["INP001"]
 "python/pysail/docs/conf.py" = ["INP001"]
-"python/pysail/examples/**/*.py" = ["T201"]
-"python/pysail/tests/**/*.py" = ["S101"]
-"scripts/**/*.py" = ["SLF001"]
+"python/pysail/examples/**/*.py" = ["T201", "PLC0415"]
+"python/pysail/spark/datasource/registry.py" = ["PLC0415"]
+"python/pysail/tests/**/*.py" = ["S101", "PLC0415"]
+"scripts/**/*.py" = ["SLF001", "PLC0415"]
 
 [tool.pytest.ini_options]
 testpaths = ["python"]

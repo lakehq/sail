@@ -77,6 +77,7 @@ use sail_common_datafusion::system::catalog::SystemTable;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_data_source::formats::binary::source::BinarySource;
 use sail_data_source::formats::console::ConsoleSinkExec;
+use sail_data_source::formats::python::{InputPartition, PythonDataSourceExec};
 use sail_data_source::formats::rate::{RateSourceExec, TableRateOptions};
 use sail_data_source::formats::socket::{SocketSourceExec, TableSocketOptions};
 use sail_data_source::formats::text::source::TextSource;
@@ -88,6 +89,7 @@ use sail_delta_lake::physical_plan::{
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
+use sail_function::aggregate::percentile::PercentileFunction;
 use sail_function::aggregate::percentile_disc::PercentileDisc;
 use sail_function::aggregate::skewness::SkewnessFunc;
 use sail_function::aggregate::try_avg::TryAvgFunction;
@@ -148,6 +150,7 @@ use sail_function::scalar::string::make_valid_utf8::MakeValidUtf8;
 use sail_function::scalar::string::randstr::Randstr;
 use sail_function::scalar::string::soundex::Soundex;
 use sail_function::scalar::string::spark_base64::{SparkBase64, SparkUnbase64};
+use sail_function::scalar::string::spark_concat_ws::SparkConcatWs;
 use sail_function::scalar::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use sail_function::scalar::string::spark_mask::SparkMask;
 use sail_function::scalar::string::spark_split::SparkSplit;
@@ -872,6 +875,31 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
 
                 Ok(Arc::new(IcebergCommitExec::new(input, table_url)))
             }
+            NodeKind::PythonDataSource(gen::PythonDataSourceExecNode {
+                command,
+                schema,
+                partitions,
+                filters,
+            }) => {
+                let schema = Arc::new(self.try_decode_schema(&schema)?);
+                let partitions = partitions
+                    .into_iter()
+                    .map(|p| InputPartition {
+                        partition_id: p.partition_id as usize,
+                        data: p.data,
+                    })
+                    .collect();
+                let filters = if filters.is_empty() {
+                    vec![]
+                } else {
+                    serde_json::from_slice(&filters)
+                        .map_err(|e| plan_datafusion_err!("failed to decode Python filters: {e}"))?
+                };
+                // Note: executor is created lazily in execute() on the worker
+                Ok(Arc::new(PythonDataSourceExec::new(
+                    command, schema, partitions, filters,
+                )))
+            }
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
         }
     }
@@ -1338,6 +1366,24 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 table_url: iceberg_commit_exec.table_url().to_string(),
             })
+        } else if let Some(python_exec) = node.as_any().downcast_ref::<PythonDataSourceExec>() {
+            let schema = self.try_encode_schema(python_exec.schema().as_ref())?;
+            let partitions = python_exec
+                .partitions()
+                .iter()
+                .map(|p| gen::PythonDataSourceInputPartition {
+                    partition_id: p.partition_id as u64,
+                    data: p.data.clone(),
+                })
+                .collect();
+            let filters = serde_json::to_vec(python_exec.filters())
+                .map_err(|e| plan_datafusion_err!("failed to encode Python filters: {e}"))?;
+            NodeKind::PythonDataSource(gen::PythonDataSourceExecNode {
+                command: python_exec.command().to_vec(),
+                schema,
+                partitions,
+                filters,
+            })
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");
         };
@@ -1564,6 +1610,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeTimestampNtz::new())))
             }
             "spark_mask" | "mask" => Ok(Arc::new(ScalarUDF::from(SparkMask::new()))),
+            "spark_concat_ws" | "concat_ws" => Ok(Arc::new(ScalarUDF::from(SparkConcatWs::new()))),
             "spark_sequence" | "sequence" => Ok(Arc::new(ScalarUDF::from(SparkSequence::new()))),
             "spark_shuffle" | "shuffle" => Ok(Arc::new(ScalarUDF::from(SparkShuffle::new()))),
             "spark_encode" | "encode" => Ok(Arc::new(ScalarUDF::from(SparkEncode::new()))),
@@ -1671,6 +1718,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkMakeTimestampNtz>()
             || node_inner.is::<SparkMakeYmInterval>()
             || node_inner.is::<SparkMask>()
+            || node_inner.is::<SparkConcatWs>()
             || node_inner.is::<SparkMurmur3Hash>()
             || node_inner.is::<SparkNextDay>()
             || node_inner.is::<SparkPmod>()
@@ -1806,6 +1854,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 "max_by" => Ok(Arc::new(AggregateUDF::from(MaxByFunction::new()))),
                 "min_by" => Ok(Arc::new(AggregateUDF::from(MinByFunction::new()))),
                 "mode" => Ok(Arc::new(AggregateUDF::from(ModeFunction::new()))),
+                "percentile" => Ok(Arc::new(AggregateUDF::from(PercentileFunction::new()))),
                 "percentile_disc" => Ok(Arc::new(AggregateUDF::from(PercentileDisc::new()))),
                 "skewness" => Ok(Arc::new(AggregateUDF::from(SkewnessFunc::new()))),
                 "try_avg" => Ok(Arc::new(AggregateUDF::from(TryAvgFunction::new()))),
@@ -1892,6 +1941,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<MaxByFunction>()
             || node.inner().as_any().is::<MinByFunction>()
             || node.inner().as_any().is::<ModeFunction>()
+            || node.inner().as_any().is::<PercentileFunction>()
             || node.inner().as_any().is::<PercentileDisc>()
             || node.inner().as_any().is::<SkewnessFunc>()
             || node.inner().as_any().is::<TryAvgFunction>()

@@ -14,6 +14,7 @@ use sail_function::scalar::string::make_valid_utf8::MakeValidUtf8;
 use sail_function::scalar::string::randstr::Randstr;
 use sail_function::scalar::string::soundex::Soundex;
 use sail_function::scalar::string::spark_base64::{SparkBase64, SparkUnbase64};
+use sail_function::scalar::string::spark_concat_ws::SparkConcatWs;
 use sail_function::scalar::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use sail_function::scalar::string::spark_mask::SparkMask;
 use sail_function::scalar::string::spark_split::SparkSplit;
@@ -51,6 +52,16 @@ fn regexp_extract(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr_fn::coalesce(vec![element, lit("")]))
 }
 
+fn regexp_substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (string, pattern) = input
+        .arguments
+        .two()
+        .map_err(|_| PlanError::invalid("regexp_substr requires 2 arguments"))?;
+    let wrapped_pattern = expr_fn::concat_ws(lit(""), vec![lit("("), pattern, lit(")")]);
+    let matches = regex_fn::regexp_match(string, wrapped_pattern, None);
+    Ok(array_element(matches, lit(1i64)))
+}
+
 fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
         mut arguments,
@@ -68,14 +79,6 @@ fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     // TODO: Spark client throws "UNEXPECTED EXCEPTION: ArrowInvalid('Unrecognized type: 24')"
     //  when the return type is Utf8View.
     Ok(cast(substr_res, DataType::Utf8))
-}
-
-fn concat_ws(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
-    let (delimiter, args) = args.at_least_one()?;
-    if args.is_empty() {
-        return Ok(lit(""));
-    }
-    Ok(expr_fn::concat_ws(delimiter, args))
 }
 
 fn overlay(mut args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
@@ -239,7 +242,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("chr", F::unary(expr_fn::chr)),
         ("collate", F::unknown("collate")),
         ("collation", F::unknown("collation")),
-        ("concat_ws", F::var_arg(concat_ws)),
+        ("concat_ws", F::udf(SparkConcatWs::new())),
         ("contains", F::custom(contains)),
         ("decode", F::udf(SparkDecode::new())),
         ("elt", F::udf(SparkElt::new())),
@@ -273,7 +276,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("regexp_extract_all", F::unknown("regexp_extract_all")),
         ("regexp_instr", F::udf(RegexpInstrFunc::new())),
         ("regexp_replace", F::ternary(regexp_replace)),
-        ("regexp_substr", F::unknown("regexp_substr")),
+        ("regexp_substr", F::custom(regexp_substr)),
         ("repeat", F::binary(expr_fn::repeat)),
         ("replace", F::var_arg(replace)),
         ("right", F::binary(expr_fn::right)),
