@@ -1,9 +1,11 @@
 """Entry point discovery for Python datasources."""
 
-from typing import List, Tuple, Type
+import logging
+
+logger = logging.getLogger(__name__)
 
 
-def discover_entry_points(group: str = "sail.datasources") -> List[Tuple[str, Type]]:
+def discover_entry_points(group: str = "sail.datasources") -> list[tuple[str, type]]:
     """
     Discover datasources from Python entry points.
 
@@ -21,5 +23,5 @@ def discover_entry_points(group: str = "sail.datasources") -> List[Tuple[str, Ty
             cls = ep.load()
             result.append((ep.name, cls))
         except Exception:
-            pass
+            logger.warning("Failed to load datasource entry point: %s", ep.name, exc_info=True)
     return result

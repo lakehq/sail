@@ -80,9 +80,9 @@ def spark_session_factory(remote):
     :yields: A factory function that creates new SparkSessions.
     """
     import uuid
-    
+
     sessions = []
-    
+
     def create_session():
         # Use a unique app name to ensure we get a fresh session
         # The session ID is generated internally by Spark Connect
@@ -95,9 +95,9 @@ def spark_session_factory(remote):
         patch_spark_connect_session(session)
         sessions.append(session)
         return session
-    
+
     yield create_session
-    
+
     # Cleanup all created sessions
     for session in sessions:
         try:
