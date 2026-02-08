@@ -1,22 +1,32 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use datafusion::common::stats::Precision;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::{JoinType, Operator};
 use datafusion::physical_expr::expressions::{BinaryExpr, Column};
+use datafusion::physical_expr::utils::collect_columns;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::aggregates::AggregateExec;
+use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::HashJoinExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion_physical_expr::intervals::utils::check_support;
+use datafusion_physical_expr::{analyze, AnalysisContext};
 use log::trace;
 
 use crate::join_reorder::graph::{JoinEdge, QueryGraph, RelationNode, StableColumn};
 use crate::join_reorder::join_set::JoinSet;
 
-/// Type alias for join condition pairs to reduce complexity
-type JoinConditionPairs = [(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)];
+type PhysicalExprRef = Arc<dyn PhysicalExpr>;
+type EquiPair = (StableColumn, StableColumn);
+type PhysicalExprWithEquiPairs = (PhysicalExprRef, Vec<EquiPair>);
+type GroupedPredicates = HashMap<JoinSet, Vec<PhysicalExprWithEquiPairs>>;
+
+/// Hard limit on the number of base relations in a single reorderable graph.
+const MAX_RELATIONS: usize = 12;
 
 /// Maps an output column from an ExecutionPlan back to a stable identifier.
 /// The vector is indexed by the column index in the plan's output schema.
@@ -109,7 +119,25 @@ impl GraphBuilder {
 
         if let Some(proj_plan) = any_plan.downcast_ref::<ProjectionExec>() {
             trace!("Visiting projection: {}", proj_plan.name());
-            return self.visit_projection(proj_plan);
+            // Only "see through" projections that are a pure column passthrough
+            // (possibly pruning/reordering/renaming/duplicating columns).
+            //
+            // Projections that introduce computed expressions are treated as a boundary leaf:
+            // seeing through them can lose the expression semantics and/or create join keys
+            // we can't reconstruct from stable base columns.
+            if self.is_trivial_projection(proj_plan) {
+                //TODO: consider apply this limit in different levels of the plan.
+                if self.graph.relation_count() >= MAX_RELATIONS {
+                    trace!(
+                        "GraphBuilder: relation_count={} >= MAX_RELATIONS={}, treating ProjectionExec as boundary leaf",
+                        self.graph.relation_count(),
+                        MAX_RELATIONS
+                    );
+                    return self.visit_boundary_or_leaf(plan);
+                }
+                return self.visit_projection(proj_plan);
+            }
+            return self.visit_boundary_or_leaf(plan);
         }
 
         // If it's not a reorderable join or a projection we can see through,
@@ -142,55 +170,82 @@ impl GraphBuilder {
         let left_map = self.visit_plan(join_plan.left().clone())?;
         let right_map = self.visit_plan(join_plan.right().clone())?;
 
-        // Parse Join conditions, create JoinEdge
-        let mut all_relations_in_condition = JoinSet::default();
-        let mut equi_pairs = Vec::new();
+        // Build join predicates and add edges.
+        //
+        // Note: avoid creating a single hyperedge that unions unrelated binary predicates
+        // (e.g. a join node with ON conditions that touch different base table pairs). Instead,
+        // split AND-conjuncts by their base-relation dependencies and create one edge per group.
+
+        // Collect conjunct predicates originating from join `on` conditions.
+        // These are equi-join predicates by construction (HashJoin keys), and we require that
+        // each side resolves to a single base StableColumn so we can reconstruct HashJoinExec.
+        let mut conjuncts: Vec<PhysicalExprWithEquiPairs> = Vec::new();
 
         for (left_on, right_on) in join_plan.on() {
-            // Parse left and right expressions, find their corresponding stable IDs
-            let left_stable_ids = self.resolve_expr_to_relations(left_on, &left_map)?;
-            let right_stable_ids = self.resolve_expr_to_relations(right_on, &right_map)?;
+            let left_stable_col = self
+                .resolve_to_single_stable_col(left_on, &left_map)?
+                .ok_or_else(|| {
+                    DataFusionError::Internal(
+                        "JoinReorder: join key is not a simple column reference".to_string(),
+                    )
+                })?;
+            let right_stable_col = self
+                .resolve_to_single_stable_col(right_on, &right_map)?
+                .ok_or_else(|| {
+                    DataFusionError::Internal(
+                        "JoinReorder: join key is not a simple column reference".to_string(),
+                    )
+                })?;
 
-            // Merge relations involved in all_relations_in_condition
-            for rel_id in left_stable_ids.iter().chain(right_stable_ids.iter()) {
-                all_relations_in_condition =
-                    all_relations_in_condition.union(&JoinSet::new_singleton(*rel_id)?);
-            }
+            // Represent the equality in stable-name form so downstream dependency analysis and
+            // join-filter rewriting can work without relying on transient schema names.
+            let l: PhysicalExprRef = Arc::new(Column::new(&left_stable_col.name, 0));
+            let r: PhysicalExprRef = Arc::new(Column::new(&right_stable_col.name, 0));
+            let eq = Arc::new(BinaryExpr::new(l, Operator::Eq, r)) as PhysicalExprRef;
 
-            // Try to resolve expressions to single stable columns for equi-join pairs
-            if let (Some(left_stable_col), Some(right_stable_col)) = (
-                self.resolve_to_single_stable_col(left_on, &left_map)?,
-                self.resolve_to_single_stable_col(right_on, &right_map)?,
-            ) {
-                equi_pairs.push((left_stable_col, right_stable_col));
-            }
+            conjuncts.push((eq, vec![(left_stable_col, right_stable_col)]));
         }
 
-        // Create an expression representing the entire ON condition
-        let mut filter_expr = self.build_conjunction_from_on(join_plan.on())?;
-
-        // Incorporate additional non-equi filters from the original join
+        // Collect conjunct predicates from join filter (non-equi predicates / residuals).
         if let Some(join_filter) = join_plan.filter() {
-            // Rewrite filter expressions to use stable column names (R{relation}.C{index})
-            // instead of ephemeral projection names and join-local indices.
+            // Rewrite join filter to stable column names.
             let extra = self.rewrite_join_filter_to_stable(
                 join_plan,
                 join_filter.expression(),
                 &left_map,
                 &right_map,
             )?;
-            // TODO: Separating the equi-join conditions from the non-equi filter expression at the source
-            filter_expr = Arc::new(BinaryExpr::new(filter_expr, Operator::And, extra))
-                as Arc<dyn PhysicalExpr>;
+
+            for c in Self::decompose_conjuncts(&extra) {
+                conjuncts.push((c, vec![]));
+            }
         }
 
-        let edge = JoinEdge::new(
-            all_relations_in_condition,
-            filter_expr,
-            *join_plan.join_type(),
-            equi_pairs,
-        );
-        self.graph.add_edge(edge)?;
+        // Group conjuncts by their base-relation dependency set and add one edge per group.
+        //
+        // This avoids generating hyperedges for join nodes where each conjunct is actually
+        // a binary predicate between two base relations.
+        let mut grouped: GroupedPredicates = HashMap::new();
+
+        for (pred, pairs) in conjuncts {
+            let deps = self.relations_for_expr(&pred, &left_map, &right_map)?;
+
+            // NOTE: If a predicate depends on <2 base relations, keep it associated with the full
+            // join node so it is not lost (it may be a single-side residual predicate).
+            let deps = if deps.cardinality() < 2 {
+                self.all_relations_in_maps(&left_map, &right_map)?
+            } else {
+                deps
+            };
+
+            grouped.entry(deps).or_default().push((pred, pairs));
+        }
+
+        for (join_set, preds) in grouped {
+            let (filter, equi_pairs) = Self::combine_predicates(preds)?;
+            let edge = JoinEdge::new(join_set, filter, *join_plan.join_type(), equi_pairs);
+            self.graph.add_edge(edge)?;
+        }
 
         // Build and return the output ColumnMap for current Join node
         // Inner Join output is concatenation of left and right child outputs
@@ -212,6 +267,186 @@ impl GraphBuilder {
             output_map = projected;
         }
         Ok(output_map)
+    }
+
+    /// Parse stable column name like "R{rel}.C{col}" -> (rel, col)
+    fn parse_stable_name(name: &str) -> Option<(usize, usize)> {
+        if !name.starts_with('R') {
+            return None;
+        }
+        let dot = name.find('.')?;
+        let rel_str = &name[1..dot];
+        if !name[dot + 1..].starts_with('C') {
+            return None;
+        }
+        let col_str = &name[dot + 2..];
+        let rel = rel_str.parse::<usize>().ok()?;
+        let col = col_str.parse::<usize>().ok()?;
+        Some((rel, col))
+    }
+
+    fn decompose_conjuncts(expr: &Arc<dyn PhysicalExpr>) -> Vec<Arc<dyn PhysicalExpr>> {
+        let mut result = Vec::new();
+        if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>() {
+            match binary.op() {
+                Operator::And => {
+                    result.extend(Self::decompose_conjuncts(binary.left()));
+                    result.extend(Self::decompose_conjuncts(binary.right()));
+                }
+                _ => result.push(Arc::clone(expr)),
+            }
+        } else {
+            result.push(Arc::clone(expr));
+        }
+        result
+    }
+
+    /// Returns true if this projection is a pure column passthrough:
+    /// - each output expression is a Column (aliases may differ)
+    ///
+    /// We allow pruning/reordering/duplication: join reordering will later recompute the
+    /// minimal required columns for the chosen join tree, and re-apply projections during
+    /// reconstruction.
+    fn is_trivial_projection(&self, proj_plan: &ProjectionExec) -> bool {
+        let input_len = proj_plan.input().schema().fields().len();
+        let exprs = proj_plan.expr();
+        if exprs.is_empty() {
+            return false;
+        }
+        for p in exprs.iter() {
+            let Some(c) = p.expr.as_any().downcast_ref::<Column>() else {
+                return false;
+            };
+            let idx = c.index();
+            if idx >= input_len {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Return the set of base relations referenced by `expr`.
+    ///
+    /// The expression can refer to:
+    /// - stable names ("R{rel}.C{col}") emitted by join-filter rewriting, or
+    /// - Column indices into either `left_map` or `right_map` (for expressions that have not
+    ///   been rewritten yet).
+    fn relations_for_expr(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+        left_map: &ColumnMap,
+        right_map: &ColumnMap,
+    ) -> Result<JoinSet> {
+        let cols = collect_columns(expr);
+        let mut bits: u64 = 0;
+
+        for c in &cols {
+            // Prefer parsing stable names if present.
+            if let Some((rel, _cidx)) = Self::parse_stable_name(c.name()) {
+                bits |= 1u64 << rel;
+                continue;
+            }
+
+            // Otherwise, fall back to column index mapping. The same expression can exist in
+            // either the left or the right join input; if present in both, it's ambiguous.
+            let l = left_map.get(c.index());
+            let r = right_map.get(c.index());
+
+            match (l, r) {
+                (Some(entry), None) => self.add_relation_bits_from_entry(entry, &mut bits)?,
+                (None, Some(entry)) => self.add_relation_bits_from_entry(entry, &mut bits)?,
+                (Some(_), Some(_)) => {
+                    return Err(DataFusionError::Internal(format!(
+                        "JoinReorder: ambiguous column index {} found in both left and right maps while analyzing predicate dependencies",
+                        c.index()
+                    )));
+                }
+                (None, None) => {
+                    return Err(DataFusionError::Internal(format!(
+                        "JoinReorder: column index {} out of bounds for both left_map (len {}) and right_map (len {})",
+                        c.index(),
+                        left_map.len(),
+                        right_map.len()
+                    )));
+                }
+            }
+        }
+
+        Ok(JoinSet::from_bits(bits))
+    }
+
+    fn add_relation_bits_from_entry(&self, entry: &ColumnMapEntry, bits: &mut u64) -> Result<()> {
+        match entry {
+            ColumnMapEntry::Stable { relation_id, .. } => {
+                *bits |= 1u64 << *relation_id;
+                Ok(())
+            }
+            ColumnMapEntry::Expression { expr, input_map } => {
+                // Conservative: if a predicate references a derived column, analyze its base
+                // dependencies so we can still attach the predicate at the right time.
+                self.add_relation_bits_from_expr(expr, input_map, bits)
+            }
+        }
+    }
+
+    fn add_relation_bits_from_expr(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+        column_map: &ColumnMap,
+        bits: &mut u64,
+    ) -> Result<()> {
+        let cols = collect_columns(expr);
+        for c in &cols {
+            if let Some((rel, _)) = Self::parse_stable_name(c.name()) {
+                *bits |= 1u64 << rel;
+                continue;
+            }
+
+            let entry = column_map.get(c.index()).ok_or_else(|| {
+                DataFusionError::Internal(format!(
+                    "JoinReorder: expression column index {} out of bounds (len {}) while analyzing predicate dependencies",
+                    c.index(),
+                    column_map.len()
+                ))
+            })?;
+
+            self.add_relation_bits_from_entry(entry, bits)?;
+        }
+        Ok(())
+    }
+
+    /// Return all base relations present in either column map.
+    fn all_relations_in_maps(
+        &self,
+        left_map: &ColumnMap,
+        right_map: &ColumnMap,
+    ) -> Result<JoinSet> {
+        let mut bits: u64 = 0;
+        for e in left_map.iter().chain(right_map.iter()) {
+            self.add_relation_bits_from_entry(e, &mut bits)?;
+        }
+        Ok(JoinSet::from_bits(bits))
+    }
+
+    fn combine_predicates(
+        preds: Vec<PhysicalExprWithEquiPairs>,
+    ) -> Result<(PhysicalExprRef, Vec<EquiPair>)> {
+        if preds.is_empty() {
+            return Err(DataFusionError::Internal(
+                "JoinReorder: cannot combine empty predicate list".to_string(),
+            ));
+        }
+
+        let mut filter = preds[0].0.clone();
+        let mut equi_pairs: Vec<EquiPair> = Vec::new();
+        equi_pairs.extend_from_slice(&preds[0].1);
+
+        for (pred, pairs) in preds.into_iter().skip(1) {
+            filter = Arc::new(BinaryExpr::new(filter, Operator::And, pred)) as PhysicalExprRef;
+            equi_pairs.extend(pairs);
+        }
+
+        Ok((filter, equi_pairs))
     }
 
     /// Rewrite a HashJoin's JoinFilter expression so that any Column references are
@@ -307,14 +542,61 @@ impl GraphBuilder {
         let relation_id = self.relation_counter;
         self.relation_counter += 1;
 
-        // Estimate initial cardinality
-        let stats = plan.partition_statistics(None)?;
+        // Estimate initial cardinality and choose statistics for downstream estimation.
+        //
+        // Special-case FilterExec: treat it as a boundary leaf (same as before), but pull
+        // statistics from its *input* (pre-filter) so we retain the most original/accurate
+        // datasource stats (e.g., Parquet), and apply the filter's selectivity as a penalty
+        // factor to initial cardinality.
+        let (stats, initial_cardinality) = if plan.as_any().is::<FilterExec>() {
+            // NOTE: We still keep FilterExec as the boundary leaf (strategy A), but we must avoid
+            // an inconsistent stats state where num_rows is "post-filter" while distinct_count
+            // (and thus TDom) remains "pre-filter". That mismatch can cause greedy join ordering
+            // to prefer catastrophic NLJs.
+            //
+            // We therefore:
+            // - read base (pre-filter) datasource statistics from beneath the filter chain, and
+            // - estimate a selectivity factor for the filter predicate(s), and
+            // - apply that selectivity to num_rows / total_byte_size (inexact) while preserving
+            //   base column stats as a best-effort proxy for join planning.
+            let (pre_filter_plan, selectivity) =
+                self.peel_filter_chain_and_estimate_selectivity(plan.clone())?;
+            let pre_stats = pre_filter_plan.partition_statistics(None)?;
+            let base = match pre_stats.num_rows {
+                Precision::Exact(count) => count as f64,
+                Precision::Inexact(count) => count as f64,
+                Precision::Absent => 1000.0,
+            };
 
-        // FIXME: Initial cardinality estimation does not account for table-level filters.
-        let initial_cardinality = match stats.num_rows {
-            datafusion::common::stats::Precision::Exact(count) => count as f64,
-            datafusion::common::stats::Precision::Inexact(count) => count as f64,
-            datafusion::common::stats::Precision::Absent => 1000.0, // Default estimation
+            let mut adjusted = pre_stats.to_inexact();
+            adjusted.num_rows = adjusted.num_rows.with_estimated_selectivity(selectivity);
+            adjusted.total_byte_size = adjusted
+                .total_byte_size
+                .with_estimated_selectivity(selectivity);
+
+            (adjusted, base * selectivity)
+        } else if plan.as_any().is::<ProjectionExec>() {
+            // Preserve ProjectionExec as a relation leaf, but prefer its input statistics
+            // (ProjectionExec may not have accurate stats of its own).
+            let mut cur = plan.clone();
+            while let Some(p) = cur.as_any().downcast_ref::<ProjectionExec>() {
+                cur = p.input().clone();
+            }
+            let stats = cur.partition_statistics(None)?;
+            let initial_cardinality = match stats.num_rows {
+                Precision::Exact(count) => count as f64,
+                Precision::Inexact(count) => count as f64,
+                Precision::Absent => 1000.0, // Default estimation
+            };
+            (stats, initial_cardinality)
+        } else {
+            let stats = plan.partition_statistics(None)?;
+            let initial_cardinality = match stats.num_rows {
+                Precision::Exact(count) => count as f64,
+                Precision::Inexact(count) => count as f64,
+                Precision::Absent => 1000.0, // Default estimation
+            };
+            (stats, initial_cardinality)
         };
 
         let relation_node =
@@ -338,47 +620,219 @@ impl GraphBuilder {
         Ok(output_map)
     }
 
-    /// Helper function to resolve an expression to the set of relation IDs it references.
-    /// Traverses the expression tree to find all underlying Stable columns.
-    fn resolve_expr_to_relations(
+    /// If `plan` is a FilterExec (possibly a chain of stacked FilterExecs), returns:
+    /// - the first non-Filter child plan (the "pre-filter" plan), and
+    /// - a multiplicative selectivity factor estimated from filter predicates.
+    ///
+    /// This is used to keep base datasource statistics (e.g., Parquet) while still
+    /// penalizing cardinality for table/subplan filters.
+    fn peel_filter_chain_and_estimate_selectivity(
         &self,
-        expr: &Arc<dyn PhysicalExpr>,
-        column_map: &ColumnMap,
-    ) -> Result<Vec<usize>> {
-        let mut relation_ids = Vec::new();
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<(Arc<dyn ExecutionPlan>, f64)> {
+        let mut cur = plan;
+        let mut selectivity: f64 = 1.0;
 
-        if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-            // This is a direct column reference
-            if let Some(entry) = column_map.get(col.index()) {
-                match entry {
-                    ColumnMapEntry::Stable { relation_id, .. } => {
-                        relation_ids.push(*relation_id);
-                    }
-                    ColumnMapEntry::Expression { .. } => {
-                        // FIXME: Support join keys / predicates that reference derived columns by
-                        // recursively walking the expression's input_map and collecting all base
-                        // relation_ids it depends on (similar to predicate dependency analysis).
+        while let Some(filter) = cur.as_any().downcast_ref::<FilterExec>() {
+            let input = filter.input().clone();
+            let input_stats = input.partition_statistics(None)?;
+            let input_schema = input.schema();
 
-                        // This column comes from a complex expression (e.g., aggregate output)
-                        // We cannot resolve it to a *specific base relation* for join condition purposes.
-                        // If a join condition relies on a column that is an aggregate output,
-                        // that join condition cannot be directly mapped to base relations.
-                        return Err(DataFusionError::Internal(
-                            "Join condition uses a column derived from an expression (e.g., aggregate), cannot map to stable join columns.".to_string(),
-                        ));
-                    }
-                }
-            }
-        } else {
-            // TODO: Implement recursive traversal of expression tree for complex expressions
-            return Err(DataFusionError::Internal(
-                "Complex expression resolution not yet implemented".to_string(),
-            ));
+            let sel = self.estimate_filter_selectivity(
+                filter.predicate(),
+                &input_schema,
+                &input_stats,
+                filter.default_selectivity(),
+            );
+            selectivity *= sel;
+            cur = input;
         }
 
-        Ok(relation_ids)
+        Ok((cur, selectivity.clamp(0.0, 1.0)))
     }
 
+    /// Estimate selectivity for a Filter predicate using DataFusion's interval analysis when
+    /// possible, falling back to FilterExec's default selectivity otherwise.
+    fn estimate_filter_selectivity(
+        &self,
+        predicate: &Arc<dyn PhysicalExpr>,
+        schema: &datafusion::arrow::datatypes::SchemaRef,
+        input_stats: &datafusion::common::Statistics,
+        default_selectivity: u8,
+    ) -> f64 {
+        // Default: `FilterExec.default_selectivity` is expressed as percent [0, 100].
+        //
+        // In practice this can be configured to 100 (no reduction), which is too optimistic
+        // for join ordering when the predicate is selective but cannot be analyzed.
+        // Cap our fallback to a conservative upper bound.
+        let configured = (default_selectivity as f64 / 100.0).clamp(0.0, 1.0);
+        // If configured to 100% ("no filtering"), use a conservative fallback when we can't
+        // estimate from stats to avoid catastrophic join orderings.
+        let fallback = if configured >= 0.999 { 0.2 } else { configured };
+
+        // First try a small set of cheap, deterministic heuristics that work well for common
+        // predicates (e.g. col = literal, range filters, conjunctions).
+        if let Some(sel) = self.estimate_selectivity_from_stats(predicate, schema, input_stats) {
+            return sel.clamp(0.0, 1.0);
+        }
+
+        if !check_support(predicate, schema) {
+            return fallback;
+        }
+
+        // Best effort: analyze predicate to derive a selectivity from column statistics.
+        let Ok(input_ctx) =
+            AnalysisContext::try_from_statistics(schema, &input_stats.column_statistics)
+        else {
+            return fallback;
+        };
+
+        let Ok(ctx) = analyze(predicate, input_ctx, schema) else {
+            return fallback;
+        };
+
+        ctx.selectivity.unwrap_or(fallback).clamp(0.0, 1.0)
+    }
+
+    fn estimate_selectivity_from_stats(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+        schema: &datafusion::arrow::datatypes::SchemaRef,
+        input_stats: &datafusion::common::Statistics,
+    ) -> Option<f64> {
+        let bin = expr.as_any().downcast_ref::<BinaryExpr>()?;
+        match bin.op() {
+            Operator::And => {
+                let l = self.estimate_selectivity_from_stats(bin.left(), schema, input_stats)?;
+                let r = self.estimate_selectivity_from_stats(bin.right(), schema, input_stats)?;
+                Some((l * r).clamp(0.0, 1.0))
+            }
+            Operator::Or => {
+                let l = self.estimate_selectivity_from_stats(bin.left(), schema, input_stats)?;
+                let r = self.estimate_selectivity_from_stats(bin.right(), schema, input_stats)?;
+                // Independence assumption: P(A ∪ B) = P(A) + P(B) - P(A)P(B)
+                Some((l + r - l * r).clamp(0.0, 1.0))
+            }
+            Operator::Eq | Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq => {
+                self.estimate_binary_selectivity_from_stats(bin, schema, input_stats)
+            }
+            _ => None,
+        }
+    }
+
+    fn estimate_binary_selectivity_from_stats(
+        &self,
+        bin: &BinaryExpr,
+        schema: &datafusion::arrow::datatypes::SchemaRef,
+        input_stats: &datafusion::common::Statistics,
+    ) -> Option<f64> {
+        use datafusion::common::ScalarValue;
+        use datafusion::physical_expr::expressions::Literal;
+
+        // Normalize into (Column, Literal) if possible.
+        let (col, lit) = if let (Some(c), Some(l)) = (
+            bin.left().as_any().downcast_ref::<Column>(),
+            bin.right().as_any().downcast_ref::<Literal>(),
+        ) {
+            (c, l)
+        } else if let (Some(l), Some(c)) = (
+            bin.left().as_any().downcast_ref::<Literal>(),
+            bin.right().as_any().downcast_ref::<Column>(),
+        ) {
+            // Flip operator direction if needed.
+            // For Eq it's symmetric; for inequalities we can invert.
+            let flipped_op = match bin.op() {
+                Operator::Lt => Operator::Gt,
+                Operator::LtEq => Operator::GtEq,
+                Operator::Gt => Operator::Lt,
+                Operator::GtEq => Operator::LtEq,
+                Operator::Eq => Operator::Eq,
+                _ => return None,
+            };
+            let tmp = BinaryExpr::new(
+                Arc::new(Column::new(c.name(), c.index())),
+                flipped_op,
+                Arc::new(Literal::new(l.value().clone())),
+            );
+            return self.estimate_binary_selectivity_from_stats(&tmp, schema, input_stats);
+        } else {
+            return None;
+        };
+
+        let col_idx = schema.index_of(col.name()).ok()?;
+        let stats = input_stats.column_statistics.get(col_idx)?;
+
+        // Prefer distinct_count for equality predicates.
+        if bin.op() == &Operator::Eq {
+            let ndv = match stats.distinct_count {
+                Precision::Exact(v) => v as f64,
+                Precision::Inexact(v) => v as f64,
+                Precision::Absent => 0.0,
+            };
+            if ndv.is_finite() && ndv > 0.0 {
+                return Some((1.0 / ndv).clamp(0.0, 1.0));
+            }
+        }
+
+        // Best-effort range reasoning from min/max for numeric scalars.
+        let (min, max) = match (&stats.min_value, &stats.max_value) {
+            (Precision::Exact(min), Precision::Exact(max))
+            | (Precision::Inexact(min), Precision::Inexact(max))
+            | (Precision::Exact(min), Precision::Inexact(max))
+            | (Precision::Inexact(min), Precision::Exact(max)) => (min, max),
+            _ => return None,
+        };
+
+        // Only implement a small int range model.
+        let (min, max, v) = match (min, max, lit.value()) {
+            (
+                ScalarValue::Int32(Some(min)),
+                ScalarValue::Int32(Some(max)),
+                ScalarValue::Int32(Some(v)),
+            ) => (*min as f64, *max as f64, *v as f64),
+            (
+                ScalarValue::Int64(Some(min)),
+                ScalarValue::Int64(Some(max)),
+                ScalarValue::Int64(Some(v)),
+            ) => (*min as f64, *max as f64, *v as f64),
+            (
+                ScalarValue::UInt32(Some(min)),
+                ScalarValue::UInt32(Some(max)),
+                ScalarValue::UInt32(Some(v)),
+            ) => (*min as f64, *max as f64, *v as f64),
+            (
+                ScalarValue::UInt64(Some(min)),
+                ScalarValue::UInt64(Some(max)),
+                ScalarValue::UInt64(Some(v)),
+            ) => (*min as f64, *max as f64, *v as f64),
+            _ => return None,
+        };
+
+        if !(min.is_finite() && max.is_finite() && v.is_finite()) || max < min {
+            return None;
+        }
+
+        let width = (max - min + 1.0).max(1.0);
+        let frac = match bin.op() {
+            Operator::Eq => {
+                if v < min || v > max {
+                    0.0
+                } else {
+                    1.0 / width
+                }
+            }
+            Operator::Lt => ((v - min) / width).clamp(0.0, 1.0),
+            Operator::LtEq => (((v - min) + 1.0) / width).clamp(0.0, 1.0),
+            Operator::Gt => ((max - v) / width).clamp(0.0, 1.0),
+            Operator::GtEq => (((max - v) + 1.0) / width).clamp(0.0, 1.0),
+            _ => return None,
+        };
+
+        Some(frac.clamp(0.0, 1.0))
+    }
+
+    /// Helper function to resolve an expression to the set of relation IDs it references.
+    /// Traverses the expression tree to find all underlying Stable columns.
     /// Helper function to resolve an expression to a single StableColumn if possible.
     /// Returns None if the expression is not a simple column reference.
     fn resolve_to_single_stable_col(
@@ -397,7 +851,8 @@ impl GraphBuilder {
                         return Ok(Some(StableColumn {
                             relation_id: *relation_id,
                             column_index: *column_index,
-                            name: col.name().to_string(),
+                            // Use a stable, parseable name that uniquely identifies the base column.
+                            name: format!("R{}.C{}", relation_id, column_index),
                         }));
                     }
                     ColumnMapEntry::Expression { .. } => {
@@ -410,29 +865,6 @@ impl GraphBuilder {
         // For complex expressions, return None
         Ok(None)
     }
-
-    /// Helper function to build a conjunction expression from join ON conditions.
-    /// Converts (left_expr, right_expr) pairs into a single AND expression.
-    fn build_conjunction_from_on(
-        &self,
-        on_conditions: &JoinConditionPairs,
-    ) -> Result<Arc<dyn PhysicalExpr>> {
-        on_conditions
-            .iter()
-            .map(|(a, b)| -> Arc<dyn PhysicalExpr> {
-                Arc::new(BinaryExpr::new(a.clone(), Operator::Eq, b.clone()))
-            })
-            .fold(None, |acc, expr| -> Option<Arc<dyn PhysicalExpr>> {
-                if let Some(acc_expr) = acc {
-                    Some(Arc::new(BinaryExpr::new(acc_expr, Operator::And, expr)))
-                } else {
-                    Some(expr)
-                }
-            })
-            .ok_or_else(|| {
-                DataFusionError::Internal("Join must have at least one ON condition".to_string())
-            })
-    }
 }
 
 impl Default for GraphBuilder {
@@ -444,9 +876,13 @@ impl Default for GraphBuilder {
 #[cfg(test)]
 mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::physical_expr::expressions::Column;
+    use datafusion::common::ScalarValue;
+    use datafusion::physical_expr::expressions::{Column, Literal};
     use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion::physical_plan::filter::FilterExec;
     use datafusion::physical_plan::joins::HashJoinExec;
+    use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
+    use datafusion::physical_plan::projection::ProjectionExpr;
 
     use super::*;
 
@@ -574,6 +1010,384 @@ mod tests {
     }
 
     #[test]
+    fn test_trivial_projection_is_seen_through_for_region_building() -> Result<()> {
+        use datafusion::common::NullEquality;
+        use datafusion::physical_plan::joins::PartitionMode;
+
+        let mut builder = GraphBuilder::new();
+
+        // A(a_id) JOIN B(b_id) -> (a_id, b_id)
+        let schema_a = Arc::new(Schema::new(vec![Field::new(
+            "a_id",
+            DataType::Int32,
+            false,
+        )]));
+        let schema_b = Arc::new(Schema::new(vec![Field::new(
+            "b_id",
+            DataType::Int32,
+            false,
+        )]));
+        let schema_c = Arc::new(Schema::new(vec![Field::new(
+            "c_id",
+            DataType::Int32,
+            false,
+        )]));
+
+        let a = Arc::new(EmptyExec::new(schema_a)) as Arc<dyn ExecutionPlan>;
+        let b = Arc::new(EmptyExec::new(schema_b)) as Arc<dyn ExecutionPlan>;
+        let c = Arc::new(EmptyExec::new(schema_c)) as Arc<dyn ExecutionPlan>;
+
+        let ab = Arc::new(HashJoinExec::try_new(
+            a,
+            b,
+            vec![(
+                Arc::new(Column::new("a_id", 0)) as Arc<dyn PhysicalExpr>,
+                Arc::new(Column::new("b_id", 0)) as Arc<dyn PhysicalExpr>,
+            )],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+        )?);
+
+        // Trivial projection over AB: identity (same indices) but with renamed aliases.
+        let ab_proj = Arc::new(ProjectionExec::try_new(
+            [
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("a_id", 0)),
+                    alias: "a_id_renamed".to_string(),
+                },
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("b_id", 1)),
+                    alias: "b_id_renamed".to_string(),
+                },
+            ],
+            ab,
+        )?);
+
+        // (AB_proj) JOIN C on a_id_renamed = c_id
+        let top = Arc::new(HashJoinExec::try_new(
+            ab_proj,
+            c,
+            vec![(
+                Arc::new(Column::new("a_id_renamed", 0)) as Arc<dyn PhysicalExpr>,
+                Arc::new(Column::new("c_id", 0)) as Arc<dyn PhysicalExpr>,
+            )],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+        )?) as Arc<dyn ExecutionPlan>;
+
+        let Some((graph, _col_map)) = builder.build(top)? else {
+            return Err(DataFusionError::Internal("expected a graph".to_string()));
+        };
+        assert_eq!(
+            graph.relation_count(),
+            3,
+            "trivial projection should be seen through so the region includes A, B, and C"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_trivial_projection_permutation_is_seen_through_for_region_building() -> Result<()> {
+        use datafusion::common::NullEquality;
+        use datafusion::physical_plan::joins::PartitionMode;
+
+        let mut builder = GraphBuilder::new();
+
+        // A(a_id) JOIN B(b_id) -> (a_id, b_id)
+        let schema_a = Arc::new(Schema::new(vec![Field::new(
+            "a_id",
+            DataType::Int32,
+            false,
+        )]));
+        let schema_b = Arc::new(Schema::new(vec![Field::new(
+            "b_id",
+            DataType::Int32,
+            false,
+        )]));
+        let schema_c = Arc::new(Schema::new(vec![Field::new(
+            "c_id",
+            DataType::Int32,
+            false,
+        )]));
+
+        let a = Arc::new(EmptyExec::new(schema_a)) as Arc<dyn ExecutionPlan>;
+        let b = Arc::new(EmptyExec::new(schema_b)) as Arc<dyn ExecutionPlan>;
+        let c = Arc::new(EmptyExec::new(schema_c)) as Arc<dyn ExecutionPlan>;
+
+        let ab = Arc::new(HashJoinExec::try_new(
+            a,
+            b,
+            vec![(
+                Arc::new(Column::new("a_id", 0)) as Arc<dyn PhysicalExpr>,
+                Arc::new(Column::new("b_id", 0)) as Arc<dyn PhysicalExpr>,
+            )],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+        )?);
+
+        // Trivial projection over AB: pure permutation of columns (no prune/dup/exprs).
+        let ab_proj = Arc::new(ProjectionExec::try_new(
+            [
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("b_id", 1)),
+                    alias: "b_first".to_string(),
+                },
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("a_id", 0)),
+                    alias: "a_second".to_string(),
+                },
+            ],
+            ab,
+        )?);
+
+        // (AB_proj) JOIN C on a_second (idx=1) = c_id
+        let top = Arc::new(HashJoinExec::try_new(
+            ab_proj,
+            c,
+            vec![(
+                Arc::new(Column::new("a_second", 1)) as Arc<dyn PhysicalExpr>,
+                Arc::new(Column::new("c_id", 0)) as Arc<dyn PhysicalExpr>,
+            )],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+        )?) as Arc<dyn ExecutionPlan>;
+
+        let Some((graph, _col_map)) = builder.build(top)? else {
+            return Err(DataFusionError::Internal("expected a graph".to_string()));
+        };
+        assert_eq!(
+            graph.relation_count(),
+            3,
+            "permutation-only projection should be seen through so the region includes A, B, and C"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_with_expression_is_boundary_leaf() -> Result<()> {
+        use datafusion::common::NullEquality;
+        use datafusion::physical_plan::joins::PartitionMode;
+
+        let mut builder = GraphBuilder::new();
+
+        // A(a_id) JOIN B(b_id) -> (a_id, b_id)
+        let schema_a = Arc::new(Schema::new(vec![Field::new(
+            "a_id",
+            DataType::Int32,
+            false,
+        )]));
+        let schema_b = Arc::new(Schema::new(vec![Field::new(
+            "b_id",
+            DataType::Int32,
+            false,
+        )]));
+        let schema_c = Arc::new(Schema::new(vec![Field::new(
+            "c_id",
+            DataType::Int32,
+            false,
+        )]));
+
+        let a = Arc::new(EmptyExec::new(schema_a)) as Arc<dyn ExecutionPlan>;
+        let b = Arc::new(EmptyExec::new(schema_b)) as Arc<dyn ExecutionPlan>;
+        let c = Arc::new(EmptyExec::new(schema_c)) as Arc<dyn ExecutionPlan>;
+
+        let ab = Arc::new(HashJoinExec::try_new(
+            a,
+            b,
+            vec![(
+                Arc::new(Column::new("a_id", 0)) as Arc<dyn PhysicalExpr>,
+                Arc::new(Column::new("b_id", 0)) as Arc<dyn PhysicalExpr>,
+            )],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+        )?);
+
+        // Non-trivial projection: contains a computed expression.
+        let ab_proj = Arc::new(ProjectionExec::try_new(
+            [
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("a_id", 0)),
+                    alias: "a_id_only".to_string(),
+                },
+                ProjectionExpr {
+                    expr: Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                    alias: "one".to_string(),
+                },
+            ],
+            ab,
+        )?);
+
+        // (AB_proj) JOIN C on a_id_only = c_id
+        let top = Arc::new(HashJoinExec::try_new(
+            ab_proj,
+            c,
+            vec![(
+                Arc::new(Column::new("a_id_only", 0)) as Arc<dyn PhysicalExpr>,
+                Arc::new(Column::new("c_id", 0)) as Arc<dyn PhysicalExpr>,
+            )],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+        )?) as Arc<dyn ExecutionPlan>;
+
+        let Some((graph, _col_map)) = builder.build(top)? else {
+            return Err(DataFusionError::Internal("expected a graph".to_string()));
+        };
+        assert_eq!(
+            graph.relation_count(),
+            2,
+            "projection with expressions should be a boundary leaf so AB is treated as one relation"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_column_only_projection_pruning_is_seen_through_for_region_building() -> Result<()> {
+        use datafusion::common::NullEquality;
+        use datafusion::physical_plan::joins::PartitionMode;
+
+        let mut builder = GraphBuilder::new();
+
+        // A(a_id) JOIN B(b_id) -> (a_id, b_id)
+        let schema_a = Arc::new(Schema::new(vec![Field::new(
+            "a_id",
+            DataType::Int32,
+            false,
+        )]));
+        let schema_b = Arc::new(Schema::new(vec![Field::new(
+            "b_id",
+            DataType::Int32,
+            false,
+        )]));
+        let schema_c = Arc::new(Schema::new(vec![Field::new(
+            "c_id",
+            DataType::Int32,
+            false,
+        )]));
+
+        let a = Arc::new(EmptyExec::new(schema_a)) as Arc<dyn ExecutionPlan>;
+        let b = Arc::new(EmptyExec::new(schema_b)) as Arc<dyn ExecutionPlan>;
+        let c = Arc::new(EmptyExec::new(schema_c)) as Arc<dyn ExecutionPlan>;
+
+        let ab = Arc::new(HashJoinExec::try_new(
+            a,
+            b,
+            vec![(
+                Arc::new(Column::new("a_id", 0)) as Arc<dyn PhysicalExpr>,
+                Arc::new(Column::new("b_id", 0)) as Arc<dyn PhysicalExpr>,
+            )],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+        )?);
+
+        // Column-only projection with pruning (drops b_id).
+        let ab_proj = Arc::new(ProjectionExec::try_new(
+            [ProjectionExpr {
+                expr: Arc::new(Column::new("a_id", 0)),
+                alias: "a_id_only".to_string(),
+            }],
+            ab,
+        )?);
+
+        // (AB_proj) JOIN C on a_id_only = c_id
+        let top = Arc::new(HashJoinExec::try_new(
+            ab_proj,
+            c,
+            vec![(
+                Arc::new(Column::new("a_id_only", 0)) as Arc<dyn PhysicalExpr>,
+                Arc::new(Column::new("c_id", 0)) as Arc<dyn PhysicalExpr>,
+            )],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+        )?) as Arc<dyn ExecutionPlan>;
+
+        let Some((graph, _col_map)) = builder.build(top)? else {
+            return Err(DataFusionError::Internal("expected a graph".to_string()));
+        };
+        assert_eq!(
+            graph.relation_count(),
+            3,
+            "column-only projection with pruning should be seen through so the region includes A, B, and C"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_leaf_adjusts_statistics_and_penalizes_cardinality() -> Result<()> {
+        // Build an input plan with exact row count statistics.
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let input = Arc::new(PlaceholderRowExec::new(schema));
+
+        // Use a predicate shape that the interval analysis doesn't support so we deterministically
+        // fall back to `default_selectivity`:
+        //
+        // (a > 0) OR (a < 0)
+        let a = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        let gt0 = Arc::new(BinaryExpr::new(
+            a.clone(),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(0)))),
+        )) as Arc<dyn PhysicalExpr>;
+        let lt0 = Arc::new(BinaryExpr::new(
+            a,
+            Operator::Lt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(0)))),
+        )) as Arc<dyn PhysicalExpr>;
+        let pred: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(gt0, Operator::Or, lt0));
+
+        let filter = FilterExec::try_new(pred, input)?.with_default_selectivity(50)?;
+        let filter: Arc<dyn ExecutionPlan> = Arc::new(filter);
+
+        let mut builder = GraphBuilder::new();
+        let _ = builder.visit_plan(filter.clone())?;
+
+        assert_eq!(builder.graph.relation_count(), 1);
+
+        let rel = &builder.graph.relations[0];
+        // Keep the boundary plan as FilterExec (structural behavior unchanged for strategy A).
+        assert_eq!(rel.plan.name(), "FilterExec");
+
+        // Statistics should reflect the estimated selectivity.
+        match rel.statistics.num_rows {
+            datafusion::common::stats::Precision::Inexact(n) => assert_eq!(n, 1),
+            #[expect(clippy::panic)]
+            other => panic!("expected Inexact(1) filtered stats, got {other:?}"),
+        }
+
+        // Penalize initial cardinality by default_selectivity (50% here).
+        assert!(
+            (rel.initial_cardinality - 0.5).abs() < 1e-9,
+            "expected initial_cardinality ~= 0.5, got {}",
+            rel.initial_cardinality
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn test_penetrate_complex_plan_structure() -> Result<()> {
         use datafusion::common::NullEquality;
         use datafusion::physical_plan::joins::PartitionMode;
@@ -650,6 +1464,207 @@ mod tests {
 
         // Should have 2 join edges
         assert_eq!(graph.edges.len(), 2, "Should find 2 join edges");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_builder_splits_multi_pair_join_into_binary_edges() -> Result<()> {
+        use datafusion::common::NullEquality;
+        use datafusion::physical_plan::joins::PartitionMode;
+
+        let mut builder = GraphBuilder::new();
+
+        // Each table has a single column "id" to keep join key construction simple.
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+
+        let t1 = Arc::new(EmptyExec::new(schema.clone()));
+        let t2 = Arc::new(EmptyExec::new(schema.clone()));
+        let t3 = Arc::new(EmptyExec::new(schema.clone()));
+        let t4 = Arc::new(EmptyExec::new(schema.clone()));
+
+        // Join t1 ⋈ t2 on id = id
+        let join12 = Arc::new(HashJoinExec::try_new(
+            t1,
+            t2,
+            vec![(
+                Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
+                Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
+            )],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Auto,
+            NullEquality::NullEqualsNothing,
+        )?);
+
+        // Join t3 ⋈ t4 on id = id
+        let join34 = Arc::new(HashJoinExec::try_new(
+            t3,
+            t4,
+            vec![(
+                Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
+                Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
+            )],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Auto,
+            NullEquality::NullEqualsNothing,
+        )?);
+
+        // Root join: (t1 ⋈ t2) ⋈ (t3 ⋈ t4) with two independent equi predicates:
+        // - t1.id = t3.id  (left index 0, right index 0)
+        // - t2.id = t4.id  (left index 1, right index 1)
+        //
+        // GraphBuilder should emit two *binary* edges ({t1,t3} and {t2,t4}),
+        // not a single hyperedge {t1,t2,t3,t4}.
+        let root = Arc::new(HashJoinExec::try_new(
+            join12,
+            join34,
+            vec![
+                (
+                    Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
+                    Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
+                ),
+                (
+                    Arc::new(Column::new("id", 1)) as Arc<dyn PhysicalExpr>,
+                    Arc::new(Column::new("id", 1)) as Arc<dyn PhysicalExpr>,
+                ),
+            ],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Auto,
+            NullEquality::NullEqualsNothing,
+        )?);
+
+        let (graph, _map) = builder
+            .build(root)?
+            .ok_or_else(|| DataFusionError::Internal("expected Some(graph)".to_string()))?;
+
+        assert_eq!(graph.relation_count(), 4);
+
+        // We expect:
+        // - edge {0,1} from join12
+        // - edge {2,3} from join34
+        // - edges {0,2} and {1,3} from the root join's two predicates
+        assert_eq!(graph.edges.len(), 4);
+
+        assert!(
+            graph.edges.iter().all(|e| e.join_set.cardinality() <= 2),
+            "expected all edges to be binary (no hyperedge) for this plan"
+        );
+
+        let s02 = JoinSet::from_iter([0, 2])?;
+        let s13 = JoinSet::from_iter([1, 3])?;
+        assert!(
+            graph.edges.iter().any(|e| e.join_set == s02),
+            "expected an edge connecting relations {{0,2}}"
+        );
+        assert!(
+            graph.edges.iter().any(|e| e.join_set == s13),
+            "expected an edge connecting relations {{1,3}}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_builder_keeps_true_multi_relation_predicate_as_hyperedge() -> Result<()> {
+        use datafusion::common::{JoinSide, NullEquality};
+        use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
+        use datafusion::physical_plan::joins::PartitionMode;
+
+        let mut builder = GraphBuilder::new();
+
+        // Three base relations with distinct column names to avoid name ambiguity.
+        let schema_a = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let schema_b = Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, false)]));
+        let schema_c = Arc::new(Schema::new(vec![Field::new("c", DataType::Int32, false)]));
+
+        let t1 = Arc::new(EmptyExec::new(schema_a.clone()));
+        let t2 = Arc::new(EmptyExec::new(schema_b.clone()));
+        let t3 = Arc::new(EmptyExec::new(schema_c.clone()));
+
+        // Join t1 ⋈ t2 on a = b
+        let join12 = Arc::new(HashJoinExec::try_new(
+            t1,
+            t2,
+            vec![(
+                Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
+                Arc::new(Column::new("b", 0)) as Arc<dyn PhysicalExpr>,
+            )],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Auto,
+            NullEquality::NullEqualsNothing,
+        )?);
+
+        // Root join: (t1 ⋈ t2) ⋈ t3 on a = c, plus a filter that truly depends on all 3 relations:
+        // (a + b) > c
+        //
+        // This conjunct cannot be split into binary predicates, so GraphBuilder must keep it as a
+        // hyperedge with join_set {t1,t2,t3}.
+        let filter_column_indices = vec![
+            ColumnIndex {
+                side: JoinSide::Left,
+                index: 0, // a
+            },
+            ColumnIndex {
+                side: JoinSide::Left,
+                index: 1, // b
+            },
+            ColumnIndex {
+                side: JoinSide::Right,
+                index: 0, // c
+            },
+        ];
+
+        let filter_expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("a", 0)),
+                Operator::Plus,
+                Arc::new(Column::new("b", 1)),
+            )),
+            Operator::Gt,
+            Arc::new(Column::new("c", 2)),
+        ));
+
+        let filter_schema = Arc::new(Schema::new(vec![
+            join12.schema().field(0).clone(),
+            join12.schema().field(1).clone(),
+            schema_c.field(0).clone(),
+        ]));
+
+        let join_filter = JoinFilter::new(filter_expr, filter_column_indices, filter_schema);
+
+        let root = Arc::new(HashJoinExec::try_new(
+            join12,
+            t3,
+            vec![(
+                Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
+                Arc::new(Column::new("c", 0)) as Arc<dyn PhysicalExpr>,
+            )],
+            Some(join_filter),
+            &JoinType::Inner,
+            None,
+            PartitionMode::Auto,
+            NullEquality::NullEqualsNothing,
+        )?);
+
+        let (graph, _map) = builder
+            .build(root)?
+            .ok_or_else(|| DataFusionError::Internal("expected Some(graph)".to_string()))?;
+
+        assert_eq!(graph.relation_count(), 3);
+
+        // Ensure we have at least one hyperedge with 3 relations.
+        assert!(
+            graph.edges.iter().any(|e| e.join_set.cardinality() == 3),
+            "expected a 3-relation hyperedge from the (a + b) > c predicate"
+        );
 
         Ok(())
     }
