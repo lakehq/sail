@@ -14,7 +14,7 @@ class TestPythonDataSourceBasic:
 
     def test_range_datasource_api(self):
         """Test RangeDataSource API without server."""
-        from pysail.spark.datasource.examples import RangeDataSource
+        from pysail.tests.spark.datasource_examples import RangeDataSource
 
         # Test with default PyArrow schema
         ds = RangeDataSource(options={"start": "0", "end": "10", "numPartitions": "2"})
@@ -490,7 +490,7 @@ class TestFilterPushdown:
 
     def test_ddl_schema_fallback(self, spark):
         """Test that DDL string schema is correctly parsed and used."""
-        from pysail.spark.datasource.examples import RangeDataSource
+        from pysail.tests.spark.datasource_examples import RangeDataSource
         spark.dataSource.register(RangeDataSource)
 
         # This uses the option we added to RangeDataSource to force DDL schema return
