@@ -279,6 +279,16 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<WindowFrameBound> {
+        // Helper to get the data type from the order_by expression for casting
+        let get_order_by_type = || -> PlanResult<DataType> {
+            let [order_by] = order_by else {
+                return Err(PlanError::invalid(
+                    "range window frame requires exactly one order by expression",
+                ));
+            };
+            Ok(order_by.expr.to_field(schema)?.1.data_type().clone())
+        };
+
         match value {
             spec::WindowFrameBoundary::CurrentRow => Ok(WindowFrameBound::CurrentRow),
             spec::WindowFrameBoundary::UnboundedPreceding => {
@@ -289,10 +299,16 @@ impl PlanResolver<'_> {
             }
             spec::WindowFrameBoundary::Preceding(expr) => {
                 let value = self.resolve_window_boundary(*expr, state)?;
+                // Cast to the order_by type to ensure compatible arithmetic
+                let data_type = get_order_by_type()?;
+                let value = value.cast_to(&data_type)?;
                 Ok(WindowFrameBound::Preceding(value))
             }
             spec::WindowFrameBoundary::Following(expr) => {
                 let value = self.resolve_window_boundary(*expr, state)?;
+                // Cast to the order_by type to ensure compatible arithmetic
+                let data_type = get_order_by_type()?;
+                let value = value.cast_to(&data_type)?;
                 Ok(WindowFrameBound::Following(value))
             }
             spec::WindowFrameBoundary::Value(expr) => {
@@ -300,12 +316,7 @@ impl PlanResolver<'_> {
                 if value.is_null() {
                     Err(PlanError::invalid("window boundary value cannot be null"))
                 } else {
-                    let [order_by] = order_by else {
-                        return Err(PlanError::invalid(
-                            "range window frame requires exactly one order by expression",
-                        ));
-                    };
-                    let data_type = order_by.expr.to_field(schema)?.1.data_type().clone();
+                    let data_type = get_order_by_type()?;
                     let value = value.cast_to(&data_type)?;
                     let zero = ScalarValue::new_zero(&data_type)?;
                     match value.partial_cmp(&zero) {
