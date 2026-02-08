@@ -103,10 +103,8 @@ def spark_session_factory(remote):
         try:
             session.stop()
         except Exception:
+            # Best-effort cleanup: ignore errors while stopping Spark sessions during test teardown.
             pass
-
-
-
 def configure_spark_session(session):
     # Set the Spark session time zone to UTC by default.
     # Some test data (e.g. TPC-DS data) may generate timestamps that is invalid
