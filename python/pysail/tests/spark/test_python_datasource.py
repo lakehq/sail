@@ -371,7 +371,7 @@ class TestPythonDataSource:
         spark.dataSource.register(FailingPartitionDataSource)
         df = spark.read.format("failing_partition_test").load()
 
-        with pytest.raises(Exception, match="[Dd]eliberate failure"):
+        with pytest.raises(Exception, match=r"[Dd]eliberate failure"):
             df.collect()
 
     def test_empty_partitions(self, spark):
@@ -505,7 +505,7 @@ class TestPythonDataSource:
         spark.dataSource.register(ExceptionDataSource)
         df = spark.read.format("exception_test").load()
 
-        with pytest.raises(Exception, match="[Dd]eliberate test exception"):
+        with pytest.raises(Exception, match=r"[Dd]eliberate test exception"):
             df.collect()
 
     def test_session_isolation(self, spark_session_factory):
@@ -559,7 +559,7 @@ class TestPythonDataSource:
 
         # Session B should NOT be able to access the datasource from Session A
         # because datasources are registered per-session
-        with pytest.raises(Exception, match="session_isolation_test|not found|unknown"):
+        with pytest.raises(Exception, match=r"session_isolation_test|not found|unknown"):
             spark_b.read.format("session_isolation_test").load().collect()
 
 
