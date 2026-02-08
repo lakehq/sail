@@ -16,7 +16,6 @@ use pyo3::types::PyAnyMethods;
 use super::error::{import_cloudpickle, PythonDataSourceContext};
 use super::filter::{filters_to_python, PythonFilter};
 
-
 /// Input partition for parallel reading.
 #[derive(Debug, Clone)]
 pub struct InputPartition {
@@ -154,8 +153,9 @@ impl PythonExecutor for InProcessExecutor {
                     let filter_ctx = PythonDataSourceContext::new(&ds_name, "pushFilters");
 
                     // Convert Rust filters to Python filter objects
-                    let py_filters = filters_to_python(py, &filters)
-                        .map_err(|e| filter_ctx.wrap_error(format!("Failed to convert filters: {}", e)))?;
+                    let py_filters = filters_to_python(py, &filters).map_err(|e| {
+                        filter_ctx.wrap_error(format!("Failed to convert filters: {}", e))
+                    })?;
 
                     // Call pushFilters on the reader
                     let rejected = reader
@@ -164,8 +164,9 @@ impl PythonExecutor for InProcessExecutor {
 
                     // Count rejected filters for logging
                     use pyo3::types::PyIterator;
-                    let rejected_list = PyIterator::from_object(&rejected)
-                        .map_err(|e| filter_ctx.wrap_error(format!("pushFilters must return an iterator: {}", e)))?;
+                    let rejected_list = PyIterator::from_object(&rejected).map_err(|e| {
+                        filter_ctx.wrap_error(format!("pushFilters must return an iterator: {}", e))
+                    })?;
                     let rejected_count = rejected_list.count();
 
                     log::debug!(
@@ -182,9 +183,10 @@ impl PythonExecutor for InProcessExecutor {
                     .map_err(|e| ctx.wrap_py_error(e))?;
 
                 // Convert Python partitions to Rust
-                let partitions_list = partitions.downcast::<pyo3::types::PyList>().map_err(|e| {
-                    ctx.wrap_error(format!("partitions() must return a list: {}", e))
-                })?;
+                let partitions_list =
+                    partitions.downcast::<pyo3::types::PyList>().map_err(|e| {
+                        ctx.wrap_error(format!("partitions() must return a list: {}", e))
+                    })?;
 
                 let mut result = Vec::with_capacity(partitions_list.len());
                 let mut total_size: usize = 0;
