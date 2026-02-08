@@ -74,6 +74,7 @@ message ExtendedScalarUdf {
     TimestampNowUdf timestamp_now = 9;
     SparkTimestampUdf spark_timestamp = 10;
     SparkDateUdf spark_date = 11;
+    SparkArrayFilterUdf spark_array_filter = 12;
   }
 }
 
@@ -150,6 +151,19 @@ message SparkTimestampUdf {
 
 message SparkDateUdf {
   bool is_try = 1;
+}
+
+message SparkArrayFilterUdf {
+  bytes lambda_expr = 1;
+  bytes element_type = 2;
+  string column_name = 3;
+  optional string index_column_name = 4;
+  repeated OuterColumnRef outer_columns = 5;
+}
+
+message OuterColumnRef {
+  string name = 1;
+  bytes data_type = 2;
 }
 
 message StandardUdaf {}

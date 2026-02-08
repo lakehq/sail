@@ -192,6 +192,52 @@ impl ScalarFunctionBuilder {
     }
 }
 
+/// Lambda function input components for higher-order functions like filter, transform, etc.
+///
+/// Contains the resolved array expression and the already-resolved lambda expression,
+/// along with metadata needed to create the UDF. The resolver handles all the complex
+/// lambda variable resolution and external column detection before calling the handler.
+pub struct LambdaFunctionInput {
+    /// The resolved array expression (first argument to the lambda function)
+    pub array_expr: expr::Expr,
+    /// The resolved lambda body expression (already resolved by the resolver)
+    pub resolved_lambda: expr::Expr,
+    /// The element type extracted from the array
+    pub element_type: DataType,
+    /// The column name for the lambda element variable
+    pub element_column_name: String,
+    /// The column name for the optional index variable (if lambda has two args)
+    pub index_column_name: Option<String>,
+    /// External columns referenced in the lambda with their types
+    pub outer_columns: Vec<(String, DataType)>,
+    /// Full column expressions for outer columns (for UDF arguments)
+    pub outer_column_exprs: Vec<expr::Expr>,
+}
+
+/// Builds a DataFusion expression from a lambda function call.
+///
+/// Lambda functions receive already-resolved expressions from the resolver.
+/// The handler is responsible for creating the appropriate UDF from these
+/// resolved components.
+pub(crate) type LambdaFunction =
+    Arc<dyn Fn(LambdaFunctionInput) -> PlanResult<expr::Expr> + Send + Sync>;
+
+pub(crate) struct LambdaFunctionBuilder;
+
+impl LambdaFunctionBuilder {
+    pub fn custom<F>(f: F) -> LambdaFunction
+    where
+        F: Fn(LambdaFunctionInput) -> PlanResult<expr::Expr> + Send + Sync + 'static,
+    {
+        Arc::new(f)
+    }
+
+    pub fn unknown(name: &str) -> LambdaFunction {
+        let name = name.to_string();
+        Arc::new(move |_| Err(PlanError::todo(format!("lambda function: {name}"))))
+    }
+}
+
 /// Aggregate function input components, excluding the function name.
 ///
 /// Populated by the resolver from `spec::UnresolvedFunction` after resolving spec expressions

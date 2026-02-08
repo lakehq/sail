@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "not implemented: lambda function: aggregate"
       }
     },
     {
@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "not implemented: lambda function: aggregate"
       }
     },
     {
@@ -93,7 +93,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"left\")])"
       }
     },
     {
@@ -119,7 +119,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "not implemented: lambda function: array_sort with comparator"
       }
     },
     {
@@ -141,7 +141,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"x\")])"
       }
     },
     {
@@ -163,7 +163,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "not implemented: lambda function: exists"
       }
     },
     {
@@ -185,7 +185,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "not implemented: lambda function: exists"
       }
     },
     {
@@ -207,7 +207,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"x\")])"
       }
     },
     {
@@ -229,7 +229,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "not implemented: lambda function: exists"
       }
     },
     {
@@ -255,7 +255,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "success": "ok"
       }
     },
     {
@@ -281,7 +281,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"x\")])"
       }
     },
     {
@@ -307,7 +307,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "success": "ok"
       }
     },
     {
@@ -329,7 +329,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "not implemented: lambda function: forall"
       }
     },
     {
@@ -351,7 +351,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "not implemented: lambda function: forall"
       }
     },
     {
@@ -373,7 +373,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "not implemented: lambda function: forall"
       }
     },
     {
@@ -395,7 +395,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "not implemented: lambda function: forall"
       }
     },
     {
@@ -422,7 +422,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "invalid argument: map_filter() first argument must be an array, got Map(Field { name: \"entries\", data_type: Struct([Field { name: \"key\", data_type: Int32 }, Field { name: \"value\", data_type: Int32, nullable: true }]) }, false)"
       }
     },
     {
@@ -449,7 +449,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "invalid argument: map_zip_with() first argument must be an array, got Map(Field { name: \"entries\", data_type: Struct([Field { name: \"key\", data_type: Utf8 }, Field { name: \"value\", data_type: Int32, nullable: true }]) }, false)"
       }
     },
     {
@@ -476,7 +476,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "invalid argument: map_zip_with() first argument must be an array, got Map(Field { name: \"entries\", data_type: Struct([Field { name: \"key\", data_type: Int32 }, Field { name: \"value\", data_type: Utf8, nullable: true }]) }, false)"
       }
     },
     {
@@ -498,7 +498,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "not implemented: lambda function: reduce"
       }
     },
     {
@@ -520,7 +520,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "not implemented: lambda function: reduce"
       }
     },
     {
@@ -546,7 +546,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "not implemented: lambda function: transform"
       }
     },
     {
@@ -572,7 +572,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "not implemented: lambda function: transform"
       }
     },
     {
@@ -599,7 +599,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "invalid argument: transform_keys() first argument must be an array, got Map(Field { name: \"entries\", data_type: Struct([Field { name: \"key\", data_type: Int32 }, Field { name: \"value\", data_type: Int32, nullable: true }]) }, false)"
       }
     },
     {
@@ -626,7 +626,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "invalid argument: transform_keys() first argument must be an array, got Map(Field { name: \"entries\", data_type: Struct([Field { name: \"key\", data_type: Int32 }, Field { name: \"value\", data_type: Int32, nullable: true }]) }, false)"
       }
     },
     {
@@ -653,7 +653,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "invalid argument: transform_values() first argument must be an array, got Map(Field { name: \"entries\", data_type: Struct([Field { name: \"key\", data_type: Int32 }, Field { name: \"value\", data_type: Int32, nullable: true }]) }, false)"
       }
     },
     {
@@ -680,7 +680,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "invalid argument: transform_values() first argument must be an array, got Map(Field { name: \"entries\", data_type: Struct([Field { name: \"key\", data_type: Int32 }, Field { name: \"value\", data_type: Int32, nullable: true }]) }, false)"
       }
     },
     {
@@ -706,7 +706,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "not implemented: lambda function: zip_with"
       }
     },
     {
@@ -732,7 +732,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "not implemented: lambda function: zip_with"
       }
     },
     {
@@ -774,7 +774,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "not implemented: lambda function: zip_with"
       }
     }
   ]
