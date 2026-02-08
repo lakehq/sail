@@ -217,7 +217,7 @@ impl PythonDataSource {
 
     /// Validate Python version compatibility.
     ///
-    /// Requires Python 3.10+ (3.9 reached end-of-life, dropped in Sail 0.5).
+    /// Requires Python 3.10+.
     fn validate_python_version(version: &str) -> Result<()> {
         // Parse version string (e.g., "3.11" -> major=3, minor=11)
         let parts: Vec<&str> = version.split('.').collect();
@@ -237,7 +237,7 @@ impl PythonDataSource {
             PythonDataSourceError::VersionError(format!("Invalid minor version: {}", parts[1]))
         })?;
 
-        // Require Python 3.10+ (3.9 reached end-of-life, dropped in Sail 0.5)
+        // Require Python 3.10+
         if major < 3 || (major == 3 && minor < 10) {
             return Err(PythonDataSourceError::VersionError(format!(
                 "Python {} is not supported. Require Python 3.10+",
@@ -416,7 +416,7 @@ mod tests {
         assert!(PythonDataSource::validate_python_version("2.7").is_err());
         assert!(PythonDataSource::validate_python_version("3.6").is_err());
         assert!(PythonDataSource::validate_python_version("3.8").is_err());
-        assert!(PythonDataSource::validate_python_version("3.9").is_err()); // 3.9 no longer supported
+        assert!(PythonDataSource::validate_python_version("3.9").is_err());
         assert!(PythonDataSource::validate_python_version("invalid").is_err());
     }
 
