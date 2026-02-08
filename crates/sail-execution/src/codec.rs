@@ -77,6 +77,7 @@ use sail_common_datafusion::system::catalog::SystemTable;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_data_source::formats::binary::source::BinarySource;
 use sail_data_source::formats::console::ConsoleSinkExec;
+use sail_data_source::formats::python::{InputPartition, PythonDataSourceExec};
 use sail_data_source::formats::rate::{RateSourceExec, TableRateOptions};
 use sail_data_source::formats::socket::{SocketSourceExec, TableSocketOptions};
 use sail_data_source::formats::text::source::TextSource;
@@ -874,6 +875,31 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
 
                 Ok(Arc::new(IcebergCommitExec::new(input, table_url)))
             }
+            NodeKind::PythonDataSource(gen::PythonDataSourceExecNode {
+                command,
+                schema,
+                partitions,
+                filters,
+            }) => {
+                let schema = Arc::new(self.try_decode_schema(&schema)?);
+                let partitions = partitions
+                    .into_iter()
+                    .map(|p| InputPartition {
+                        partition_id: p.partition_id as usize,
+                        data: p.data,
+                    })
+                    .collect();
+                let filters = if filters.is_empty() {
+                    vec![]
+                } else {
+                    serde_json::from_slice(&filters)
+                        .map_err(|e| plan_datafusion_err!("failed to decode Python filters: {e}"))?
+                };
+                // Note: executor is created lazily in execute() on the worker
+                Ok(Arc::new(PythonDataSourceExec::new(
+                    command, schema, partitions, filters,
+                )))
+            }
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
         }
     }
@@ -1339,6 +1365,24 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::IcebergCommit(gen::IcebergCommitExecNode {
                 input,
                 table_url: iceberg_commit_exec.table_url().to_string(),
+            })
+        } else if let Some(python_exec) = node.as_any().downcast_ref::<PythonDataSourceExec>() {
+            let schema = self.try_encode_schema(python_exec.schema().as_ref())?;
+            let partitions = python_exec
+                .partitions()
+                .iter()
+                .map(|p| gen::PythonDataSourceInputPartition {
+                    partition_id: p.partition_id as u64,
+                    data: p.data.clone(),
+                })
+                .collect();
+            let filters = serde_json::to_vec(python_exec.filters())
+                .map_err(|e| plan_datafusion_err!("failed to encode Python filters: {e}"))?;
+            NodeKind::PythonDataSource(gen::PythonDataSourceExecNode {
+                command: python_exec.command().to_vec(),
+                schema,
+                partitions,
+                filters,
             })
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");
