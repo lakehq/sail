@@ -29,6 +29,7 @@ mod stat;
 mod udf;
 mod udtf;
 mod values;
+mod with_relations;
 
 impl PlanResolver<'_> {
     /// Resolve query plan.
@@ -311,6 +312,10 @@ impl PlanResolver<'_> {
                 ctes,
             } => {
                 self.resolve_query_with_ctes(*input, recursive, ctes, state)
+                    .await?
+            }
+            QueryNode::WithRelations { root, references } => {
+                self.resolve_query_with_relations(*root, references, state)
                     .await?
             }
             QueryNode::LateralView {

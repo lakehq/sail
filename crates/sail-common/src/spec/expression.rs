@@ -80,6 +80,16 @@ pub enum Expr {
         subquery: Box<QueryPlan>,
         negated: bool,
     },
+    /// Unresolved subquery expression reference (resolved by WithRelations).
+    SubqueryExpressionRef {
+        /// The plan_id referencing a plan in WithRelations.references.
+        plan_id: i64,
+        /// The subquery type.
+        subquery_type: SubqueryType,
+        /// Values for IN subquery (the left-side expressions).
+        in_subquery_values: Vec<Expr>,
+        negated: bool,
+    },
     InList {
         expr: Box<Expr>,
         list: Vec<Expr>,
@@ -403,4 +413,13 @@ pub struct WildcardReplaceColumn {
 pub struct IdentifierWithAlias {
     pub identifier: Identifier,
     pub alias: Identifier,
+}
+
+/// The type of subquery expression.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SubqueryType {
+    In,
+    Scalar,
+    Exists,
 }
