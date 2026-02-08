@@ -14,6 +14,7 @@ use sail_function::scalar::string::make_valid_utf8::MakeValidUtf8;
 use sail_function::scalar::string::randstr::Randstr;
 use sail_function::scalar::string::soundex::Soundex;
 use sail_function::scalar::string::spark_base64::{SparkBase64, SparkUnbase64};
+use sail_function::scalar::string::spark_concat_ws::SparkConcatWs;
 use sail_function::scalar::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use sail_function::scalar::string::spark_mask::SparkMask;
 use sail_function::scalar::string::spark_split::SparkSplit;
@@ -78,14 +79,6 @@ fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     // TODO: Spark client throws "UNEXPECTED EXCEPTION: ArrowInvalid('Unrecognized type: 24')"
     //  when the return type is Utf8View.
     Ok(cast(substr_res, DataType::Utf8))
-}
-
-fn concat_ws(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
-    let (delimiter, args) = args.at_least_one()?;
-    if args.is_empty() {
-        return Ok(lit(""));
-    }
-    Ok(expr_fn::concat_ws(delimiter, args))
 }
 
 fn overlay(mut args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
@@ -249,7 +242,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("chr", F::unary(expr_fn::chr)),
         ("collate", F::unknown("collate")),
         ("collation", F::unknown("collation")),
-        ("concat_ws", F::var_arg(concat_ws)),
+        ("concat_ws", F::udf(SparkConcatWs::new())),
         ("contains", F::custom(contains)),
         ("decode", F::udf(SparkDecode::new())),
         ("elt", F::udf(SparkElt::new())),
