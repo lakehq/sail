@@ -12,6 +12,7 @@ use sail_data_source::formats::parquet::ParquetTableFormat;
 use sail_data_source::formats::rate::RateTableFormat;
 use sail_data_source::formats::socket::SocketTableFormat;
 use sail_data_source::formats::text::TextTableFormat;
+use sail_data_source::formats::vortex::VortexTableFormat;
 use sail_delta_lake::DeltaTableFormat;
 use sail_iceberg::IcebergTableFormat;
 
@@ -33,6 +34,7 @@ fn register_builtin_formats(registry: &Arc<TableFormatRegistry>) -> Result<()> {
     registry.register(Arc::new(SocketTableFormat))?;
     registry.register(Arc::new(RateTableFormat))?;
     registry.register(Arc::new(ConsoleTableFormat))?;
+    registry.register(Arc::new(VortexTableFormat::default()))?;
     Ok(())
 }
 

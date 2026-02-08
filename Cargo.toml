@@ -170,6 +170,9 @@ hdfs-native-object-store = "0.15.0"
 
 # Lakehouse
 delta_kernel = { version = "0.18.2", features = ["arrow-57", "default-engine-rustls", "internal-api"] }
+# Vortex (using git develop branch for DataFusion 52.x compatibility; published 0.58.0 targets DataFusion 51.x)
+vortex = { git = "https://github.com/vortex-data/vortex.git", rev = "a11336d", default-features = false, features = ["object_store", "tokio", "files"] }
+vortex-datafusion = { git = "https://github.com/vortex-data/vortex.git", rev = "a11336d", default-features = false }
 ######
 # This is the end of the manually managed dependencies.
 # Do not add more dependencies below.

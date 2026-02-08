@@ -9,3 +9,4 @@ pub mod parquet;
 pub mod rate;
 pub mod socket;
 pub mod text;
+pub mod vortex;
