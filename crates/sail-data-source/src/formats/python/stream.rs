@@ -5,10 +5,11 @@ use std::time::Instant;
 
 use arrow::array::RecordBatch;
 use arrow_schema::SchemaRef;
+use datafusion::common::runtime::SpawnedTask;
 use datafusion::physical_plan::RecordBatchStream;
 use datafusion_common::Result;
 use futures::Stream;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 
 /// RecordBatch stream from Python DataSource.
 ///
@@ -81,14 +82,12 @@ pub const DEFAULT_BATCH_SIZE: usize = 8192;
 /// Stream state for RAII cleanup.
 enum StreamState {
     Running {
-        /// Signal to stop the Python thread
-        stop_signal: Option<oneshot::Sender<()>>,
-        /// Handle to join the Python thread
-        python_thread: Option<std::thread::JoinHandle<()>>,
+        /// SpawnedTask handle - kept alive to prevent abort on drop
+        /// The task runs to completion; we don't await it
+        _task: SpawnedTask<()>,
         /// Receiver for batches
         rx: mpsc::Receiver<Result<RecordBatch>>,
     },
-    Stopped,
 }
 
 /// Stream that reads RecordBatches from a Python datasource.
@@ -117,40 +116,24 @@ impl PythonDataSourceStream {
         batch_size: usize,
     ) -> Result<Self> {
         let (tx, rx) = mpsc::channel(16);
-        let (stop_tx, stop_rx) = oneshot::channel();
 
         let schema_clone = schema.clone();
-        let partition_id = partition.partition_id;
-
-        // Spawn named Python thread for debuggability
         let filters_clone = filters.clone();
-        let python_thread = std::thread::Builder::new()
-            .name(format!("python-ds-p{}", partition_id))
-            .spawn(move || {
-                Self::run_python_reader(
-                    command,
-                    partition,
-                    schema_clone,
-                    filters_clone,
-                    batch_size,
-                    tx,
-                    stop_rx,
-                );
-            })
-            .map_err(|e| {
-                datafusion_common::DataFusionError::Execution(format!(
-                    "Failed to spawn Python reader thread: {}",
-                    e
-                ))
-            })?;
+
+        let task = SpawnedTask::spawn_blocking(move || {
+            Self::run_python_reader(
+                command,
+                partition,
+                schema_clone,
+                filters_clone,
+                batch_size,
+                tx,
+            );
+        });
 
         Ok(Self {
             schema,
-            state: StreamState::Running {
-                stop_signal: Some(stop_tx),
-                python_thread: Some(python_thread),
-                rx,
-            },
+            state: StreamState::Running { _task: task, rx },
         })
     }
 
@@ -162,7 +145,6 @@ impl PythonDataSourceStream {
         filters: Vec<PythonFilter>,
         batch_size: usize,
         tx: mpsc::Sender<Result<RecordBatch>>,
-        mut stop_rx: oneshot::Receiver<()>,
     ) {
         use pyo3::prelude::*;
         use pyo3::types::PyBytes;
@@ -265,14 +247,6 @@ impl PythonDataSourceStream {
 
             // Iterate over results
             loop {
-                // Check for stop signal
-                match stop_rx.try_recv() {
-                    Ok(_) | Err(oneshot::error::TryRecvError::Closed) => {
-                        break;
-                    }
-                    Err(oneshot::error::TryRecvError::Empty) => {}
-                }
-
                 // Get next item from iterator (with slow read detection)
                 let read_start = Instant::now();
                 let next_result = iterator.call_method0("__next__");
@@ -383,7 +357,6 @@ impl Stream for PythonDataSourceStream {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match &mut self.state {
             StreamState::Running { rx, .. } => Pin::new(rx).poll_recv(cx),
-            StreamState::Stopped => Poll::Ready(None),
         }
     }
 }
@@ -391,32 +364,6 @@ impl Stream for PythonDataSourceStream {
 impl RecordBatchStream for PythonDataSourceStream {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
-    }
-}
-
-impl Drop for PythonDataSourceStream {
-    fn drop(&mut self) {
-        let state = std::mem::replace(&mut self.state, StreamState::Stopped);
-
-        match state {
-            StreamState::Running {
-                stop_signal,
-                python_thread,
-                ..
-            } => {
-                // Send stop signal
-                if let Some(signal) = stop_signal {
-                    let _ = signal.send(());
-                }
-
-                // Join thread to ensure cleanup
-                if let Some(thread) = python_thread {
-                    // Don't panic if thread panicked
-                    let _ = thread.join();
-                }
-            }
-            StreamState::Stopped => {}
-        }
     }
 }
 
