@@ -109,7 +109,7 @@ impl StreamManager {
             Entry::Occupied(mut entry) => match entry.get_mut() {
                 LocalStreamState::Created { stream } => stream.subscribe(),
                 LocalStreamState::Pending { senders } => {
-                    let (tx, rx) = mpsc::channel(self.options.worker_stream_buffer);
+                    let (tx, rx) = mpsc::channel(self.options.task_stream_buffer);
                     senders.push(tx);
                     // There is no need to probe the pending stream again.
                     Ok(Box::pin(ReceiverStream::new(rx)))
@@ -121,7 +121,7 @@ impl StreamManager {
                 ))),
             },
             Entry::Vacant(entry) => {
-                let (tx, rx) = mpsc::channel(self.options.worker_stream_buffer);
+                let (tx, rx) = mpsc::channel(self.options.task_stream_buffer);
                 entry.insert(LocalStreamState::Pending { senders: vec![tx] });
                 ctx.send_with_delay(
                     T::Message::probe_pending_local_stream(key.clone()),
@@ -203,7 +203,7 @@ impl StreamManager {
     ) -> ExecutionResult<Box<dyn LocalStream>> {
         match storage {
             LocalStreamStorage::Memory { replicas } => Ok(Box::new(MemoryStream::new(
-                options.worker_stream_buffer,
+                options.task_stream_buffer,
                 replicas,
                 senders,
             ))),

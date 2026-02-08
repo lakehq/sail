@@ -787,9 +787,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-async"
-version = "1.2.7"
+version = "1.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ee19095c7c4dda59f1697d028ce704c24b2d33c6718790c7f1d5a3015b4107c"
+checksum = "52eec3db979d18cb807fc1070961cc51d87d069abe9ab57917769687368a8c6c"
 dependencies = [
  "futures-util",
  "pin-project-lite",
@@ -901,9 +901,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-runtime-api"
-version = "1.10.0"
+version = "1.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "efce7aaaf59ad53c5412f14fc19b2d5c6ab2c3ec688d272fd31f76ec12f44fb0"
+checksum = "49952c52f7eebb72ce2a754d3866cc0f87b97d2a46146b79f80f3a93fb2b3716"
 dependencies = [
  "aws-smithy-async",
  "aws-smithy-types",
@@ -918,9 +918,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-types"
-version = "1.3.6"
+version = "1.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "65f172bcb02424eb94425db8aed1b6d583b5104d4d5ddddf22402c661a320048"
+checksum = "3b3a26048eeab0ddeba4b4f9d51654c79af8c3b32357dc5f336cee85ab331c33"
 dependencies = [
  "base64-simd",
  "bytes",
@@ -1314,9 +1314,9 @@ checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
 name = "bytes"
-version = "1.11.0"
+version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b35204fbdc0b3f4446b89fc1ac2cf84a8a68971995d0bf2e925ec7cd960f9cb3"
+checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
 name = "bytes-utils"
@@ -1417,9 +1417,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.54"
+version = "4.5.56"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6e6ff9dcd79cff5cd969a17a545d79e84ab086e444102a591e288a8aa3ce394"
+checksum = "a75ca66430e33a14957acc24c5077b503e7d374151b2b4b3a10c83b4ceb4be0e"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -1427,9 +1427,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.54"
+version = "4.5.56"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fa42cf4d2b7a41bc8f663a7cab4031ebafa1bf3875705bfaf8466dc60ab52c00"
+checksum = "793207c7fa6300a0608d1080b858e5fdbe713cdc1c8db9fb17777d8a13e63df0"
 dependencies = [
  "anstream",
  "anstyle",
@@ -1439,9 +1439,9 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "4.5.49"
+version = "4.5.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a0b5487afeab2deb2ff4e03a807ad1a03ac532ff5a2cee5d86884440c7f7671"
+checksum = "a92793da1a46a5f2a02a6f4c46c6496b28c43638adea8306fcb0caa1634f24e5"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -3586,9 +3586,9 @@ dependencies = [
 
 [[package]]
 name = "iana-time-zone"
-version = "0.1.64"
+version = "0.1.65"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33e57f83510bb73707521ebaffa789ec8caf86f9657cad665b092b581d40e9fb"
+checksum = "e31bc9ad994ba00e440a8aa5c9ef0ec67d5cb5e5cb0cc7f8b744a35b389cc470"
 dependencies = [
  "android_system_properties",
  "core-foundation-sys",
@@ -4327,9 +4327,9 @@ dependencies = [
 
 [[package]]
 name = "num-conv"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51d515d32fb182ee37cda2ccdcb92950d6a3c2893aa280e540671c2cd0f3b1d9"
+checksum = "cf97ec579c3c42f953ef76dbf8d55ac91fb219dde70e49aa4a6b7d74e9919050"
 
 [[package]]
 name = "num-integer"
@@ -5847,7 +5847,7 @@ checksum = "a50f4cf475b65d88e057964e0e9bb1f0aa9bbb2036dc65c64596b42932536984"
 
 [[package]]
 name = "sail-cache"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "datafusion",
@@ -5860,7 +5860,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "datafusion",
@@ -5877,12 +5877,13 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-glue"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "arrow",
  "async-trait",
  "aws-config",
  "aws-sdk-glue",
+ "aws-smithy-types",
  "sail-catalog",
  "sail-common-datafusion",
  "testcontainers",
@@ -5891,7 +5892,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-iceberg"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5912,7 +5913,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-memory"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "dashmap",
@@ -5922,7 +5923,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-onelake"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5935,7 +5936,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-system"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "datafusion",
@@ -5949,7 +5950,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-unity"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5974,7 +5975,7 @@ dependencies = [
 
 [[package]]
 name = "sail-cli"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "clap",
  "log",
@@ -5991,7 +5992,7 @@ dependencies = [
 
 [[package]]
 name = "sail-common"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -6012,7 +6013,7 @@ dependencies = [
 
 [[package]]
 name = "sail-common-datafusion"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -6043,7 +6044,7 @@ dependencies = [
 
 [[package]]
 name = "sail-data-source"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "arrow",
  "arrow-pyarrow",
@@ -6080,7 +6081,7 @@ dependencies = [
 
 [[package]]
 name = "sail-delta-lake"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "arrow-schema",
  "async-trait",
@@ -6114,7 +6115,7 @@ dependencies = [
 
 [[package]]
 name = "sail-execution"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "arrow-flight",
  "chrono",
@@ -6156,7 +6157,7 @@ dependencies = [
 
 [[package]]
 name = "sail-function"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -6174,6 +6175,7 @@ dependencies = [
  "jiter",
  "lazy_static",
  "num",
+ "ordered-float 5.1.0",
  "percent-encoding",
  "rand 0.9.2",
  "rand_chacha 0.9.0",
@@ -6189,7 +6191,7 @@ dependencies = [
 
 [[package]]
 name = "sail-gold-test"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "clap",
  "lazy_static",
@@ -6201,7 +6203,7 @@ dependencies = [
 
 [[package]]
 name = "sail-iceberg"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "apache-avro",
  "async-trait",
@@ -6229,14 +6231,14 @@ dependencies = [
 
 [[package]]
 name = "sail-logical-optimizer"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "datafusion",
 ]
 
 [[package]]
 name = "sail-logical-plan"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "comfy-table",
  "datafusion",
@@ -6251,7 +6253,7 @@ dependencies = [
 
 [[package]]
 name = "sail-object-store"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -6285,7 +6287,7 @@ dependencies = [
 
 [[package]]
 name = "sail-physical-optimizer"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "datafusion",
  "datafusion-physical-expr",
@@ -6295,7 +6297,7 @@ dependencies = [
 
 [[package]]
 name = "sail-physical-plan"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "datafusion",
  "datafusion-common",
@@ -6309,7 +6311,7 @@ dependencies = [
 
 [[package]]
 name = "sail-plan"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "arrow",
  "async-recursion",
@@ -6347,7 +6349,7 @@ dependencies = [
 
 [[package]]
 name = "sail-plan-lakehouse"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "datafusion",
@@ -6363,7 +6365,7 @@ dependencies = [
 
 [[package]]
 name = "sail-python"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "fastrace",
  "log",
@@ -6377,7 +6379,7 @@ dependencies = [
 
 [[package]]
 name = "sail-python-udf"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "arrow-pyarrow",
  "datafusion",
@@ -6396,7 +6398,7 @@ dependencies = [
 
 [[package]]
 name = "sail-server"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "axum",
  "fastrace",
@@ -6412,7 +6414,7 @@ dependencies = [
 
 [[package]]
 name = "sail-session"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -6457,7 +6459,7 @@ dependencies = [
 
 [[package]]
 name = "sail-spark-connect"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "async-stream",
  "datafusion",
@@ -6500,7 +6502,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-analyzer"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "chumsky",
@@ -6514,7 +6516,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-macro"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6523,7 +6525,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-parser"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "chumsky",
  "either",
@@ -6540,7 +6542,7 @@ dependencies = [
 
 [[package]]
 name = "sail-telemetry"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "datafusion",
  "env_logger",
@@ -7253,9 +7255,9 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.3.45"
+version = "0.3.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9e442fc33d7fdb45aa9bfeb312c095964abdf596f7567261062b2a7107aaabd"
+checksum = "743bd48c283afc0388f9b8827b976905fb217ad9e647fae3a379a9283c4def2c"
 dependencies = [
  "deranged",
  "itoa",
@@ -7268,15 +7270,15 @@ dependencies = [
 
 [[package]]
 name = "time-core"
-version = "0.1.7"
+version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b36ee98fd31ec7426d599183e8fe26932a8dc1fb76ddb6214d05493377d34ca"
+checksum = "7694e1cfe791f8d31026952abf09c69ca6f6fa4e1a1229e18988f06a04a12dca"
 
 [[package]]
 name = "time-macros"
-version = "0.2.25"
+version = "0.2.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71e552d1249bf61ac2a52db88179fd0673def1e1ad8243a00d9ec9ed71fee3dd"
+checksum = "2e70e4c5a0e0a8a4823ad65dfe1a6930e4f4d756dcd9dd7939022b5e8c501215"
 dependencies = [
  "num-conv",
  "time-core",
@@ -7462,9 +7464,9 @@ checksum = "5d99f8c9a7727884afe522e9bd5edbfc91a3312b36a77b5fb8926e4c31a41801"
 
 [[package]]
 name = "tonic"
-version = "0.14.2"
+version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb7613188ce9f7df5bfe185db26c5814347d110db17920415cf2fbcad85e7203"
+checksum = "a286e33f82f8a1ee2df63f4fa35c0becf4a85a0cb03091a15fd7bf0b402dc94a"
 dependencies = [
  "async-trait",
  "axum",
@@ -7495,9 +7497,9 @@ dependencies = [
 
 [[package]]
 name = "tonic-build"
-version = "0.14.2"
+version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c40aaccc9f9eccf2cd82ebc111adc13030d23e887244bc9cfa5d1d636049de3"
+checksum = "27aac809edf60b741e2d7db6367214d078856b8a5bff0087e94ff330fb97b6fc"
 dependencies = [
  "prettyplease",
  "proc-macro2",
@@ -7507,9 +7509,9 @@ dependencies = [
 
 [[package]]
 name = "tonic-health"
-version = "0.14.2"
+version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a82868bf299e0a1d2e8dce0dc33a46c02d6f045b2c1f1d6cc8dc3d0bf1812ef"
+checksum = "8dbde2c702c4be12b9b2f6f7e6c824a84a7b7be177070cada8ee575a581af359"
 dependencies = [
  "prost",
  "tokio",
@@ -7520,9 +7522,9 @@ dependencies = [
 
 [[package]]
 name = "tonic-prost"
-version = "0.14.2"
+version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66bd50ad6ce1252d87ef024b3d64fe4c3cf54a86fb9ef4c631fdd0ded7aeaa67"
+checksum = "d6c55a2d6a14174563de34409c9f92ff981d006f56da9c6ecd40d9d4a31500b0"
 dependencies = [
  "bytes",
  "prost",
@@ -7531,9 +7533,9 @@ dependencies = [
 
 [[package]]
 name = "tonic-prost-build"
-version = "0.14.2"
+version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4a16cba4043dc3ff43fcb3f96b4c5c154c64cbd18ca8dce2ab2c6a451d058a2"
+checksum = "a4556786613791cfef4ed134aa670b61a85cfcacf71543ef33e8d801abae988f"
 dependencies = [
  "prettyplease",
  "proc-macro2",
@@ -7547,9 +7549,9 @@ dependencies = [
 
 [[package]]
 name = "tonic-reflection"
-version = "0.14.2"
+version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34da53e8387581d66db16ff01f98a70b426b091fdf76856e289d5c1bd386ed7b"
+checksum = "758112f988818866f38face806ebf8c8961ad2c087e2ba89ad30010ba5fd80c1"
 dependencies = [
  "prost",
  "prost-types",
@@ -7561,9 +7563,9 @@ dependencies = [
 
 [[package]]
 name = "tonic-types"
-version = "0.14.2"
+version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37c8dfa7c722a8fb39faed16908397743dec84e8d331aa7a91ea9e40aaea457c"
+checksum = "e89423f8aeab18ecc83e536f686930c37f7074cb6beb42eb7a047f5c8a7aea65"
 dependencies = [
  "prost",
  "prost-types",

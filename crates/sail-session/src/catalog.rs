@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::common::{plan_datafusion_err, Result};
+use datafusion_common::plan_err;
 use sail_catalog::error::CatalogResult;
 use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
 use sail_catalog::provider::{CatalogProvider, RuntimeAwareCatalogProvider};
@@ -146,6 +147,22 @@ pub fn create_catalog_manager(
         })
         .collect::<CatalogResult<HashMap<_, _>>>()
         .map_err(|e| plan_datafusion_err!("failed to create catalog: {e}"))?;
+    let default_catalog = if let Some(name) = config.catalog.default_catalog.as_ref() {
+        name.clone()
+    } else {
+        let mut keys = catalogs.keys();
+        if let Some(name) = keys.next() {
+            if keys.next().is_none() {
+                name.clone()
+            } else {
+                return plan_err!(
+                    "cannot infer default catalog when multiple catalogs are defined"
+                );
+            }
+        } else {
+            return plan_err!("no catalogs are defined to infer default catalog");
+        }
+    };
     if catalogs
         .insert(
             SYSTEM_CATALOG_NAME.to_string(),
@@ -160,7 +177,7 @@ pub fn create_catalog_manager(
     }
     let options = CatalogManagerOptions {
         catalogs,
-        default_catalog: config.catalog.default_catalog.clone(),
+        default_catalog,
         default_database: config.catalog.default_database.clone(),
         global_temporary_database: config.catalog.global_temporary_database.clone(),
     };

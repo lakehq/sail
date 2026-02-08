@@ -9,11 +9,16 @@ import pytest
 from _pytest.doctest import DoctestItem
 from pyspark.sql import SparkSession
 
-from pysail.spark import SparkConnectServer
 from pysail.tests.spark.utils import SAIL_ONLY, is_jvm_spark
 
 
 def pytest_configure(config):
+    # Register custom markers.
+    # Note: pytest-bdd converts @sail-only tag to "sail-only" marker (preserves hyphen)
+    config.addinivalue_line(
+        "markers",
+        "sail-only: mark test as Sail-only (skipped when running against Spark JVM)",
+    )
     # Load all pytest-bdd step modules.
     config.pluginmanager.import_plugin("pysail.tests.spark.steps.file_tree")
     config.pluginmanager.import_plugin("pysail.tests.spark.steps.sql")
@@ -26,15 +31,6 @@ if TYPE_CHECKING:
     import pyspark.sql.connect.session
 
 
-@pytest.fixture(scope="session", autouse=True)
-def sail_default_parallelism():
-    """Sets the default parallelism to a fixed value regardless of the
-    number of CPU cores to ensure deterministic test results, especially for
-    snapshot tests involving execution plans.
-    """
-    os.environ["SAIL_EXECUTION__DEFAULT_PARALLELISM"] = "4"
-
-
 @pytest.fixture(scope="session")
 def remote():
     """Creates a Spark Connect server if there is not one already running
@@ -45,9 +41,9 @@ def remote():
     if r := os.environ.get("SPARK_REMOTE"):
         yield r
     else:
+        from pysail.spark import SparkConnectServer  # noqa: PLC0415
+
         server = SparkConnectServer("127.0.0.1", 0)
-        if os.environ.get("SAIL_TEST_INIT_TELEMETRY") == "1":
-            server.init_telemetry()
         server.start(background=True)
         _, port = server.listening_address
         yield f"sc://localhost:{port}"
@@ -159,8 +155,13 @@ def local_timezone(request):
 
 def pytest_collection_modifyitems(session, config, items):  # noqa: ARG001
     if is_jvm_spark():
+        skip_sail_only = pytest.mark.skip(reason="Sail-only feature, not supported by Spark")
         for item in items:
             if isinstance(item, DoctestItem):
                 for example in item.dtest.examples:
                     if example.options.get(SAIL_ONLY):
                         example.options[doctest.SKIP] = True
+            # Skip pytest-bdd scenarios with @sail-only tag
+            # Note: pytest-bdd preserves the hyphen in marker names
+            elif item.get_closest_marker("sail-only"):
+                item.add_marker(skip_sail_only)
