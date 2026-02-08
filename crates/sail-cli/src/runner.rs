@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use sail_common::error::CommonError;
 
+use crate::flight::run_flight_server;
 use crate::spark::{
     run_pyspark_shell, run_spark_connect_server, run_spark_mcp_server, McpSettings, McpTransport,
 };
@@ -17,8 +18,41 @@ struct Cli {
 enum Command {
     #[command(subcommand, about = "Run Spark workloads with Sail")]
     Spark(SparkCommand),
+    #[command(subcommand, about = "Arrow Flight SQL interface for Sail")]
+    Flight(FlightCommand),
     #[command(about = "Start the Sail worker (internal use only)")]
     Worker,
+}
+
+#[derive(Subcommand)]
+enum FlightCommand {
+    #[command(about = "Start the Arrow Flight SQL server")]
+    Server {
+        #[arg(
+            long,
+            default_value = "127.0.0.1",
+            help = "The IP address that the server binds to"
+        )]
+        ip: String,
+        #[arg(
+            long,
+            default_value_t = 32010,
+            help = "The port number that the server listens on"
+        )]
+        port: u16,
+        #[arg(
+            long,
+            default_value_t = 0,
+            help = "Maximum rows to return per query (0 = unlimited)"
+        )]
+        max_rows: usize,
+        #[arg(
+            short = 'C',
+            long,
+            help = "The directory to change to before starting the server"
+        )]
+        directory: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -125,6 +159,19 @@ pub fn main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
                     port,
                     spark_remote,
                 })
+            }
+        },
+        Command::Flight(command) => match command {
+            FlightCommand::Server {
+                ip,
+                port,
+                max_rows,
+                directory,
+            } => {
+                if let Some(directory) = directory {
+                    std::env::set_current_dir(directory)?;
+                }
+                run_flight_server(ip.parse()?, port, max_rows)
             }
         },
     }

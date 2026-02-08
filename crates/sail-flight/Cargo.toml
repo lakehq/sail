@@ -1,0 +1,47 @@
+[package]
+name = "sail-flight"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Arrow Flight SQL server for Sail"
+
+[lib]
+name = "sail_flight"
+path = "src/lib.rs"
+
+[dependencies]
+# Sail crates
+sail-common = { path = "../sail-common" }
+sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-catalog = { path = "../sail-catalog" }
+sail-catalog-memory = { path = "../sail-catalog-memory" }
+sail-plan = { path = "../sail-plan" }
+sail-server = { path = "../sail-server" }
+sail-sql-analyzer = { path = "../sail-sql-analyzer" }
+sail-session = { path = "../sail-session" }
+sail-telemetry = { path = "../sail-telemetry" }
+
+# Arrow / DataFusion
+arrow = { workspace = true }
+arrow-flight = { workspace = true }
+datafusion = { workspace = true }
+
+# Async / Server
+tokio = { workspace = true }
+tonic = { workspace = true }
+tonic-health = { workspace = true }
+futures = { workspace = true }
+prost = { workspace = true }
+
+# Logging & Tracing
+log = { workspace = true }
+env_logger = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+
+# Config
+figment = { workspace = true }
+
+[build-dependencies]
+tonic-build = { workspace = true }

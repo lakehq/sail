@@ -1,0 +1,131 @@
+name: Flight SQL Tests
+
+on:
+  workflow_call:
+    secrets:
+      CODECOV_TOKEN:
+        required: false
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    env:
+      # Coverage environment variables
+      RUSTC_WORKSPACE_WRAPPER: ${{ github.workspace }}/.github/scripts/rustc-workspace-wrapper.sh
+      LLVM_PROFILE_FILE: ${{ github.workspace }}/target/sail-flight-%p-%m.profraw
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/adjust-swap-space
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Hatch
+        uses: pypa/hatch@install
+
+      - name: Install Rust toolchain and coverage tools
+        run: |
+          {
+            rustup toolchain install stable
+            rustup component add --toolchain stable llvm-tools-preview
+          } &
+
+      - name: Install grcov
+        uses: taiki-e/install-action@grcov
+
+      - name: Install protobuf compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+          protoc --version
+
+      - name: Install grpc_health_probe
+        run: |
+          wget -q -O /usr/local/bin/grpc_health_probe "https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/v0.4.26/grpc_health_probe-linux-amd64"
+          chmod +x /usr/local/bin/grpc_health_probe
+          grpc_health_probe -version
+
+      - name: Build sail-cli binary
+        env:
+          RUSTFLAGS: "-C instrument-coverage"
+        run: |
+          # Wait for background Rust toolchain installation to complete
+          wait
+          cargo build -p sail-cli
+
+      - name: Download Python Package
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package
+          path: target/wheels
+
+      - name: Set Up Hatch Environment
+        run: |
+          hatch run install-pysail
+
+      - name: Install Flight SQL dependencies
+        run: |
+          hatch run pip install adbc-driver-flightsql adbc-driver-manager
+
+      - name: List Python packages
+        continue-on-error: true
+        run: |
+          hatch run uv pip freeze || hatch run python -m pip freeze
+
+      - name: Run Flight SQL Server
+        run: |
+          nohup scripts/flight-tests/run-server.sh > /dev/null 2>&1 < /dev/null &
+
+      - name: Wait for Flight SQL Server to Start
+        run: |
+          scripts/flight-tests/wait-for-server.sh
+
+      - name: Run Flight SQL Tests
+        timeout-minutes: 5
+        env:
+          SAIL_FLIGHT_URI: "grpc://127.0.0.1:32010"
+        run: |
+          hatch run pytest --pyargs pysail.tests.flight -v
+
+      - name: Shutdown Flight SQL Server
+        if: ${{ !cancelled() }}
+        run: |
+          scripts/flight-tests/stop-server.sh
+
+      # Generate coverage report after Flight SQL tests
+      - name: Generate coverage report
+        run: |
+          # Wait for background Rust toolchain installation to complete
+          wait
+          BINARY_PATH=$(find target -name "sail" -type f -executable | head -n 1)
+          echo "Binary path: $BINARY_PATH"
+          LLVM_PATH=$(.github/scripts/find-llvm-profdata.sh)
+          grcov target --binary-path "$(dirname $BINARY_PATH)" -s . \
+            --llvm-path "$LLVM_PATH" \
+            -t lcov --branch --ignore-not-existing \
+            -o coverage-flight.info
+
+      - name: Upload Flight SQL coverage to Codecov
+        if: ${{ github.actor != 'dependabot[bot]' }}
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage-flight.info
+          flags: flight-tests
+          name: flight-tests
+          fail_ci_if_error: true
+          env_vars: OS
+
+      - name: Upload Test Logs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: flight-test-logs
+          path: |
+            nohup.out
+            tmp/flight-tests/
+          retention-days: 30
