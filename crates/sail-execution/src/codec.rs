@@ -7,6 +7,7 @@ use datafusion::arrow::datatypes::{DataType, Schema, TimeUnit};
 use datafusion::common::parsers::CompressionTypeVariant;
 use datafusion::common::{
     plan_datafusion_err, plan_err, Constraint, Constraints, JoinSide, Result, ScalarValue,
+    Statistics,
 };
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::memory::MemorySourceConfig;
@@ -620,6 +621,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 limit,
                 pushdown_filter,
                 version,
+                statistics,
             }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let table_url = Url::parse(&table_url)
@@ -666,17 +668,24 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 } else {
                     None
                 };
-                Ok(Arc::new(DeltaScanByAddsExec::new(
-                    input,
-                    table_url,
-                    version,
-                    table_schema,
-                    output_schema,
-                    scan_config,
-                    projection,
-                    limit,
-                    pushdown_filter,
-                )))
+                let statistics = statistics
+                    .as_ref()
+                    .map(|bytes| self.try_decode_statistics(bytes))
+                    .transpose()?;
+                Ok(Arc::new(
+                    DeltaScanByAddsExec::new(
+                        input,
+                        table_url,
+                        version,
+                        table_schema,
+                        output_schema,
+                        scan_config,
+                        projection,
+                        limit,
+                        pushdown_filter,
+                    )
+                    .with_output_statistics(statistics),
+                ))
             }
             NodeKind::DeltaDiscovery(gen::DeltaDiscoveryExecNode {
                 table_url,
@@ -730,18 +739,40 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 partition_columns,
                 checkpoint_files,
                 commit_files,
+                checkpoint_input,
+                commits_input,
             }) => {
-                let input = self.try_decode_plan(&input, ctx)?;
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
-                Ok(Arc::new(DeltaLogReplayExec::new(
-                    input,
-                    table_url,
-                    version,
-                    partition_columns,
-                    checkpoint_files,
-                    commit_files,
-                )))
+                match (checkpoint_input.as_ref(), commits_input.as_ref()) {
+                    (Some(checkpoint_input), Some(commits_input)) => {
+                        let checkpoint_input = self.try_decode_plan(checkpoint_input, ctx)?;
+                        let commits_input = self.try_decode_plan(commits_input, ctx)?;
+                        Ok(Arc::new(DeltaLogReplayExec::new_hash(
+                            checkpoint_input,
+                            commits_input,
+                            table_url,
+                            version,
+                            partition_columns,
+                            checkpoint_files,
+                            commit_files,
+                        )))
+                    }
+                    (None, None) => {
+                        let input = self.try_decode_plan(&input, ctx)?;
+                        Ok(Arc::new(DeltaLogReplayExec::new(
+                            input,
+                            table_url,
+                            version,
+                            partition_columns,
+                            checkpoint_files,
+                            commit_files,
+                        )))
+                    }
+                    _ => plan_err!(
+                        "DeltaLogReplayExec requires both checkpoint_input and commits_input when hash replay is encoded"
+                    ),
+                }
             }
             NodeKind::ConsoleSink(gen::ConsoleSinkExecNode { input }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
@@ -1217,6 +1248,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             } else {
                 None
             };
+            let statistics =
+                Some(self.try_encode_statistics(delta_scan_by_adds_exec.statistics())?);
             NodeKind::DeltaScanByAdds(gen::DeltaScanByAddsExecNode {
                 input,
                 table_url: delta_scan_by_adds_exec.table_url().to_string(),
@@ -1227,6 +1260,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 limit,
                 pushdown_filter,
                 version: delta_scan_by_adds_exec.version(),
+                statistics,
             })
         } else if let Some(delta_discovery_exec) =
             node.as_any().downcast_ref::<DeltaDiscoveryExec>()
@@ -1260,7 +1294,20 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(delta_log_replay_exec) =
             node.as_any().downcast_ref::<DeltaLogReplayExec>()
         {
-            let input = self.try_encode_plan(delta_log_replay_exec.children()[0].clone())?;
+            let children = delta_log_replay_exec.children();
+            let (input, checkpoint_input, commits_input) = match children.as_slice() {
+                [input] => (self.try_encode_plan((*input).clone())?, None, None),
+                [checkpoint_input, commits_input] => (
+                    Vec::new(),
+                    Some(self.try_encode_plan((*checkpoint_input).clone())?),
+                    Some(self.try_encode_plan((*commits_input).clone())?),
+                ),
+                _ => {
+                    return plan_err!(
+                        "DeltaLogReplayExec expects one child for sort replay or two children for hash replay"
+                    )
+                }
+            };
             NodeKind::DeltaLogReplay(gen::DeltaLogReplayExecNode {
                 input,
                 table_url: delta_log_replay_exec.table_url().to_string(),
@@ -1268,6 +1315,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 partition_columns: delta_log_replay_exec.partition_columns().to_vec(),
                 checkpoint_files: delta_log_replay_exec.checkpoint_files().to_vec(),
                 commit_files: delta_log_replay_exec.commit_files().to_vec(),
+                checkpoint_input,
+                commits_input,
             })
         } else if let Some(console_sink) = node.as_any().downcast_ref::<ConsoleSinkExec>() {
             let input = self.try_encode_plan(console_sink.input().clone())?;
@@ -2784,6 +2833,15 @@ impl RemoteExecutionCodec {
 
     fn try_encode_schema(&self, schema: &Schema) -> Result<Vec<u8>> {
         self.try_encode_message::<gen_datafusion_common::Schema>(schema.try_into()?)
+    }
+
+    fn try_decode_statistics(&self, buf: &[u8]) -> Result<Statistics> {
+        let statistics = self.try_decode_message::<gen_datafusion_common::Statistics>(buf)?;
+        Ok((&statistics).try_into()?)
+    }
+
+    fn try_encode_statistics(&self, statistics: &Statistics) -> Result<Vec<u8>> {
+        self.try_encode_message::<gen_datafusion_common::Statistics>(statistics.into())
     }
 
     fn try_decode_message<M>(&self, buf: &[u8]) -> Result<M>

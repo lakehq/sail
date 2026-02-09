@@ -373,6 +373,20 @@ impl DeltaScanByAddsExec {
         self
     }
 
+    pub fn with_output_statistics(mut self, output_statistics: Option<Statistics>) -> Self {
+        self.statistics = output_statistics
+            .as_ref()
+            .map(|statistics| {
+                if statistics.column_statistics.len() == self.output_schema.fields().len() {
+                    sanitize_statistics_to_schema(statistics.clone(), &self.output_schema)
+                } else {
+                    map_statistics_to_schema(statistics, &self.table_schema, &self.output_schema)
+                }
+            })
+            .unwrap_or_else(|| Statistics::new_unknown(self.output_schema.as_ref()));
+        self
+    }
+
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
     }
@@ -596,6 +610,22 @@ fn map_statistics_to_schema(
     }
 }
 
+fn sanitize_statistics_to_schema(mut statistics: Statistics, schema: &SchemaRef) -> Statistics {
+    if statistics.column_statistics.len() != schema.fields().len() {
+        return Statistics::new_unknown(schema.as_ref());
+    }
+
+    for (field, column_stats) in schema
+        .fields()
+        .iter()
+        .zip(&mut statistics.column_statistics)
+    {
+        sanitize_column_statistics_for_field(column_stats, field.name(), field.data_type());
+    }
+
+    statistics
+}
+
 fn sanitize_column_statistics_for_field(
     column_stats: &mut ColumnStatistics,
     _column_name: &str,
@@ -795,5 +825,54 @@ mod tests {
         assert_eq!(stats.num_rows, Precision::Exact(123));
         assert_eq!(stats.column_statistics.len(), 1);
         assert_eq!(stats.column_statistics[0].null_count, Precision::Exact(4));
+    }
+
+    #[test]
+    fn test_scan_by_adds_accepts_output_statistics_directly() {
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Int64, true),
+        ]));
+        let output_schema = Arc::new(Schema::new(vec![Field::new("b", DataType::Int64, true)]));
+        let input_schema = Arc::new(Schema::new(vec![Field::new(
+            "action",
+            DataType::Utf8,
+            true,
+        )]));
+        let input = Arc::new(EmptyExec::new(input_schema));
+        let table_url = Url::parse("file:///tmp/table").expect("valid table URL");
+
+        let output_stats = Statistics {
+            num_rows: Precision::Exact(88),
+            total_byte_size: Precision::Exact(1024),
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Exact(6),
+                max_value: Precision::Exact(ScalarValue::Int64(Some(10))),
+                min_value: Precision::Exact(ScalarValue::Int64(Some(2))),
+                sum_value: Precision::Absent,
+                distinct_count: Precision::Exact(5),
+                byte_size: Precision::Absent,
+            }],
+        };
+
+        let scan = DeltaScanByAddsExec::new(
+            input,
+            table_url,
+            1,
+            table_schema,
+            output_schema,
+            crate::datasource::DeltaScanConfig::default(),
+            None,
+            None,
+            None,
+        )
+        .with_output_statistics(Some(output_stats));
+
+        let stats = scan
+            .partition_statistics(None)
+            .expect("statistics should exist");
+        assert_eq!(stats.num_rows, Precision::Exact(88));
+        assert_eq!(stats.column_statistics.len(), 1);
+        assert_eq!(stats.column_statistics[0].null_count, Precision::Exact(6));
     }
 }
