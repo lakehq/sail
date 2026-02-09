@@ -1,3 +1,4 @@
+pub mod decimal_format;
 pub mod format_number;
 pub mod levenshtein;
 pub mod make_valid_utf8;

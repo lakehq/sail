@@ -7,6 +7,8 @@ use datafusion_common::cast::as_float64_array;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
+use super::decimal_format::{format_with_parsed_pattern, insert_grouping, parse_pattern};
+
 /// Formats a number to a string with comma grouping or a DecimalFormat pattern.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct FormatNumber {
@@ -66,7 +68,10 @@ impl ScalarUDFImpl for FormatNumber {
                     format_with_scalar_spec(&args[0], |v| format_number_fixed(v, *d as i32))
                 }
                 ScalarValue::Utf8(Some(pattern)) => {
-                    format_with_scalar_spec(&args[0], |v| Some(format_number_pattern(v, pattern)))
+                    let parsed = parse_pattern(pattern)?;
+                    format_with_scalar_spec(&args[0], |v| {
+                        Some(format_with_parsed_pattern(v, &parsed))
+                    })
                 }
                 ScalarValue::Int8(None)
                 | ScalarValue::Int16(None)
@@ -105,74 +110,7 @@ fn format_number_fixed(value: f64, decimal_places: i32) -> Option<String> {
     }
     let d = decimal_places as usize;
     let rounded = format!("{:.prec$}", value, prec = d);
-    Some(insert_commas(&rounded))
-}
-
-/// Inserts comma grouping into the integer part of a formatted number string.
-fn insert_commas(s: &str) -> String {
-    let (integer_part, decimal_part) = match s.find('.') {
-        Some(pos) => (&s[..pos], Some(&s[pos..])),
-        None => (s, None),
-    };
-
-    let negative = integer_part.starts_with('-');
-    let digits = if negative {
-        &integer_part[1..]
-    } else {
-        integer_part
-    };
-
-    let mut result = String::with_capacity(s.len() + digits.len() / 3);
-    if negative {
-        result.push('-');
-    }
-
-    let len = digits.len();
-    for (i, ch) in digits.chars().enumerate() {
-        if i > 0 && (len - i) % 3 == 0 {
-            result.push(',');
-        }
-        result.push(ch);
-    }
-
-    if let Some(dec) = decimal_part {
-        result.push_str(dec);
-    }
-
-    result
-}
-
-/// Formats a number using a Java DecimalFormat-style pattern string.
-fn format_number_pattern(value: f64, pattern: &str) -> String {
-    let has_grouping = pattern.contains(',');
-    let frac = pattern.rfind('.').map(|pos| &pattern[pos + 1..]);
-    let decimal_digits = frac.map_or(0, |f| f.chars().filter(|c| *c == '#' || *c == '0').count());
-    let min_decimal_digits = frac.map_or(0, |f| f.chars().filter(|c| *c == '0').count());
-
-    let formatted = format!("{:.prec$}", value, prec = decimal_digits);
-
-    let trimmed = if decimal_digits > min_decimal_digits {
-        let (int_part, dec_part) = formatted.split_once('.').unwrap_or((&formatted, ""));
-        let mut dec_chars: Vec<char> = dec_part.chars().collect();
-
-        while dec_chars.len() > min_decimal_digits && dec_chars.last() == Some(&'0') {
-            dec_chars.pop();
-        }
-
-        if dec_chars.is_empty() {
-            int_part.to_string()
-        } else {
-            format!("{}.{}", int_part, dec_chars.iter().collect::<String>())
-        }
-    } else {
-        formatted
-    };
-
-    if has_grouping {
-        insert_commas(&trimmed)
-    } else {
-        trimmed
-    }
+    Some(insert_grouping(&rounded, 3))
 }
 
 /// Formats numbers using a single scalar format spec broadcast across all rows.
@@ -255,26 +193,34 @@ fn format_with_per_row_pattern(
     match number {
         ColumnarValue::Array(arr) => {
             let f64_arr = cast_arrow_array_to_f64(arr)?;
-            let result: StringArray = f64_arr
+            let result: Result<Vec<Option<String>>> = f64_arr
                 .iter()
                 .zip(p_arr.iter())
                 .map(|(v_opt, p_opt)| match (v_opt, p_opt) {
-                    (Some(v), Some(p)) => Some(format_number_pattern(v, p)),
-                    _ => None,
+                    (Some(v), Some(p)) => {
+                        let parsed = parse_pattern(p)?;
+                        Ok(Some(format_with_parsed_pattern(v, &parsed)))
+                    }
+                    _ => Ok(None),
                 })
                 .collect();
-            Ok(ColumnarValue::Array(Arc::new(result)))
+            let arr: StringArray = result?.into_iter().collect();
+            Ok(ColumnarValue::Array(Arc::new(arr)))
         }
         ColumnarValue::Scalar(scalar) => {
             let value = scalar_to_f64(scalar)?;
-            let result: StringArray = p_arr
+            let result: Result<Vec<Option<String>>> = p_arr
                 .iter()
                 .map(|p_opt| match (value, p_opt) {
-                    (Some(v), Some(p)) => Some(format_number_pattern(v, p)),
-                    _ => None,
+                    (Some(v), Some(p)) => {
+                        let parsed = parse_pattern(p)?;
+                        Ok(Some(format_with_parsed_pattern(v, &parsed)))
+                    }
+                    _ => Ok(None),
                 })
                 .collect();
-            Ok(ColumnarValue::Array(Arc::new(result)))
+            let arr: StringArray = result?.into_iter().collect();
+            Ok(ColumnarValue::Array(Arc::new(arr)))
         }
     }
 }
