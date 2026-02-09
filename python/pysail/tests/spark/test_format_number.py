@@ -51,9 +51,7 @@ def test_format_number_empty_pattern(spark):
 
 def test_format_number_pattern_with_grouping(spark):
     """Pattern with grouping separators formats correctly."""
-    actual = spark.sql(
-        "SELECT format_number(12831273.23481, '###,###,###,###,###.###') AS result"
-    ).toPandas()
+    actual = spark.sql("SELECT format_number(12831273.23481, '###,###,###,###,###.###') AS result").toPandas()
 
     expected = pd.DataFrame({"result": ["12,831,273.235"]})
     pd.testing.assert_frame_equal(actual, expected)
@@ -61,9 +59,7 @@ def test_format_number_pattern_with_grouping(spark):
 
 def test_format_number_pattern_integer_only(spark):
     """Pattern with no decimal part formats as integer with grouping."""
-    actual = spark.sql(
-        "SELECT format_number(12332.123456, '#,###,###,###,###,###,##0') AS result"
-    ).toPandas()
+    actual = spark.sql("SELECT format_number(12332.123456, '#,###,###,###,###,###,##0') AS result").toPandas()
 
     expected = pd.DataFrame({"result": ["12,332"]})
     pd.testing.assert_frame_equal(actual, expected)
