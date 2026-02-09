@@ -260,6 +260,10 @@ SKIPPED_SPARK_TESTS = [
         reason="Segmentation fault",
     ),
     TestMarker(
+        keywords=["test_data_source_segfault"],
+        reason="Segmentation fault",
+    ),
+    TestMarker(
         keywords=["test_reattach.py"],
         reason="Slow test not working yet",
     ),
