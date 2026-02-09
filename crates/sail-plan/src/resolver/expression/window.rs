@@ -299,16 +299,25 @@ impl PlanResolver<'_> {
             }
             spec::WindowFrameBoundary::Preceding(expr) => {
                 let value = self.resolve_window_boundary(*expr, state)?;
-                // Cast to the order_by type to ensure compatible arithmetic
+                // Cast numeric boundaries to match the ORDER BY type.
+                // Non-numeric boundaries (e.g. INTERVAL for TIMESTAMP ORDER BY) are left as-is
+                // since DataFusion handles interval arithmetic directly.
                 let data_type = get_order_by_type()?;
-                let value = value.cast_to(&data_type)?;
+                let value = if data_type.is_numeric() {
+                    value.cast_to(&data_type)?
+                } else {
+                    value
+                };
                 Ok(WindowFrameBound::Preceding(value))
             }
             spec::WindowFrameBoundary::Following(expr) => {
                 let value = self.resolve_window_boundary(*expr, state)?;
-                // Cast to the order_by type to ensure compatible arithmetic
                 let data_type = get_order_by_type()?;
-                let value = value.cast_to(&data_type)?;
+                let value = if data_type.is_numeric() {
+                    value.cast_to(&data_type)?
+                } else {
+                    value
+                };
                 Ok(WindowFrameBound::Following(value))
             }
             spec::WindowFrameBoundary::Value(expr) => {
@@ -317,7 +326,11 @@ impl PlanResolver<'_> {
                     Err(PlanError::invalid("window boundary value cannot be null"))
                 } else {
                     let data_type = get_order_by_type()?;
-                    let value = value.cast_to(&data_type)?;
+                    let value = if data_type.is_numeric() {
+                        value.cast_to(&data_type)?
+                    } else {
+                        value
+                    };
                     let zero = ScalarValue::new_zero(&data_type)?;
                     match value.partial_cmp(&zero) {
                         None => Err(PlanError::invalid(

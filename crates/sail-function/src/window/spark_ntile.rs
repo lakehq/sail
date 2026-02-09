@@ -79,7 +79,7 @@ impl WindowUDFImpl for SparkNtile {
 
         if scalar_n.is_null() {
             return datafusion::common::exec_err!(
-                "NTILE requires a positive integer, but finds NULL"
+                "NTILE requires a positive integer, but found NULL"
             );
         }
 
@@ -103,12 +103,12 @@ struct SparkNtileEvaluator {
 
 impl PartitionEvaluator for SparkNtileEvaluator {
     fn evaluate_all(&mut self, _values: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
+        if num_rows == 0 {
+            return Ok(Arc::new(UInt64Array::from(Vec::<u64>::new())));
+        }
+
         let num_rows = num_rows as u64;
         let n = u64::min(self.n, num_rows);
-
-        if n == 0 {
-            return datafusion::common::exec_err!("NTILE requires a positive integer");
-        }
 
         // Spark distributes extra rows to the first buckets
         // For 10 rows with n=4: base=2, extra=2
