@@ -9,6 +9,7 @@ use datafusion_functions_nested::expr_fn::array_element;
 use datafusion_spark::function::string::elt::SparkElt;
 use datafusion_spark::function::string::expr_fn as string_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::string::format_number::FormatNumber;
 use sail_function::scalar::string::levenshtein::Levenshtein;
 use sail_function::scalar::string::make_valid_utf8::MakeValidUtf8;
 use sail_function::scalar::string::randstr::Randstr;
@@ -249,7 +250,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("encode", F::udf(SparkEncode::new())),
         ("endswith", F::custom(endswith)),
         ("find_in_set", F::binary(expr_fn::find_in_set)),
-        ("format_number", F::unknown("format_number")),
+        ("format_number", F::udf(FormatNumber::new())),
         ("format_string", F::binary(string_fn::format_string)),
         ("initcap", F::unary(expr_fn::initcap)),
         ("instr", F::binary(expr_fn::instr)),
