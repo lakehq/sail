@@ -13,7 +13,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Options that control the behavior of Delta Lake tables.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TableDeltaOptions {
     pub replace_where: Option<String>,
     pub merge_schema: bool,
@@ -28,6 +28,14 @@ pub struct TableDeltaOptions {
     #[serde(default = "default_serverless_read")]
     pub serverless_read: bool,
 
+    /// Strategy for serverless Delta log replay in metadata path.
+    #[serde(default)]
+    pub delta_log_replay_strategy: DeltaLogReplayStrategyOption,
+
+    /// Max commit JSON file count to use hash-no-sort replay when strategy is `Auto`.
+    #[serde(default = "default_delta_log_replay_hash_threshold")]
+    pub delta_log_replay_hash_threshold: usize,
+
     /// Column mapping mode for new tables (dataframe API only)
     #[serde(default)]
     pub column_mapping_mode: ColumnMappingModeOption,
@@ -35,6 +43,37 @@ pub struct TableDeltaOptions {
 
 fn default_serverless_read() -> bool {
     true
+}
+
+impl Default for TableDeltaOptions {
+    fn default() -> Self {
+        Self {
+            replace_where: None,
+            merge_schema: false,
+            overwrite_schema: false,
+            target_file_size: 0,
+            write_batch_size: 0,
+            version_as_of: None,
+            timestamp_as_of: None,
+            serverless_read: false,
+            delta_log_replay_strategy: DeltaLogReplayStrategyOption::Auto,
+            delta_log_replay_hash_threshold: default_delta_log_replay_hash_threshold(),
+            column_mapping_mode: ColumnMappingModeOption::None,
+        }
+    }
+}
+
+fn default_delta_log_replay_hash_threshold() -> usize {
+    100
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum DeltaLogReplayStrategyOption {
+    #[default]
+    Auto,
+    Sort,
+    HashNoSort,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]

@@ -264,6 +264,8 @@ pub async fn create_delta_provider(
         },
         commit_version_column_name: None,
         commit_timestamp_column_name: None,
+        delta_log_replay_strategy: options.delta_log_replay_strategy,
+        delta_log_replay_hash_threshold: options.delta_log_replay_hash_threshold,
     };
 
     let table_provider = DeltaTableProvider::try_new(snapshot, log_store, scan_config)?;
@@ -312,6 +314,8 @@ pub async fn create_delta_source(
         },
         commit_version_column_name: None,
         commit_timestamp_column_name: None,
+        delta_log_replay_strategy: options.delta_log_replay_strategy,
+        delta_log_replay_hash_threshold: options.delta_log_replay_hash_threshold,
     };
 
     Ok(Arc::new(DeltaTableSource::try_new(

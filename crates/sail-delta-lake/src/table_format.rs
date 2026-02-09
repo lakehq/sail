@@ -17,7 +17,7 @@ use sail_data_source::options::{
 use sail_data_source::resolve_listing_urls;
 use url::Url;
 
-use crate::options::{ColumnMappingModeOption, TableDeltaOptions};
+use crate::options::{ColumnMappingModeOption, DeltaLogReplayStrategyOption, TableDeltaOptions};
 use crate::physical_plan::planner::{
     plan_delete, plan_merge, DeltaPhysicalPlanner, DeltaTableConfig, PlannerContext,
 };
@@ -289,6 +289,38 @@ fn apply_serverless_read_option(
     Ok(())
 }
 
+fn apply_delta_log_replay_options(
+    opts: &HashMap<String, String>,
+    to: &mut TableDeltaOptions,
+) -> Result<()> {
+    let strategy_key = "deltaLogReplayStrategy";
+    if let Some(raw) = opts.get(strategy_key) {
+        to.delta_log_replay_strategy = match raw.to_ascii_lowercase().as_str() {
+            "auto" => DeltaLogReplayStrategyOption::Auto,
+            "sort" => DeltaLogReplayStrategyOption::Sort,
+            "hashnosort" | "hash_no_sort" => DeltaLogReplayStrategyOption::HashNoSort,
+            other => {
+                return plan_err!(
+                    "invalid value for {strategy_key}: {other}, expected auto/sort/hashNoSort"
+                )
+            }
+        };
+    }
+
+    let threshold_key = "deltaLogReplayHashThreshold";
+    if let Some(raw) = opts.get(threshold_key) {
+        let threshold: usize = raw.parse().map_err(|e| {
+            DataFusionError::Plan(format!("invalid value for {threshold_key}: {e}"))
+        })?;
+        if threshold == 0 {
+            return plan_err!("invalid value for {threshold_key}: expected positive integer");
+        }
+        to.delta_log_replay_hash_threshold = threshold;
+    }
+
+    Ok(())
+}
+
 fn apply_delta_write_options(from: DeltaWriteOptions, to: &mut TableDeltaOptions) -> Result<()> {
     if let Some(merge_schema) = from.merge_schema {
         to.merge_schema = merge_schema;
@@ -322,6 +354,7 @@ pub fn resolve_delta_read_options(
     apply_delta_read_options(load_default_options()?, &mut delta_options)?;
     for opt in options {
         apply_serverless_read_option(&opt, &mut delta_options)?;
+        apply_delta_log_replay_options(&opt, &mut delta_options)?;
         apply_delta_read_options(load_options(opt)?, &mut delta_options)?;
     }
     Ok(delta_options)
@@ -333,6 +366,7 @@ pub fn resolve_delta_write_options(
     let mut delta_options = TableDeltaOptions::default();
     apply_delta_write_options(load_default_options()?, &mut delta_options)?;
     for opt in options {
+        apply_delta_log_replay_options(&opt, &mut delta_options)?;
         apply_delta_write_options(load_options(opt)?, &mut delta_options)?;
     }
     Ok(delta_options)

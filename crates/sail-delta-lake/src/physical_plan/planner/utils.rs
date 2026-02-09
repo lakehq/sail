@@ -39,6 +39,7 @@ use super::log_scan::{build_delta_log_datasource_scans_with_options, LogScanOpti
 use crate::datasource::{
     simplify_expr, COMMIT_TIMESTAMP_COLUMN, COMMIT_VERSION_COLUMN, PATH_COLUMN,
 };
+use crate::options::DeltaLogReplayStrategyOption;
 use crate::physical_plan::{
     create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaLogReplayExec,
     DeltaPhysicalExprAdapterFactory, DeltaWriterExec, COL_LOG_IS_REMOVE, COL_LOG_VERSION,
@@ -165,7 +166,8 @@ pub fn align_schemas_for_union(
 
 /// Build the standard log replay pipeline:
 /// `Union(DataSourceExec)` -> `Projection(payload + replay_keys)` -> `Repartition(Hash replay_path)`
-/// -> `Sort(replay_path, log_version desc, preserve_partitioning)` -> `DeltaLogReplayExec`.
+/// -> `[optional Sort(replay_path, log_version desc, preserve_partitioning)]`
+/// -> `DeltaLogReplayExec`.
 pub async fn build_log_replay_pipeline(
     ctx: &PlannerContext<'_>,
     table_url: Url,
@@ -443,9 +445,8 @@ pub async fn build_log_replay_pipeline_with_options(
             return Ok(plan);
         }
 
-        // Ensure per-partition ordering on (replay_path, log_version desc, is_remove asc) so:
-        // - Sort-mode replay can stream without materializing the active set in memory (spill ok)
-        // - Hash-mode replay can implement deterministic tie-breaks for DV updates
+        // Ensure per-partition ordering on (replay_path, log_version desc, is_remove asc)
+        // for sort-based replay mode.
         let replay_path_idx = plan.schema().index_of(COL_REPLAY_PATH)?;
         let log_version_idx = plan.schema().index_of(COL_LOG_VERSION)?;
         let is_remove_idx = plan.schema().index_of(COL_LOG_IS_REMOVE)?;
@@ -481,14 +482,25 @@ pub async fn build_log_replay_pipeline_with_options(
         ))
     };
 
-    let replay: Arc<dyn ExecutionPlan> = if !checkpoint_files.is_empty() {
+    let replay_strategy = ctx.options().delta_log_replay_strategy;
+    let replay_hash_threshold = ctx.options().delta_log_replay_hash_threshold.max(1);
+    let has_checkpoint = !checkpoint_files.is_empty();
+    let hash_no_sort = match replay_strategy {
+        DeltaLogReplayStrategyOption::Sort => false,
+        DeltaLogReplayStrategyOption::HashNoSort => has_checkpoint,
+        DeltaLogReplayStrategyOption::Auto => {
+            has_checkpoint && commit_files.len() <= replay_hash_threshold
+        }
+    };
+
+    let replay: Arc<dyn ExecutionPlan> = if has_checkpoint {
         // Hash replay: stream checkpoint, build small commit-side map, then emit commit-only adds.
         let checkpoint_scan =
             checkpoint_scan_opt.unwrap_or_else(|| empty_scan(Arc::clone(&input_schema)));
         let commit_scan = commit_scan_opt.unwrap_or_else(|| empty_scan(Arc::clone(&input_schema)));
 
         let checkpoint_branch = build_branch(checkpoint_scan, false)?;
-        let commit_branch = build_branch(commit_scan, true)?;
+        let commit_branch = build_branch(commit_scan, !hash_no_sort)?;
 
         Arc::new(DeltaLogReplayExec::new_hash(
             checkpoint_branch,

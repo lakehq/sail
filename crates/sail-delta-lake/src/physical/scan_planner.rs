@@ -15,8 +15,7 @@ use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use delta_kernel::table_features::ColumnMappingMode;
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
 
-use crate::datasource::scan::TableStatsMode;
-use crate::datasource::scan::{build_file_scan_config, FileScanParams};
+use crate::datasource::scan::{build_file_scan_config, FileScanParams, TableStatsMode};
 use crate::datasource::{
     df_logical_schema, simplify_expr, DataFusionMixins, DeltaScanConfig, DeltaTableStateExt,
 };
@@ -226,11 +225,15 @@ pub(crate) async fn plan_delta_scan(
         .map(|p| p.filename.clone())
         .collect::<Vec<_>>();
 
+    let mut planner_options = TableDeltaOptions::default();
+    planner_options.delta_log_replay_strategy = config.delta_log_replay_strategy;
+    planner_options.delta_log_replay_hash_threshold = config.delta_log_replay_hash_threshold;
+
     let planner_ctx = PlannerContext::new(
         session,
         PlannerTableConfig::new(
             table_url.clone(),
-            TableDeltaOptions::default(),
+            planner_options,
             table_partition_cols.clone(),
             None,
             true,

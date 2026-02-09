@@ -675,8 +675,7 @@ mod tests {
     use datafusion_common::ScalarValue;
     use url::Url;
 
-    use super::map_statistics_to_schema;
-    use super::DeltaScanByAddsExec;
+    use super::{map_statistics_to_schema, DeltaScanByAddsExec};
 
     #[test]
     fn test_map_statistics_to_schema_by_name() {

@@ -356,6 +356,7 @@ impl ReplayState {
 
 #[derive(Debug, Clone)]
 struct ReplayEntry {
+    log_version: i64,
     is_remove: bool,
     payload: Option<Vec<ArrayRef>>,
 }
@@ -457,16 +458,27 @@ impl HashReplayState {
                 continue;
             }
             let key = replay_path.value(row).to_string();
-            if self.map.contains_key(&key) {
-                continue;
-            }
-
             let removed = !is_remove.is_null(row) && is_remove.value(row);
-            let _version = if log_version.is_null(row) {
-                0
+            let version = if log_version.is_null(row) {
+                i64::MIN
             } else {
                 log_version.value(row)
             };
+
+            let should_replace = match self.map.get(&key) {
+                None => true,
+                Some(existing) => {
+                    // Compare-and-swap winner rule:
+                    // - Higher version wins
+                    // - At equal version, Add beats Remove (DV update pattern)
+                    version > existing.log_version
+                        || (version == existing.log_version && existing.is_remove && !removed)
+                }
+            };
+            if !should_replace {
+                continue;
+            }
+
             let payload = if removed {
                 None
             } else {
@@ -480,6 +492,7 @@ impl HashReplayState {
             self.map.insert(
                 key,
                 ReplayEntry {
+                    log_version: version,
                     is_remove: removed,
                     payload,
                 },
@@ -579,51 +592,7 @@ impl ExecutionPlan for DeltaLogReplayExec {
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         match &self.mode {
-            ReplayMode::Hash { commits, .. } => {
-                // Hash replay doesn't need checkpoint ordering, but we still require deterministic
-                // ordering for the commit side to implement tie-breaks such as:
-                // Add beats Remove for the same path/version (DV update pattern).
-                let replay_idx = match commits.schema().index_of(COL_REPLAY_PATH) {
-                    Ok(i) => i,
-                    Err(_) => return vec![None, None],
-                };
-                let version_idx = match commits.schema().index_of(COL_LOG_VERSION) {
-                    Ok(i) => i,
-                    Err(_) => return vec![None, None],
-                };
-                let is_remove_idx = match commits.schema().index_of(COL_LOG_IS_REMOVE) {
-                    Ok(i) => i,
-                    Err(_) => return vec![None, None],
-                };
-
-                let Some(ordering) = LexOrdering::new(vec![
-                    PhysicalSortExpr {
-                        expr: Arc::new(Column::new(COL_REPLAY_PATH, replay_idx)),
-                        options: SortOptions {
-                            descending: false,
-                            nulls_first: false,
-                        },
-                    },
-                    PhysicalSortExpr {
-                        expr: Arc::new(Column::new(COL_LOG_VERSION, version_idx)),
-                        options: SortOptions {
-                            descending: true,
-                            nulls_first: false,
-                        },
-                    },
-                    PhysicalSortExpr {
-                        expr: Arc::new(Column::new(COL_LOG_IS_REMOVE, is_remove_idx)),
-                        options: SortOptions {
-                            descending: false,
-                            nulls_first: false,
-                        },
-                    },
-                ]) else {
-                    return vec![None, None];
-                };
-
-                vec![None, Some(OrderingRequirements::from(ordering))]
-            }
+            ReplayMode::Hash { .. } => vec![None, None],
             ReplayMode::Sort { input } => {
                 // The streaming replay logic relies on all rows for the same `COL_REPLAY_PATH`
                 // being adjacent within each partition, so we require a local ordering by:
@@ -1370,10 +1339,10 @@ mod tests {
 
     #[tokio::test]
     async fn hash_replay_tie_break_add_beats_remove_same_version() -> Result<()> {
-        // Commits (same path/version):
-        // - add a (v1)
+        // Commits (same path/version), intentionally unordered:
         // - remove a (v1)
-        // With commit-side ordering (is_remove ASC), the first entry should win -> add.
+        // - add a (v1)
+        // Add should still win even without commit-side ordering.
 
         let add_fields: Fields = vec![Arc::new(Field::new("path", DataType::Utf8, true))].into();
         let schema = Arc::new(Schema::new(vec![
@@ -1387,15 +1356,15 @@ mod tests {
 
         let add_struct = struct_array_with_validity(
             add_fields.clone(),
-            vec![Arc::new(StringArray::from(vec![Some("a"), None])) as ArrayRef],
-            vec![true, false],
+            vec![Arc::new(StringArray::from(vec![None, Some("a")])) as ArrayRef],
+            vec![false, true],
         );
         let commits_batch = RecordBatch::try_new(
             schema,
             vec![
                 Arc::new(add_struct) as ArrayRef,
                 Arc::new(StringArray::from(vec![Some("a"), Some("a")])) as ArrayRef,
-                Arc::new(BooleanArray::from(vec![false, true])) as ArrayRef,
+                Arc::new(BooleanArray::from(vec![true, false])) as ArrayRef,
                 Arc::new(Int64Array::from(vec![1, 1])) as ArrayRef,
             ],
         )
@@ -1434,6 +1403,206 @@ mod tests {
             .downcast_ref::<StringArray>()
             .unwrap();
         assert_eq!(path_col.value(0), "a");
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[allow(clippy::unwrap_used)]
+    async fn hash_replay_unordered_same_version_remove_then_add_add_wins() -> Result<()> {
+        let add_fields: Fields = vec![Arc::new(Field::new("path", DataType::Utf8, true))].into();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("add", DataType::Struct(add_fields.clone()), true),
+            Field::new(COL_REPLAY_PATH, DataType::Utf8, false),
+            Field::new(COL_LOG_IS_REMOVE, DataType::Boolean, true),
+            Field::new(COL_LOG_VERSION, DataType::Int64, false),
+        ]));
+
+        let checkpoint_batch = RecordBatch::new_empty(schema.clone());
+        let commits_add = struct_array_with_validity(
+            add_fields,
+            vec![Arc::new(StringArray::from(vec![None, Some("a")])) as ArrayRef],
+            vec![false, true],
+        );
+        let commits_batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(commits_add) as ArrayRef,
+                Arc::new(StringArray::from(vec![Some("a"), Some("a")])) as ArrayRef,
+                Arc::new(BooleanArray::from(vec![true, false])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![1, 1])) as ArrayRef,
+            ],
+        )
+        .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+
+        let checkpoint_plan: Arc<dyn ExecutionPlan> = Arc::new(OneBatchExec::new(checkpoint_batch));
+        let commits_plan: Arc<dyn ExecutionPlan> = Arc::new(OneBatchExec::new(commits_batch));
+
+        let exec = Arc::new(DeltaLogReplayExec::new_hash(
+            checkpoint_plan,
+            commits_plan,
+            Url::parse("file:///tmp/delta").unwrap(),
+            0,
+            vec![],
+            vec![],
+            vec![],
+        ));
+
+        let ctx = Arc::new(TaskContext::default());
+        let mut stream = exec.execute(0, ctx)?;
+        let out = stream.try_next().await?.unwrap();
+        assert_eq!(out.num_rows(), 1);
+        let add = out
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let path_col = add
+            .column_by_name("path")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(path_col.value(0), "a");
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[allow(clippy::unwrap_used)]
+    async fn hash_replay_unordered_higher_version_overrides_lower() -> Result<()> {
+        let add_fields: Fields = vec![Arc::new(Field::new("path", DataType::Utf8, true))].into();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("add", DataType::Struct(add_fields.clone()), true),
+            Field::new(COL_REPLAY_PATH, DataType::Utf8, false),
+            Field::new(COL_LOG_IS_REMOVE, DataType::Boolean, true),
+            Field::new(COL_LOG_VERSION, DataType::Int64, false),
+        ]));
+
+        let checkpoint_batch = RecordBatch::new_empty(schema.clone());
+        let commits_add = struct_array_with_validity(
+            add_fields,
+            vec![Arc::new(StringArray::from(vec![Some("a"), None])) as ArrayRef],
+            vec![true, false],
+        );
+        let commits_batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(commits_add) as ArrayRef,
+                Arc::new(StringArray::from(vec![Some("a"), Some("a")])) as ArrayRef,
+                Arc::new(BooleanArray::from(vec![false, true])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
+            ],
+        )
+        .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+
+        let checkpoint_plan: Arc<dyn ExecutionPlan> = Arc::new(OneBatchExec::new(checkpoint_batch));
+        let commits_plan: Arc<dyn ExecutionPlan> = Arc::new(OneBatchExec::new(commits_batch));
+
+        let exec = Arc::new(DeltaLogReplayExec::new_hash(
+            checkpoint_plan,
+            commits_plan,
+            Url::parse("file:///tmp/delta").unwrap(),
+            0,
+            vec![],
+            vec![],
+            vec![],
+        ));
+
+        let ctx = Arc::new(TaskContext::default());
+        let mut stream = exec.execute(0, ctx)?;
+        assert!(stream.try_next().await?.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[allow(clippy::unwrap_used)]
+    async fn hash_replay_unordered_lower_version_cannot_override() -> Result<()> {
+        let add_fields: Fields = vec![Arc::new(Field::new("path", DataType::Utf8, true))].into();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("add", DataType::Struct(add_fields.clone()), true),
+            Field::new(COL_REPLAY_PATH, DataType::Utf8, false),
+            Field::new(COL_LOG_IS_REMOVE, DataType::Boolean, true),
+            Field::new(COL_LOG_VERSION, DataType::Int64, false),
+        ]));
+
+        let checkpoint_batch = RecordBatch::new_empty(schema.clone());
+        let commits_add = struct_array_with_validity(
+            add_fields,
+            vec![Arc::new(StringArray::from(vec![Some("a"), None])) as ArrayRef],
+            vec![true, false],
+        );
+        let commits_batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(commits_add) as ArrayRef,
+                Arc::new(StringArray::from(vec![Some("a"), Some("a")])) as ArrayRef,
+                Arc::new(BooleanArray::from(vec![false, true])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![2, 1])) as ArrayRef,
+            ],
+        )
+        .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+
+        let checkpoint_plan: Arc<dyn ExecutionPlan> = Arc::new(OneBatchExec::new(checkpoint_batch));
+        let commits_plan: Arc<dyn ExecutionPlan> = Arc::new(OneBatchExec::new(commits_batch));
+
+        let exec = Arc::new(DeltaLogReplayExec::new_hash(
+            checkpoint_plan,
+            commits_plan,
+            Url::parse("file:///tmp/delta").unwrap(),
+            0,
+            vec![],
+            vec![],
+            vec![],
+        ));
+
+        let ctx = Arc::new(TaskContext::default());
+        let mut stream = exec.execute(0, ctx)?;
+        let out = stream.try_next().await?.unwrap();
+        assert_eq!(out.num_rows(), 1);
+        let add = out
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let path_col = add
+            .column_by_name("path")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(path_col.value(0), "a");
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[allow(clippy::unwrap_used)]
+    async fn hash_replay_required_input_ordering_is_none_for_hash_mode() -> Result<()> {
+        let add_fields: Fields = vec![Arc::new(Field::new("path", DataType::Utf8, true))].into();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("add", DataType::Struct(add_fields), true),
+            Field::new(COL_REPLAY_PATH, DataType::Utf8, false),
+            Field::new(COL_LOG_IS_REMOVE, DataType::Boolean, true),
+            Field::new(COL_LOG_VERSION, DataType::Int64, false),
+        ]));
+
+        let checkpoint_plan: Arc<dyn ExecutionPlan> =
+            Arc::new(OneBatchExec::new(RecordBatch::new_empty(schema.clone())));
+        let commits_plan: Arc<dyn ExecutionPlan> =
+            Arc::new(OneBatchExec::new(RecordBatch::new_empty(schema)));
+
+        let exec = Arc::new(DeltaLogReplayExec::new_hash(
+            checkpoint_plan,
+            commits_plan,
+            Url::parse("file:///tmp/delta").unwrap(),
+            0,
+            vec![],
+            vec![],
+            vec![],
+        ));
+
+        let ordering = exec.required_input_ordering();
+        assert_eq!(ordering.len(), 2);
+        assert!(ordering[0].is_none());
+        assert!(ordering[1].is_none());
         Ok(())
     }
 }
