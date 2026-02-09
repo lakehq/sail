@@ -39,7 +39,6 @@ use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, Pla
 use datafusion_common::{exec_err, internal_err, Result};
 
 use super::executor::InputPartition;
-use super::filter::PythonFilter;
 
 /// Execution plan for reading from a Python datasource.
 ///
@@ -49,14 +48,12 @@ use super::filter::PythonFilter;
 /// worker-side initialization in distributed mode.
 #[derive(Debug)]
 pub struct PythonDataSourceExec {
-    /// Pickled Python DataSource instance
-    command: Vec<u8>,
+    /// Pickled Python DataSourceReader instance (with filters applied)
+    pickled_reader: Vec<u8>,
     /// Schema of the output data
     schema: SchemaRef,
     /// Partitions for parallel reading
     partitions: Vec<InputPartition>,
-    /// Filters to push down
-    filters: Vec<PythonFilter>,
     /// Execution plan properties
     properties: PlanProperties,
 }
@@ -66,15 +63,13 @@ impl PythonDataSourceExec {
     ///
     /// # Arguments
     ///
-    /// * `command` - Pickled Python DataSource instance
+    /// * `pickled_reader` - Pickled Python DataSourceReader instance (with filters applied)
     /// * `schema` - Schema of the output data
     /// * `partitions` - Partitions for parallel reading
-    /// * `filters` - Filters to push down
     pub fn new(
-        command: Vec<u8>,
+        pickled_reader: Vec<u8>,
         schema: SchemaRef,
         partitions: Vec<InputPartition>,
-        filters: Vec<PythonFilter>,
     ) -> Self {
         let num_partitions = partitions.len().max(1);
         let properties = PlanProperties::new(
@@ -85,10 +80,9 @@ impl PythonDataSourceExec {
         );
 
         Self {
-            command,
+            pickled_reader,
             schema,
             partitions,
-            filters,
             properties,
         }
     }
@@ -98,19 +92,14 @@ impl PythonDataSourceExec {
         self.partitions.len()
     }
 
-    /// Get the pickled command.
-    pub fn command(&self) -> &[u8] {
-        &self.command
+    /// Get the pickled reader.
+    pub fn pickled_reader(&self) -> &[u8] {
+        &self.pickled_reader
     }
 
     /// Get the partitions.
     pub fn partitions(&self) -> &[InputPartition] {
         &self.partitions
-    }
-
-    /// Get the filters.
-    pub fn filters(&self) -> &[PythonFilter] {
-        &self.filters
     }
 }
 
@@ -181,7 +170,6 @@ impl ExecutionPlan for PythonDataSourceExec {
         }
 
         // Get batch size from TaskContext session config
-        // Get batch size from TaskContext session config
         let batch_size = context.session_config().batch_size();
 
         // Create executor lazily at execution time
@@ -189,17 +177,15 @@ impl ExecutionPlan for PythonDataSourceExec {
         let executor: Arc<dyn super::executor::PythonExecutor> =
             Arc::new(super::executor::InProcessExecutor::new());
 
-        let command = self.command.clone();
+        let pickled_reader = self.pickled_reader.clone();
         let part = self.partitions[partition].clone();
         let schema = self.schema.clone();
 
         // Create async stream that uses the executor
-        // We need to handle the Result<BoxStream> properly
         use futures::TryStreamExt;
-        let filters = self.filters.clone();
         let stream = futures::stream::once(async move {
             executor
-                .execute_read(&command, &part, schema, filters, batch_size)
+                .execute_read(&pickled_reader, &part, schema, batch_size)
                 .await
         })
         .try_flatten();
@@ -235,7 +221,7 @@ mod tests {
             },
         ];
 
-        let exec = PythonDataSourceExec::new(vec![0, 0], schema.clone(), partitions, vec![]);
+        let exec = PythonDataSourceExec::new(vec![0, 0], schema.clone(), partitions);
 
         assert_eq!(exec.num_partitions(), 2);
         assert_eq!(exec.children().len(), 0);
@@ -267,7 +253,7 @@ mod tests {
             },
         ];
 
-        let exec = PythonDataSourceExec::new(vec![], schema, partitions, vec![]);
+        let exec = PythonDataSourceExec::new(vec![], schema, partitions);
 
         // Verify the struct was created correctly
         assert_eq!(exec.num_partitions(), 3);
@@ -279,7 +265,7 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
         let partitions: Vec<InputPartition> = vec![];
 
-        let exec = PythonDataSourceExec::new(vec![], schema, partitions, vec![]);
+        let exec = PythonDataSourceExec::new(vec![], schema, partitions);
 
         // Empty partitions reports 0 partitions, but properties use max(1) for DataFusion
         assert_eq!(exec.num_partitions(), 0);

@@ -128,8 +128,8 @@ impl PythonTableFormat {
         let python_ver = Self::get_python_version()?;
 
         Python::attach(|py| {
-            // Use cloudpickle directly (PySpark is a hard requirement)
-            let cloudpickle = py.import("cloudpickle").map_err(py_err)?;
+            // Use pyspark.cloudpickle (PySpark is a hard requirement)
+            let cloudpickle = import_cloudpickle(py)?;
 
             let class_bytes = PyBytes::new(py, pickled_class);
             let ds_class = cloudpickle
@@ -157,8 +157,8 @@ impl PythonTableFormat {
     }
 }
 
-/// Re-export py_err from error module for internal use.
-use super::error::py_err;
+/// Re-export py_err and import_cloudpickle from error module for internal use.
+use super::error::{import_cloudpickle, py_err};
 
 #[async_trait]
 impl TableFormat for PythonTableFormat {

@@ -580,8 +580,8 @@ message PythonDataSourceInputPartition {
 }
 
 message PythonDataSourceExecNode {
-  bytes command = 1;
+  // Pickled Python DataSourceReader instance (with filters already applied)
+  bytes pickled_reader = 1;
   bytes schema = 2;
   repeated PythonDataSourceInputPartition partitions = 3;
-  bytes filters = 4;
 }
