@@ -63,3 +63,27 @@ def test_format_number_pattern_integer_only(spark):
 
     expected = pd.DataFrame({"result": ["12,332"]})
     pd.testing.assert_frame_equal(actual, expected)
+
+
+def test_format_number_negative_value(spark):
+    """Formats a negative number with comma grouping."""
+    actual = spark.sql("SELECT format_number(-12332.123456, 4) AS result").toPandas()
+
+    expected = pd.DataFrame({"result": ["-12,332.1235"]})
+    pd.testing.assert_frame_equal(actual, expected)
+
+
+def test_format_number_large_value(spark):
+    """Formats a very large number with comma grouping."""
+    actual = spark.sql("SELECT format_number(1234567890123.0, 2) AS result").toPandas()
+
+    expected = pd.DataFrame({"result": ["1,234,567,890,123.00"]})
+    pd.testing.assert_frame_equal(actual, expected)
+
+
+def test_format_number_zero(spark):
+    """Formats zero with decimal places."""
+    actual = spark.sql("SELECT format_number(0, 4) AS result").toPandas()
+
+    expected = pd.DataFrame({"result": ["0.0000"]})
+    pd.testing.assert_frame_equal(actual, expected)
