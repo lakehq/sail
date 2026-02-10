@@ -9,40 +9,41 @@ import pytest
 
 # pytest markers defined in `pyproject.toml` of the Ibis project
 IBIS_MARKERS = [
-    "athena",
-    "databricks",
+    "athena: Amazon Athena tests",
     "backend: tests specific to a backend",
     "benchmark: benchmarks",
-    "core: tests that do not required a backend",
-    "examples: tests that exercise examples",
-    "geospatial: tests for geospatial functionality",
-    "xfail_version: backend tests that for a specific version of a dependency",
-    "notimpl: functionality that isn't implemented in ibis",
-    "notyet: for functionality that isn't implemented in a backend",
-    "never: tests for functionality that a backend is likely to never implement",
-    "broken: test has exposed existing broken functionality",
     "bigquery: BigQuery tests",
     "clickhouse: ClickHouse tests",
-    "dask: Dask tests",
+    "core: tests that do not required a backend",
+    "databricks: Databricks SQL tests",
     "datafusion: Apache Datafusion tests",
     "druid: Apache Druid tests",
     "duckdb: DuckDB tests",
     "exasol: ExasolDB tests",
+    "examples: tests that exercise examples",
     "flink: Flink tests",
+    "geospatial: tests for geospatial functionality",
     "impala: Apache Impala tests",
-    "mysql: MySQL tests",
+    "materialize: Materialize tests",
     "mssql: MS SQL Server tests",
+    "mysql: MySQL tests",
+    "never: Backend will never support this / pass this test",
+    "notimpl: Could be implemented/fixed in ibis, but hasn't yet",
+    "notyet: Requires upstream to implement/fix something",
     "oracle: Oracle tests",
-    "pandas: Pandas tests",
     "polars: Polars tests",
     "postgres: PostgreSQL tests",
-    "risingwave: Risingwave tests",
     "pyspark: PySpark tests",
+    "risingwave: RisingWave tests",
+    "singlestoredb: SingleStoreDB tests",
+    "singlestoredb_http: SingleStoreDB HTTP protocol tests",
+    "singlestoredb_mysql: SingleStoreDB MySQL protocol tests",
     "snowflake: Snowflake tests",
     "sqlite: SQLite tests",
     "trino: Trino tests",
     "tpch: TPC-H tests",
     "tpcds: TPC-DS tests",
+    "xfail_version: backend tests that for a specific version of a dependency",
 ]
 
 
@@ -50,21 +51,36 @@ def _is_ibis_testing():
     return os.environ.get("IBIS_TESTING") == "1"
 
 
-def _resolve_data_volume() -> str:
+def _resolve_data_dir() -> Path:
     env_var = "IBIS_TESTING_DATA_DIR"
     data_dir = os.environ.get(env_var)
     if not data_dir:
         msg = f"missing environment variable '{env_var}'"
         raise RuntimeError(msg)
-    return str(Path(data_dir) / "parquet")
+    return Path(data_dir)
+
+
+@pytest.fixture(scope="session")
+def data_dir() -> Path:
+    """Override Ibis data_dir fixture to use our test data location."""
+    return _resolve_data_dir()
 
 
 def pytest_configure(config):
-    data_volume = _resolve_data_volume()
+    resolved = _resolve_data_dir()
+    data_volume = str(resolved / "parquet")
     mod = importlib.import_module("ibis.backends.pyspark.tests.conftest")
     TestConf = getattr(mod, "TestConf")  # noqa: N806 B009
     TestConf.data_volume = data_volume
     TestConf.parquet_dir = property(lambda _: data_volume)
+    # Skip the ``docker compose cp`` step in ``ServiceBackendTest.preload``.
+    # Sail runs locally, so test data is already on the filesystem.
+    TestConf.preload = lambda _self: None
+    # Override the data_dir fixture in ibis.conftest so that tests
+    # resolve test data from our location instead of the default
+    # ``<ibis-package>/../ci/ibis-testing-data`` path.
+    ibis_conftest = importlib.import_module("ibis.conftest")
+    ibis_conftest.data_dir = data_dir
     for marker in IBIS_MARKERS:
         config.addinivalue_line("markers", marker)
 
@@ -87,6 +103,9 @@ SKIPPED_IBIS_TESTS = [
 ]
 
 # Tests that need spark.sql.ansi.enabled=false because they expect non-ANSI behavior.
+# With ANSI mode enabled (the default since Spark 4.x), division by zero raises an error.
+# These tests expect non-ANSI results (NULL or Infinity), so they correctly fail (XFAIL)
+# when ANSI mode is disabled and the results don't match the expected Ibis output.
 ANSI_DISABLED_IBIS_TESTS = [
     TestMarker(
         keywords=["test_divide_by_zero", "pyspark"],
@@ -103,7 +122,7 @@ def add_ibis_test_markers(items: list[pytest.Item]):
 
 
 def _needs_ansi_disabled(item: pytest.Item) -> bool:
-    return any(all(k in item.name for k in test.keywords) for test in ANSI_DISABLED_IBIS_TESTS)
+    return any(all(any(k in kw for kw in item.keywords) for k in test.keywords) for test in ANSI_DISABLED_IBIS_TESTS)
 
 
 @pytest.fixture(autouse=True)

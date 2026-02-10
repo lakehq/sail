@@ -145,6 +145,7 @@ use sail_function::scalar::misc::spark_aes::{
 use sail_function::scalar::misc::version::SparkVersion;
 use sail_function::scalar::multi_expr::MultiExpr;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
+use sail_function::scalar::string::format_number::FormatNumber;
 use sail_function::scalar::string::levenshtein::Levenshtein;
 use sail_function::scalar::string::make_valid_utf8::MakeValidUtf8;
 use sail_function::scalar::string::randstr::Randstr;
@@ -876,10 +877,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(IcebergCommitExec::new(input, table_url)))
             }
             NodeKind::PythonDataSource(gen::PythonDataSourceExecNode {
-                command,
+                pickled_reader,
                 schema,
                 partitions,
-                filters,
             }) => {
                 let schema = Arc::new(self.try_decode_schema(&schema)?);
                 let partitions = partitions
@@ -889,15 +889,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         data: p.data,
                     })
                     .collect();
-                let filters = if filters.is_empty() {
-                    vec![]
-                } else {
-                    serde_json::from_slice(&filters)
-                        .map_err(|e| plan_datafusion_err!("failed to decode Python filters: {e}"))?
-                };
                 // Note: executor is created lazily in execute() on the worker
                 Ok(Arc::new(PythonDataSourceExec::new(
-                    command, schema, partitions, filters,
+                    pickled_reader,
+                    schema,
+                    partitions,
                 )))
             }
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
@@ -1376,13 +1372,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     data: p.data.clone(),
                 })
                 .collect();
-            let filters = serde_json::to_vec(python_exec.filters())
-                .map_err(|e| plan_datafusion_err!("failed to encode Python filters: {e}"))?;
             NodeKind::PythonDataSource(gen::PythonDataSourceExecNode {
-                command: python_exec.command().to_vec(),
+                pickled_reader: python_exec.pickled_reader().to_vec(),
                 schema,
                 partitions,
-                filters,
             })
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");
@@ -1535,6 +1528,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "randn" => Ok(Arc::new(ScalarUDF::from(Randn::new()))),
             "random" | "rand" => Ok(Arc::new(ScalarUDF::from(Random::new()))),
             "randstr" => Ok(Arc::new(ScalarUDF::from(Randstr::new()))),
+            "format_number" => Ok(Arc::new(ScalarUDF::from(FormatNumber::new()))),
             "soundex" => Ok(Arc::new(ScalarUDF::from(Soundex::new()))),
             "spark_array" | "spark_make_array" | "array" => {
                 Ok(Arc::new(ScalarUDF::from(SparkArray::new())))
@@ -1673,6 +1667,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<FormatStringFunc>()
             || node_inner.is::<GreatestFunc>()
             || node_inner.is::<LeastFunc>()
+            || node_inner.is::<FormatNumber>()
             || node_inner.is::<Levenshtein>()
             || node_inner.is::<Randstr>()
             || node_inner.is::<Soundex>()

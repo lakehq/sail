@@ -985,7 +985,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: format_number"
+        "success": "ok"
       }
     },
     {
@@ -1007,7 +1007,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: format_number"
+        "success": "ok"
       }
     },
     {

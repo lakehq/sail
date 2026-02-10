@@ -32,6 +32,18 @@ impl InputPartition {
     }
 }
 
+/// Result of partition planning, containing the pickled reader and partitions.
+///
+/// The reader is pickled with filters already applied, so execution only needs
+/// to deserialize and call `read(partition)` without re-applying filters.
+#[derive(Debug, Clone)]
+pub struct PartitionPlan {
+    /// Pickled Python DataSourceReader instance (with filters applied)
+    pub pickled_reader: Vec<u8>,
+    /// Partitions for parallel reading
+    pub partitions: Vec<InputPartition>,
+}
+
 /// Abstract executor for Python datasource operations.
 ///
 /// This trait provides the abstraction layer between Sail's execution engine
@@ -48,25 +60,24 @@ pub trait PythonExecutor: Send + Sync + std::fmt::Debug {
     ///
     /// Calls the Python `DataSource.reader(schema).partitions()` method.
     /// If filters are provided, calls `pushFilters()` on the reader first.
+    /// Returns a `PartitionPlan` containing the pickled reader (with filters applied)
+    /// and the list of partitions.
     async fn get_partitions(
         &self,
         command: &[u8],
         schema: &SchemaRef,
         filters: Vec<PythonFilter>,
-    ) -> Result<Vec<InputPartition>>;
+    ) -> Result<PartitionPlan>;
 
     /// Execute a read for a specific partition.
     ///
-    /// Returns a stream of RecordBatches from Python.
-    /// Execute a read for a specific partition.
-    ///
+    /// Takes a pickled reader (with filters already applied) and partition.
     /// Returns a stream of RecordBatches from Python.
     async fn execute_read(
         &self,
-        command: &[u8],
+        pickled_reader: &[u8],
         partition: &InputPartition,
         schema: SchemaRef,
-        filters: Vec<PythonFilter>,
         batch_size: usize,
     ) -> Result<BoxStream<'static, Result<RecordBatch>>>;
 }
@@ -127,7 +138,7 @@ impl PythonExecutor for InProcessExecutor {
         command: &[u8],
         schema: &SchemaRef,
         filters: Vec<PythonFilter>,
-    ) -> Result<Vec<InputPartition>> {
+    ) -> Result<PartitionPlan> {
         let command = command.to_vec();
         let schema = schema.clone();
 
@@ -203,14 +214,21 @@ impl PythonExecutor for InProcessExecutor {
                     });
                 }
 
+                // Pickle the reader with filters already applied
+                let pickled_reader = pickle_object(py, &reader)?;
+
                 log::debug!(
-                    "[{}::partitions] Created {} partitions, total size: {} bytes",
+                    "[{}::partitions] Created {} partitions, total size: {} bytes, reader size: {} bytes",
                     ds_name,
                     result.len(),
-                    total_size
+                    total_size,
+                    pickled_reader.len()
                 );
 
-                Ok(result)
+                Ok(PartitionPlan {
+                    pickled_reader,
+                    partitions: result,
+                })
             })
         })
         .await
@@ -219,19 +237,17 @@ impl PythonExecutor for InProcessExecutor {
 
     async fn execute_read(
         &self,
-        command: &[u8],
+        pickled_reader: &[u8],
         partition: &InputPartition,
         schema: SchemaRef,
-        filters: Vec<PythonFilter>,
         batch_size: usize,
     ) -> Result<BoxStream<'static, Result<RecordBatch>>> {
         use super::stream::PythonDataSourceStream;
 
         let stream = PythonDataSourceStream::new(
-            command.to_vec(),
+            pickled_reader.to_vec(),
             partition.clone(),
             schema,
-            filters,
             batch_size,
         )?;
 
