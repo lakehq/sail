@@ -4,8 +4,8 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field};
 use datafusion::functions_aggregate::{
     approx_distinct, approx_percentile_cont, array_agg, average, bit_and_or_xor, bool_and_or,
-    correlation, count, covariance, first_last, grouping, median, min_max, percentile_cont, regr,
-    stddev, sum, variance,
+    correlation, count, covariance, first_last, grouping, min_max, percentile_cont, regr, stddev,
+    sum, variance,
 };
 use datafusion::functions_nested::string::array_to_string;
 use datafusion_common::ScalarValue;
@@ -15,9 +15,11 @@ use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use lazy_static::lazy_static;
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
+use sail_function::aggregate::percentile::PercentileFunction;
 use sail_function::aggregate::percentile_disc::percentile_disc_udaf;
 use sail_function::aggregate::skewness::SkewnessFunc;
 use sail_function::aggregate::try_avg::TryAvgFunction;
@@ -284,22 +286,23 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 
 fn count_if(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     match input.arguments.len() {
-        1 => Ok(expr::Expr::AggregateFunction(AggregateFunction {
-            func: count::count_udaf(),
-            params: AggregateFunctionParams {
-                args: input.arguments.clone(),
-                distinct: input.distinct,
-                order_by: input.order_by,
-                filter: Some(Box::new(
-                    input
-                        .arguments
-                        .first()
-                        .ok_or_else(|| PlanError::invalid("`count_if` requires 1 argument"))?
-                        .clone(),
-                )),
-                null_treatment: get_null_treatment(input.ignore_nulls),
-            },
-        })),
+        1 => {
+            let filter = input
+                .arguments
+                .first()
+                .ok_or_else(|| PlanError::invalid("`count_if` requires 1 argument"))?
+                .clone();
+            Ok(expr::Expr::AggregateFunction(AggregateFunction {
+                func: count::count_udaf(),
+                params: AggregateFunctionParams {
+                    args: vec![lit(0)],
+                    distinct: input.distinct,
+                    order_by: input.order_by,
+                    filter: Some(Box::new(filter)),
+                    null_treatment: get_null_treatment(input.ignore_nulls),
+                },
+            }))
+        }
         _ => Err(PlanError::invalid("`count_if` requires 1 argument")),
     }
 }
@@ -418,20 +421,45 @@ fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         .end()?)
 }
 
+fn histogram_numeric(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(HistogramNumericFunction::new())),
+        params: AggregateFunctionParams {
+            args: input.arguments,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
 fn median(input: AggFunctionInput) -> PlanResult<expr::Expr> {
-    Ok(cast(
-        expr::Expr::AggregateFunction(AggregateFunction {
-            func: median::median_udaf(),
-            params: AggregateFunctionParams {
-                args: input.arguments.clone(),
-                distinct: input.distinct,
-                order_by: input.order_by,
-                filter: input.filter,
-                null_treatment: get_null_treatment(input.ignore_nulls),
-            },
-        }),
-        DataType::Float64,
-    ))
+    let mut args = input.arguments.clone();
+    args.push(lit(0.5_f64));
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(PercentileFunction::new())),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
+fn percentile_exact(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(PercentileFunction::new())),
+        params: AggregateFunctionParams {
+            args: input.arguments,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
 }
 
 fn approx_count_distinct(input: AggFunctionInput) -> PlanResult<expr::Expr> {
@@ -486,7 +514,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("first_value", F::custom(first_value)),
         ("grouping", F::default(grouping::grouping_udaf)),
         ("grouping_id", F::unknown("grouping_id")),
-        ("histogram_numeric", F::unknown("histogram_numeric")),
+        ("histogram_numeric", F::custom(histogram_numeric)),
         ("hll_sketch_agg", F::unknown("hll_sketch_agg")),
         ("hll_union_agg", F::unknown("hll_union_agg")),
         ("kurtosis", F::custom(kurtosis)),
@@ -500,7 +528,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("min", F::default(min_max::min_udaf)),
         ("min_by", F::custom(min_by)),
         ("mode", F::custom(mode)),
-        ("percentile", F::unknown("percentile")),
+        ("percentile", F::custom(percentile_exact)),
         (
             "percentile_approx",
             F::default(approx_percentile_cont::approx_percentile_cont_udaf),

@@ -985,7 +985,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: format_number"
+        "success": "ok"
       }
     },
     {
@@ -1007,7 +1007,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: format_number"
+        "success": "ok"
       }
     },
     {
@@ -2371,7 +2371,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: randstr"
+        "success": "ok"
       }
     },
     {
@@ -2437,7 +2437,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: regexp_extract"
+        "success": "ok"
       }
     },
     {
@@ -2459,7 +2459,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: regexp_extract"
+        "success": "ok"
       }
     },
     {
@@ -2621,7 +2621,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: regexp_substr"
+        "success": "ok"
       }
     },
     {
@@ -2643,7 +2643,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: regexp_substr"
+        "success": "ok"
       }
     },
     {
@@ -2909,7 +2909,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: soundex"
+        "success": "ok"
       }
     },
     {

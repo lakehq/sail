@@ -93,6 +93,8 @@ fn arrow_schema_impl(snapshot: &Snapshot, wrap_partitions: bool) -> DeltaResult<
 pub fn df_logical_schema(
     snapshot: &DeltaTableState,
     file_column_name: &Option<String>,
+    commit_version_column_name: &Option<String>,
+    commit_timestamp_column_name: &Option<String>,
     schema: Option<ArrowSchemaRef>,
 ) -> DeltaResult<SchemaRef> {
     let input_schema = match schema {
@@ -121,6 +123,21 @@ pub fn df_logical_schema(
         fields.push(Arc::new(Field::new(
             file_column_name,
             ArrowDataType::Utf8,
+            true,
+        )));
+    }
+
+    if let Some(commit_version_column_name) = commit_version_column_name {
+        fields.push(Arc::new(Field::new(
+            commit_version_column_name,
+            ArrowDataType::Int64,
+            true,
+        )));
+    }
+    if let Some(commit_timestamp_column_name) = commit_timestamp_column_name {
+        fields.push(Arc::new(Field::new(
+            commit_timestamp_column_name,
+            ArrowDataType::Int64,
             true,
         )));
     }

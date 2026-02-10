@@ -32,6 +32,8 @@ use crate::kernel::snapshot::LogDataHandler;
 use crate::kernel::{DeltaResult, DeltaTableError};
 use crate::table::DeltaTableState;
 pub const PATH_COLUMN: &str = "__sail_file_path";
+pub const COMMIT_VERSION_COLUMN: &str = "_commit_version";
+pub const COMMIT_TIMESTAMP_COLUMN: &str = "_commit_timestamp";
 
 pub mod actions;
 pub mod expressions;
@@ -90,6 +92,12 @@ pub struct DeltaScanConfigBuilder {
     enable_parquet_pushdown: bool,
     /// Schema to scan table with
     schema: Option<SchemaRef>,
+    /// Include commit version/timestamp virtual columns.
+    include_commit_metadata: bool,
+    /// Column name that contains the commit version.
+    commit_version_column_name: Option<String>,
+    /// Column name that contains the commit timestamp.
+    commit_timestamp_column_name: Option<String>,
 }
 
 impl Default for DeltaScanConfigBuilder {
@@ -100,6 +108,9 @@ impl Default for DeltaScanConfigBuilder {
             wrap_partition_values: true,
             enable_parquet_pushdown: true,
             schema: None,
+            include_commit_metadata: false,
+            commit_version_column_name: None,
+            commit_timestamp_column_name: None,
         }
     }
 }
@@ -121,6 +132,12 @@ impl DeltaScanConfigBuilder {
     /// Use the provided [SchemaRef] for the [DeltaScan]
     pub fn with_schema(mut self, schema: SchemaRef) -> Self {
         self.schema = Some(schema);
+        self
+    }
+
+    /// Indicate that commit metadata virtual columns are included.
+    pub fn with_commit_metadata_columns(mut self, include: bool) -> Self {
+        self.include_commit_metadata = include;
         self
     }
 
@@ -160,11 +177,57 @@ impl DeltaScanConfigBuilder {
             None
         };
 
+        let (commit_version_column_name, commit_timestamp_column_name) =
+            if self.include_commit_metadata {
+                let input_schema = snapshot.input_schema()?;
+                let mut column_names: HashSet<String> = input_schema
+                    .fields
+                    .iter()
+                    .map(|f| f.name().clone())
+                    .collect();
+                if let Some(file_column_name) = &file_column_name {
+                    column_names.insert(file_column_name.clone());
+                }
+
+                let mut unique_name = |base: &str| -> String {
+                    if !column_names.contains(base) {
+                        column_names.insert(base.to_string());
+                        return base.to_string();
+                    }
+                    let mut idx = 0;
+                    loop {
+                        idx += 1;
+                        let candidate = format!("{base}_{idx}");
+                        if !column_names.contains(&candidate) {
+                            column_names.insert(candidate.clone());
+                            return candidate;
+                        }
+                    }
+                };
+
+                (
+                    Some(
+                        self.commit_version_column_name
+                            .clone()
+                            .unwrap_or_else(|| unique_name(COMMIT_VERSION_COLUMN)),
+                    ),
+                    Some(
+                        self.commit_timestamp_column_name
+                            .clone()
+                            .unwrap_or_else(|| unique_name(COMMIT_TIMESTAMP_COLUMN)),
+                    ),
+                )
+            } else {
+                (None, None)
+            };
+
         Ok(DeltaScanConfig {
             file_column_name,
             wrap_partition_values: self.wrap_partition_values,
             enable_parquet_pushdown: self.enable_parquet_pushdown,
             schema: self.schema.clone(),
+            commit_version_column_name,
+            commit_timestamp_column_name,
         })
     }
 }
@@ -180,4 +243,8 @@ pub struct DeltaScanConfig {
     pub enable_parquet_pushdown: bool,
     /// Schema to read as
     pub schema: Option<SchemaRef>,
+    /// Commit version virtual column name.
+    pub commit_version_column_name: Option<String>,
+    /// Commit timestamp virtual column name.
+    pub commit_timestamp_column_name: Option<String>,
 }

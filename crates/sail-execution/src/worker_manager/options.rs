@@ -8,7 +8,7 @@ pub struct WorkerLaunchOptions {
     pub driver_external_host: String,
     pub driver_external_port: u16,
     pub worker_heartbeat_interval: Duration,
-    pub worker_stream_buffer: usize,
+    pub task_stream_buffer: usize,
     pub task_stream_creation_timeout: Duration,
     pub rpc_retry_strategy: RetryStrategy,
 }

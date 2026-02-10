@@ -7,7 +7,7 @@ use datafusion_expr::{col, Expr, ExprSchemable, Extension, LogicalPlan, LogicalP
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::error::CatalogError;
 use sail_catalog::manager::CatalogManager;
-use sail_catalog::provider::{CreateTableColumnOptions, CreateTableOptions};
+use sail_catalog::provider::{CatalogPartitionField, CreateTableColumnOptions, CreateTableOptions};
 use sail_common::spec;
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableSort, TableColumnStatus, TableKind,
@@ -71,7 +71,7 @@ pub(super) struct WritePlanBuilder {
     mode: Option<WriteMode>,
     format: Option<String>,
     partition: Vec<(spec::Identifier, Option<spec::Expr>)>,
-    partition_by: Vec<spec::Identifier>,
+    partition_by: Vec<CatalogPartitionField>,
     bucket_by: Option<spec::SaveBucketBy>,
     sort_by: Vec<spec::SortOrder>,
     cluster_by: Vec<spec::ObjectName>,
@@ -118,7 +118,7 @@ impl WritePlanBuilder {
         self
     }
 
-    pub fn with_partition_by(mut self, partition_by: Vec<spec::Identifier>) -> Self {
+    pub fn with_partition_by(mut self, partition_by: Vec<CatalogPartitionField>) -> Self {
         self.partition_by = partition_by;
         self
     }
@@ -325,7 +325,6 @@ impl PlanResolver<'_> {
                         generated_always_as: None,
                     })
                     .collect();
-                let partition_by = partition_by.into_iter().map(|x| x.into()).collect();
                 let sort_by = self.resolve_catalog_table_sort(sort_by)?;
                 let bucket_by = self.resolve_catalog_table_bucket_by(bucket_by)?;
                 let command = CatalogCommand::CreateTable {
@@ -530,9 +529,9 @@ impl PlanResolver<'_> {
 
     fn resolve_write_partition_by(
         &self,
-        partition_by: Vec<spec::Identifier>,
+        partition_by: Vec<CatalogPartitionField>,
     ) -> PlanResult<Vec<String>> {
-        Ok(partition_by.into_iter().map(|x| x.into()).collect())
+        Ok(partition_by.into_iter().map(|x| x.column).collect())
     }
 
     fn resolve_write_bucket_by(
