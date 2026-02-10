@@ -52,8 +52,7 @@ def test_histogram_numeric_with_nulls(spark):
 def test_histogram_numeric_all_nulls(spark):
     """All-NULL input returns a null list."""
     actual = spark.sql(
-        "SELECT histogram_numeric(col, 5) AS hist "
-        "FROM VALUES (CAST(NULL AS INT)), (CAST(NULL AS INT)) AS tab(col)"
+        "SELECT histogram_numeric(col, 5) AS hist FROM VALUES (CAST(NULL AS INT)), (CAST(NULL AS INT)) AS tab(col)"
     ).toPandas()
 
     assert actual["hist"].iloc[0] is None
@@ -76,21 +75,16 @@ def test_histogram_numeric_negative_values(spark):
 def test_histogram_numeric_float_values(spark):
     """Float column input is supported."""
     actual = spark.sql(
-        "SELECT histogram_numeric(col, 5) AS hist "
-        "FROM VALUES (1.5), (2.5), (3.5) AS tab(col)"
+        "SELECT histogram_numeric(col, 5) AS hist FROM VALUES (1.5), (2.5), (3.5) AS tab(col)"
     ).toPandas()
 
-    expected = pd.DataFrame(
-        {"hist": [[{"x": 1.5, "y": 1.0}, {"x": 2.5, "y": 1.0}, {"x": 3.5, "y": 1.0}]]}
-    )
+    expected = pd.DataFrame({"hist": [[{"x": 1.5, "y": 1.0}, {"x": 2.5, "y": 1.0}, {"x": 3.5, "y": 1.0}]]})
     pd.testing.assert_frame_equal(actual, expected)
 
 
 def test_histogram_numeric_single_value(spark):
     """A single non-null value produces one bin."""
-    actual = spark.sql(
-        "SELECT histogram_numeric(col, 5) AS hist FROM VALUES (42) AS tab(col)"
-    ).toPandas()
+    actual = spark.sql("SELECT histogram_numeric(col, 5) AS hist FROM VALUES (42) AS tab(col)").toPandas()
 
     expected = pd.DataFrame({"hist": [[{"x": 42, "y": 1.0}]]})
     pd.testing.assert_frame_equal(actual, expected)
@@ -99,8 +93,7 @@ def test_histogram_numeric_single_value(spark):
 def test_histogram_numeric_large_values(spark):
     """Large values do not cause precision issues."""
     actual = spark.sql(
-        "SELECT histogram_numeric(col, 3) AS hist "
-        "FROM VALUES (1e15), (2e15), (3e15) AS tab(col)"
+        "SELECT histogram_numeric(col, 3) AS hist FROM VALUES (1e15), (2e15), (3e15) AS tab(col)"
     ).toPandas()
 
     hist = actual["hist"].iloc[0]
