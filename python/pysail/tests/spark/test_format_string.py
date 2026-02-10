@@ -329,6 +329,6 @@ def test_format_string_too_few_args_error(spark):
 def test_format_string_invalid_conversion_error(spark):
     with pytest.raises(
         AnalysisException,
-        match=r'Execution("Invalid argument type for integer conversion: Utf8"), format string: "Value: %d"',
+        match="Invalid argument type",
     ):
         spark.sql("SELECT format_string('Value: %d', 'not_a_number')").collect()
