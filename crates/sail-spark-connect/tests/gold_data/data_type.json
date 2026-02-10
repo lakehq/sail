@@ -352,7 +352,11 @@
     {
       "input": "TIME(6)",
       "output": {
-        "failure": "error in JSON serde: expected value at line 1 column 1"
+        "success": {
+          "time64": {
+            "timeUnit": "microsecond"
+          }
+        }
       }
     },
     {
@@ -375,7 +379,11 @@
     {
       "input": "TimE",
       "output": {
-        "failure": "error in JSON serde: expected value at line 1 column 1"
+        "success": {
+          "time64": {
+            "timeUnit": "microsecond"
+          }
+        }
       }
     },
     {
@@ -709,7 +717,11 @@
     {
       "input": "time(0)",
       "output": {
-        "failure": "error in JSON serde: expected ident at line 1 column 2"
+        "success": {
+          "time32": {
+            "timeUnit": "second"
+          }
+        }
       }
     },
     {
@@ -743,7 +755,11 @@
       "input": "time(9)",
       "exception": "[UNSUPPORTED_TIME_PRECISION] The seconds precision 9 of the TIME data type is out of the supported range [0, 6]. SQLSTATE: 0A001",
       "output": {
-        "failure": "error in JSON serde: expected ident at line 1 column 2"
+        "success": {
+          "time64": {
+            "timeUnit": "nanosecond"
+          }
+        }
       }
     },
     {
