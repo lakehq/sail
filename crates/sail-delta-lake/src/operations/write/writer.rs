@@ -226,6 +226,8 @@ impl DeltaWriter {
             if let Some(old_key) = self.current_partition_key.take() {
                 #[cfg(debug_assertions)]
                 self.closed_partition_keys.insert(old_key);
+                #[cfg(not(debug_assertions))]
+                let _ = old_key;
             }
         }
 
