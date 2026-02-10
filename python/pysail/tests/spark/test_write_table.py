@@ -88,7 +88,6 @@ def test_insert_overwrite(spark):
     assert_frame_equal(actual, expected)
 
 
-@pytest.mark.skip(reason="Investigate a solution for this flaky test probably due to caching issues")
 def test_save_as_table(spark, tmp_path):
     location = str(tmp_path / "t2")
     df = spark.createDataFrame([(1001, "Alice")], schema="id LONG, name STRING")
@@ -137,7 +136,6 @@ def test_save_as_table(spark, tmp_path):
 
 
 @pytest.mark.skipif(is_jvm_spark(), reason="Spark does not handle v1 and v2 tables properly")
-@pytest.mark.skip(reason="Investigate a solution for this flaky test probably due to caching issues")
 def test_write_to(spark, tmp_path):
     location = str(tmp_path / "t3")
     df = spark.createDataFrame([(2002, "Bob")], schema="id LONG, name STRING")

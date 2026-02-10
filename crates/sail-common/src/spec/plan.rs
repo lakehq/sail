@@ -280,6 +280,9 @@ pub enum CommandNode {
         qualifier: Option<ObjectName>,
         pattern: Option<String>,
     },
+    ListCatalogs {
+        pattern: Option<String>,
+    },
     ListTables {
         database: Option<ObjectName>,
         pattern: Option<String>,
@@ -351,9 +354,6 @@ pub enum CommandNode {
     CurrentCatalog,
     SetCurrentCatalog {
         catalog: Identifier,
-    },
-    ListCatalogs {
-        pattern: Option<String>,
     },
     CreateCatalog {
         catalog: Identifier,
