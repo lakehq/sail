@@ -30,8 +30,7 @@ use crate::spark::connect::{
     CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction,
     CreateDataFrameViewCommand, ExecutePlanResponse, GetResourcesCommand, LocalRelation,
     MergeIntoTableCommand, Relation, SqlCommand, StreamingQueryCommand,
-    StreamingQueryCommandResult,
-    StreamingQueryListenerBusCommand, StreamingQueryManagerCommand,
+    StreamingQueryCommandResult, StreamingQueryListenerBusCommand, StreamingQueryManagerCommand,
     StreamingQueryManagerCommandResult, WriteOperation, WriteOperationV2,
     WriteStreamOperationStart, WriteStreamOperationStartResult,
 };
