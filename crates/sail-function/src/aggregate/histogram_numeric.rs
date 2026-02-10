@@ -95,7 +95,7 @@ impl NumericHistogram {
     }
 
     fn trim(&mut self) {
-        while self.bins.len() > self.nbins {
+        while self.bins.len() > self.nbins && self.bins.len() >= 2 {
             let mut smallest_diff = self.bins[1].x - self.bins[0].x;
             let mut smallest_diff_loc = 0usize;
             let mut smallest_diff_count = 1usize;
@@ -146,16 +146,32 @@ impl HistogramNumericFunction {
 
     fn extract_nbins(args: &AccumulatorArgs) -> Result<usize> {
         let scalar = get_scalar_value(&args.exprs[1])?;
-        match scalar {
-            ScalarValue::Int8(Some(v)) => Ok(v as usize),
-            ScalarValue::Int16(Some(v)) => Ok(v as usize),
-            ScalarValue::Int32(Some(v)) => Ok(v as usize),
-            ScalarValue::Int64(Some(v)) => Ok(v as usize),
-            other => Err(DataFusionError::Plan(format!(
-                "histogram_numeric requires an integer literal for nbins, got {}",
-                other.data_type()
-            ))),
+        let nbins_i64 = match scalar {
+            ScalarValue::Int8(Some(v)) => v as i64,
+            ScalarValue::Int16(Some(v)) => v as i64,
+            ScalarValue::Int32(Some(v)) => v as i64,
+            ScalarValue::Int64(Some(v)) => v,
+            ScalarValue::Int8(None)
+            | ScalarValue::Int16(None)
+            | ScalarValue::Int32(None)
+            | ScalarValue::Int64(None) => {
+                return Err(DataFusionError::Plan(
+                    "histogram_numeric requires a non-null integer literal for nbins".to_string(),
+                ))
+            }
+            other => {
+                return Err(DataFusionError::Plan(format!(
+                    "histogram_numeric requires an integer literal for nbins, got {}",
+                    other.data_type()
+                )))
+            }
+        };
+        if nbins_i64 < 1 {
+            return Err(DataFusionError::Plan(format!(
+                "histogram_numeric requires nbins to be a positive integer, got {nbins_i64}",
+            )));
         }
+        Ok(nbins_i64 as usize)
     }
 }
 
@@ -311,10 +327,17 @@ impl Accumulator for HistogramNumericAccumulator {
         let xs_list = ScalarValue::new_list_nullable(&xs, &DataType::Float64);
         let ys_list = ScalarValue::new_list_nullable(&ys, &DataType::Float64);
 
+        let nbins_i32: i32 = self.histogram.nbins.try_into().map_err(|_| {
+            DataFusionError::Execution(
+                "Number of histogram bins exceeds i32::MAX and cannot be represented in state"
+                    .to_string(),
+            )
+        })?;
+
         Ok(vec![
             ScalarValue::List(xs_list),
             ScalarValue::List(ys_list),
-            ScalarValue::Int32(Some(self.histogram.nbins as i32)),
+            ScalarValue::Int32(Some(nbins_i32)),
         ])
     }
 
@@ -344,7 +367,13 @@ impl Accumulator for HistogramNumericAccumulator {
             }
             let xs_values = xs_list.value(i);
             let ys_values = ys_list.value(i);
-            let nbins = nbins_array.value(i) as usize;
+            let nbins_i32 = nbins_array.value(i);
+            if nbins_i32 <= 0 {
+                return Err(DataFusionError::Internal(format!(
+                    "Invalid nbins value in histogram state: {nbins_i32}",
+                )));
+            }
+            let nbins = nbins_i32 as usize;
 
             let xs = xs_values
                 .as_any()
