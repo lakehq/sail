@@ -4,8 +4,8 @@
 #
 # These tests are marked as xfail in Ibis for the PySpark backend because
 # standard PySpark doesn't support them. Sail passes them because it
-# implements additional capabilities (remote UDFs, JSON unwrap, file I/O,
-# Decimal256, big timestamps, string quantiles, etc.).
+# implements additional capabilities (JSON unwrap, file I/O, Decimal256,
+# big timestamps, string quantiles, divide-by-zero with ANSI toggle, etc.).
 #
 # This patch skips the xfail conversion so these tests count as regular passes.
 #
@@ -44,28 +44,6 @@ xpass_block = '''
 # Sail: tests that pass against Sail but are xfail in Ibis for pyspark.
 # Injected by patch-ibis-xpass.sh — do not edit manually.
 _SAIL_XPASS_TESTS = {
-    # Remote UDFs (21)
-    "test_vectorized_udf[pyspark-add_one_pyarrow]",
-    "test_vectorized_udf[pyspark-add_one_pandas]",
-    "test_elementwise_udf[pyspark-add_one_modern_series]",
-    "test_elementwise_udf[pyspark-add_one_legacy_series]",
-    "test_elementwise_udf_mutate[pyspark-add_one_modern_list]",
-    "test_elementwise_udf_mutate[pyspark-add_one_modern_array]",
-    "test_elementwise_udf_mutate[pyspark-add_one_modern_series]",
-    "test_elementwise_udf_mutate[pyspark-add_one_legacy_array]",
-    "test_elementwise_udf_mutate[pyspark-add_one_legacy_list]",
-    "test_elementwise_udf_mutate[pyspark-add_one_legacy_series]",
-    "test_elementwise_udf_named_destruct[pyspark]",
-    "test_elementwise_udf_struct[pyspark]",
-    "test_reduction_udf[pyspark]",
-    "test_reduction_udf_on_empty_data[pyspark]",
-    "test_valid_args[pyspark]",
-    "test_valid_args_and_kwargs[pyspark]",
-    "test_valid_kwargs[pyspark]",
-    "test_aggregate[pyspark-mean_udf]",
-    "test_aggregate_grouped[pyspark-mean_udf]",
-    "test_impure_uncorrelated_same_id[pyspark-udf]",
-    "test_impure_uncorrelated_different_id[pyspark-udf]",
     # JSON unwrap (8)
     "test_json_unwrap[pyspark-getattr-str]",
     "test_json_unwrap[pyspark-getattr-float]",
@@ -93,8 +71,12 @@ _SAIL_XPASS_TESTS = {
     # String quantiles (2)
     "test_string_quantile[pyspark-median]",
     "test_string_quantile[pyspark-quantile]",
-    # Other
-    "test_uncorrelated_subquery[pyspark]",
+    # Divide by zero — xpass because ANSI mode fixture toggles it off (2)
+    "test_divide_by_zero[pyspark-double_col-0.0]",
+    "test_divide_by_zero[pyspark-float_col-0.0]",
+    # UDF named destruct (1)
+    "test_elementwise_udf_named_destruct[pyspark]",
+    # Other (2)
     "test_first_last[pyspark-True-False-first]",
     "test_first_last[pyspark-True-False-last]",
 }
