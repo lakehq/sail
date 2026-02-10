@@ -9,6 +9,21 @@ from pytest_bdd import given, parsers, then, when
 from pysail.tests.spark.utils import escape_sql_string_literal, parse_show_string
 
 
+def normalize_type_name(type_str: str) -> str:
+    """Normalize PySpark type names to canonical form.
+
+    PySpark 3.5.x and 4.x use different type name formats.
+    This normalizes to the canonical names used in Spark SQL.
+    """
+    mapping = {
+        "integer": "int",
+        "long": "bigint",
+        "byte": "tinyint",
+        "short": "smallint",
+    }
+    return mapping.get(type_str, type_str)
+
+
 @pytest.fixture
 def variables():
     """Per-scenario variables used by `.feature` templates."""
@@ -84,11 +99,35 @@ def query(template, docstring, variables):
     return Template(docstring).render(**variables) if template else docstring
 
 
-@then("query schema")
-def query_schema(docstring, query, spark):
-    """Analyze the SQL query and compare schema with expected schema tree string."""
+@then("query schema type")
+def query_schema_type(datatable, query, spark):
+    """Verify the schema types of query result columns.
+
+    Uses a datatable with columns: column, type, nullable (optional).
+    Type names are normalized to handle PySpark 3.5.x/4.x differences.
+    """
     df = spark.sql(query)
-    assert docstring.strip() == df.schema.treeString().strip()
+    schema = df.schema
+
+    for row in datatable[1:]:  # Skip header row
+        column_name = row[0]
+        expected_type = row[1]
+        try:
+            expected_nullable = row[2].lower() == "true"
+        except IndexError:
+            expected_nullable = None
+
+        field = schema[column_name]
+        actual_type = normalize_type_name(field.dataType.simpleString())
+
+        assert actual_type == expected_type, (
+            f"Column '{column_name}': expected type '{expected_type}', got '{actual_type}'"
+        )
+
+        if expected_nullable is not None:
+            assert field.nullable == expected_nullable, (
+                f"Column '{column_name}': expected nullable={expected_nullable}, got nullable={field.nullable}"
+            )
 
 
 @then(parsers.re("query result(?P<ordered>( ordered)?)"))

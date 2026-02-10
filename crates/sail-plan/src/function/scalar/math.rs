@@ -26,6 +26,7 @@ use sail_function::scalar::math::spark_try_mod::SparkTryMod;
 use sail_function::scalar::math::spark_try_mult::SparkTryMult;
 use sail_function::scalar::math::spark_try_subtract::SparkTrySubtract;
 use sail_function::scalar::math::spark_unhex::SparkUnHex;
+use sail_function::scalar::math::spark_uniform::SparkUniform;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -497,7 +498,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("try_mod", F::udf(SparkTryMod::new())),
         ("try_subtract", F::udf(SparkTrySubtract::new())),
         ("unhex", F::udf(SparkUnHex::new())),
-        ("uniform", F::unknown("uniform")),
+        ("uniform", F::udf(SparkUniform::new())),
         ("width_bucket", F::quaternary(math_fn::width_bucket)),
     ]
 }
