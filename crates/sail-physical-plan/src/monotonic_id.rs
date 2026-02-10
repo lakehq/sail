@@ -13,9 +13,8 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
     RecordBatchStream,
 };
-use datafusion_common::{
-    exec_err, internal_err, stats::Precision, ColumnStatistics, Result, Statistics,
-};
+use datafusion_common::stats::Precision;
+use datafusion_common::{exec_err, internal_err, ColumnStatistics, Result, Statistics};
 use futures::Stream;
 
 #[derive(Debug, Clone)]
