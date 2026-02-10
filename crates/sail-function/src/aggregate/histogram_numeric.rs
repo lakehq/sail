@@ -151,10 +151,18 @@ impl HistogramNumericFunction {
             ScalarValue::Int16(Some(v)) => v as i64,
             ScalarValue::Int32(Some(v)) => v as i64,
             ScalarValue::Int64(Some(v)) => v,
+            ScalarValue::UInt8(Some(v)) => v as i64,
+            ScalarValue::UInt16(Some(v)) => v as i64,
+            ScalarValue::UInt32(Some(v)) => v as i64,
+            ScalarValue::UInt64(Some(v)) => v as i64,
             ScalarValue::Int8(None)
             | ScalarValue::Int16(None)
             | ScalarValue::Int32(None)
-            | ScalarValue::Int64(None) => {
+            | ScalarValue::Int64(None)
+            | ScalarValue::UInt8(None)
+            | ScalarValue::UInt16(None)
+            | ScalarValue::UInt32(None)
+            | ScalarValue::UInt64(None) => {
                 return Err(DataFusionError::Plan(
                     "histogram_numeric requires a non-null integer literal for nbins".to_string(),
                 ))

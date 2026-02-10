@@ -47,3 +47,89 @@ def test_histogram_numeric_with_nulls(spark):
 
     expected = pd.DataFrame({"hist": [[{"x": 1, "y": 1.0}, {"x": 2, "y": 1.0}, {"x": 3, "y": 1.0}]]})
     pd.testing.assert_frame_equal(actual, expected)
+
+
+def test_histogram_numeric_all_nulls(spark):
+    """All-NULL input returns a null list."""
+    actual = spark.sql(
+        "SELECT histogram_numeric(col, 5) AS hist "
+        "FROM VALUES (CAST(NULL AS INT)), (CAST(NULL AS INT)) AS tab(col)"
+    ).toPandas()
+
+    assert actual["hist"].iloc[0] is None
+
+
+def test_histogram_numeric_negative_values(spark):
+    """Negative values are handled correctly."""
+    actual = spark.sql(
+        "SELECT histogram_numeric(col, 5) AS hist FROM VALUES (-3), (-1), (0), (2), (4) AS tab(col)"
+    ).toPandas()
+
+    hist = actual["hist"].iloc[0]
+    xs = [entry["x"] for entry in hist]
+    assert xs == sorted(xs)
+    total_count = sum(entry["y"] for entry in hist)
+    assert total_count == 5.0
+
+
+def test_histogram_numeric_float_values(spark):
+    """Float column input is supported."""
+    actual = spark.sql(
+        "SELECT histogram_numeric(col, 5) AS hist "
+        "FROM VALUES (1.5), (2.5), (3.5) AS tab(col)"
+    ).toPandas()
+
+    expected = pd.DataFrame(
+        {"hist": [[{"x": 1.5, "y": 1.0}, {"x": 2.5, "y": 1.0}, {"x": 3.5, "y": 1.0}]]}
+    )
+    pd.testing.assert_frame_equal(actual, expected)
+
+
+def test_histogram_numeric_single_value(spark):
+    """A single non-null value produces one bin."""
+    actual = spark.sql(
+        "SELECT histogram_numeric(col, 5) AS hist FROM VALUES (42) AS tab(col)"
+    ).toPandas()
+
+    expected = pd.DataFrame({"hist": [[{"x": 42, "y": 1.0}]]})
+    pd.testing.assert_frame_equal(actual, expected)
+
+
+def test_histogram_numeric_large_values(spark):
+    """Large values do not cause precision issues."""
+    actual = spark.sql(
+        "SELECT histogram_numeric(col, 3) AS hist "
+        "FROM VALUES (1e15), (2e15), (3e15) AS tab(col)"
+    ).toPandas()
+
+    hist = actual["hist"].iloc[0]
+    assert len(hist) == 3
+    total_count = sum(entry["y"] for entry in hist)
+    assert total_count == 3.0
+
+
+def test_histogram_numeric_bigint(spark):
+    """BIGINT column input is supported."""
+    actual = spark.sql(
+        "SELECT histogram_numeric(col, 5) AS hist "
+        "FROM VALUES (CAST(1 AS BIGINT)), (CAST(2 AS BIGINT)), (CAST(3 AS BIGINT)) AS tab(col)"
+    ).toPandas()
+
+    hist = actual["hist"].iloc[0]
+    assert len(hist) == 3
+    total_count = sum(entry["y"] for entry in hist)
+    assert total_count == 3.0
+
+
+def test_histogram_numeric_decimal(spark):
+    """DECIMAL column input is supported."""
+    actual = spark.sql(
+        "SELECT histogram_numeric(col, 5) AS hist "
+        "FROM VALUES (CAST(1.1 AS DECIMAL(10,2))), (CAST(2.2 AS DECIMAL(10,2))), "
+        "(CAST(3.3 AS DECIMAL(10,2))) AS tab(col)"
+    ).toPandas()
+
+    hist = actual["hist"].iloc[0]
+    assert len(hist) == 3
+    total_count = sum(entry["y"] for entry in hist)
+    assert total_count == 3.0
