@@ -1,5 +1,3 @@
-import re
-
 import pandas as pd
 import pytest
 from pyspark.errors.exceptions.connect import AnalysisException
@@ -315,7 +313,7 @@ def test_format_string_mixed_specifiers(spark):
 def test_format_string_missing_args_error(spark):
     with pytest.raises(
         AnalysisException,
-        match="Argument index .* out of bounds",
+        match=r"Argument index .* out of bounds",
     ):
         spark.sql("SELECT format_string('Value: %d')").collect()
 
@@ -331,6 +329,6 @@ def test_format_string_too_few_args_error(spark):
 def test_format_string_invalid_conversion_error(spark):
     with pytest.raises(
         AnalysisException,
-        match=re.escape('Execution("Invalid argument type for integer conversion: Utf8"), format string: "Value: %d"'),
+        match=r'Execution("Invalid argument type for integer conversion: Utf8"), format string: "Value: %d"',
     ):
         spark.sql("SELECT format_string('Value: %d', 'not_a_number')").collect()
