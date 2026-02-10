@@ -185,3 +185,35 @@
   supported: false
   rust_type: bool
   rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: metadata_as_data_read
+  aliases:
+    - metadataAsDataRead
+    - serverlessRead
+  description: |
+    Enable the metadata-as-data read path: avoid eagerly loading file metadata on the driver;
+    use log replay and discovery in the physical plan instead. When false (default), use the
+    driver path with pre-loaded file list.
+  default: "false"
+  supported: true
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: delta_log_replay_strategy
+  aliases:
+    - deltaLogReplayStrategy
+  description: |
+    Strategy for Delta log replay in the metadata-as-data path. Values: "auto", "sort", "hashNoSort".
+  default: "auto"
+  supported: true
+  rust_type: String
+
+- key: delta_log_replay_hash_threshold
+  aliases:
+    - deltaLogReplayHashThreshold
+  description: |
+    Max commit JSON file count to use hash-no-sort replay when strategy is "auto".
+  default: "100"
+  supported: true
+  rust_type: usize
+  rust_deserialize_with: crate::options::serde::deserialize_usize

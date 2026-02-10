@@ -99,7 +99,7 @@ pub struct DeltaScanConfigBuilder {
     commit_version_column_name: Option<String>,
     /// Column name that contains the commit timestamp.
     commit_timestamp_column_name: Option<String>,
-    /// Strategy for serverless log replay planning.
+    /// Strategy for log replay planning.
     delta_log_replay_strategy: DeltaLogReplayStrategyOption,
     /// Threshold for auto replay strategy.
     delta_log_replay_hash_threshold: usize,
@@ -148,7 +148,7 @@ impl DeltaScanConfigBuilder {
         self
     }
 
-    /// Configure serverless replay strategy for log replay planning.
+    /// Configure replay strategy for log replay planning.
     pub fn with_delta_log_replay_strategy(
         mut self,
         strategy: DeltaLogReplayStrategyOption,
@@ -271,7 +271,7 @@ pub struct DeltaScanConfig {
     pub commit_version_column_name: Option<String>,
     /// Commit timestamp virtual column name.
     pub commit_timestamp_column_name: Option<String>,
-    /// Strategy for serverless log replay planning.
+    /// Strategy for log replay planning.
     #[serde(default)]
     pub delta_log_replay_strategy: DeltaLogReplayStrategyOption,
     /// Threshold for `Auto` replay strategy.

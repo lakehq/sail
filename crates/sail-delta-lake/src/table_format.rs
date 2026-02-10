@@ -271,53 +271,29 @@ fn apply_delta_read_options(from: DeltaReadOptions, to: &mut TableDeltaOptions) 
     if let Some(version_as_of) = from.version_as_of {
         to.version_as_of = Some(version_as_of)
     }
-    Ok(())
-}
-
-fn apply_serverless_read_option(
-    opts: &HashMap<String, String>,
-    to: &mut TableDeltaOptions,
-) -> Result<()> {
-    let key = "serverlessRead";
-    if let Some(raw) = opts.get(key) {
-        match raw.to_ascii_lowercase().as_str() {
-            "true" | "1" | "yes" => to.serverless_read = true,
-            "false" | "0" | "no" => to.serverless_read = false,
-            other => return plan_err!("invalid value for {key}: '{other}', expected true/false"),
-        }
+    if let Some(metadata_as_data_read) = from.metadata_as_data_read {
+        to.metadata_as_data_read = metadata_as_data_read;
     }
-    Ok(())
-}
-
-fn apply_delta_log_replay_options(
-    opts: &HashMap<String, String>,
-    to: &mut TableDeltaOptions,
-) -> Result<()> {
-    let strategy_key = "deltaLogReplayStrategy";
-    if let Some(raw) = opts.get(strategy_key) {
+    if let Some(ref raw) = from.delta_log_replay_strategy {
         to.delta_log_replay_strategy = match raw.to_ascii_lowercase().as_str() {
             "auto" => DeltaLogReplayStrategyOption::Auto,
             "sort" => DeltaLogReplayStrategyOption::Sort,
             "hashnosort" | "hash_no_sort" => DeltaLogReplayStrategyOption::HashNoSort,
             other => {
                 return plan_err!(
-                    "invalid value for {strategy_key}: {other}, expected auto/sort/hashNoSort"
+                    "invalid value for deltaLogReplayStrategy: {other}, expected auto/sort/hashNoSort"
                 )
             }
         };
     }
-
-    let threshold_key = "deltaLogReplayHashThreshold";
-    if let Some(raw) = opts.get(threshold_key) {
-        let threshold: usize = raw.parse().map_err(|e| {
-            DataFusionError::Plan(format!("invalid value for {threshold_key}: {e}"))
-        })?;
+    if let Some(threshold) = from.delta_log_replay_hash_threshold {
         if threshold == 0 {
-            return plan_err!("invalid value for {threshold_key}: expected positive integer");
+            return plan_err!(
+                "invalid value for deltaLogReplayHashThreshold: expected positive integer"
+            );
         }
         to.delta_log_replay_hash_threshold = threshold;
     }
-
     Ok(())
 }
 
@@ -344,6 +320,26 @@ fn apply_delta_write_options(from: DeltaWriteOptions, to: &mut TableDeltaOptions
             _ => to.column_mapping_mode = ColumnMappingModeOption::None,
         }
     }
+    if let Some(ref raw) = from.delta_log_replay_strategy {
+        to.delta_log_replay_strategy = match raw.to_ascii_lowercase().as_str() {
+            "auto" => DeltaLogReplayStrategyOption::Auto,
+            "sort" => DeltaLogReplayStrategyOption::Sort,
+            "hashnosort" | "hash_no_sort" => DeltaLogReplayStrategyOption::HashNoSort,
+            other => {
+                return plan_err!(
+                    "invalid value for deltaLogReplayStrategy: {other}, expected auto/sort/hashNoSort"
+                )
+            }
+        };
+    }
+    if let Some(threshold) = from.delta_log_replay_hash_threshold {
+        if threshold == 0 {
+            return plan_err!(
+                "invalid value for deltaLogReplayHashThreshold: expected positive integer"
+            );
+        }
+        to.delta_log_replay_hash_threshold = threshold;
+    }
     Ok(())
 }
 
@@ -353,8 +349,6 @@ pub fn resolve_delta_read_options(
     let mut delta_options = TableDeltaOptions::default();
     apply_delta_read_options(load_default_options()?, &mut delta_options)?;
     for opt in options {
-        apply_serverless_read_option(&opt, &mut delta_options)?;
-        apply_delta_log_replay_options(&opt, &mut delta_options)?;
         apply_delta_read_options(load_options(opt)?, &mut delta_options)?;
     }
     Ok(delta_options)
@@ -366,7 +360,6 @@ pub fn resolve_delta_write_options(
     let mut delta_options = TableDeltaOptions::default();
     apply_delta_write_options(load_default_options()?, &mut delta_options)?;
     for opt in options {
-        apply_delta_log_replay_options(&opt, &mut delta_options)?;
         apply_delta_write_options(load_options(opt)?, &mut delta_options)?;
     }
     Ok(delta_options)

@@ -24,12 +24,10 @@ pub struct TableDeltaOptions {
     pub version_as_of: Option<i64>,
     pub timestamp_as_of: Option<String>,
 
-    /// Enable metadata-as-data read path for Delta tables.
-    #[serde(default = "default_serverless_read")]
-    pub serverless_read: bool,
+    /// Enable metadata-as-data read path (avoid loading file list on driver; use log replay + discovery).
+    pub metadata_as_data_read: bool,
 
-    /// Strategy for serverless Delta log replay in metadata path.
-    #[serde(default)]
+    /// Strategy for Delta log replay in metadata-as-data path.
     pub delta_log_replay_strategy: DeltaLogReplayStrategyOption,
 
     /// Max commit JSON file count to use hash-no-sort replay when strategy is `Auto`.
@@ -39,10 +37,6 @@ pub struct TableDeltaOptions {
     /// Column mapping mode for new tables (dataframe API only)
     #[serde(default)]
     pub column_mapping_mode: ColumnMappingModeOption,
-}
-
-fn default_serverless_read() -> bool {
-    true
 }
 
 impl Default for TableDeltaOptions {
@@ -55,7 +49,7 @@ impl Default for TableDeltaOptions {
             write_batch_size: 0,
             version_as_of: None,
             timestamp_as_of: None,
-            serverless_read: false,
+            metadata_as_data_read: false,
             delta_log_replay_strategy: DeltaLogReplayStrategyOption::Auto,
             delta_log_replay_hash_threshold: default_delta_log_replay_hash_threshold(),
             column_mapping_mode: ColumnMappingModeOption::None,

@@ -331,7 +331,7 @@ pub(crate) async fn plan_delta_scan(
 
     // NOTE: Keep filtering inside DeltaScanByAddsExec pushdown path for now.
     // Wrapping an additional FilterExec here can trigger DataFusion interval
-    // inference assertion failures on some nullable predicates in serverless
+    // inference assertion failures on some nullable predicates in metadata-as-data
     // scans (tracked separately).
 
     if let Some(prefix_len) = projection_prefix_len {
