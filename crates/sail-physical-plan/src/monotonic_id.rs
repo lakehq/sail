@@ -13,7 +13,9 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
     RecordBatchStream,
 };
-use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_common::{
+    exec_err, internal_err, stats::Precision, ColumnStatistics, Result, Statistics,
+};
 use futures::Stream;
 
 #[derive(Debug, Clone)]
@@ -118,6 +120,32 @@ impl ExecutionPlan for MonotonicIdExec {
             self.column_name.clone(),
             partition,
         )?))
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        let mut stats = self.input.partition_statistics(partition)?;
+        let col_idx = self.schema.index_of(&self.column_name)?;
+
+        if col_idx < stats.column_statistics.len() {
+            stats.column_statistics[col_idx] = ColumnStatistics::new_unknown();
+        } else {
+            while stats.column_statistics.len() < col_idx {
+                stats
+                    .column_statistics
+                    .push(ColumnStatistics::new_unknown());
+            }
+            stats
+                .column_statistics
+                .push(ColumnStatistics::new_unknown());
+        }
+
+        // One additional Int64 output column contributes 8 bytes per row when row counts are known.
+        let added_bytes = stats
+            .num_rows
+            .multiply(&Precision::Exact(std::mem::size_of::<i64>()));
+        stats.total_byte_size = stats.total_byte_size.add(&added_bytes);
+
+        Ok(stats)
     }
 }
 
