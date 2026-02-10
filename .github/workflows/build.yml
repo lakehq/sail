@@ -139,6 +139,16 @@ jobs:
       - setup
       - rust-build
 
+  flight-tests:
+    name: Flight SQL Tests
+    if: ${{ needs.setup.outputs.build_package == 'true' }}
+    uses: ./.github/workflows/flight-tests.yml
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+    needs:
+      - setup
+      - rust-build
+
   codecov-notify:
     name: Codecov Notify
     if: ${{ !cancelled() && github.actor != 'dependabot[bot]' }}
@@ -148,6 +158,7 @@ jobs:
       - python-tests
       - spark-tests
       - ibis-tests
+      - flight-tests
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:

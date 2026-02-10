@@ -335,14 +335,22 @@ version = "57.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f63654f21676be802d446c6c4bc54f6a47e18d55f9ae6f7195a6f6faf2ecdbeb"
 dependencies = [
+ "arrow-arith",
  "arrow-array",
  "arrow-buffer",
  "arrow-cast",
+ "arrow-data",
  "arrow-ipc",
+ "arrow-ord",
+ "arrow-row",
  "arrow-schema",
+ "arrow-select",
+ "arrow-string",
  "base64 0.22.1",
  "bytes",
  "futures",
+ "once_cell",
+ "paste",
  "prost",
  "prost-types",
  "tonic",
@@ -5989,6 +5997,7 @@ dependencies = [
  "rustls 0.23.36",
  "sail-common",
  "sail-execution",
+ "sail-flight",
  "sail-session",
  "sail-spark-connect",
  "sail-telemetry",
@@ -6158,6 +6167,34 @@ dependencies = [
  "tonic-types",
  "tower",
  "url",
+]
+
+[[package]]
+name = "sail-flight"
+version = "0.4.6"
+dependencies = [
+ "arrow",
+ "arrow-flight",
+ "datafusion",
+ "env_logger",
+ "figment",
+ "futures",
+ "log",
+ "prost",
+ "sail-catalog",
+ "sail-catalog-memory",
+ "sail-common",
+ "sail-common-datafusion",
+ "sail-plan",
+ "sail-server",
+ "sail-session",
+ "sail-sql-analyzer",
+ "sail-telemetry",
+ "serde",
+ "tokio",
+ "tonic",
+ "tonic-build",
+ "tonic-health",
 ]
 
 [[package]]
