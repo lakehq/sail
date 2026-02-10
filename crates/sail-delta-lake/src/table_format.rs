@@ -279,11 +279,9 @@ fn apply_delta_read_options(from: DeltaReadOptions, to: &mut TableDeltaOptions) 
             "auto" => DeltaLogReplayStrategyOption::Auto,
             "sort" => DeltaLogReplayStrategyOption::Sort,
             "hashnosort" | "hash_no_sort" => DeltaLogReplayStrategyOption::HashNoSort,
-            other => {
-                return plan_err!(
-                    "invalid value for deltaLogReplayStrategy: {other}, expected auto/sort/hashNoSort"
-                )
-            }
+            other => return plan_err!(
+                "invalid value for deltaLogReplayStrategy: {other}, expected auto/sort/hashNoSort"
+            ),
         };
     }
     if let Some(threshold) = from.delta_log_replay_hash_threshold {
@@ -325,11 +323,9 @@ fn apply_delta_write_options(from: DeltaWriteOptions, to: &mut TableDeltaOptions
             "auto" => DeltaLogReplayStrategyOption::Auto,
             "sort" => DeltaLogReplayStrategyOption::Sort,
             "hashnosort" | "hash_no_sort" => DeltaLogReplayStrategyOption::HashNoSort,
-            other => {
-                return plan_err!(
-                    "invalid value for deltaLogReplayStrategy: {other}, expected auto/sort/hashNoSort"
-                )
-            }
+            other => return plan_err!(
+                "invalid value for deltaLogReplayStrategy: {other}, expected auto/sort/hashNoSort"
+            ),
         };
     }
     if let Some(threshold) = from.delta_log_replay_hash_threshold {

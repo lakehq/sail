@@ -132,13 +132,45 @@ pub(crate) async fn plan_delta_scan(
         }
     }
 
+    let table_schema = snapshot
+        .input_schema()
+        .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
+
+    let pruning_expr = conjunction(pruning_filters);
+    let pruning_predicate = if let Some(expr) = pruning_expr {
+        let df_schema = logical_schema.clone().to_dfschema()?;
+        Some(simplify_expr(session, &df_schema, expr).map_err(|e| {
+            datafusion::common::DataFusionError::Plan(format!(
+                "failed to simplify scan pruning filter: {e}"
+            ))
+        })?)
+    } else {
+        None
+    };
+
     let (files, pruning_mask): (Option<Arc<Vec<Add>>>, Option<Vec<bool>>) = match files {
-        Some(files) => (Some(files), None),
+        Some(files) => {
+            if let Some(predicate) = pruning_predicate.as_ref() {
+                let source_files = files.as_ref().clone();
+                let pruning_mask = crate::datasource::pruning::prune_adds_by_physical_predicate(
+                    source_files.clone(),
+                    table_schema.clone(),
+                    Arc::clone(predicate),
+                )?;
+                let pruned_files = source_files
+                    .into_iter()
+                    .zip(pruning_mask.iter().copied())
+                    .filter_map(|(add, keep)| keep.then_some(add))
+                    .collect::<Vec<_>>();
+                (Some(Arc::new(pruned_files)), Some(pruning_mask))
+            } else {
+                (Some(files), None)
+            }
+        }
         None => (None, None),
     };
 
     // Build physical file schema (non-partition columns)
-    let table_partition_cols = snapshot.metadata().partition_columns();
     let kmode: ColumnMappingMode = snapshot.effective_column_mapping_mode();
     let kschema_arc = snapshot.snapshot().table_configuration().schema();
     let physical_arrow: ArrowSchema = get_physical_schema(&kschema_arc, kmode);
@@ -207,11 +239,8 @@ pub(crate) async fn plan_delta_scan(
         return Ok(renamed);
     }
 
-    // Serverless metadata path: log scan -> replay -> discovery -> scan by adds.
+    // Metadata-as-data path: log scan -> replay -> discovery -> scan by adds.
     let table_url = log_store.config().location.clone();
-    let table_schema = snapshot
-        .input_schema()
-        .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
     let kernel_snapshot = snapshot.snapshot().snapshot().inner.clone();
     let log_segment = kernel_snapshot.log_segment();
     let checkpoint_files = log_segment
@@ -239,18 +268,6 @@ pub(crate) async fn plan_delta_scan(
             true,
         ),
     );
-
-    let pruning_expr = conjunction(pruning_filters);
-    let pruning_predicate = if let Some(expr) = pruning_expr {
-        let df_schema = logical_schema.clone().to_dfschema()?;
-        Some(simplify_expr(session, &df_schema, expr).map_err(|e| {
-            datafusion::common::DataFusionError::Plan(format!(
-                "failed to simplify metadata pruning filter: {e}"
-            ))
-        })?)
-    } else {
-        None
-    };
 
     let mut log_replay_options = LogReplayOptions::default();
     if let Some(predicate) = pruning_predicate.as_ref() {

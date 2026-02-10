@@ -276,11 +276,8 @@ pub async fn create_delta_provider(
 
     let mut table_provider = DeltaTableProvider::try_new(snapshot.clone(), log_store, scan_config)?;
     if !options.metadata_as_data_read && snapshot.log_data().num_files() > 0 {
-        let adds: Vec<crate::kernel::models::Add> = snapshot
-            .log_data()
-            .iter()
-            .map(|v| v.add_action())
-            .collect();
+        let adds: Vec<crate::kernel::models::Add> =
+            snapshot.log_data().iter().map(|v| v.add_action()).collect();
         table_provider = table_provider.with_files(adds);
     }
 
