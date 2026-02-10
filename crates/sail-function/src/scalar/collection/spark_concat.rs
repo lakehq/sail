@@ -144,7 +144,18 @@ impl ScalarUDFImpl for SparkConcat {
             .iter()
             .any(|arg| matches!(arg.data_type(), DataType::List(_)))
         {
-            ArrayConcat::new().invoke_with_args(args)
+            // Cast arrays with Null element type to the return type for proper concatenation
+            // This handles cases like concat(array(), array(1, 2, 3)) where the first array
+            // has type List(Null) and needs to be cast to List(Int32)
+            let casted_args = cast_list_columnar_values(args.args, return_type)?;
+            let casted_scalar_args = ScalarFunctionArgs {
+                args: casted_args,
+                arg_fields: args.arg_fields,
+                number_rows: args.number_rows,
+                return_field: args.return_field,
+                config_options: args.config_options,
+            };
+            ArrayConcat::new().invoke_with_args(casted_scalar_args)
         } else {
             let casted_columns =
                 if args.args.iter().any(|arg| {
@@ -191,6 +202,40 @@ fn cast_columnar_values(
             ColumnarValue::Array(array) => {
                 let cast_array = cast(&array, target_type)?;
                 Ok(ColumnarValue::Array(cast_array))
+            }
+        })
+        .collect()
+}
+
+/// Cast list arrays with Null element type to the target list type.
+/// This is needed for concatenating empty arrays with typed arrays.
+fn cast_list_columnar_values(
+    values: Vec<ColumnarValue>,
+    target_type: &DataType,
+) -> Result<Vec<ColumnarValue>> {
+    values
+        .into_iter()
+        .map(|value| {
+            let needs_cast = match &value {
+                ColumnarValue::Scalar(s) => {
+                    matches!(s.data_type(), DataType::List(f) if f.data_type() == &DataType::Null)
+                }
+                ColumnarValue::Array(a) => {
+                    matches!(a.data_type(), DataType::List(f) if f.data_type() == &DataType::Null)
+                }
+            };
+            if needs_cast {
+                match value {
+                    ColumnarValue::Scalar(scalar) => {
+                        Ok(ColumnarValue::Scalar(scalar.cast_to(target_type)?))
+                    }
+                    ColumnarValue::Array(array) => {
+                        let cast_array = cast(&array, target_type)?;
+                        Ok(ColumnarValue::Array(cast_array))
+                    }
+                }
+            } else {
+                Ok(value)
             }
         })
         .collect()

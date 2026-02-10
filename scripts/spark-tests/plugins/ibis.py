@@ -80,6 +80,10 @@ SKIPPED_IBIS_TESTS = [
         keywords=["test_table_info_large[pyspark]"],
         reason="Complex SQL statements causing timeout",
     ),
+    TestMarker(
+        keywords=["test_table_describe_large[pyspark]"],
+        reason="Complex SQL statements causing timeout",
+    ),
 ]
 
 
