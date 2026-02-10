@@ -33,5 +33,3 @@ def test_monotonically_increasing_id_same_when_called_twice_in_select(spark):
     assert rows, "expected non-empty result"
     for r in rows:
         assert r["id1"] == r["id2"]
-
-

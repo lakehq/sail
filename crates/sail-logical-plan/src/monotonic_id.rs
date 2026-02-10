@@ -98,7 +98,7 @@ impl UserDefinedLogicalNodeCore for MonotonicIdNode {
     fn with_exprs_and_inputs(&self, exprs: Vec<Expr>, inputs: Vec<LogicalPlan>) -> Result<Self> {
         exprs.zero()?;
         let input = Arc::new(inputs.one()?);
-        Ok(Self::try_new(input, self.column_name.clone())?)
+        Self::try_new(input, self.column_name.clone())
     }
 
     fn necessary_children_exprs(&self, _output_columns: &[usize]) -> Option<Vec<Vec<usize>>> {
