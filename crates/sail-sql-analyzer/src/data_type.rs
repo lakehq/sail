@@ -258,5 +258,22 @@ pub fn from_ast_data_type(sql_type: DataType) -> SqlResult<spec::DataType> {
                 keys_sorted: false,
             })
         }
+        DataType::Geometry(_, _, srid, _) => {
+            let srid = match srid {
+                sail_sql_parser::ast::data_type::GeometrySrid::Srid(lit) => lit.value as i32,
+                sail_sql_parser::ast::data_type::GeometrySrid::Any(_) => -1,
+            };
+            Ok(spec::DataType::Geometry { srid })
+        }
+        DataType::Geography(_, _, srid, _) => {
+            let srid = match srid {
+                sail_sql_parser::ast::data_type::GeographySrid::Srid(lit) => lit.value as i32,
+                sail_sql_parser::ast::data_type::GeographySrid::Any(_) => -1,
+            };
+            Ok(spec::DataType::Geography {
+                srid,
+                algorithm: spec::EdgeInterpolationAlgorithm::Spherical,
+            })
+        }
     }
 }

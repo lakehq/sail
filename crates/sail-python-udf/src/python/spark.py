@@ -214,7 +214,7 @@ def _to_string(data: Any) -> str | None:
         return data
     if isinstance(data, bool):
         return "true" if data else "false"
-    if isinstance(data, (list, tuple)):
+    if isinstance(data, list | tuple):
         items = ", ".join(_to_string(x) for x in data)
         return f"[{items}]"
     if isinstance(data, dict):
@@ -278,7 +278,7 @@ class ArrayConverter(Converter):
         end = 0
         for x in data:
             _raise_for_row(x)
-            if x is None or not isinstance(x, (list, tuple)):
+            if x is None or not isinstance(x, list | tuple):
                 offsets.append(None)
             else:
                 offsets.append(end)

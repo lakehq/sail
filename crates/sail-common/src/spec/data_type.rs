@@ -21,6 +21,53 @@ pub const SAIL_MAP_KEY_FIELD_NAME: &str = "key";
 /// Field name for map type's value.
 pub const SAIL_MAP_VALUE_FIELD_NAME: &str = "value";
 
+/// Default SRID for Geometry and Geography types (Spark 4.1 default: 4326 / WGS84).
+pub const GEOSPATIAL_DEFAULT_SRID: i32 = 4326;
+/// Mixed SRID value allowing different SRIDs per row (Spark 4.1: -1).
+pub const GEOSPATIAL_MIXED_SRID: i32 = -1;
+/// Default CRS string for SRID 4326 (Spark 4.1 format: OGC:CRS84).
+pub const GEOSPATIAL_DEFAULT_CRS: &str = "OGC:CRS84";
+
+/// Edge interpolation algorithm for Geography type.
+/// Determines how edges are interpolated between vertices.
+///
+/// Spark 4.1 only defines Spherical interpolation for Geography types.
+/// Reference: org.apache.spark.sql.types.EdgeInterpolationAlgorithm
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    TryFromPrimitive,
+)]
+#[serde(rename_all = "camelCase")]
+#[num_enum(error_type(name = CommonError, constructor = EdgeInterpolationAlgorithm::invalid))]
+#[repr(i32)]
+pub enum EdgeInterpolationAlgorithm {
+    /// Spherical edge interpolation (geodetic coordinates on a sphere).
+    Spherical = 0,
+}
+
+impl EdgeInterpolationAlgorithm {
+    fn invalid(value: i32) -> CommonError {
+        CommonError::invalid(format!("edge interpolation algorithm: {value}"))
+    }
+}
+
+impl std::fmt::Display for EdgeInterpolationAlgorithm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EdgeInterpolationAlgorithm::Spherical => write!(f, "Spherical"),
+        }
+    }
+}
+
 /// Native Sail data types that convert to Arrow types.
 /// Types directly match to [`arrow_schema::DataType`] variants when there is a corresponding type.
 /// Additionally, custom data types are supported for cases not covered by Arrow.
@@ -200,6 +247,24 @@ pub enum DataType {
         value_type: Box<DataType>,
         value_type_nullable: bool,
         keys_sorted: bool,
+    },
+    /// Geometry type for 2D spatial data with Cartesian coordinates.
+    /// Stored as WKB-encoded Binary with geoarrow.wkb extension metadata.
+    /// Corresponds to Spark 4.1 GeometryType.
+    Geometry {
+        /// Spatial Reference System Identifier (SRID).
+        /// Common values: 4326 (WGS84), 3857 (Web Mercator), 0 (unspecified), -1 (mixed).
+        srid: i32,
+    },
+    /// Geography type for 2D spatial data with spherical (geodetic) coordinates.
+    /// Stored as WKB-encoded Binary with geoarrow.wkb extension metadata.
+    /// Corresponds to Spark 4.1 GeographyType.
+    Geography {
+        /// Spatial Reference System Identifier (SRID).
+        /// In Spark 4.1, only SRID 4326 (WGS84) is valid for Geography.
+        srid: i32,
+        /// Edge interpolation algorithm. Spark 4.1 only supports Spherical.
+        algorithm: EdgeInterpolationAlgorithm,
     },
     //
     // Everything below this line is not part of the Arrow specification.

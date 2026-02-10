@@ -77,6 +77,7 @@ use sail_common_datafusion::system::catalog::SystemTable;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_data_source::formats::binary::source::BinarySource;
 use sail_data_source::formats::console::ConsoleSinkExec;
+use sail_data_source::formats::python::{InputPartition, PythonDataSourceExec};
 use sail_data_source::formats::rate::{RateSourceExec, TableRateOptions};
 use sail_data_source::formats::socket::{SocketSourceExec, TableSocketOptions};
 use sail_data_source::formats::text::source::TextSource;
@@ -85,6 +86,7 @@ use sail_delta_lake::physical_plan::{
     DeltaCastColumnExpr, DeltaCommitExec, DeltaDiscoveryExec, DeltaLogReplayExec,
     DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
 };
+use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
@@ -144,6 +146,7 @@ use sail_function::scalar::misc::spark_aes::{
 use sail_function::scalar::misc::version::SparkVersion;
 use sail_function::scalar::multi_expr::MultiExpr;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
+use sail_function::scalar::string::format_number::FormatNumber;
 use sail_function::scalar::string::levenshtein::Levenshtein;
 use sail_function::scalar::string::make_valid_utf8::MakeValidUtf8;
 use sail_function::scalar::string::randstr::Randstr;
@@ -874,6 +877,26 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
 
                 Ok(Arc::new(IcebergCommitExec::new(input, table_url)))
             }
+            NodeKind::PythonDataSource(gen::PythonDataSourceExecNode {
+                pickled_reader,
+                schema,
+                partitions,
+            }) => {
+                let schema = Arc::new(self.try_decode_schema(&schema)?);
+                let partitions = partitions
+                    .into_iter()
+                    .map(|p| InputPartition {
+                        partition_id: p.partition_id as usize,
+                        data: p.data,
+                    })
+                    .collect();
+                // Note: executor is created lazily in execute() on the worker
+                Ok(Arc::new(PythonDataSourceExec::new(
+                    pickled_reader,
+                    schema,
+                    partitions,
+                )))
+            }
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
         }
     }
@@ -1340,6 +1363,21 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 table_url: iceberg_commit_exec.table_url().to_string(),
             })
+        } else if let Some(python_exec) = node.as_any().downcast_ref::<PythonDataSourceExec>() {
+            let schema = self.try_encode_schema(python_exec.schema().as_ref())?;
+            let partitions = python_exec
+                .partitions()
+                .iter()
+                .map(|p| gen::PythonDataSourceInputPartition {
+                    partition_id: p.partition_id as u64,
+                    data: p.data.clone(),
+                })
+                .collect();
+            NodeKind::PythonDataSource(gen::PythonDataSourceExecNode {
+                pickled_reader: python_exec.pickled_reader().to_vec(),
+                schema,
+                partitions,
+            })
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");
         };
@@ -1491,6 +1529,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "randn" => Ok(Arc::new(ScalarUDF::from(Randn::new()))),
             "random" | "rand" => Ok(Arc::new(ScalarUDF::from(Random::new()))),
             "randstr" => Ok(Arc::new(ScalarUDF::from(Randstr::new()))),
+            "format_number" => Ok(Arc::new(ScalarUDF::from(FormatNumber::new()))),
             "soundex" => Ok(Arc::new(ScalarUDF::from(Soundex::new()))),
             "spark_array" | "spark_make_array" | "array" => {
                 Ok(Arc::new(ScalarUDF::from(SparkArray::new())))
@@ -1629,6 +1668,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<FormatStringFunc>()
             || node_inner.is::<GreatestFunc>()
             || node_inner.is::<LeastFunc>()
+            || node_inner.is::<FormatNumber>()
             || node_inner.is::<Levenshtein>()
             || node_inner.is::<Randstr>()
             || node_inner.is::<Soundex>()
@@ -1806,6 +1846,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         let ExtendedAggregateUdf { udaf_kind } = udaf;
         match udaf_kind {
             Some(UdafKind::Standard(gen::StandardUdaf {})) => match name {
+                "histogram_numeric" => Ok(Arc::new(AggregateUDF::from(
+                    HistogramNumericFunction::new(),
+                ))),
                 "kurtosis" => Ok(Arc::new(AggregateUDF::from(KurtosisFunction::new()))),
                 "max_by" => Ok(Arc::new(AggregateUDF::from(MaxByFunction::new()))),
                 "min_by" => Ok(Arc::new(AggregateUDF::from(MinByFunction::new()))),
@@ -1893,7 +1936,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
-        let udaf_kind = if node.inner().as_any().is::<KurtosisFunction>()
+        let udaf_kind = if node.inner().as_any().is::<HistogramNumericFunction>()
+            || node.inner().as_any().is::<KurtosisFunction>()
             || node.inner().as_any().is::<MaxByFunction>()
             || node.inner().as_any().is::<MinByFunction>()
             || node.inner().as_any().is::<ModeFunction>()
