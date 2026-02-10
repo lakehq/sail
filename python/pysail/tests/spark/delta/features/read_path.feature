@@ -89,3 +89,84 @@ Feature: Delta Lake read path (driver vs metadata-as-data)
         EXPLAIN SELECT * FROM delta_read_driver_partitioned_path WHERE year = 2024
         """
       Then query plan matches snapshot
+
+  Rule: Append-only table with no remove actions is readable on driver path
+    Background:
+      Given variable location for temporary directory delta_read_driver_append_only
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_read_driver_append_only
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_read_driver_append_only (
+          id INT,
+          name STRING,
+          value INT
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_read_driver_append_only
+        SELECT * FROM VALUES (1, 'a', 10), (2, 'b', 20)
+        """
+      Given statement
+        """
+        INSERT INTO delta_read_driver_append_only
+        SELECT * FROM VALUES (3, 'c', 30), (4, 'd', 40)
+        """
+
+    Scenario: SELECT succeeds after append-only writes with metadataAsDataRead disabled
+      When query
+        """
+        SELECT id, name, value FROM delta_read_driver_append_only ORDER BY id
+        """
+      Then query result ordered
+        | id | name | value |
+        | 1  | a    | 10    |
+        | 2  | b    | 20    |
+        | 3  | c    | 30    |
+        | 4  | d    | 40    |
+
+  Rule: Append-only table with no remove actions is readable on metadata-as-data path
+    Background:
+      Given variable location for temporary directory delta_read_metadata_append_only
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_read_metadata_append_only
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_read_metadata_append_only (
+          id INT,
+          name STRING,
+          value INT
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        OPTIONS (metadataAsDataRead true)
+        """
+      Given statement
+        """
+        INSERT INTO delta_read_metadata_append_only
+        SELECT * FROM VALUES (1, 'a', 10), (2, 'b', 20)
+        """
+      Given statement
+        """
+        INSERT INTO delta_read_metadata_append_only
+        SELECT * FROM VALUES (3, 'c', 30), (4, 'd', 40)
+        """
+
+    Scenario: SELECT succeeds after append-only writes with metadataAsDataRead enabled
+      When query
+        """
+        SELECT id, name, value FROM delta_read_metadata_append_only ORDER BY id
+        """
+      Then query result ordered
+        | id | name | value |
+        | 1  | a    | 10    |
+        | 2  | b    | 20    |
+        | 3  | c    | 30    |
+        | 4  | d    | 40    |

@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::compute::SortOptions;
-use datafusion::arrow::datatypes::{DataType, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::common::{
     Column as LogicalColumn, DataFusionError, Result, ScalarValue, ToDFSchema,
 };
@@ -78,6 +78,26 @@ impl Default for LogReplayOptions {
             parquet_predicate: None,
         }
     }
+}
+
+fn replay_output_schema(
+    partition_columns: &[(String, String)],
+    include_stats_json: bool,
+) -> SchemaRef {
+    let mut fields = vec![
+        Field::new(PATH_COLUMN, DataType::Utf8, true),
+        Field::new("size_bytes", DataType::Int64, true),
+        Field::new("modification_time", DataType::Int64, true),
+        Field::new(COMMIT_VERSION_COLUMN, DataType::Int64, true),
+        Field::new(COMMIT_TIMESTAMP_COLUMN, DataType::Int64, true),
+    ];
+    for (logical, _) in partition_columns {
+        fields.push(Field::new(logical, DataType::Utf8, true));
+    }
+    if include_stats_json {
+        fields.push(Field::new("stats_json", DataType::Utf8, true));
+    }
+    Arc::new(Schema::new(fields))
 }
 
 pub fn build_standard_write_layers(
@@ -234,6 +254,28 @@ pub async fn build_log_replay_pipeline_with_options(
     let log_version_idx = input_schema.index_of(COL_LOG_VERSION)?;
     let df_schema = input_schema.clone().to_dfschema()?;
     let simplify = |expr: Expr| simplify_expr(ctx.session(), &df_schema, expr);
+
+    if input_schema.field_with_name("add").is_err() {
+        // Some tables/log ranges contain only metadata/protocol/remove actions.
+        // Without any `add` payload there are no data files to replay.
+        let replay: Arc<dyn ExecutionPlan> =
+            Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
+                replay_output_schema(&partition_columns, options.include_stats_json),
+            ));
+
+        let replay: Arc<dyn ExecutionPlan> = if let Some(filter) = options.log_filter {
+            let adapter_factory = Arc::new(DeltaPhysicalExprAdapterFactory {});
+            let adapter = adapter_factory.create(filter.table_schema, replay.schema());
+            let adapted = adapter
+                .rewrite(filter.predicate)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            Arc::new(FilterExec::try_new(adapted, replay)?)
+        } else {
+            replay
+        };
+
+        return Ok(replay);
+    }
 
     let col_expr = |name: &str| Expr::Column(LogicalColumn::new_unqualified(name));
     let lit_str = |s: &str| Expr::Literal(ScalarValue::Utf8(Some(s.to_string())), None);
