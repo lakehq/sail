@@ -2837,7 +2837,7 @@ impl RemoteExecutionCodec {
 
     fn try_decode_statistics(&self, buf: &[u8]) -> Result<Statistics> {
         let statistics = self.try_decode_message::<gen_datafusion_common::Statistics>(buf)?;
-        Ok((&statistics).try_into()?)
+        (&statistics).try_into()
     }
 
     fn try_encode_statistics(&self, statistics: &Statistics) -> Result<Vec<u8>> {

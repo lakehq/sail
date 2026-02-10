@@ -254,9 +254,11 @@ pub(crate) async fn plan_delta_scan(
         .map(|p| p.filename.clone())
         .collect::<Vec<_>>();
 
-    let mut planner_options = TableDeltaOptions::default();
-    planner_options.delta_log_replay_strategy = config.delta_log_replay_strategy;
-    planner_options.delta_log_replay_hash_threshold = config.delta_log_replay_hash_threshold;
+    let planner_options = TableDeltaOptions {
+        delta_log_replay_strategy: config.delta_log_replay_strategy,
+        delta_log_replay_hash_threshold: config.delta_log_replay_hash_threshold,
+        ..TableDeltaOptions::default()
+    };
 
     let planner_ctx = PlannerContext::new(
         session,

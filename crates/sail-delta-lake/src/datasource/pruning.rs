@@ -405,7 +405,7 @@ mod tests {
     use datafusion::arrow::array::UInt64Array;
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::pruning::PruningStatistics;
-    use datafusion_common::Column;
+    use datafusion_common::{Column, DataFusionError, Result};
 
     use super::AddStatsPruningStatistics;
     use crate::kernel::models::Add;
@@ -429,7 +429,7 @@ mod tests {
     }
 
     #[test]
-    fn row_counts_use_uint64_for_decimal_columns() {
+    fn row_counts_use_uint64_for_decimal_columns() -> Result<()> {
         let table_schema = Arc::new(Schema::new(vec![Field::new(
             "dec_col",
             DataType::Decimal128(7, 2),
@@ -439,22 +439,24 @@ mod tests {
         let mut referenced_columns = HashSet::new();
         referenced_columns.insert("dec_col".to_string());
 
-        let stats = AddStatsPruningStatistics::try_new(table_schema, adds, referenced_columns)
-            .expect("stats should parse");
+        let stats = AddStatsPruningStatistics::try_new(table_schema, adds, referenced_columns)?;
         let array = stats
             .row_counts(&Column::from_name("dec_col"))
-            .expect("row count stats should be available");
+            .ok_or_else(|| {
+                DataFusionError::Internal("row count stats should be available".to_string())
+            })?;
 
         assert_eq!(array.data_type(), &DataType::UInt64);
         let values = array
             .as_any()
             .downcast_ref::<UInt64Array>()
-            .expect("array should be UInt64");
+            .ok_or_else(|| DataFusionError::Internal("array should be UInt64".to_string()))?;
         assert_eq!(values.value(0), 2_382_848);
+        Ok(())
     }
 
     #[test]
-    fn null_counts_use_uint64_for_date_columns() {
+    fn null_counts_use_uint64_for_date_columns() -> Result<()> {
         let table_schema = Arc::new(Schema::new(vec![Field::new(
             "date_col",
             DataType::Date32,
@@ -466,17 +468,19 @@ mod tests {
         let mut referenced_columns = HashSet::new();
         referenced_columns.insert("date_col".to_string());
 
-        let stats = AddStatsPruningStatistics::try_new(table_schema, adds, referenced_columns)
-            .expect("stats should parse");
+        let stats = AddStatsPruningStatistics::try_new(table_schema, adds, referenced_columns)?;
         let array = stats
             .null_counts(&Column::from_name("date_col"))
-            .expect("null count stats should be available");
+            .ok_or_else(|| {
+                DataFusionError::Internal("null count stats should be available".to_string())
+            })?;
 
         assert_eq!(array.data_type(), &DataType::UInt64);
         let values = array
             .as_any()
             .downcast_ref::<UInt64Array>()
-            .expect("array should be UInt64");
+            .ok_or_else(|| DataFusionError::Internal("array should be UInt64".to_string()))?;
         assert_eq!(values.value(0), 0);
+        Ok(())
     }
 }

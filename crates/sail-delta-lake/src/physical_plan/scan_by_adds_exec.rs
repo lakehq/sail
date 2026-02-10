@@ -702,7 +702,7 @@ mod tests {
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::ExecutionPlan;
     use datafusion_common::stats::{ColumnStatistics, Precision, Statistics};
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{DataFusionError, Result, ScalarValue};
     use url::Url;
 
     use super::{map_statistics_to_schema, DeltaScanByAddsExec};
@@ -828,7 +828,7 @@ mod tests {
     }
 
     #[test]
-    fn test_scan_by_adds_accepts_output_statistics_directly() {
+    fn test_scan_by_adds_accepts_output_statistics_directly() -> Result<()> {
         let table_schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int64, true),
             Field::new("b", DataType::Int64, true),
@@ -840,7 +840,8 @@ mod tests {
             true,
         )]));
         let input = Arc::new(EmptyExec::new(input_schema));
-        let table_url = Url::parse("file:///tmp/table").expect("valid table URL");
+        let table_url =
+            Url::parse("file:///tmp/table").map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let output_stats = Statistics {
             num_rows: Precision::Exact(88),
@@ -868,11 +869,10 @@ mod tests {
         )
         .with_output_statistics(Some(output_stats));
 
-        let stats = scan
-            .partition_statistics(None)
-            .expect("statistics should exist");
+        let stats = scan.partition_statistics(None)?;
         assert_eq!(stats.num_rows, Precision::Exact(88));
         assert_eq!(stats.column_statistics.len(), 1);
         assert_eq!(stats.column_statistics[0].null_count, Precision::Exact(6));
+        Ok(())
     }
 }
