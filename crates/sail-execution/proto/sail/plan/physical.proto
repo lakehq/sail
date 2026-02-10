@@ -47,6 +47,7 @@ message ExtendedPhysicalPlanNode {
     IcebergWriterExecNode iceberg_writer = 32;
     IcebergCommitExecNode iceberg_commit = 33;
     MergeCardinalityCheckExecNode merge_cardinality_check = 34;
+    PythonDataSourceExecNode python_data_source = 35;
   }
 }
 
@@ -583,4 +584,16 @@ message DeltaLogReplayExecNode {
   // Preferred encoding for hash replay mode.
   optional bytes checkpoint_input = 7;
   optional bytes commits_input = 8;
+}
+
+message PythonDataSourceInputPartition {
+  uint64 partition_id = 1;
+  bytes data = 2;
+}
+
+message PythonDataSourceExecNode {
+  // Pickled Python DataSourceReader instance (with filters already applied)
+  bytes pickled_reader = 1;
+  bytes schema = 2;
+  repeated PythonDataSourceInputPartition partitions = 3;
 }

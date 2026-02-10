@@ -128,9 +128,9 @@ def main():
     benchmark = TpchBenchmark(args.url, args.data_path, args.query_path, args.format, args.include_load_time)
     if args.console:
         with benchmark.spark_session() as spark:
-            import code  # noqa: PLC0415
-            import readline  # noqa: PLC0415
-            from rlcompleter import Completer  # noqa: PLC0415
+            import code
+            import readline
+            from rlcompleter import Completer
 
             namespace = {"spark": spark}
             readline.parse_and_bind("tab: complete")
