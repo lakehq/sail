@@ -1,17 +1,18 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::Schema;
+use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::datasource::{provider_as_source, TableProvider};
-use datafusion_common::{DFSchema, TableReference};
+use datafusion_common::{DFSchema, ScalarValue, TableReference};
 use datafusion_expr::registry::FunctionRegistry;
-use datafusion_expr::{LogicalPlan, TableScan, UNNAMED_TABLE};
+use datafusion_expr::{Expr, LogicalPlan, TableScan, UNNAMED_TABLE};
 use rand::{rng, Rng};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::TableKind;
 use sail_common_datafusion::datasource::{SourceInfo, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_common_datafusion::rename::table_provider::RenameTableProvider;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -43,7 +44,7 @@ impl PlanResolver<'_> {
         if let Some(cte) = state.get_cte(&table_reference) {
             let plan = cte.clone();
             return if let Some(table_sample) = sample {
-                self.apply_table_sample(plan, table_sample, state)
+                self.apply_table_sample(plan, table_sample, state).await
             } else {
                 Ok(plan)
             };
@@ -105,14 +106,14 @@ impl PlanResolver<'_> {
         };
 
         if let Some(table_sample) = sample {
-            self.apply_table_sample(plan, table_sample, state)
+            self.apply_table_sample(plan, table_sample, state).await
         } else {
             Ok(plan)
         }
     }
 
     /// Apply TABLESAMPLE clause to a LogicalPlan
-    fn apply_table_sample(
+    async fn apply_table_sample(
         &self,
         plan: LogicalPlan,
         table_sample: spec::TableSample,
@@ -123,18 +124,16 @@ impl PlanResolver<'_> {
         // Convert TableSampleMethod to sample bounds
         let (lower_bound, upper_bound) = match method {
             spec::TableSampleMethod::Percent { value } => {
-                // Evaluate the percent expression to get a literal value
-                let percent = self.evaluate_sample_expr_to_f64(&value)?;
-                if !(0.0..=100.0).contains(&percent) {
+                let percent = self.evaluate_sample_expr_to_f64(value, state).await?;
+                let fraction = percent / 100.0;
+                if !(0.0..=1.0).contains(&fraction) {
                     return Err(PlanError::invalid(format!(
-                        "TABLESAMPLE percent must be between 0 and 100, got {percent}"
+                        "Sampling fraction ({fraction}) must be on interval [0, 1]"
                     )));
                 }
-                (0.0, percent / 100.0)
+                (0.0, fraction)
             }
             spec::TableSampleMethod::Rows { value: _ } => {
-                // ROWS sampling is complex - it requires knowing total row count
-                // For now, return a todo error
                 return Err(PlanError::todo("TABLESAMPLE with ROWS"));
             }
             spec::TableSampleMethod::Bucket {
@@ -163,43 +162,28 @@ impl PlanResolver<'_> {
         Self::apply_sample_to_plan(plan, lower_bound, upper_bound, false, seed, state)
     }
 
-    /// Evaluate a sample expression to get a float value
-    fn evaluate_sample_expr_to_f64(&self, expr: &spec::Expr) -> PlanResult<f64> {
-        match expr {
-            spec::Expr::Literal(lit) => match lit {
-                spec::Literal::Int8 { value: Some(i) } => Ok(*i as f64),
-                spec::Literal::Int16 { value: Some(i) } => Ok(*i as f64),
-                spec::Literal::Int32 { value: Some(i) } => Ok(*i as f64),
-                spec::Literal::Int64 { value: Some(l) } => Ok(*l as f64),
-                spec::Literal::Float32 { value: Some(f) } => Ok(*f as f64),
-                spec::Literal::Float64 { value: Some(d) } => Ok(*d),
-                spec::Literal::Decimal128 {
-                    value: Some(value),
-                    scale,
-                    ..
-                } => {
-                    let divisor = 10_f64.powi(*scale as i32);
-                    Ok(*value as f64 / divisor)
-                }
-                spec::Literal::Decimal256 {
-                    value: Some(value),
-                    scale,
-                    ..
-                } => {
-                    let divisor = 10_f64.powi(*scale as i32);
-                    // i256 doesn't implement Into<f64>, use string conversion
-                    let value_str = value.to_string();
-                    let value_f64: f64 = value_str
-                        .parse()
-                        .map_err(|_| PlanError::invalid("invalid decimal value"))?;
-                    Ok(value_f64 / divisor)
-                }
-                _ => Err(PlanError::invalid("TABLESAMPLE requires a numeric literal")),
-            },
-            // Handle Cast expressions (e.g., CAST(10 AS DOUBLE))
-            spec::Expr::Cast { expr, .. } => self.evaluate_sample_expr_to_f64(expr),
+    /// Evaluate a sample expression to get a float value.
+    /// Resolves the spec expression using an empty schema and uses [LiteralEvaluator]
+    /// to support constant expressions beyond just literals.
+    async fn evaluate_sample_expr_to_f64(
+        &self,
+        expr: spec::Expr,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<f64> {
+        let schema = Arc::new(DFSchema::empty());
+        let resolved = self.resolve_expression(expr, &schema, state).await?;
+        let cast_expr = Expr::Cast(datafusion_expr::expr::Cast {
+            expr: Box::new(resolved),
+            data_type: DataType::Float64,
+        });
+        let evaluator = LiteralEvaluator::new();
+        let scalar = evaluator
+            .evaluate(&cast_expr)
+            .map_err(|e| PlanError::invalid(e.to_string()))?;
+        match scalar {
+            ScalarValue::Float64(Some(v)) => Ok(v),
             _ => Err(PlanError::invalid(
-                "TABLESAMPLE requires a literal expression",
+                "TABLESAMPLE requires a numeric expression",
             )),
         }
     }
