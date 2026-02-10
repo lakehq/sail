@@ -40,6 +40,7 @@ rank: 2
 | `min`                   | :white_check_mark: |
 | `min_by`                | :white_check_mark: |
 | `mode`                  | :white_check_mark: |
+| `percentile`            | :white_check_mark: |
 | `percentile_approx`     | :white_check_mark: |
 | `regr_avgx`             | :white_check_mark: |
 | `regr_avgy`             | :white_check_mark: |
@@ -70,6 +71,5 @@ rank: 2
 | `histogram_numeric`     | :construction:     |
 | `hll_sketch_agg`        | :construction:     |
 | `hll_union_agg`         | :construction:     |
-| `percentile`            | :construction:     |
 | `percentile_cont`       | :construction:     |
 | `percentile_disc`       | :construction:     |

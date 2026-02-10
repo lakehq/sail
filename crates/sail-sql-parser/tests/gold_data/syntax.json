@@ -2093,6 +2093,38 @@
                         "nonTerminal": "Operator(GreaterThan)"
                       }
                     ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Geometry)"
+                      },
+                      {
+                        "nonTerminal": "Operator(LeftParenthesis)"
+                      },
+                      {
+                        "nonTerminal": "GeometrySrid"
+                      },
+                      {
+                        "nonTerminal": "Operator(RightParenthesis)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Geography)"
+                      },
+                      {
+                        "nonTerminal": "Operator(LeftParenthesis)"
+                      },
+                      {
+                        "nonTerminal": "GeographySrid"
+                      },
+                      {
+                        "nonTerminal": "Operator(RightParenthesis)"
+                      }
+                    ]
                   }
                 ]
               }
@@ -3054,6 +3086,48 @@
               }
             },
             {
+              "name": "GeographySrid",
+              "node": {
+                "choice": [
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "IntegerLiteral"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Any)"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "name": "GeometrySrid",
+              "node": {
+                "choice": [
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "IntegerLiteral"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Any)"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
               "name": "GroupByClause",
               "node": {
                 "sequence": [
@@ -3927,6 +4001,14 @@
               }
             },
             {
+              "name": "Keyword(Catalogs)",
+              "node": {
+                "terminal": {
+                  "keyword": "CATALOGS"
+                }
+              }
+            },
+            {
               "name": "Keyword(Change)",
               "node": {
                 "terminal": {
@@ -4507,6 +4589,22 @@
               "node": {
                 "terminal": {
                   "keyword": "GENERATED"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Geography)",
+              "node": {
+                "terminal": {
+                  "keyword": "GEOGRAPHY"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Geometry)",
+              "node": {
+                "terminal": {
+                  "keyword": "GEOMETRY"
                 }
               }
             },
@@ -8834,6 +8932,19 @@
                   {
                     "sequence": [
                       {
+                        "nonTerminal": "Keyword(Use)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Catalog)"
+                      },
+                      {
+                        "nonTerminal": "Identifier"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
                         "nonTerminal": "Keyword(Create)"
                       },
                       {
@@ -8895,6 +9006,19 @@
                       },
                       {
                         "nonTerminal": "Option(Tuple(Either(Keyword(From), Keyword(In)), ObjectName))"
+                      },
+                      {
+                        "nonTerminal": "Option(Tuple(Option(Keyword(Like)), StringLiteral))"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Show)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Catalogs)"
                       },
                       {
                         "nonTerminal": "Option(Tuple(Option(Keyword(Like)), StringLiteral))"

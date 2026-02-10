@@ -62,16 +62,16 @@ The `DESCRIBE QUERY` statement is not supported yet.
 
 ### Data Manipulation
 
-| Statement                           | Supported          |
-| ----------------------------------- | ------------------ |
-| `INSERT INTO <table>`               | :white_check_mark: |
-| `INSERT OVERWRITE <table>`          | :construction:     |
-| `INSERT OVERWRITE DIRECTORY <path>` | :construction:     |
-| `LOAD DATA`                         | :construction:     |
-| `COPY INTO`                         | :construction:     |
-| `MERGE INTO`                        | :construction:     |
-| `UPDATE`                            | :construction:     |
-| `DELETE FROM`                       | :construction:     |
+| Statement                           | Supported                    |
+| ----------------------------------- | ---------------------------- |
+| `INSERT INTO <table>`               | :white_check_mark:           |
+| `INSERT OVERWRITE <table>`          | :construction:               |
+| `INSERT OVERWRITE DIRECTORY <path>` | :construction:               |
+| `LOAD DATA`                         | :construction:               |
+| `COPY INTO`                         | :construction:               |
+| `MERGE INTO`                        | :white_check_mark: (partial) |
+| `UPDATE`                            | :construction:               |
+| `DELETE FROM`                       | :white_check_mark: (partial) |
 
 The `COPY INTO`, `MERGE INTO`, `UPDATE`, and `DELETE FROM` statements are not core Spark features.
 But some extensions support these statements for lakehouse tables (e.g., Delta Lake).
@@ -115,8 +115,6 @@ But some extensions support these statements for lakehouse tables (e.g., Delta L
 Currently, Sail only supports in-memory catalog, which means the databases and tables are available only within the
 session.
 Remote catalog support is in our roadmap.
-
-For the `CREATE TABLE` statement, the `CREATE TABLE ... AS ...` syntax is not supported yet.
 
 ### Configuration Management
 
