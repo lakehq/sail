@@ -116,6 +116,7 @@
 	      echo "hatch run maturin develop"
         echo "hatch run test-spark.spark-4.1.1:pip install 'pyspark[connect]==4.1.1' 'pandas'"
         echo "hatch run test-spark.spark-4.1.1:bash scripts/spark-tests/run-tests.sh"
+        echo "export SPARK_REMOTE=\"sc://localhost:50051\" && hatch run pytest --pyargs pysail"
         echo ""
         echo "env RUST_LOG=\"DEBUG\" SAIL_EXECUTION__DEFAULT_PARALLELISM=4 cargo run -p sail-cli -- spark server"
         echo ""
