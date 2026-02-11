@@ -4,6 +4,10 @@ Vortex vs Parquet benchmark via Sail Python DataSource.
 Replicates the benchmark from PR #1334 (native Rust integration)
 using the Python DataSource API instead.
 
+The VortexDataSource supports:
+  - Filter pushdown via pushFilters() -> vortex scan(expr=...)
+  - RecordBatch yield (columnar, zero-copy) instead of row-by-row tuples
+
 Requirements:
     pip install vortex-data pyspark pyarrow
 
@@ -22,8 +26,19 @@ import time
 import pyarrow as pa
 import pyarrow.parquet as pq
 import vortex
+from pyspark.sql.datasource import (
+    DataSource,
+    DataSourceReader,
+    EqualTo,
+    Filter,
+    GreaterThan,
+    GreaterThanOrEqual,
+    InputPartition,
+    LessThan,
+    LessThanOrEqual,
+)
+
 from pyspark.sql import SparkSession
-from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
 
 
 # ============================================================
@@ -64,7 +79,41 @@ def arrow_to_spark_ddl(arrow_schema):
 
 
 # ============================================================
-# Vortex Python DataSource
+# PySpark Filter -> serializable tuple -> Vortex Expr
+# ============================================================
+SUPPORTED_OPS = {EqualTo: "eq", GreaterThan: "gt", GreaterThanOrEqual: "gte", LessThan: "lt", LessThanOrEqual: "lte"}
+
+
+def filter_to_tuple(f):
+    """Convert a PySpark Filter to a serializable (col, op, value) tuple."""
+    for cls, op in SUPPORTED_OPS.items():
+        if isinstance(f, cls):
+            col_name = f.attribute[0] if isinstance(f.attribute, tuple) else f.attribute
+            return (col_name, op, f.value)
+    return None
+
+
+def tuple_to_vortex_expr(t):
+    """Convert a (col, op, value) tuple to a vortex.expr expression."""
+    from vortex.expr import column
+
+    col_name, op, value = t
+    col = column(col_name)
+    if op == "eq":
+        return col == value
+    elif op == "gt":
+        return col > value
+    elif op == "gte":
+        return col >= value
+    elif op == "lt":
+        return col < value
+    elif op == "lte":
+        return col <= value
+    return None
+
+
+# ============================================================
+# Vortex Python DataSource (with pushdown)
 # ============================================================
 class VortexPartition(InputPartition):
     def __init__(self, path):
@@ -75,19 +124,49 @@ class VortexPartition(InputPartition):
 class VortexReader(DataSourceReader):
     def __init__(self, path):
         self.path = path
+        self._filters = []
+
+    def pushFilters(self, filters):  # noqa: N802
+        """Accept filters that Vortex can handle natively."""
+        for f in filters:
+            t = filter_to_tuple(f)
+            if t is not None:
+                self._filters.append(t)  # Store as pickle-safe tuple
+            else:
+                yield f  # Reject — Sail will post-filter
 
     def partitions(self):
         return [VortexPartition(self.path)]
 
     def read(self, partition):
+        import pyarrow as pa
         import vortex as vtx
+        from vortex.expr import and_
 
         vf = vtx.open(partition.path)
-        for batch in vf.scan():
+
+        # Build combined filter expression from serializable tuples
+        scan_expr = None
+        for t in self._filters:
+            expr = tuple_to_vortex_expr(t)
+            if expr is not None:
+                scan_expr = expr if scan_expr is None else and_(scan_expr, expr)
+
+        # Scan with pushdown
+        for batch in vf.scan(expr=scan_expr):
             arrow_table = batch.to_arrow_table()
+            # Cast string_view -> string (Vortex returns Utf8View, Sail expects Utf8)
+            new_columns = []
+            for i, field in enumerate(arrow_table.schema):
+                col = arrow_table.column(i)
+                if field.type == pa.string_view():
+                    col = col.cast(pa.string())
+                new_columns.append(col)
+            arrow_table = pa.table(
+                {field.name: col for field, col in zip(arrow_table.schema, new_columns)}
+            )
             for rb in arrow_table.to_batches():
-                for i in range(rb.num_rows):
-                    yield tuple(rb.column(c)[i].as_py() for c in range(rb.num_columns))
+                yield rb  # Yield RecordBatch (columnar)
 
 
 class VortexDataSource(DataSource):
@@ -165,7 +244,7 @@ def main():
     runs = int(os.environ.get("BENCH_RUNS", "3"))
     spark_remote = os.environ.get("SPARK_REMOTE", "sc://localhost:50051")
 
-    print(f"Vortex vs Parquet Benchmark (Python DataSource)")
+    print("Vortex vs Parquet Benchmark (Python DataSource + Pushdown)")
     print(f"  Rows: {n:,}  |  Runs: {runs}  |  Server: {spark_remote}")
     print()
 
@@ -192,7 +271,7 @@ def main():
     # File sizes
     parquet_size = os.path.getsize(parquet_path)
     vortex_size = os.path.getsize(vortex_path)
-    print(f"\n=== FILE SIZE ===")
+    print("\n=== FILE SIZE ===")
     print(f"  Parquet: {parquet_size / 1024 / 1024:.2f} MB")
     print(f"  Vortex:  {vortex_size / 1024 / 1024:.2f} MB")
     print(f"  Ratio:   {vortex_size / parquet_size:.2f}x")
@@ -266,8 +345,10 @@ def main():
         f"{vortex_size/1024/1024:>8.2f}MB "
         f"{'Vortex' if vortex_size < parquet_size else 'Parquet':>15}"
     )
-    print(f"\n  Note: Vortex reads go through Python DataSource (row-by-row yield).")
-    print(f"  Native Rust integration (PR #1334) would be significantly faster.")
+    print(
+        f"\n  Note: Vortex uses Python DataSource with filter pushdown + RecordBatch yield."
+    )
+    print(f"  Native Rust integration (PR #1334) would be even faster.")
     print(f"\n  Temp dir: {tmpdir}")
 
 

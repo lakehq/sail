@@ -91,17 +91,19 @@ PySpark client  -->  Sail server (gRPC)  -->  Python DataSource (embedded PyO3)
 
 ## Benchmark results (1M rows)
 
-### Python DataSource (this example)
+### Python DataSource with filter pushdown + RecordBatch yield
 
 | Operation | Parquet | Vortex | Winner |
 |---|---|---|---|
-| Write | 0.062s | 0.066s | Parquet (1.06x) |
-| Full Scan | 9.458s | 11.962s | Parquet (1.26x) |
-| Filter Scan | 4.937s | 11.340s | Parquet (2.30x) |
-| Projection | 5.240s | 11.342s | Parquet (2.16x) |
-| Aggregation | 0.466s | 9.798s | Parquet (21.04x) |
-| Count | 0.010s | 9.781s | Parquet (947x) |
+| Write | 0.055s | 0.043s | **Vortex (1.28x)** |
+| Full Scan | 9.730s | 9.460s | **Vortex (1.03x)** |
+| Filter Scan | 4.909s | 4.935s | Parquet (1.01x) |
+| Projection | 5.235s | 5.272s | Parquet (1.01x) |
+| Aggregation | 0.464s | 0.076s | **Vortex (6.10x)** |
+| Count | 0.009s | 0.024s | Parquet (2.74x) |
 | File Size | 12.85 MB | 9.20 MB | **Vortex (0.72x)** |
+
+Vortex wins 4 out of 7 categories. The `pushFilters()` method pushes predicates into `vortex.scan(expr=...)`, and `read()` yields Arrow `RecordBatch` instead of row-by-row tuples.
 
 ### Native Rust integration (PR #1334)
 
@@ -114,18 +116,14 @@ PySpark client  -->  Sail server (gRPC)  -->  Python DataSource (embedded PyO3)
 | Aggregation | 0.045s | 0.031s | **Vortex (1.45x)** |
 | File Size | 6.01 MB | 9.90 MB | Parquet (0.61x) |
 
-### Why the difference?
+### Key optimizations
 
-Parquet uses Sail's **native Rust reader** (columnar Arrow batches, projection/predicate pushdown), while the Vortex Python DataSource goes through a slow path:
+The Python DataSource uses two optimizations to close the gap with Parquet's native Rust reader:
 
-```
-Parquet:  .parquet  ->  Rust reader  ->  Arrow batches  ->  result
-Vortex:   .vtx  ->  Python  ->  vortex-data  ->  Arrow  ->  .as_py()  ->  yield row-by-row  ->  Sail
-```
+1. **Filter pushdown** via `pushFilters()`: PySpark filters are converted to `vortex.expr` expressions and passed to `vf.scan(expr=...)`, so Vortex filters data before returning it
+2. **RecordBatch yield**: `read()` yields Arrow `RecordBatch` objects (columnar) instead of `tuple(...)` per row, eliminating the `.as_py()` conversion overhead
 
-The bottleneck is `yield tuple(...)` row-by-row. Operations like Count and Aggregation are hit hardest because Parquet resolves them via metadata or columnar processing, while Vortex still reads all 1M rows through Python.
-
-The native Rust integration eliminates this overhead entirely, making Vortex faster than Parquet for most operations.
+The remaining gap (Filter Scan, Projection, Count) is due to Parquet's native Rust reader having zero Python overhead.
 
 ## Troubleshooting
 
