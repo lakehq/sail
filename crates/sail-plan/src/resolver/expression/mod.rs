@@ -202,6 +202,24 @@ impl PlanResolver<'_> {
                 subquery,
                 negated,
             } => {
+                // Detect multi-column IN subquery: (a, b) IN (SELECT x, y FROM ...)
+                // The SQL parser produces a Tuple which the analyzer converts to
+                // UnresolvedFunction("struct", [a, b]).
+                if let Expr::UnresolvedFunction(ref f) = *expr {
+                    if f.function_name.parts() == [spec::Identifier::from("struct")]
+                        && f.arguments.len() > 1
+                    {
+                        let arguments = match *expr {
+                            Expr::UnresolvedFunction(f) => f.arguments,
+                            _ => unreachable!(),
+                        };
+                        return self
+                            .resolve_multi_column_in_subquery(
+                                arguments, *subquery, negated, schema, state,
+                            )
+                            .await;
+                    }
+                }
                 self.resolve_expression_in_subquery(*expr, *subquery, negated, schema, state)
                     .await
             }
