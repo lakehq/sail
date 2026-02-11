@@ -644,6 +644,28 @@
                   {
                     "sequence": [
                       {
+                        "nonTerminal": "Keyword(TryCast)"
+                      },
+                      {
+                        "nonTerminal": "Operator(LeftParenthesis)"
+                      },
+                      {
+                        "nonTerminal": "Box(Expression)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(As)"
+                      },
+                      {
+                        "nonTerminal": "DataType"
+                      },
+                      {
+                        "nonTerminal": "Operator(RightParenthesis)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
                         "nonTerminal": "Keyword(Extract)"
                       },
                       {
@@ -5727,6 +5749,14 @@
               "node": {
                 "terminal": {
                   "keyword": "TRUE"
+                }
+              }
+            },
+            {
+              "name": "Keyword(TryCast)",
+              "node": {
+                "terminal": {
+                  "keyword": "TRY_CAST"
                 }
               }
             },
