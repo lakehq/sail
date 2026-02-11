@@ -882,7 +882,23 @@ fn merge_disambiguate_unqualified_plan_ids(
         },
         Expr::UnresolvedDate { .. } => expr,
         Expr::UnresolvedTimestamp { .. } => expr,
-        Expr::Subquery { .. } => expr,
+        Expr::Subquery {
+            subquery,
+            in_subquery_values,
+        } => Expr::Subquery {
+            subquery,
+            in_subquery_values: in_subquery_values
+                .into_iter()
+                .map(|value_expr| {
+                    merge_disambiguate_unqualified_plan_ids(
+                        value_expr,
+                        state,
+                        target_schema,
+                        source_schema,
+                    )
+                })
+                .collect(),
+        },
     }
 }
 
