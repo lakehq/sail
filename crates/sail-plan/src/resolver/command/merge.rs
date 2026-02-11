@@ -18,6 +18,19 @@ use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
+// When we receive an unqualified attribute with `plan_id=None`, we need:
+// - if it exists only in target -> treat as target
+// - if it exists only in source -> treat as source
+// - if it exists in both -> default to target
+//
+// FIXME: We currently disambiguate `plan_id=None` attributes only for MERGE.
+// Similar ambiguity can arise in other multi-input operations (e.g. joins) when using
+// unqualified column names from ExpressionString / col("..."). Consider a shared resolver utility.
+// These are hardcoded values and need to pay attention if other implementations got conflicting values.
+
+const MERGE_TARGET_DEFAULT_PLAN_ID: i64 = i64::MIN + 4242;
+const MERGE_SOURCE_DEFAULT_PLAN_ID: i64 = i64::MIN + 4243;
+
 impl PlanResolver<'_> {
     pub(super) async fn resolve_command_merge_into(
         &self,
@@ -48,6 +61,16 @@ impl PlanResolver<'_> {
 
         let target_schema = target_plan.schema();
         let source_schema = source_plan.schema();
+
+        // Register synthetic plan ids for both sides. These are only used to disambiguate
+        // unqualified attributes when the Connect proto omits `plan_id`.
+        for field in target_schema.fields() {
+            state.register_plan_id_for_field(field.name(), MERGE_TARGET_DEFAULT_PLAN_ID)?;
+        }
+        for field in source_schema.fields() {
+            state.register_plan_id_for_field(field.name(), MERGE_SOURCE_DEFAULT_PLAN_ID)?;
+        }
+
         let merge_schema = Arc::new(build_join_schema(
             target_schema,
             source_schema,
@@ -55,14 +78,26 @@ impl PlanResolver<'_> {
         )?);
 
         let on_condition_source = on_condition.source;
+        let on_condition_expr = merge_disambiguate_unqualified_plan_ids(
+            on_condition.expr,
+            state,
+            target_schema,
+            source_schema,
+        );
         let on_condition = self
-            .resolve_expression(on_condition.expr, &merge_schema, state)
+            .resolve_expression(on_condition_expr, &merge_schema, state)
             .await?;
         let (join_key_pairs, residual_predicates, target_only_predicates) =
             analyze_merge_join(&on_condition, &merge_schema, target_schema.clone());
 
         let (matched_clauses, not_matched_by_source, not_matched_by_target) = self
-            .resolve_merge_clauses(clauses, &merge_schema, target_schema.clone(), state)
+            .resolve_merge_clauses(
+                clauses,
+                &merge_schema,
+                target_schema.clone(),
+                source_schema.clone(),
+                state,
+            )
             .await?;
 
         let options = MergeIntoOptions {
@@ -148,6 +183,7 @@ impl PlanResolver<'_> {
         clauses: Vec<spec::MergeClause>,
         merge_schema: &datafusion_common::DFSchemaRef,
         target_schema: datafusion_common::DFSchemaRef,
+        source_schema: datafusion_common::DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<(
         Vec<MergeMatchedClause>,
@@ -166,6 +202,7 @@ impl PlanResolver<'_> {
                             inner,
                             merge_schema,
                             target_schema.clone(),
+                            source_schema.clone(),
                             state,
                         )
                         .await?,
@@ -177,6 +214,7 @@ impl PlanResolver<'_> {
                             inner,
                             merge_schema,
                             target_schema.clone(),
+                            source_schema.clone(),
                             state,
                         )
                         .await?,
@@ -188,6 +226,7 @@ impl PlanResolver<'_> {
                             inner,
                             merge_schema,
                             target_schema.clone(),
+                            source_schema.clone(),
                             state,
                         )
                         .await?,
@@ -204,17 +243,30 @@ impl PlanResolver<'_> {
         clause: spec::MergeMatchedClause,
         merge_schema: &datafusion_common::DFSchemaRef,
         target_schema: datafusion_common::DFSchemaRef,
+        source_schema: datafusion_common::DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<MergeMatchedClause> {
         let condition = self
-            .resolve_merge_optional_condition(clause.condition, merge_schema, state)
+            .resolve_merge_optional_condition(
+                clause.condition,
+                merge_schema,
+                &target_schema,
+                &source_schema,
+                state,
+            )
             .await?;
         let action = match clause.action {
             spec::MergeMatchedAction::Delete => MergeMatchedAction::Delete,
             spec::MergeMatchedAction::UpdateAll => MergeMatchedAction::UpdateAll,
             spec::MergeMatchedAction::UpdateSet(assignments) => {
                 let assignments = self
-                    .resolve_merge_assignments(assignments, merge_schema, target_schema, state)
+                    .resolve_merge_assignments(
+                        assignments,
+                        merge_schema,
+                        target_schema,
+                        &source_schema,
+                        state,
+                    )
                     .await?;
                 MergeMatchedAction::UpdateSet(assignments)
             }
@@ -227,16 +279,29 @@ impl PlanResolver<'_> {
         clause: spec::MergeNotMatchedBySourceClause,
         merge_schema: &datafusion_common::DFSchemaRef,
         target_schema: datafusion_common::DFSchemaRef,
+        source_schema: datafusion_common::DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<MergeNotMatchedBySourceClause> {
         let condition = self
-            .resolve_merge_optional_condition(clause.condition, merge_schema, state)
+            .resolve_merge_optional_condition(
+                clause.condition,
+                merge_schema,
+                &target_schema,
+                &source_schema,
+                state,
+            )
             .await?;
         let action = match clause.action {
             spec::MergeNotMatchedBySourceAction::Delete => MergeNotMatchedBySourceAction::Delete,
             spec::MergeNotMatchedBySourceAction::UpdateSet(assignments) => {
                 let assignments = self
-                    .resolve_merge_assignments(assignments, merge_schema, target_schema, state)
+                    .resolve_merge_assignments(
+                        assignments,
+                        merge_schema,
+                        target_schema,
+                        &source_schema,
+                        state,
+                    )
                     .await?;
                 MergeNotMatchedBySourceAction::UpdateSet(assignments)
             }
@@ -249,10 +314,17 @@ impl PlanResolver<'_> {
         clause: spec::MergeNotMatchedByTargetClause,
         merge_schema: &datafusion_common::DFSchemaRef,
         target_schema: datafusion_common::DFSchemaRef,
+        source_schema: datafusion_common::DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<MergeNotMatchedByTargetClause> {
         let condition = self
-            .resolve_merge_optional_condition(clause.condition, merge_schema, state)
+            .resolve_merge_optional_condition(
+                clause.condition,
+                merge_schema,
+                &target_schema,
+                &source_schema,
+                state,
+            )
             .await?;
         let action = match clause.action {
             spec::MergeNotMatchedByTargetAction::InsertAll => {
@@ -260,10 +332,16 @@ impl PlanResolver<'_> {
             }
             spec::MergeNotMatchedByTargetAction::InsertColumns { columns, values } => {
                 let columns = self
-                    .resolve_merge_columns(columns, target_schema, state)
+                    .resolve_merge_columns(columns, target_schema.clone(), state)
                     .await?;
                 let values = self
-                    .resolve_merge_values(values, merge_schema, state)
+                    .resolve_merge_values(
+                        values,
+                        merge_schema,
+                        &target_schema,
+                        &source_schema,
+                        state,
+                    )
                     .await?;
                 MergeNotMatchedByTargetAction::InsertColumns { columns, values }
             }
@@ -276,6 +354,7 @@ impl PlanResolver<'_> {
         assignments: Vec<(spec::ObjectName, spec::Expr)>,
         merge_schema: &datafusion_common::DFSchemaRef,
         target_schema: datafusion_common::DFSchemaRef,
+        source_schema: &datafusion_common::DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<Vec<MergeAssignment>> {
         let mut out = Vec::with_capacity(assignments.len());
@@ -283,6 +362,12 @@ impl PlanResolver<'_> {
             let resolved_column = self
                 .resolve_merge_column(column, target_schema.clone(), state)
                 .await?;
+            let value = merge_disambiguate_unqualified_plan_ids(
+                value,
+                state,
+                &target_schema,
+                source_schema,
+            );
             let resolved_value = self.resolve_expression(value, merge_schema, state).await?;
             out.push(MergeAssignment {
                 column: resolved_column,
@@ -312,10 +397,14 @@ impl PlanResolver<'_> {
         &self,
         values: Vec<spec::Expr>,
         merge_schema: &datafusion_common::DFSchemaRef,
+        target_schema: &datafusion_common::DFSchemaRef,
+        source_schema: &datafusion_common::DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<Vec<Expr>> {
         let mut out = Vec::with_capacity(values.len());
         for value in values {
+            let value =
+                merge_disambiguate_unqualified_plan_ids(value, state, target_schema, source_schema);
             out.push(self.resolve_expression(value, merge_schema, state).await?);
         }
         Ok(out)
@@ -345,11 +434,23 @@ impl PlanResolver<'_> {
         &self,
         expression: Option<spec::ExprWithSource>,
         schema: &datafusion_common::DFSchemaRef,
+        target_schema: &datafusion_common::DFSchemaRef,
+        source_schema: &datafusion_common::DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<Option<ExprWithSource>> {
         match expression {
             Some(expr) => Ok(Some(ExprWithSource::new(
-                self.resolve_expression(expr.expr, schema, state).await?,
+                self.resolve_expression(
+                    merge_disambiguate_unqualified_plan_ids(
+                        expr.expr,
+                        state,
+                        target_schema,
+                        source_schema,
+                    ),
+                    schema,
+                    state,
+                )
+                .await?,
                 expr.source,
             ))),
             None => Ok(None),
@@ -385,6 +486,402 @@ impl PlanResolver<'_> {
                 "MERGE is only supported against tables",
             )),
         }
+    }
+}
+
+fn merge_schema_has_column_name(
+    schema: &datafusion_common::DFSchemaRef,
+    state: &PlanResolverState,
+    name: &str,
+) -> bool {
+    schema.iter().any(|(_qualifier, field)| {
+        state
+            .get_field_info(field.name())
+            .is_ok_and(|info| !info.is_hidden() && info.name().eq_ignore_ascii_case(name))
+    })
+}
+
+fn merge_disambiguate_unqualified_plan_ids(
+    expr: spec::Expr,
+    state: &PlanResolverState,
+    target_schema: &datafusion_common::DFSchemaRef,
+    source_schema: &datafusion_common::DFSchemaRef,
+) -> spec::Expr {
+    use spec::Expr;
+
+    match expr {
+        Expr::UnresolvedAttribute {
+            name,
+            plan_id: None,
+            is_metadata_column,
+        } => {
+            // Only disambiguate a bare identifier like `id`. Qualified identifiers
+            // like `t.id` should be resolved using the qualifier.
+            if let [part] = name.parts() {
+                let col = part.as_ref();
+                let in_target = merge_schema_has_column_name(target_schema, state, col);
+                let in_source = merge_schema_has_column_name(source_schema, state, col);
+                let plan_id = match (in_target, in_source) {
+                    (true, false) => Some(MERGE_TARGET_DEFAULT_PLAN_ID),
+                    (false, true) => Some(MERGE_SOURCE_DEFAULT_PLAN_ID),
+                    (true, true) => Some(MERGE_TARGET_DEFAULT_PLAN_ID),
+                    (false, false) => None,
+                };
+                Expr::UnresolvedAttribute {
+                    name,
+                    plan_id,
+                    is_metadata_column,
+                }
+            } else {
+                Expr::UnresolvedAttribute {
+                    name,
+                    plan_id: None,
+                    is_metadata_column,
+                }
+            }
+        }
+        Expr::UnresolvedAttribute { .. } => expr,
+        Expr::Literal(_) => expr,
+        Expr::UnresolvedFunction(mut f) => {
+            f.arguments = f
+                .arguments
+                .into_iter()
+                .map(|e| {
+                    merge_disambiguate_unqualified_plan_ids(e, state, target_schema, source_schema)
+                })
+                .collect();
+            Expr::UnresolvedFunction(f)
+        }
+        Expr::UnresolvedStar {
+            target,
+            plan_id: None,
+            wildcard_options,
+        } => Expr::UnresolvedStar {
+            target,
+            plan_id: Some(MERGE_TARGET_DEFAULT_PLAN_ID),
+            wildcard_options,
+        },
+        Expr::UnresolvedStar { .. } => expr,
+        Expr::Alias {
+            expr,
+            name,
+            metadata,
+        } => Expr::Alias {
+            expr: Box::new(merge_disambiguate_unqualified_plan_ids(
+                *expr,
+                state,
+                target_schema,
+                source_schema,
+            )),
+            name,
+            metadata,
+        },
+        Expr::Cast {
+            expr,
+            cast_to_type,
+            rename,
+            is_try,
+        } => Expr::Cast {
+            expr: Box::new(merge_disambiguate_unqualified_plan_ids(
+                *expr,
+                state,
+                target_schema,
+                source_schema,
+            )),
+            cast_to_type,
+            rename,
+            is_try,
+        },
+        Expr::UnresolvedRegex {
+            col_name,
+            plan_id: None,
+        } => Expr::UnresolvedRegex {
+            col_name,
+            plan_id: Some(MERGE_TARGET_DEFAULT_PLAN_ID),
+        },
+        Expr::UnresolvedRegex { .. } => expr,
+        Expr::SortOrder(sort) => Expr::SortOrder(spec::SortOrder {
+            child: Box::new(merge_disambiguate_unqualified_plan_ids(
+                *sort.child,
+                state,
+                target_schema,
+                source_schema,
+            )),
+            ..sort
+        }),
+        Expr::LambdaFunction {
+            function,
+            arguments,
+        } => Expr::LambdaFunction {
+            function: Box::new(merge_disambiguate_unqualified_plan_ids(
+                *function,
+                state,
+                target_schema,
+                source_schema,
+            )),
+            arguments,
+        },
+        Expr::Window {
+            window_function,
+            window,
+        } => Expr::Window {
+            window_function: Box::new(merge_disambiguate_unqualified_plan_ids(
+                *window_function,
+                state,
+                target_schema,
+                source_schema,
+            )),
+            window,
+        },
+        Expr::UnresolvedExtractValue { child, extraction } => Expr::UnresolvedExtractValue {
+            child: Box::new(merge_disambiguate_unqualified_plan_ids(
+                *child,
+                state,
+                target_schema,
+                source_schema,
+            )),
+            extraction: Box::new(merge_disambiguate_unqualified_plan_ids(
+                *extraction,
+                state,
+                target_schema,
+                source_schema,
+            )),
+        },
+        Expr::UpdateFields {
+            struct_expression,
+            field_name,
+            value_expression,
+        } => Expr::UpdateFields {
+            struct_expression: Box::new(merge_disambiguate_unqualified_plan_ids(
+                *struct_expression,
+                state,
+                target_schema,
+                source_schema,
+            )),
+            field_name,
+            value_expression: value_expression.map(|v| {
+                Box::new(merge_disambiguate_unqualified_plan_ids(
+                    *v,
+                    state,
+                    target_schema,
+                    source_schema,
+                ))
+            }),
+        },
+        Expr::UnresolvedNamedLambdaVariable(_) => expr,
+        Expr::CommonInlineUserDefinedFunction(_) => expr,
+        Expr::CallFunction {
+            function_name,
+            arguments,
+        } => Expr::CallFunction {
+            function_name,
+            arguments: arguments
+                .into_iter()
+                .map(|e| {
+                    merge_disambiguate_unqualified_plan_ids(e, state, target_schema, source_schema)
+                })
+                .collect(),
+        },
+        Expr::Placeholder(_) => expr,
+        Expr::Rollup(exprs) => Expr::Rollup(
+            exprs
+                .into_iter()
+                .map(|e| {
+                    merge_disambiguate_unqualified_plan_ids(e, state, target_schema, source_schema)
+                })
+                .collect(),
+        ),
+        Expr::Cube(exprs) => Expr::Cube(
+            exprs
+                .into_iter()
+                .map(|e| {
+                    merge_disambiguate_unqualified_plan_ids(e, state, target_schema, source_schema)
+                })
+                .collect(),
+        ),
+        Expr::GroupingSets(sets) => Expr::GroupingSets(
+            sets.into_iter()
+                .map(|set| {
+                    set.into_iter()
+                        .map(|e| {
+                            merge_disambiguate_unqualified_plan_ids(
+                                e,
+                                state,
+                                target_schema,
+                                source_schema,
+                            )
+                        })
+                        .collect()
+                })
+                .collect(),
+        ),
+        Expr::InSubquery {
+            expr,
+            subquery,
+            negated,
+        } => Expr::InSubquery {
+            expr: Box::new(merge_disambiguate_unqualified_plan_ids(
+                *expr,
+                state,
+                target_schema,
+                source_schema,
+            )),
+            subquery,
+            negated,
+        },
+        Expr::ScalarSubquery { .. } => expr,
+        Expr::Exists { .. } => expr,
+        Expr::InList {
+            expr,
+            list,
+            negated,
+        } => Expr::InList {
+            expr: Box::new(merge_disambiguate_unqualified_plan_ids(
+                *expr,
+                state,
+                target_schema,
+                source_schema,
+            )),
+            list: list
+                .into_iter()
+                .map(|e| {
+                    merge_disambiguate_unqualified_plan_ids(e, state, target_schema, source_schema)
+                })
+                .collect(),
+            negated,
+        },
+        Expr::IsFalse(e) => Expr::IsFalse(Box::new(merge_disambiguate_unqualified_plan_ids(
+            *e,
+            state,
+            target_schema,
+            source_schema,
+        ))),
+        Expr::IsNotFalse(e) => Expr::IsNotFalse(Box::new(merge_disambiguate_unqualified_plan_ids(
+            *e,
+            state,
+            target_schema,
+            source_schema,
+        ))),
+        Expr::IsTrue(e) => Expr::IsTrue(Box::new(merge_disambiguate_unqualified_plan_ids(
+            *e,
+            state,
+            target_schema,
+            source_schema,
+        ))),
+        Expr::IsNotTrue(e) => Expr::IsNotTrue(Box::new(merge_disambiguate_unqualified_plan_ids(
+            *e,
+            state,
+            target_schema,
+            source_schema,
+        ))),
+        Expr::IsNull(e) => Expr::IsNull(Box::new(merge_disambiguate_unqualified_plan_ids(
+            *e,
+            state,
+            target_schema,
+            source_schema,
+        ))),
+        Expr::IsNotNull(e) => Expr::IsNotNull(Box::new(merge_disambiguate_unqualified_plan_ids(
+            *e,
+            state,
+            target_schema,
+            source_schema,
+        ))),
+        Expr::IsUnknown(e) => Expr::IsUnknown(Box::new(merge_disambiguate_unqualified_plan_ids(
+            *e,
+            state,
+            target_schema,
+            source_schema,
+        ))),
+        Expr::IsNotUnknown(e) => Expr::IsNotUnknown(Box::new(
+            merge_disambiguate_unqualified_plan_ids(*e, state, target_schema, source_schema),
+        )),
+        Expr::Between {
+            expr,
+            negated,
+            low,
+            high,
+        } => Expr::Between {
+            expr: Box::new(merge_disambiguate_unqualified_plan_ids(
+                *expr,
+                state,
+                target_schema,
+                source_schema,
+            )),
+            negated,
+            low: Box::new(merge_disambiguate_unqualified_plan_ids(
+                *low,
+                state,
+                target_schema,
+                source_schema,
+            )),
+            high: Box::new(merge_disambiguate_unqualified_plan_ids(
+                *high,
+                state,
+                target_schema,
+                source_schema,
+            )),
+        },
+        Expr::IsDistinctFrom { left, right } => Expr::IsDistinctFrom {
+            left: Box::new(merge_disambiguate_unqualified_plan_ids(
+                *left,
+                state,
+                target_schema,
+                source_schema,
+            )),
+            right: Box::new(merge_disambiguate_unqualified_plan_ids(
+                *right,
+                state,
+                target_schema,
+                source_schema,
+            )),
+        },
+        Expr::IsNotDistinctFrom { left, right } => Expr::IsNotDistinctFrom {
+            left: Box::new(merge_disambiguate_unqualified_plan_ids(
+                *left,
+                state,
+                target_schema,
+                source_schema,
+            )),
+            right: Box::new(merge_disambiguate_unqualified_plan_ids(
+                *right,
+                state,
+                target_schema,
+                source_schema,
+            )),
+        },
+        Expr::SimilarTo {
+            expr,
+            pattern,
+            negated,
+            escape_char,
+            case_insensitive,
+        } => Expr::SimilarTo {
+            expr: Box::new(merge_disambiguate_unqualified_plan_ids(
+                *expr,
+                state,
+                target_schema,
+                source_schema,
+            )),
+            pattern: Box::new(merge_disambiguate_unqualified_plan_ids(
+                *pattern,
+                state,
+                target_schema,
+                source_schema,
+            )),
+            negated,
+            escape_char,
+            case_insensitive,
+        },
+        Expr::Table { expr } => Expr::Table {
+            expr: Box::new(merge_disambiguate_unqualified_plan_ids(
+                *expr,
+                state,
+                target_schema,
+                source_schema,
+            )),
+        },
+        Expr::UnresolvedDate { .. } => expr,
+        Expr::UnresolvedTimestamp { .. } => expr,
     }
 }
 
