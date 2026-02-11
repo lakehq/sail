@@ -253,6 +253,11 @@ pub enum QueryNode {
         recursive: bool,
         ctes: Vec<(Identifier, QueryPlan)>,
     },
+    /// A relation that wraps a root plan with referenced subquery plans.
+    WithRelations {
+        root: Box<QueryPlan>,
+        references: Vec<QueryPlan>,
+    },
     LateralView {
         input: Option<Box<QueryPlan>>,
         function: ObjectName,
