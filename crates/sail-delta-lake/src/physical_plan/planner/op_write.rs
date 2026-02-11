@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::common::{DataFusionError, Result};
+use datafusion::common::{DataFusionError, Result, ToDFSchema};
 use datafusion::physical_expr::expressions::NotExpr;
 use datafusion::physical_expr::{LexRequirement, PhysicalExpr};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -22,7 +22,7 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
-use sail_common_datafusion::physical_expr::PhysicalExprWithSource;
+use sail_common_datafusion::logical_expr::LogicalPredicateInfo;
 
 use super::context::PlannerContext;
 use super::utils::{
@@ -44,8 +44,13 @@ pub async fn build_write_plan(
     sort_order: Option<LexRequirement>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     match sink_mode.clone() {
-        PhysicalSinkMode::OverwriteIf { condition } => {
-            build_overwrite_if_plan(ctx, input, condition, sort_order).await
+        PhysicalSinkMode::OverwriteIf { condition, source } => {
+            let condition = condition.ok_or_else(|| {
+                DataFusionError::Plan(
+                    "missing overwrite-if logical condition while building Delta plan".to_string(),
+                )
+            })?;
+            build_overwrite_if_plan(ctx, input, *condition, source, sort_order).await
         }
         _ => build_standard_plan(ctx, input, sink_mode, sort_order).await,
     }
@@ -151,7 +156,8 @@ async fn build_full_overwrite_plan(
 async fn build_overwrite_if_plan(
     ctx: &PlannerContext<'_>,
     input: Arc<dyn ExecutionPlan>,
-    condition: PhysicalExprWithSource,
+    condition: LogicalPredicateInfo,
+    source: Option<String>,
     sort_order: Option<LexRequirement>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let table = ctx.open_table().await?;
@@ -165,9 +171,22 @@ async fn build_overwrite_if_plan(
         .arrow_schema()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let partition_columns = snapshot_state.metadata().partition_columns().clone();
+    let table_df_schema = table_schema
+        .clone()
+        .to_dfschema()
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let physical_condition = ctx
+        .session()
+        .create_physical_expr(condition.expr, &table_df_schema)?;
+    let predicate_source = source.or(condition.source);
 
-    let old_data_plan =
-        build_old_data_plan(ctx, condition.expr.clone(), version, table_schema.clone()).await?;
+    let old_data_plan = build_old_data_plan(
+        ctx,
+        physical_condition.clone(),
+        version,
+        table_schema.clone(),
+    )
+    .await?;
 
     let target_partitions = ctx.session().config().target_partitions().max(1);
     let new_plan = create_projection(Arc::clone(&input), ctx.partition_columns().to_vec())
@@ -187,7 +206,7 @@ async fn build_overwrite_if_plan(
         } else {
             Some(ctx.partition_columns().to_vec())
         },
-        predicate: condition.source.clone(),
+        predicate: predicate_source.clone(),
     });
     let writer = Arc::new(DeltaWriterExec::new(
         Arc::clone(&union_plan),
@@ -195,7 +214,8 @@ async fn build_overwrite_if_plan(
         ctx.options().clone(),
         ctx.partition_columns().to_vec(),
         PhysicalSinkMode::OverwriteIf {
-            condition: condition.clone(),
+            condition: None,
+            source: predicate_source.clone(),
         },
         ctx.table_exists(),
         union_plan.schema(),
@@ -204,7 +224,7 @@ async fn build_overwrite_if_plan(
 
     let mut expr_props = PredicateProperties::new(partition_columns.clone());
     expr_props
-        .analyze_predicate(&condition.expr)
+        .analyze_predicate(&physical_condition)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     let kernel_snapshot = snapshot_state.snapshot().snapshot().inner.clone();
@@ -223,7 +243,7 @@ async fn build_overwrite_if_plan(
     let mut log_replay_options = LogReplayOptions::default();
     if expr_props.partition_only {
         log_replay_options.log_filter = Some(LogReplayFilter {
-            predicate: condition.expr.clone(),
+            predicate: physical_condition.clone(),
             table_schema: table_schema.clone(),
         });
     }
@@ -241,7 +261,7 @@ async fn build_overwrite_if_plan(
     let find_files_plan: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
         meta_scan,
         ctx.table_url().clone(),
-        Some(condition.expr.clone()),
+        Some(physical_condition.clone()),
         Some(table_schema.clone()),
         version,
         partition_columns.clone(),
@@ -257,7 +277,10 @@ async fn build_overwrite_if_plan(
         ctx.partition_columns().to_vec(),
         ctx.table_exists(),
         input_schema,
-        PhysicalSinkMode::OverwriteIf { condition },
+        PhysicalSinkMode::OverwriteIf {
+            condition: None,
+            source: predicate_source,
+        },
     )))
 }
 

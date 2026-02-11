@@ -375,7 +375,7 @@ impl DeltaWriterExec {
                         predicate: None,
                     });
                 }
-                PhysicalSinkMode::OverwriteIf { condition } => {
+                PhysicalSinkMode::OverwriteIf { source, .. } => {
                     operation = Some(DeltaOperation::Write {
                         mode: SaveMode::Overwrite,
                         partition_by: if partition_columns.is_empty() {
@@ -383,7 +383,7 @@ impl DeltaWriterExec {
                         } else {
                             Some(partition_columns.clone())
                         },
-                        predicate: condition.source.clone(),
+                        predicate: source.clone(),
                     });
                 }
                 PhysicalSinkMode::ErrorIfExists => {
