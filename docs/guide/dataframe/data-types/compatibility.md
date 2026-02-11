@@ -161,9 +161,9 @@ The table below shows how Spark data types are mapped to Python types and Arrow 
       <td>Date64</td>
     </tr>
     <tr>
-      <td>-</td>
-      <td>-</td>
-      <td>-</td>
+      <td><strong>TimeType</strong></td>
+      <td><code>TimeType(precision: int = 6)</code></td>
+      <td><code>datetime.time</code></td>
       <td>
         Time32(Second)<br />Time32(Millisecond)<br />Time64(Microsecond)<br />Time64(Nanosecond)
       </td>
@@ -262,3 +262,4 @@ The table below shows how Spark data types are mapped to Python types and Arrow 
 3. **StringType**, **CharType(_n_)**, and **VarcharType(_n_)** in Spark are mapped to either the Utf8 or LargeUtf8 type in Arrow, depending on the `spark.sql.execution.arrow.useLargeVarTypes` configuration option.
 4. **BinaryType** in Spark is mapped to either the Binary or LargeBinary type in Arrow, depending on the `spark.sql.execution.arrow.useLargeVarTypes` configuration option.
 5. **CalendarIntervalType** in Spark has microsecond precision while the Interval(MonthDayNano) Arrow type has nanosecond precision. So the supported data range for calendar intervals is different between JVM Spark and Arrow.
+6. **TimeType** represents time of day values without a time zone. The `precision` parameter specifies the number of decimal digits following the decimal point in the seconds field. Spark 4.0 supports precision values `0`, `3`, and `6` (second, millisecond, microsecond). The default precision is `6` (microsecond). Precision `0` and `3` map to Time32 in Arrow, while precision `6` maps to Time64(Microsecond) in Arrow. Note: TIME precision 9 (nanosecond) is not supported by Spark 4.0.
