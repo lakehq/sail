@@ -1,38 +1,39 @@
-use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
+use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::{DFSchema, DFSchemaRef, Result};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
+use educe::Educe;
 use sail_common_datafusion::utils::items::ItemTaker;
 
-#[allow(clippy::derived_hash_with_manual_eq)]
-#[derive(Clone, Debug, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Educe)]
+#[educe(Eq, Hash, PartialOrd)]
 pub struct MonotonicIdNode {
     input: Arc<LogicalPlan>,
     column_name: String,
+    #[educe(PartialOrd(ignore))]
     schema: DFSchemaRef,
 }
 
 impl MonotonicIdNode {
     pub fn try_new(input: Arc<LogicalPlan>, column_name: String) -> Result<Self> {
-        let mut fields = input.schema().as_ref().as_arrow().fields().to_vec();
-        fields.push(Arc::new(Field::new(
-            column_name.clone(),
-            DataType::Int64,
-            false,
-        )));
-        let arrow_schema = ArrowSchema::new(fields);
-        let schema = Arc::new(DFSchema::from_unqualified_fields(
-            arrow_schema.fields().to_vec().into(),
-            HashMap::new(),
-        )?);
+        let mut qualified_fields = input
+            .schema()
+            .iter()
+            .map(|(qualifier, field)| (qualifier.cloned(), Arc::clone(field)))
+            .collect::<Vec<_>>();
+        qualified_fields.push((
+            None,
+            Arc::new(Field::new(column_name.clone(), DataType::Int64, false)),
+        ));
+        let schema =
+            DFSchema::new_with_metadata(qualified_fields, input.schema().metadata().clone())?
+                .with_functional_dependencies(input.schema().functional_dependencies().clone())?;
         Ok(Self {
             input,
             column_name,
-            schema,
+            schema: Arc::new(schema),
         })
     }
 
@@ -42,35 +43,6 @@ impl MonotonicIdNode {
 
     pub fn column_name(&self) -> &str {
         &self.column_name
-    }
-}
-
-impl PartialEq for MonotonicIdNode {
-    fn eq(&self, other: &Self) -> bool {
-        self.input == other.input
-            && self.column_name == other.column_name
-            && self.schema == other.schema
-    }
-}
-
-#[derive(PartialEq, PartialOrd)]
-struct MonotonicIdNodeOrd<'a> {
-    input: &'a Arc<LogicalPlan>,
-    column_name: &'a String,
-}
-
-impl<'a> From<&'a MonotonicIdNode> for MonotonicIdNodeOrd<'a> {
-    fn from(node: &'a MonotonicIdNode) -> Self {
-        Self {
-            input: &node.input,
-            column_name: &node.column_name,
-        }
-    }
-}
-
-impl PartialOrd for MonotonicIdNode {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        MonotonicIdNodeOrd::from(self).partial_cmp(&other.into())
     }
 }
 

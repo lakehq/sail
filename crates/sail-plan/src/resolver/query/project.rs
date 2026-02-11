@@ -34,9 +34,9 @@ impl PlanResolver<'_> {
         let schema = input.schema();
         let expr = self.resolve_named_expressions(expr, schema, state).await?;
         let (input, expr) = self.rewrite_wildcard(input, expr, state)?;
+        let (input, expr) = self.rewrite_projection::<MonotonicIdRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<WindowRewriter>(input, expr, state)?;
-        let (input, expr) = self.rewrite_projection::<MonotonicIdRewriter>(input, expr, state)?;
         let expr = self.rewrite_multi_expr(expr)?;
         let has_aggregate = expr.iter().any(|e| {
             e.expr

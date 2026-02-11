@@ -8,7 +8,6 @@ use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::EquivalenceProperties;
-use datafusion::physical_plan::execution_plan::EmissionType;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
     RecordBatchStream,
@@ -46,7 +45,7 @@ impl MonotonicIdExec {
         let properties = PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             input.output_partitioning().clone(),
-            EmissionType::Both,
+            input.pipeline_behavior(),
             input.boundedness(),
         );
         Ok(Self {
@@ -124,18 +123,16 @@ impl ExecutionPlan for MonotonicIdExec {
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         let mut stats = self.input.partition_statistics(partition)?;
         let col_idx = self.schema.index_of(&self.column_name)?;
-
-        if col_idx < stats.column_statistics.len() {
-            stats.column_statistics[col_idx] = ColumnStatistics::new_unknown();
+        let unknown_col_stats = ColumnStatistics::new_unknown();
+        if col_idx <= stats.column_statistics.len() {
+            stats.column_statistics.insert(col_idx, unknown_col_stats);
         } else {
             while stats.column_statistics.len() < col_idx {
                 stats
                     .column_statistics
                     .push(ColumnStatistics::new_unknown());
             }
-            stats
-                .column_statistics
-                .push(ColumnStatistics::new_unknown());
+            stats.column_statistics.push(unknown_col_stats);
         }
 
         // One additional Int64 output column contributes 8 bytes per row when row counts are known.
@@ -210,11 +207,14 @@ impl Stream for MonotonicIdStream {
                     Ok(c) => c,
                     Err(e) => return Poll::Ready(Some(Err(e))),
                 };
-                if self.col_idx >= cols.len() {
-                    cols.push(id_col);
-                } else {
-                    cols[self.col_idx] = id_col;
+                if self.col_idx > cols.len() {
+                    return Poll::Ready(Some(internal_err!(
+                        "MonotonicIdExec output column index {0} exceeds input column count {1}",
+                        self.col_idx,
+                        cols.len()
+                    )));
                 }
+                cols.insert(self.col_idx, id_col);
                 Poll::Ready(Some(
                     RecordBatch::try_new(self.schema.clone(), cols).map_err(Into::into),
                 ))

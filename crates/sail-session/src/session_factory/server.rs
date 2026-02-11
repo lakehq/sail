@@ -195,8 +195,7 @@ impl ServerSessionFactory {
     }
 
     fn apply_execution_config(&mut self, config: &mut SessionConfig) {
-        let options = config.options_mut();
-        let execution = &mut options.execution;
+        let execution = &mut config.options_mut().execution;
 
         execution.batch_size = self.config.execution.batch_size;
         if self.config.execution.default_parallelism > 0 {
