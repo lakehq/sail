@@ -19,7 +19,12 @@ impl PlanResolver<'_> {
             let plan_id = ref_plan
                 .plan_id
                 .ok_or_else(|| PlanError::invalid("subquery reference missing plan_id"))?;
-            state.insert_subquery_reference(plan_id, ref_plan);
+            if state.insert_subquery_reference(plan_id, ref_plan).is_some() {
+                return Err(PlanError::invalid(format!(
+                    "duplicate subquery reference for plan_id {}",
+                    plan_id
+                )));
+            }
         }
         self.resolve_query_plan(root, scope.state()).await
     }
