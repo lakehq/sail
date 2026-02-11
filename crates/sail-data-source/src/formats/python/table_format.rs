@@ -1,6 +1,6 @@
-/// TableFormat implementation for Python DataSources.
+/// TableFormat implementation for Python data sources.
 ///
-/// This enables Python datasources to be used with `spark.read.format("name")` syntax
+/// This enables Python data sources to be used with `spark.read.format("name")` syntax
 /// by integrating with the TableFormatRegistry.
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -11,18 +11,18 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{not_impl_err, Result};
 use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat, TableFormatRegistry};
 
-use super::discovery::DATASOURCE_REGISTRY;
+use super::discovery::DATA_SOURCE_REGISTRY;
 use super::executor::InProcessExecutor;
 use super::python_datasource::PythonDataSource;
 use super::python_table_provider::PythonTableProvider;
 
-/// TableFormat implementation for a Python DataSource.
+/// TableFormat implementation for a Python data source.
 ///
 /// Each registered Python datasource gets its own PythonTableFormat instance,
 /// keyed by the datasource name.
 ///
-/// For session-registered datasources, the pickled class bytes are embedded directly
-/// in the format instance. For entry-point discovered datasources, the bytes are
+/// For session-registered data sources, the pickled class bytes are embedded directly
+/// in the format instance. For entry-point discovered data sources, the bytes are
 /// looked up from the global registry.
 #[derive(Debug)]
 pub struct PythonTableFormat {
@@ -35,7 +35,7 @@ pub struct PythonTableFormat {
 impl PythonTableFormat {
     /// Create a new PythonTableFormat for an entry-point discovered datasource.
     ///
-    /// The pickled class will be looked up from the global `DATASOURCE_REGISTRY`.
+    /// The pickled class will be looked up from the global `DATA_SOURCE_REGISTRY`.
     pub fn new(name: String) -> Self {
         Self {
             name,
@@ -45,7 +45,7 @@ impl PythonTableFormat {
 
     /// Create a PythonTableFormat with embedded pickled class bytes.
     ///
-    /// Used for session-registered datasources where the pickled bytes are stored
+    /// Used for session-registered data sources where the pickled bytes are stored
     /// directly in the format instance for session isolation.
     pub fn with_pickled_class(name: String, pickled_class: Vec<u8>) -> Self {
         Self {
@@ -54,12 +54,12 @@ impl PythonTableFormat {
         }
     }
 
-    /// Register all discovered Python datasources with the TableFormatRegistry.
+    /// Register all discovered Python data sources with the TableFormatRegistry.
     ///
     /// This should be called during session initialization after calling
-    /// `discover_datasources()`.
+    /// `discover_data_sources()`.
     pub fn register_all(registry: &TableFormatRegistry) -> Result<()> {
-        for name in DATASOURCE_REGISTRY.list() {
+        for name in DATA_SOURCE_REGISTRY.list() {
             let format = Arc::new(Self::new(name));
             registry.register(format)?;
         }
@@ -94,8 +94,8 @@ impl PythonTableFormat {
         let pickled_class = match &self.pickled_class {
             Some(bytes) => bytes.clone(),
             None => {
-                // Lookup from global registry for entry-point discovered datasources
-                let entry = DATASOURCE_REGISTRY.get(&self.name).ok_or_else(|| {
+                // Lookup from global registry for entry-point discovered data sources
+                let entry = DATA_SOURCE_REGISTRY.get(&self.name).ok_or_else(|| {
                     datafusion_common::DataFusionError::Plan(format!(
                         "Python datasource '{}' not found in registry",
                         self.name
