@@ -213,6 +213,22 @@ impl PlanResolver<'_> {
                 self.resolve_expression_exists(*subquery, negated, schema, state)
                     .await
             }
+            Expr::Subquery {
+                plan_id,
+                subquery_type,
+                in_subquery_values,
+                negated,
+            } => {
+                self.resolve_expression_subquery(
+                    plan_id,
+                    subquery_type,
+                    in_subquery_values,
+                    negated,
+                    schema,
+                    state,
+                )
+                .await
+            }
             Expr::InList {
                 expr,
                 list,
