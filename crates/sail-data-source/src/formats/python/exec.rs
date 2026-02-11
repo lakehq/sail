@@ -48,7 +48,7 @@ use super::executor::InputPartition;
 /// worker-side initialization in distributed mode.
 #[derive(Debug)]
 pub struct PythonDataSourceExec {
-    /// Pickled Python data sourceReader instance (with filters applied)
+    /// Pickled Python data source reader instance (with filters applied)
     pickled_reader: Vec<u8>,
     /// Schema of the output data
     schema: SchemaRef,
@@ -63,7 +63,7 @@ impl PythonDataSourceExec {
     ///
     /// # Arguments
     ///
-    /// * `pickled_reader` - Pickled Python data sourceReader instance (with filters applied)
+    /// * `pickled_reader` - Pickled Python data source reader instance (with filters applied)
     /// * `schema` - Schema of the output data
     /// * `partitions` - Partitions for parallel reading
     pub fn new(

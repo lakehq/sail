@@ -3,7 +3,7 @@
 //! This module provides:
 //! - Entry point discovery via `importlib.metadata.entry_points()`
 //! - Thread-safe registry with `DashMap`
-//! - Datasource validation for security
+//! - Data source validation for security
 use std::ffi::CString;
 
 use dashmap::mapref::entry::Entry;
@@ -24,7 +24,7 @@ const MODULE_SOURCE_CODE: &str = include_str!("discovery.py");
 struct PyDiscovery;
 
 impl PyDiscovery {
-    /// The group that the entry points are registered.
+    /// The group in which the entry points are registered.
     const ENTRY_POINT_GROUP: &'static str = "pysail.datasources";
 
     fn module(py: Python) -> PyResult<Bound<PyModule>> {

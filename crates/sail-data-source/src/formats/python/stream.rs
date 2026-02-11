@@ -103,7 +103,7 @@ impl PythonDataSourceStream {
     /// Spawns a dedicated thread for Python execution.
     ///
     /// # Arguments
-    /// * `pickled_reader` - Pickled Python data sourceReader instance (with filters applied)
+    /// * `pickled_reader` - Pickled Python data source reader instance (with filters applied)
     /// * `partition` - The partition to read
     /// * `schema` - Expected output schema
     /// * `batch_size` - Batch size for row collection (from TaskContext)
