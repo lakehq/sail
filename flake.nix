@@ -20,7 +20,7 @@
 
         py = pkgs.python313;
         pyp = pkgs.python313Packages;
-	py311 = pkgs.python311;
+        py311 = pkgs.python311;
 
       in {
         devShells.default = pkgs.mkShell {
@@ -40,7 +40,7 @@
 
               # Prereqs from Sail docs
               protobuf   # protoc
-              nodejs_20
+              nodejs_22
               pnpm
               zig
               maturin
@@ -61,6 +61,7 @@
 
               # Python base for venvs
               py
+              py311
               pyp.virtualenv
               pyp.setuptools
               pyp.wheel
@@ -77,6 +78,7 @@
             ''
               export RUST_BACKTRACE=1
               export JAVA_HOME=${pkgs.jdk17}
+              export PROTOC="${pkgs.protobuf}/bin/protoc"
 
               export PYTHONPATH="$PWD/python:$PYTHONPATH"
               export PYO3_PYTHON="${py}/bin/python"
@@ -102,6 +104,42 @@
               if [ -e "${pkgs.fzf}/share/fzf/completion.bash" ]; then
                 source "${pkgs.fzf}/share/fzf/completion.bash"
               fi
+
+              # Auto-download Ibis test data if not present
+              if [ ! -d "opt/ibis-testing-data" ]; then
+                echo ""
+                echo -e "\033[1;36mDownloading Ibis test data...\033[0m"
+                git clone --depth 1 https://github.com/ibis-project/testing-data opt/ibis-testing-data
+                echo -e "\033[1;32m✓ Ibis test data downloaded\033[0m"
+              fi
+
+              # Print helpful commands
+              echo ""
+              echo -e "\033[1;36m=== Sail Development Commands ===\033[0m"
+              echo ""
+              echo "hatch run maturin develop"
+              echo "hatch run test-spark.spark-4.1.1:pip install 'pyspark[connect]==4.1.1' 'pandas'"
+	      echo ""
+              echo -e "\033[1;32m✓ Ibis test data ready at opt/ibis-testing-data\033[0m"
+              echo ""
+              echo -e "\033[1;33m1. Run Sail server (port 50051):\033[0m"
+              echo "   hatch run test-ibis:scripts/spark-tests/run-server.sh"
+              echo ""
+              echo -e "\033[1;33m2. Run Ibis tests (against Sail server on localhost:50051):\033[0m"
+              echo "   hatch run test-ibis:env SPARK_REMOTE=\"sc://localhost:50051\" scripts/spark-tests/run-tests.sh"
+              echo ""
+              echo -e "\033[1;33m3. Run feature tests (BDD with pytest-bdd):\033[0m"
+              echo "   hatch run pytest python/pysail/tests/spark/*/test_features.py"
+              echo ""
+              echo -e "\033[1;33m4. Run all tests (against Sail server on localhost:50051):\033[0m"
+              echo "   env SPARK_REMOTE=\"sc://localhost:50051\" hatch run pytest --pyargs pysail"
+              echo ""
+              echo -e "\033[1;33m5. Run tests with Spark local (not Sail):\033[0m"
+              echo "   env SPARK_REMOTE=\"local\" hatch run pytest --pyargs pysail"
+              echo ""
+              echo -e "\033[1;33m4. Run all tests features (against Sail server on localhost:50051):\033[0m"
+              echo " export SPARK_REMOTE=\"sc://localhost:50051\" && hatch run pytest python/pysail/tests/spark/function/test_features.py"
+              echo ""
             ''
             + lib.optionalString isLinux ''
               export ARROW_LIB_DIR=${pkgs.arrow-cpp}/lib
