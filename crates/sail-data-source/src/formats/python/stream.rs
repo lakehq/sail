@@ -11,7 +11,7 @@ use datafusion_common::Result;
 use futures::Stream;
 use tokio::sync::mpsc;
 
-/// RecordBatch stream from Python DataSource.
+/// RecordBatch stream from Python data source.
 ///
 /// This stream reads from a Python datasource in a dedicated thread,
 /// with proper RAII cleanup via the Drop impl.
@@ -103,7 +103,7 @@ impl PythonDataSourceStream {
     /// Spawns a dedicated thread for Python execution.
     ///
     /// # Arguments
-    /// * `pickled_reader` - Pickled Python DataSourceReader instance (with filters applied)
+    /// * `pickled_reader` - Pickled Python data sourceReader instance (with filters applied)
     /// * `partition` - The partition to read
     /// * `schema` - Expected output schema
     /// * `batch_size` - Batch size for row collection (from TaskContext)

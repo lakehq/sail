@@ -1,24 +1,61 @@
-//! Discovery system for Python datasources.
+//! Discovery system for Python data sources.
 //!
 //! This module provides:
 //! - Entry point discovery via `importlib.metadata.entry_points()`
 //! - Thread-safe registry with `DashMap`
 //! - Datasource validation for security
-//!
-//! Entry points are registered under the group `sail.datasources`.
+use std::ffi::CString;
+
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use datafusion_common::{exec_err, Result};
 use once_cell::sync::Lazy;
+use pyo3::prelude::PyModule;
+use pyo3::sync::PyOnceLock;
 use pyo3::types::PyAnyMethods;
+use pyo3::{Bound, Py, PyAny, PyResult, Python};
 
 use super::error::py_err;
 
-/// Global registry for Python datasources.
+const MODULE_NAME: &str = "utils.spark.datasource.discovery";
+const MODULE_FILE_NAME: &str = "discovery.py";
+const MODULE_SOURCE_CODE: &str = include_str!("discovery.py");
+
+struct PyDiscovery;
+
+impl PyDiscovery {
+    /// The group that the entry points are registered.
+    const ENTRY_POINT_GROUP: &'static str = "pysail.datasource";
+
+    fn module(py: Python) -> PyResult<Bound<PyModule>> {
+        static MODULE: PyOnceLock<Py<PyModule>> = PyOnceLock::new();
+
+        Ok(MODULE
+            .get_or_try_init(py, || -> PyResult<_> {
+                Ok(PyModule::from_code(
+                    py,
+                    CString::new(MODULE_SOURCE_CODE)?.as_c_str(),
+                    CString::new(MODULE_FILE_NAME)?.as_c_str(),
+                    CString::new(MODULE_NAME)?.as_c_str(),
+                )?
+                .unbind())
+            })?
+            .clone_ref(py)
+            .into_bound(py))
+    }
+
+    fn discover_entry_points<'py>(py: Python<'py>, group: &str) -> PyResult<Bound<'py, PyAny>> {
+        Self::module(py)?
+            .getattr("discover_entry_points")?
+            .call1((group,))
+    }
+}
+
+/// Global registry for Python data sources.
 ///
 /// Stores pickled datasource classes for GIL-free access.
 /// Thread-safe via `DashMap`.
-pub static DATASOURCE_REGISTRY: Lazy<PythonDataSourceRegistry> =
+pub static DATA_SOURCE_REGISTRY: Lazy<PythonDataSourceRegistry> =
     Lazy::new(PythonDataSourceRegistry::new);
 
 /// Registry entry for a discovered datasource.
@@ -32,7 +69,7 @@ pub struct DataSourceEntry {
     pub module_path: String,
 }
 
-/// Thread-safe registry for Python datasources.
+/// Thread-safe registry for Python data sources.
 pub struct PythonDataSourceRegistry {
     /// Map from datasource name to entry
     entries: DashMap<String, DataSourceEntry>,
@@ -85,24 +122,22 @@ impl Default for PythonDataSourceRegistry {
     }
 }
 
-/// Discover datasources from Python entry points.
+/// Discover data sources from Python entry points.
 ///
-/// Scans `sail.datasources` entry point group and registers found classes.
-pub fn discover_datasources() -> Result<usize> {
-    pyo3::Python::attach(|py| {
+/// Scans the entry point group and registers found classes.
+pub fn discover_data_sources() -> Result<usize> {
+    Python::attach(|py| {
         let count = discover_from_entry_points(py).unwrap_or(0);
         Ok(count)
     })
 }
 
-/// Discover datasources from Python entry points.
+/// Discover data sources from Python entry points.
 ///
-/// Returns the number of successfully registered datasources, or 0 if
+/// Returns the number of successfully registered data sources, or 0 if
 /// the entry points module is not available.
-fn discover_from_entry_points(py: pyo3::Python<'_>) -> Option<usize> {
-    let base_module = py.import("pysail.spark.datasource.registry").ok()?;
-    let discover_fn = base_module.getattr("discover_entry_points").ok()?;
-    let entries = discover_fn.call0().ok()?;
+fn discover_from_entry_points(py: Python<'_>) -> Option<usize> {
+    let entries = PyDiscovery::discover_entry_points(py, PyDiscovery::ENTRY_POINT_GROUP).ok()?;
     let iter = entries.try_iter().ok()?;
 
     let mut count = 0;
@@ -118,18 +153,14 @@ fn discover_from_entry_points(py: pyo3::Python<'_>) -> Option<usize> {
 ///
 /// Extracts the (name, class) tuple, validates the class, pickles it,
 /// and registers it atomically. Returns true on success.
-fn try_register_entry(
-    py: pyo3::Python<'_>,
-    entry: pyo3::Bound<'_, pyo3::PyAny>,
-    source: &str,
-) -> bool {
+fn try_register_entry(py: Python<'_>, entry: Bound<'_, PyAny>, source: &str) -> bool {
     // Extract (name, class) tuple
-    let Ok((name, cls)) = entry.extract::<(String, pyo3::Bound<'_, pyo3::PyAny>)>() else {
+    let Ok((name, cls)) = entry.extract::<(String, Bound<'_, PyAny>)>() else {
         return false;
     };
 
     // Use entry API for atomic check-and-insert (fixes TOCTOU)
-    let Entry::Vacant(vacant) = DATASOURCE_REGISTRY.entry(&name) else {
+    let Entry::Vacant(vacant) = DATA_SOURCE_REGISTRY.entry(&name) else {
         return false; // Already registered
     };
 
@@ -163,10 +194,7 @@ fn try_register_entry(
 /// Validate that a Python class is a valid datasource.
 ///
 /// Checks for required methods: `name`, `schema`, `reader`.
-pub fn validate_datasource_class(
-    py: pyo3::Python<'_>,
-    cls: &pyo3::Bound<'_, pyo3::PyAny>,
-) -> Result<()> {
+pub fn validate_datasource_class(py: Python<'_>, cls: &Bound<'_, PyAny>) -> Result<()> {
     // Check required methods exist
     let required_methods = ["name", "schema", "reader"];
 
@@ -198,10 +226,7 @@ pub fn validate_datasource_class(
 
 /// Validate a datasource instance has required methods.
 #[allow(dead_code)]
-pub fn validate_datasource_instance(
-    _py: pyo3::Python<'_>,
-    instance: &pyo3::Bound<'_, pyo3::PyAny>,
-) -> Result<()> {
+pub fn validate_datasource_instance(_py: Python<'_>, instance: &Bound<'_, PyAny>) -> Result<()> {
     let required_methods = ["name", "schema", "reader"];
 
     for method in required_methods {
@@ -217,7 +242,7 @@ pub fn validate_datasource_instance(
 }
 
 /// Pickle a Python class for GIL-free storage.
-fn pickle_class(py: pyo3::Python<'_>, cls: &pyo3::Bound<'_, pyo3::PyAny>) -> Result<Vec<u8>> {
+fn pickle_class(py: Python<'_>, cls: &Bound<'_, PyAny>) -> Result<Vec<u8>> {
     let cloudpickle = super::error::import_cloudpickle(py)?;
 
     let pickled = cloudpickle.call_method1("dumps", (cls,)).map_err(py_err)?;

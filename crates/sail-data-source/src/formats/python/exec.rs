@@ -1,31 +1,31 @@
-/// Execution plan for Python DataSource batch reads.
-///
-/// This execution plan reads data from a Python datasource in parallel,
-/// with one partition per InputPartition returned by the reader.
-///
-/// # Architecture
-///
-/// Uses `InProcessExecutor` for direct PyO3 calls. The executor is created
-/// lazily in `execute()` rather than at construction time, which:
-/// - Keeps the codec/serialization layer lightweight
-/// - Ensures workers create their own executor at runtime
-/// - Decouples construction from execution context
-///
-/// # Phase 6 Enhancements (Performance & Polish)
-///
-/// TODO: Expose partitioning metadata from Python datasources.
-/// Currently uses `UnknownPartitioning` which is correct but prevents query optimizations.
-/// If Python datasource provides hash/range partitioning info via an optional `partitioning()`
-/// method, this could enable partition pruning and join optimization in DataFusion.
-/// See: <https://docs.rs/datafusion/latest/datafusion/physical_expr/enum.Partitioning.html>
-///
-/// TODO: Integrate GIL metrics with DataFusion's MetricsSet.
-/// `PythonExecutionMetrics` (gil_wait_ns, gil_hold_ns, etc.) are currently only logged.
-/// Exposing via `fn metrics(&self) -> Option<MetricsSet>` would enable:
-/// - EXPLAIN ANALYZE visibility
-/// - Programmatic access via `ctx.collect_metrics()`
-/// - UI dashboards for execution bottleneck visualization
-///
+//! Execution plan for Python data source batch reads.
+//!
+//! This execution plan reads data from a Python datasource in parallel,
+//! with one partition per InputPartition returned by the reader.
+//!
+//! # Architecture
+//!
+//! Uses `InProcessExecutor` for direct PyO3 calls. The executor is created
+//! lazily in `execute()` rather than at construction time, which:
+//! - Keeps the codec/serialization layer lightweight
+//! - Ensures workers create their own executor at runtime
+//! - Decouples construction from execution context
+//!
+//! # Phase 6 Enhancements (Performance & Polish)
+//!
+//! TODO: Expose partitioning metadata from Python data sources.
+//! Currently uses `UnknownPartitioning` which is correct but prevents query optimizations.
+//! If Python datasource provides hash/range partitioning info via an optional `partitioning()`
+//! method, this could enable partition pruning and join optimization in DataFusion.
+//! See: <https://docs.rs/datafusion/latest/datafusion/physical_expr/enum.Partitioning.html>
+//!
+//! TODO: Integrate GIL metrics with DataFusion's MetricsSet.
+//! `PythonExecutionMetrics` (gil_wait_ns, gil_hold_ns, etc.) are currently only logged.
+//! Exposing via `fn metrics(&self) -> Option<MetricsSet>` would enable:
+//! - EXPLAIN ANALYZE visibility
+//! - Programmatic access via `ctx.collect_metrics()`
+//! - UI dashboards for execution bottleneck visualization
+//!
 use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
@@ -48,7 +48,7 @@ use super::executor::InputPartition;
 /// worker-side initialization in distributed mode.
 #[derive(Debug)]
 pub struct PythonDataSourceExec {
-    /// Pickled Python DataSourceReader instance (with filters applied)
+    /// Pickled Python data sourceReader instance (with filters applied)
     pickled_reader: Vec<u8>,
     /// Schema of the output data
     schema: SchemaRef,
@@ -63,7 +63,7 @@ impl PythonDataSourceExec {
     ///
     /// # Arguments
     ///
-    /// * `pickled_reader` - Pickled Python DataSourceReader instance (with filters applied)
+    /// * `pickled_reader` - Pickled Python data sourceReader instance (with filters applied)
     /// * `schema` - Schema of the output data
     /// * `partitions` - Partitions for parallel reading
     pub fn new(

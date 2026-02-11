@@ -243,7 +243,6 @@ line-length = 120
 "crates/**/*.py" = ["INP001"]
 "python/pysail/docs/conf.py" = ["INP001"]
 "python/pysail/examples/**/*.py" = ["T201", "PLC0415"]
-"python/pysail/spark/datasource/registry.py" = ["PLC0415"]
 "python/pysail/tests/**/*.py" = ["S101", "PLC0415"]
 "scripts/**/*.py" = ["SLF001", "PLC0415"]
 
