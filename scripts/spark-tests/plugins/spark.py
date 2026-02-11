@@ -27,11 +27,14 @@ def spark_working_dir(tmp_path_factory):
 
     # Copy the test support data to the working directory
     # since some tests use relative paths to access the data.
+    # The directory may not exist when PySpark is installed via pip
+    # instead of from the source distribution.
     test_support_dir = Path(pyspark.__file__).parent / "python" / "test_support"
-    shutil.copytree(
-        test_support_dir,
-        working_dir / "python" / "test_support",
-    )
+    if test_support_dir.exists():
+        shutil.copytree(
+            test_support_dir,
+            working_dir / "python" / "test_support",
+        )
 
     os.chdir(working_dir)
 
@@ -69,7 +72,9 @@ def spark_doctest_session(doctest_namespace, request):
     if request.config.option.doctestmodules:
         from pyspark.sql import SparkSession
 
-        spark = SparkSession.builder.appName("doctest").remote("local").getOrCreate()
+        port = os.environ.get("SPARK_TESTING_REMOTE_PORT", "")
+        remote = f"sc://localhost:{port}" if port else "local"
+        spark = SparkSession.builder.appName("doctest").remote(remote).getOrCreate()
         doctest_namespace["spark"] = spark
         yield
         spark.stop()
@@ -158,7 +163,10 @@ def patch_pandas_test_utils():
     ]
 
     for name in modules:
-        module = importlib.import_module(name)
+        try:
+            module = importlib.import_module(name)
+        except ModuleNotFoundError:
+            continue
         module.assert_frame_equal = assert_frame_equal
 
 
