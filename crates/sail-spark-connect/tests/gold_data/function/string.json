@@ -985,7 +985,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: format_number"
+        "success": "ok"
       }
     },
     {
@@ -1007,7 +1007,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: format_number"
+        "success": "ok"
       }
     },
     {
@@ -1029,7 +1029,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: two values expected: [Literal(Utf8(\"Hello World %d %s\"), None), Literal(Int32(100), None), Literal(Utf8(\"days\"), None)]"
+        "success": "ok"
       }
     },
     {
@@ -2327,7 +2327,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: printf"
+        "success": "ok"
       }
     },
     {
