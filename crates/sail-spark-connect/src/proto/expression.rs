@@ -246,8 +246,13 @@ impl TryFrom<Expression> for spec::Expr {
                 plan_id,
                 subquery_type: raw_subquery_type,
                 in_subquery_values,
-                ..
+                table_arg_options,
             }) => {
+                if table_arg_options.is_some() {
+                    return Err(SparkError::unsupported(
+                        "table argument options in subquery expression",
+                    ));
+                }
                 use crate::spark::connect::subquery_expression::SubqueryType;
                 let subquery_type = match SubqueryType::try_from(raw_subquery_type) {
                     Ok(SubqueryType::In) => spec::SubqueryType::In,
@@ -259,7 +264,7 @@ impl TryFrom<Expression> for spec::Expr {
                     .into_iter()
                     .map(|e| e.try_into())
                     .collect::<SparkResult<_>>()?;
-                Ok(spec::Expr::SubqueryExpressionRef {
+                Ok(spec::Expr::Subquery {
                     plan_id,
                     subquery_type,
                     in_subquery_values,

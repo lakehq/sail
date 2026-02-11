@@ -4,6 +4,7 @@ use std::sync::Arc;
 use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::{DFSchemaRef, TableReference};
 use datafusion_expr::LogicalPlan;
+use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::expression::NamedExpr;
@@ -74,6 +75,8 @@ pub(super) struct PlanResolverState {
     aggregate_state: AggregateState,
     /// The CTEs for the current query.
     ctes: HashMap<TableReference, Arc<LogicalPlan>>,
+    /// Unresolved subquery references from a WithRelations node, keyed by plan_id.
+    subquery_references: HashMap<i64, spec::QueryPlan>,
     config: PlanResolverStateConfig,
 }
 
@@ -91,6 +94,7 @@ impl PlanResolverState {
             outer_query_schema: None,
             aggregate_state: AggregateState::default(),
             ctes: HashMap::new(),
+            subquery_references: HashMap::new(),
             config: PlanResolverStateConfig::default(),
         }
     }
@@ -197,6 +201,20 @@ impl PlanResolverState {
 
     pub fn insert_cte(&mut self, table_ref: TableReference, plan: LogicalPlan) {
         self.ctes.insert(table_ref, Arc::new(plan));
+    }
+
+    /// Takes a subquery reference plan from state, removing it.
+    pub fn take_subquery_reference(&mut self, plan_id: i64) -> Option<spec::QueryPlan> {
+        self.subquery_references.remove(&plan_id)
+    }
+
+    /// Stores a subquery reference plan in state.
+    pub fn insert_subquery_reference(&mut self, plan_id: i64, plan: spec::QueryPlan) {
+        self.subquery_references.insert(plan_id, plan);
+    }
+
+    pub fn enter_with_relations_scope(&mut self) -> WithRelationsScope<'_> {
+        WithRelationsScope::new(self)
     }
 
     pub fn enter_config_scope(&mut self) -> ConfigScope<'_> {
@@ -319,5 +337,31 @@ impl<'a> ConfigScope<'a> {
 impl Drop for ConfigScope<'_> {
     fn drop(&mut self) {
         self.state.config = std::mem::take(&mut self.previous_config);
+    }
+}
+
+/// Scope for WithRelations subquery references.
+pub(crate) struct WithRelationsScope<'a> {
+    state: &'a mut PlanResolverState,
+    previous_subquery_references: HashMap<i64, spec::QueryPlan>,
+}
+
+impl<'a> WithRelationsScope<'a> {
+    fn new(state: &'a mut PlanResolverState) -> Self {
+        let previous_subquery_references = std::mem::take(&mut state.subquery_references);
+        Self {
+            state,
+            previous_subquery_references,
+        }
+    }
+
+    pub(crate) fn state(&mut self) -> &mut PlanResolverState {
+        self.state
+    }
+}
+
+impl Drop for WithRelationsScope<'_> {
+    fn drop(&mut self) {
+        self.state.subquery_references = std::mem::take(&mut self.previous_subquery_references);
     }
 }

@@ -3,7 +3,6 @@ use std::sync::Arc;
 use datafusion_common::DFSchemaRef;
 use datafusion_expr::expr_fn;
 use sail_common::spec;
-use sail_logical_plan::unresolved_subquery_ref::UnresolvedSubqueryRef;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::expression::NamedExpr;
@@ -67,8 +66,8 @@ impl PlanResolver<'_> {
         Ok(NamedExpr::new(vec!["exists".to_string()], exists))
     }
 
-    /// Resolves a SubqueryExpressionRef by creating a placeholder that will be replaced later.
-    pub(super) async fn resolve_expression_subquery_ref(
+    /// Resolves a Subquery by looking up the referenced plan from state and delegating to existing subquery resolvers.
+    pub(super) async fn resolve_expression_subquery(
         &self,
         plan_id: i64,
         subquery_type: spec::SubqueryType,
@@ -77,7 +76,11 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let placeholder = Arc::new(UnresolvedSubqueryRef::try_new(plan_id)?.into_logical_plan());
+        let subquery_plan = state.take_subquery_reference(plan_id).ok_or_else(|| {
+            PlanError::invalid(format!(
+                "subquery plan_id {plan_id} not found in WithRelations references"
+            ))
+        })?;
 
         match subquery_type {
             spec::SubqueryType::In => {
@@ -90,25 +93,16 @@ impl PlanResolver<'_> {
                     .into_iter()
                     .next()
                     .ok_or_else(|| PlanError::invalid("IN subquery missing value expression"))?;
-                let resolved_expr = self.resolve_expression(expr, schema, state).await?;
-                let in_subquery = if !negated {
-                    expr_fn::in_subquery(resolved_expr, placeholder)
-                } else {
-                    expr_fn::not_in_subquery(resolved_expr, placeholder)
-                };
-                Ok(NamedExpr::new(vec!["in_subquery".to_string()], in_subquery))
+                self.resolve_expression_in_subquery(expr, subquery_plan, negated, schema, state)
+                    .await
             }
-            spec::SubqueryType::Scalar => Ok(NamedExpr::new(
-                vec!["subquery".to_string()],
-                expr_fn::scalar_subquery(placeholder),
-            )),
+            spec::SubqueryType::Scalar => {
+                self.resolve_expression_scalar_subquery(subquery_plan, schema, state)
+                    .await
+            }
             spec::SubqueryType::Exists => {
-                let exists = if !negated {
-                    expr_fn::exists(placeholder)
-                } else {
-                    expr_fn::not_exists(placeholder)
-                };
-                Ok(NamedExpr::new(vec!["exists".to_string()], exists))
+                self.resolve_expression_exists(subquery_plan, negated, schema, state)
+                    .await
             }
         }
     }

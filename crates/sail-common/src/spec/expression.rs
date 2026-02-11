@@ -80,8 +80,8 @@ pub enum Expr {
         subquery: Box<QueryPlan>,
         negated: bool,
     },
-    /// Unresolved subquery expression reference (resolved by WithRelations).
-    SubqueryExpressionRef {
+    /// Subquery reference from WithRelations.
+    Subquery {
         /// The plan_id referencing a plan in WithRelations.references.
         plan_id: i64,
         /// The subquery type.
