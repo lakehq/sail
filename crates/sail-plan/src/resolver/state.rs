@@ -203,14 +203,18 @@ impl PlanResolverState {
         self.ctes.insert(table_ref, Arc::new(plan));
     }
 
-    /// Takes a subquery reference plan from state, removing it.
-    pub fn take_subquery_reference(&mut self, plan_id: i64) -> Option<spec::QueryPlan> {
-        self.subquery_references.remove(&plan_id)
+    /// Returns a subquery reference plan from state by plan_id.
+    pub fn get_subquery_reference(&self, plan_id: i64) -> Option<spec::QueryPlan> {
+        self.subquery_references.get(&plan_id).cloned()
     }
 
-    /// Stores a subquery reference plan in state.
-    pub fn insert_subquery_reference(&mut self, plan_id: i64, plan: spec::QueryPlan) {
-        self.subquery_references.insert(plan_id, plan);
+    /// Stores a subquery reference plan in state, returning the previous value if any.
+    pub fn insert_subquery_reference(
+        &mut self,
+        plan_id: i64,
+        plan: spec::QueryPlan,
+    ) -> Option<spec::QueryPlan> {
+        self.subquery_references.insert(plan_id, plan)
     }
 
     pub fn enter_with_relations_scope(&mut self) -> WithRelationsScope<'_> {

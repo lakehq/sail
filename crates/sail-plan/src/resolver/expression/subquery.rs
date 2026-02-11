@@ -76,7 +76,7 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let subquery_plan = state.take_subquery_reference(plan_id).ok_or_else(|| {
+        let subquery_plan = state.get_subquery_reference(plan_id).ok_or_else(|| {
             PlanError::invalid(format!(
                 "subquery plan_id {plan_id} not found in WithRelations references"
             ))
