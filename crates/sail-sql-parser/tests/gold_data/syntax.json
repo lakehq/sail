@@ -9766,6 +9766,9 @@
                         "nonTerminal": "Operator(RightParenthesis)"
                       },
                       {
+                        "nonTerminal": "Option(TableSampleClause)"
+                      },
+                      {
                         "nonTerminal": "Vector(TableModifier)"
                       },
                       {

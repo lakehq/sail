@@ -113,7 +113,7 @@ impl PlanResolver<'_> {
     }
 
     /// Apply TABLESAMPLE clause to a LogicalPlan
-    async fn apply_table_sample(
+    pub(super) async fn apply_table_sample(
         &self,
         plan: LogicalPlan,
         table_sample: spec::TableSample,
