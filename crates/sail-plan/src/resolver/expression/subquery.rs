@@ -24,14 +24,21 @@ impl PlanResolver<'_> {
             let mut scope = state.enter_query_scope(Arc::clone(schema));
             let plan = self.resolve_query_plan(subquery, scope.state()).await?;
             // Wrap in a Projection so that DataFusion's head_output_expr() works
-            // for Extension nodes (e.g. RangeNode) used as IN subqueries.
-            let exprs: Vec<Expr> = plan
-                .schema()
-                .columns()
-                .into_iter()
-                .map(Expr::Column)
-                .collect();
-            LogicalPlan::Projection(Projection::try_new(exprs, Arc::new(plan))?)
+            // for plans without a top-level Projection (e.g. bare Extension nodes
+            // like RangeNode from Spark Connect). SQL subqueries already have a
+            // Projection on top, so wrapping them again can cause duplicate column
+            // names during decorrelation.
+            if matches!(plan, LogicalPlan::Projection(_)) {
+                plan
+            } else {
+                let exprs: Vec<Expr> = plan
+                    .schema()
+                    .columns()
+                    .into_iter()
+                    .map(Expr::Column)
+                    .collect();
+                LogicalPlan::Projection(Projection::try_new(exprs, Arc::new(plan))?)
+            }
         };
         let in_subquery = if !negated {
             expr_fn::in_subquery(expr, Arc::new(subquery))
