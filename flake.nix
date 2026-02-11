@@ -19,8 +19,8 @@
         rustNightly = fenix.packages.${system}.latest.toolchain;
 
         # Single Python version
-        py = pkgs.python313;
-        pyp = pkgs.python313Packages;
+        py = pkgs.python311;
+        pyp = pkgs.python311Packages;
 
       in {
         devShells.default = pkgs.mkShell {
@@ -84,9 +84,10 @@
               unset PYTHONPATH
 
               # Force PyO3 to exact interpreter
-              export PYO3_PYTHON="${py}/bin/python3.13"
-              export PYTHON_SYS_EXECUTABLE="${py}/bin/python3.13"
+              export PYO3_PYTHON="${py}/bin/python3.11"
+              export PYTHON_SYS_EXECUTABLE="${py}/bin/python3.11"
               export PYO3_USE_ABI3=0
+	      export PKG_CONFIG_PATH="${py}/lib/pkgconfig:$PKG_CONFIG_PATH"
 
               export PYTHONPATH="$PWD/python"
 
