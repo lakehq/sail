@@ -80,6 +80,28 @@ Feature: IN subquery support
         | 2   | Alice |
         | 8   | Mike  |
 
+    Scenario: multi-column IN subquery with expressions
+      Given statement
+        """
+        CREATE OR REPLACE TEMPORARY VIEW data AS
+        SELECT * FROM VALUES (1, 10), (2, 20), (3, 30) AS t(a, b)
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMPORARY VIEW targets AS
+        SELECT * FROM VALUES (3, 19), (4, 29) AS t(x, y)
+        """
+      When query
+        """
+        SELECT a, b FROM data
+        WHERE (a + 1, b - 1) IN (SELECT x, y FROM targets)
+        ORDER BY a
+        """
+      Then query result ordered
+        | a | b  |
+        | 2 | 20 |
+        | 3 | 30 |
+
     Scenario: multi-column NOT IN subquery
       Given statement
         """

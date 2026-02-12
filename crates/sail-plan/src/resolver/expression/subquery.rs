@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::DFSchemaRef;
 use datafusion_expr::logical_plan::{Filter, Projection};
 use datafusion_expr::{expr_fn, Expr, LogicalPlan};
@@ -97,15 +98,22 @@ impl PlanResolver<'_> {
         let mut outer_refs = Vec::with_capacity(in_subquery_values.len());
         for value in in_subquery_values {
             let expr = self.resolve_expression(value, schema, state).await?;
-            // Convert column references to OuterReferenceColumn so DataFusion's
-            // decorrelation pass recognizes them as correlated references.
-            let outer_ref = match &expr {
-                Expr::Column(col) => {
-                    let (_, field) = schema.qualified_field_from_column(col)?;
-                    Expr::OuterReferenceColumn(field.clone(), col.clone())
-                }
-                _ => expr,
-            };
+            // Recursively convert column references to OuterReferenceColumn so
+            // DataFusion's decorrelation pass recognizes them as correlated
+            // references. This handles both bare columns (e.g. `a`) and
+            // expressions containing columns (e.g. `a + 1`).
+            let outer_ref = expr
+                .transform(|e| match e {
+                    Expr::Column(ref col) => {
+                        let (_, field) = schema.qualified_field_from_column(col)?;
+                        Ok(Transformed::yes(Expr::OuterReferenceColumn(
+                            field.clone(),
+                            col.clone(),
+                        )))
+                    }
+                    _ => Ok(Transformed::no(e)),
+                })
+                .data()?;
             outer_refs.push(outer_ref);
         }
         let subquery_plan = {
