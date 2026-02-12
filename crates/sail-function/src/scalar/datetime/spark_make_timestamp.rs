@@ -352,3 +352,65 @@ fn make_timestamp_ntz(
         .and_then(|date| date.and_hms_micro_opt(hour, min, sec, micro))
         .map(|dt| dt.and_utc().timestamp_micros())
 }
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct SparkTryMakeTimestampNtz {
+    signature: Signature,
+    make_timestamp_ntz_udf: Arc<SparkMakeTimestampNtz>,
+}
+
+impl Default for SparkTryMakeTimestampNtz {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SparkTryMakeTimestampNtz {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::user_defined(Volatility::Immutable),
+            make_timestamp_ntz_udf: Arc::new(SparkMakeTimestampNtz::new()),
+        }
+    }
+}
+
+impl ScalarUDFImpl for SparkTryMakeTimestampNtz {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "spark_try_make_timestamp_ntz"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        self.make_timestamp_ntz_udf.return_type(arg_types)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let result = self.make_timestamp_ntz_udf.invoke_with_args(args.clone());
+        match result {
+            Ok(result) => Ok(result),
+            Err(_) => {
+                let data_type = self.return_type(
+                    &args
+                        .args
+                        .iter()
+                        .map(|cv| cv.data_type().clone())
+                        .collect::<Vec<_>>(),
+                )?;
+                Ok(ColumnarValue::Scalar(ScalarValue::try_new_null(
+                    &data_type,
+                )?))
+            }
+        }
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        self.make_timestamp_ntz_udf.coerce_types(arg_types)
+    }
+}
