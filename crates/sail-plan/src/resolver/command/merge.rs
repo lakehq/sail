@@ -542,6 +542,7 @@ fn merge_disambiguate_unqualified_plan_ids(
         }
         Expr::UnresolvedAttribute { .. } => expr,
         Expr::Literal(_) => expr,
+        Expr::UnresolvedTime { .. } => expr,
         Expr::UnresolvedFunction(mut f) => {
             f.arguments = f
                 .arguments
