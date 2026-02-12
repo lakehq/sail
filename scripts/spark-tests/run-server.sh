@@ -34,5 +34,6 @@ if [ -z "${CI:-}" ]; then
 
   cargo run -p sail-cli -- spark server -C "${work_dir}"
 else
+  export PYTHONPATH="${VIRTUAL_ENV}/lib/python${python_version}/site-packages"
   sail spark server -C "${work_dir}"
 fi
