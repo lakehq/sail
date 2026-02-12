@@ -422,7 +422,12 @@ fn make_ym_interval(args: Vec<Expr>) -> PlanResult<Expr> {
 }
 
 fn make_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    if input.arguments.len() == 2 {
+    if input.arguments.len() == 1 {
+        // make_timestamp(date) defaults time to 00:00:00
+        let date = input.arguments.one()?;
+        let default_time = lit(ScalarValue::Time64Microsecond(Some(0)));
+        Ok(ScalarUDF::from(SparkMakeTimestampNtz::new()).call(vec![date, default_time]))
+    } else if input.arguments.len() == 2 {
         Ok(ScalarUDF::from(SparkMakeTimestampNtz::new()).call(input.arguments))
     } else if input.arguments.len() == 3 {
         let session_tz = session_timezone(&input);
@@ -450,14 +455,19 @@ fn make_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
         Ok(convert_tz(from_tz, session_tz, ntz_ts))
     } else {
         Err(PlanError::invalid(format!(
-            "make_timestamp requires 2, 3, 6 or 7 arguments, got {:?}",
+            "make_timestamp requires 1, 2, 3, 6 or 7 arguments, got {:?}",
             input.arguments
         )))
     }
 }
 
 fn try_make_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    if input.arguments.len() == 2 {
+    if input.arguments.len() == 1 {
+        // try_make_timestamp(date) defaults time to 00:00:00
+        let date = input.arguments.one()?;
+        let default_time = lit(ScalarValue::Time64Microsecond(Some(0)));
+        Ok(ScalarUDF::from(SparkTryMakeTimestampNtz::new()).call(vec![date, default_time]))
+    } else if input.arguments.len() == 2 {
         Ok(ScalarUDF::from(SparkTryMakeTimestampNtz::new()).call(input.arguments))
     } else if input.arguments.len() == 3 {
         let session_tz = session_timezone(&input);
@@ -489,10 +499,33 @@ fn try_make_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
         Ok(convert_tz(from_tz, session_tz, ntz_ts))
     } else {
         Err(PlanError::invalid(format!(
-            "try_make_timestamp requires 2, 3, 6 or 7 arguments, got {:?}",
+            "try_make_timestamp requires 1, 2, 3, 6 or 7 arguments, got {:?}",
             input.arguments
         )))
     }
+}
+
+fn make_timestamp_ltz(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    // make_timestamp_ltz requires date AND time (no 1-arg variant)
+    if input.arguments.len() == 1 {
+        return Err(PlanError::invalid(
+            "make_timestamp_ltz requires at least 2 arguments (date and time), got 1".to_string(),
+        ));
+    }
+    // Delegate to make_timestamp for 2, 3, 6, 7 args
+    make_timestamp(input)
+}
+
+fn try_make_timestamp_ltz(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    // try_make_timestamp_ltz requires date AND time (no 1-arg variant)
+    if input.arguments.len() == 1 {
+        return Err(PlanError::invalid(
+            "try_make_timestamp_ltz requires at least 2 arguments (date and time), got 1"
+                .to_string(),
+        ));
+    }
+    // Delegate to try_make_timestamp for 2, 3, 6, 7 args
+    try_make_timestamp(input)
 }
 
 fn date_part(part: Expr, date: Expr) -> Expr {
@@ -636,7 +669,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("make_dt_interval", F::udf(SparkMakeDtInterval::new())),
         ("make_interval", F::udf(SparkMakeInterval::new())),
         ("make_timestamp", F::custom(make_timestamp)),
-        ("make_timestamp_ltz", F::custom(make_timestamp)),
+        ("make_timestamp_ltz", F::custom(make_timestamp_ltz)),
         ("make_timestamp_ntz", F::udf(SparkMakeTimestampNtz::new())),
         ("make_ym_interval", F::var_arg(make_ym_interval)),
         ("minute", F::unary(|arg| integer_part(arg, "MINUTE"))),
@@ -689,7 +722,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("trunc", F::binary(trunc)),
         ("try_make_interval", F::unknown("try_make_interval")),
         ("try_make_timestamp", F::custom(try_make_timestamp)),
-        ("try_make_timestamp_ltz", F::custom(try_make_timestamp)),
+        ("try_make_timestamp_ltz", F::custom(try_make_timestamp_ltz)),
         (
             "try_make_timestamp_ntz",
             F::udf(SparkTryMakeTimestampNtz::new()),

@@ -1976,7 +1976,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: make_timestamp requires 2, 3, 6 or 7 arguments, got [Literal(Date32(\"2014-12-28\"), None)]"
+        "success": "ok"
       }
     },
     {
@@ -3340,7 +3340,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: try_make_timestamp requires 2, 3, 6 or 7 arguments, got [Literal(Date32(\"2014-12-28\"), None)]"
+        "success": "ok"
       }
     },
     {
