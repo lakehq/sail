@@ -105,8 +105,17 @@ impl ScalarUDFImpl for SparkMakeTimestampNtz {
                 let date_val = dates.value(i);
                 let time_val = times.value(i);
 
-                let micros = (date_val as i64 * MICROS_PER_DAY) + time_val;
-                builder.append_value(micros);
+                match (date_val as i64)
+                    .checked_mul(MICROS_PER_DAY)
+                    .and_then(|v| v.checked_add(time_val))
+                {
+                    Some(micros) => builder.append_value(micros),
+                    None => {
+                        // TODO: If the configuration spark.sql.ansi.enabled is false,
+                        //  the function returns NULL on invalid inputs. Otherwise, it will throw an error.
+                        builder.append_null()
+                    }
+                }
             }
             return Ok(ColumnarValue::Array(Arc::new(builder.finish())));
         }

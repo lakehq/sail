@@ -101,7 +101,12 @@ pub fn parse_timestamp(s: &str) -> SqlResult<TimestampValue<'_>> {
 }
 
 pub fn parse_time(s: &str) -> SqlResult<TimeValue> {
-    parse_simple!(s, create_time_parser)
+    let time = parse_simple!(s, create_time_parser)?;
+
+    // Validate via TryFrom which checks hour (0-23), minute/second (0-59)
+    let _ = chrono::NaiveTime::try_from(time.clone())?;
+
+    Ok(time)
 }
 
 #[cfg(test)]

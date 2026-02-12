@@ -87,7 +87,7 @@ impl PlanResolver<'_> {
         value: String,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        // parse_time already validates hour (0-23), minute/second (0-59) internally
+        // parse_time validates hour (0-23), minute/second (0-59) via NaiveTime
         let time = parse_time(&value)?;
 
         // Convert to microseconds since midnight
