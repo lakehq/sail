@@ -165,7 +165,7 @@ The table below shows how Spark data types are mapped to Python types and Arrow 
       <td><code>TimeType(precision: int = 6)</code></td>
       <td><code>datetime.time</code></td>
       <td>
-        Time32(Second)<br />Time32(Millisecond)<br />Time64(Microsecond)<br />Time64(Nanosecond)
+        Time32(Second)<br />Time32(Millisecond)<br />Time64(Microsecond)
       </td>
     </tr>
     <tr>
