@@ -91,6 +91,8 @@ impl PlanResolver<'_> {
         let time = parse_time(&value)?;
 
         // Convert to microseconds since midnight
+        // Note: Nanoseconds beyond microsecond precision (digits 7-9) are truncated.
+        // This matches Spark's behavior of silently truncating excess precision.
         // Formula: (hour * 3600 + minute * 60 + second) * 1_000_000 + nanoseconds / 1_000
         let total_seconds =
             (time.hour as i64 * 3600) + (time.minute as i64 * 60) + (time.second as i64);

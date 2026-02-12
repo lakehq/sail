@@ -182,4 +182,19 @@ mod tests {
         assert!(parse_time("12:30:60").is_err());
         assert!(parse_time("12:30:99").is_err());
     }
+
+    #[test]
+    fn test_parse_time_fractional_seconds() -> SqlResult<()> {
+        use crate::parser::parse_time;
+
+        // Valid: up to 6 digits (microsecond precision)
+        assert!(parse_time("12:34:56.123456").is_ok());
+
+        // Parser accepts >6 digits (nanosecond precision)
+        // These will be silently truncated to microseconds during resolution
+        // to match Spark's behavior of truncating excess precision
+        assert!(parse_time("12:34:56.123456789").is_ok());
+
+        Ok(())
+    }
 }
