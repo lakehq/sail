@@ -1,14 +1,14 @@
-/// Filter pushdown system for Python datasources.
-///
-/// Converts DataFusion expressions to Python filter objects that can be
-/// pushed down to Python datasource readers.
-///
-/// Supports:
-/// - Comparison: EqualTo, GreaterThan, LessThan, etc.
-/// - Null checks: IsNull, IsNotNull
-/// - Membership: In
-/// - Logical: Not, And, Or
-/// - String patterns: StartsWith, EndsWith, Contains
+//! Filter pushdown system for Python data sources.
+//!
+//! Converts DataFusion expressions to Python filter objects that can be
+//! pushed down to Python datasource readers.
+//!
+//! Supports:
+//! - Comparison: EqualTo, GreaterThan, LessThan, etc.
+//! - Null checks: IsNull, IsNotNull
+//! - Membership: In
+//! - Logical: Not, And, Or
+//! - String patterns: StartsWith, EndsWith, Contains
 use datafusion::logical_expr::{Expr, Operator};
 use datafusion_common::ScalarValue;
 use pyo3::prelude::*;

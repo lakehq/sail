@@ -38,7 +38,7 @@ impl InputPartition {
 /// to deserialize and call `read(partition)` without re-applying filters.
 #[derive(Debug, Clone)]
 pub struct PartitionPlan {
-    /// Pickled Python DataSourceReader instance (with filters applied)
+    /// Pickled Python data source reader instance (with filters applied)
     pub pickled_reader: Vec<u8>,
     /// Partitions for parallel reading
     pub partitions: Vec<InputPartition>,
