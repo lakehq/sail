@@ -29,7 +29,7 @@ hatch run maturin develop
 # Start the server (run from the repo root)
 SAIL_VENV="$(pwd)/.venvs/default" \
 VIRTUAL_ENV="$SAIL_VENV" \
-PYTHONPATH="$SAIL_VENV/lib/python3.11/site-packages:$(pwd)/python" \
+PYTHONPATH="$SAIL_VENV/lib/python3.11/site-packages:$(pwd)/python:$(pwd)/python/pysail/examples/spark/datasources/vortex" \
 PYO3_PYTHON="$SAIL_VENV/bin/python" \
 RUST_LOG='sail=debug' RUST_BACKTRACE=1 \
 cargo run -p sail-cli -- spark server --port 50051
@@ -67,7 +67,7 @@ table = pa.table({"id": [1, 2, 3], "name": ["Alice", "Bob", "Carol"]})
 vortex.io.write(table, "/tmp/test.vtx")
 
 # Read it through Sail
-from pysail.examples.spark.datasources.vortex.benchmark import VortexDataSource
+from datasource_vortex import VortexDataSource
 spark = SparkSession.builder.remote("sc://localhost:50051").getOrCreate()
 spark.dataSource.register(VortexDataSource)
 spark.read.format("vortex").option("path", "/tmp/test.vtx").load().show()
