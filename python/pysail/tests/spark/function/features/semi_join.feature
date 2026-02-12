@@ -70,3 +70,54 @@ Feature: Semi join support
       Then query result ordered
         | name | amount |
         | Bob  | 200    |
+
+  # RIGHT SEMI/ANTI JOIN is not valid Spark SQL syntax; only available via the DataFrame API.
+  # See https://spark.apache.org/docs/latest/sql-ref-syntax-qry-select-join.html
+  Rule: RIGHT SEMI JOIN with ON condition
+
+    @sail-only
+    Scenario: right semi join keeps matching rows from the right side
+      Given statement
+        """
+        CREATE OR REPLACE TEMPORARY VIEW products AS
+        SELECT * FROM VALUES ('Widget', 10.0), ('Gadget', 25.0), ('Doohickey', 5.0) AS t(name, price)
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMPORARY VIEW sold AS
+        SELECT * FROM VALUES ('Widget', 3), ('Gadget', 7) AS t(product, qty)
+        """
+      When query
+        """
+        SELECT name, price FROM sold
+        RIGHT SEMI JOIN products ON sold.product = products.name
+        ORDER BY name
+        """
+      Then query result ordered
+        | name   | price |
+        | Gadget | 25.0  |
+        | Widget | 10.0  |
+
+  Rule: RIGHT ANTI JOIN with ON condition
+
+    @sail-only
+    Scenario: right anti join keeps non-matching rows from the right side
+      Given statement
+        """
+        CREATE OR REPLACE TEMPORARY VIEW products AS
+        SELECT * FROM VALUES ('Widget', 10.0), ('Gadget', 25.0), ('Doohickey', 5.0) AS t(name, price)
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMPORARY VIEW sold AS
+        SELECT * FROM VALUES ('Widget', 3), ('Gadget', 7) AS t(product, qty)
+        """
+      When query
+        """
+        SELECT name, price FROM sold
+        RIGHT ANTI JOIN products ON sold.product = products.name
+        ORDER BY name
+        """
+      Then query result ordered
+        | name      | price |
+        | Doohickey | 5.0   |
