@@ -11,7 +11,6 @@ use crate::resolver::state::{AggregateState, PlanResolverState};
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
 use crate::resolver::tree::window::WindowRewriter;
-use crate::resolver::tree::PlanRewriter;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
@@ -107,42 +106,6 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let grouping = self.resolve_grouping_positions(grouping, &projections)?;
-        let mut monotonic_rewriter = MonotonicIdRewriter::new_from_plan(input, state);
-        let projections = projections
-            .into_iter()
-            .map(|expr| {
-                let NamedExpr {
-                    name,
-                    expr,
-                    metadata,
-                } = expr;
-                Ok(NamedExpr {
-                    name,
-                    expr: expr.rewrite(&mut monotonic_rewriter)?.data,
-                    metadata,
-                })
-            })
-            .collect::<PlanResult<Vec<_>>>()?;
-        let grouping = grouping
-            .into_iter()
-            .map(|expr| {
-                let NamedExpr {
-                    name,
-                    expr,
-                    metadata,
-                } = expr;
-                Ok(NamedExpr {
-                    name,
-                    expr: expr.rewrite(&mut monotonic_rewriter)?.data,
-                    metadata,
-                })
-            })
-            .collect::<PlanResult<Vec<_>>>()?;
-        let having = having
-            .map(|expr| -> PlanResult<Expr> { Ok(expr.rewrite(&mut monotonic_rewriter)?.data) })
-            .transpose()?;
-        let input = monotonic_rewriter.into_plan();
-
         let mut aggregate_candidates = projections
             .iter()
             .map(|x| x.expr.clone())
@@ -213,6 +176,8 @@ impl PlanResolver<'_> {
             }
             None => plan,
         };
+        let (plan, projections) =
+            self.rewrite_projection::<MonotonicIdRewriter>(plan, projections, state)?;
         let (plan, projections) =
             self.rewrite_projection::<ExplodeRewriter>(plan, projections, state)?;
         let (plan, projections) =
