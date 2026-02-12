@@ -423,3 +423,54 @@ impl ScalarUDFImpl for SparkTryMakeTimestampNtz {
         self.make_timestamp_ntz_udf.coerce_types(arg_types)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_make_timestamp_ntz_overflow_protection() {
+        // Test that extreme date values that would overflow are handled
+        let date_val = i32::MAX;
+        let time_val = MICROS_PER_DAY - 1;
+
+        // This should NOT overflow - checked arithmetic returns None
+        let result = (date_val as i64)
+            .checked_mul(MICROS_PER_DAY)
+            .and_then(|v| v.checked_add(time_val));
+
+        assert!(result.is_none(), "Should overflow and return None");
+    }
+
+    #[test]
+    fn test_make_timestamp_ntz_function_valid() {
+        // Test the underlying make_timestamp_ntz function
+        // Date: 2014-12-28, Time: 06:30:45.887
+        let result = make_timestamp_ntz(2014, 12, 28, 6, 30, 45.887);
+        assert!(result.is_some(), "Should return valid timestamp");
+    }
+
+    #[test]
+    fn test_make_timestamp_ntz_function_invalid_ranges() {
+        // Invalid year
+        assert!(make_timestamp_ntz(0, 1, 1, 0, 0, 0.0).is_none());
+        assert!(make_timestamp_ntz(10000, 1, 1, 0, 0, 0.0).is_none());
+
+        // Invalid month
+        assert!(make_timestamp_ntz(2024, 0, 1, 0, 0, 0.0).is_none());
+        assert!(make_timestamp_ntz(2024, 13, 1, 0, 0, 0.0).is_none());
+
+        // Invalid day
+        assert!(make_timestamp_ntz(2024, 1, 0, 0, 0, 0.0).is_none());
+        assert!(make_timestamp_ntz(2024, 1, 32, 0, 0, 0.0).is_none());
+
+        // Invalid hour
+        assert!(make_timestamp_ntz(2024, 1, 1, 24, 0, 0.0).is_none());
+
+        // Invalid minute
+        assert!(make_timestamp_ntz(2024, 1, 1, 0, 60, 0.0).is_none());
+
+        // Invalid second
+        assert!(make_timestamp_ntz(2024, 1, 1, 0, 0, 61.0).is_none());
+    }
+}

@@ -152,4 +152,34 @@ mod tests {
         );
         Ok(())
     }
+
+    #[test]
+    fn test_parse_time_valid() -> SqlResult<()> {
+        use crate::parser::parse_time;
+
+        // Valid times
+        assert!(parse_time("00:00:00").is_ok());
+        assert!(parse_time("23:59:59").is_ok());
+        assert!(parse_time("12:34:56.123456").is_ok());
+        assert!(parse_time("00:00:00.000000").is_ok());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_time_invalid() {
+        use crate::parser::parse_time;
+
+        // Invalid hour
+        assert!(parse_time("24:00:00").is_err());
+        assert!(parse_time("25:30:45").is_err());
+
+        // Invalid minute
+        assert!(parse_time("12:60:00").is_err());
+        assert!(parse_time("12:99:00").is_err());
+
+        // Invalid second
+        assert!(parse_time("12:30:60").is_err());
+        assert!(parse_time("12:30:99").is_err());
+    }
 }
