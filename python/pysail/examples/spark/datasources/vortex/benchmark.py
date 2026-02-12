@@ -39,12 +39,12 @@ def generate_data(n=1_000_000):
             "name": pa.array([names[i % len(names)] for i in range(n)], type=pa.string()),
             "category": pa.array([categories[i % len(categories)] for i in range(n)], type=pa.string()),
             "value": pa.array(
-                [random.random() * 1000.0 for _ in range(n)],
-                type=pa.float64(),  # noqa: S311
+                [random.random() * 1000.0 for _ in range(n)],  # noqa: S311
+                type=pa.float64(),
             ),
             "count": pa.array(
-                [random.randint(1, 100) for _ in range(n)],
-                type=pa.int64(),  # noqa: S311
+                [random.randint(1, 100) for _ in range(n)],  # noqa: S311
+                type=pa.int64(),
             ),
         }
     )

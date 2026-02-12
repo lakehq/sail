@@ -11,7 +11,6 @@ Usage:
 """
 
 import pyarrow as pa
-import vortex
 from pyspark.sql.datasource import (
     DataSource,
     DataSourceReader,
@@ -29,6 +28,8 @@ from pyspark.sql.datasource import (
     StringEndsWith,
     StringStartsWith,
 )
+
+import vortex
 
 # Arrow type -> Spark DDL mapping
 ARROW_TO_SPARK = {
