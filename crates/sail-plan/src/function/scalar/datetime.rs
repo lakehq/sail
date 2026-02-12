@@ -420,7 +420,20 @@ fn make_ym_interval(args: Vec<Expr>) -> PlanResult<Expr> {
 }
 
 fn make_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    if input.arguments.len() == 6 {
+    if input.arguments.len() == 2 {
+        Ok(ScalarUDF::from(SparkMakeTimestampNtz::new()).call(input.arguments))
+    } else if input.arguments.len() == 3 {
+        let session_tz = session_timezone(&input);
+        let mut args = input.arguments;
+        let from_tz = args.pop().ok_or_else(|| {
+            PlanError::invalid(
+                "make_timestamp: empty args array with len = 3, should be unreachable",
+            )
+        })?;
+
+        let ntz_ts = ScalarUDF::from(SparkMakeTimestampNtz::new()).call(args);
+        Ok(convert_tz(from_tz, session_tz, ntz_ts))
+    } else if input.arguments.len() == 6 {
         Ok(ScalarUDF::from(SparkMakeTimestampNtz::new()).call(input.arguments))
     } else if input.arguments.len() == 7 {
         let session_tz = session_timezone(&input);
@@ -435,7 +448,7 @@ fn make_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
         Ok(convert_tz(from_tz, session_tz, ntz_ts))
     } else {
         Err(PlanError::invalid(format!(
-            "make_timestamp requires 6 or 7 arguments, got {:?}",
+            "make_timestamp requires 2, 3, 6 or 7 arguments, got {:?}",
             input.arguments
         )))
     }

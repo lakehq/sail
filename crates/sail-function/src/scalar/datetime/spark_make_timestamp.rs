@@ -3,14 +3,17 @@ use std::sync::Arc;
 
 use chrono::NaiveDate;
 use datafusion::arrow::array::{
-    AsArray, Float32Array, Int32Array, PrimitiveArray, PrimitiveBuilder, UInt32Array,
+    Array, AsArray, Float32Array, Int32Array, PrimitiveArray, PrimitiveBuilder, UInt32Array,
 };
 use datafusion::arrow::datatypes::{
-    DataType, Float32Type, Int32Type, TimeUnit, TimestampMicrosecondType, UInt32Type,
+    DataType, Date32Type, Float32Type, Int32Type, Time64MicrosecondType, TimeUnit,
+    TimestampMicrosecondType, UInt32Type,
 };
 use datafusion_common::types::NativeType;
 use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+
+const MICROS_PER_DAY: i64 = 86_400_000_000; // 24 * 60 * 60 * 1_000_000
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkMakeTimestampNtz {
@@ -52,6 +55,62 @@ impl ScalarUDFImpl for SparkMakeTimestampNtz {
         let ScalarFunctionArgs {
             args, number_rows, ..
         } = args;
+        if args.len() == 2 {
+            let to_date32_array_fn = |col: &ColumnarValue,
+                                      arg_name: &str|
+             -> Result<PrimitiveArray<Date32Type>> {
+                match col {
+                    ColumnarValue::Array(array) => {
+                        Ok(array.as_primitive::<Date32Type>().to_owned())
+                    }
+                    ColumnarValue::Scalar(ScalarValue::Date32(Some(value))) => Ok(
+                        PrimitiveArray::<Date32Type>::from_value(*value, number_rows),
+                    ),
+                    other => {
+                        exec_err!(
+                                "Unsupported {arg_name} arg {other:?} for Spark function `make_timestamp_ntz`"
+                            )
+                    }
+                }
+            };
+
+            let to_time64_array_fn = |col: &ColumnarValue,
+                                      arg_name: &str|
+             -> Result<PrimitiveArray<Time64MicrosecondType>> {
+                match col {
+                    ColumnarValue::Array(array) => {
+                        Ok(array.as_primitive::<Time64MicrosecondType>().to_owned())
+                    }
+                    ColumnarValue::Scalar(ScalarValue::Time64Microsecond(Some(value))) => Ok(
+                        PrimitiveArray::<Time64MicrosecondType>::from_value(*value, number_rows),
+                    ),
+                    other => {
+                        exec_err!(
+                            "Unsupported {arg_name} arg {other:?} for Spark function `make_timestamp_ntz`"
+                        )
+                    }
+                }
+            };
+
+            let dates = to_date32_array_fn(&args[0], "date")?;
+            let times = to_time64_array_fn(&args[1], "time")?;
+
+            let mut builder =
+                PrimitiveBuilder::<TimestampMicrosecondType>::with_capacity(number_rows);
+            for i in 0..number_rows {
+                if dates.is_null(i) || times.is_null(i) {
+                    builder.append_null();
+                    continue;
+                }
+                let date_val = dates.value(i);
+                let time_val = times.value(i);
+
+                let micros = (date_val as i64 * MICROS_PER_DAY) + time_val;
+                builder.append_value(micros);
+            }
+            return Ok(ColumnarValue::Array(Arc::new(builder.finish())));
+        }
+
         if args.len() != 6 {
             return exec_err!(
                 "Spark `make_timestamp_ntz` function requires 6 arguments, got {}",
@@ -197,6 +256,12 @@ impl ScalarUDFImpl for SparkMakeTimestampNtz {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() == 2 {
+            return Ok(vec![
+                DataType::Date32,
+                DataType::Time64(TimeUnit::Microsecond),
+            ]);
+        }
         if arg_types.len() != 6 {
             return exec_err!(
                 "Spark `make_timestamp_ntz` function requires 6 arguments, got {}",
