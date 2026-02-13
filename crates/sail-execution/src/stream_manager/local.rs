@@ -86,12 +86,13 @@ impl TaskStreamSink for MemoryStreamReplicaSender {
 
             if let Some(tx) = sender.as_ref() {
                 // Try to flush overflow first
-                while let Some(item) = overflow.front() {
-                    match tx.try_send(item.clone()) {
-                        Ok(_) => {
-                            overflow.pop_front();
+                while let Some(item) = overflow.pop_front() {
+                    match tx.try_send(item) {
+                        Ok(_) => {}
+                        Err(mpsc::error::TrySendError::Full(x)) => {
+                            overflow.push_front(x);
+                            break;
                         }
-                        Err(mpsc::error::TrySendError::Full(_)) => break,
                         Err(mpsc::error::TrySendError::Closed(_)) => {
                             dropped = true;
                             break;
@@ -114,8 +115,8 @@ impl TaskStreamSink for MemoryStreamReplicaSender {
                 if overflow.is_empty() {
                     match tx.try_send(batch.clone()) {
                         Ok(_) => {}
-                        Err(mpsc::error::TrySendError::Full(_)) => {
-                            overflow.push_back(batch.clone());
+                        Err(mpsc::error::TrySendError::Full(x)) => {
+                            overflow.push_back(x);
                         }
                         Err(mpsc::error::TrySendError::Closed(_)) => {
                             dropped = true;
