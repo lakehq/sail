@@ -26,6 +26,7 @@ use sail_logical_plan::file_write::FileWriteNode;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_logical_plan::merge::MergeIntoNode;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
+use sail_logical_plan::rand::RandNode;
 use sail_logical_plan::range::RangeNode;
 use sail_logical_plan::repartition::ExplicitRepartitionNode;
 use sail_logical_plan::schema_pivot::SchemaPivotNode;
@@ -40,6 +41,7 @@ use sail_physical_plan::file_delete::create_file_delete_physical_plan;
 use sail_physical_plan::file_write::create_file_write_physical_plan;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
+use sail_physical_plan::rand::RandExec;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
@@ -123,6 +125,17 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
             Arc::new(MonotonicIdExec::try_new(
                 input.clone(),
                 node.column_name().to_string(),
+                UserDefinedLogicalNode::schema(node).inner().clone(),
+            )?)
+        } else if let Some(node) = node.as_any().downcast_ref::<RandNode>() {
+            let [input] = physical_inputs else {
+                return internal_err!("RandExec requires exactly one physical input");
+            };
+            Arc::new(RandExec::try_new(
+                input.clone(),
+                node.column_name().to_string(),
+                node.seed(),
+                node.mode().clone(),
                 UserDefinedLogicalNode::schema(node).inner().clone(),
             )?)
         } else if let Some(node) = node.as_any().downcast_ref::<SortWithinPartitionsNode>() {

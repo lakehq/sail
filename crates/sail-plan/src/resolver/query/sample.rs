@@ -10,7 +10,7 @@ use sail_common::spec;
 use sail_common::spec::{NullOrdering, SortDirection, SortOrder};
 use sail_function::scalar::array::spark_sequence::SparkSequence;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
-use sail_function::scalar::math::random::Random;
+use sail_logical_plan::rand::{RandMode, RandNode};
 use sail_logical_plan::sort::SortWithinPartitionsNode;
 
 use crate::error::{PlanError, PlanResult};
@@ -151,33 +151,39 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let rand_column_name: String = state.register_field_name("rand_value");
-        let rand_expr: Expr = if with_replacement {
-            Expr::ScalarFunction(ScalarFunction {
-                func: Arc::new(ScalarUDF::from(RandPoisson::new())),
-                args: vec![
-                    Expr::Literal(ScalarValue::Float64(Some(upper_bound)), None),
-                    Expr::Literal(ScalarValue::Int64(Some(seed)), None),
-                ],
-            })
-            .alias(&rand_column_name)
-        } else {
-            Expr::ScalarFunction(ScalarFunction {
-                func: Arc::new(ScalarUDF::from(Random::new())),
-                args: vec![Expr::Literal(ScalarValue::Int64(Some(seed)), None)],
-            })
-            .alias(&rand_column_name)
-        };
         let init_exprs: Vec<Expr> = input
             .schema()
             .columns()
             .iter()
             .map(|col| Expr::Column(col.clone()))
             .collect();
-        let mut all_exprs: Vec<Expr> = init_exprs.clone();
-        all_exprs.push(rand_expr);
-        let plan_with_rand: LogicalPlan = LogicalPlanBuilder::from(input)
-            .project(all_exprs)?
-            .build()?;
+
+        let plan_with_rand: LogicalPlan = if with_replacement {
+            // Poisson sampling still uses the UDF (not partition-aware yet).
+            let rand_expr: Expr = Expr::ScalarFunction(ScalarFunction {
+                func: Arc::new(ScalarUDF::from(RandPoisson::new())),
+                args: vec![
+                    Expr::Literal(ScalarValue::Float64(Some(upper_bound)), None),
+                    Expr::Literal(ScalarValue::Int64(Some(seed)), None),
+                ],
+            })
+            .alias(&rand_column_name);
+            let mut all_exprs: Vec<Expr> = init_exprs.clone();
+            all_exprs.push(rand_expr);
+            LogicalPlanBuilder::from(input)
+                .project(all_exprs)?
+                .build()?
+        } else {
+            // Bernoulli sampling uses partition-aware RandNode.
+            LogicalPlan::Extension(Extension {
+                node: Arc::new(RandNode::try_new(
+                    Arc::new(input),
+                    rand_column_name.clone(),
+                    seed,
+                    RandMode::Uniform,
+                )?),
+            })
+        };
 
         if with_replacement {
             Self::resolve_sample_with_replacement(

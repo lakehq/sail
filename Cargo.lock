@@ -6311,6 +6311,7 @@ dependencies = [
  "futures",
  "lazy_static",
  "sail-common-datafusion",
+ "sail-function",
  "sail-logical-plan",
  "tokio-stream",
 ]

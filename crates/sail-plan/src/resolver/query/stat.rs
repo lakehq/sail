@@ -11,13 +11,14 @@ use datafusion::functions_aggregate::min_max::{max_udaf, min_udaf};
 use datafusion::functions_aggregate::stddev::stddev_udaf;
 use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion_common::{Column, ExprSchema, ScalarValue};
-use datafusion_expr::expr::{AggregateFunctionParams, ScalarFunction};
+use datafusion_expr::expr::AggregateFunctionParams;
 use datafusion_expr::{
-    and, col, expr, lit, or, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, ScalarUDF,
+    col, expr, lit, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder,
 };
+use rand::{rng, Rng};
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::math::random::Random;
+use sail_logical_plan::rand::{RandMode, RandNode};
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
@@ -534,38 +535,58 @@ impl PlanResolver<'_> {
             }
         };
 
+        let seed_value: i64 = seed.unwrap_or_else(|| {
+            let mut r = rng();
+            r.random::<i64>()
+        });
+
+        // Match Spark's sampleBy: single random column + filter.
+        // Generate one random value per row, then filter where
+        // (key == k1 AND rand < frac1) OR (key == k2 AND rand < frac2) OR ...
+        let rand_column_name: String = state.register_field_name("rand_value");
+
+        // Build conditions first to avoid unnecessary work when all fractions are 0.
+        let mut conditions: Vec<Expr> = vec![];
+        for frac in &fractions {
+            if frac.fraction <= 0.0 {
+                continue;
+            }
+            let key_val = self.resolve_literal(frac.stratum.clone(), state)?;
+            conditions.push(
+                Expr::Column(column_expr.clone())
+                    .eq(lit(key_val))
+                    .and(col(&rand_column_name).lt(lit(frac.fraction))),
+            );
+        }
+
+        if conditions.is_empty() {
+            return Ok(LogicalPlanBuilder::from(input)
+                .filter(lit(false))?
+                .build()?);
+        }
+
         let init_exprs: Vec<Expr> = input
             .schema()
             .columns()
-            .into_iter()
-            .map(Expr::Column)
+            .iter()
+            .map(|c| Expr::Column(c.clone()))
             .collect();
-        let rand_column_name: String = state.register_hidden_field_name("rand_value");
-
-        let rand_expr: Expr = Expr::ScalarFunction(ScalarFunction {
-            func: Arc::new(ScalarUDF::from(Random::new())),
-            args: vec![Expr::Literal(ScalarValue::Int64(seed), None)],
-        })
-        .alias(&rand_column_name);
-        let mut all_exprs: Vec<Expr> = init_exprs.clone();
-        all_exprs.push(rand_expr);
-        let plan_with_rand: LogicalPlan = LogicalPlanBuilder::from(input)
-            .project(all_exprs)?
+        let plan_with_rand = LogicalPlan::Extension(Extension {
+            node: Arc::new(RandNode::try_new(
+                Arc::new(input),
+                rand_column_name,
+                seed_value,
+                RandMode::Uniform,
+            )?),
+        });
+        let combined = conditions
+            .into_iter()
+            .reduce(Expr::or)
+            .ok_or_else(|| PlanError::internal("expected at least one sampleBy condition"))?;
+        let plan = LogicalPlanBuilder::from(plan_with_rand)
+            .filter(combined)?
+            .project(init_exprs)?
             .build()?;
-
-        let mut acc_exprs: Vec<Expr> = vec![];
-        for frac in &fractions {
-            let key_val = self.resolve_literal(frac.stratum.clone(), state)?;
-            let f = and(
-                Expr::Column(column_expr.clone()).eq(lit(key_val)),
-                col(&rand_column_name).lt_eq(lit(frac.fraction)),
-            );
-            acc_exprs.push(f);
-        }
-
-        let final_expr: Expr = acc_exprs.into_iter().reduce(or).unwrap_or(lit(false));
-        Ok(LogicalPlanBuilder::from(plan_with_rand)
-            .filter(final_expr)?
-            .build()?)
+        Ok(plan)
     }
 }
