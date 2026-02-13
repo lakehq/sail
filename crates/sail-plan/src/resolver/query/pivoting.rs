@@ -12,6 +12,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::explode::ExplodeRewriter;
+use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
@@ -165,7 +166,8 @@ impl PlanResolver<'_> {
             .collect::<Vec<_>>();
 
         let (input, expr) =
-            self.rewrite_projection::<ExplodeRewriter>(input.clone(), projections, state)?;
+            self.rewrite_projection::<MonotonicIdRewriter>(input.clone(), projections, state)?;
+        let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
 
         let expr = self.rewrite_multi_expr(expr)?;
         let expr = self.rewrite_named_expressions(expr, state)?;

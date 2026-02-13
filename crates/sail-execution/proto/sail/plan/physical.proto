@@ -48,6 +48,7 @@ message ExtendedPhysicalPlanNode {
     IcebergCommitExecNode iceberg_commit = 33;
     MergeCardinalityCheckExecNode merge_cardinality_check = 34;
     PythonDataSourceExecNode python_data_source = 35;
+    MonotonicIdExecNode monotonic_id = 36;
   }
 }
 
@@ -516,6 +517,12 @@ message MergeCardinalityCheckExecNode {
   string target_row_id_col = 2;
   string target_present_col = 3;
   string source_present_col = 4;
+}
+
+message MonotonicIdExecNode {
+  bytes input = 1;
+  string column_name = 2;
+  bytes schema = 3;
 }
 
 message JoinOn {
