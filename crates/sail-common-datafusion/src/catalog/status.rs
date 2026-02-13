@@ -99,9 +99,7 @@ impl TableKind {
                 columns,
                 partition_by,
                 ..
-            } if !partition_by.is_empty() => {
-                columns.iter().filter(|c| c.is_partition).collect()
-            }
+            } if !partition_by.is_empty() => columns.iter().filter(|c| c.is_partition).collect(),
             _ => vec![],
         }
     }
