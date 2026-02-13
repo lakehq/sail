@@ -15,12 +15,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::array::RecordBatch;
+use datafusion::common::runtime::SpawnedTask;
 use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;
 use object_store::path::Path;
 use object_store::ObjectStore;
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
 
 use super::config::{PartitioningMode, WriterConfig};
 use super::demux::{AutoPartitioner, ContiguousPartitioner, HashPartitioner, Partitioner};
@@ -95,10 +95,11 @@ impl DeltaWriteOrchestrator {
     pub async fn close(mut self) -> Result<Vec<Add>, DeltaTableError> {
         let mut all_actions = Vec::new();
         for (_, handle) in self.partitions.drain() {
+            let PartitionHandle { tx, join } = handle;
             // Dropping the sender closes the channel, allowing the task to finish.
-            drop(handle.tx);
-            let actions = handle
-                .join
+            drop(tx);
+            let actions = join
+                .join_unwind()
                 .await
                 .map_err(|e| DeltaTableError::generic(format!("writer task join error: {e}")))??;
             all_actions.extend(actions);
@@ -110,7 +111,7 @@ impl DeltaWriteOrchestrator {
 
 struct PartitionHandle {
     tx: mpsc::Sender<RecordBatch>,
-    join: JoinHandle<Result<Vec<Add>, DeltaTableError>>,
+    join: SpawnedTask<Result<Vec<Add>, DeltaTableError>>,
 }
 
 impl PartitionHandle {
@@ -123,7 +124,7 @@ impl PartitionHandle {
     ) -> Result<Self, DeltaTableError> {
         let (tx, mut rx) = mpsc::channel::<RecordBatch>(128);
 
-        let join = tokio::spawn(async move {
+        let join = SpawnedTask::spawn(async move {
             let mut writer = RollingPartitionWriter::try_new(
                 object_store,
                 table_path,
