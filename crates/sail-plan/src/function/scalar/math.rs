@@ -4,7 +4,7 @@ use datafusion::arrow::datatypes::{i256, DataType, IntervalUnit, TimeUnit};
 use datafusion::arrow::error::ArrowError;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{cast, expr, lit, Expr, ExprSchemable, Operator, ScalarUDF};
+use datafusion_expr::{cast, expr, lit, BinaryExpr, Expr, ExprSchemable, Operator, ScalarUDF};
 use datafusion_spark::function::math::expr_fn as math_fn;
 use half::f16;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -26,6 +26,7 @@ use sail_function::scalar::math::spark_try_mod::SparkTryMod;
 use sail_function::scalar::math::spark_try_mult::SparkTryMult;
 use sail_function::scalar::math::spark_try_subtract::SparkTrySubtract;
 use sail_function::scalar::math::spark_unhex::SparkUnHex;
+use sail_function::scalar::misc::raise_error::RaiseError;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -224,6 +225,39 @@ fn is_zero_literal(expr: &Expr) -> bool {
     }
 }
 
+/// Wraps a division expression with a runtime zero-divisor check.
+///
+/// In ANSI mode: raises an error via `RaiseError` UDF for any division by zero.
+/// In non-ANSI mode: returns NULL for any division by zero.
+fn wrap_division_by_zero_check(
+    div_expr: Expr,
+    divisor: &Expr,
+    divisor_type: &DataType,
+    ansi_mode: bool,
+    error_message: &str,
+) -> Expr {
+    // Skip wrapping for Interval/Duration types (cannot be compared to lit(0)).
+    if matches!(divisor_type, DataType::Interval(_) | DataType::Duration(_)) {
+        return div_expr;
+    }
+
+    let zero_check = divisor.clone().eq(lit(0));
+    let then_expr = if ansi_mode {
+        Expr::ScalarFunction(expr::ScalarFunction {
+            func: Arc::new(ScalarUDF::from(RaiseError::new())),
+            args: vec![lit(error_message)],
+        })
+    } else {
+        Expr::Literal(ScalarValue::Null, None)
+    };
+
+    Expr::Case(expr::Case {
+        expr: None,
+        when_then_expr: vec![(Box::new(zero_check), Box::new(then_expr))],
+        else_expr: Some(Box::new(div_expr)),
+    })
+}
+
 /// Arguments:
 ///   - dividend: A numeric or INTERVAL expression.
 ///   - divisor: A numeric expression.
@@ -245,22 +279,23 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
     let (dividend, divisor) = arguments.two()?;
 
-    // Check if the divisor is a zero literal (handles both direct literals and CAST expressions)
+    // Plan-time check for literal zero divisors (fast path, better error UX).
     if is_zero_literal(&divisor) {
         if function_context.plan_config.ansi_mode {
-            // ANSI mode: throw error for division by zero
             return Err(PlanError::ArrowError(ArrowError::DivideByZero));
         } else {
-            // Non-ANSI mode: return NULL for any division by zero (Spark 4.x behavior)
             return Ok(Expr::Literal(ScalarValue::Null, None));
         }
     }
 
-    let (dividend_type, divisor_type) = (
-        dividend.get_type(function_context.schema),
-        divisor.get_type(function_context.schema),
-    );
-    Ok(match (dividend_type, divisor_type) {
+    let ansi_mode = function_context.plan_config.ansi_mode;
+    let dividend_type = dividend.get_type(function_context.schema);
+    let divisor_type = divisor.get_type(function_context.schema);
+
+    // Clone divisor before it is consumed by the division expression.
+    let divisor_for_check = divisor.clone();
+
+    let div_expr = match (&dividend_type, &divisor_type) {
         // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
         //  Seems to be a bug in DataFusion.
         // TODO: Cast the precision and scale that matches the Spark's behavior after the division.
@@ -282,7 +317,16 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
         // TODO: In case getting the type fails, we don't want to fail the query.
         //  Future work is needed here, ideally we create something like `Operator::SparkDivide`.
         (Err(_), _) | (_, Err(_)) => dividend / divisor,
-    })
+    };
+
+    let effective_divisor_type = divisor_type.unwrap_or(DataType::Int32);
+    Ok(wrap_division_by_zero_check(
+        div_expr,
+        &divisor_for_check,
+        &effective_divisor_type,
+        ansi_mode,
+        "Division by zero",
+    ))
 }
 
 /// Returns the integral part of the division of dividend by divisor.
@@ -301,11 +345,23 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
     } = input;
 
     let (dividend, divisor) = arguments.two()?;
-    let (dividend_type, divisor_type) = (
-        dividend.get_type(function_context.schema),
-        divisor.get_type(function_context.schema),
-    );
-    let expr = match (dividend_type, divisor_type) {
+
+    // Plan-time check for literal zero divisors.
+    if is_zero_literal(&divisor) {
+        if function_context.plan_config.ansi_mode {
+            return Err(PlanError::ArrowError(ArrowError::DivideByZero));
+        } else {
+            return Ok(Expr::Literal(ScalarValue::Null, None));
+        }
+    }
+
+    let ansi_mode = function_context.plan_config.ansi_mode;
+    let dividend_type = dividend.get_type(function_context.schema);
+    let divisor_type = divisor.get_type(function_context.schema);
+
+    let divisor_for_check = divisor.clone();
+
+    let div_expr = match (&dividend_type, &divisor_type) {
         // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
         //  Seems to be a bug in DataFusion.
         (Ok(DataType::Duration(_)), Ok(DataType::Duration(_))) => {
@@ -324,8 +380,17 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
         //  Future work is needed here, ideally we create something like `Operator::SparkDivide`.
         (Ok(_), Ok(_)) | (Err(_), _) | (_, Err(_)) => dividend / divisor,
     };
-    // We need this final cast because we are doing integer division.
-    Ok(cast(expr, DataType::Int64))
+
+    // DIV is integer division — the divisor is always integral.
+    let effective_divisor_type = divisor_type.unwrap_or(DataType::Int32);
+    let typed_div_expr = cast(div_expr, DataType::Int64);
+    Ok(wrap_division_by_zero_check(
+        typed_div_expr,
+        &divisor_for_check,
+        &effective_divisor_type,
+        ansi_mode,
+        "Division by zero",
+    ))
 }
 
 fn power(base: Expr, exponent: Expr) -> Expr {
@@ -459,11 +524,56 @@ fn double2(func: impl Fn(Expr, Expr) -> Expr) -> impl Fn(Expr, Expr) -> Expr {
     move |arg1: Expr, arg2| func(cast(arg1, DataType::Float64), cast(arg2, DataType::Float64))
 }
 
+/// Modulo operation with division-by-zero handling.
+///
+/// In ANSI mode: raises error for integral/decimal modulo by zero.
+/// In non-ANSI mode: returns NULL for modulo by zero.
+/// Float/double modulo by zero returns NaN (IEEE 754).
+fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+
+    let (dividend, divisor) = arguments.two()?;
+
+    // Plan-time check for literal zero divisors.
+    if is_zero_literal(&divisor) {
+        if function_context.plan_config.ansi_mode {
+            return Err(PlanError::ArrowError(ArrowError::ArithmeticOverflow(
+                "Remainder by zero".to_string(),
+            )));
+        } else {
+            return Ok(Expr::Literal(ScalarValue::Null, None));
+        }
+    }
+
+    let ansi_mode = function_context.plan_config.ansi_mode;
+    let divisor_type = divisor.get_type(function_context.schema);
+
+    let divisor_for_check = divisor.clone();
+
+    let mod_expr = Expr::BinaryExpr(BinaryExpr {
+        left: Box::new(dividend),
+        op: Operator::Modulo,
+        right: Box::new(divisor),
+    });
+
+    let effective_divisor_type = divisor_type.unwrap_or(DataType::Int32);
+    Ok(wrap_division_by_zero_check(
+        mod_expr,
+        &divisor_for_check,
+        &effective_divisor_type,
+        ansi_mode,
+        "Remainder by zero",
+    ))
+}
+
 pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
-        ("%", F::binary_op(Operator::Modulo)),
+        ("%", F::custom(spark_modulo)),
         ("*", F::custom(spark_multiply)),
         ("+", F::custom(spark_plus)),
         ("-", F::custom(spark_minus)),
@@ -502,7 +612,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("log10", F::unary(double(log10))),
         ("log1p", F::unary(double(log1p))),
         ("log2", F::unary(double(log2))),
-        ("mod", F::binary_op(Operator::Modulo)),
+        ("mod", F::custom(spark_modulo)),
         ("negative", F::unary(|x| Expr::Negative(Box::new(x)))),
         ("pi", F::nullary(expr_fn::pi)),
         ("pmod", F::binary(math_fn::pmod)),
