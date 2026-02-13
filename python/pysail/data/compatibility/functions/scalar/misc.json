@@ -95,7 +95,8 @@
     "module": "pyspark.sql.functions",
     "function": "java_method",
     "status": "not supported",
-    "ref": "https://github.com/lakehq/sail/issues/507"
+    "ref": "https://github.com/lakehq/sail/issues/507",
+    "note": "This is specific to the Java implementation."
   },
   {
     "module": "pyspark.sql.functions",
@@ -111,7 +112,8 @@
     "module": "pyspark.sql.functions",
     "function": "reflect",
     "status": "not supported",
-    "ref": "https://github.com/lakehq/sail/issues/507"
+    "ref": "https://github.com/lakehq/sail/issues/507",
+    "note": "This is specific to the Java implementation."
   },
   {
     "module": "pyspark.sql.functions",
