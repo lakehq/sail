@@ -10,14 +10,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;
 use object_store::path::Path;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 use parquet::schema::types::ColumnPath;
 use uuid::Uuid;
-
-use delta_kernel::expressions::Scalar;
 
 use crate::conversion::scalar::ScalarExt as _;
 
@@ -58,6 +57,12 @@ impl PartFileNamer {
             "part-{:05}-{}-c000{}.parquet",
             self.part_counter, self.writer_id, compression_suffix
         )
+    }
+}
+
+impl Default for PartFileNamer {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

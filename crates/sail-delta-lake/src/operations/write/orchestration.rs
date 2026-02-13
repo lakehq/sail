@@ -10,7 +10,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
+use std::collections::{hash_map::Entry, HashMap};
 use std::sync::Arc;
 
 use datafusion::arrow::array::RecordBatch;
@@ -41,8 +41,8 @@ pub struct DeltaWriteOrchestrator {
 impl DeltaWriteOrchestrator {
     pub fn new(object_store: Arc<dyn ObjectStore>, table_path: Path, config: WriterConfig) -> Self {
         let partitioner: Box<dyn Partitioner> = match config.partitioning_mode {
-            PartitioningMode::Contiguous => Box::new(ContiguousPartitioner::default()),
-            PartitioningMode::Hash => Box::new(HashPartitioner::default()),
+            PartitioningMode::Contiguous => Box::new(ContiguousPartitioner),
+            PartitioningMode::Hash => Box::new(HashPartitioner),
             PartitioningMode::Auto => Box::new(AutoPartitioner::default()),
         };
 
@@ -67,9 +67,9 @@ impl DeltaWriteOrchestrator {
 
         for part in partitioned {
             let partition_key = part.partition_values.hive_partition_path();
-            let handle = match self.partitions.get_mut(&partition_key) {
-                Some(h) => h,
-                None => {
+            let handle = match self.partitions.entry(partition_key.clone()) {
+                Entry::Occupied(entry) => entry.into_mut(),
+                Entry::Vacant(entry) => {
                     let partition_segments = part.partition_values.hive_partition_segments();
                     let handle = PartitionHandle::spawn(
                         Arc::clone(&self.object_store),
@@ -78,19 +78,14 @@ impl DeltaWriteOrchestrator {
                         partition_segments,
                         part.partition_values.clone(),
                     )?;
-                    self.partitions.insert(partition_key.clone(), handle);
-                    self.partitions
-                        .get_mut(&partition_key)
-                        .expect("partition handle must exist after insert")
+                    entry.insert(handle)
                 }
             };
 
             // Send batch to writer task; backpressure via bounded channel.
-            handle
-                .tx
-                .send(part.record_batch)
-                .await
-                .map_err(|_| DeltaTableError::generic("partition writer task terminated".to_string()))?;
+            handle.tx.send(part.record_batch).await.map_err(|_| {
+                DeltaTableError::generic("partition writer task terminated".to_string())
+            })?;
         }
 
         Ok(())
@@ -224,7 +219,9 @@ impl RollingPartitionWriter {
 
             writer.write(&slice).await?;
 
-            let estimated_size = writer.bytes_written().saturating_add(writer.in_progress_size());
+            let estimated_size = writer
+                .bytes_written()
+                .saturating_add(writer.in_progress_size());
             if estimated_size >= self.config.target_file_size {
                 self.flush_current().await?;
             }
@@ -268,4 +265,3 @@ impl RollingPartitionWriter {
         Ok(self.adds)
     }
 }
-

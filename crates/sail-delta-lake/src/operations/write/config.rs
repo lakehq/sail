@@ -108,4 +108,3 @@ pub fn arrow_schema_without_partitions(
             .collect::<Vec<_>>(),
     ))
 }
-

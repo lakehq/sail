@@ -316,9 +316,8 @@ fn divide_by_partition_values_hash(
     // Build take indices grouped by encoded key.
     let mut take_map: HashMap<Vec<String>, UInt64Builder> = HashMap::new();
     let mut first_row_for_key: HashMap<Vec<String>, usize> = HashMap::new();
-    for i in 0..input.num_rows() {
-        let key = key_strings[i].clone();
-        let b = take_map.entry(key.clone()).or_insert_with(UInt64Builder::new);
+    for (i, key) in key_strings.iter().cloned().enumerate() {
+        let b = take_map.entry(key.clone()).or_default();
         b.append_value(i as u64);
         first_row_for_key.entry(key).or_insert(i);
     }
@@ -343,16 +342,19 @@ fn divide_by_partition_values_hash(
         let taken_rb = RecordBatch::from(taken.as_struct());
 
         // Project to non-partition columns.
-        let projected = taken_rb
-            .project(&data_indices)
-            .map_err(|e| DeltaTableError::generic(format!("Failed to project record batch: {e}")))?;
-        let record_batch = RecordBatch::try_new(Arc::clone(&output_schema), projected.columns().to_vec())
-            .map_err(|e| DeltaTableError::generic(format!("Failed to build record batch: {e}")))?;
+        let projected = taken_rb.project(&data_indices).map_err(|e| {
+            DeltaTableError::generic(format!("Failed to project record batch: {e}"))
+        })?;
+        let record_batch =
+            RecordBatch::try_new(Arc::clone(&output_schema), projected.columns().to_vec())
+                .map_err(|e| {
+                    DeltaTableError::generic(format!("Failed to build record batch: {e}"))
+                })?;
 
         // Reconstruct typed partition values for Add (use first row for that key).
-        let first_row = *first_row_for_key
-            .get(&encoded_key)
-            .ok_or_else(|| DeltaTableError::generic("missing first-row mapping for partition key"))?;
+        let first_row = *first_row_for_key.get(&encoded_key).ok_or_else(|| {
+            DeltaTableError::generic("missing first-row mapping for partition key")
+        })?;
         let typed_vals = key_values[first_row].clone();
         let partition_values: IndexMap<String, Scalar> = logical_partition_columns
             .iter()
@@ -368,4 +370,3 @@ fn divide_by_partition_values_hash(
 
     Ok(out)
 }
-

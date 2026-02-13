@@ -41,6 +41,12 @@ impl SharedBytesCounter {
     }
 }
 
+impl Default for SharedBytesCounter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// An `AsyncWrite` wrapper that counts bytes written.
 pub struct CountingAsyncWrite<W> {
     inner: W,
