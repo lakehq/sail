@@ -106,6 +106,7 @@ impl PartitionsExt for IndexMap<String, Scalar> {
             return vec![];
         }
 
+        // TODO: Reuse cached partition segments when the same key repeats across batches.
         self.iter()
             .map(|(k, v)| {
                 let value_str = v.serialize_encoded();

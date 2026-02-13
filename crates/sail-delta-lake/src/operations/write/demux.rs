@@ -99,6 +99,7 @@ impl Partitioner for AutoPartitioner {
         input: &RecordBatch,
     ) -> Result<Vec<PartitionedBatch>, DeltaTableError> {
         // Fast path: small batch or no partitions.
+        // TODO: Move these heuristic thresholds to writer/session config.
         if input.num_rows() <= 1024 || logical_partition_columns.is_empty() {
             return self.contiguous.partition(
                 output_schema,
@@ -117,6 +118,7 @@ impl Partitioner for AutoPartitioner {
         )?;
 
         // Heuristic: contiguous partitions approaching per-row indicates unsorted / high churn.
+        // TODO: Make this fallback threshold configurable per workload.
         if contiguous.len() > 256 && contiguous.len() > input.num_rows() / 2 {
             return self.hash.partition(
                 output_schema,
@@ -314,6 +316,7 @@ fn divide_by_partition_values_hash(
     }
 
     // Build take indices grouped by encoded key.
+    // TODO: Add memory-aware safeguards for very high partition cardinality.
     let mut take_map: HashMap<Vec<String>, UInt64Builder> = HashMap::new();
     let mut first_row_for_key: HashMap<Vec<String>, usize> = HashMap::new();
     for (i, key) in key_strings.iter().cloned().enumerate() {

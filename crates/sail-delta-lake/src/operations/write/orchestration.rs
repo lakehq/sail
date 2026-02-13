@@ -122,6 +122,7 @@ impl PartitionHandle {
         partition_segments: Vec<String>,
         partition_values: IndexMap<String, Scalar>,
     ) -> Result<Self, DeltaTableError> {
+        // TODO: Source channel capacity from execution/session config.
         let (tx, mut rx) = mpsc::channel::<RecordBatch>(128);
 
         let join = SpawnedTask::spawn(async move {

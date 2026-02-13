@@ -92,6 +92,7 @@ impl<W: AsyncWrite + Unpin> AsyncWrite for CountingAsyncWrite<W> {
 pub struct DeltaParquetFileWriter {
     writer: Option<AsyncArrowWriter<CountingAsyncWrite<BufWriter>>>,
     bytes_counter: SharedBytesCounter,
+    // TODO: Integrate writer memory accounting with DataFusion memory reservations.
     schema: ArrowSchemaRef,
 }
 

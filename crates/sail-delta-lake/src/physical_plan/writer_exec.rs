@@ -627,6 +627,7 @@ impl DeltaWriterExec {
                 (final_schema.clone(), partition_columns.clone(), None)
             };
 
+            // TODO: Thread full parquet writer options into WriterConfig instead of defaults.
             let mut writer_config = WriterConfig::new(
                 writer_schema.clone(),
                 partition_columns.clone(),
