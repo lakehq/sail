@@ -627,7 +627,7 @@ impl DeltaWriterExec {
                 (final_schema.clone(), partition_columns.clone(), None)
             };
 
-            let writer_config = WriterConfig::new(
+            let mut writer_config = WriterConfig::new(
                 writer_schema.clone(),
                 partition_columns.clone(),
                 physical_partition_columns.clone(),
@@ -637,6 +637,11 @@ impl DeltaWriterExec {
                 32,
                 None,
             );
+            writer_config.objectstore_writer_buffer_size = context
+                .session_config()
+                .options()
+                .execution
+                .objectstore_writer_buffer_size;
 
             let writer_path = object_store::path::Path::from(table_url.path());
             let mut writer = DeltaWriter::new(object_store.clone(), writer_path, writer_config);

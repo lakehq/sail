@@ -10,7 +10,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod async_utils;
-mod partitioning;
+pub mod config;
+pub mod demux;
+pub mod orchestration;
+pub mod parquet;
+pub mod path;
 pub mod stats;
 pub mod writer;
