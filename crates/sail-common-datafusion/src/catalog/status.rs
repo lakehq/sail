@@ -80,7 +80,7 @@ impl TableKind {
             TableKind::Table { .. } => "MANAGED",
             TableKind::View { .. } => "VIEW",
             TableKind::TemporaryView { .. } => "TEMPORARY",
-            TableKind::GlobalTemporaryView { .. } => "GLOBAL TEMPORARY",
+            TableKind::GlobalTemporaryView { .. } => "TEMPORARY",
         }
     }
 
