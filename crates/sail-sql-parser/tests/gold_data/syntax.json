@@ -2180,16 +2180,6 @@
                   {
                     "sequence": [
                       {
-                        "nonTerminal": "Option(Keyword(Query))"
-                      },
-                      {
-                        "nonTerminal": "Query"
-                      }
-                    ]
-                  },
-                  {
-                    "sequence": [
-                      {
                         "nonTerminal": "Keyword(Function)"
                       },
                       {
@@ -2229,7 +2219,7 @@
                   {
                     "sequence": [
                       {
-                        "nonTerminal": "Option(Keyword(Table))"
+                        "nonTerminal": "Keyword(Table)"
                       },
                       {
                         "nonTerminal": "Option(Keyword(Extended))"
@@ -2242,6 +2232,16 @@
                       },
                       {
                         "nonTerminal": "Option(ObjectName)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Option(Keyword(Query))"
+                      },
+                      {
+                        "nonTerminal": "Query"
                       }
                     ]
                   }
