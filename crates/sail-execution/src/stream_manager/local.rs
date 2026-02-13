@@ -18,8 +18,6 @@ pub trait LocalStream: Send {
 
 /// A memory stream that can be read multiple times.
 /// It maintains multiple replicas of the stream internally.
-/// The slowest receiver controls the rate of the sender,
-/// and the overall memory usage is bounded.
 /// Since [`Arc`] is used inside the record batch, it is relatively cheap
 /// to clone the data in multiple replicas.
 pub(crate) struct MemoryStream {
@@ -69,6 +67,10 @@ impl LocalStream for MemoryStream {
 
 struct MemoryStreamReplicaSender {
     senders: Vec<Option<mpsc::Sender<TaskStreamResult<RecordBatch>>>>,
+    /// An overflow buffer for each sender to avoid blocking sending for slow senders.
+    /// This also avoids deadlock situations where the task stream buffer size is small.
+    // TODO: More investigation is needed to understand why deadlocks might happen among stages
+    //   when the task stream buffer is of a limited size.
     overflow: Vec<VecDeque<TaskStreamResult<RecordBatch>>>,
 }
 
@@ -152,6 +154,8 @@ impl TaskStreamSink for MemoryStreamReplicaSender {
             let mut dropped = false;
             while let Some(item) = overflow.pop_front() {
                 if let Some(tx) = sender.as_ref() {
+                    // TODO: `send` here is blocking and may introduce deadlocks among tasks.
+                    //   This is low-risk empirically though.
                     if tx.send(item).await.is_err() {
                         dropped = true;
                         break;
