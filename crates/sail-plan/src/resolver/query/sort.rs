@@ -3,13 +3,12 @@ use std::sync::Arc;
 use async_recursion::async_recursion;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Column;
-use datafusion_expr::expr::{Alias, ScalarFunction, Sort};
+use datafusion_expr::expr::{Alias, Sort};
 use datafusion_expr::{
     Aggregate, Expr, Extension, LogicalPlan, LogicalPlanBuilder, Projection, Window,
 };
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::explode::{Explode, ExplodeKind};
 use sail_logical_plan::sort::SortWithinPartitionsNode;
 
 use crate::error::{PlanError, PlanResult};
@@ -161,11 +160,19 @@ impl PlanResolver<'_> {
             .into_iter()
             .filter_map(|column| {
                 let info = state.get_field_info(column.name()).ok()?;
-                if info.is_hidden() {
+                if info.is_hidden() || info.name().is_empty() {
                     return None;
                 }
-                Some((info.name().to_string(), Expr::Column(column)))
+                Some((
+                    column.name().to_string(),
+                    info.name().to_string(),
+                    Expr::Column(column),
+                ))
             })
+            .collect::<Vec<_>>();
+        let output_field_ids = output_columns
+            .iter()
+            .map(|(field_id, _, _)| field_id.clone())
             .collect::<Vec<_>>();
 
         sorts
@@ -176,18 +183,38 @@ impl PlanResolver<'_> {
                     asc,
                     nulls_first,
                 } = sort;
-                if matches!(expr, Expr::Column(_)) {
-                    return Ok(Sort {
-                        expr,
-                        asc,
-                        nulls_first,
-                    });
+                if let Expr::Column(column) = &expr {
+                    if output_columns
+                        .iter()
+                        .any(|(field_id, _, _)| field_id == &column.name)
+                    {
+                        return Ok(Sort {
+                            expr,
+                            asc,
+                            nulls_first,
+                        });
+                    }
+                }
+
+                if let Some(field_id) =
+                    state.find_output_field_for_expression(&expr, &output_field_ids)
+                {
+                    if let Some((_, _, column)) = output_columns
+                        .iter()
+                        .find(|(output_field_id, _, _)| output_field_id == &field_id)
+                    {
+                        return Ok(Sort {
+                            expr: column.clone(),
+                            asc,
+                            nulls_first,
+                        });
+                    }
                 }
 
                 let expr_name = Self::normalize_sort_expression_name(&expr, state)?;
                 let expr = output_columns
                     .iter()
-                    .find_map(|(name, column)| (name == &expr_name).then_some(column.clone()))
+                    .find_map(|(_, name, column)| (name == &expr_name).then_some(column.clone()))
                     .unwrap_or(expr);
 
                 Ok(Sort {
@@ -203,17 +230,6 @@ impl PlanResolver<'_> {
         expr: &Expr,
         state: &PlanResolverState,
     ) -> PlanResult<String> {
-        if let Expr::ScalarFunction(ScalarFunction { func, .. }) = expr {
-            if let Some(explode) = func.inner().as_any().downcast_ref::<Explode>() {
-                if matches!(
-                    explode.kind(),
-                    ExplodeKind::Explode | ExplodeKind::ExplodeOuter
-                ) {
-                    return Ok("col".to_string());
-                }
-            }
-        }
-
         let expr = expr
             .clone()
             .transform_down(|e| {

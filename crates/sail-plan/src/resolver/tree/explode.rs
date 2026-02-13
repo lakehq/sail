@@ -174,6 +174,8 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
             Either::Left(node) => node,
             Either::Right(nodes) => ScalarUDF::from(MultiExpr::new()).call(nodes),
         };
+        self.state
+            .register_expression_rewrite(original_expr.clone(), out.clone());
         self.rewritten_expr.push((original_expr, out.clone()));
         Ok(Transformed::yes(out))
     }

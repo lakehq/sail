@@ -177,7 +177,12 @@ impl PlanResolver<'_> {
                     expr,
                     metadata,
                 } = x;
-                let expr = Self::rebase_expression(expr, &aggregate_or_grouping_exprs, &plan)?;
+                let expr = Self::rebase_expression_with_state(
+                    expr,
+                    &aggregate_or_grouping_exprs,
+                    &plan,
+                    state,
+                )?;
                 Ok(NamedExpr {
                     name,
                     expr,
@@ -187,8 +192,12 @@ impl PlanResolver<'_> {
             .collect::<PlanResult<Vec<_>>>()?;
         let plan = match having {
             Some(having) => {
-                let having =
-                    Self::rebase_expression(having.clone(), &aggregate_or_grouping_exprs, &plan)?;
+                let having = Self::rebase_expression_with_state(
+                    having.clone(),
+                    &aggregate_or_grouping_exprs,
+                    &plan,
+                    state,
+                )?;
                 LogicalPlanBuilder::from(plan).having(having)?.build()?
             }
             None => plan,
@@ -207,7 +216,9 @@ impl PlanResolver<'_> {
                     expr,
                     metadata: _,
                 } = x;
-                Ok(expr.alias(state.register_field_name(name.one()?)))
+                let field_id = state.register_field_name(name.one()?);
+                state.register_expression_output_field(expr.clone(), field_id.clone());
+                Ok(expr.alias(field_id))
             })
             .collect::<PlanResult<Vec<_>>>()?;
         Ok(LogicalPlanBuilder::from(plan)
@@ -269,6 +280,26 @@ impl PlanResolver<'_> {
             .transform_down(|e| {
                 if base.contains(&e) {
                     Ok(Transformed::yes(expr_as_column_expr(&e, plan)?))
+                } else {
+                    Ok(Transformed::no(e))
+                }
+            })
+            .data()?)
+    }
+
+    /// Rebase expression and record replacement edges in resolver state.
+    pub(super) fn rebase_expression_with_state(
+        expr: Expr,
+        base: &[Expr],
+        plan: &LogicalPlan,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Expr> {
+        Ok(expr
+            .transform_down(|e| {
+                if base.contains(&e) {
+                    let rebased = expr_as_column_expr(&e, plan)?;
+                    state.register_expression_rewrite(e, rebased.clone());
+                    Ok(Transformed::yes(rebased))
                 } else {
                     Ok(Transformed::no(e))
                 }
