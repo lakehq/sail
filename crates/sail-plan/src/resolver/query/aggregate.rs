@@ -14,6 +14,8 @@ use crate::resolver::tree::window::WindowRewriter;
 use crate::resolver::tree::PlanRewriter;
 use crate::resolver::PlanResolver;
 
+type RewrittenAggregateExpressions = (LogicalPlan, Vec<NamedExpr>, Vec<NamedExpr>, Option<Expr>);
+
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_aggregate(
         &self,
@@ -233,7 +235,7 @@ impl PlanResolver<'_> {
         grouping: Vec<NamedExpr>,
         having: Option<Expr>,
         state: &'s mut PlanResolverState,
-    ) -> PlanResult<(LogicalPlan, Vec<NamedExpr>, Vec<NamedExpr>, Option<Expr>)>
+    ) -> PlanResult<RewrittenAggregateExpressions>
     where
         T: PlanRewriter<'s> + TreeNodeRewriter<Node = Expr>,
     {
