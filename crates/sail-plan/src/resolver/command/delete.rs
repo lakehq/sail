@@ -107,10 +107,10 @@ impl PlanResolver<'_> {
             };
             let registry = self.ctx.extension::<TableFormatRegistry>()?;
             let table_format = registry.get(&format)?;
-            let provider = table_format
-                .create_provider(&self.ctx.state(), source_info)
+            let source = table_format
+                .create_source(&self.ctx.state(), source_info)
                 .await?;
-            provider.schema().to_dfschema_ref()?
+            source.schema().to_dfschema_ref()?
         } else {
             let schema = datafusion::arrow::datatypes::Schema::new(
                 columns.iter().map(|c| c.field()).collect::<Vec<_>>(),

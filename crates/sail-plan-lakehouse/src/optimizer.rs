@@ -1,18 +1,16 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use datafusion::datasource::{provider_as_source, source_as_provider, TableProvider};
 use datafusion::logical_expr::logical_plan::builder::LogicalPlanBuilder;
 use datafusion::optimizer::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, Result};
 use datafusion_expr::logical_plan::Extension;
-use datafusion_expr::{Expr, LogicalPlan};
+use datafusion_expr::{Expr, LogicalPlan, TableScan, TableSource};
 use log::trace;
-use sail_delta_lake::datasource::DeltaTableProvider;
+use sail_delta_lake::datasource::PATH_COLUMN;
+use sail_delta_lake::DeltaTableSource;
 use sail_logical_plan::merge::{expand_merge, MergeIntoNode, MergeIntoWriteNode};
-
-const PATH_COLUMN_NAME: &str = "__sail_file_path";
 
 #[derive(Debug, Clone, Default)]
 pub struct ExpandMerge;
@@ -48,15 +46,12 @@ impl OptimizerRule for ExpandMerge {
                         "rewrite target_plan schema after ensure_file_column: {:?}",
                         &target_fields
                     );
-                    if !target_fields.iter().any(|n| n == PATH_COLUMN_NAME) {
+                    if !target_fields.iter().any(|n| n == PATH_COLUMN) {
                         let mut exprs: Vec<Expr> = target_fields
                             .iter()
                             .map(|name| Expr::Column(Column::from_name(name.clone())))
                             .collect();
-                        exprs.push(
-                            Expr::Column(Column::from_name(PATH_COLUMN_NAME))
-                                .alias(PATH_COLUMN_NAME),
-                        );
+                        exprs.push(Expr::Column(Column::from_name(PATH_COLUMN)).alias(PATH_COLUMN));
                         target_plan = LogicalPlanBuilder::from(target_plan)
                             .project(exprs)?
                             .build()?;
@@ -77,7 +72,7 @@ impl OptimizerRule for ExpandMerge {
                         node.input_schema().clone(),
                     );
 
-                    let expansion = expand_merge(&node, PATH_COLUMN_NAME)?;
+                    let expansion = expand_merge(&node, PATH_COLUMN)?;
                     trace!(
                         "ExpandMergeRule write_plan schema fields: {:?}",
                         expansion
@@ -117,66 +112,56 @@ fn ensure_file_column(plan: LogicalPlan) -> Result<LogicalPlan> {
         .transform_up(|plan| {
             // First, make sure Delta table scans expose the path column.
             if let LogicalPlan::TableScan(scan) = &plan {
-                if let Ok(provider) = source_as_provider(&scan.source) {
-                    if let Some(delta_provider) =
-                        provider.as_any().downcast_ref::<DeltaTableProvider>()
-                    {
+                if let Some(delta_source) = scan.source.as_any().downcast_ref::<DeltaTableSource>()
+                {
+                    trace!(
+                        "ensure_file_column (scan) before - table_name: {:?}, schema_fields: {:?}, projection: {:?}",
+                        &scan.table_name,
+                        delta_source
+                            .schema()
+                            .fields()
+                            .iter()
+                            .map(|f| f.name().clone())
+                            .collect::<Vec<_>>(),
+                        &scan.projection
+                    );
+                    if delta_source.config().file_column_name.is_none() {
+                        let mut new_config = delta_source.config().clone();
+                        new_config.file_column_name = Some(PATH_COLUMN.to_string());
+
+                        let new_source = Arc::new(delta_source.try_with_config(new_config)?);
+                        let schema = new_source.schema();
+                        let file_idx = schema.column_with_name(PATH_COLUMN).map(|(idx, _)| idx);
+
+                        let mut projection = scan.projection.clone();
+                        if projection.is_none() {
+                            projection = Some((0..schema.fields().len()).collect::<Vec<usize>>());
+                        }
+                        if let (Some(idx), Some(proj)) = (file_idx, projection.as_mut()) {
+                            if !proj.contains(&idx) {
+                                proj.push(idx);
+                            }
+                        }
+
+                        let new_scan = LogicalPlan::TableScan(TableScan::try_new(
+                            scan.table_name.clone(),
+                            new_source as Arc<dyn TableSource>,
+                            projection,
+                            scan.filters.clone(),
+                            scan.fetch,
+                        )?);
                         trace!(
-                            "ensure_file_column (scan) before - table_name: {:?}, schema_fields: {:?}, projection: {:?}",
-                            &scan.table_name,
-                            provider
+                            "ensure_file_column (scan) after - schema_fields: {:?}, scan: {:?}",
+                            new_scan
                                 .schema()
                                 .fields()
                                 .iter()
                                 .map(|f| f.name().clone())
                                 .collect::<Vec<_>>(),
-                            &scan.projection
+                            &new_scan
                         );
-                        if delta_provider.config().file_column_name.is_none() {
-                            let mut new_config = delta_provider.config().clone();
-                            new_config.file_column_name = Some(PATH_COLUMN_NAME.to_string());
 
-                            let new_provider = Arc::new(DeltaTableProvider::try_new(
-                                delta_provider.snapshot().clone(),
-                                delta_provider.log_store().clone(),
-                                new_config,
-                            )?);
-
-                            let schema = new_provider.schema();
-                            let file_idx = schema
-                                .column_with_name(PATH_COLUMN_NAME)
-                                .map(|(idx, _)| idx);
-
-                            let mut projection = scan.projection.clone();
-                            if projection.is_none() {
-                                projection =
-                                    Some((0..schema.fields().len()).collect::<Vec<usize>>());
-                            }
-                            if let (Some(idx), Some(proj)) = (file_idx, projection.as_mut()) {
-                                if !proj.contains(&idx) {
-                                    proj.push(idx);
-                                }
-                            }
-
-                            let new_scan = LogicalPlanBuilder::scan(
-                                scan.table_name.clone(),
-                                provider_as_source(new_provider as Arc<dyn TableProvider>),
-                                projection,
-                            )?
-                            .build()?;
-                            trace!(
-                                "ensure_file_column (scan) after - schema_fields: {:?}, scan: {:?}",
-                                new_scan
-                                    .schema()
-                                    .fields()
-                                    .iter()
-                                    .map(|f| f.name().clone())
-                                    .collect::<Vec<_>>(),
-                                &new_scan
-                            );
-
-                            return Ok(Transformed::yes(new_scan));
-                        }
+                        return Ok(Transformed::yes(new_scan));
                     }
                 }
             }
@@ -187,11 +172,11 @@ fn ensure_file_column(plan: LogicalPlan) -> Result<LogicalPlan> {
                 let has_path_in_input = input_schema
                     .fields()
                     .iter()
-                    .any(|f| f.name() == PATH_COLUMN_NAME);
+                    .any(|f| f.name() == PATH_COLUMN);
                 if has_path_in_input {
                     let has_path = proj.expr.iter().any(|e| match e {
-                        Expr::Column(c) => c.name == PATH_COLUMN_NAME,
-                        Expr::Alias(a) => a.name == PATH_COLUMN_NAME,
+                        Expr::Column(c) => c.name == PATH_COLUMN,
+                        Expr::Alias(a) => a.name == PATH_COLUMN,
                         _ => false,
                     });
 
@@ -207,8 +192,7 @@ fn ensure_file_column(plan: LogicalPlan) -> Result<LogicalPlan> {
                         );
                         let mut new_exprs = proj.expr.clone();
                         new_exprs.push(
-                            Expr::Column(Column::from_name(PATH_COLUMN_NAME))
-                                .alias(PATH_COLUMN_NAME),
+                            Expr::Column(Column::from_name(PATH_COLUMN)).alias(PATH_COLUMN),
                         );
                         let new_proj = LogicalPlanBuilder::from(proj.input.as_ref().clone())
                             .project(new_exprs)?
@@ -241,12 +225,8 @@ fn ensure_file_column(plan: LogicalPlan) -> Result<LogicalPlan> {
             .schema()
             .fields()
             .iter()
-            .any(|f| f.name() == PATH_COLUMN_NAME);
-        let has_path_in_alias = sa
-            .schema
-            .fields()
-            .iter()
-            .any(|f| f.name() == PATH_COLUMN_NAME);
+            .any(|f| f.name() == PATH_COLUMN);
+        let has_path_in_alias = sa.schema.fields().iter().any(|f| f.name() == PATH_COLUMN);
         if has_path_in_child && !has_path_in_alias {
             transformed =
                 LogicalPlan::SubqueryAlias(datafusion_expr::logical_plan::SubqueryAlias::try_new(

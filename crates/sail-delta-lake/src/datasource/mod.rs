@@ -30,6 +30,7 @@ use url::Url;
 
 use crate::kernel::snapshot::LogDataHandler;
 use crate::kernel::{DeltaResult, DeltaTableError};
+use crate::options::DeltaLogReplayStrategyOption;
 use crate::table::DeltaTableState;
 pub const PATH_COLUMN: &str = "__sail_file_path";
 pub const COMMIT_VERSION_COLUMN: &str = "_commit_version";
@@ -98,6 +99,10 @@ pub struct DeltaScanConfigBuilder {
     commit_version_column_name: Option<String>,
     /// Column name that contains the commit timestamp.
     commit_timestamp_column_name: Option<String>,
+    /// Strategy for log replay planning.
+    delta_log_replay_strategy: DeltaLogReplayStrategyOption,
+    /// Threshold for auto replay strategy.
+    delta_log_replay_hash_threshold: usize,
 }
 
 impl Default for DeltaScanConfigBuilder {
@@ -111,6 +116,8 @@ impl Default for DeltaScanConfigBuilder {
             include_commit_metadata: false,
             commit_version_column_name: None,
             commit_timestamp_column_name: None,
+            delta_log_replay_strategy: DeltaLogReplayStrategyOption::Auto,
+            delta_log_replay_hash_threshold: 100,
         }
     }
 }
@@ -138,6 +145,21 @@ impl DeltaScanConfigBuilder {
     /// Indicate that commit metadata virtual columns are included.
     pub fn with_commit_metadata_columns(mut self, include: bool) -> Self {
         self.include_commit_metadata = include;
+        self
+    }
+
+    /// Configure replay strategy for log replay planning.
+    pub fn with_delta_log_replay_strategy(
+        mut self,
+        strategy: DeltaLogReplayStrategyOption,
+    ) -> Self {
+        self.delta_log_replay_strategy = strategy;
+        self
+    }
+
+    /// Configure threshold for `Auto` replay strategy.
+    pub fn with_delta_log_replay_hash_threshold(mut self, threshold: usize) -> Self {
+        self.delta_log_replay_hash_threshold = threshold;
         self
     }
 
@@ -228,6 +250,8 @@ impl DeltaScanConfigBuilder {
             schema: self.schema.clone(),
             commit_version_column_name,
             commit_timestamp_column_name,
+            delta_log_replay_strategy: self.delta_log_replay_strategy,
+            delta_log_replay_hash_threshold: self.delta_log_replay_hash_threshold,
         })
     }
 }
@@ -247,4 +271,14 @@ pub struct DeltaScanConfig {
     pub commit_version_column_name: Option<String>,
     /// Commit timestamp virtual column name.
     pub commit_timestamp_column_name: Option<String>,
+    /// Strategy for log replay planning.
+    #[serde(default)]
+    pub delta_log_replay_strategy: DeltaLogReplayStrategyOption,
+    /// Threshold for `Auto` replay strategy.
+    #[serde(default = "default_delta_log_replay_hash_threshold")]
+    pub delta_log_replay_hash_threshold: usize,
+}
+
+fn default_delta_log_replay_hash_threshold() -> usize {
+    100
 }

@@ -44,8 +44,7 @@ pub async fn build_delete_plan(
     let version = snapshot_state.version();
 
     let table_schema = snapshot_state
-        .snapshot()
-        .arrow_schema()
+        .input_schema()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let partition_columns = snapshot_state.metadata().partition_columns().clone();
 
@@ -78,11 +77,24 @@ pub async fn build_delete_plan(
         });
     }
 
+    let kschema_arc = snapshot_state.snapshot().table_configuration().schema();
+    let kmode = snapshot_state.effective_column_mapping_mode();
+    let partition_columns_map = partition_columns
+        .iter()
+        .map(|col| {
+            let physical = kschema_arc
+                .field(col)
+                .map(|f| f.physical_name(kmode).to_string())
+                .unwrap_or_else(|| col.clone());
+            (col.clone(), physical)
+        })
+        .collect::<Vec<_>>();
+
     let meta_scan: Arc<dyn ExecutionPlan> = build_log_replay_pipeline_with_options(
         ctx,
         ctx.table_url().clone(),
         version,
-        partition_columns.clone(),
+        partition_columns_map,
         checkpoint_files,
         commit_files,
         log_replay_options,
@@ -110,7 +122,13 @@ pub async fn build_delete_plan(
     let scan_exec = Arc::new(DeltaScanByAddsExec::new(
         Arc::clone(&find_files_exec),
         ctx.table_url().clone(),
+        version,
         table_schema.clone(),
+        table_schema.clone(),
+        crate::datasource::DeltaScanConfig::default(),
+        None,
+        None,
+        None,
     ));
 
     // Adapt the predicate to the scan schema. PhysicalExpr Column indices are schema-dependent,

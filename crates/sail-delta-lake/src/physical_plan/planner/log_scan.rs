@@ -139,12 +139,17 @@ fn to_file_groups(metas: Vec<ObjectMeta>, target_partitions: usize) -> Result<Ve
     Ok(groups)
 }
 
-pub async fn build_delta_log_datasource_union_with_options(
+pub async fn build_delta_log_datasource_scans_with_options(
     ctx: &PlannerContext<'_>,
     checkpoint_files: Vec<String>,
     commit_files: Vec<String>,
     options: LogScanOptions,
-) -> Result<(Arc<dyn ExecutionPlan>, Vec<String>, Vec<String>)> {
+) -> Result<(
+    Option<Arc<dyn ExecutionPlan>>,
+    Option<Arc<dyn ExecutionPlan>>,
+    Vec<String>,
+    Vec<String>,
+)> {
     let store = ctx.object_store()?;
     let log_store = ctx.log_store()?;
     let object_store_url = create_object_store_url(&log_store.config().location).map_err(|e| {
@@ -241,19 +246,22 @@ pub async fn build_delta_log_datasource_union_with_options(
                 indices.push(file_schema_len);
                 continue;
             }
-            let idx = merged.index_of(col).map_err(|_| {
-                DataFusionError::Plan(format!(
-                    "log scan projection column '{col}' not found in merged schema"
-                ))
-            })?;
-            indices.push(idx);
+
+            match merged.index_of(col) {
+                Ok(idx) => indices.push(idx),
+                Err(_) => {
+                    // Some Delta writers/checkpoint formats may omit an action column
+                    // (for example, no `remove` records in a newly created table).
+                    // Skip missing projected columns and let downstream replay logic
+                    // treat them as absent.
+                }
+            }
         }
         Some(indices)
     } else {
         None
     };
 
-    let mut inputs: Vec<Arc<dyn ExecutionPlan>> = Vec::new();
     let target_partitions = ctx.session().config().target_partitions();
     let table_schema = TableSchema::new(
         Arc::clone(&merged),
@@ -264,7 +272,9 @@ pub async fn build_delta_log_datasource_union_with_options(
         ))],
     );
 
-    if !checkpoint_metas.is_empty() {
+    let checkpoint_scan: Option<Arc<dyn ExecutionPlan>> = if checkpoint_metas.is_empty() {
+        None
+    } else {
         let mut source =
             datafusion::datasource::physical_plan::ParquetSource::new(table_schema.clone());
         if let Some(predicate) = &options.parquet_predicate {
@@ -276,10 +286,12 @@ pub async fn build_delta_log_datasource_union_with_options(
             .with_file_groups(groups)
             .with_projection_indices(projection_indices.clone())?
             .build();
-        inputs.push(DataSourceExec::from_data_source(conf));
-    }
+        Some(DataSourceExec::from_data_source(conf))
+    };
 
-    if !commit_metas.is_empty() {
+    let commit_scan: Option<Arc<dyn ExecutionPlan>> = if commit_metas.is_empty() {
+        None
+    } else {
         let source: Arc<dyn datafusion::datasource::physical_plan::FileSource> = Arc::new(
             datafusion::datasource::physical_plan::JsonSource::new(table_schema),
         );
@@ -288,7 +300,29 @@ pub async fn build_delta_log_datasource_union_with_options(
             .with_file_groups(groups)
             .with_projection_indices(projection_indices)?
             .build();
-        inputs.push(DataSourceExec::from_data_source(conf));
+        Some(DataSourceExec::from_data_source(conf))
+    };
+
+    Ok((checkpoint_scan, commit_scan, checkpoint_files, commit_files))
+}
+
+#[allow(dead_code)]
+pub async fn build_delta_log_datasource_union_with_options(
+    ctx: &PlannerContext<'_>,
+    checkpoint_files: Vec<String>,
+    commit_files: Vec<String>,
+    options: LogScanOptions,
+) -> Result<(Arc<dyn ExecutionPlan>, Vec<String>, Vec<String>)> {
+    let (checkpoint_scan, commit_scan, checkpoint_files, commit_files) =
+        build_delta_log_datasource_scans_with_options(ctx, checkpoint_files, commit_files, options)
+            .await?;
+
+    let mut inputs: Vec<Arc<dyn ExecutionPlan>> = Vec::new();
+    if let Some(cp) = checkpoint_scan {
+        inputs.push(cp);
+    }
+    if let Some(c) = commit_scan {
+        inputs.push(c);
     }
 
     Ok((UnionExec::try_new(inputs)?, checkpoint_files, commit_files))

@@ -27,7 +27,7 @@ use sail_common_datafusion::datasource::{
 use url::Url;
 
 use super::context::PlannerContext;
-use super::utils::build_log_replay_pipeline;
+use super::utils::{build_log_replay_pipeline_with_options, LogReplayOptions};
 use crate::datasource::{DataFusionMixins, PATH_COLUMN};
 use crate::kernel::{DeltaOperation, MergePredicate};
 use crate::options::TableDeltaOptions;
@@ -54,8 +54,7 @@ pub async fn build_merge_plan(
         .clone();
     let version = snapshot_state.version();
     let table_schema = snapshot_state
-        .snapshot()
-        .arrow_schema()
+        .input_schema()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let partition_columns = snapshot_state.metadata().partition_columns().clone();
 
@@ -256,13 +255,29 @@ async fn finalize_merge(
     if let Some(touched_plan) = &touched_plan_opt {
         // Build a log-side stream of active Add rows using a visible log replay pipeline:
         // Union(DataSourceExec parquet/json) -> DeltaLogReplayExec -> ... -> DeltaDiscoveryExec.
-        let meta_scan: Arc<dyn ExecutionPlan> = build_log_replay_pipeline(
+        let partition_columns_map = partition_columns
+            .iter()
+            .map(|col| {
+                let physical = table_schema
+                    .field_with_name(col)
+                    .ok()
+                    .and_then(|f| {
+                        f.metadata()
+                            .get("delta.columnMapping.physicalName")
+                            .cloned()
+                    })
+                    .unwrap_or_else(|| col.clone());
+                (col.clone(), physical)
+            })
+            .collect::<Vec<_>>();
+        let meta_scan: Arc<dyn ExecutionPlan> = build_log_replay_pipeline_with_options(
             ctx,
             table_url.clone(),
             version,
-            partition_columns.clone(),
+            partition_columns_map,
             checkpoint_files,
             commit_files,
+            LogReplayOptions::default(),
         )
         .await?;
 

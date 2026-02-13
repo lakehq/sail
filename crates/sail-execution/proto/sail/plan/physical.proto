@@ -447,6 +447,14 @@ message DeltaScanByAddsExecNode {
   bytes input = 1;
   string table_url = 2;
   bytes table_schema = 3;
+  optional bytes output_schema = 4;
+  string scan_config_json = 5;
+  repeated uint64 projection = 6;
+  optional uint64 limit = 7;
+  optional bytes pushdown_filter = 8;
+  int64 version = 9;
+  optional bytes statistics = 10;
+  // TODO: Consider snapshot hints (partition columns, kernel schema) to avoid worker log reads.
 }
 
 message DeltaDiscoveryExecNode {
@@ -566,12 +574,16 @@ message IcebergCommitExecNode {
 }
 
 message DeltaLogReplayExecNode {
+  // Legacy single-input encoding for sort replay mode.
   bytes input = 1;
   string table_url = 2;
   int64 version = 3;
   repeated string partition_columns = 4;
   repeated string checkpoint_files = 5;
   repeated string commit_files = 6;
+  // Preferred encoding for hash replay mode.
+  optional bytes checkpoint_input = 7;
+  optional bytes commits_input = 8;
 }
 
 message PythonDataSourceInputPartition {

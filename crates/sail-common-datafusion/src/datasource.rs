@@ -5,12 +5,14 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::plan_datafusion_err;
+use datafusion::datasource::provider_as_source;
 use datafusion::physical_expr::{
     create_physical_sort_exprs, LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortRequirement,
 };
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, DFSchemaRef, Result};
 use datafusion_expr::expr::Sort;
+use datafusion_expr::TableSource;
 
 use crate::extension::SessionExtension;
 use crate::logical_expr::ExprWithSource;
@@ -202,6 +204,18 @@ pub struct MergeInfo {
 pub trait TableFormat: Send + Sync {
     /// Returns the name of the format.
     fn name(&self) -> &str;
+
+    /// Creates a logical [`TableSource`] for read.
+    ///
+    /// Default implementation wraps [`Self::create_provider`] using DataFusion's
+    /// `DefaultTableSource` adapter to preserve backwards compatibility.
+    async fn create_source(
+        &self,
+        ctx: &dyn Session,
+        info: SourceInfo,
+    ) -> Result<Arc<dyn TableSource>> {
+        Ok(provider_as_source(self.create_provider(ctx, info).await?))
+    }
 
     /// Creates a `TableProvider` for read.
     async fn create_provider(

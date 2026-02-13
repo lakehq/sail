@@ -139,3 +139,22 @@
   default: "none"
   supported: true
   rust_type: String
+
+- key: delta_log_replay_strategy
+  aliases:
+    - deltaLogReplayStrategy
+  description: |
+    Strategy for Delta log replay in the metadata-as-data path. Values: "auto", "sort", "hashNoSort".
+  default: "auto"
+  supported: true
+  rust_type: String
+
+- key: delta_log_replay_hash_threshold
+  aliases:
+    - deltaLogReplayHashThreshold
+  description: |
+    Max commit JSON file count to use hash-no-sort replay when strategy is "auto".
+  default: "100"
+  supported: true
+  rust_type: usize
+  rust_deserialize_with: crate::options::serde::deserialize_usize

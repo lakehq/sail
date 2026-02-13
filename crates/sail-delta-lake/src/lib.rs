@@ -14,19 +14,23 @@ pub mod conversion;
 pub mod datasource;
 pub mod error;
 mod kernel;
+pub mod logical;
 pub mod operations;
 pub mod options;
+pub mod physical;
 pub mod physical_plan;
 pub mod planner;
 pub mod schema;
+pub mod session_extension;
 pub mod storage;
 pub mod table;
 pub mod table_format;
 
 use std::sync::Once;
 
+pub use logical::DeltaTableSource;
 use sail_physical_plan::{register_format_type, FormatTag};
-pub use table::create_delta_provider;
+pub use table::{create_delta_provider, create_delta_source};
 pub use table_format::DeltaTableFormat;
 
 pub use crate::error::{DeltaError, DeltaError as DeltaTableError, DeltaResult, KernelError};
