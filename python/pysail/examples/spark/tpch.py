@@ -80,7 +80,7 @@ class TpchBenchmark:
                     end_time = time.time()
                     query_time = end_time - start_time
                     total_time += query_time
-                    print(f"Run {run} query {query}:{s} returned {len(rows)} row(s) and took {query_time} seconds.")
+                    print(f"Run {run + 1} query {query}:{s} returned {len(rows)} row(s) and took {query_time} seconds.")
         return total_time
 
     def run(self, query: int | None = None, explain: bool = False, num_runs: int = 1):  # noqa: FBT001, FBT002
