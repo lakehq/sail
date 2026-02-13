@@ -17,8 +17,8 @@ use crate::ast::keywords::{
     Milliseconds, Minute, Minutes, Month, Months, Not, Null, Nulls, Or, Order, Over, Overlay,
     Placing, Position, Preceding, Range, Regexp, Respect, Rlike, Rollup, Row, Rows, Second,
     Seconds, Sets, Similar, Struct, Substr, Substring, Table, Then, Timestamp, TimestampLtz,
-    TimestampNtz, To, Trailing, Trim, True, Unbounded, Unknown, Week, Weeks, When, Where, Within,
-    Year, Years,
+    TimestampNtz, To, Trailing, Trim, True, TryCast, Unbounded, Unknown, Week, Weeks, When, Where,
+    Within, Year, Years,
 };
 use crate::ast::literal::{NumberLiteral, StringLiteral};
 use crate::ast::operator;
@@ -153,6 +153,14 @@ pub enum AtomExpr {
     },
     Cast(
         Cast,
+        LeftParenthesis,
+        #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
+        As,
+        #[parser(function = |(_, _, d), _| d)] DataType,
+        RightParenthesis,
+    ),
+    TryCast(
+        TryCast,
         LeftParenthesis,
         #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
         As,

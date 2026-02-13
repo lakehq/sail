@@ -2,8 +2,10 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::prelude::SessionContext;
 use datafusion_expr::ScalarUDF;
+use sail_common_datafusion::array::serde::ArrowSerializer;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
+use serde::{Deserialize, Serialize};
 
 use crate::error::{CatalogError, CatalogResult};
 use crate::manager::CatalogManager;
@@ -112,6 +114,10 @@ pub enum CatalogCommand {
         view: Vec<String>,
         options: CreateViewOptions,
     },
+    DescribeTable {
+        table: Vec<String>,
+        extended: bool,
+    },
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd)]
@@ -150,6 +156,7 @@ impl CatalogCommand {
             CatalogCommand::DropView { .. } => "DropView",
             CatalogCommand::CreateTemporaryView { .. } => "CreateTemporaryView",
             CatalogCommand::CreateView { .. } => "CreateView",
+            CatalogCommand::DescribeTable { .. } => "DescribeTable",
         }
     }
 
@@ -174,6 +181,9 @@ impl CatalogCommand {
             | CatalogCommand::RegisterTableFunction { .. } => display.empty().schema()?,
             CatalogCommand::CurrentCatalog | CatalogCommand::CurrentDatabase => {
                 display.strings().schema()?
+            }
+            CatalogCommand::DescribeTable { .. } => {
+                ArrowSerializer::default().schema::<DescribeTableRow>()?
             }
             CatalogCommand::DatabaseExists { .. }
             | CatalogCommand::TableExists { .. }
@@ -294,6 +304,69 @@ impl CatalogCommand {
                 let rows = manager.get_table_or_view(&table).await?.kind.columns();
                 display.table_columns().to_record_batch(rows)?
             }
+            CatalogCommand::DescribeTable { table, extended } => {
+                let table_status = manager.get_table_or_view(&table).await?;
+                let formatter = service.plan_formatter();
+                let serializer = ArrowSerializer::default();
+
+                let mut rows: Vec<DescribeTableRow> = Vec::new();
+
+                for col in &table_status.kind.columns() {
+                    rows.push(DescribeTableRow {
+                        col_name: col.name.clone(),
+                        data_type: formatter
+                            .data_type_to_simple_string(&col.data_type)
+                            .unwrap_or_else(|_| "invalid".to_string()),
+                        comment: col.comment.clone(),
+                    });
+                }
+
+                if extended {
+                    let partition_cols = table_status.kind.partition_columns();
+                    if !partition_cols.is_empty() {
+                        rows.push(DescribeTableRow {
+                            col_name: "# Partition Information".to_string(),
+                            data_type: String::new(),
+                            comment: None,
+                        });
+                        rows.push(DescribeTableRow {
+                            col_name: "# col_name".to_string(),
+                            data_type: "data_type".to_string(),
+                            comment: Some("comment".to_string()),
+                        });
+                        for col in &partition_cols {
+                            rows.push(DescribeTableRow {
+                                col_name: col.name.clone(),
+                                data_type: formatter
+                                    .data_type_to_simple_string(&col.data_type)
+                                    .unwrap_or_else(|_| "invalid".to_string()),
+                                comment: col.comment.clone(),
+                            });
+                        }
+                    }
+
+                    rows.push(DescribeTableRow {
+                        col_name: String::new(),
+                        data_type: String::new(),
+                        comment: None,
+                    });
+                    rows.push(DescribeTableRow {
+                        col_name: "# Detailed Table Information".to_string(),
+                        data_type: String::new(),
+                        comment: None,
+                    });
+
+                    for (key, value) in table_status.describe_extended_metadata() {
+                        rows.push(DescribeTableRow {
+                            col_name: key,
+                            data_type: value,
+                            comment: None,
+                        });
+                    }
+                }
+
+                serializer.build_record_batch(&rows)?
+            }
             CatalogCommand::FunctionExists { .. } => {
                 return Err(CatalogError::NotSupported("function exists".to_string()));
             }
@@ -357,4 +430,11 @@ impl CatalogCommand {
         };
         Ok(batch)
     }
+}
+
+#[derive(Serialize, Deserialize)]
+struct DescribeTableRow {
+    col_name: String,
+    data_type: String,
+    comment: Option<String>,
 }

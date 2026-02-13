@@ -115,5 +115,10 @@ pub fn spark_datetime_format_to_chrono_strftime(format: &str) -> Result<String> 
             .to_string()
     }
 
+    // Fix double-dot issue: chrono's %.Nf already includes a leading dot,
+    // so when the Spark format has a literal '.' before S-patterns (e.g., "ss.SSS"),
+    // the result would have ".%.Nf" which produces "..NNN". Remove the extra dot.
+    result = result.replace(".%.", "%.");
+
     Ok(result)
 }

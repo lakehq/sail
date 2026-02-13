@@ -47,6 +47,8 @@ test = [
     "jedi>=0.19.2,<0.20",
     "jsonpath-ng>=1.6,<2",
     "PyYAML>=6.0,<7",
+    "moto[glue]>=5,<6",
+    "testcontainers>=4,<5",
 ]
 mcp = [
     "mcp>=1.0.0,<2",
@@ -96,6 +98,8 @@ dependencies = [
     "jedi>=0.19.2,<0.20",
     "jsonpath-ng>=1.6,<2",
     "PyYAML>=6.0,<7",
+    "moto[glue]>=5,<6",
+    "testcontainers>=4,<5",
 ]
 path = ".venvs/default"
 
@@ -143,6 +147,8 @@ dependencies = [
     "jedi>=0.19.2,<0.20",
     "jsonpath-ng>=1.6,<2",
     "PyYAML>=6.0,<7",
+    "moto[glue]>=5,<6",
+    "testcontainers>=4,<5",
 ]
 
 [[tool.hatch.envs.test.matrix]]
@@ -237,7 +243,6 @@ line-length = 120
 "crates/**/*.py" = ["INP001"]
 "python/pysail/docs/conf.py" = ["INP001"]
 "python/pysail/examples/**/*.py" = ["T201", "PLC0415"]
-"python/pysail/spark/datasource/registry.py" = ["PLC0415"]
 "python/pysail/tests/**/*.py" = ["S101", "PLC0415"]
 "scripts/**/*.py" = ["SLF001", "PLC0415"]
 

@@ -13,9 +13,9 @@ use super::exec::PythonDataSourceExec;
 use super::executor::PythonExecutor;
 use super::filter::{expr_to_filter, exprs_to_python_filters};
 
-/// TableProvider for Python-defined DataSources.
+/// TableProvider for Python data sources.
 ///
-/// This allows Python DataSources to be registered in DataFusion's catalog
+/// This allows Python data sources to be registered in DataFusion's catalog
 /// and used in SQL queries.
 ///
 /// # Architecture
@@ -27,7 +27,7 @@ use super::filter::{expr_to_filter, exprs_to_python_filters};
 pub struct PythonTableProvider {
     /// Executor for Python operations (in-process or remote)
     executor: Arc<dyn PythonExecutor>,
-    /// Pickled Python DataSource instance
+    /// Pickled Python data source instance
     command: Vec<u8>,
     /// Cached schema
     schema: SchemaRef,
@@ -38,7 +38,7 @@ impl PythonTableProvider {
     ///
     /// # Arguments
     /// * `executor` - The executor for Python operations
-    /// * `command` - Pickled Python DataSource instance
+    /// * `command` - Pickled Python data source instance
     /// * `schema` - The schema of the data
     pub fn new(executor: Arc<dyn PythonExecutor>, command: Vec<u8>, schema: SchemaRef) -> Self {
         Self {
@@ -68,9 +68,9 @@ impl TableProvider for PythonTableProvider {
         TableType::Base
     }
 
-    /// Scan the Python DataSource.
+    /// Scan the Python data source.
     ///
-    /// This creates a physical execution plan for reading from the Python DataSource.
+    /// This creates a physical execution plan for reading from the Python data source.
     ///
     /// # Filter Pushdown
     ///

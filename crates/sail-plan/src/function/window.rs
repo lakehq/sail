@@ -10,7 +10,6 @@ use datafusion::functions_nested::string::array_to_string;
 use datafusion::functions_window::cume_dist::cume_dist_udwf;
 use datafusion::functions_window::lead_lag::{lag_udwf, lead_udwf};
 use datafusion::functions_window::nth_value::{first_value_udwf, last_value_udwf, nth_value_udwf};
-use datafusion::functions_window::ntile::ntile_udwf;
 use datafusion::functions_window::rank::{dense_rank_udwf, percent_rank_udwf, rank_udwf};
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion_common::ScalarValue;
@@ -22,12 +21,14 @@ use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use lazy_static::lazy_static;
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
 use sail_function::aggregate::percentile::PercentileFunction;
 use sail_function::aggregate::skewness::SkewnessFunc;
 use sail_function::aggregate::try_avg::TryAvgFunction;
+use sail_function::window::spark_ntile_udwf;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
@@ -494,7 +495,7 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
         ("last_value", F::window(last_value_udwf)),
         ("lead", F::window(lead_udwf)),
         ("nth_value", F::custom(nth_value)),
-        ("ntile", F::window(ntile_udwf)),
+        ("ntile", F::window(spark_ntile_udwf)),
         ("rank", F::window(rank_udwf)),
         ("row_number", F::window(row_number_udwf)),
         ("percent_rank", F::window(percent_rank_udwf)),
@@ -529,7 +530,10 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
         ("first_value", F::custom(first_value)),
         ("grouping", F::aggregate(grouping::grouping_udaf)),
         ("grouping_id", F::unknown("grouping_id")),
-        ("histogram_numeric", F::unknown("histogram_numeric")),
+        (
+            "histogram_numeric",
+            F::aggregate(|| Arc::new(AggregateUDF::from(HistogramNumericFunction::new()))),
+        ),
         ("hll_sketch_agg", F::unknown("hll_sketch_agg")),
         ("hll_union_agg", F::unknown("hll_union_agg")),
         ("kurtosis", F::custom(kurtosis)),

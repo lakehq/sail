@@ -270,6 +270,8 @@ pub enum TableFactor {
         query: Query,
         right: RightParenthesis,
         #[parser(function = |(_, e, _), o| compose(e, o))]
+        sample: Option<TableSampleClause>,
+        #[parser(function = |(_, e, _), o| compose(e, o))]
         modifiers: Vec<TableModifier>,
         alias: Option<AliasClause>,
     },

@@ -86,6 +86,7 @@ use sail_delta_lake::physical_plan::{
     DeltaCastColumnExpr, DeltaCommitExec, DeltaDiscoveryExec, DeltaLogReplayExec,
     DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
 };
+use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
@@ -168,6 +169,7 @@ use sail_logical_plan::range::Range;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
+use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
 use sail_physical_plan::show_string::ShowStringExec;
@@ -835,6 +837,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 target_present_col,
                 source_present_col,
             )?)),
+            NodeKind::MonotonicId(gen::MonotonicIdExecNode {
+                input,
+                column_name,
+                schema,
+            }) => {
+                let schema = self.try_decode_schema(&schema)?;
+                Ok(Arc::new(MonotonicIdExec::try_new(
+                    self.try_decode_plan(&input, ctx)?,
+                    column_name,
+                    Arc::new(schema),
+                )?))
+            }
             NodeKind::IcebergWriter(gen::IcebergWriterExecNode {
                 input,
                 table_url,
@@ -1341,6 +1355,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 target_present_col: cardinality_check.target_present_col().to_string(),
                 source_present_col: cardinality_check.source_present_col().to_string(),
             })
+        } else if let Some(monotonic_id) = node.as_any().downcast_ref::<MonotonicIdExec>() {
+            let input = self.try_encode_plan(monotonic_id.input().clone())?;
+            let schema = self.try_encode_schema(monotonic_id.schema().as_ref())?;
+            NodeKind::MonotonicId(gen::MonotonicIdExecNode {
+                input,
+                column_name: monotonic_id.column_name().to_string(),
+                schema,
+            })
         } else if let Some(iceberg_writer_exec) = node.as_any().downcast_ref::<IcebergWriterExec>()
         {
             let input = self.try_encode_plan(iceberg_writer_exec.input().clone())?;
@@ -1845,6 +1867,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         let ExtendedAggregateUdf { udaf_kind } = udaf;
         match udaf_kind {
             Some(UdafKind::Standard(gen::StandardUdaf {})) => match name {
+                "histogram_numeric" => Ok(Arc::new(AggregateUDF::from(
+                    HistogramNumericFunction::new(),
+                ))),
                 "kurtosis" => Ok(Arc::new(AggregateUDF::from(KurtosisFunction::new()))),
                 "max_by" => Ok(Arc::new(AggregateUDF::from(MaxByFunction::new()))),
                 "min_by" => Ok(Arc::new(AggregateUDF::from(MinByFunction::new()))),
@@ -1932,7 +1957,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
-        let udaf_kind = if node.inner().as_any().is::<KurtosisFunction>()
+        let udaf_kind = if node.inner().as_any().is::<HistogramNumericFunction>()
+            || node.inner().as_any().is::<KurtosisFunction>()
             || node.inner().as_any().is::<MaxByFunction>()
             || node.inner().as_any().is::<MinByFunction>()
             || node.inner().as_any().is::<ModeFunction>()

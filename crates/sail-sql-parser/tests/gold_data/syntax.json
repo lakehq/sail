@@ -644,6 +644,28 @@
                   {
                     "sequence": [
                       {
+                        "nonTerminal": "Keyword(TryCast)"
+                      },
+                      {
+                        "nonTerminal": "Operator(LeftParenthesis)"
+                      },
+                      {
+                        "nonTerminal": "Box(Expression)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(As)"
+                      },
+                      {
+                        "nonTerminal": "DataType"
+                      },
+                      {
+                        "nonTerminal": "Operator(RightParenthesis)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
                         "nonTerminal": "Keyword(Extract)"
                       },
                       {
@@ -2158,16 +2180,6 @@
                   {
                     "sequence": [
                       {
-                        "nonTerminal": "Option(Keyword(Query))"
-                      },
-                      {
-                        "nonTerminal": "Query"
-                      }
-                    ]
-                  },
-                  {
-                    "sequence": [
-                      {
                         "nonTerminal": "Keyword(Function)"
                       },
                       {
@@ -2207,7 +2219,7 @@
                   {
                     "sequence": [
                       {
-                        "nonTerminal": "Option(Keyword(Table))"
+                        "nonTerminal": "Keyword(Table)"
                       },
                       {
                         "nonTerminal": "Option(Keyword(Extended))"
@@ -2220,6 +2232,16 @@
                       },
                       {
                         "nonTerminal": "Option(ObjectName)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Option(Keyword(Query))"
+                      },
+                      {
+                        "nonTerminal": "Query"
                       }
                     ]
                   }
@@ -5727,6 +5749,14 @@
               "node": {
                 "terminal": {
                   "keyword": "TRUE"
+                }
+              }
+            },
+            {
+              "name": "Keyword(TryCast)",
+              "node": {
+                "terminal": {
+                  "keyword": "TRY_CAST"
                 }
               }
             },
@@ -9734,6 +9764,9 @@
                       },
                       {
                         "nonTerminal": "Operator(RightParenthesis)"
+                      },
+                      {
+                        "nonTerminal": "Option(TableSampleClause)"
                       },
                       {
                         "nonTerminal": "Vector(TableModifier)"
