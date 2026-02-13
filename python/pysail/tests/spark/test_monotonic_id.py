@@ -59,7 +59,6 @@ def test_monotonically_increasing_id_in_aggregate_projection(spark):
         assert row["id1"] == row["id2"]
 
 
-@pytest.mark.skip(reason="Temporarily skipped until we have a fix for the issue")
 def test_monotonically_increasing_id_in_grouping_expression_projection(spark):
     rows = spark.sql(
         """
@@ -79,7 +78,6 @@ def test_monotonically_increasing_id_in_grouping_expression_projection(spark):
     assert len(set(group_ids)) == len(group_ids)
 
 
-@pytest.mark.skip(reason="Temporarily skipped until we have a fix for the issue")
 def test_monotonically_increasing_id_in_aggregate_with_group_by_id(spark):
     rows = spark.sql(
         """
@@ -97,7 +95,6 @@ def test_monotonically_increasing_id_in_aggregate_with_group_by_id(spark):
         assert row[1] >= 0
 
 
-@pytest.mark.skip(reason="Temporarily skipped until we have a fix for the issue")
 def test_explode_in_aggregate_with_group_by_id(spark):
     rows = spark.sql(
         """
@@ -114,7 +111,6 @@ def test_explode_in_aggregate_with_group_by_id(spark):
         assert row[1] is None or isinstance(row[1], int)
 
 
-@pytest.mark.skip(reason="Temporarily skipped until we have a fix for the issue")
 def test_explode_in_grouping_expression_projection(spark):
     rows = spark.sql(
         """

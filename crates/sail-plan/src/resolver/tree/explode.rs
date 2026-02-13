@@ -41,11 +41,16 @@ impl ExplodeDataType {
 pub(crate) struct ExplodeRewriter<'s> {
     plan: LogicalPlan,
     state: &'s mut PlanResolverState,
+    rewritten_expr: Vec<(Expr, Expr)>,
 }
 
 impl<'s> PlanRewriter<'s> for ExplodeRewriter<'s> {
     fn new_from_plan(plan: LogicalPlan, state: &'s mut PlanResolverState) -> Self {
-        Self { plan, state }
+        Self {
+            plan,
+            state,
+            rewritten_expr: Vec::new(),
+        }
     }
 
     fn into_plan(self) -> LogicalPlan {
@@ -68,6 +73,15 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
                 return Ok(Transformed::no(func.call(args)));
             }
         };
+        let original_expr = func.call(args.clone());
+        if let Some(out) = self
+            .rewritten_expr
+            .iter()
+            .find_map(|(expr, out)| (expr == &original_expr).then_some(out.clone()))
+        {
+            return Ok(Transformed::yes(out));
+        }
+
         let (with_position, preserve_nulls, is_inline) = match explode.kind() {
             ExplodeKind::Explode => (false, false, false),
             ExplodeKind::ExplodeOuter => (false, true, false),
@@ -160,6 +174,7 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
             Either::Left(node) => node,
             Either::Right(nodes) => ScalarUDF::from(MultiExpr::new()).call(nodes),
         };
+        self.rewritten_expr.push((original_expr, out.clone()));
         Ok(Transformed::yes(out))
     }
 }

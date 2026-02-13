@@ -3,12 +3,13 @@ use std::sync::Arc;
 use async_recursion::async_recursion;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Column;
-use datafusion_expr::expr::{Alias, Sort};
+use datafusion_expr::expr::{Alias, ScalarFunction, Sort};
 use datafusion_expr::{
     Aggregate, Expr, Extension, LogicalPlan, LogicalPlanBuilder, Projection, Window,
 };
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::explode::{Explode, ExplodeKind};
 use sail_logical_plan::sort::SortWithinPartitionsNode;
 
 use crate::error::{PlanError, PlanResult};
@@ -30,6 +31,7 @@ impl PlanResolver<'_> {
             .resolve_query_sort_orders_by_plan(&input, &order, state)
             .await?;
         let sorts = Self::rebase_query_sort_orders(sorts, &input)?;
+        let sorts = Self::bind_sort_expression_to_output_columns(sorts, &input, state)?;
         if is_global {
             Ok(LogicalPlanBuilder::from(input).sort(sorts)?.build()?)
         } else {
@@ -146,6 +148,90 @@ impl PlanResolver<'_> {
             asc,
             nulls_first,
         })
+    }
+
+    fn bind_sort_expression_to_output_columns(
+        sorts: Vec<Sort>,
+        plan: &LogicalPlan,
+        state: &PlanResolverState,
+    ) -> PlanResult<Vec<Sort>> {
+        let output_columns = plan
+            .schema()
+            .columns()
+            .into_iter()
+            .filter_map(|column| {
+                let info = state.get_field_info(column.name()).ok()?;
+                if info.is_hidden() {
+                    return None;
+                }
+                Some((info.name().to_string(), Expr::Column(column)))
+            })
+            .collect::<Vec<_>>();
+
+        sorts
+            .into_iter()
+            .map(|sort| {
+                let Sort {
+                    expr,
+                    asc,
+                    nulls_first,
+                } = sort;
+                if matches!(expr, Expr::Column(_)) {
+                    return Ok(Sort {
+                        expr,
+                        asc,
+                        nulls_first,
+                    });
+                }
+
+                let expr_name = Self::normalize_sort_expression_name(&expr, state)?;
+                let expr = output_columns
+                    .iter()
+                    .find_map(|(name, column)| (name == &expr_name).then_some(column.clone()))
+                    .unwrap_or(expr);
+
+                Ok(Sort {
+                    expr,
+                    asc,
+                    nulls_first,
+                })
+            })
+            .collect::<PlanResult<Vec<_>>>()
+    }
+
+    fn normalize_sort_expression_name(
+        expr: &Expr,
+        state: &PlanResolverState,
+    ) -> PlanResult<String> {
+        if let Expr::ScalarFunction(ScalarFunction { func, .. }) = expr {
+            if let Some(explode) = func.inner().as_any().downcast_ref::<Explode>() {
+                if matches!(
+                    explode.kind(),
+                    ExplodeKind::Explode | ExplodeKind::ExplodeOuter
+                ) {
+                    return Ok("col".to_string());
+                }
+            }
+        }
+
+        let expr = expr
+            .clone()
+            .transform_down(|e| {
+                if let Expr::Column(column) = e {
+                    if let Ok(info) = state.get_field_info(column.name()) {
+                        if !info.is_hidden() {
+                            return Ok(Transformed::yes(Expr::Column(Column::from_name(
+                                info.name(),
+                            ))));
+                        }
+                    }
+                    return Ok(Transformed::no(Expr::Column(column)));
+                }
+                Ok(Transformed::no(e))
+            })
+            .data()?;
+        let expr_name = expr.schema_name().to_string();
+        Ok(expr_name)
     }
 
     /// Resolve sort orders by attempting child plans recursively.
