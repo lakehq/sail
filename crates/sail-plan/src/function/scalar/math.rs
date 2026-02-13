@@ -225,37 +225,38 @@ fn is_zero_literal(expr: &Expr) -> bool {
     }
 }
 
-/// Wraps a division expression with a runtime zero-divisor check.
+/// Returns a guarded divisor expression that handles division by zero at runtime.
 ///
-/// In ANSI mode: raises an error via `RaiseError` UDF for any division by zero.
-/// In non-ANSI mode: returns NULL for any division by zero.
-fn wrap_division_by_zero_check(
-    div_expr: Expr,
-    divisor: &Expr,
+/// In non-ANSI mode: returns `nullif(divisor, 0)` — evaluates to NULL when divisor is zero.
+/// In ANSI mode: returns `CASE WHEN divisor = 0 THEN raise_error(msg) ELSE divisor END`.
+///
+/// This wraps the divisor itself (not the entire division expression) to avoid
+/// duplicating complex divisor expressions (e.g., window functions) in the plan.
+fn make_safe_divisor(
+    divisor: Expr,
     divisor_type: &DataType,
     ansi_mode: bool,
     error_message: &str,
 ) -> Expr {
     // Skip wrapping for Interval/Duration types (cannot be compared to lit(0)).
     if matches!(divisor_type, DataType::Interval(_) | DataType::Duration(_)) {
-        return div_expr;
+        return divisor;
     }
 
-    let zero_check = divisor.clone().eq(lit(0));
-    let then_expr = if ansi_mode {
-        Expr::ScalarFunction(expr::ScalarFunction {
+    if ansi_mode {
+        let zero_check = divisor.clone().eq(lit(0));
+        let raise = Expr::ScalarFunction(expr::ScalarFunction {
             func: Arc::new(ScalarUDF::from(RaiseError::new())),
             args: vec![lit(error_message)],
+        });
+        Expr::Case(expr::Case {
+            expr: None,
+            when_then_expr: vec![(Box::new(zero_check), Box::new(raise))],
+            else_expr: Some(Box::new(divisor)),
         })
     } else {
-        Expr::Literal(ScalarValue::Null, None)
-    };
-
-    Expr::Case(expr::Case {
-        expr: None,
-        when_then_expr: vec![(Box::new(zero_check), Box::new(then_expr))],
-        else_expr: Some(Box::new(div_expr)),
-    })
+        expr_fn::nullif(divisor, lit(0))
+    }
 }
 
 /// Arguments:
@@ -292,8 +293,14 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let dividend_type = dividend.get_type(function_context.schema);
     let divisor_type = divisor.get_type(function_context.schema);
 
-    // Clone divisor before it is consumed by the division expression.
-    let divisor_for_check = divisor.clone();
+    // Apply runtime zero-divisor guard to the divisor before building the division expression.
+    let effective_divisor_type = divisor_type.as_ref().cloned().unwrap_or(DataType::Int32);
+    let divisor = make_safe_divisor(
+        divisor,
+        &effective_divisor_type,
+        ansi_mode,
+        "Division by zero",
+    );
 
     let div_expr = match (&dividend_type, &divisor_type) {
         // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
@@ -319,14 +326,7 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
         (Err(_), _) | (_, Err(_)) => dividend / divisor,
     };
 
-    let effective_divisor_type = divisor_type.unwrap_or(DataType::Int32);
-    Ok(wrap_division_by_zero_check(
-        div_expr,
-        &divisor_for_check,
-        &effective_divisor_type,
-        ansi_mode,
-        "Division by zero",
-    ))
+    Ok(div_expr)
 }
 
 /// Returns the integral part of the division of dividend by divisor.
@@ -359,7 +359,14 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let dividend_type = dividend.get_type(function_context.schema);
     let divisor_type = divisor.get_type(function_context.schema);
 
-    let divisor_for_check = divisor.clone();
+    // Apply runtime zero-divisor guard to the divisor before building the division expression.
+    let effective_divisor_type = divisor_type.as_ref().cloned().unwrap_or(DataType::Int32);
+    let divisor = make_safe_divisor(
+        divisor,
+        &effective_divisor_type,
+        ansi_mode,
+        "Division by zero",
+    );
 
     let div_expr = match (&dividend_type, &divisor_type) {
         // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
@@ -381,16 +388,7 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
         (Ok(_), Ok(_)) | (Err(_), _) | (_, Err(_)) => dividend / divisor,
     };
 
-    // DIV is integer division — the divisor is always integral.
-    let effective_divisor_type = divisor_type.unwrap_or(DataType::Int32);
-    let typed_div_expr = cast(div_expr, DataType::Int64);
-    Ok(wrap_division_by_zero_check(
-        typed_div_expr,
-        &divisor_for_check,
-        &effective_divisor_type,
-        ansi_mode,
-        "Division by zero",
-    ))
+    Ok(cast(div_expr, DataType::Int64))
 }
 
 fn power(base: Expr, exponent: Expr) -> Expr {
@@ -551,22 +549,20 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let ansi_mode = function_context.plan_config.ansi_mode;
     let divisor_type = divisor.get_type(function_context.schema);
 
-    let divisor_for_check = divisor.clone();
-
-    let mod_expr = Expr::BinaryExpr(BinaryExpr {
-        left: Box::new(dividend),
-        op: Operator::Modulo,
-        right: Box::new(divisor),
-    });
-
+    // Apply runtime zero-divisor guard to the divisor before building the modulo expression.
     let effective_divisor_type = divisor_type.unwrap_or(DataType::Int32);
-    Ok(wrap_division_by_zero_check(
-        mod_expr,
-        &divisor_for_check,
+    let divisor = make_safe_divisor(
+        divisor,
         &effective_divisor_type,
         ansi_mode,
         "Remainder by zero",
-    ))
+    );
+
+    Ok(Expr::BinaryExpr(BinaryExpr {
+        left: Box::new(dividend),
+        op: Operator::Modulo,
+        right: Box::new(divisor),
+    }))
 }
 
 pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunction)> {
