@@ -104,6 +104,10 @@ pub enum QueryNode {
         schema: Option<Schema>,
     },
     Sample(Sample),
+    TableSample {
+        input: Box<QueryPlan>,
+        sample: TableSample,
+    },
     Deduplicate(Deduplicate),
     Range(Range),
     SubqueryAlias {
