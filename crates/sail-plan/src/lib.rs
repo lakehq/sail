@@ -7,7 +7,9 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::Result;
 use datafusion_expr::{Extension, LogicalPlan};
+use sail_cache::CacheManager;
 use sail_common::spec;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
 use sail_logical_plan::precondition::WithPreconditionsNode;
 
@@ -60,6 +62,13 @@ pub async fn resolve_and_execute_plan(
     let resolver = PlanResolver::new(ctx, config);
     let NamedPlan { plan, fields } = resolver.resolve_named_plan(plan).await?;
     info.push(plan.to_stringified(PlanType::InitialLogicalPlan));
+
+    let plan = if let Ok(cache) = ctx.extension::<CacheManager>() {
+        cache.use_cached_data(ctx, plan)?
+    } else {
+        plan
+    };
+
     let df = execute_logical_plan(ctx, plan).await?;
     let (session_state, plan) = df.into_parts();
     let plan = session_state.optimize(&plan)?;

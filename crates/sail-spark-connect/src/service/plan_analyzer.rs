@@ -1,5 +1,6 @@
 use datafusion::prelude::SessionContext;
 use log::warn;
+use sail_cache::CacheManager;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::schema::rename_schema;
@@ -154,11 +155,20 @@ pub(crate) async fn handle_analyze_semantic_hash(
 }
 
 pub(crate) async fn handle_analyze_persist(
-    _ctx: &SessionContext,
-    _request: PersistRequest,
+    ctx: &SessionContext,
+    request: PersistRequest,
 ) -> SparkResult<PersistResponse> {
-    // TODO: Implement
-    warn!("Persist operation is not yet supported and is a no-op");
+    let spark = ctx.extension::<SparkSession>()?;
+    let cache = ctx.extension::<CacheManager>()?;
+    let resolver = PlanResolver::new(ctx, spark.plan_config()?);
+
+    let plan = request.relation.ok_or(SparkError::missing("relation"))?;
+    let plan = resolver
+        .resolve_named_plan(spec::Plan::Query(plan.try_into()?))
+        .await?
+        .plan;
+
+    cache.cache_plan(plan);
     Ok(PersistResponse {})
 }
 

@@ -17,6 +17,8 @@ use sail_session::session_factory::{
 };
 use sail_session::session_manager::{SessionManager, SessionManagerOptions};
 
+use sail_cache::CacheManager;
+
 use crate::error::SparkResult;
 use crate::session::{SparkSession, SparkSessionOptions};
 
@@ -46,7 +48,8 @@ impl ServerSessionMutator for SparkSessionMutator {
         .map_err(|e| internal_datafusion_err!("{e}"))?;
         Ok(config
             .with_extension(Arc::new(plan_service))
-            .with_extension(Arc::new(spark)))
+            .with_extension(Arc::new(spark))
+            .with_extension(Arc::new(CacheManager::new())))
     }
 
     fn mutate_state(
