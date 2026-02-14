@@ -1,7 +1,7 @@
 use datafusion::prelude::SessionContext;
 use log::warn;
-use sail_cache::CacheManager;
 use sail_common::spec;
+use sail_common_datafusion::cache_manager::CacheManager;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::schema::rename_schema;
 use sail_plan::explain::{explain_string, ExplainOptions};

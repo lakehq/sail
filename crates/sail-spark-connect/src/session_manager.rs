@@ -17,7 +17,7 @@ use sail_session::session_factory::{
 };
 use sail_session::session_manager::{SessionManager, SessionManagerOptions};
 
-use sail_cache::CacheManager;
+use sail_common_datafusion::cache_manager::CacheManager;
 
 use crate::error::SparkResult;
 use crate::session::{SparkSession, SparkSessionOptions};
