@@ -23,7 +23,7 @@ use tokio::sync::mpsc;
 /// If a single Python operation hangs (e.g., slow network I/O in `read()`),
 /// there is no way to cancel it without subprocess isolation (Phase 2/3).
 ///
-/// Configure `SAIL_PYTHON_SLOW_READ_WARN_MS` (default: 30000) to log warnings
+/// Configure `python.data_source_slow_read_warn_ms` (default: 30000) to log warnings
 /// when individual Python operations exceed the threshold.
 use super::executor::InputPartition;
 
@@ -107,18 +107,27 @@ impl PythonDataSourceStream {
     /// * `partition` - The partition to read
     /// * `schema` - Expected output schema
     /// * `batch_size` - Batch size for row collection (from TaskContext)
+    /// * `slow_read_warn_ms` - Slow read warning threshold in milliseconds (from config)
     pub fn new(
         pickled_reader: Vec<u8>,
         partition: InputPartition,
         schema: SchemaRef,
         batch_size: usize,
+        slow_read_warn_ms: u64,
     ) -> Result<Self> {
         let (tx, rx) = mpsc::channel(16);
 
         let schema_clone = schema.clone();
 
         let task = SpawnedTask::spawn_blocking(move || {
-            Self::run_python_reader(pickled_reader, partition, schema_clone, batch_size, tx);
+            Self::run_python_reader(
+                pickled_reader,
+                partition,
+                schema_clone,
+                batch_size,
+                slow_read_warn_ms,
+                tx,
+            );
         });
 
         Ok(Self {
@@ -133,6 +142,7 @@ impl PythonDataSourceStream {
         partition: InputPartition,
         schema: SchemaRef,
         batch_size: usize,
+        slow_read_warn_ms: u64,
         tx: mpsc::Sender<Result<RecordBatch>>,
     ) {
         use pyo3::prelude::*;
@@ -150,7 +160,7 @@ impl PythonDataSourceStream {
             // Record GIL wait time (time from start to acquiring GIL)
             let gil_acquired = Instant::now();
             metrics.gil_wait_ns.fetch_add(
-                gil_wait_start.elapsed().as_nanos() as u64,
+                gil_wait_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
                 Ordering::Relaxed,
             );
             metrics.gil_acquisitions.fetch_add(1, Ordering::Relaxed);
@@ -181,12 +191,6 @@ impl PythonDataSourceStream {
 
             // Create row batcher for tuple fallback path
             let mut row_batcher = RowBatchCollector::new(schema.clone(), batch_size);
-
-            // Slow read warning threshold (default: 30 seconds)
-            let slow_read_warn_ms: u64 = std::env::var("SAIL_PYTHON_SLOW_READ_WARN_MS")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(30_000);
 
             // Iterate over results
             loop {
@@ -226,7 +230,6 @@ impl PythonDataSourceStream {
                                 .fetch_add(batch.num_rows() as u64, Ordering::Relaxed);
                             metrics.batches_processed.fetch_add(1, Ordering::Relaxed);
 
-                            // Send batch
                             if tx.blocking_send(Ok(batch)).is_err() {
                                 break;
                             }
@@ -277,9 +280,10 @@ impl PythonDataSourceStream {
             }
 
             // Record total GIL hold time
-            metrics
-                .gil_hold_ns
-                .fetch_add(gil_acquired.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            metrics.gil_hold_ns.fetch_add(
+                gil_acquired.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+                Ordering::Relaxed,
+            );
 
             Ok(())
         });

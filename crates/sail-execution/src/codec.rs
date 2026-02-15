@@ -77,7 +77,9 @@ use sail_common_datafusion::system::catalog::SystemTable;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_data_source::formats::binary::source::BinarySource;
 use sail_data_source::formats::console::ConsoleSinkExec;
-use sail_data_source::formats::python::{InputPartition, PythonDataSourceExec};
+use sail_data_source::formats::python::{
+    InputPartition, PythonDataSourceExec, PythonDataSourceWriteExec,
+};
 use sail_data_source::formats::rate::{RateSourceExec, TableRateOptions};
 use sail_data_source::formats::socket::{SocketSourceExec, TableSocketOptions};
 use sail_data_source::formats::text::source::TextSource;
@@ -910,6 +912,21 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     partitions,
                 )))
             }
+            NodeKind::PythonDataSourceWrite(gen::PythonDataSourceWriteExecNode {
+                pickled_writer,
+                schema,
+                is_arrow,
+                input,
+            }) => {
+                let schema = Arc::new(self.try_decode_schema(&schema)?);
+                let input = self.try_decode_plan(&input, ctx)?;
+                Ok(Arc::new(PythonDataSourceWriteExec::new(
+                    input,
+                    pickled_writer,
+                    schema,
+                    is_arrow,
+                )))
+            }
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
         }
     }
@@ -1398,6 +1415,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 pickled_reader: python_exec.pickled_reader().to_vec(),
                 schema,
                 partitions,
+            })
+        } else if let Some(python_write_exec) =
+            node.as_any().downcast_ref::<PythonDataSourceWriteExec>()
+        {
+            let schema = self.try_encode_schema(python_write_exec.schema().as_ref())?;
+            let input = self.try_encode_plan(python_write_exec.input().clone())?;
+            NodeKind::PythonDataSourceWrite(gen::PythonDataSourceWriteExecNode {
+                pickled_writer: python_write_exec.pickled_writer().to_vec(),
+                schema,
+                is_arrow: python_write_exec.is_arrow(),
+                input,
             })
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");

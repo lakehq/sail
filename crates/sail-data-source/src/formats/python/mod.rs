@@ -19,6 +19,7 @@
 //! - `executor`: Python execution abstraction
 //! - `stream`: RecordBatch streaming with RAII cleanup
 //! - `arrow_utils`: Arrow ↔ Python conversion utilities
+//! - `write_exec`: Write execution plan for Python datasources
 pub mod arrow_utils;
 mod discovery;
 mod error;
@@ -30,6 +31,7 @@ mod python_datasource;
 mod python_table_provider;
 mod stream;
 mod table_format;
+mod write_exec;
 
 // Public exports - always available
 // Public exports - require python feature
@@ -45,3 +47,4 @@ pub use python_datasource::PythonDataSource;
 pub use python_table_provider::PythonTableProvider;
 pub use stream::{PythonDataSourceStream, RowBatchCollector, DEFAULT_BATCH_SIZE};
 pub use table_format::PythonTableFormat;
+pub use write_exec::PythonDataSourceWriteExec;

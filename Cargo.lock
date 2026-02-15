@@ -6074,6 +6074,7 @@ dependencies = [
  "pyo3",
  "quote",
  "regex",
+ "sail-common",
  "sail-common-datafusion",
  "serde",
  "serde_yaml",

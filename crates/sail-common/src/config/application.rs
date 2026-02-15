@@ -24,6 +24,7 @@ pub struct AppConfig {
     pub catalog: CatalogConfig,
     pub optimizer: OptimizerConfig,
     pub spark: SparkConfig,
+    pub python: PythonConfig,
     pub telemetry: TelemetryConfig,
     /// Reserved for internal use.
     /// This field ensures that environment variables with prefix `SAIL_INTERNAL_`
@@ -387,6 +388,14 @@ pub enum CatalogType {
 pub struct SparkConfig {
     pub session_timeout_secs: u64,
     pub execution_heartbeat_interval_secs: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PythonConfig {
+    pub data_source_write_channel_capacity: usize,
+    pub data_source_slow_write_warn_ms: u64,
+    pub data_source_slow_read_warn_ms: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]

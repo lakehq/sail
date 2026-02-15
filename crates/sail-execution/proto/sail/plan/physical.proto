@@ -49,6 +49,7 @@ message ExtendedPhysicalPlanNode {
     MergeCardinalityCheckExecNode merge_cardinality_check = 34;
     PythonDataSourceExecNode python_data_source = 35;
     MonotonicIdExecNode monotonic_id = 36;
+    PythonDataSourceWriteExecNode python_data_source_write = 37;
   }
 }
 
@@ -591,4 +592,15 @@ message PythonDataSourceExecNode {
   bytes pickled_reader = 1;
   bytes schema = 2;
   repeated PythonDataSourceInputPartition partitions = 3;
+}
+
+message PythonDataSourceWriteExecNode {
+  // Pickled Python DataSourceWriter instance
+  bytes pickled_writer = 1;
+  // Schema of the data being written
+  bytes schema = 2;
+  // Whether writer is DataSourceArrowWriter (true) or DataSourceWriter (false)
+  bool is_arrow = 3;
+  // Input plan (data to write)
+  bytes input = 4;
 }
