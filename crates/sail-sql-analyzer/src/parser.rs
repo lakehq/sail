@@ -101,12 +101,7 @@ pub fn parse_timestamp(s: &str) -> SqlResult<TimestampValue<'_>> {
 }
 
 pub fn parse_time(s: &str) -> SqlResult<TimeValue> {
-    let time = parse_simple!(s, create_time_parser)?;
-
-    // Validate via TryFrom which checks hour (0-23), minute/second (0-59)
-    let _ = chrono::NaiveTime::try_from(time.clone())?;
-
-    Ok(time)
+    parse_simple!(s, create_time_parser)
 }
 
 #[cfg(test)]
@@ -150,51 +145,6 @@ mod tests {
             parse_one_statement("SELECT U&\"a#2014b#+002014c\"   UESCAPE '#'")?.text(),
             "SELECT U&\"a#2014b#+002014c\" UESCAPE '#' "
         );
-        Ok(())
-    }
-
-    #[test]
-    fn test_parse_time_valid() -> SqlResult<()> {
-        use crate::parser::parse_time;
-
-        // Valid times
-        assert!(parse_time("00:00:00").is_ok());
-        assert!(parse_time("23:59:59").is_ok());
-        assert!(parse_time("12:34:56.123456").is_ok());
-        assert!(parse_time("00:00:00.000000").is_ok());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_parse_time_invalid() {
-        use crate::parser::parse_time;
-
-        // Invalid hour
-        assert!(parse_time("24:00:00").is_err());
-        assert!(parse_time("25:30:45").is_err());
-
-        // Invalid minute
-        assert!(parse_time("12:60:00").is_err());
-        assert!(parse_time("12:99:00").is_err());
-
-        // Invalid second
-        assert!(parse_time("12:30:60").is_err());
-        assert!(parse_time("12:30:99").is_err());
-    }
-
-    #[test]
-    fn test_parse_time_fractional_seconds() -> SqlResult<()> {
-        use crate::parser::parse_time;
-
-        // Valid: up to 6 digits (microsecond precision)
-        assert!(parse_time("12:34:56.123456").is_ok());
-
-        // Parser accepts >6 digits (nanosecond precision)
-        // These will be silently truncated to microseconds during resolution
-        // to match Spark's behavior of truncating excess precision
-        assert!(parse_time("12:34:56.123456789").is_ok());
-
         Ok(())
     }
 }

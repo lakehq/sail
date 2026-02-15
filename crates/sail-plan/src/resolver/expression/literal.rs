@@ -2,6 +2,7 @@ use std::str::FromStr;
 
 use arrow::array::timezone::Tz;
 use arrow::datatypes::Date32Type;
+use chrono::{NaiveTime, Timelike};
 use datafusion_expr::expr;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -87,16 +88,16 @@ impl PlanResolver<'_> {
         value: String,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        // parse_time validates hour (0-23), minute/second (0-59) via NaiveTime
         let time = parse_time(&value)?;
 
-        // Convert to microseconds since midnight
-        // Note: Nanoseconds beyond microsecond precision (digits 7-9) are truncated.
-        // This matches Spark's behavior of silently truncating excess precision.
-        // Formula: (hour * 3600 + minute * 60 + second) * 1_000_000 + nanoseconds / 1_000
-        let total_seconds =
-            (time.hour as i64 * 3600) + (time.minute as i64 * 60) + (time.second as i64);
-        let microseconds = total_seconds * 1_000_000 + (time.nanoseconds as i64 / 1_000);
+        // Convert to NaiveTime which validates hour (0-23), minute/second (0-59)
+        let naive_time: NaiveTime = time.try_into()?;
+
+        // Use chrono methods to get microseconds since midnight
+        // Nanoseconds beyond microsecond precision are truncated to match Spark behavior
+        let seconds_from_midnight = naive_time.num_seconds_from_midnight() as i64;
+        let nanoseconds = naive_time.nanosecond() as i64;
+        let microseconds = seconds_from_midnight * 1_000_000 + nanoseconds / 1_000;
 
         let literal = spec::Literal::Time64Microsecond {
             microseconds: Some(microseconds),
