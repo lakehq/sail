@@ -1597,9 +1597,9 @@ impl TryFrom<WriteOperation> for spec::Write {
             None => None,
         };
         let options = options.into_iter().collect();
-        let save_type = match save_type {
-            Some(SaveType::Path(x)) => spec::SaveType::Path(x),
-            Some(SaveType::Table(table)) => {
+        let save_type = match save_type.required("save type")? {
+            SaveType::Path(x) => spec::SaveType::Path(x),
+            SaveType::Table(table) => {
                 let SaveTable {
                     table_name,
                     save_method,
@@ -1614,11 +1614,6 @@ impl TryFrom<WriteOperation> for spec::Write {
                     TableSaveMethod::InsertInto => spec::TableSaveMethod::InsertInto,
                 };
                 spec::SaveType::Table { table, save_method }
-            }
-            None => {
-                // When save_type is not set (e.g. Python DataSource .save() without path),
-                // default to empty path — the DataSource format handles its own destination.
-                spec::SaveType::Path(String::new())
             }
         };
         Ok(spec::Write {

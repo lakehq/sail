@@ -461,7 +461,7 @@ impl PythonExecutor for InProcessExecutor {
         // Create a channel to stream batches to the blocking thread.
         // Capacity is from python.data_source_write_channel_capacity config; larger values
         // trade memory for throughput when the writer is slower than the producer.
-        let (tx, rx) = std::sync::mpsc::sync_channel(self.write_channel_capacity);
+        let (tx, rx) = tokio::sync::mpsc::channel(self.write_channel_capacity.max(1));
 
         // Cancellation flag: set when the blocking write task finishes so the
         // pumper stops immediately instead of draining the entire input stream.
@@ -475,7 +475,7 @@ impl PythonExecutor for InProcessExecutor {
                 if cancel_pumper.load(std::sync::atomic::Ordering::Relaxed) {
                     break;
                 }
-                if tx.send(batch_result).is_err() {
+                if tx.send(batch_result).await.is_err() {
                     break;
                 }
             }
@@ -678,7 +678,7 @@ impl PythonExecutor for InProcessExecutor {
 #[pyclass]
 pub struct RecordBatchIterator {
     /// Wrapped in Mutex so the struct is Sync (required by PyO3 for pyclass).
-    receiver: std::sync::Arc<std::sync::Mutex<std::sync::mpsc::Receiver<Result<RecordBatch>>>>,
+    receiver: std::sync::Arc<std::sync::Mutex<tokio::sync::mpsc::Receiver<Result<RecordBatch>>>>,
     is_arrow: bool,
     row_factory: Option<Py<PyAny>>,
     current_batch: Option<RecordBatch>,
@@ -688,7 +688,7 @@ pub struct RecordBatchIterator {
 impl RecordBatchIterator {
     /// Create a new RecordBatchIterator.
     pub fn new(
-        receiver: std::sync::mpsc::Receiver<Result<RecordBatch>>,
+        receiver: tokio::sync::mpsc::Receiver<Result<RecordBatch>>,
         is_arrow: bool,
         schema: SchemaRef,
         py: Python<'_>,
@@ -769,21 +769,21 @@ impl RecordBatchIterator {
             // Release the GIL while waiting for the next batch from Rust.
             let receiver = std::sync::Arc::clone(&slf.receiver);
             let batch_result = py.detach(|| -> PyResult<_> {
-                let guard = receiver
+                let mut guard = receiver
                     .lock()
                     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-                Ok(guard.recv())
+                Ok(guard.blocking_recv())
             })?;
             match batch_result {
-                Ok(Ok(batch)) => {
+                Some(Ok(batch)) => {
                     slf.current_batch = Some(batch);
                     slf.current_row = 0;
                     // Loop around to extract from the new batch
                 }
-                Ok(Err(e)) => {
+                Some(Err(e)) => {
                     return Err(pyo3::exceptions::PyRuntimeError::new_err(e.to_string()));
                 }
-                Err(_) => {
+                None => {
                     // Channel closed
                     return Ok(None);
                 }
