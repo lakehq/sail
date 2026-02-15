@@ -1303,7 +1303,7 @@ def test_write_commit_failure_triggers_abort(spark):
         _abort_called = False
         _abort_messages = None
 
-        def __init__(self, schema, overwrite):  # noqa: ARG002
+        def __init__(self, schema, overwrite):
             pass
 
         def write(self, iterator):
@@ -1379,14 +1379,13 @@ def test_write_none_commit_message(spark):
     class NoneMessageWriter(DataSourceWriter):
         _commit_messages = None
 
-        def __init__(self, schema, overwrite):  # noqa: ARG002
+        def __init__(self, schema, overwrite):
             pass
 
         def write(self, iterator):
             for _ in iterator:
                 pass
             # Explicitly return None (no commit message)
-            return None
 
         def commit(self, messages):
             NoneMessageWriter._commit_messages = messages
@@ -1415,4 +1414,3 @@ def test_write_none_commit_message(spark):
     # Verify commit was called — messages list should contain the None message
     assert NoneMessageWriter._commit_messages is not None  # noqa: SLF001
     assert len(NoneMessageWriter._commit_messages) > 0  # noqa: SLF001
-
