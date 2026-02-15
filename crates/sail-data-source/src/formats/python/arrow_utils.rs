@@ -596,7 +596,14 @@ use super::error::{import_cloudpickle, py_err};
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Once;
+
     use super::*;
+
+    fn init_python_once() {
+        static INIT: Once = Once::new();
+        INIT.call_once(Python::initialize);
+    }
 
     #[test]
     fn test_is_supported_row_type() {
@@ -692,6 +699,7 @@ mod tests {
     #[test]
     #[expect(clippy::unwrap_used)]
     fn test_rust_record_batch_to_py() {
+        init_python_once();
         Python::attach(|py| {
             // Create a simple RecordBatch
             let schema = Arc::new(Schema::new(vec![
@@ -726,6 +734,7 @@ mod tests {
     #[test]
     #[expect(clippy::unwrap_used)]
     fn test_record_batch_to_py_rows() {
+        init_python_once();
         Python::attach(|py| {
             // Create a simple RecordBatch
             let schema = Arc::new(Schema::new(vec![
@@ -773,6 +782,7 @@ mod tests {
     #[test]
     #[expect(clippy::unwrap_used)]
     fn test_record_batch_to_py_rows_with_nulls() {
+        init_python_once();
         Python::attach(|py| {
             // Create a RecordBatch with nulls
             let schema = Arc::new(Schema::new(vec![
