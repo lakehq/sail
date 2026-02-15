@@ -39,6 +39,7 @@ phf = { workspace = true }
 log = { workspace = true }
 futures = { workspace = true }
 fastrace = { workspace = true }
+pyo3 = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }
