@@ -12,10 +12,6 @@ Prerequisites:
 
 import logging
 import sys
-from pathlib import Path
-
-# Add the parent directory to the path so we can import the datasource
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from pyspark.sql import SparkSession
 
