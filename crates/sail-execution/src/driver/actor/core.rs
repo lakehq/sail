@@ -88,6 +88,12 @@ impl Actor for DriverActor {
                 context,
                 result,
             } => self.handle_execute_job(ctx, plan, context, result),
+            DriverEvent::ExecuteCacheJob {
+                plan,
+                context,
+                cache_id,
+                result,
+            } => self.handle_execute_cache_job(ctx, plan, context, cache_id, result),
             DriverEvent::CleanUpJob { job_id } => self.handle_clean_up_job(ctx, job_id),
             DriverEvent::UpdateTask {
                 key,

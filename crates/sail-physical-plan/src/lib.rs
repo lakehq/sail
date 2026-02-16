@@ -1,6 +1,7 @@
 pub mod file_delete;
 pub mod file_write;
 pub mod format_tag;
+pub mod in_memory_relation;
 pub mod map_partitions;
 pub mod merge;
 pub mod merge_cardinality_check;

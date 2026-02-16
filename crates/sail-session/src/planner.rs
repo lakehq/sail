@@ -21,8 +21,10 @@ use sail_common_datafusion::rename::physical_plan::rename_projected_physical_pla
 use sail_common_datafusion::streaming::event::schema::{
     to_flow_event_field_names, to_flow_event_projection,
 };
+use sail_execution::plan::CacheReadExec;
 use sail_logical_plan::file_delete::FileDeleteNode;
 use sail_logical_plan::file_write::FileWriteNode;
+use sail_logical_plan::in_memory_relation::InMemoryRelationNode;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_logical_plan::merge::MergeIntoNode;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
@@ -89,8 +91,14 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
         session_state: &SessionState,
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
         let plan: Arc<dyn ExecutionPlan> = if let Some(node) =
-            node.as_any().downcast_ref::<RangeNode>()
+            node.as_any().downcast_ref::<InMemoryRelationNode>()
         {
+            Arc::new(CacheReadExec::new(
+                node.cache_id().to_string(),
+                UserDefinedLogicalNode::schema(node).inner().clone(),
+                1,
+            ))
+        } else if let Some(node) = node.as_any().downcast_ref::<RangeNode>() {
             Arc::new(RangeExec::new(
                 node.range().clone(),
                 node.num_partitions(),

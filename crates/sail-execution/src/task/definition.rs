@@ -51,7 +51,13 @@ pub struct TaskInputKey {
 }
 
 #[derive(Debug, Clone)]
-pub struct TaskOutput {
+pub enum TaskOutput {
+    Shuffle(ShuffleOutput),
+    Cache { cache_id: String },
+}
+
+#[derive(Debug, Clone)]
+pub struct ShuffleOutput {
     pub distribution: TaskOutputDistribution,
     pub locator: TaskOutputLocator,
 }
@@ -368,14 +374,18 @@ impl TryFrom<gen::TaskInputRemoteKeyList> for Vec<TaskInputKey> {
 
 impl From<TaskOutput> for gen::TaskOutput {
     fn from(value: TaskOutput) -> Self {
-        let TaskOutput {
-            distribution,
-            locator,
-        } = value;
-        gen::TaskOutput {
-            distribution: Some(distribution.into()),
-            locator: Some(locator.into()),
-        }
+        let kind = match value {
+            TaskOutput::Shuffle(shuffle) => {
+                gen::task_output::Kind::Shuffle(gen::TaskShuffleOutput {
+                    distribution: Some(shuffle.distribution.into()),
+                    locator: Some(shuffle.locator.into()),
+                })
+            }
+            TaskOutput::Cache { cache_id } => {
+                gen::task_output::Kind::Cache(gen::TaskCacheOutput { cache_id })
+            }
+        };
+        gen::TaskOutput { kind: Some(kind) }
     }
 }
 
@@ -383,26 +393,36 @@ impl TryFrom<gen::TaskOutput> for TaskOutput {
     type Error = ExecutionError;
 
     fn try_from(value: gen::TaskOutput) -> Result<Self, Self::Error> {
-        let distribution = match value.distribution {
-            Some(x) => x.try_into()?,
-            None => {
-                return Err(ExecutionError::InvalidArgument(
-                    "cannot decode empty task output distribution".to_string(),
-                ))
+        match value.kind {
+            Some(gen::task_output::Kind::Shuffle(shuffle)) => {
+                let distribution = match shuffle.distribution {
+                    Some(x) => x.try_into()?,
+                    None => {
+                        return Err(ExecutionError::InvalidArgument(
+                            "cannot decode empty task output distribution".to_string(),
+                        ))
+                    }
+                };
+                let locator = match shuffle.locator {
+                    Some(x) => x.try_into()?,
+                    None => {
+                        return Err(ExecutionError::InvalidArgument(
+                            "cannot decode empty task output locator".to_string(),
+                        ))
+                    }
+                };
+                Ok(TaskOutput::Shuffle(ShuffleOutput {
+                    distribution,
+                    locator,
+                }))
             }
-        };
-        let locator = match value.locator {
-            Some(x) => x.try_into()?,
-            None => {
-                return Err(ExecutionError::InvalidArgument(
-                    "cannot decode empty task output locator".to_string(),
-                ))
-            }
-        };
-        Ok(TaskOutput {
-            distribution,
-            locator,
-        })
+            Some(gen::task_output::Kind::Cache(cache)) => Ok(TaskOutput::Cache {
+                cache_id: cache.cache_id,
+            }),
+            None => Err(ExecutionError::InvalidArgument(
+                "cannot decode empty task output".to_string(),
+            )),
+        }
     }
 }
 
@@ -544,7 +564,7 @@ impl TaskInput {
     }
 }
 
-impl TaskOutput {
+impl ShuffleOutput {
     pub fn channels(&self) -> usize {
         match self.distribution {
             TaskOutputDistribution::Hash { channels, .. } => channels,

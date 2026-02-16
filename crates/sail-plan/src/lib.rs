@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use async_recursion::async_recursion;
+use datafusion::common::tree_node::Transformed;
+use datafusion::common::tree_node::TreeNode;
 use datafusion::dataframe::DataFrame;
 use datafusion::physical_plan::{displayable, ExecutionPlan};
 use datafusion::prelude::SessionContext;
@@ -11,6 +13,7 @@ use sail_common::spec;
 use sail_common_datafusion::cache_manager::CacheManager;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
+use sail_logical_plan::in_memory_relation::InMemoryRelationNode;
 use sail_logical_plan::precondition::WithPreconditionsNode;
 
 use crate::catalog::CatalogCommandNode;
@@ -53,7 +56,11 @@ pub async fn execute_logical_plan(ctx: &SessionContext, plan: LogicalPlan) -> Re
     Ok(df)
 }
 
-pub async fn resolve_and_execute_plan(
+/// Resolves a spec plan into a physical execution plan.
+///
+/// Converts the input plan through logical resolution, cache substitution,
+/// optimization, and physical planning. Does not execute the resulting plan.
+pub async fn resolve_to_execution_plan(
     ctx: &SessionContext,
     config: Arc<PlanConfig>,
     plan: spec::Plan,
@@ -64,7 +71,7 @@ pub async fn resolve_and_execute_plan(
     info.push(plan.to_stringified(PlanType::InitialLogicalPlan));
 
     let plan = if let Ok(cache) = ctx.extension::<CacheManager>() {
-        cache.use_cached_data(ctx, plan)?
+        use_cached_data(&cache, plan)?
     } else {
         plan
     };
@@ -92,4 +99,24 @@ pub async fn resolve_and_execute_plan(
         displayable(plan.as_ref()).indent(true).to_string(),
     ));
     Ok((plan, info))
+}
+
+/// Replaces cached subtrees with InMemoryRelation nodes.
+///
+/// Walks the plan top-down (including subquery expressions) and substitutes any
+/// subtree matching a cached entry with an InMemoryRelationNode carrying the cache ID.
+/// Equivalent to Spark's `CacheManager.useCachedData`:
+/// `spark/sql/core/src/main/scala/org/apache/spark/sql/execution/CacheManager.scala:496`
+fn use_cached_data(cache: &CacheManager, plan: LogicalPlan) -> Result<LogicalPlan> {
+    plan.transform_down_with_subqueries(|node| {
+        let Some(cached) = cache.find_match(&node) else {
+            return Ok(Transformed::no(node));
+        };
+        let relation =
+            InMemoryRelationNode::new(cached.plan.schema().clone(), cached.cache_id.clone());
+        Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+            node: Arc::new(relation),
+        })))
+    })
+    .map(|t| t.data)
 }

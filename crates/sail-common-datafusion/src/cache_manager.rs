@@ -1,24 +1,25 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
-use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::logical_expr::LogicalPlan;
-use datafusion::prelude::SessionContext;
-use datafusion_common::Result;
 
 use crate::extension::SessionExtension;
 
-/// A cached plan entry pairing a plan key with its materialized data.
-struct CachedData {
+/// A cached plan entry.
+#[derive(Clone)]
+pub struct CachedData {
     /// The resolved logical plan used as the cache key.
-    plan: LogicalPlan,
-    /// The materialized result, or None if not yet executed.
-    batches: Option<Vec<RecordBatch>>,
+    pub plan: LogicalPlan,
+    /// Unique identifier for this cache entry.
+    pub cache_id: String,
+    /// Whether the cached data has been materialized on worker nodes.
+    pub materialized: bool,
 }
 
 /// Manages cached query results for a session.
 pub struct CacheManager {
     entries: Mutex<Vec<CachedData>>,
+    next_id: AtomicU64,
 }
 
 impl SessionExtension for CacheManager {
@@ -32,67 +33,46 @@ impl CacheManager {
     pub fn new() -> Self {
         Self {
             entries: Mutex::new(Vec::new()),
+            next_id: AtomicU64::new(1),
         }
     }
 
-    /// Registers a plan for caching. Data is not materialized yet.
-    pub fn cache_plan(&self, plan: LogicalPlan) {
+    /// Registers a plan for caching. Returns the assigned cache ID.
+    pub fn cache_plan(&self, plan: LogicalPlan) -> String {
         let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-        if !entries.iter().any(|e| e.plan == plan) {
-            entries.push(CachedData {
-                plan,
-                batches: None,
-            });
+        if let Some(existing) = entries.iter().find(|e| e.plan == plan) {
+            return existing.cache_id.clone();
         }
+        let cache_id = format!("cache_{}", self.next_id.fetch_add(1, Ordering::Relaxed));
+        entries.push(CachedData {
+            plan,
+            cache_id: cache_id.clone(),
+            materialized: false,
+        });
+        cache_id
     }
 
-    /// Removes a cached plan.
-    pub fn uncache_plan(&self, plan: &LogicalPlan) {
-        let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-        entries.retain(|e| e.plan != *plan);
+    /// Returns a clone of the cached entry if the given plan matches.
+    pub fn find_match(&self, node: &LogicalPlan) -> Option<CachedData> {
+        let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        entries.iter().find(|e| e.plan == *node).map(|e| e.clone())
     }
 
-    /// Stores materialized batches for a cached plan after first execution.
-    pub fn store_batches(&self, plan: &LogicalPlan, batches: Vec<RecordBatch>) {
-        let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(entry) = entries.iter_mut().find(|e| e.plan == *plan) {
-            entry.batches = Some(batches);
-        }
-    }
-
-    /// Checks if a plan is registered for caching but not yet materialized.
-    pub fn needs_materialization(&self, plan: &LogicalPlan) -> bool {
+    /// Returns a clone of the cached entry with the given cache ID.
+    pub fn find_by_id(&self, cache_id: &str) -> Option<CachedData> {
         let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         entries
             .iter()
-            .any(|e| e.batches.is_none() && e.plan == *plan)
+            .find(|e| e.cache_id == cache_id)
+            .map(|e| e.clone())
     }
 
-    /// Walks the plan tree and replaces matching subtrees with cached scans.
-    pub fn use_cached_data(&self, _ctx: &SessionContext, plan: LogicalPlan) -> Result<LogicalPlan> {
-        let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-        if entries.is_empty() {
-            return Ok(plan);
-        }
-        plan.transform_down(|node| {
-            for entry in entries.iter() {
-                if let Some(_batches) = &entry.batches {
-                    if node == entry.plan {
-                        // TODO: create a MemTable-backed LogicalPlan from cached RecordBatches
-                        // let cached_scan = create_cached_scan(ctx, batches)?;
-                        // return Ok(Transformed::yes(cached_scan));
-                    }
-                }
-            }
-            Ok(Transformed::no(node))
-        })
-        .map(|t| t.data)
-    }
-
-    /// Clears all cached data.
-    pub fn clear(&self) {
+    /// Marks a cache entry as materialized.
+    pub fn mark_materialized(&self, cache_id: &str) {
         let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-        entries.clear();
+        if let Some(entry) = entries.iter_mut().find(|e| e.cache_id == cache_id) {
+            entry.materialized = true;
+        }
     }
 }
 

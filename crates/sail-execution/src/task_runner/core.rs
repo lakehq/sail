@@ -24,9 +24,10 @@ use crate::codec::RemoteExecutionCodec;
 use crate::driver::TaskStatus;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{TaskKey, TaskKeyDisplay};
-use crate::plan::{ShuffleReadExec, ShuffleWriteExec, StageInputExec};
+use crate::local_cache_store::LocalCacheStore;
+use crate::plan::{CacheWriteExec, ShuffleReadExec, ShuffleWriteExec, StageInputExec};
 use crate::stream_accessor::{StreamAccessor, StreamAccessorMessage};
-use crate::task::definition::{TaskDefinition, TaskInput, TaskOutput};
+use crate::task::definition::{ShuffleOutput, TaskDefinition, TaskInput, TaskOutput};
 use crate::task_runner::monitor::TaskMonitor;
 use crate::task_runner::{TaskRunner, TaskRunnerMessage};
 
@@ -35,9 +36,15 @@ impl TaskRunner {
         Self {
             signals: HashMap::new(),
             codec: Box::new(RemoteExecutionCodec),
+            cache_store: Arc::new(LocalCacheStore::new()),
         }
     }
 
+    /// Executes a task by building and running its physical plan, then spawns a monitor to track completion.
+    ///
+    /// Deserializes the plan from the task definition, executes it, and spawns a
+    /// background monitor that polls the resulting stream and reports task status.
+    /// If plan execution fails, the task is immediately reported as failed.
     pub fn run_task<T: Actor>(
         &mut self,
         ctx: &mut ActorContext<T>,
@@ -73,6 +80,11 @@ impl TaskRunner {
         }
     }
 
+    /// Deserializes and prepares a physical plan for execution on this node.
+    ///
+    /// Decodes the plan from protobuf, rewrites parquet adapters, and wraps the plan
+    /// with the appropriate output node (ShuffleWriteExec for normal jobs, or
+    /// CacheWriteExec for cache materialization jobs once implemented).
     fn execute_plan<T: Actor>(
         &mut self,
         ctx: &mut ActorContext<T>,
@@ -86,14 +98,14 @@ impl TaskRunner {
         let plan = PhysicalPlanNode::decode(definition.plan.as_ref())?;
         let plan = plan.try_into_physical_plan(&context, self.codec.as_ref())?;
         let plan = self.rewrite_parquet_adapters(plan)?;
-        let plan = self.rewrite_shuffle(
-            ctx,
-            key,
-            &definition.inputs,
-            &definition.output,
-            plan,
-            &context,
-        )?;
+        let plan = match &definition.output {
+            TaskOutput::Shuffle(shuffle) => {
+                self.rewrite_shuffle(ctx, key, &definition.inputs, shuffle, plan, &context)?
+            }
+            TaskOutput::Cache { cache_id } => {
+                self.rewrite_cache(ctx, key, &definition.inputs, plan, cache_id)?
+            }
+        };
         debug!(
             "{} execution plan\n{}",
             TaskKeyDisplay(key),
@@ -131,14 +143,13 @@ impl TaskRunner {
         Ok(result.data()?)
     }
 
-    fn rewrite_shuffle<T: Actor>(
+    /// Replaces StageInputExec placeholders with ShuffleReadExec nodes.
+    fn rewrite_stage_inputs<T: Actor>(
         &mut self,
         ctx: &mut ActorContext<T>,
         key: &TaskKey,
         inputs: &[TaskInput],
-        output: &TaskOutput,
         plan: Arc<dyn ExecutionPlan>,
-        context: &TaskContext,
     ) -> ExecutionResult<Arc<dyn ExecutionPlan>>
     where
         T::Message: TaskRunnerMessage + StreamAccessorMessage,
@@ -165,7 +176,24 @@ impl TaskRunner {
                 Ok(Transformed::no(node))
             }
         });
-        let plan = result.data()?;
+        Ok(result.data()?)
+    }
+
+    /// Rewrites the plan for normal job execution by replacing stage inputs and wrapping with ShuffleWriteExec.
+    fn rewrite_shuffle<T: Actor>(
+        &mut self,
+        ctx: &mut ActorContext<T>,
+        key: &TaskKey,
+        inputs: &[TaskInput],
+        output: &ShuffleOutput,
+        plan: Arc<dyn ExecutionPlan>,
+        context: &TaskContext,
+    ) -> ExecutionResult<Arc<dyn ExecutionPlan>>
+    where
+        T::Message: TaskRunnerMessage + StreamAccessorMessage,
+    {
+        let plan = self.rewrite_stage_inputs(ctx, key, inputs, plan)?;
+        let handle = ctx.handle();
         let schema = plan.schema();
         let accessor = StreamAccessor::new(handle.clone());
         let mut locations = vec![vec![]; plan.output_partitioning().partition_count()];
@@ -181,5 +209,22 @@ impl TaskRunner {
         let partitioning = output.partitioning(context, &schema, self.codec.as_ref())?;
         let shuffle = ShuffleWriteExec::new(plan, locations, Arc::new(accessor), partitioning);
         Ok(Arc::new(shuffle))
+    }
+
+    /// Rewrites the plan for cache materialization by replacing stage inputs and wrapping with CacheWriteExec.
+    fn rewrite_cache<T: Actor>(
+        &mut self,
+        ctx: &mut ActorContext<T>,
+        key: &TaskKey,
+        inputs: &[TaskInput],
+        plan: Arc<dyn ExecutionPlan>,
+        cache_id: &str,
+    ) -> ExecutionResult<Arc<dyn ExecutionPlan>>
+    where
+        T::Message: TaskRunnerMessage + StreamAccessorMessage,
+    {
+        let plan = self.rewrite_stage_inputs(ctx, key, inputs, plan)?;
+        let cache = CacheWriteExec::new(plan, self.cache_store.clone(), cache_id.to_string());
+        Ok(Arc::new(cache))
     }
 }

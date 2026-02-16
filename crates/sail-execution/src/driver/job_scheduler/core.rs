@@ -28,8 +28,8 @@ use crate::job_graph::{
     InputMode, JobGraph, OutputDistribution, OutputMode, Stage, StageInput, TaskPlacement,
 };
 use crate::task::definition::{
-    TaskDefinition, TaskInput, TaskInputKey, TaskInputLocator, TaskOutput, TaskOutputDistribution,
-    TaskOutputLocator,
+    ShuffleOutput, TaskDefinition, TaskInput, TaskInputKey, TaskInputLocator, TaskOutput,
+    TaskOutputDistribution, TaskOutputLocator,
 };
 use crate::task::scheduling::{
     TaskAssignment, TaskAssignmentGetter, TaskOutputKind, TaskRegion, TaskSet, TaskSetEntry,
@@ -737,10 +737,10 @@ impl JobScheduler {
                 TaskOutputLocator::Remote { uri }
             }
         };
-        Ok(TaskOutput {
+        Ok(TaskOutput::Shuffle(ShuffleOutput {
             distribution,
             locator,
-        })
+        }))
     }
 
     fn get_latest_task_attempt(

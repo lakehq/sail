@@ -55,6 +55,12 @@ pub enum DriverEvent {
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     },
+    ExecuteCacheJob {
+        plan: Arc<dyn ExecutionPlan>,
+        context: Arc<TaskContext>,
+        cache_id: String,
+        result: oneshot::Sender<ExecutionResult<()>>,
+    },
     CleanUpJob {
         job_id: JobId,
     },
@@ -162,6 +168,7 @@ impl SpanAssociation for DriverEvent {
             DriverEvent::ProbeIdleWorker { .. } => "ProbeIdleWorker",
             DriverEvent::ProbeLostWorker { .. } => "ProbeLostWorker",
             DriverEvent::ExecuteJob { .. } => "ExecuteJob",
+            DriverEvent::ExecuteCacheJob { .. } => "ExecuteCacheJob",
             DriverEvent::CleanUpJob { .. } => "CleanUpJob",
             DriverEvent::UpdateTask { .. } => "UpdateTask",
             DriverEvent::ProbePendingTask { .. } => "ProbePendingTask",
@@ -212,6 +219,12 @@ impl SpanAssociation for DriverEvent {
             DriverEvent::ExecuteJob {
                 plan: _,
                 context: _,
+                result: _,
+            } => {}
+            DriverEvent::ExecuteCacheJob {
+                plan: _,
+                context: _,
+                cache_id: _,
                 result: _,
             } => {}
             DriverEvent::CleanUpJob { job_id } => {
