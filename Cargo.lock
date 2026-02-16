@@ -6216,6 +6216,7 @@ dependencies = [
  "sail-plan-lakehouse",
  "sail-python-udf",
  "sail-sql-analyzer",
+ "sail-sql-parser",
  "serde",
  "serde_json",
  "thiserror",
