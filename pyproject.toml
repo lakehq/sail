@@ -53,6 +53,10 @@ test = [
 mcp = [
     "mcp>=1.0.0,<2",
 ]
+postgres = [
+    "psycopg2-binary>=2.9,<3",
+    "pyarrow>=10.0,<20",
+]
 
 [project.urls]
 Homepage = "https://lakesail.com"
@@ -243,7 +247,9 @@ line-length = 120
 "crates/**/*.py" = ["INP001"]
 "python/pysail/docs/conf.py" = ["INP001"]
 "python/pysail/examples/**/*.py" = ["T201", "PLC0415"]
+"python/pysail/datasources/**/*.py" = ["PLC0415"]
 "python/pysail/tests/**/*.py" = ["S101", "PLC0415"]
+"python/pysail/tests/**/manual_*.py" = ["S106", "PLR2004"]
 "scripts/**/*.py" = ["SLF001", "PLC0415"]
 
 [tool.pytest.ini_options]
