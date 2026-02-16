@@ -169,6 +169,7 @@ use sail_logical_plan::range::Range;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
+use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
 use sail_physical_plan::show_string::ShowStringExec;
@@ -836,6 +837,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 target_present_col,
                 source_present_col,
             )?)),
+            NodeKind::MonotonicId(gen::MonotonicIdExecNode {
+                input,
+                column_name,
+                schema,
+            }) => {
+                let schema = self.try_decode_schema(&schema)?;
+                Ok(Arc::new(MonotonicIdExec::try_new(
+                    self.try_decode_plan(&input, ctx)?,
+                    column_name,
+                    Arc::new(schema),
+                )?))
+            }
             NodeKind::IcebergWriter(gen::IcebergWriterExecNode {
                 input,
                 table_url,
@@ -1341,6 +1354,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 target_row_id_col: cardinality_check.target_row_id_col().to_string(),
                 target_present_col: cardinality_check.target_present_col().to_string(),
                 source_present_col: cardinality_check.source_present_col().to_string(),
+            })
+        } else if let Some(monotonic_id) = node.as_any().downcast_ref::<MonotonicIdExec>() {
+            let input = self.try_encode_plan(monotonic_id.input().clone())?;
+            let schema = self.try_encode_schema(monotonic_id.schema().as_ref())?;
+            NodeKind::MonotonicId(gen::MonotonicIdExecNode {
+                input,
+                column_name: monotonic_id.column_name().to_string(),
+                schema,
             })
         } else if let Some(iceberg_writer_exec) = node.as_any().downcast_ref::<IcebergWriterExec>()
         {
