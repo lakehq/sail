@@ -130,6 +130,7 @@ message ExplodeUdf {
 
 message SparkUnixTimestampUdf {
   string timezone = 1;
+  bool is_try = 2;
 }
 
 message StructFunctionUdf {

@@ -252,15 +252,23 @@ fn to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
 fn unix_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let timezone = input.function_context.plan_config.session_timezone.clone();
+    // ANSI=false means invalid input returns NULL (is_try=true behavior)
+    let is_try = !input.function_context.plan_config.ansi_mode;
     if input.arguments.is_empty() {
         let expr = ScalarUDF::from(TimestampNow::new(timezone, TimeUnit::Second)).call(vec![]);
         Ok(cast(expr, DataType::Int64))
     } else if input.arguments.len() == 1 {
-        Ok(ScalarUDF::from(SparkUnixTimestamp::new(timezone)).call(input.arguments))
+        Ok(
+            ScalarUDF::from(SparkUnixTimestamp::new_with_try(timezone, is_try))
+                .call(input.arguments),
+        )
     } else if input.arguments.len() == 2 {
         let (expr, format) = input.arguments.two()?;
         let format = to_chrono_fmt(format);
-        Ok(ScalarUDF::from(SparkUnixTimestamp::new(timezone)).call(vec![expr, format]))
+        Ok(
+            ScalarUDF::from(SparkUnixTimestamp::new_with_try(timezone, is_try))
+                .call(vec![expr, format]),
+        )
     } else {
         Err(PlanError::invalid(
             "unix_timestamp requires 1 or 2 arguments",

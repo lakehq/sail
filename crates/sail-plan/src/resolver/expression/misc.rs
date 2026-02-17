@@ -1,19 +1,21 @@
 use std::collections::HashMap;
+use std::ops::Sub;
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{plan_datafusion_err, Column, DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::FieldMetadata;
-use datafusion_expr::{expr, lit, BinaryExpr, ExprSchemable, ScalarUDF};
+use datafusion_expr::{expr, lit, when, BinaryExpr, ExprSchemable, ScalarUDF};
 use datafusion_expr_common::operator::Operator;
 use datafusion_functions::core::expr_ext::FieldAccessor;
-use datafusion_functions_nested::expr_fn::{array_element, map_extract};
+use datafusion_functions_nested::expr_fn::{array_element, array_length, map_extract};
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::drop_struct_field::DropStructField;
+use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::table_input::TableInput;
 use sail_function::scalar::update_struct_field::UpdateStructField;
 
@@ -203,14 +205,42 @@ impl PlanResolver<'_> {
             | DataType::LargeList(_)
             | DataType::FixedSizeList(_, _)
             | DataType::ListView(_)
-            | DataType::LargeListView(_) => array_element(
-                expr,
-                expr::Expr::BinaryExpr(BinaryExpr::new(
-                    Box::new(expr::Expr::Literal(extraction, None)),
-                    Operator::Plus,
-                    Box::new(lit(1i64)),
-                )),
-            ),
+            | DataType::LargeListView(_) => {
+                let index_expr = expr::Expr::Literal(extraction, None);
+
+                // Convert 0-based index to 1-based for array_element:
+                // - Non-negative indices: add 1 (0-based 0 -> 1-based 1)
+                // - Negative indices: keep as-is (-1 means last in both systems)
+                let one_based_index = when(
+                    index_expr.clone().gt_eq(lit(0i64)),
+                    expr::Expr::BinaryExpr(BinaryExpr::new(
+                        Box::new(index_expr.clone()),
+                        Operator::Plus,
+                        Box::new(lit(1i64)),
+                    )),
+                )
+                .otherwise(index_expr.clone())?;
+
+                // Out-of-bounds behavior depends on ANSI mode
+                let out_of_bounds_result = if self.config.ansi_mode {
+                    ScalarUDF::from(RaiseError::new())
+                        .call(vec![lit("array subscript: the index is out of bounds")])
+                } else {
+                    lit(ScalarValue::Null)
+                };
+
+                let arr_len = array_length(expr.clone());
+                // 0-based bounds check: valid range is [-array_length, array_length - 1]
+                // Out of bounds if: index < -array_length OR index >= array_length
+                let out_of_bounds_condition = index_expr
+                    .clone()
+                    .lt(lit(0i64).sub(arr_len.clone()))
+                    .or(index_expr.gt_eq(arr_len));
+
+                when(out_of_bounds_condition, out_of_bounds_result)
+                    .when(lit(true), array_element(expr, one_based_index))
+                    .end()?
+            }
             DataType::Struct(fields) => {
                 let ScalarValue::Utf8(Some(name)) = extraction else {
                     return Err(PlanError::AnalysisError(format!(
