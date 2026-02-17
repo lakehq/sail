@@ -880,6 +880,175 @@ def test_table_schema_option(spark):
     logger.info("✓ Test 24 passed")
 
 
+def test_sql_injection_filter_value(spark):
+    """Test 25 (HIGH): Filter value injection is neutralized by parameterized queries.
+
+    Attempts to inject SQL via a filter value that would DROP the 'orders' table.
+    With psycopg2 parameterized queries (%s placeholders), the payload is treated
+    as a literal string — the filter returns 0 rows and 'orders' remains intact.
+    """
+    logger.info("\n=== Test 25: Filter Value SQL Injection ===")
+
+    spark.dataSource.register(PostgresDataSource)
+
+    from pyspark.sql.functions import col
+
+    # Establish that orders exists and has the expected row count before the attack.
+    orders_before = (
+        spark.read.format("postgres")
+        .options(host="localhost", port="5432", database="testdb", user="testuser", password="testpass", table="orders")
+        .load()
+        .count()
+    )
+    assert orders_before == 8, f"Precondition failed: orders should have 8 rows, got {orders_before}"
+    logger.info("orders table has %s rows before injection attempt", orders_before)
+
+    # Attempt SQL injection via EqualTo filter pushdown.
+    # If the value were interpolated into SQL, '; DROP TABLE orders; -- would execute.
+    # With parameterized queries it becomes:  "name" = %s  →  bind 'injection_payload'
+    injection_payload = "'; DROP TABLE orders; --"
+    users_df = (
+        spark.read.format("postgres")
+        .options(host="localhost", port="5432", database="testdb", user="testuser", password="testpass", table="users")
+        .load()
+    )
+    result = users_df.filter(col("name") == injection_payload).collect()
+    logger.info("Filter with injection payload matched %s row(s) (expected 0)", len(result))
+    assert len(result) == 0, f"Injection payload should not match any row, matched {len(result)}"
+
+    # Verify 'orders' was NOT dropped or truncated.
+    orders_after = (
+        spark.read.format("postgres")
+        .options(host="localhost", port="5432", database="testdb", user="testuser", password="testpass", table="orders")
+        .load()
+        .count()
+    )
+    assert orders_after == 8, f"INJECTION SUCCEEDED: orders was modified (expected 8 rows, got {orders_after})"
+    logger.info("orders table still has %s rows after injection attempt ✓", orders_after)
+
+    logger.info("✓ Test 25 passed")
+
+
+def test_sql_injection_table_name(spark):
+    """Test 26 (HIGH): Table name injection is neutralized by double-quote identifier escaping.
+
+    Passes a malicious string as the 'table' option.  _quote_table_reference()
+    wraps it in double-quotes so Postgres sees it as a single identifier name
+    rather than executing the injected SQL.
+    """
+    logger.info("\n=== Test 26: Table Name SQL Injection ===")
+
+    spark.dataSource.register(PostgresDataSource)
+
+    # Confirm orders exists before the attack.
+    orders_before = (
+        spark.read.format("postgres")
+        .options(host="localhost", port="5432", database="testdb", user="testuser", password="testpass", table="orders")
+        .load()
+        .count()
+    )
+    assert orders_before == 8, f"Precondition failed: orders should have 8 rows, got {orders_before}"
+    logger.info("orders table has %s rows before injection attempt", orders_before)
+
+    # Injection attempt via the 'table' option.
+    # Without quoting:  SELECT * FROM orders'; DROP TABLE orders; --
+    # With quoting:     SELECT * FROM "orders'; DROP TABLE orders; --"  (no such table → error)
+    injection_table = "orders'; DROP TABLE orders; --"
+    try:
+        df = (
+            spark.read.format("postgres")
+            .options(
+                host="localhost",
+                port="5432",
+                database="testdb",
+                user="testuser",
+                password="testpass",
+                table=injection_table,
+            )
+            .load()
+        )
+        df.count()
+        msg = "Expected table-not-found error for injected table name"
+        raise AssertionError(msg)  # noqa: TRY301
+    except AssertionError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        logger.info("  Correctly raised error for injected table name: %s", type(e).__name__)
+
+    # Verify 'orders' was NOT dropped.
+    orders_after = (
+        spark.read.format("postgres")
+        .options(host="localhost", port="5432", database="testdb", user="testuser", password="testpass", table="orders")
+        .load()
+        .count()
+    )
+    assert orders_after == 8, f"INJECTION SUCCEEDED: orders was modified (expected 8 rows, got {orders_after})"
+    logger.info("orders table still has %s rows after injection attempt ✓", orders_after)
+
+    logger.info("✓ Test 26 passed")
+
+
+def test_sql_injection_partition_column(spark):
+    """Test 27 (HIGH): Partition column injection is neutralized by identifier quoting.
+
+    Passes a malicious string as 'partitionColumn'.  _quote_identifier() wraps it
+    in double-quotes so Postgres raises a 'column does not exist' error rather than
+    executing the injected SQL.
+    """
+    logger.info("\n=== Test 27: Partition Column SQL Injection ===")
+
+    spark.dataSource.register(PostgresDataSource)
+
+    # Confirm users exists before the attack.
+    users_before = (
+        spark.read.format("postgres")
+        .options(host="localhost", port="5432", database="testdb", user="testuser", password="testpass", table="users")
+        .load()
+        .count()
+    )
+    assert users_before == 15, f"Precondition failed: users should have 15 rows, got {users_before}"
+    logger.info("users table has %s rows before injection attempt", users_before)
+
+    # Injection attempt via partitionColumn.
+    # Without quoting:  MOD(id'; DROP TABLE users; --, 2) = 0
+    # With quoting:     MOD("id'; DROP TABLE users; --", 2) = 0  (column not found → error)
+    injection_column = "id'; DROP TABLE users; --"
+    try:
+        df = (
+            spark.read.format("postgres")
+            .options(
+                host="localhost",
+                port="5432",
+                database="testdb",
+                user="testuser",
+                password="testpass",
+                table="users",
+                numPartitions="2",
+                partitionColumn=injection_column,
+            )
+            .load()
+        )
+        df.count()
+        msg = "Expected an error for injected partition column name"
+        raise AssertionError(msg)  # noqa: TRY301
+    except AssertionError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        logger.info("  Correctly raised error for injected partition column: %s", type(e).__name__)
+
+    # Verify 'users' was NOT dropped.
+    users_after = (
+        spark.read.format("postgres")
+        .options(host="localhost", port="5432", database="testdb", user="testuser", password="testpass", table="users")
+        .load()
+        .count()
+    )
+    assert users_after == 15, f"INJECTION SUCCEEDED: users was modified (expected 15 rows, got {users_after})"
+    logger.info("users table still has %s rows after injection attempt ✓", users_after)
+
+    logger.info("✓ Test 27 passed")
+
+
 def main():
     """Run all tests."""
     logger.info("=" * 60)
@@ -922,6 +1091,11 @@ def main():
         test_batch_size_option(spark)
         test_table_schema_option(spark)
 
+        # SQL injection proof tests
+        test_sql_injection_filter_value(spark)
+        test_sql_injection_table_name(spark)
+        test_sql_injection_partition_column(spark)
+
         logger.info("\n%s", "=" * 60)
         logger.info("✓ All tests passed!")
         logger.info("%s", "=" * 60)
@@ -929,7 +1103,8 @@ def main():
         logger.info("  - Original tests: 6")
         logger.info("  - HIGH priority: 10")
         logger.info("  - MEDIUM priority: 7")
-        logger.info("  - Total: 24 tests")
+        logger.info("  - SQL injection proof: 3")
+        logger.info("  - Total: 27 tests")
 
     except Exception:
         logger.exception("✗ Test failed with error")

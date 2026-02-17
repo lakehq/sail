@@ -9,10 +9,11 @@ from pyspark.sql.datasource import (
 
 
 class PostgresInputPartition(InputPartition):
-    def __init__(self, partition_id: int, query: str, connection_params: dict):
+    def __init__(self, partition_id: int, query: str, connection_params: dict, params: list | None = None):
         super().__init__(partition_id)
         self.query = query
         self.connection_params = connection_params
+        self.params = params or []
 
 
 class PostgresDataSourceReader(DataSourceReader):
@@ -49,24 +50,26 @@ class PostgresDataSourceReader(DataSourceReader):
                 yield f
 
     def partitions(self):
-        where_clause = self._build_where_clause()
+        where_clause, where_params = self._build_where_clause()
         table = self._quote_table_reference(self.table)
         if self.num_partitions == 1 or not self.partition_column:
             query = f"SELECT * FROM {table}"  # noqa: S608
             if where_clause:
                 query += f" WHERE {where_clause}"
-            return [PostgresInputPartition(0, query, self.connection_params)]
+            return [PostgresInputPartition(0, query, self.connection_params, where_params)]
 
         partition_column = self._quote_identifier(self.partition_column)  # column name only, never schema-qualified
         partitions = []
         for i in range(self.num_partitions):
             query = f"SELECT * FROM {table}"  # noqa: S608
             conditions = []
+            params = list(where_params)
             if where_clause:
                 conditions.append(where_clause)
+            # num_partitions and i are integers from our own code, safe to interpolate
             conditions.append(f"MOD({partition_column}, {self.num_partitions}) = {i}")
             query += f" WHERE {' AND '.join(conditions)}"
-            partitions.append(PostgresInputPartition(i, query, self.connection_params))
+            partitions.append(PostgresInputPartition(i, query, self.connection_params, params))
         return partitions
 
     def read(self, partition):
@@ -76,7 +79,7 @@ class PostgresDataSourceReader(DataSourceReader):
         try:
             cursor = conn.cursor()
             try:
-                cursor.execute(partition.query)
+                cursor.execute(partition.query, partition.params or None)
                 columns = [desc[0] for desc in cursor.description]
 
                 while True:
@@ -111,8 +114,10 @@ class PostgresDataSourceReader(DataSourceReader):
         finally:
             conn.close()
 
-    def _build_where_clause(self):
+    def _build_where_clause(self) -> tuple[str, list]:
+        """Return (clause, params) where clause uses %s placeholders for all filter values."""
         conditions = []
+        params = []
         for f in self._filters:
             col = f["attribute"][0] if f["attribute"] else None
             if not col:
@@ -120,20 +125,22 @@ class PostgresDataSourceReader(DataSourceReader):
 
             filter_type = f["type"]
             quoted_col = self._quote_identifier(col)
-            val = self._format_value(f["value"])
 
             if filter_type == "EqualTo":
-                conditions.append(f"{quoted_col} = {val}")
+                conditions.append(f"{quoted_col} = %s")
             elif filter_type == "GreaterThan":
-                conditions.append(f"{quoted_col} > {val}")
+                conditions.append(f"{quoted_col} > %s")
             elif filter_type == "GreaterThanOrEqual":
-                conditions.append(f"{quoted_col} >= {val}")
+                conditions.append(f"{quoted_col} >= %s")
             elif filter_type == "LessThan":
-                conditions.append(f"{quoted_col} < {val}")
+                conditions.append(f"{quoted_col} < %s")
             elif filter_type == "LessThanOrEqual":
-                conditions.append(f"{quoted_col} <= {val}")
+                conditions.append(f"{quoted_col} <= %s")
+            else:
+                continue
+            params.append(f["value"])
 
-        return " AND ".join(conditions) if conditions else ""
+        return " AND ".join(conditions) if conditions else "", params
 
     def _quote_identifier(self, identifier):
         return '"' + identifier.replace('"', '""') + '"'
@@ -142,15 +149,6 @@ class PostgresDataSourceReader(DataSourceReader):
         """Quote a table reference, handling an optional 'schema.table' prefix."""
         parts = table.split(".", 1)
         return ".".join(self._quote_identifier(p) for p in parts)
-
-    def _format_value(self, value):
-        if isinstance(value, str):
-            return f"'{value.replace(chr(39), chr(39) + chr(39))}'"
-        if isinstance(value, bool):
-            return "TRUE" if value else "FALSE"
-        if value is None:
-            return "NULL"
-        return str(value)
 
 
 class PostgresDataSource(DataSource):
