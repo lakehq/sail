@@ -251,9 +251,11 @@ impl TableFormat for PythonTableFormat {
             .collect();
         options.push(mode_option);
 
-        // Create datasource and get writer
+        // Create datasource and get writer using the same executor configuration
+        // path as write execution for consistent Python datasource behavior.
         let datasource = self.create_datasource(&options)?;
-        let executor: Arc<dyn super::executor::PythonExecutor> = Arc::new(InProcessExecutor::new());
+        let executor: Arc<dyn super::executor::PythonExecutor> =
+            Arc::new(InProcessExecutor::from_app_config());
         let schema = input.schema();
 
         let writer_plan = executor

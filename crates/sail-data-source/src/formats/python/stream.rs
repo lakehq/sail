@@ -11,6 +11,8 @@ use datafusion_common::Result;
 use futures::Stream;
 use tokio::sync::mpsc;
 
+const MAX_NANOS_U64: u128 = u64::MAX as u128;
+
 /// RecordBatch stream from Python data source.
 ///
 /// This stream reads from a Python datasource in a dedicated thread,
@@ -160,7 +162,7 @@ impl PythonDataSourceStream {
             // Record GIL wait time (time from start to acquiring GIL)
             let gil_acquired = Instant::now();
             metrics.gil_wait_ns.fetch_add(
-                gil_wait_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+                gil_wait_start.elapsed().as_nanos().min(MAX_NANOS_U64) as u64,
                 Ordering::Relaxed,
             );
             metrics.gil_acquisitions.fetch_add(1, Ordering::Relaxed);

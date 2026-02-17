@@ -595,7 +595,9 @@ message PythonDataSourceExecNode {
 }
 
 message PythonDataSourceWriteExecNode {
-  // Pickled Python DataSourceWriter instance
+  // Pickled Python DataSourceWriter instance obtained from
+  // DataSource.writer(schema, overwrite), ready for write(), commit(),
+  // and abort() calls (stateless boundary matches write_exec.rs).
   bytes pickled_writer = 1;
   // Schema of the data being written
   bytes schema = 2;

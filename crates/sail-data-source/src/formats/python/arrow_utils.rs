@@ -361,7 +361,11 @@ fn extract_decimal128_value(
     // Convert to string with proper scale to avoid floating-point precision loss
     let decimal_str = if scale <= 0 {
         // No decimal point needed (or need to append zeros)
-        let factor = 10i128.pow((-scale) as u32);
+        let factor_scale = scale
+            .checked_neg()
+            .ok_or_else(|| DataFusionError::Execution("Decimal scale overflow".to_string()))?
+            as u32;
+        let factor = 10i128.pow(factor_scale);
         format!("{}", raw_value * factor)
     } else {
         let scale_u = scale as u32;

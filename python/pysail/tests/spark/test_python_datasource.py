@@ -7,6 +7,7 @@ including both Arrow RecordBatch and tuple-based paths.
 
 from collections.abc import Iterator
 from typing import Any
+from uuid import uuid4
 
 import pyarrow as pa
 import pytest
@@ -838,144 +839,142 @@ class TestFilterPushdown:
 # ============================================================================
 
 
-class InMemoryWriter(DataSourceWriter):
-    """Row-based writer for testing."""
+def _create_writable_test_datasource():
+    """Create a writable datasource class with per-test local commit state."""
+    datasource_name = f"writable_test_{uuid4().hex}"
 
-    def __init__(self, schema, overwrite):
-        self.schema = schema
-        self.overwrite = overwrite
-        self.data = []
-        self.committed = False
-        self.aborted = False
-        self.commit_messages = []
+    class InMemoryWriter(DataSourceWriter):
+        """Row-based writer for testing."""
 
-    def write(self, iterator):
-        """Write rows and return commit message."""
-        for row in iterator:
-            # Convert Row to dict for storage
-            self.data.append(dict(row.asDict()))
-        return {"partition_data": self.data, "count": len(self.data)}
+        def __init__(self, schema, overwrite):
+            self.schema = schema
+            self.overwrite = overwrite
+            self.data = []
+            self.committed = False
+            self.aborted = False
+            self.commit_messages = []
 
-    def commit(self, messages):
-        """Commit the write."""
-        self.committed = True
-        self.commit_messages = messages
-        # Store messages in a global for test verification
-        InMemoryWriter._last_commit_messages = messages
+        def write(self, iterator):
+            """Write rows and return commit message."""
+            for row in iterator:
+                # Convert Row to dict for storage
+                self.data.append(dict(row.asDict()))
+            return {"partition_data": self.data, "count": len(self.data)}
 
-    def abort(self, messages):
-        """Abort the write."""
-        self.aborted = True
-        self.commit_messages = messages
+        def commit(self, messages):
+            """Commit the write."""
+            self.committed = True
+            self.commit_messages = messages
+            WritableDataSource.row_commit_messages = messages
 
+        def abort(self, messages):
+            """Abort the write."""
+            self.aborted = True
+            self.commit_messages = messages
 
-# Global storage for commit messages
-InMemoryWriter._last_commit_messages = []  # noqa: SLF001
+    class InMemoryArrowWriter(DataSourceArrowWriter):
+        """Arrow-based writer for testing."""
 
+        def __init__(self, schema, overwrite):
+            self.schema = schema
+            self.overwrite = overwrite
+            self.batches = []
+            self.committed = False
+            self.aborted = False
+            self.commit_messages = []
 
-class InMemoryArrowWriter(DataSourceArrowWriter):
-    """Arrow-based writer for testing."""
+        def write(self, iterator):
+            """Write Arrow RecordBatches and return commit message."""
+            batch_count = 0
+            total_rows = 0
+            for batch in iterator:
+                self.batches.append(batch)
+                batch_count += 1
+                total_rows += batch.num_rows
+            return {"batch_count": batch_count, "total_rows": total_rows}
 
-    def __init__(self, schema, overwrite):
-        self.schema = schema
-        self.overwrite = overwrite
-        self.batches = []
-        self.committed = False
-        self.aborted = False
-        self.commit_messages = []
+        def commit(self, messages):
+            """Commit the write."""
+            self.committed = True
+            self.commit_messages = messages
+            WritableDataSource.arrow_commit_messages = messages
 
-    def write(self, iterator):
-        """Write Arrow RecordBatches and return commit message."""
-        batch_count = 0
-        total_rows = 0
-        for batch in iterator:
-            self.batches.append(batch)
-            batch_count += 1
-            total_rows += batch.num_rows
-        return {"batch_count": batch_count, "total_rows": total_rows}
+        def abort(self, messages):
+            """Abort the write."""
+            self.aborted = True
+            self.commit_messages = messages
 
-    def commit(self, messages):
-        """Commit the write."""
-        self.committed = True
-        self.commit_messages = messages
-        InMemoryArrowWriter._last_commit_messages = messages
+    class WritableDataSource(DataSource):
+        """DataSource that supports both reading and writing."""
+        row_commit_messages = None
+        arrow_commit_messages = None
 
-    def abort(self, messages):
-        """Abort the write."""
-        self.aborted = True
-        self.commit_messages = messages
+        def __init__(self, options):
+            self.options = options
+            self.writer_type = options.get("writer_type", "row")
 
+        @classmethod
+        def name(cls):
+            return datasource_name
 
-InMemoryArrowWriter._last_commit_messages = []  # noqa: SLF001
+        def schema(self):
+            return "id INT, value STRING"
 
+        def reader(self, schema):  # noqa: ARG002
+            # Simple reader for testing
+            class SimpleReader(DataSourceReader):
+                def partitions(self):
+                    return [InputPartition(0)]
 
-class WritableDataSource(DataSource):
-    """DataSource that supports both reading and writing."""
+                def read(self, partition):  # noqa: ARG002
+                    data = {"id": [1, 2, 3], "value": ["a", "b", "c"]}
+                    reader_schema = pa.schema([("id", pa.int32()), ("value", pa.string())])
+                    batch = pa.RecordBatch.from_pydict(data, schema=reader_schema)
+                    yield batch
 
-    def __init__(self, options):
-        self.options = options
-        self.writer_type = options.get("writer_type", "row")
+            return SimpleReader()
 
-    @classmethod
-    def name(cls):
-        return "writable_test"
+        def writer(self, schema, overwrite):
+            """Return writer based on configuration."""
+            if self.writer_type == "arrow":
+                return InMemoryArrowWriter(schema, overwrite)
+            return InMemoryWriter(schema, overwrite)
 
-    def schema(self):
-        return "id INT, value STRING"
-
-    def reader(self, schema):  # noqa: ARG002
-        # Simple reader for testing
-        class SimpleReader(DataSourceReader):
-            def partitions(self):
-                return [InputPartition(0)]
-
-            def read(self, partition):  # noqa: ARG002
-                data = {"id": [1, 2, 3], "value": ["a", "b", "c"]}
-                reader_schema = pa.schema([("id", pa.int32()), ("value", pa.string())])
-                batch = pa.RecordBatch.from_pydict(data, schema=reader_schema)
-                yield batch
-
-        return SimpleReader()
-
-    def writer(self, schema, overwrite):
-        """Return writer based on configuration."""
-        if self.writer_type == "arrow":
-            return InMemoryArrowWriter(schema, overwrite)
-        return InMemoryWriter(schema, overwrite)
+    return WritableDataSource, datasource_name
 
 
 def test_basic_write(spark):
     """Test basic Row-based write."""
-    # Reset global state to avoid cross-test contamination
-    InMemoryWriter._last_commit_messages = None  # noqa: SLF001
-    spark.dataSource.register(WritableDataSource)
+    writable_test_ds, datasource_name = _create_writable_test_datasource()
+    spark.dataSource.register(writable_test_ds)
 
     # Create test DataFrame
     df = spark.createDataFrame([(1, "a"), (2, "b"), (3, "c")], ["id", "value"])
 
     # Write data
-    df.write.format("writable_test").option("writer_type", "row").mode("append").save()
+    df.write.format(datasource_name).option("writer_type", "row").mode("append").save()
 
     # Verify commit was called
-    assert InMemoryWriter._last_commit_messages is not None  # noqa: SLF001
-    assert len(InMemoryWriter._last_commit_messages) > 0  # noqa: SLF001
+    row_messages = writable_test_ds.row_commit_messages
+    assert row_messages is not None
+    assert len(row_messages) > 0
 
 
 def test_arrow_write(spark):
     """Test Arrow-based write."""
-    # Reset global state to avoid cross-test contamination
-    InMemoryArrowWriter._last_commit_messages = None  # noqa: SLF001
-    spark.dataSource.register(WritableDataSource)
+    writable_test_ds, datasource_name = _create_writable_test_datasource()
+    spark.dataSource.register(writable_test_ds)
 
     # Create test DataFrame
     df = spark.createDataFrame([(1, "x"), (2, "y")], ["id", "value"])
 
     # Write data using Arrow writer
-    df.write.format("writable_test").option("writer_type", "arrow").mode("append").save()
+    df.write.format(datasource_name).option("writer_type", "arrow").mode("append").save()
 
     # Verify commit was called
-    assert InMemoryArrowWriter._last_commit_messages is not None  # noqa: SLF001
-    assert len(InMemoryArrowWriter._last_commit_messages) > 0  # noqa: SLF001
+    arrow_messages = writable_test_ds.arrow_commit_messages
+    assert arrow_messages is not None
+    assert len(arrow_messages) > 0
 
 
 def test_write_overwrite_mode(spark):
@@ -1101,18 +1100,18 @@ def test_write_commit(spark):
 
 def test_write_empty_dataframe(spark):
     """Test writing an empty DataFrame."""
-    # Reset global state to avoid cross-test contamination
-    InMemoryWriter._last_commit_messages = None  # noqa: SLF001
-    spark.dataSource.register(WritableDataSource)
+    writable_test_ds, datasource_name = _create_writable_test_datasource()
+    spark.dataSource.register(writable_test_ds)
 
     # Create empty DataFrame
     df = spark.createDataFrame([], "id INT, value STRING")
 
     # Write should succeed even with empty data
-    df.write.format("writable_test").option("writer_type", "row").save()
+    df.write.format(datasource_name).option("writer_type", "row").save()
 
     # Verify commit was called
-    assert InMemoryWriter._last_commit_messages is not None  # noqa: SLF001
+    row_messages = writable_test_ds.row_commit_messages
+    assert row_messages is not None
 
 
 def test_write_no_writer_implemented(spark):
@@ -1351,10 +1350,8 @@ def test_write_commit_failure_triggers_abort(spark):
 
 def test_write_null_values(spark):
     """Test writing data that contains null values."""
-    # Reset global state to avoid cross-test contamination
-    InMemoryWriter._last_commit_messages = None  # noqa: SLF001
-    InMemoryArrowWriter._last_commit_messages = None  # noqa: SLF001
-    spark.dataSource.register(WritableDataSource)
+    writable_test_ds, datasource_name = _create_writable_test_datasource()
+    spark.dataSource.register(writable_test_ds)
 
     # Create DataFrame with null values
     df = spark.createDataFrame(
@@ -1363,14 +1360,16 @@ def test_write_null_values(spark):
     )
 
     # Test row-based write with nulls
-    df.write.format("writable_test").option("writer_type", "row").mode("append").save()
-    assert InMemoryWriter._last_commit_messages is not None  # noqa: SLF001
-    assert len(InMemoryWriter._last_commit_messages) > 0  # noqa: SLF001
+    df.write.format(datasource_name).option("writer_type", "row").mode("append").save()
+    row_messages = writable_test_ds.row_commit_messages
+    assert row_messages is not None
+    assert len(row_messages) > 0
 
     # Test Arrow-based write with nulls
-    df.write.format("writable_test").option("writer_type", "arrow").mode("append").save()
-    assert InMemoryArrowWriter._last_commit_messages is not None  # noqa: SLF001
-    assert len(InMemoryArrowWriter._last_commit_messages) > 0  # noqa: SLF001
+    df.write.format(datasource_name).option("writer_type", "arrow").mode("append").save()
+    arrow_messages = writable_test_ds.arrow_commit_messages
+    assert arrow_messages is not None
+    assert len(arrow_messages) > 0
 
 
 def test_write_none_commit_message(spark):
