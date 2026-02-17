@@ -70,17 +70,12 @@ message TaskInputRemoteKeyList {
 message TaskOutput {
   oneof kind {
     TaskShuffleOutput shuffle = 1;
-    TaskCacheOutput cache = 2;
   }
 }
 
 message TaskShuffleOutput {
   TaskOutputDistribution distribution = 1;
   TaskOutputLocator locator = 2;
-}
-
-message TaskCacheOutput {
-  string cache_id = 1;
 }
 
 message TaskOutputDistribution {

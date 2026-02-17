@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
 use async_recursion::async_recursion;
-use datafusion::common::tree_node::Transformed;
-use datafusion::common::tree_node::TreeNode;
+use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::dataframe::DataFrame;
 use datafusion::physical_plan::{displayable, ExecutionPlan};
 use datafusion::prelude::SessionContext;
@@ -112,8 +111,7 @@ fn use_cached_data(cache: &CacheManager, plan: LogicalPlan) -> Result<LogicalPla
         let Some(cached) = cache.find_match(&node) else {
             return Ok(Transformed::no(node));
         };
-        let relation =
-            InMemoryRelationNode::new(cached.plan.schema().clone(), cached.cache_id.clone());
+        let relation = InMemoryRelationNode::new(cached.plan.schema().clone(), cached.cache_id);
         Ok(Transformed::yes(LogicalPlan::Extension(Extension {
             node: Arc::new(relation),
         })))

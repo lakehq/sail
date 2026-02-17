@@ -8,18 +8,18 @@ use sail_common_datafusion::utils::items::ItemTaker;
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct InMemoryRelationNode {
     schema: DFSchemaRef,
-    cache_id: String,
+    cache_id: u64,
 }
 
 impl InMemoryRelationNode {
     /// Creates a new InMemoryRelation node with the given schema and cache ID.
-    pub fn new(schema: DFSchemaRef, cache_id: String) -> Self {
+    pub fn new(schema: DFSchemaRef, cache_id: u64) -> Self {
         Self { schema, cache_id }
     }
 
     /// Returns the cache ID for this relation.
-    pub fn cache_id(&self) -> &str {
-        &self.cache_id
+    pub fn cache_id(&self) -> u64 {
+        self.cache_id
     }
 }
 

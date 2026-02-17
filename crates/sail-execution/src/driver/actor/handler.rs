@@ -180,23 +180,6 @@ impl DriverActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_execute_cache_job(
-        &mut self,
-        _ctx: &mut ActorContext<Self>,
-        _plan: Arc<dyn ExecutionPlan>,
-        _context: Arc<TaskContext>,
-        _cache_id: String,
-        result: oneshot::Sender<ExecutionResult<()>>,
-    ) -> ActorAction {
-        // TODO: Submit the plan as a cache materialization job via self.job_scheduler.
-        // The job scheduler should store the cache_id and use TaskOutput::Cache
-        // for the final stage's tasks so workers wrap with CacheWriteExec.
-        let _ = result.send(Err(crate::error::ExecutionError::InternalError(
-            "cache job execution not yet implemented".to_string(),
-        )));
-        ActorAction::Continue
-    }
-
     pub(super) fn handle_clean_up_job(
         &mut self,
         ctx: &mut ActorContext<Self>,

@@ -94,7 +94,7 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
             node.as_any().downcast_ref::<InMemoryRelationNode>()
         {
             Arc::new(CacheReadExec::new(
-                node.cache_id().to_string(),
+                node.cache_id(),
                 UserDefinedLogicalNode::schema(node).inner().clone(),
                 1,
             ))

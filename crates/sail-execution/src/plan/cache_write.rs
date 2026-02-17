@@ -20,8 +20,8 @@ use crate::local_cache_store::LocalCacheStore;
 /// Physical execution node that consumes a child plan's output and stores it in the worker-local cache.
 pub(crate) struct CacheWriteExec {
     plan: Arc<dyn ExecutionPlan>,
-    cache_store: Arc<LocalCacheStore>,
-    cache_id: String,
+    cache_store: Option<Arc<LocalCacheStore>>,
+    cache_id: u64,
     properties: PlanProperties,
 }
 
@@ -30,7 +30,7 @@ impl CacheWriteExec {
     pub fn new(
         plan: Arc<dyn ExecutionPlan>,
         cache_store: Arc<LocalCacheStore>,
-        cache_id: String,
+        cache_id: u64,
     ) -> Self {
         let properties = PlanProperties::new(
             EquivalenceProperties::new(Arc::new(Schema::empty())),
@@ -40,10 +40,36 @@ impl CacheWriteExec {
         );
         Self {
             plan,
-            cache_store,
+            cache_store: Some(cache_store),
             cache_id,
             properties,
         }
+    }
+
+    /// Creates a stub CacheWriteExec without a cache store, for serialization on the driver side.
+    pub fn new_stub(plan: Arc<dyn ExecutionPlan>, cache_id: u64) -> Self {
+        let properties = PlanProperties::new(
+            EquivalenceProperties::new(Arc::new(Schema::empty())),
+            Partitioning::UnknownPartitioning(plan.output_partitioning().partition_count()),
+            EmissionType::Final,
+            Boundedness::Bounded,
+        );
+        Self {
+            plan,
+            cache_store: None,
+            cache_id,
+            properties,
+        }
+    }
+
+    /// Sets the cache store on a stub CacheWriteExec after deserialization on a worker.
+    pub fn set_cache_store(&mut self, cache_store: Arc<LocalCacheStore>) {
+        self.cache_store = Some(cache_store);
+    }
+
+    /// Returns the cache ID for this node.
+    pub fn cache_id(&self) -> u64 {
+        self.cache_id
     }
 }
 
@@ -61,7 +87,7 @@ impl Clone for CacheWriteExec {
         Self {
             plan: self.plan.clone(),
             cache_store: self.cache_store.clone(),
-            cache_id: self.cache_id.clone(),
+            cache_id: self.cache_id,
             properties: self.properties.clone(),
         }
     }
@@ -96,11 +122,13 @@ impl ExecutionPlan for CacheWriteExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let child = children.pop();
         match (child, children.is_empty()) {
-            (Some(plan), true) => Ok(Arc::new(Self::new(
-                plan,
-                self.cache_store.clone(),
-                self.cache_id.clone(),
-            ))),
+            (Some(plan), true) => {
+                let mut node = Self::new_stub(plan, self.cache_id);
+                if let Some(store) = &self.cache_store {
+                    node.set_cache_store(store.clone());
+                }
+                Ok(Arc::new(node))
+            }
             _ => plan_err!("CacheWriteExec should have one child"),
         }
     }
@@ -110,9 +138,16 @@ impl ExecutionPlan for CacheWriteExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        let cache_store = match &self.cache_store {
+            Some(store) => store.clone(),
+            None => {
+                return plan_err!(
+                    "CacheWriteExec has no cache store; was it deserialized without injection?"
+                )
+            }
+        };
         let mut stream = self.plan.execute(partition, context)?;
-        let cache_store = self.cache_store.clone();
-        let cache_id = self.cache_id.clone();
+        let cache_id = self.cache_id;
         let schema = self.schema();
 
         let output = futures::stream::once(async move {
@@ -120,7 +155,7 @@ impl ExecutionPlan for CacheWriteExec {
             while let Some(batch) = stream.next().await {
                 batches.push(batch?);
             }
-            cache_store.store(&cache_id, partition, batches);
+            cache_store.store(cache_id, partition, batches);
             Ok(RecordBatch::new_empty(schema))
         });
 

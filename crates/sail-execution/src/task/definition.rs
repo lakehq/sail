@@ -51,13 +51,7 @@ pub struct TaskInputKey {
 }
 
 #[derive(Debug, Clone)]
-pub enum TaskOutput {
-    Shuffle(ShuffleOutput),
-    Cache { cache_id: String },
-}
-
-#[derive(Debug, Clone)]
-pub struct ShuffleOutput {
+pub struct TaskOutput {
     pub distribution: TaskOutputDistribution,
     pub locator: TaskOutputLocator,
 }
@@ -374,17 +368,10 @@ impl TryFrom<gen::TaskInputRemoteKeyList> for Vec<TaskInputKey> {
 
 impl From<TaskOutput> for gen::TaskOutput {
     fn from(value: TaskOutput) -> Self {
-        let kind = match value {
-            TaskOutput::Shuffle(shuffle) => {
-                gen::task_output::Kind::Shuffle(gen::TaskShuffleOutput {
-                    distribution: Some(shuffle.distribution.into()),
-                    locator: Some(shuffle.locator.into()),
-                })
-            }
-            TaskOutput::Cache { cache_id } => {
-                gen::task_output::Kind::Cache(gen::TaskCacheOutput { cache_id })
-            }
-        };
+        let kind = gen::task_output::Kind::Shuffle(gen::TaskShuffleOutput {
+            distribution: Some(value.distribution.into()),
+            locator: Some(value.locator.into()),
+        });
         gen::TaskOutput { kind: Some(kind) }
     }
 }
@@ -411,14 +398,11 @@ impl TryFrom<gen::TaskOutput> for TaskOutput {
                         ))
                     }
                 };
-                Ok(TaskOutput::Shuffle(ShuffleOutput {
+                Ok(TaskOutput {
                     distribution,
                     locator,
-                }))
+                })
             }
-            Some(gen::task_output::Kind::Cache(cache)) => Ok(TaskOutput::Cache {
-                cache_id: cache.cache_id,
-            }),
             None => Err(ExecutionError::InvalidArgument(
                 "cannot decode empty task output".to_string(),
             )),
@@ -564,7 +548,7 @@ impl TaskInput {
     }
 }
 
-impl ShuffleOutput {
+impl TaskOutput {
     pub fn channels(&self) -> usize {
         match self.distribution {
             TaskOutputDistribution::Hash { channels, .. } => channels,

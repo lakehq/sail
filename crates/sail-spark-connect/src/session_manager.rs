@@ -7,6 +7,7 @@ use datafusion::execution::SessionStateBuilder;
 use datafusion::prelude::SessionConfig;
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
+use sail_common_datafusion::cache_manager::CacheManager;
 use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_plan::catalog::SparkCatalogObjectDisplay;
@@ -16,8 +17,6 @@ use sail_session::session_factory::{
     ServerSessionFactory, ServerSessionInfo, ServerSessionMutator, SessionFactory,
 };
 use sail_session::session_manager::{SessionManager, SessionManagerOptions};
-
-use sail_common_datafusion::cache_manager::CacheManager;
 
 use crate::error::SparkResult;
 use crate::session::{SparkSession, SparkSessionOptions};
