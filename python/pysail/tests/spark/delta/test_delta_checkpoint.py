@@ -32,9 +32,9 @@ def test_delta_checkpoint_created_and_metrics_exposed(spark, tmp_path: Path):
     assert log_dir.exists(), f"missing delta log dir: {log_dir}"
 
     # We should always create a checkpoint at v0 (0 % interval == 0).
-    assert list(
-        log_dir.glob(f"{0:020}.checkpoint*.parquet")
-    ), f"expected v0 checkpoint parquet in {log_dir}, found none"
+    assert list(log_dir.glob(f"{0:020}.checkpoint*.parquet")), (
+        f"expected v0 checkpoint parquet in {log_dir}, found none"
+    )
 
     last_checkpoint_file = log_dir / "_last_checkpoint"
     assert last_checkpoint_file.exists(), f"missing _last_checkpoint: {last_checkpoint_file}"

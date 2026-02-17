@@ -372,9 +372,9 @@ class TestDeltaPartitionPruning:
         filtered_df = spark.read.format("delta").load(delta_table_path).filter("year = 2022 AND month = 6")
         result_count = filtered_df.count()
         expected_count = 2 * 10  # 2 days * 10 records
-        assert (
-            result_count == expected_count
-        ), f"Expected {expected_count} rows for year=2022 AND month=6, got {result_count}"
+        assert result_count == expected_count, (
+            f"Expected {expected_count} rows for year=2022 AND month=6, got {result_count}"
+        )
 
         filtered_df = spark.read.format("delta").load(delta_table_path).filter("year = 2021 AND month = 3 AND day = 15")
         result_count = filtered_df.count()
@@ -497,9 +497,9 @@ class TestDeltaPartitionPruning:
         filtered_df = spark.read.format("delta").load(delta_table_path).filter(filter_str)
         actual_count = filtered_df.count()
 
-        assert (
-            actual_count == expected_count
-        ), f"Filter '{filter_str}': expected {expected_count} records, got {actual_count}"
+        assert actual_count == expected_count, (
+            f"Filter '{filter_str}': expected {expected_count} records, got {actual_count}"
+        )
 
     @pytest.mark.parametrize(
         ("filter_condition", "expected_count", "description"),

@@ -168,9 +168,9 @@ def csv_files_first_line_is(location_var: str, expected_line: str, variables: di
     with open(first_file, encoding="utf-8") as f:
         actual_first_line = f.readline().rstrip("\n\r")
 
-    assert (
-        actual_first_line == expected_line
-    ), f"CSV file {first_file} first line is {actual_first_line!r}, expected {expected_line!r}"
+    assert actual_first_line == expected_line, (
+        f"CSV file {first_file} first line is {actual_first_line!r}, expected {expected_line!r}"
+    )
 
 
 @then(parsers.parse("subdirectories in {location_var} count is {n:d}"))
@@ -182,6 +182,6 @@ def subdirectories_count_is(location_var: str, n: int, variables: dict) -> None:
     assert real_path.exists(), f"Directory {real_path} does not exist"
 
     subdirs = [p for p in real_path.iterdir() if p.is_dir() and not p.name.startswith(".")]
-    assert (
-        len(subdirs) == n
-    ), f"Expected {n} subdirectories under {real_path}, got {len(subdirs)}: {[d.name for d in subdirs]}"
+    assert len(subdirs) == n, (
+        f"Expected {n} subdirectories under {real_path}, got {len(subdirs)}: {[d.name for d in subdirs]}"
+    )
