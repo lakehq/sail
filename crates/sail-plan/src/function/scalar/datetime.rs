@@ -479,9 +479,7 @@ fn make_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
 }
 
 fn make_timestamp_ntz(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    if input.arguments.len() == 2 {
-        Ok(ScalarUDF::from(SparkMakeTimestampNtz::new()).call(input.arguments))
-    } else if input.arguments.len() == 6 {
+    if input.arguments.len() == 2 || input.arguments.len() == 6 {
         Ok(ScalarUDF::from(SparkMakeTimestampNtz::new()).call(input.arguments))
     } else {
         Err(PlanError::invalid(format!(
@@ -539,9 +537,7 @@ fn try_make_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
 }
 
 fn try_make_timestamp_ntz(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    if input.arguments.len() == 2 {
-        Ok(ScalarUDF::from(SparkTryMakeTimestampNtz::new()).call(input.arguments))
-    } else if input.arguments.len() == 6 {
+    if input.arguments.len() == 2 || input.arguments.len() == 6 {
         Ok(ScalarUDF::from(SparkTryMakeTimestampNtz::new()).call(input.arguments))
     } else {
         Err(PlanError::invalid(format!(

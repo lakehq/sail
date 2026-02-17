@@ -306,7 +306,7 @@ pub(crate) fn make_timestamp_ntz(
     //   seconds = floorDiv(unscaledSecFrac, 1_000_000)
     //   nanos = floorMod(unscaledSecFrac, 1_000_000) * 1000
     let micros_total = (sec * 1_000_000.0).round() as i64;
-    let seconds = (micros_total / 1_000_000) as i64;
+    let seconds = micros_total / 1_000_000;
     let micro_frac = (micros_total % 1_000_000) as u32;
 
     if seconds == 60 {
