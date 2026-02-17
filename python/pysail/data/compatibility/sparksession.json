@@ -17,14 +17,13 @@
   {
     "module": "pyspark.sql.session.SparkSession",
     "function": "readStream",
-    "status": "planned",
-    "ref": "???"
+    "status": "planned"
   },
   {
     "module": "pyspark.sql.session.SparkSession",
     "function": "sparkContext",
     "status": "not supported",
-    "note": "not supported in in Spark Connect in general"
+    "note": "This is not supported in Spark Connect in general."
   },
   {
     "module": "pyspark.sql.session.SparkSession",
