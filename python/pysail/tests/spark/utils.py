@@ -183,9 +183,9 @@ def assert_file_count_in_partitions(path: str, expected_files_per_partition: int
     for partition in partitions:
         partition_path = os.path.join(str(path), partition)
         parquet_files = [f for f in os.listdir(partition_path) if f.endswith(".parquet")]
-        assert len(parquet_files) == expected_files_per_partition, (
-            f"Expected {expected_files_per_partition} parquet file(s) in {partition}, got {len(parquet_files)}"
-        )
+        assert (
+            len(parquet_files) == expected_files_per_partition
+        ), f"Expected {expected_files_per_partition} parquet file(s) in {partition}, got {len(parquet_files)}"
 
 
 def assert_file_lifecycle(files_before: set[str], files_after: set[str], operation: str):

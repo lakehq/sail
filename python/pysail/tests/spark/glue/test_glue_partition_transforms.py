@@ -81,9 +81,9 @@ def test_glue_partition_transform_time_based(
         spec = table.spec()
 
         assert len(spec.fields) == 1, f"Expected 1 partition field, got {len(spec.fields)}"
-        assert isinstance(spec.fields[0].transform, expected_transform_type), (
-            f"Expected {expected_transform_type.__name__}, got {type(spec.fields[0].transform).__name__}"
-        )
+        assert isinstance(
+            spec.fields[0].transform, expected_transform_type
+        ), f"Expected {expected_transform_type.__name__}, got {type(spec.fields[0].transform).__name__}"
 
         # Verify data can be read back via table name
         result = glue_spark.table(f"test_db.{table_name}").select("id").orderBy("id").collect()
@@ -123,9 +123,9 @@ def test_glue_partition_transform_bucket(glue_spark, moto_endpoint):
         spec = table.spec()
 
         assert len(spec.fields) == 1, f"Expected 1 partition field, got {len(spec.fields)}"
-        assert isinstance(spec.fields[0].transform, BucketTransform), (
-            f"Expected BucketTransform, got {type(spec.fields[0].transform).__name__}"
-        )
+        assert isinstance(
+            spec.fields[0].transform, BucketTransform
+        ), f"Expected BucketTransform, got {type(spec.fields[0].transform).__name__}"
         assert spec.fields[0].transform.num_buckets == num_buckets
 
         # Verify data can be read back via table name

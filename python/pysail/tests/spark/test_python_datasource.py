@@ -906,6 +906,7 @@ def _create_writable_test_datasource():
 
     class WritableDataSource(DataSource):
         """DataSource that supports both reading and writing."""
+
         row_commit_messages = None
         arrow_commit_messages = None
 
