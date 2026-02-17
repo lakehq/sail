@@ -24,7 +24,7 @@ docker compose --profile datasources up -d
 hatch run maturin develop --extras postgres
 
 # 3. Run tests
-hatch run python python/pysail/datasources/postgres/test_postgres_datasource.py
+hatch run python python/pysail/tests/datasources/postgres/manual_test_postgres.py
 ```
 
 The PostgreSQL container includes sample test data (users, products, orders tables) loaded from `init.sql`.
@@ -89,6 +89,7 @@ df.filter("age > 25").show()
 | `table` | Yes | | Table to read |
 | `host` | No | `localhost` | Server hostname |
 | `port` | No | `5432` | Server port |
-| `numPartitions` | No | `1` | Number of parallel readers |
+| `tableSchema` | No | `public` | PostgreSQL schema containing the table |
+| `numPartitions` | No | `1` | Number of parallel readers (must be ≥ 1) |
 | `partitionColumn` | No | | Column for partitioning (required when `numPartitions > 1`) |
-| `batchSize` | No | `8192` | Number of rows to fetch per batch |
+| `batchSize` | No | `8192` | Number of rows to fetch per batch (must be ≥ 1) |

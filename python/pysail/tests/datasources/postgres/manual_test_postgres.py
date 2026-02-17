@@ -7,7 +7,7 @@ Prerequisites:
 1. Start PostgreSQL: docker compose --profile datasources up -d
 2. Build pysail: hatch run maturin develop --extras postgres
 3. Start Sail server: sail spark server --port 50051
-4. Run tests: hatch run python python/pysail/datasources/postgres/test_postgres_datasource.py
+4. Run tests: hatch run python python/pysail/tests/datasources/postgres/manual_test_postgres.py
 """
 
 import logging
@@ -290,8 +290,8 @@ def test_null_values_handling(spark):
 
 
 def test_filter_null_values(spark):
-    """Test 15 (HIGH): Filtering with NULL comparisons."""
-    logger.info("\n=== Test 15: NULL Value Filtering ===")
+    """Test 10 (HIGH): Filtering with NULL comparisons."""
+    logger.info("\n=== Test 10: NULL Value Filtering ===")
 
     spark.dataSource.register(PostgresDataSource)
 
@@ -311,7 +311,7 @@ def test_filter_null_values(spark):
     logger.info("Rows matching 'age IS NULL': %s", len(result))
     assert len(result) >= 1
 
-    logger.info("✓ Test 15 passed")
+    logger.info("✓ Test 10 passed")
 
 
 def test_empty_table(spark):
@@ -343,7 +343,7 @@ def test_empty_table(spark):
 
 
 def test_large_dataset(spark):
-    """Test 12 (HIGH): Reading large dataset (15K rows)."""
+    """Test 12 (HIGH): Reading large dataset (10K rows)."""
     logger.info("\n=== Test 12: Large Dataset (10K rows) ===")
 
     spark.dataSource.register(PostgresDataSource)
@@ -729,6 +729,157 @@ def test_connection_cleanup(spark):
     logger.info("✓ Test 20 passed")
 
 
+def test_invalid_batch_size(spark):
+    """Test 21 (HIGH): Invalid batchSize values are rejected with a clear error."""
+    logger.info("\n=== Test 21: Invalid batchSize Validation ===")
+
+    spark.dataSource.register(PostgresDataSource)
+
+    for bad_value in ["0", "-1", "-100"]:
+        try:
+            df = (
+                spark.read.format("postgres")
+                .options(
+                    host="localhost",
+                    port="5432",
+                    database="testdb",
+                    user="testuser",
+                    password="testpass",
+                    table="users",
+                    batchSize=bad_value,
+                )
+                .load()
+            )
+            df.count()
+            msg = f"Should have raised an error for batchSize={bad_value}"
+            raise AssertionError(msg)  # noqa: TRY301
+        except AssertionError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            assert "batchSize" in str(e), f"Expected 'batchSize' in error, got: {e}"  # noqa: PT017
+            logger.info("  batchSize=%s correctly rejected: %s", bad_value, type(e).__name__)
+
+    logger.info("✓ Test 21 passed")
+
+
+def test_invalid_num_partitions(spark):
+    """Test 22 (HIGH): Invalid numPartitions values are rejected with a clear error."""
+    logger.info("\n=== Test 22: Invalid numPartitions Validation ===")
+
+    spark.dataSource.register(PostgresDataSource)
+
+    for bad_value in ["0", "-1"]:
+        try:
+            df = (
+                spark.read.format("postgres")
+                .options(
+                    host="localhost",
+                    port="5432",
+                    database="testdb",
+                    user="testuser",
+                    password="testpass",
+                    table="users",
+                    numPartitions=bad_value,
+                    partitionColumn="id",
+                )
+                .load()
+            )
+            df.count()
+            msg = f"Should have raised an error for numPartitions={bad_value}"
+            raise AssertionError(msg)  # noqa: TRY301
+        except AssertionError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            assert "numPartitions" in str(e), f"Expected 'numPartitions' in error, got: {e}"  # noqa: PT017
+            logger.info("  numPartitions=%s correctly rejected: %s", bad_value, type(e).__name__)
+
+    logger.info("✓ Test 22 passed")
+
+
+def test_batch_size_option(spark):
+    """Test 23 (MEDIUM): Custom batchSize returns correct row count regardless of fetch size."""
+    logger.info("\n=== Test 23: Custom batchSize ===")
+
+    spark.dataSource.register(PostgresDataSource)
+
+    for batch_size in ["1", "100", "500", "8192", "20000"]:
+        df = (
+            spark.read.format("postgres")
+            .options(
+                host="localhost",
+                port="5432",
+                database="testdb",
+                user="testuser",
+                password="testpass",
+                table="large_table",
+                batchSize=batch_size,
+            )
+            .load()
+        )
+        count = df.count()
+        assert count == 10000, f"batchSize={batch_size}: expected 10000 rows, got {count}"
+        logger.info("  batchSize=%-6s -> %s rows ✓", batch_size, count)
+
+    logger.info("✓ Test 23 passed")
+
+
+def test_table_schema_option(spark):
+    """Test 24 (HIGH): tableSchema option reads from the correct PostgreSQL schema."""
+    logger.info("\n=== Test 24: tableSchema Option ===")
+
+    spark.dataSource.register(PostgresDataSource)
+
+    # Read from a non-public schema
+    df = (
+        spark.read.format("postgres")
+        .options(
+            host="localhost",
+            port="5432",
+            database="testdb",
+            user="testuser",
+            password="testpass",
+            table="schema_table",
+            tableSchema="test_schema",
+        )
+        .load()
+    )
+
+    count = df.count()
+    logger.info("Rows in test_schema.schema_table: %s", count)
+    assert count == 3, f"Expected 3 rows from test_schema, got {count}"
+
+    rows = df.collect()
+    values = {r.value for r in rows}
+    assert values == {"row_from_test_schema_1", "row_from_test_schema_2", "row_from_test_schema_3"}
+    logger.info("Values: %s", sorted(values))
+
+    # Verify a same-named table in public schema is NOT returned
+    # (there is no 'schema_table' in public, so it should raise "table not found")
+    try:
+        df_wrong = (
+            spark.read.format("postgres")
+            .options(
+                host="localhost",
+                port="5432",
+                database="testdb",
+                user="testuser",
+                password="testpass",
+                table="schema_table",
+                tableSchema="public",
+            )
+            .load()
+        )
+        df_wrong.count()
+        msg = "Expected table-not-found error for schema_table in public schema"
+        raise AssertionError(msg)  # noqa: TRY301
+    except AssertionError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        logger.info("  public.schema_table correctly not found: %s", type(e).__name__)
+
+    logger.info("✓ Test 24 passed")
+
+
 def main():
     """Run all tests."""
     logger.info("=" * 60)
@@ -765,14 +916,20 @@ def main():
         test_concurrent_readers(spark)
         test_connection_cleanup(spark)
 
+        # Validation and schema tests
+        test_invalid_batch_size(spark)
+        test_invalid_num_partitions(spark)
+        test_batch_size_option(spark)
+        test_table_schema_option(spark)
+
         logger.info("\n%s", "=" * 60)
         logger.info("✓ All tests passed!")
         logger.info("%s", "=" * 60)
         logger.info("\nTest Summary:")
         logger.info("  - Original tests: 6")
-        logger.info("  - HIGH priority: 8")
-        logger.info("  - MEDIUM priority: 6")
-        logger.info("  - Total: 20 tests")
+        logger.info("  - HIGH priority: 10")
+        logger.info("  - MEDIUM priority: 7")
+        logger.info("  - Total: 24 tests")
 
     except Exception:
         logger.exception("✗ Test failed with error")

@@ -156,3 +156,18 @@ INSERT INTO special_chars (name, description) VALUES
 Break', 'Text with newline'),
     ('Tab	Test', 'Text with tab'),
     ('Backslash\Test', 'Text with backslash');
+
+-- Create a non-public schema for schema isolation testing
+CREATE SCHEMA test_schema;
+GRANT USAGE ON SCHEMA test_schema TO testuser;
+
+CREATE TABLE test_schema.schema_table (
+    id SERIAL PRIMARY KEY,
+    value TEXT
+);
+GRANT SELECT ON test_schema.schema_table TO testuser;
+
+INSERT INTO test_schema.schema_table (value) VALUES
+    ('row_from_test_schema_1'),
+    ('row_from_test_schema_2'),
+    ('row_from_test_schema_3');

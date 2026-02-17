@@ -50,19 +50,21 @@ class PostgresDataSourceReader(DataSourceReader):
 
     def partitions(self):
         where_clause = self._build_where_clause()
+        table = self._quote_table_reference(self.table)
         if self.num_partitions == 1 or not self.partition_column:
-            query = f"SELECT * FROM {self.table}"  # noqa: S608
+            query = f"SELECT * FROM {table}"  # noqa: S608
             if where_clause:
                 query += f" WHERE {where_clause}"
             return [PostgresInputPartition(0, query, self.connection_params)]
 
+        partition_column = self._quote_identifier(self.partition_column)  # column name only, never schema-qualified
         partitions = []
         for i in range(self.num_partitions):
-            query = f"SELECT * FROM {self.table}"  # noqa: S608
+            query = f"SELECT * FROM {table}"  # noqa: S608
             conditions = []
             if where_clause:
                 conditions.append(where_clause)
-            conditions.append(f"MOD({self.partition_column}, {self.num_partitions}) = {i}")
+            conditions.append(f"MOD({partition_column}, {self.num_partitions}) = {i}")
             query += f" WHERE {' AND '.join(conditions)}"
             partitions.append(PostgresInputPartition(i, query, self.connection_params))
         return partitions
@@ -71,40 +73,42 @@ class PostgresDataSourceReader(DataSourceReader):
         import psycopg2
 
         conn = psycopg2.connect(**partition.connection_params)
-        cursor = conn.cursor()
         try:
-            cursor.execute(partition.query)
-            columns = [desc[0] for desc in cursor.description]
+            cursor = conn.cursor()
+            try:
+                cursor.execute(partition.query)
+                columns = [desc[0] for desc in cursor.description]
 
-            while True:
-                rows = cursor.fetchmany(self.batch_size)
-                if not rows:
-                    break
+                while True:
+                    rows = cursor.fetchmany(self.batch_size)
+                    if not rows:
+                        break
 
-                # Build arrays with explicit types from schema
-                arrays = []
-                for i, col in enumerate(columns):
-                    col_data = [row[i] for row in rows]
-                    field = self.schema.field(col)
+                    # Build arrays with explicit types from schema
+                    arrays = []
+                    for i, col in enumerate(columns):
+                        col_data = [row[i] for row in rows]
+                        field = self.schema.field(col)
 
-                    # Convert data types that PyArrow can't handle directly
-                    converted_data = []
-                    for val in col_data:
-                        if val is None:
-                            converted_data.append(None)
-                        elif pa.types.is_string(field.type):
-                            # Convert to string for string fields (handles Decimal, UUID, etc.)
-                            converted_data.append(str(val) if val is not None else None)
-                        else:
-                            converted_data.append(val)
+                        # Convert data types that PyArrow can't handle directly
+                        converted_data = []
+                        for val in col_data:
+                            if val is None:
+                                converted_data.append(None)
+                            elif pa.types.is_string(field.type):
+                                # Convert to string for string fields (handles Decimal, UUID, etc.)
+                                converted_data.append(str(val))
+                            else:
+                                converted_data.append(val)
 
-                    # Create array with explicit type to ensure correct type conversion
-                    arrays.append(pa.array(converted_data, type=field.type))
+                        # Create array with explicit type to ensure correct type conversion
+                        arrays.append(pa.array(converted_data, type=field.type))
 
-                # Create RecordBatch from arrays with schema
-                yield pa.RecordBatch.from_arrays(arrays, schema=self.schema)
+                    # Create RecordBatch from arrays with schema
+                    yield pa.RecordBatch.from_arrays(arrays, schema=self.schema)
+            finally:
+                cursor.close()
         finally:
-            cursor.close()
             conn.close()
 
     def _build_where_clause(self):
@@ -115,20 +119,29 @@ class PostgresDataSourceReader(DataSourceReader):
                 continue
 
             filter_type = f["type"]
+            quoted_col = self._quote_identifier(col)
             val = self._format_value(f["value"])
 
             if filter_type == "EqualTo":
-                conditions.append(f"{col} = {val}")
+                conditions.append(f"{quoted_col} = {val}")
             elif filter_type == "GreaterThan":
-                conditions.append(f"{col} > {val}")
+                conditions.append(f"{quoted_col} > {val}")
             elif filter_type == "GreaterThanOrEqual":
-                conditions.append(f"{col} >= {val}")
+                conditions.append(f"{quoted_col} >= {val}")
             elif filter_type == "LessThan":
-                conditions.append(f"{col} < {val}")
+                conditions.append(f"{quoted_col} < {val}")
             elif filter_type == "LessThanOrEqual":
-                conditions.append(f"{col} <= {val}")
+                conditions.append(f"{quoted_col} <= {val}")
 
         return " AND ".join(conditions) if conditions else ""
+
+    def _quote_identifier(self, identifier):
+        return '"' + identifier.replace('"', '""') + '"'
+
+    def _quote_table_reference(self, table):
+        """Quote a table reference, handling an optional 'schema.table' prefix."""
+        parts = table.split(".", 1)
+        return ".".join(self._quote_identifier(p) for p in parts)
 
     def _format_value(self, value):
         if isinstance(value, str):
@@ -150,45 +163,58 @@ class PostgresDataSource(DataSource):
 
         conn_params = self._get_connection_params()
         table = self.options.get("table")
+        table_schema = self.options.get("tableSchema", "public")
         if not table:
             msg = "table option is required"
             raise ValueError(msg)
 
         conn = psycopg2.connect(**conn_params)
-        cursor = conn.cursor()
         try:
-            cursor.execute(
-                """
-                SELECT column_name, data_type
-                FROM information_schema.columns
-                WHERE table_name = %s
-                ORDER BY ordinal_position
-            """,
-                (table,),
-            )
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    """
+                    SELECT column_name, data_type
+                    FROM information_schema.columns
+                    WHERE table_name = %s AND table_schema = %s
+                    ORDER BY ordinal_position
+                """,
+                    (table, table_schema),
+                )
 
-            fields = []
-            for col_name, data_type in cursor.fetchall():
-                arrow_type = self._pg_to_arrow(data_type)
-                fields.append((col_name, arrow_type))
+                fields = []
+                for col_name, data_type in cursor.fetchall():
+                    arrow_type = self._pg_to_arrow(data_type)
+                    fields.append((col_name, arrow_type))
 
-            if not fields:
-                msg = f"Table '{table}' not found"
-                raise ValueError(msg)
-            return pa.schema(fields)
+                if not fields:
+                    msg = f"Table '{table}' not found"
+                    raise ValueError(msg)
+                return pa.schema(fields)
+            finally:
+                cursor.close()
         finally:
-            cursor.close()
             conn.close()
 
     def reader(self, schema):
         conn_params = self._get_connection_params()
         table = self.options.get("table")
+        table_schema = self.options.get("tableSchema", "public")
         num_partitions = int(self.options.get("numPartitions", "1"))
         partition_column = self.options.get("partitionColumn")
         batch_size = int(self.options.get("batchSize", "8192"))
 
-        # Pass the schema to the reader for proper type conversion
-        return PostgresDataSourceReader(conn_params, table, num_partitions, partition_column, schema, batch_size)
+        if num_partitions < 1:
+            msg = "numPartitions must be a positive integer"
+            raise ValueError(msg)
+        if batch_size < 1:
+            msg = "batchSize must be a positive integer"
+            raise ValueError(msg)
+
+        qualified_table = f"{table_schema}.{table}"
+        return PostgresDataSourceReader(
+            conn_params, qualified_table, num_partitions, partition_column, schema, batch_size
+        )
 
     def _get_connection_params(self):
         database = self.options.get("database")
