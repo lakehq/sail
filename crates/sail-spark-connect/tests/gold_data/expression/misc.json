@@ -70,12 +70,10 @@
               }
             },
             "extraction": {
-              "unresolvedAttribute": {
-                "name": [
-                  "b"
-                ],
-                "planId": null,
-                "isMetadataColumn": false
+              "literal": {
+                "utf8": {
+                  "value": "b"
+                }
               }
             }
           }
@@ -4395,12 +4393,10 @@
               }
             },
             "extraction": {
-              "unresolvedAttribute": {
-                "name": [
-                  "b"
-                ],
-                "planId": null,
-                "isMetadataColumn": false
+              "literal": {
+                "utf8": {
+                  "value": "b"
+                }
               }
             }
           }
