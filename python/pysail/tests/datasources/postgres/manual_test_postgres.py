@@ -15,7 +15,7 @@ import sys
 
 from pyspark.sql import SparkSession
 
-from pysail.datasources.postgres.datasource import PostgresDataSource
+from pysail.datasources.postgres.datasource import PostgresDataSource, PostgresDataSourceReader
 
 # Configure logging
 logging.basicConfig(
@@ -25,6 +25,9 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+_URL = "jdbc:postgresql://localhost:5432/testdb"
+_CREDS = {"user": "testuser", "password": "testpass"}
+
 
 def test_basic_read(spark):
     """Test 1: Basic read from PostgreSQL table."""
@@ -32,11 +35,7 @@ def test_basic_read(spark):
 
     spark.dataSource.register(PostgresDataSource)
 
-    df = (
-        spark.read.format("postgres")
-        .options(host="localhost", port="5432", database="testdb", user="testuser", password="testpass", table="users")
-        .load()
-    )
+    df = spark.read.format("postgres").options(url=_URL, **_CREDS, dbtable="users").load()
 
     logger.info("Schema:")
     df.printSchema()
@@ -56,11 +55,7 @@ def test_filter_pushdown(spark):
 
     spark.dataSource.register(PostgresDataSource)
 
-    df = (
-        spark.read.format("postgres")
-        .options(host="localhost", port="5432", database="testdb", user="testuser", password="testpass", table="users")
-        .load()
-    )
+    df = spark.read.format("postgres").options(url=_URL, **_CREDS, dbtable="users").load()
 
     # Test equality filter
     filtered = df.filter("age = 28").collect()
@@ -86,11 +81,7 @@ def test_projection(spark):
 
     spark.dataSource.register(PostgresDataSource)
 
-    df = (
-        spark.read.format("postgres")
-        .options(host="localhost", port="5432", database="testdb", user="testuser", password="testpass", table="users")
-        .load()
-    )
+    df = spark.read.format("postgres").options(url=_URL, **_CREDS, dbtable="users").load()
 
     # Select specific columns
     result = df.select("name", "email").collect()
@@ -110,12 +101,9 @@ def test_partitioned_read(spark):
     df = (
         spark.read.format("postgres")
         .options(
-            host="localhost",
-            port="5432",
-            database="testdb",
-            user="testuser",
-            password="testpass",
-            table="users",
+            url=_URL,
+            **_CREDS,
+            dbtable="users",
             numPartitions="4",
             partitionColumn="id",
         )
@@ -135,13 +123,7 @@ def test_products_table(spark):
 
     spark.dataSource.register(PostgresDataSource)
 
-    df = (
-        spark.read.format("postgres")
-        .options(
-            host="localhost", port="5432", database="testdb", user="testuser", password="testpass", table="products"
-        )
-        .load()
-    )
+    df = spark.read.format("postgres").options(url=_URL, **_CREDS, dbtable="products").load()
 
     logger.info("Products schema:")
     df.printSchema()
@@ -170,11 +152,7 @@ def test_sql_queries(spark):
     spark.dataSource.register(PostgresDataSource)
 
     # Create a temporary view
-    df = (
-        spark.read.format("postgres")
-        .options(host="localhost", port="5432", database="testdb", user="testuser", password="testpass", table="users")
-        .load()
-    )
+    df = spark.read.format("postgres").options(url=_URL, **_CREDS, dbtable="users").load()
 
     df.createOrReplaceTempView("users_view")
 
@@ -208,9 +186,7 @@ def test_error_invalid_credentials(spark):
     try:
         df = (
             spark.read.format("postgres")
-            .options(
-                host="localhost", port="5432", database="testdb", user="wronguser", password="wrongpass", table="users"
-            )
+            .options(url=_URL, user="wronguser", password="wrongpass", dbtable="users")
             .load()
         )
         df.count()
@@ -236,12 +212,9 @@ def test_error_nonexistent_table(spark):
         df = (
             spark.read.format("postgres")
             .options(
-                host="localhost",
-                port="5432",
-                database="testdb",
-                user="testuser",
-                password="testpass",
-                table="nonexistent_table_12345",
+                url=_URL,
+                **_CREDS,
+                dbtable="nonexistent_table_12345",
             )
             .load()
         )
@@ -264,11 +237,7 @@ def test_null_values_handling(spark):
 
     spark.dataSource.register(PostgresDataSource)
 
-    df = (
-        spark.read.format("postgres")
-        .options(host="localhost", port="5432", database="testdb", user="testuser", password="testpass", table="users")
-        .load()
-    )
+    df = spark.read.format("postgres").options(url=_URL, **_CREDS, dbtable="users").load()
 
     # Test IS NULL filter
     null_ages = df.filter("age IS NULL").collect()
@@ -295,11 +264,7 @@ def test_filter_null_values(spark):
 
     spark.dataSource.register(PostgresDataSource)
 
-    df = (
-        spark.read.format("postgres")
-        .options(host="localhost", port="5432", database="testdb", user="testuser", password="testpass", table="users")
-        .load()
-    )
+    df = spark.read.format("postgres").options(url=_URL, **_CREDS, dbtable="users").load()
 
     # NULL values should not match equality
     result = df.filter("age = NULL").collect()
@@ -320,13 +285,7 @@ def test_empty_table(spark):
 
     spark.dataSource.register(PostgresDataSource)
 
-    df = (
-        spark.read.format("postgres")
-        .options(
-            host="localhost", port="5432", database="testdb", user="testuser", password="testpass", table="empty_table"
-        )
-        .load()
-    )
+    df = spark.read.format("postgres").options(url=_URL, **_CREDS, dbtable="empty_table").load()
 
     logger.info("Schema of empty table:")
     df.printSchema()
@@ -348,13 +307,7 @@ def test_large_dataset(spark):
 
     spark.dataSource.register(PostgresDataSource)
 
-    df = (
-        spark.read.format("postgres")
-        .options(
-            host="localhost", port="5432", database="testdb", user="testuser", password="testpass", table="large_table"
-        )
-        .load()
-    )
+    df = spark.read.format("postgres").options(url=_URL, **_CREDS, dbtable="large_table").load()
 
     count = df.count()
     logger.info("Total rows in large_table: %s", count)
@@ -379,11 +332,7 @@ def test_unicode_strings(spark):
 
     spark.dataSource.register(PostgresDataSource)
 
-    df = (
-        spark.read.format("postgres")
-        .options(host="localhost", port="5432", database="testdb", user="testuser", password="testpass", table="users")
-        .load()
-    )
+    df = spark.read.format("postgres").options(url=_URL, **_CREDS, dbtable="users").load()
 
     # Find Chinese name
     chinese = df.filter("name = '张伟'").collect()
@@ -418,18 +367,7 @@ def test_sql_injection_protection(spark):
 
     spark.dataSource.register(PostgresDataSource)
 
-    df = (
-        spark.read.format("postgres")
-        .options(
-            host="localhost",
-            port="5432",
-            database="testdb",
-            user="testuser",
-            password="testpass",
-            table="special_chars",
-        )
-        .load()
-    )
+    df = spark.read.format("postgres").options(url=_URL, **_CREDS, dbtable="special_chars").load()
 
     # Test reading data with apostrophes
     apostrophe = df.filter("name LIKE '%Reilly%'").collect()
@@ -452,18 +390,7 @@ def test_all_postgres_data_types(spark):
 
     spark.dataSource.register(PostgresDataSource)
 
-    df = (
-        spark.read.format("postgres")
-        .options(
-            host="localhost",
-            port="5432",
-            database="testdb",
-            user="testuser",
-            password="testpass",
-            table="data_types_test",
-        )
-        .load()
-    )
+    df = spark.read.format("postgres").options(url=_URL, **_CREDS, dbtable="data_types_test").load()
 
     logger.info("Schema with all data types:")
     df.printSchema()
@@ -506,27 +433,13 @@ def test_join_operations(spark):
     spark.dataSource.register(PostgresDataSource)
 
     # Load users table
-    users = (
-        spark.read.format("postgres")
-        .options(host="localhost", port="5432", database="testdb", user="testuser", password="testpass", table="users")
-        .load()
-    )
+    users = spark.read.format("postgres").options(url=_URL, **_CREDS, dbtable="users").load()
 
     # Load orders table
-    orders = (
-        spark.read.format("postgres")
-        .options(host="localhost", port="5432", database="testdb", user="testuser", password="testpass", table="orders")
-        .load()
-    )
+    orders = spark.read.format("postgres").options(url=_URL, **_CREDS, dbtable="orders").load()
 
     # Load products table
-    products = (
-        spark.read.format("postgres")
-        .options(
-            host="localhost", port="5432", database="testdb", user="testuser", password="testpass", table="products"
-        )
-        .load()
-    )
+    products = spark.read.format("postgres").options(url=_URL, **_CREDS, dbtable="products").load()
 
     # Create views for SQL
     users.createOrReplaceTempView("users")
@@ -579,11 +492,7 @@ def test_complex_filters(spark):
 
     spark.dataSource.register(PostgresDataSource)
 
-    df = (
-        spark.read.format("postgres")
-        .options(host="localhost", port="5432", database="testdb", user="testuser", password="testpass", table="users")
-        .load()
-    )
+    df = spark.read.format("postgres").options(url=_URL, **_CREDS, dbtable="users").load()
 
     # Test OR filter
     result = df.filter("age = 28 OR age = 35").collect()
@@ -623,12 +532,9 @@ def test_partition_with_nulls(spark):
     df = (
         spark.read.format("postgres")
         .options(
-            host="localhost",
-            port="5432",
-            database="testdb",
-            user="testuser",
-            password="testpass",
-            table="users",
+            url=_URL,
+            **_CREDS,
+            dbtable="users",
             numPartitions="3",
             partitionColumn="id",
         )
@@ -653,27 +559,11 @@ def test_concurrent_readers(spark):
     spark.dataSource.register(PostgresDataSource)
 
     # Create multiple DataFrames reading the same table
-    df1 = (
-        spark.read.format("postgres")
-        .options(host="localhost", port="5432", database="testdb", user="testuser", password="testpass", table="users")
-        .load()
-    )
+    df1 = spark.read.format("postgres").options(url=_URL, **_CREDS, dbtable="users").load()
 
-    df2 = (
-        spark.read.format("postgres")
-        .options(
-            host="localhost", port="5432", database="testdb", user="testuser", password="testpass", table="products"
-        )
-        .load()
-    )
+    df2 = spark.read.format("postgres").options(url=_URL, **_CREDS, dbtable="products").load()
 
-    df3 = (
-        spark.read.format("postgres")
-        .options(
-            host="localhost", port="5432", database="testdb", user="testuser", password="testpass", table="large_table"
-        )
-        .load()
-    )
+    df3 = spark.read.format("postgres").options(url=_URL, **_CREDS, dbtable="large_table").load()
 
     # Execute queries concurrently
     count1 = df1.count()
@@ -700,12 +590,9 @@ def test_connection_cleanup(spark):
             df = (
                 spark.read.format("postgres")
                 .options(
-                    host="localhost",
-                    port="5432",
-                    database="testdb",
-                    user="testuser",
-                    password="testpass",
-                    table=f"nonexistent_{i}",
+                    url=_URL,
+                    **_CREDS,
+                    dbtable=f"nonexistent_{i}",
                 )
                 .load()
             )
@@ -716,11 +603,7 @@ def test_connection_cleanup(spark):
     logger.info("✓ Multiple failed connections handled")
 
     # Now try a successful read
-    df = (
-        spark.read.format("postgres")
-        .options(host="localhost", port="5432", database="testdb", user="testuser", password="testpass", table="users")
-        .load()
-    )
+    df = spark.read.format("postgres").options(url=_URL, **_CREDS, dbtable="users").load()
 
     count = df.count()
     logger.info("Successful read after failures: %s rows", count)
@@ -729,9 +612,9 @@ def test_connection_cleanup(spark):
     logger.info("✓ Test 20 passed")
 
 
-def test_invalid_batch_size(spark):
-    """Test 21 (HIGH): Invalid batchSize values are rejected with a clear error."""
-    logger.info("\n=== Test 21: Invalid batchSize Validation ===")
+def test_invalid_fetch_size(spark):
+    """Test 21 (HIGH): Invalid fetchsize values are rejected with a clear error."""
+    logger.info("\n=== Test 21: Invalid fetchsize Validation ===")
 
     spark.dataSource.register(PostgresDataSource)
 
@@ -740,24 +623,21 @@ def test_invalid_batch_size(spark):
             df = (
                 spark.read.format("postgres")
                 .options(
-                    host="localhost",
-                    port="5432",
-                    database="testdb",
-                    user="testuser",
-                    password="testpass",
-                    table="users",
-                    batchSize=bad_value,
+                    url=_URL,
+                    **_CREDS,
+                    dbtable="users",
+                    fetchsize=bad_value,
                 )
                 .load()
             )
             df.count()
-            msg = f"Should have raised an error for batchSize={bad_value}"
+            msg = f"Should have raised an error for fetchsize={bad_value}"
             raise AssertionError(msg)  # noqa: TRY301
         except AssertionError:
             raise
         except Exception as e:  # noqa: BLE001
-            assert "batchSize" in str(e), f"Expected 'batchSize' in error, got: {e}"  # noqa: PT017
-            logger.info("  batchSize=%s correctly rejected: %s", bad_value, type(e).__name__)
+            assert "fetchsize" in str(e), f"Expected 'fetchsize' in error, got: {e}"  # noqa: PT017
+            logger.info("  fetchsize=%s correctly rejected: %s", bad_value, type(e).__name__)
 
     logger.info("✓ Test 21 passed")
 
@@ -773,12 +653,9 @@ def test_invalid_num_partitions(spark):
             df = (
                 spark.read.format("postgres")
                 .options(
-                    host="localhost",
-                    port="5432",
-                    database="testdb",
-                    user="testuser",
-                    password="testpass",
-                    table="users",
+                    url=_URL,
+                    **_CREDS,
+                    dbtable="users",
                     numPartitions=bad_value,
                     partitionColumn="id",
                 )
@@ -796,29 +673,26 @@ def test_invalid_num_partitions(spark):
     logger.info("✓ Test 22 passed")
 
 
-def test_batch_size_option(spark):
-    """Test 23 (MEDIUM): Custom batchSize returns correct row count regardless of fetch size."""
-    logger.info("\n=== Test 23: Custom batchSize ===")
+def test_fetch_size_option(spark):
+    """Test 23 (MEDIUM): Custom fetchsize returns correct row count regardless of fetch size."""
+    logger.info("\n=== Test 23: Custom fetchsize ===")
 
     spark.dataSource.register(PostgresDataSource)
 
-    for batch_size in ["1", "100", "500", "8192", "20000"]:
+    for fetch_size in ["1", "100", "500", "8192", "20000"]:
         df = (
             spark.read.format("postgres")
             .options(
-                host="localhost",
-                port="5432",
-                database="testdb",
-                user="testuser",
-                password="testpass",
-                table="large_table",
-                batchSize=batch_size,
+                url=_URL,
+                **_CREDS,
+                dbtable="large_table",
+                fetchsize=fetch_size,
             )
             .load()
         )
         count = df.count()
-        assert count == 10000, f"batchSize={batch_size}: expected 10000 rows, got {count}"
-        logger.info("  batchSize=%-6s -> %s rows ✓", batch_size, count)
+        assert count == 10000, f"fetchsize={fetch_size}: expected 10000 rows, got {count}"
+        logger.info("  fetchsize=%-6s -> %s rows ✓", fetch_size, count)
 
     logger.info("✓ Test 23 passed")
 
@@ -833,12 +707,9 @@ def test_table_schema_option(spark):
     df = (
         spark.read.format("postgres")
         .options(
-            host="localhost",
-            port="5432",
-            database="testdb",
-            user="testuser",
-            password="testpass",
-            table="schema_table",
+            url=_URL,
+            **_CREDS,
+            dbtable="schema_table",
             tableSchema="test_schema",
         )
         .load()
@@ -859,12 +730,9 @@ def test_table_schema_option(spark):
         df_wrong = (
             spark.read.format("postgres")
             .options(
-                host="localhost",
-                port="5432",
-                database="testdb",
-                user="testuser",
-                password="testpass",
-                table="schema_table",
+                url=_URL,
+                **_CREDS,
+                dbtable="schema_table",
                 tableSchema="public",
             )
             .load()
@@ -894,12 +762,7 @@ def test_sql_injection_filter_value(spark):
     from pyspark.sql.functions import col
 
     # Establish that orders exists and has the expected row count before the attack.
-    orders_before = (
-        spark.read.format("postgres")
-        .options(host="localhost", port="5432", database="testdb", user="testuser", password="testpass", table="orders")
-        .load()
-        .count()
-    )
+    orders_before = spark.read.format("postgres").options(url=_URL, **_CREDS, dbtable="orders").load().count()
     assert orders_before == 8, f"Precondition failed: orders should have 8 rows, got {orders_before}"
     logger.info("orders table has %s rows before injection attempt", orders_before)
 
@@ -907,22 +770,13 @@ def test_sql_injection_filter_value(spark):
     # If the value were interpolated into SQL, '; DROP TABLE orders; -- would execute.
     # With parameterized queries it becomes:  "name" = %s  →  bind 'injection_payload'
     injection_payload = "'; DROP TABLE orders; --"
-    users_df = (
-        spark.read.format("postgres")
-        .options(host="localhost", port="5432", database="testdb", user="testuser", password="testpass", table="users")
-        .load()
-    )
+    users_df = spark.read.format("postgres").options(url=_URL, **_CREDS, dbtable="users").load()
     result = users_df.filter(col("name") == injection_payload).collect()
     logger.info("Filter with injection payload matched %s row(s) (expected 0)", len(result))
     assert len(result) == 0, f"Injection payload should not match any row, matched {len(result)}"
 
     # Verify 'orders' was NOT dropped or truncated.
-    orders_after = (
-        spark.read.format("postgres")
-        .options(host="localhost", port="5432", database="testdb", user="testuser", password="testpass", table="orders")
-        .load()
-        .count()
-    )
+    orders_after = spark.read.format("postgres").options(url=_URL, **_CREDS, dbtable="orders").load().count()
     assert orders_after == 8, f"INJECTION SUCCEEDED: orders was modified (expected 8 rows, got {orders_after})"
     logger.info("orders table still has %s rows after injection attempt ✓", orders_after)
 
@@ -932,7 +786,7 @@ def test_sql_injection_filter_value(spark):
 def test_sql_injection_table_name(spark):
     """Test 26 (HIGH): Table name injection is neutralized by double-quote identifier escaping.
 
-    Passes a malicious string as the 'table' option.  _quote_table_reference()
+    Passes a malicious string as the 'dbtable' option.  _quote_table_reference()
     wraps it in double-quotes so Postgres sees it as a single identifier name
     rather than executing the injected SQL.
     """
@@ -941,16 +795,11 @@ def test_sql_injection_table_name(spark):
     spark.dataSource.register(PostgresDataSource)
 
     # Confirm orders exists before the attack.
-    orders_before = (
-        spark.read.format("postgres")
-        .options(host="localhost", port="5432", database="testdb", user="testuser", password="testpass", table="orders")
-        .load()
-        .count()
-    )
+    orders_before = spark.read.format("postgres").options(url=_URL, **_CREDS, dbtable="orders").load().count()
     assert orders_before == 8, f"Precondition failed: orders should have 8 rows, got {orders_before}"
     logger.info("orders table has %s rows before injection attempt", orders_before)
 
-    # Injection attempt via the 'table' option.
+    # Injection attempt via the 'dbtable' option.
     # Without quoting:  SELECT * FROM orders'; DROP TABLE orders; --
     # With quoting:     SELECT * FROM "orders'; DROP TABLE orders; --"  (no such table → error)
     injection_table = "orders'; DROP TABLE orders; --"
@@ -958,12 +807,9 @@ def test_sql_injection_table_name(spark):
         df = (
             spark.read.format("postgres")
             .options(
-                host="localhost",
-                port="5432",
-                database="testdb",
-                user="testuser",
-                password="testpass",
-                table=injection_table,
+                url=_URL,
+                **_CREDS,
+                dbtable=injection_table,
             )
             .load()
         )
@@ -976,12 +822,7 @@ def test_sql_injection_table_name(spark):
         logger.info("  Correctly raised error for injected table name: %s", type(e).__name__)
 
     # Verify 'orders' was NOT dropped.
-    orders_after = (
-        spark.read.format("postgres")
-        .options(host="localhost", port="5432", database="testdb", user="testuser", password="testpass", table="orders")
-        .load()
-        .count()
-    )
+    orders_after = spark.read.format("postgres").options(url=_URL, **_CREDS, dbtable="orders").load().count()
     assert orders_after == 8, f"INJECTION SUCCEEDED: orders was modified (expected 8 rows, got {orders_after})"
     logger.info("orders table still has %s rows after injection attempt ✓", orders_after)
 
@@ -1000,12 +841,7 @@ def test_sql_injection_partition_column(spark):
     spark.dataSource.register(PostgresDataSource)
 
     # Confirm users exists before the attack.
-    users_before = (
-        spark.read.format("postgres")
-        .options(host="localhost", port="5432", database="testdb", user="testuser", password="testpass", table="users")
-        .load()
-        .count()
-    )
+    users_before = spark.read.format("postgres").options(url=_URL, **_CREDS, dbtable="users").load().count()
     assert users_before == 15, f"Precondition failed: users should have 15 rows, got {users_before}"
     logger.info("users table has %s rows before injection attempt", users_before)
 
@@ -1017,12 +853,9 @@ def test_sql_injection_partition_column(spark):
         df = (
             spark.read.format("postgres")
             .options(
-                host="localhost",
-                port="5432",
-                database="testdb",
-                user="testuser",
-                password="testpass",
-                table="users",
+                url=_URL,
+                **_CREDS,
+                dbtable="users",
                 numPartitions="2",
                 partitionColumn=injection_column,
             )
@@ -1037,16 +870,73 @@ def test_sql_injection_partition_column(spark):
         logger.info("  Correctly raised error for injected partition column: %s", type(e).__name__)
 
     # Verify 'users' was NOT dropped.
-    users_after = (
-        spark.read.format("postgres")
-        .options(host="localhost", port="5432", database="testdb", user="testuser", password="testpass", table="users")
-        .load()
-        .count()
-    )
+    users_after = spark.read.format("postgres").options(url=_URL, **_CREDS, dbtable="users").load().count()
     assert users_after == 15, f"INJECTION SUCCEEDED: users was modified (expected 15 rows, got {users_after})"
     logger.info("users table still has %s rows after injection attempt ✓", users_after)
 
     logger.info("✓ Test 27 passed")
+
+
+def test_build_where_clause_unit():
+    """Test unit: _build_where_clause uses full column names (not just first character)."""
+    logger.info("\n=== Unit Test: _build_where_clause ===")
+
+    def _make_reader(filters):
+        r = PostgresDataSourceReader(connection_params={}, table="users")
+        r._filters = filters  # noqa: SLF001
+        return r
+
+    # attribute is a ColumnPath = Tuple[str, ...] as provided by PySpark's filter pushdown
+    cases = [
+        ([{"type": "EqualTo", "attribute": ("age",), "value": 28}], '"age" = %s', [28]),
+        ([{"type": "GreaterThan", "attribute": ("score",), "value": 100}], '"score" > %s', [100]),
+        ([{"type": "GreaterThanOrEqual", "attribute": ("price",), "value": 9.99}], '"price" >= %s', [9.99]),
+        ([{"type": "LessThan", "attribute": ("quantity",), "value": 5}], '"quantity" < %s', [5]),
+        ([{"type": "LessThanOrEqual", "attribute": ("rating",), "value": 4.5}], '"rating" <= %s', [4.5]),
+        (
+            [
+                {"type": "EqualTo", "attribute": ("is_active",), "value": True},
+                {"type": "GreaterThan", "attribute": ("age",), "value": 30},
+            ],
+            '"is_active" = %s AND "age" > %s',
+            [True, 30],
+        ),
+        ([], "", []),
+    ]
+
+    for filters, expected_clause, expected_params in cases:
+        r = _make_reader(filters)
+        clause, params = r._build_where_clause()  # noqa: SLF001
+        assert clause == expected_clause, f"clause mismatch: {clause!r} != {expected_clause!r}"
+        assert params == expected_params, f"params mismatch: {params!r} != {expected_params!r}"
+
+    logger.info("✓ _build_where_clause unit tests passed")
+
+
+def test_quote_identifier_unit():
+    """Test unit: _quote_identifier double-quotes identifiers and escapes embedded quotes."""
+    logger.info("\n=== Unit Test: _quote_identifier ===")
+
+    r = PostgresDataSourceReader(connection_params={}, table="users")
+
+    assert r._quote_identifier("column") == '"column"'  # noqa: SLF001
+    assert r._quote_identifier('col"name') == '"col""name"'  # noqa: SLF001
+    assert r._quote_identifier("my column") == '"my column"'  # noqa: SLF001
+
+    logger.info("✓ _quote_identifier unit tests passed")
+
+
+def test_quote_table_reference_unit():
+    """Test unit: _quote_table_reference handles schema.table and plain table."""
+    logger.info("\n=== Unit Test: _quote_table_reference ===")
+
+    r = PostgresDataSourceReader(connection_params={}, table="users")
+
+    assert r._quote_table_reference("users") == '"users"'  # noqa: SLF001
+    assert r._quote_table_reference("public.users") == '"public"."users"'  # noqa: SLF001
+    assert r._quote_table_reference('my"schema.my"table') == '"my""schema"."my""table"'  # noqa: SLF001
+
+    logger.info("✓ _quote_table_reference unit tests passed")
 
 
 def main():
@@ -1054,6 +944,11 @@ def main():
     logger.info("=" * 60)
     logger.info("PostgreSQL DataSource Test Suite")
     logger.info("=" * 60)
+
+    # Unit tests (no Spark/DB required)
+    test_build_where_clause_unit()
+    test_quote_identifier_unit()
+    test_quote_table_reference_unit()
 
     # Create Spark session
     spark = SparkSession.builder.remote("sc://localhost:50051").appName("PostgreSQL DataSource Test").getOrCreate()
@@ -1086,9 +981,9 @@ def main():
         test_connection_cleanup(spark)
 
         # Validation and schema tests
-        test_invalid_batch_size(spark)
+        test_invalid_fetch_size(spark)
         test_invalid_num_partitions(spark)
-        test_batch_size_option(spark)
+        test_fetch_size_option(spark)
         test_table_schema_option(spark)
 
         # SQL injection proof tests
@@ -1100,11 +995,12 @@ def main():
         logger.info("✓ All tests passed!")
         logger.info("%s", "=" * 60)
         logger.info("\nTest Summary:")
+        logger.info("  - Unit tests (no DB): 3")
         logger.info("  - Original tests: 6")
         logger.info("  - HIGH priority: 10")
         logger.info("  - MEDIUM priority: 7")
         logger.info("  - SQL injection proof: 3")
-        logger.info("  - Total: 27 tests")
+        logger.info("  - Total: 30 tests")
 
     except Exception:
         logger.exception("✗ Test failed with error")

@@ -28,12 +28,10 @@ from pysail.datasources.postgres import PostgresDataSource
 spark.dataSource.register(PostgresDataSource)
 
 df = spark.read.format("postgres").options(
-    host="localhost",
-    port="5432",
-    database="mydb",
+    url="jdbc:postgresql://localhost:5432/mydb",
     user="myuser",
     password="mypassword",
-    table="users",
+    dbtable="users",
 ).load()
 
 df.show()
@@ -46,12 +44,10 @@ Each partition reads rows where `MOD(partitionColumn, numPartitions) = partition
 
 ```python
 df = spark.read.format("postgres").options(
-    host="localhost",
-    port="5432",
-    database="mydb",
+    url="jdbc:postgresql://localhost:5432/mydb",
     user="myuser",
     password="mypassword",
-    table="large_table",
+    dbtable="large_table",
     numPartitions="4",
     partitionColumn="id",
 ).load()
@@ -69,18 +65,16 @@ df.filter("age > 25").show()
 
 ## Options
 
-| Option            | Required | Default     | Description                                                 |
-| ----------------- | -------- | ----------- | ----------------------------------------------------------- |
-| `database`        | Yes      |             | Database name                                               |
-| `user`            | Yes      |             | Username                                                    |
-| `password`        | Yes      |             | Password                                                    |
-| `table`           | Yes      |             | Table name                                                  |
-| `host`            | No       | `localhost` | Server hostname                                             |
-| `port`            | No       | `5432`      | Server port                                                 |
-| `tableSchema`     | No       | `public`    | PostgreSQL schema containing the table                      |
-| `numPartitions`   | No       | `1`         | Number of parallel readers (must be ≥ 1)                    |
-| `partitionColumn` | No       |             | Column for partitioning (required when `numPartitions > 1`) |
-| `batchSize`       | No       | `8192`      | Number of rows fetched per batch (must be ≥ 1)              |
+| Option            | Required | Default  | Description                                                  |
+| ----------------- | -------- | -------- | ------------------------------------------------------------ |
+| `url`             | Yes      |          | PostgreSQL JDBC URL (`jdbc:postgresql://host:port/database`) |
+| `user`            | Yes      |          | Username                                                     |
+| `password`        | Yes      |          | Password                                                     |
+| `dbtable`         | Yes      |          | Table name                                                   |
+| `tableSchema`     | No       | `public` | PostgreSQL schema containing the table                       |
+| `numPartitions`   | No       | `1`      | Number of parallel readers (must be ≥ 1)                     |
+| `partitionColumn` | No       |          | Column for partitioning (required when `numPartitions > 1`)  |
+| `fetchsize`       | No       | `8192`   | Number of rows fetched per batch (must be ≥ 1)               |
 
 <script setup>
 import { useData } from "vitepress";

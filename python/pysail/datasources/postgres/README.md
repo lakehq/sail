@@ -42,12 +42,10 @@ spark = SparkSession.builder \
 spark.dataSource.register(PostgresDataSource)
 
 df = spark.read.format("postgres").options(
-    host="localhost",
-    port="5432",
-    database="mydb",
+    url="jdbc:postgresql://localhost:5432/mydb",
     user="myuser",
     password="mypassword",
-    table="users",
+    dbtable="users",
 ).load()
 
 df.show()
@@ -59,10 +57,10 @@ Split reads across multiple partitions using a numeric column:
 
 ```python
 df = spark.read.format("postgres").options(
-    database="mydb",
+    url="jdbc:postgresql://localhost:5432/mydb",
     user="myuser",
     password="mypassword",
-    table="large_table",
+    dbtable="large_table",
     numPartitions="4",
     partitionColumn="id",
 ).load()
@@ -83,13 +81,11 @@ df.filter("age > 25").show()
 
 | Option | Required | Default | Description |
 |--------|----------|---------|-------------|
-| `database` | Yes | | Database name |
+| `url` | Yes | | PostgreSQL JDBC URL (`jdbc:postgresql://host:port/database`) |
 | `user` | Yes | | Username |
 | `password` | Yes | | Password |
-| `table` | Yes | | Table to read |
-| `host` | No | `localhost` | Server hostname |
-| `port` | No | `5432` | Server port |
+| `dbtable` | Yes | | Table to read |
 | `tableSchema` | No | `public` | PostgreSQL schema containing the table |
 | `numPartitions` | No | `1` | Number of parallel readers (must be ≥ 1) |
 | `partitionColumn` | No | | Column for partitioning (required when `numPartitions > 1`) |
-| `batchSize` | No | `8192` | Number of rows to fetch per batch (must be ≥ 1) |
+| `fetchsize` | No | `8192` | Number of rows to fetch per batch (must be ≥ 1) |

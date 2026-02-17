@@ -160,10 +160,10 @@ class PostgresDataSource(DataSource):
         import psycopg2
 
         conn_params = self._get_connection_params()
-        table = self.options.get("table")
+        table = self.options.get("dbtable")
         table_schema = self.options.get("tableSchema", "public")
         if not table:
-            msg = "table option is required"
+            msg = "dbtable option is required"
             raise ValueError(msg)
 
         conn = psycopg2.connect(**conn_params)
@@ -196,17 +196,17 @@ class PostgresDataSource(DataSource):
 
     def reader(self, schema):
         conn_params = self._get_connection_params()
-        table = self.options.get("table")
+        table = self.options.get("dbtable")
         table_schema = self.options.get("tableSchema", "public")
         num_partitions = int(self.options.get("numPartitions", "1"))
         partition_column = self.options.get("partitionColumn")
-        batch_size = int(self.options.get("batchSize", "8192"))
+        batch_size = int(self.options.get("fetchsize", "8192"))
 
         if num_partitions < 1:
             msg = "numPartitions must be a positive integer"
             raise ValueError(msg)
         if batch_size < 1:
-            msg = "batchSize must be a positive integer"
+            msg = "fetchsize must be a positive integer"
             raise ValueError(msg)
 
         qualified_table = f"{table_schema}.{table}"
@@ -215,17 +215,32 @@ class PostgresDataSource(DataSource):
         )
 
     def _get_connection_params(self):
-        database = self.options.get("database")
+        from urllib.parse import urlparse
+
+        url = self.options.get("url")
         user = self.options.get("user")
         password = self.options.get("password")
 
-        if not all([database, user, password]):
-            msg = "database, user, and password are required"
+        if not all([url, user, password]):
+            msg = "url, user, and password are required"
+            raise ValueError(msg)
+
+        if not url.startswith("jdbc:postgresql://"):
+            msg = "url must be a PostgreSQL JDBC URL (e.g. jdbc:postgresql://localhost:5432/mydb)"
+            raise ValueError(msg)
+
+        parsed = urlparse(url[5:])  # strip "jdbc:" → "postgresql://host:port/db"
+        host = parsed.hostname or "localhost"
+        port = parsed.port or 5432
+        database = parsed.path.lstrip("/")
+
+        if not database:
+            msg = "url must include a database name (e.g. jdbc:postgresql://localhost:5432/mydb)"
             raise ValueError(msg)
 
         return {
-            "host": self.options.get("host", "localhost"),
-            "port": int(self.options.get("port", "5432")),
+            "host": host,
+            "port": port,
             "database": database,
             "user": user,
             "password": password,
