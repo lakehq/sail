@@ -304,9 +304,11 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
                 }),
                 _ => Ok(spec::Expr::UnresolvedExtractValue {
                     child: Box::new(expr),
-                    extraction: Box::new(spec::Expr::Literal(spec::Literal::Utf8 {
-                        value: Some(field.value),
-                    })),
+                    extraction: Box::new(spec::Expr::UnresolvedAttribute {
+                        name: spec::ObjectName::bare(field.value),
+                        plan_id: None,
+                        is_metadata_column: false,
+                    }),
                 }),
             }
         }
