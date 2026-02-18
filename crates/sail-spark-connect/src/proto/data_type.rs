@@ -174,17 +174,26 @@ impl TryFrom<DataType> for spec::DataType {
                 })
             }
             Kind::DayTimeInterval(sdt::DayTimeInterval {
-                // FIXME: Currently `start_field` and `end_field` are lost in translation.
-                //  This does not impact computation accuracy.
-                //  This may affect the display string in the `data_type_to_simple_string` function.
-                start_field: _,
-                end_field: _,
+                start_field,
+                end_field,
                 type_variation_reference: _,
             }) => {
-                // Spark's DayTimeInterval has microsecond precision.
-                // Arrow's IntervalUnit::DayTime has millisecond precision.
-                Ok(spec::DataType::Duration {
-                    time_unit: spec::TimeUnit::Microsecond,
+                let start_field = start_field
+                    .map(spec::DayTimeIntervalField::try_from)
+                    .transpose()?
+                    .map(spec::IntervalFieldType::try_from)
+                    .transpose()?;
+                let end_field = end_field
+                    .map(spec::DayTimeIntervalField::try_from)
+                    .transpose()?
+                    .map(spec::IntervalFieldType::try_from)
+                    .transpose()?;
+                let start_field = Some(start_field.unwrap_or(spec::IntervalFieldType::Day));
+                let end_field = Some(end_field.unwrap_or(spec::IntervalFieldType::Second));
+                Ok(spec::DataType::Interval {
+                    interval_unit: spec::IntervalUnit::DayTime,
+                    start_field,
+                    end_field,
                 })
             }
             Kind::Array(array) => {
