@@ -701,17 +701,17 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 TrimExpr::LeadingSpace(_, _, e) => ("ltrim", vec![from_ast_expression(e)?]),
                 TrimExpr::Leading(_, what, _, e) => (
                     "ltrim",
-                    vec![from_ast_expression(e)?, from_ast_expression(what)?],
+                    vec![from_ast_expression(what)?, from_ast_expression(e)?],
                 ),
                 TrimExpr::TrailingSpace(_, _, e) => ("rtrim", vec![from_ast_expression(e)?]),
                 TrimExpr::Trailing(_, what, _, e) => (
                     "rtrim",
-                    vec![from_ast_expression(e)?, from_ast_expression(what)?],
+                    vec![from_ast_expression(what)?, from_ast_expression(e)?],
                 ),
                 TrimExpr::BothSpace(_, _, e) => ("trim", vec![from_ast_expression(e)?]),
                 TrimExpr::Both(_, what, _, e) => (
                     "trim",
-                    vec![from_ast_expression(e)?, from_ast_expression(what)?],
+                    vec![from_ast_expression(what)?, from_ast_expression(e)?],
                 ),
             };
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
