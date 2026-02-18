@@ -271,7 +271,23 @@ impl PlanResolver<'_> {
             CommandNode::DescribeDatabase { .. } => {
                 Err(PlanError::todo("CommandNode::DescribeDatabase"))
             }
-            CommandNode::DescribeTable { .. } => Err(PlanError::todo("CommandNode::DescribeTable")),
+            CommandNode::DescribeTable {
+                table,
+                extended,
+                partition,
+                column,
+            } => {
+                if !partition.is_empty() {
+                    return Err(PlanError::todo("DESCRIBE TABLE with partition spec"));
+                }
+                if column.is_some() {
+                    return Err(PlanError::todo("DESCRIBE TABLE with column"));
+                }
+                self.resolve_catalog_command(CatalogCommand::DescribeTable {
+                    table: table.into(),
+                    extended,
+                })
+            }
             CommandNode::CommentOnCatalog { .. } => {
                 Err(PlanError::todo("CommandNode::CommentOnCatalog"))
             }

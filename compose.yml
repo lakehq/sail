@@ -115,8 +115,30 @@ services:
     profiles:
       - telemetry
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: sail-postgres-dev
+    environment:
+      POSTGRES_USER: testuser
+      POSTGRES_PASSWORD: testpass
+      POSTGRES_DB: testdb
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./python/pysail/tests/datasources/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U testuser -d testdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - datasources
+
 volumes:
   minio-data:
     driver: local
   azurite-data:
+    driver: local
+  postgres-data:
     driver: local

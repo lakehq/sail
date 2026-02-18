@@ -10,9 +10,9 @@ use crate::spark::connect::catalog::CatType;
 use crate::spark::connect::relation::RelType;
 use crate::spark::connect::write_stream_operation_start::SinkDestination;
 use crate::spark::connect::{
-    plan, Catalog, CreateDataFrameViewCommand, Plan, Relation, RelationCommon,
-    StreamingForeachFunction, TransformWithStateInfo, WriteOperation, WriteOperationV2,
-    WriteStreamOperationStart,
+    plan, Catalog, CreateDataFrameViewCommand, MergeIntoTableCommand, Plan, Relation,
+    RelationCommon, StreamingForeachFunction, TransformWithStateInfo, WriteOperation,
+    WriteOperationV2, WriteStreamOperationStart,
 };
 
 struct RelationMetadata {
@@ -1031,7 +1031,18 @@ impl TryFrom<RelType> for RelationNode {
             RelType::CommonInlineUserDefinedDataSource(_) => {
                 Err(SparkError::todo("common inline user defined data source"))
             }
-            RelType::WithRelations(_) => Err(SparkError::todo("with relations")),
+            RelType::WithRelations(wr) => {
+                let sc::WithRelations { root, references } = *wr;
+                let root = *root.required("with relations root")?;
+                let references: Vec<spec::QueryPlan> = references
+                    .into_iter()
+                    .map(|r| r.try_into())
+                    .collect::<SparkResult<_>>()?;
+                Ok(RelationNode::Query(spec::QueryNode::WithRelations {
+                    root: Box::new(root.try_into()?),
+                    references,
+                }))
+            }
             RelType::Transpose(_) => Err(SparkError::todo("transpose")),
             RelType::UnresolvedTableValuedFunction(_) => {
                 Err(SparkError::todo("unresolved table valued function"))
@@ -1707,6 +1718,215 @@ impl TryFrom<CreateDataFrameViewCommand> for spec::CommandNode {
     }
 }
 
+fn merge_action_from_expression(expression: sc::Expression) -> SparkResult<sc::MergeAction> {
+    let expr_type = expression
+        .expr_type
+        .required("merge action expression type")?;
+    match expr_type {
+        sc::expression::ExprType::MergeAction(action) => Ok(*action),
+        _ => Err(SparkError::invalid("expected merge action expression")),
+    }
+}
+
+fn merge_condition_from_expression(
+    condition: Option<Box<sc::Expression>>,
+) -> SparkResult<Option<spec::ExprWithSource>> {
+    condition
+        .map(|expr| {
+            let expr = *expr;
+            Ok(spec::ExprWithSource {
+                expr: expr.try_into()?,
+                source: None,
+            })
+        })
+        .transpose()
+}
+
+fn merge_assignment_key_to_object_name(
+    expression: sc::Expression,
+) -> SparkResult<spec::ObjectName> {
+    let expr_type = expression
+        .expr_type
+        .required("merge action assignment key type")?;
+    match expr_type {
+        sc::expression::ExprType::UnresolvedAttribute(attr) => {
+            parse_object_name(attr.unparsed_identifier.as_str())
+                .and_then(from_ast_object_name)
+                .map_err(SparkError::from)
+        }
+        sc::expression::ExprType::ExpressionString(expr) => {
+            parse_object_name(expr.expression.as_str())
+                .and_then(from_ast_object_name)
+                .map_err(SparkError::from)
+        }
+        _ => Err(SparkError::invalid(
+            "merge assignment key must be a column reference",
+        )),
+    }
+}
+
+fn merge_assignments_to_pairs(
+    assignments: Vec<sc::merge_action::Assignment>,
+) -> SparkResult<Vec<(spec::ObjectName, spec::Expr)>> {
+    assignments
+        .into_iter()
+        .map(|assignment| {
+            let key = assignment.key.required("merge action assignment key")?;
+            let value = assignment.value.required("merge action assignment value")?;
+            Ok((merge_assignment_key_to_object_name(key)?, value.try_into()?))
+        })
+        .collect()
+}
+
+fn merge_action_type_from_proto(value: i32) -> SparkResult<sc::merge_action::ActionType> {
+    sc::merge_action::ActionType::try_from(value)
+        .map_err(|_| SparkError::invalid(format!("invalid merge action type: {value}")))
+}
+
+fn merge_matched_clause_from_expression(
+    expression: sc::Expression,
+) -> SparkResult<spec::MergeClause> {
+    let action = merge_action_from_expression(expression)?;
+    let condition = merge_condition_from_expression(action.condition)?;
+    let action_type = merge_action_type_from_proto(action.action_type)?;
+    let action = match action_type {
+        sc::merge_action::ActionType::Delete => spec::MergeMatchedAction::Delete,
+        sc::merge_action::ActionType::UpdateStar => spec::MergeMatchedAction::UpdateAll,
+        sc::merge_action::ActionType::Update => {
+            let assignments = merge_assignments_to_pairs(action.assignments)?;
+            if assignments.is_empty() {
+                return Err(SparkError::invalid(
+                    "merge matched update requires assignments",
+                ));
+            }
+            spec::MergeMatchedAction::UpdateSet(assignments)
+        }
+        sc::merge_action::ActionType::Invalid
+        | sc::merge_action::ActionType::Insert
+        | sc::merge_action::ActionType::InsertStar => {
+            return Err(SparkError::invalid("invalid merge matched action type"))
+        }
+    };
+    Ok(spec::MergeClause::Matched(spec::MergeMatchedClause {
+        condition,
+        action,
+    }))
+}
+
+fn merge_not_matched_by_target_clause_from_expression(
+    expression: sc::Expression,
+) -> SparkResult<spec::MergeClause> {
+    let action = merge_action_from_expression(expression)?;
+    let condition = merge_condition_from_expression(action.condition)?;
+    let action_type = merge_action_type_from_proto(action.action_type)?;
+    let action = match action_type {
+        sc::merge_action::ActionType::InsertStar => spec::MergeNotMatchedByTargetAction::InsertAll,
+        sc::merge_action::ActionType::Insert => {
+            let assignments = merge_assignments_to_pairs(action.assignments)?;
+            if assignments.is_empty() {
+                return Err(SparkError::invalid("merge insert requires assignments"));
+            }
+            let (columns, values) = assignments.into_iter().unzip();
+            spec::MergeNotMatchedByTargetAction::InsertColumns { columns, values }
+        }
+        sc::merge_action::ActionType::Invalid
+        | sc::merge_action::ActionType::Delete
+        | sc::merge_action::ActionType::Update
+        | sc::merge_action::ActionType::UpdateStar => {
+            return Err(SparkError::invalid("invalid merge not matched action type"))
+        }
+    };
+    Ok(spec::MergeClause::NotMatchedByTarget(
+        spec::MergeNotMatchedByTargetClause { condition, action },
+    ))
+}
+
+fn merge_not_matched_by_source_clause_from_expression(
+    expression: sc::Expression,
+) -> SparkResult<spec::MergeClause> {
+    let action = merge_action_from_expression(expression)?;
+    let condition = merge_condition_from_expression(action.condition)?;
+    let action_type = merge_action_type_from_proto(action.action_type)?;
+    let action = match action_type {
+        sc::merge_action::ActionType::Delete => spec::MergeNotMatchedBySourceAction::Delete,
+        sc::merge_action::ActionType::Update => {
+            let assignments = merge_assignments_to_pairs(action.assignments)?;
+            if assignments.is_empty() {
+                return Err(SparkError::invalid(
+                    "merge not matched by source update requires assignments",
+                ));
+            }
+            spec::MergeNotMatchedBySourceAction::UpdateSet(assignments)
+        }
+        sc::merge_action::ActionType::Invalid
+        | sc::merge_action::ActionType::Insert
+        | sc::merge_action::ActionType::InsertStar
+        | sc::merge_action::ActionType::UpdateStar => {
+            return Err(SparkError::invalid(
+                "invalid merge not matched by source action type",
+            ))
+        }
+    };
+    Ok(spec::MergeClause::NotMatchedBySource(
+        spec::MergeNotMatchedBySourceClause { condition, action },
+    ))
+}
+
+impl TryFrom<MergeIntoTableCommand> for spec::CommandNode {
+    type Error = SparkError;
+
+    fn try_from(command: MergeIntoTableCommand) -> SparkResult<spec::CommandNode> {
+        let MergeIntoTableCommand {
+            target_table_name,
+            source_table_plan,
+            merge_condition,
+            match_actions,
+            not_matched_actions,
+            not_matched_by_source_actions,
+            with_schema_evolution,
+        } = command;
+        let target = from_ast_object_name(parse_object_name(target_table_name.as_str())?)?;
+        let source_table_plan = source_table_plan.required("source table plan")?;
+        let merge_condition = merge_condition.required("merge condition")?;
+        let source = spec::MergeSource::Query {
+            input: Box::new(source_table_plan.try_into()?),
+            alias: None,
+        };
+        let mut clauses = Vec::with_capacity(
+            match_actions.len() + not_matched_actions.len() + not_matched_by_source_actions.len(),
+        );
+        clauses.extend(
+            match_actions
+                .into_iter()
+                .map(merge_matched_clause_from_expression)
+                .collect::<SparkResult<Vec<_>>>()?,
+        );
+        clauses.extend(
+            not_matched_actions
+                .into_iter()
+                .map(merge_not_matched_by_target_clause_from_expression)
+                .collect::<SparkResult<Vec<_>>>()?,
+        );
+        clauses.extend(
+            not_matched_by_source_actions
+                .into_iter()
+                .map(merge_not_matched_by_source_clause_from_expression)
+                .collect::<SparkResult<Vec<_>>>()?,
+        );
+        Ok(spec::CommandNode::MergeInto(spec::MergeInto {
+            target,
+            target_alias: None,
+            source,
+            on_condition: spec::ExprWithSource {
+                expr: merge_condition.try_into()?,
+                source: None,
+            },
+            clauses,
+            with_schema_evolution,
+        }))
+    }
+}
+
 impl TryFrom<WriteStreamOperationStart> for spec::CommandNode {
     type Error = SparkError;
 
@@ -1789,11 +2009,13 @@ impl TryFrom<StreamingForeachFunction> for spec::FunctionDefinition {
 
 #[cfg(test)]
 mod tests {
+    use sail_common::spec;
     use sail_common::tests::test_gold_set;
     use sail_sql_analyzer::parser::parse_one_statement;
     use sail_sql_analyzer::statement::from_ast_statement;
 
     use crate::error::{SparkError, SparkResult};
+    use crate::spark::connect as sc;
 
     #[test]
     fn test_sql_to_plan() -> SparkResult<()> {
@@ -1802,5 +2024,123 @@ mod tests {
             |sql: String| Ok(from_ast_statement(parse_one_statement(&sql)?)?),
             SparkError::internal,
         )
+    }
+
+    #[test]
+    fn test_merge_into_table_command_to_plan() -> SparkResult<()> {
+        use sc::expression::{ExprType, ExpressionString, UnresolvedAttribute};
+        use sc::{merge_action, relation, MergeAction};
+
+        let source_table_plan = sc::Relation {
+            common: None,
+            rel_type: Some(relation::RelType::Sql({
+                #[expect(deprecated)]
+                sc::Sql {
+                    query: "select * from source_table".to_string(),
+                    args: Default::default(),
+                    pos_args: vec![],
+                    named_arguments: Default::default(),
+                    pos_arguments: vec![],
+                }
+            })),
+        };
+
+        let merge_condition = sc::Expression {
+            common: None,
+            expr_type: Some(ExprType::ExpressionString(ExpressionString {
+                expression: "t.id = s.id".to_string(),
+            })),
+        };
+
+        let matched_update = sc::Expression {
+            common: None,
+            expr_type: Some(ExprType::MergeAction(Box::new(MergeAction {
+                action_type: merge_action::ActionType::Update as i32,
+                condition: None,
+                assignments: vec![merge_action::Assignment {
+                    key: Some(sc::Expression {
+                        common: None,
+                        expr_type: Some(ExprType::UnresolvedAttribute(UnresolvedAttribute {
+                            unparsed_identifier: "value".to_string(),
+                            plan_id: None,
+                            is_metadata_column: None,
+                        })),
+                    }),
+                    value: Some(sc::Expression {
+                        common: None,
+                        expr_type: Some(ExprType::ExpressionString(ExpressionString {
+                            expression: "s.value".to_string(),
+                        })),
+                    }),
+                }],
+            }))),
+        };
+
+        let not_matched_insert = sc::Expression {
+            common: None,
+            expr_type: Some(ExprType::MergeAction(Box::new(MergeAction {
+                action_type: merge_action::ActionType::Insert as i32,
+                condition: None,
+                assignments: vec![
+                    merge_action::Assignment {
+                        key: Some(sc::Expression {
+                            common: None,
+                            expr_type: Some(ExprType::UnresolvedAttribute(UnresolvedAttribute {
+                                unparsed_identifier: "id".to_string(),
+                                plan_id: None,
+                                is_metadata_column: None,
+                            })),
+                        }),
+                        value: Some(sc::Expression {
+                            common: None,
+                            expr_type: Some(ExprType::ExpressionString(ExpressionString {
+                                expression: "s.id".to_string(),
+                            })),
+                        }),
+                    },
+                    merge_action::Assignment {
+                        key: Some(sc::Expression {
+                            common: None,
+                            expr_type: Some(ExprType::UnresolvedAttribute(UnresolvedAttribute {
+                                unparsed_identifier: "value".to_string(),
+                                plan_id: None,
+                                is_metadata_column: None,
+                            })),
+                        }),
+                        value: Some(sc::Expression {
+                            common: None,
+                            expr_type: Some(ExprType::ExpressionString(ExpressionString {
+                                expression: "s.value".to_string(),
+                            })),
+                        }),
+                    },
+                ],
+            }))),
+        };
+
+        let command = sc::MergeIntoTableCommand {
+            target_table_name: "target_table".to_string(),
+            source_table_plan: Some(source_table_plan),
+            merge_condition: Some(merge_condition),
+            match_actions: vec![matched_update],
+            not_matched_actions: vec![not_matched_insert],
+            not_matched_by_source_actions: vec![],
+            with_schema_evolution: true,
+        };
+
+        let node: spec::CommandNode = command.try_into()?;
+        match node {
+            spec::CommandNode::MergeInto(merge) => {
+                assert!(merge.with_schema_evolution);
+                assert_eq!(merge.clauses.len(), 2);
+                assert!(matches!(merge.clauses[0], spec::MergeClause::Matched(_)));
+                assert!(matches!(
+                    merge.clauses[1],
+                    spec::MergeClause::NotMatchedByTarget(_)
+                ));
+            }
+            _ => return Err(SparkError::internal("expected merge into command")),
+        }
+        Ok(())
     }
 }
