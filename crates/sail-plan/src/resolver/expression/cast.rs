@@ -84,9 +84,7 @@ impl PlanResolver<'_> {
                 if from.is_numeric() =>
             {
                 let multiplier = match (day_time_interval_field, &cast_to_type) {
-                    (Some(field), DataType::Duration(_)) => {
-                        day_time_field_to_microseconds(field)
-                    }
+                    (Some(field), DataType::Duration(_)) => day_time_field_to_microseconds(field),
                     _ => time_unit_to_multiplier(&time_unit),
                 };
                 cast(expr.mul(lit(multiplier)), cast_to_type)
