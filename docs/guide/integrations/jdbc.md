@@ -1,3 +1,8 @@
+---
+title: JDBC
+rank: 3
+---
+
 # JDBC Datasource
 
 Sail provides a database connector exposed under the `"jdbc"` format name for API parity with
