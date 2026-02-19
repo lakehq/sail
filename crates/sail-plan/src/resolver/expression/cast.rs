@@ -2,7 +2,7 @@ use std::ops::{Div, Mul};
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
-use datafusion_common::DFSchemaRef;
+use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::{cast, expr, lit, try_cast, ExprSchemable, ScalarUDF};
 use sail_common::datetime::time_unit_to_multiplier;
 use sail_common::spec;
@@ -16,7 +16,7 @@ use sail_function::scalar::datetime::spark_interval::{
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 
-use crate::error::PlanResult;
+use crate::error::{PlanError, PlanResult};
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
@@ -121,6 +121,16 @@ impl PlanResolver<'_> {
             }
             (_, DataType::Utf8View, _) if override_string_cast => {
                 ScalarUDF::new_from_impl(SparkToUtf8View::new()).call(vec![expr])
+            }
+            (DataType::Date32 | DataType::Date64, to, _)
+                if to.is_numeric() || matches!(to, DataType::Boolean) =>
+            {
+                if !is_try && self.config.ansi_mode {
+                    return Err(PlanError::invalid(format!(
+                        "cannot cast date to {to}"
+                    )));
+                }
+                lit(ScalarValue::try_from(&to)?)
             }
             (_, to, true) => try_cast(expr, to),
             (_, to, _) => cast(expr, to),
