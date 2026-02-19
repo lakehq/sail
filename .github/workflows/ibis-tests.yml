@@ -57,6 +57,10 @@ jobs:
         run: |
           hatch run uv pip freeze || hatch run python -m pip freeze
 
+      - name: Patch Ibis xpass tests
+        run: |
+          hatch run bash scripts/spark-tests/patch-ibis-xpass.sh
+
       - name: Install grpc_health_probe
         run: |
           wget -q -O /usr/local/bin/grpc_health_probe "https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/v0.4.26/grpc_health_probe-linux-amd64"
