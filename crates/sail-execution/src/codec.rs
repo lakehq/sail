@@ -114,6 +114,7 @@ use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval
 use sail_function::scalar::datetime::spark_next_day::SparkNextDay;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
+use sail_function::scalar::datetime::spark_try_make_timestamp_ntz::SparkTryMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::timestamp_now::TimestampNow;
@@ -1625,6 +1626,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_make_timestamp_ntz" | "make_timestamp_ntz" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeTimestampNtz::new())))
             }
+            "spark_try_make_timestamp_ntz" | "try_make_timestamp_ntz" => {
+                Ok(Arc::new(ScalarUDF::from(SparkTryMakeTimestampNtz::new())))
+            }
             "spark_mask" | "mask" => Ok(Arc::new(ScalarUDF::from(SparkMask::new()))),
             "spark_concat_ws" | "concat_ws" => Ok(Arc::new(ScalarUDF::from(SparkConcatWs::new()))),
             "spark_sequence" | "sequence" => Ok(Arc::new(ScalarUDF::from(SparkSequence::new()))),
@@ -1733,6 +1737,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkMakeDtInterval>()
             || node_inner.is::<SparkMakeInterval>()
             || node_inner.is::<SparkMakeTimestampNtz>()
+            || node_inner.is::<SparkTryMakeTimestampNtz>()
             || node_inner.is::<SparkMakeYmInterval>()
             || node_inner.is::<SparkMask>()
             || node_inner.is::<SparkConcatWs>()

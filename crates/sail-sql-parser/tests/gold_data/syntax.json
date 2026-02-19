@@ -887,6 +887,16 @@
                   {
                     "sequence": [
                       {
+                        "nonTerminal": "Keyword(Time)"
+                      },
+                      {
+                        "nonTerminal": "StringLiteral"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
                         "nonTerminal": "Keyword(Null)"
                       }
                     ]
@@ -2030,6 +2040,16 @@
                     "sequence": [
                       {
                         "nonTerminal": "Keyword(Date64)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Time)"
+                      },
+                      {
+                        "nonTerminal": "Option(Tuple(Operator(LeftParenthesis), IntegerLiteral, Operator(RightParenthesis)))"
                       }
                     ]
                   },

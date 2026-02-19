@@ -1316,7 +1316,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: found '09:08:01.000001' at 30:47 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', or ')'"
+        "success": "ok"
       }
     },
     {
@@ -1360,7 +1360,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: found '09:08:01.000001' at 32:49 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', or ')'"
+        "success": "ok"
       }
     },
     {
@@ -1404,7 +1404,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: found '09:08:01.000001' at 32:49 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', or ')'"
+        "success": "ok"
       }
     },
     {
@@ -1646,7 +1646,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: found '13:59:59.999999' at 16:33 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
+        "success": "ok"
       }
     },
     {
@@ -1976,7 +1976,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: make_timestamp requires 6 or 7 arguments, got [Literal(Date32(\"2014-12-28\"), None)]"
+        "success": "ok"
       }
     },
     {
@@ -1998,7 +1998,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: found '6:30:45.887' at 44:57 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
+        "success": "ok"
       }
     },
     {
@@ -2020,7 +2020,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: found '6:30:45.887' at 44:57 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
+        "success": "ok"
       }
     },
     {
@@ -2108,7 +2108,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: found '6:30:45.887' at 48:61 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
+        "success": "ok"
       }
     },
     {
@@ -2130,7 +2130,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: found '6:30:45.887' at 48:61 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
+        "success": "ok"
       }
     },
     {
@@ -2218,7 +2218,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: found '6:30:45.887' at 48:61 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
+        "success": "ok"
       }
     },
     {
@@ -2372,7 +2372,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: found '23:59:59.999999' at 18:35 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
+        "success": "ok"
       }
     },
     {
@@ -2570,7 +2570,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: found '13:25:59.999999' at 18:35 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
+        "success": "ok"
       }
     },
     {
@@ -2592,7 +2592,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: found '20:30:29' at 29:39 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
+        "failure": "not supported: unknown function: time_diff"
       }
     },
     {
@@ -2614,7 +2614,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: found '20:30:29' at 29:39 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
+        "failure": "not supported: unknown function: time_diff"
       }
     },
     {
@@ -2636,7 +2636,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: found '20:30:29' at 29:39 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
+        "failure": "not supported: unknown function: time_diff"
       }
     },
     {
@@ -2658,7 +2658,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: found '09:32:05.359' at 30:44 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
+        "failure": "not supported: unknown function: time_trunc"
       }
     },
     {
@@ -2680,7 +2680,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: found '09:32:05.123456' at 37:54 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
+        "failure": "not supported: unknown function: time_trunc"
       }
     },
     {
@@ -3230,7 +3230,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_make_timestamp"
+        "success": "ok"
       }
     },
     {
@@ -3252,7 +3252,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_make_timestamp"
+        "success": "ok"
       }
     },
     {
@@ -3274,7 +3274,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_make_timestamp"
+        "success": "ok"
       }
     },
     {
@@ -3296,7 +3296,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_make_timestamp"
+        "success": "ok"
       }
     },
     {
@@ -3318,7 +3318,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_make_timestamp"
+        "success": "ok"
       }
     },
     {
@@ -3340,7 +3340,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_make_timestamp"
+        "success": "ok"
       }
     },
     {
@@ -3362,7 +3362,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: found '6:30:45.887' at 48:61 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
+        "success": "ok"
       }
     },
     {
@@ -3384,7 +3384,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: found '6:30:45.887' at 48:61 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
+        "success": "ok"
       }
     },
     {
@@ -3406,7 +3406,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_make_timestamp"
+        "success": "ok"
       }
     },
     {
@@ -3428,7 +3428,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_make_timestamp_ltz"
+        "success": "ok"
       }
     },
     {
@@ -3450,7 +3450,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_make_timestamp_ltz"
+        "success": "ok"
       }
     },
     {
@@ -3472,7 +3472,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_make_timestamp_ltz"
+        "success": "ok"
       }
     },
     {
@@ -3494,7 +3494,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_make_timestamp_ltz"
+        "success": "ok"
       }
     },
     {
@@ -3516,7 +3516,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: found '6:30:45.887' at 52:65 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
+        "success": "ok"
       }
     },
     {
@@ -3538,7 +3538,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: found '6:30:45.887' at 52:65 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
+        "success": "ok"
       }
     },
     {
@@ -3560,7 +3560,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_make_timestamp_ltz"
+        "success": "ok"
       }
     },
     {
@@ -3582,7 +3582,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_make_timestamp_ntz"
+        "success": "ok"
       }
     },
     {
@@ -3604,7 +3604,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_make_timestamp_ntz"
+        "success": "ok"
       }
     },
     {
@@ -3626,7 +3626,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_make_timestamp_ntz"
+        "success": "ok"
       }
     },
     {
@@ -3648,7 +3648,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: found '6:30:45.887' at 52:65 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
+        "success": "ok"
       }
     },
     {
@@ -3670,7 +3670,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_make_timestamp_ntz"
+        "success": "ok"
       }
     },
     {

@@ -130,6 +130,9 @@ pub enum Expr {
     UnresolvedDate {
         value: String,
     },
+    UnresolvedTime {
+        value: String,
+    },
     UnresolvedTimestamp {
         value: String,
         timestamp_type: TimestampType,
