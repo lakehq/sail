@@ -15,6 +15,8 @@
 #[derive(Debug, Clone)]
 pub struct SparkXorShiftRandom {
     seed: i64,
+    /// Cached second gaussian from the Marsaglia polar method.
+    next_next_gaussian: Option<f64>,
 }
 
 impl SparkXorShiftRandom {
@@ -24,6 +26,7 @@ impl SparkXorShiftRandom {
     pub fn new(init: i64) -> Self {
         Self {
             seed: Self::hash_seed(init),
+            next_next_gaussian: None,
         }
     }
 
@@ -128,6 +131,27 @@ impl SparkXorShiftRandom {
         ((high + low) as f64) / ((1i64 << 53) as f64)
     }
 
+    /// Generate the next gaussian (normal) random double.
+    ///
+    /// This is equivalent to Java's `Random.nextGaussian()`,
+    /// which uses the Marsaglia polar method.
+    pub fn next_gaussian(&mut self) -> f64 {
+        if let Some(cached) = self.next_next_gaussian.take() {
+            return cached;
+        }
+
+        loop {
+            let v1 = 2.0 * self.next_double() - 1.0;
+            let v2 = 2.0 * self.next_double() - 1.0;
+            let s = v1 * v1 + v2 * v2;
+            if s < 1.0 && s != 0.0 {
+                let multiplier = (-2.0 * s.ln() / s).sqrt();
+                self.next_next_gaussian = Some(v2 * multiplier);
+                return v1 * multiplier;
+            }
+        }
+    }
+
     /// Generate the next random 32-bit integer.
     ///
     /// This is equivalent to Java's `Random.nextInt()`.
@@ -178,6 +202,36 @@ mod tests {
             let actual = rng.next_double();
             assert!(
                 (actual - expected).abs() < 1e-15,
+                "Expected {}, got {}",
+                expected,
+                actual
+            );
+        }
+    }
+
+    /// Expected values from Spark's `randn(42)` (verified via spark-shell / PySpark).
+    /// Spark uses XORShiftRandom(42).nextGaussian() for `randn(42)`.
+    #[allow(clippy::excessive_precision)]
+    const SPARK_RANDN_SEED_42: [f64; 10] = [
+        2.384479054241165,
+        0.1920934041293524,
+        0.7337336533286575,
+        -0.5224480195716871,
+        2.060084179317831,
+        0.20963383826633825,
+        -0.548526047771831,
+        1.9079683321716681,
+        -0.41705865828987015,
+        1.0872260173387922,
+    ];
+
+    #[test]
+    fn test_spark_xorshift_next_gaussian_seed_42() {
+        let mut rng = SparkXorShiftRandom::new(42);
+        for expected in SPARK_RANDN_SEED_42 {
+            let actual = rng.next_gaussian();
+            assert!(
+                (actual - expected).abs() < 1e-12,
                 "Expected {}, got {}",
                 expected,
                 actual

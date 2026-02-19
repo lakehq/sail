@@ -464,6 +464,12 @@ fn percentile_exact(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 fn approx_percentile(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     // Spark: approx_percentile(col, percentage, [accuracy])
     // Drop the optional 3rd arg (accuracy) — PercentileFunction gives exact results.
+    // Currently delegates to PercentileFunction which computes exact percentiles.
+    // This produces slightly different results from Spark's Greenwald-Khanna approximate
+    // algorithm (see QuantileSummaries.scala). To match Spark exactly, we would need to
+    // port the Greenwald-Khanna algorithm and honor the accuracy parameter.
+    // Reference: https://doi.org/10.1145/375663.375670
+    // Spark impl: https://github.com/apache/spark/blob/master/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/util/QuantileSummaries.scala
     let args: Vec<_> = input.arguments.into_iter().take(2).collect();
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(PercentileFunction::new())),

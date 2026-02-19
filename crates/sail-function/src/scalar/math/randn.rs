@@ -5,10 +5,8 @@ use datafusion::arrow::array::Float64Array;
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
-use rand::{rng, SeedableRng};
-use rand_chacha::ChaCha8Rng;
-use rand_distr::{Distribution, StandardNormal};
 
+use super::xorshift::SparkXorShiftRandom;
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_types_exec_err};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -71,9 +69,8 @@ impl ScalarUDFImpl for Randn {
                     }
                     _ => return exec_err!("`randn` expects an integer seed, got {scalar}"),
                 };
-                let mut rng = ChaCha8Rng::seed_from_u64(seed);
-                let values =
-                    std::iter::repeat_with(|| StandardNormal.sample(&mut rng)).take(number_rows);
+                let mut rng = SparkXorShiftRandom::new(seed as i64);
+                let values = std::iter::repeat_with(|| rng.next_gaussian()).take(number_rows);
                 let array = Float64Array::from_iter_values(values);
                 Ok(ColumnarValue::Array(Arc::new(array)))
             }
@@ -108,8 +105,11 @@ impl ScalarUDFImpl for Randn {
 }
 
 fn invoke_no_seed(number_rows: usize) -> Result<ColumnarValue> {
-    let mut rng = rng();
-    let values = std::iter::repeat_with(|| StandardNormal.sample(&mut rng)).take(number_rows);
+    // Use a random seed for the no-seed case, matching Spark's behavior
+    // of creating a new XORShiftRandom with a random seed per partition.
+    let seed = rand::random::<i64>();
+    let mut rng = SparkXorShiftRandom::new(seed);
+    let values = std::iter::repeat_with(|| rng.next_gaussian()).take(number_rows);
     let array = Float64Array::from_iter_values(values);
     Ok(ColumnarValue::Array(Arc::new(array)))
 }
