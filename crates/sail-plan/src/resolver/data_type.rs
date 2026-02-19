@@ -129,14 +129,17 @@ impl PlanResolver<'_> {
                 interval_unit,
                 start_field: _,
                 end_field: _,
-            } => {
-                // TODO: Currently `start_field` and `end_field` is lost in translation.
-                //  This does not impact computation accuracy,
-                //  This may affect the display string in the `data_type_to_simple_string` function.
-                Ok(adt::DataType::Interval(Self::resolve_interval_unit(
+            } => match interval_unit {
+                // Spark's DayTimeInterval has microsecond precision.
+                // Arrow's IntervalUnit::DayTime has millisecond precision.
+                // Use Duration to preserve microsecond precision.
+                spec::IntervalUnit::DayTime => {
+                    Ok(adt::DataType::Duration(adt::TimeUnit::Microsecond))
+                }
+                _ => Ok(adt::DataType::Interval(Self::resolve_interval_unit(
                     interval_unit,
-                )))
-            }
+                ))),
+            },
             DataType::Binary => Ok(adt::DataType::Binary),
             DataType::FixedSizeBinary { size } => Ok(adt::DataType::FixedSizeBinary(*size)),
             DataType::LargeBinary => Ok(adt::DataType::LargeBinary),

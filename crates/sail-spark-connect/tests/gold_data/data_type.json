@@ -510,8 +510,10 @@
       "input": "interval day to second",
       "output": {
         "success": {
-          "duration": {
-            "timeUnit": "microsecond"
+          "interval": {
+            "intervalUnit": "dayTime",
+            "startField": "day",
+            "endField": "second"
           }
         }
       }

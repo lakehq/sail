@@ -195,11 +195,10 @@ pub fn from_ast_data_type(sql_type: DataType) -> SqlResult<spec::DataType> {
                         "interval end field: {interval:?}"
                     )));
                 }
-                // FIXME: Currently `start_field` and `end_field` are lost in translation.
-                //  This does not impact computation accuracy.
-                //  This may affect the display string in the `data_type_to_simple_string` function.
-                Ok(spec::DataType::Duration {
-                    time_unit: spec::TimeUnit::Microsecond,
+                Ok(spec::DataType::Interval {
+                    interval_unit: spec::IntervalUnit::DayTime,
+                    start_field: Some(start),
+                    end_field: end,
                 })
             }
             IntervalType::Default(_) => Ok(spec::DataType::Interval {
