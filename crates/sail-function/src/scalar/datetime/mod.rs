@@ -8,6 +8,7 @@ pub mod spark_make_time;
 pub mod spark_make_timestamp;
 pub mod spark_make_ym_interval;
 pub mod spark_next_day;
+pub mod spark_time_diff;
 pub mod spark_timestamp;
 pub mod spark_time_trunc;
 pub mod spark_to_chrono_fmt;
