@@ -126,9 +126,7 @@ impl PlanResolver<'_> {
                 if to.is_numeric() || matches!(to, DataType::Boolean) =>
             {
                 if !is_try && self.config.ansi_mode {
-                    return Err(PlanError::invalid(format!(
-                        "cannot cast date to {to}"
-                    )));
+                    return Err(PlanError::invalid(format!("cannot cast date to {to}")));
                 }
                 lit(ScalarValue::try_from(&to)?)
             }
