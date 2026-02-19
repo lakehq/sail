@@ -70,7 +70,10 @@ Feature: CTE (Common Table Expressions) support
       | inner |
 
   Rule: CTE shadowing
+    # Spark JVM rejects duplicate CTE names with DUPLICATED_CTE_NAMES error.
+    # Sail allows them, keeping the last definition (more lenient behavior).
 
+    @sail-only
     Scenario: duplicate CTE name keeps the last definition
       When query
       """
@@ -83,6 +86,7 @@ Feature: CTE (Common Table Expressions) support
       | value |
       | 2     |
 
+    @sail-only
     Scenario: duplicate CTE name with intermediate CTEs
       When query
       """
@@ -96,6 +100,7 @@ Feature: CTE (Common Table Expressions) support
       | label |
       | last  |
 
+    @sail-only
     Scenario: multiple shadowed CTEs preserve non-duplicate order
       When query
       """
