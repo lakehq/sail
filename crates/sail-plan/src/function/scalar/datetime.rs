@@ -17,6 +17,7 @@ use sail_function::scalar::datetime::spark_make_timestamp::SparkMakeTimestampNtz
 use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use sail_function::scalar::datetime::spark_next_day::SparkNextDay;
 use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
+use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_try_make_timestamp_ntz::SparkTryMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
@@ -769,6 +770,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("try_make_timestamp_ltz", F::custom(try_make_timestamp_ltz)),
         ("try_make_timestamp_ntz", F::custom(try_make_timestamp_ntz)),
         ("try_to_timestamp", F::custom(try_to_timestamp)),
+        ("time_trunc", F::udf(SparkTimeTrunc::new())),
         (
             "unix_date",
             F::unary(|arg| cast(cast(arg, DataType::Date32), DataType::Int32)),
