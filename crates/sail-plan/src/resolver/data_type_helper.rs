@@ -266,6 +266,7 @@ impl PlanResolver {
         Ok(adt::Fields::from(fields))
     }
 
+    #[allow(dead_code)]
     pub fn resolve_schema(
         &self,
         schema: spec::Schema,

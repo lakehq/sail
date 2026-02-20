@@ -1,24 +1,24 @@
 use std::sync::Arc;
 
 use arrow::array::{
-	ArrayRef, Decimal32Builder, Float32Builder, Float64Builder, Int32Builder, Int64Builder, ListArray, ListBuilder, StringBuilder, StructArray
+	ArrayRef, Decimal32Builder, Float32Builder, Float64Builder, Int32Builder, Int64Builder, ListArray, StringBuilder, StructArray
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
-use arrow::datatypes::{Field, Fields, SchemaBuilder};
+use arrow::datatypes::{Field, Fields};
+
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::{cast, expr, lit, when};
 use datafusion_functions::unicode::expr_fn as unicode_fn;
 use datafusion_functions_json::udfs;
+
 use sail_sql_analyzer::data_type::from_ast_data_type;
+use sail_sql_analyzer::parser::parse_data_type;
+
 use serde_json::Value;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::ScalarFunction;
-
-use sail_sql_analyzer::parser::parse_data_type;
-use sail_sql_parser::ast::data_type::DataType as AstDataType;
-
 use crate::resolver::data_type_helper::PlanResolver;
 
 fn get_json_object(expr: expr::Expr, path: expr::Expr) -> PlanResult<expr::Expr> {
@@ -56,7 +56,8 @@ fn json_object_keys(json_data: expr::Expr) -> expr::Expr {
 fn from_json(json_expr: expr::Expr, schema_expr: expr::Expr) -> PlanResult<expr::Expr> {
     let json_str = match json_expr {
         expr::Expr::Literal(ScalarValue::Utf8(Some(utf8)), _) => utf8,
-        _ => unimplemented!("Onwy utf8 avaiwable")
+        expr::Expr::Column(_) => return Err(PlanError::NotImplemented("Not yet implemented column support".to_string())),
+        other => return Err(PlanError::NotSupported(format!("from_json doesn't support {other:?} types")))
     };
     let value: Value = serde_json::from_str::<serde_json::Value>(json_str.as_str()).unwrap();
     let fields = get_schema_expr_as_fields(schema_expr)?;
@@ -80,7 +81,6 @@ fn from_json(json_expr: expr::Expr, schema_expr: expr::Expr) -> PlanResult<expr:
         .collect::<PlanResult<Vec<_>>>()?;
     let null_buffer = NullBuffer::from(struct_nulls);
     let struct_array = Arc::new(StructArray::new(fields.clone(), arrays, Some(null_buffer)));
-    dbg!(&struct_array);
     Ok(expr::Expr::Literal(ScalarValue::Struct(struct_array), None))
 }
 
@@ -244,8 +244,6 @@ fn append_field_value(
                 for val in arr {
                     append_field_value(builder, field, Some(val))?;
                 };
-                dbg!(&offsets);
-                dbg!(&offsets.last());
                 let last = *offsets.last().unwrap();
                 offsets.push(last + arr.len() as i32);
             } else {
@@ -303,34 +301,14 @@ fn get_schema_expr_as_fields(schema_expr: expr::Expr) -> PlanResult<Fields> {
                 parse_data_type(format!("struct<{schema}>").as_str())?
             }
         },
-        other => return Err(PlanError::NotImplemented(format!("Not implemented expr parsing for type {other:?}")))
+        expr::Expr::Column(_) => return Err(PlanError::NotImplemented("Not implemented cols yet".to_string())),
+        other => return Err(PlanError::NotImplemented(format!("Not supported for type {other:?}"))),
     };
     let sail_dtype = from_ast_data_type(schema_struct.clone())?;
     let arrow_dtype = PlanResolver.resolve_data_type(&sail_dtype)?;
-    dbg!(&arrow_dtype);
     match arrow_dtype {
         DataType::Struct(fields) => Ok(fields),
         other => Err(PlanError::NotImplemented(format!("Not implemented {other:?}")))
-    }
-}
-
-fn ast_data_type_to_arrow(ast_data_type: &AstDataType) -> PlanResult<DataType> {
-    match ast_data_type {
-        AstDataType::Int(_, _) => Ok(DataType::Int64),
-        AstDataType::Double(_) => Ok(DataType::Decimal32(9, 2)),
-        AstDataType::Struct(_, _, Some(struct_fields), _) => {
-            let mut field_builder = SchemaBuilder::new();
-            for struct_field in struct_fields.items() {
-                let data_type = ast_data_type_to_arrow(&struct_field.data_type)?;
-                field_builder.push(Field::new(
-                    struct_field.identifier.value.clone(),
-                    data_type,
-                    struct_field.not_null.is_none()
-                ));
-            }
-            Ok(DataType::Struct(field_builder.finish().fields))
-        }
-        _ => unimplemented!("Not hewe wet")
     }
 }
 
@@ -448,16 +426,4 @@ mod tests {
         cast(expr_.clone(), DataType::Utf8);
         from_json(expr_.clone(), expr_.clone()).unwrap();
     }
-
-    // TODO: remove
-    #[test]
-    fn test_parse_data_type() {
-        let s = parse_data_type("struct<a INT, b DOUBLE>").unwrap();
-        dbg!(s);
-        let s = parse_data_type("a INT, b DOUBLE").unwrap();
-        dbg!(s);
-        let s = parse_data_type("STRUCT<teacher: STRING, student: ARRAY<STRUCT<name: STRING, rank: INT>>>").unwrap();
-        dbg!(s);
-    }
-
 }
