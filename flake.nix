@@ -11,8 +11,8 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
-        lib = pkgs.lib;
 
+        lib = pkgs.lib;
         isLinux = pkgs.stdenv.isLinux;
 
         rustStable = fenix.packages.${system}.stable.toolchain;
@@ -21,12 +21,13 @@
         py = pkgs.python313;
         pyp = pkgs.python313Packages;
 
+        protobuf3 = pkgs.protobuf_21;
+
       in {
         # ── Dev shell ─────────────────────────────────────────────────
         devShells.default = pkgs.mkShell {
           buildInputs =
             (with pkgs; [
-              # Shell utils
               fzf
               bashInteractive
               coreutils
@@ -38,44 +39,51 @@
               procps
               ripgrep
 
-              # Sail prerequisites
-              protobuf
               nodejs_22
               pnpm
               zig
               maturin
 
-              # Rust
               rustStable
               rustNightly
               cargo-nextest
               pkg-config
 
-              # Java (Spark)
               jdk17
+              maven
 
-              # Python
               py
-              pyp.virtualenv
-              pyp.setuptools
-              pyp.wheel
 
-              # Other tooling
               hatch
               uv
 
             ])
+            ++ [ protobuf3 ]
             ++ lib.optionals isLinux [
               pkgs.stdenv.cc.cc.lib
             ];
 
           shellHook =
             ''
-              export RUST_BACKTRACE=1
-              export JAVA_HOME=${pkgs.jdk17}
-              export PROTOC="${pkgs.protobuf}/bin/protoc"
+            if ! nixos-option programs.nix-ld.enable >/dev/null 2>&1; then
+              echo "⚠️ No estás en NixOS o nixos-option no está disponible."
+            elif [ "$(nixos-option programs.nix-ld.enable | awk '/Value:/ {getline; print $1}')" != "true" ]; then
+              echo ""
+              echo "⚠️  nix-ld no está habilitado."
+              echo "   Añade en configuration.nix:"
+              echo "     programs.nix-ld.enable = true;"
+              echo "   y ejecuta: sudo nixos-rebuild switch"
+              echo ""
+            fi
+           
 
-              # Clean Python env
+              export RUST_BACKTRACE=1
+              export JAVA_HOME=${pkgs.jdk17}/lib/openjdk
+
+              # 🔥 Forzamos el protoc correcto
+              export PROTOC="${protobuf3}/bin/protoc"
+              export PATH="${protobuf3}/bin:$PATH"
+
               unset PYTHONHOME
               unset PYTHONPATH
 
