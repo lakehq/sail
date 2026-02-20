@@ -146,7 +146,16 @@ impl ScalarUDFImpl for ParseUrl {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         match arg_types.len() {
-            2 | 3 if arg_types.iter().all(is_string_type) => Ok(arg_types.to_vec()),
+            2 | 3 if arg_types.iter().all(is_string_type) => Ok(arg_types
+                .iter()
+                .map(|dt| {
+                    if matches!(dt, DataType::Null) {
+                        DataType::Utf8
+                    } else {
+                        dt.clone()
+                    }
+                })
+                .collect()),
             2 | 3 => plan_err!(
                 "`{}` expects STRING arguments, got {:?}",
                 &self.name(),
@@ -169,7 +178,7 @@ impl ScalarUDFImpl for ParseUrl {
 fn is_string_type(dt: &DataType) -> bool {
     matches!(
         dt,
-        DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8
+        DataType::Null | DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8
     )
 }
 
