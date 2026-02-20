@@ -22,6 +22,7 @@ use sail_function::aggregate::percentile::PercentileFunction;
 use sail_function::aggregate::percentile_disc::percentile_disc_udaf;
 use sail_function::aggregate::skewness::SkewnessFunc;
 use sail_function::aggregate::try_avg::TryAvgFunction;
+use sail_function::error::invalid_arg_count_exec_err;
 use sail_function::scalar::struct_function::StructFunction;
 
 use crate::error::{PlanError, PlanResult};
@@ -470,6 +471,10 @@ fn approx_percentile(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     // port the Greenwald-Khanna algorithm and honor the accuracy parameter.
     // Reference: https://doi.org/10.1145/375663.375670
     // Spark impl: https://github.com/apache/spark/blob/master/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/util/QuantileSummaries.scala
+    let n = input.arguments.len();
+    if !(2..=3).contains(&n) {
+        return Err(invalid_arg_count_exec_err("approx_percentile", (2, 3), n).into());
+    }
     let args: Vec<_> = input.arguments.into_iter().take(2).collect();
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(PercentileFunction::new())),
