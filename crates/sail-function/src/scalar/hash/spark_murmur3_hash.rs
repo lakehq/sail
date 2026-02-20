@@ -54,13 +54,7 @@ impl ScalarUDFImpl for SparkMurmur3Hash {
                 "spark_hash requires at least one argument".to_string(),
             ));
         }
-        let seed = &args[length - 1];
-        match seed {
-            ColumnarValue::Scalar(ScalarValue::Int32(_)) => {}
-            _ => {
-                args.push(ColumnarValue::Scalar(ScalarValue::Int32(Some(42))));
-            }
-        }
+        args.push(ColumnarValue::Scalar(ScalarValue::Int32(Some(42))));
         spark_murmur3_hash(&args[..])
     }
 }

@@ -54,17 +54,7 @@ impl ScalarUDFImpl for SparkXxhash64 {
                 "spark_xxhash64 requires at least one argument".to_string(),
             ));
         }
-        let seed = &args[length - 1];
-        match seed {
-            ColumnarValue::Scalar(ScalarValue::Int32(Some(seed))) => {
-                let new_scalar = ScalarValue::Int64(Some(*seed as i64));
-                args[length - 1] = ColumnarValue::Scalar(new_scalar);
-            }
-            ColumnarValue::Scalar(ScalarValue::Int64(_)) => {}
-            _ => {
-                args.push(ColumnarValue::Scalar(ScalarValue::Int64(Some(42))));
-            }
-        }
+        args.push(ColumnarValue::Scalar(ScalarValue::Int64(Some(42))));
         spark_xxhash64(&args[..])
     }
 }
