@@ -29,7 +29,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
     get_arguments_and_null_treatment, get_null_treatment, AggFunction, AggFunctionInput,
 };
-use crate::function::transform_count_star_wildcard_expr;
+use crate::function::{expand_wildcard_to_columns, transform_count_star_wildcard_expr};
 
 lazy_static! {
     static ref BUILT_IN_AGGREGATE_FUNCTIONS: HashMap<&'static str, AggFunction> =
@@ -258,10 +258,14 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         ignore_nulls,
         filter,
         order_by,
-        function_context: _,
+        function_context,
     } = input;
     let null_treatment = get_null_treatment(ignore_nulls);
-    let args = transform_count_star_wildcard_expr(arguments);
+    let args = if distinct {
+        expand_wildcard_to_columns(arguments, function_context.schema)
+    } else {
+        transform_count_star_wildcard_expr(arguments)
+    };
     // TODO: remove StructFunction call when count distinct from multiple arguments is implemented
     // https://github.com/apache/datafusion/blob/58ddf0d4390c770bc571f3ac2727c7de77aa25ab/datafusion/functions-aggregate/src/count.rs#L333
     let args = if distinct && (args.len() > 1) {
