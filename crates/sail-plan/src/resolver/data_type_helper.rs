@@ -199,6 +199,21 @@ impl PlanResolver {
                     *keys_sorted,
                 ))
             }
+            DataType::Geometry { srid: _ } => {
+                // Geometry types are stored as Binary (WKB-encoded)
+                // Extension type metadata is added at the Field level, not DataType level
+                // See resolve_field() for metadata handling
+                Ok(adt::DataType::Binary)
+            }
+            DataType::Geography {
+                srid: _,
+                algorithm: _,
+            } => {
+                // Geography types are stored as Binary (WKB-encoded)
+                // Extension type metadata is added at the Field level, not DataType level
+                // See resolve_field() for metadata handling
+                Ok(adt::DataType::Binary)
+            }
             DataType::ConfiguredUtf8 { utf8_type: _ } => {
                 // FIXME: Currently `length` and `utf8_type` is lost in translation.
                 //  This impacts accuracy if `spec::ConfiguredUtf8Type` is `VarChar` or `Char`.

@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
 use arrow::array::{
-	ArrayRef, Decimal32Builder, Float32Builder, Float64Builder, Int32Builder, Int64Builder, ListArray, StringBuilder, StructArray
+	ArrayRef, Decimal32Builder, Float32Builder, Float64Builder, Int32Builder, Int64Builder, ListArray, StringBuilder, StructArray, TimestampMicrosecondBuilder
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
-use arrow::datatypes::{Field, Fields};
+use arrow::datatypes::{Field, Fields, TimeUnit};
 
+use chrono::NaiveDate;
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::{cast, expr, lit, when};
@@ -17,7 +18,7 @@ use sail_function::scalar::json::{
 use sail_sql_analyzer::data_type::from_ast_data_type;
 use sail_sql_analyzer::parser::parse_data_type;
 
-use serde_json::Value;
+use serde_json::{Value};
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::ScalarFunction;
@@ -64,7 +65,13 @@ fn to_json(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     }
 }
 
-fn from_json(json_expr: expr::Expr, schema_expr: expr::Expr) -> PlanResult<expr::Expr> {
+fn from_json(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+    if args.len() < 2 && args.len() > 3 {
+        return Err(PlanError::InvalidArgument(format!("Expected 2-3 args but got {}", args.len())));
+    };
+    let json_expr = args.get(0).unwrap().clone();
+    let schema_expr = args.get(1).unwrap().clone();
+    let _options = args.get(2).clone();
     let json_str = match json_expr {
         expr::Expr::Literal(ScalarValue::Utf8(Some(utf8)), _) => utf8,
         expr::Expr::Column(_) => return Err(PlanError::NotImplemented("Not yet implemented column support".to_string())),
@@ -92,6 +99,7 @@ fn from_json(json_expr: expr::Expr, schema_expr: expr::Expr) -> PlanResult<expr:
         .collect::<PlanResult<Vec<_>>>()?;
     let null_buffer = NullBuffer::from(struct_nulls);
     let struct_array = Arc::new(StructArray::new(fields.clone(), arrays, Some(null_buffer)));
+    dbg!(&struct_array);
     Ok(expr::Expr::Literal(ScalarValue::Struct(struct_array), None))
 }
 
@@ -104,6 +112,7 @@ fn finish_builder(builder: FieldBuilder) -> PlanResult<ArrayRef> {
             FieldBuilder::Float64(mut b) => Arc::new(b.finish()),
             FieldBuilder::Decimal32(mut b) => Arc::new(b.finish()),
             FieldBuilder::String(mut b) => Arc::new(b.finish()),
+            FieldBuilder::TimestampMicrosecondBuilder(mut b) => Arc::new(b.finish()),
             FieldBuilder::Struct {
                 fields,
                 builders,
@@ -149,6 +158,7 @@ fn append_field_value(
                 FieldBuilder::Float64(builder) => builder.append_null(),
                 FieldBuilder::Decimal32(builder) => builder.append_null(),
                 FieldBuilder::String(builder) => builder.append_null(),
+                FieldBuilder::TimestampMicrosecondBuilder(builder) => builder.append_null(),
                 FieldBuilder::Struct {
                     builders: nested_builders,
                     null_buffer,
@@ -223,6 +233,21 @@ fn append_field_value(
             }
         },
         (
+            FieldBuilder::TimestampMicrosecondBuilder(b),
+            DataType::Timestamp(TimeUnit::Microsecond, _)
+        ) => {
+            let s = value.as_str().unwrap();
+            dbg!(s);
+            let micro_seconds = NaiveDate::parse_from_str(s, "%d/%m/%Y")
+                .unwrap()
+                .and_hms_opt(0, 0, 0)
+                .unwrap()
+                .and_utc()
+                .timestamp_micros();
+            dbg!(&micro_seconds);
+            b.append_value(micro_seconds);
+        },
+        (
             FieldBuilder::Struct {
                 fields: nested_fields,
                 builders: nested_builders,
@@ -279,6 +304,7 @@ fn append_null_to_all_builders(builders: &mut [FieldBuilder]) {
             FieldBuilder::Float64(b) => b.append_null(),
             FieldBuilder::Decimal32(b) => b.append_null(),
             FieldBuilder::String(b) => b.append_null(),
+            FieldBuilder::TimestampMicrosecondBuilder(b) => b.append_null(),
             FieldBuilder::Struct {
                 builders: nested_builder,
                 null_buffer,
@@ -330,6 +356,7 @@ enum FieldBuilder {
     Float64(Float64Builder),
     Decimal32(Decimal32Builder),
     String(StringBuilder),
+    TimestampMicrosecondBuilder(TimestampMicrosecondBuilder),
     Struct {
         fields: Fields,
         builders: Vec<FieldBuilder>,
@@ -353,6 +380,8 @@ fn create_field_builders(fields: &Fields, capacity: usize) -> PlanResult<Vec<Fie
             DataType::Float64 => Ok(FieldBuilder::Float64(Float64Builder::with_capacity(capacity))),
             DataType::Decimal32(_, _) => Ok(FieldBuilder::Decimal32(Decimal32Builder::with_capacity(capacity))),
             DataType::Utf8 => Ok(FieldBuilder::String(StringBuilder::with_capacity(capacity, capacity*16))),
+            DataType::Timestamp(TimeUnit::Microsecond, _) =>
+                Ok(FieldBuilder::TimestampMicrosecondBuilder(TimestampMicrosecondBuilder::with_capacity(capacity))),
             DataType::Struct(fields) => {
                 let builders = create_field_builders(fields, capacity)?;
                 Ok(FieldBuilder::Struct {
@@ -385,7 +414,7 @@ pub(super) fn list_built_in_json_functions() -> Vec<(&'static str, ScalarFunctio
     use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
-        ("from_json", F::binary(from_json)),
+        ("from_json", F::var_arg(from_json)),
         ("get_json_object", F::binary(get_json_object)),
         ("json_array_length", F::unary(json_array_length)),
         ("json_object_keys", F::unary(json_object_keys)),
@@ -398,6 +427,7 @@ pub(super) fn list_built_in_json_functions() -> Vec<(&'static str, ScalarFunctio
 #[cfg(test)]
 mod tests {
 
+    use arrow::array::{MapBuilder};
     use datafusion::{prelude::Column};
     use datafusion_common::Spans;
 
@@ -414,7 +444,7 @@ mod tests {
         let expr_ = expr::Expr::Literal(ScalarValue::Utf8(Some(s.to_string())), None);
         let schema = r#"a int, b double"#;
         let schema_expr = expr::Expr::Literal(ScalarValue::Utf8(Some(schema.to_string())), None);
-        from_json(expr_.clone(), schema_expr.clone()).unwrap();
+        from_json(vec![expr_.clone(), schema_expr.clone()]).unwrap();
 
         let s = r#"
             {"teacher": "Alice", "student": [{"name": "Bob", "rank": 1}, {"name": "Charlie", "rank": 2}]}
@@ -422,7 +452,21 @@ mod tests {
         let expr_ = expr::Expr::Literal(ScalarValue::Utf8(Some(s.to_string())), None);
         let schema = r#"STRUCT<teacher: STRING, student: ARRAY<STRUCT<name: STRING, rank: INT>>>"#;
         let schema_expr = expr::Expr::Literal(ScalarValue::Utf8(Some(schema.to_string())), None);
-        from_json(expr_.clone(), schema_expr.clone()).unwrap();
+        from_json(vec![expr_.clone(), schema_expr.clone()]).unwrap();
+
+        let s = "{\"time\":\"26/08/2015\"}";
+        let expr_ = expr::Expr::Literal(ScalarValue::Utf8(Some(s.to_string())), None);
+        let schema = r#"time Timestamp"#;
+        let schema_expr = expr::Expr::Literal(ScalarValue::Utf8(Some(schema.to_string())), None);
+        //let opt = r#"map('timestampFormat', 'dd/MM/yyyy'))"#;
+        let key_builder = StringBuilder::new();
+        let value_builder = StringBuilder::new();
+        let mut map_builder = MapBuilder::new(None, key_builder, value_builder);
+        map_builder.keys().append_value("timestampFormat");
+        map_builder.values().append_value("dd/MM/yyyy");
+        map_builder.append(true).unwrap();
+        let opt = expr::Expr::Literal(ScalarValue::Map(Arc::new(map_builder.finish())), None);
+        from_json(vec![expr_.clone(), schema_expr.clone(), opt]).unwrap();
     }
 
     #[test]
@@ -435,6 +479,6 @@ mod tests {
         let expr_ = expr::Expr::Column(col);
         // meh not done with this - not sure how to get data out
         cast(expr_.clone(), DataType::Utf8);
-        from_json(expr_.clone(), expr_.clone()).unwrap();
+        from_json(vec![expr_.clone(), expr_.clone()]).unwrap();
     }
 }

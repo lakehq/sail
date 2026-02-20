@@ -42,3 +42,4 @@ uuid = { workspace = true }
 indexmap = { workspace = true }
 log = { workspace = true }
 regex = { workspace = true }
+chrono = { workspace = true }
