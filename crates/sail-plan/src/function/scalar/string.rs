@@ -5,12 +5,18 @@ use datafusion::functions::regex::regexpcount::RegexpCountFunc;
 use datafusion::functions::regex::regexpinstr::RegexpInstrFunc;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::{cast, expr, lit, try_cast, when, ExprSchemable};
+use datafusion_functions_nested::expr_fn::array_element;
 use datafusion_spark::function::string::elt::SparkElt;
 use datafusion_spark::function::string::expr_fn as string_fn;
+use datafusion_spark::function::string::format_string::FormatStringFunc;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::string::format_number::FormatNumber;
 use sail_function::scalar::string::levenshtein::Levenshtein;
 use sail_function::scalar::string::make_valid_utf8::MakeValidUtf8;
+use sail_function::scalar::string::randstr::Randstr;
+use sail_function::scalar::string::soundex::Soundex;
 use sail_function::scalar::string::spark_base64::{SparkBase64, SparkUnbase64};
+use sail_function::scalar::string::spark_concat_ws::SparkConcatWs;
 use sail_function::scalar::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use sail_function::scalar::string::spark_mask::SparkMask;
 use sail_function::scalar::string::spark_split::SparkSplit;
@@ -23,6 +29,39 @@ use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
 fn regexp_replace(string: expr::Expr, pattern: expr::Expr, replacement: expr::Expr) -> expr::Expr {
     regex_fn::regexp_replace(string, pattern, replacement, Some(lit("g")))
+}
+
+fn regexp_extract(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput { mut arguments, .. } = input;
+    // regexp_extract(str, pattern, idx) - idx defaults to 1
+    let idx = if arguments.len() == 3 {
+        arguments
+            .pop()
+            .ok_or_else(|| PlanError::invalid("regexp_extract requires 2 or 3 arguments"))?
+    } else {
+        lit(1i64)
+    };
+    let (string, pattern) = arguments
+        .two()
+        .map_err(|_| PlanError::invalid("regexp_extract requires 2 or 3 arguments"))?;
+    // Wrap pattern with an outer capture group so idx=0 (entire match) works.
+    // After wrapping, regexp_match returns [entire_match, group1, group2, ...].
+    let wrapped_pattern = expr_fn::concat_ws(lit(""), vec![lit("("), pattern, lit(")")]);
+    let matches = regex_fn::regexp_match(string, wrapped_pattern, None);
+    // array_element is 1-indexed; +1 accounts for the outer group we added.
+    let element = array_element(matches, idx + lit(1i64));
+    // Spark returns "" instead of NULL when no match.
+    Ok(expr_fn::coalesce(vec![element, lit("")]))
+}
+
+fn regexp_substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (string, pattern) = input
+        .arguments
+        .two()
+        .map_err(|_| PlanError::invalid("regexp_substr requires 2 arguments"))?;
+    let wrapped_pattern = expr_fn::concat_ws(lit(""), vec![lit("("), pattern, lit(")")]);
+    let matches = regex_fn::regexp_match(string, wrapped_pattern, None);
+    Ok(array_element(matches, lit(1i64)))
 }
 
 fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -42,14 +81,6 @@ fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     // TODO: Spark client throws "UNEXPECTED EXCEPTION: ArrowInvalid('Unrecognized type: 24')"
     //  when the return type is Utf8View.
     Ok(cast(substr_res, DataType::Utf8))
-}
-
-fn concat_ws(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
-    let (delimiter, args) = args.at_least_one()?;
-    if args.is_empty() {
-        return Ok(lit(""));
-    }
-    Ok(expr_fn::concat_ws(delimiter, args))
 }
 
 fn overlay(mut args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
@@ -213,15 +244,15 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("chr", F::unary(expr_fn::chr)),
         ("collate", F::unknown("collate")),
         ("collation", F::unknown("collation")),
-        ("concat_ws", F::var_arg(concat_ws)),
+        ("concat_ws", F::udf(SparkConcatWs::new())),
         ("contains", F::custom(contains)),
         ("decode", F::udf(SparkDecode::new())),
         ("elt", F::udf(SparkElt::new())),
         ("encode", F::udf(SparkEncode::new())),
         ("endswith", F::custom(endswith)),
         ("find_in_set", F::binary(expr_fn::find_in_set)),
-        ("format_number", F::unknown("format_number")),
-        ("format_string", F::binary(string_fn::format_string)),
+        ("format_number", F::udf(FormatNumber::new())),
+        ("format_string", F::udf(FormatStringFunc::new())),
         ("initcap", F::unary(expr_fn::initcap)),
         ("instr", F::binary(expr_fn::instr)),
         ("is_valid_utf8", F::custom(is_valid_utf8)),
@@ -240,21 +271,21 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("octet_length", F::custom(octet_length)),
         ("overlay", F::var_arg(overlay)),
         ("position", F::custom(position)),
-        ("printf", F::unknown("printf")),
-        ("randstr", F::unknown("randstr")),
+        ("printf", F::udf(FormatStringFunc::new())),
+        ("randstr", F::udf(Randstr::new())),
         ("regexp_count", F::udf(RegexpCountFunc::new())),
-        ("regexp_extract", F::unknown("regexp_extract")),
+        ("regexp_extract", F::custom(regexp_extract)),
         ("regexp_extract_all", F::unknown("regexp_extract_all")),
         ("regexp_instr", F::udf(RegexpInstrFunc::new())),
         ("regexp_replace", F::ternary(regexp_replace)),
-        ("regexp_substr", F::unknown("regexp_substr")),
+        ("regexp_substr", F::custom(regexp_substr)),
         ("repeat", F::binary(expr_fn::repeat)),
         ("replace", F::var_arg(replace)),
         ("right", F::binary(expr_fn::right)),
         ("rpad", F::var_arg(expr_fn::rpad)),
         ("rtrim", F::var_arg(rev_args(expr_fn::rtrim))),
         ("sentences", F::unknown("sentences")),
-        ("soundex", F::unknown("soundex")),
+        ("soundex", F::udf(Soundex::new())),
         ("space", F::unary(space)),
         ("split", F::udf(SparkSplit::new())),
         ("split_part", F::ternary(expr_fn::split_part)),

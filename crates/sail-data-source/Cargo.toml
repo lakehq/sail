@@ -15,6 +15,7 @@ futures = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-datasource = { workspace = true }
+datafusion-session = { workspace = true }
 object_store = { workspace = true }
 chumsky = { workspace = true }
 glob = { workspace = true }
@@ -26,6 +27,13 @@ bytes = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 chrono = { workspace = true }
+pyo3 = { workspace = true }
+arrow = { workspace = true }
+arrow-schema = { workspace = true }
+arrow-pyarrow = { workspace = true }
+dashmap = { workspace = true }
+once_cell = { workspace = true }
+thiserror = { workspace = true }
 
 [build-dependencies]
 serde = { workspace = true }

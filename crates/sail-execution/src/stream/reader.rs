@@ -1,4 +1,4 @@
-use std::fmt::{Debug, Display};
+use std::fmt;
 use std::pin::Pin;
 
 use datafusion::arrow::array::RecordBatch;
@@ -6,34 +6,41 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::Result;
 use futures::Stream;
 
-use crate::id::WorkerId;
-use crate::stream::channel::ChannelName;
+use crate::id::{TaskStreamKey, TaskStreamKeyDenseDisplay, WorkerId};
 use crate::stream::error::TaskStreamResult;
-
 #[derive(Debug, Clone)]
 pub enum TaskReadLocation {
+    Driver {
+        key: TaskStreamKey,
+    },
     Worker {
         worker_id: WorkerId,
-        channel: ChannelName,
+        key: TaskStreamKey,
     },
     Remote {
         uri: String,
+        key: TaskStreamKey,
     },
 }
 
-impl Display for TaskReadLocation {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl fmt::Display for TaskReadLocation {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            TaskReadLocation::Worker { worker_id, channel } => {
-                write!(f, "Worker({worker_id}, {channel})")
+            TaskReadLocation::Driver { key } => {
+                write!(f, "Driver({})", TaskStreamKeyDenseDisplay(key))
             }
-            TaskReadLocation::Remote { uri } => write!(f, "Remote({uri})"),
+            TaskReadLocation::Worker { worker_id, key } => {
+                write!(f, "Worker({worker_id}, {})", TaskStreamKeyDenseDisplay(key))
+            }
+            TaskReadLocation::Remote { uri, key } => {
+                write!(f, "Remote({uri}, {})", TaskStreamKeyDenseDisplay(key))
+            }
         }
     }
 }
 
 #[tonic::async_trait]
-pub trait TaskStreamReader: Debug + Send + Sync {
+pub trait TaskStreamReader: fmt::Debug + Send + Sync {
     async fn open(
         &self,
         location: &TaskReadLocation,

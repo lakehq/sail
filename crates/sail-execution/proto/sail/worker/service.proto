@@ -2,10 +2,6 @@ syntax = "proto3";
 
 package sail.worker;
 
-message TaskStreamTicket {
-  string channel = 1;
-}
-
 message WorkerLocation {
   uint64 worker_id = 1;
   string host = 2;
@@ -14,11 +10,10 @@ message WorkerLocation {
 
 message RunTaskRequest {
   uint64 job_id = 1;
-  uint64 task_id = 2;
-  uint64 attempt = 3;
-  bytes plan = 4;
-  uint64 partition = 5;
-  optional string channel = 6;
+  uint64 stage = 2;
+  uint64 partition = 3;
+  uint64 attempt = 4;
+  bytes definition = 5;
   // The locations of peer workers that may or may not be needed
   // when fetching streams for this task.
   // Note that we should not broadcast peer information to workers
@@ -26,7 +21,7 @@ message RunTaskRequest {
   // However, the worker can asynchronously acknowledge the receipt
   // of peer information to the driver so that duplicate peer
   // information does not need to be sent again in the future.
-  repeated WorkerLocation peers = 7;
+  repeated WorkerLocation peers = 6;
 }
 
 message RunTaskResponse {
@@ -34,18 +29,22 @@ message RunTaskResponse {
 
 message StopTaskRequest {
   uint64 job_id = 1;
-  uint64 task_id = 2;
-  uint64 attempt = 3;
+  uint64 stage = 2;
+  uint64 partition = 3;
+  uint64 attempt = 4;
 }
 
 message StopTaskResponse {
 }
 
-message RemoveStreamRequest {
-  string channel_prefix = 1;
+message CleanUpJobRequest {
+  uint64 job_id = 1;
+  // An optional stage to clean up.
+  // If not specified, clean up all stages for the job.
+  optional uint64 stage = 2;
 }
 
-message RemoveStreamResponse {
+message CleanUpJobResponse {
 }
 
 message StopWorkerRequest {
@@ -57,6 +56,6 @@ message StopWorkerResponse {
 service WorkerService {
   rpc RunTask(RunTaskRequest) returns (RunTaskResponse) {}
   rpc StopTask(StopTaskRequest) returns (StopTaskResponse) {}
-  rpc RemoveStream(RemoveStreamRequest) returns (RemoveStreamResponse) {}
+  rpc CleanUpJob(CleanUpJobRequest) returns (CleanUpJobResponse) {}
   rpc StopWorker(StopWorkerRequest) returns (StopWorkerResponse) {}
 }

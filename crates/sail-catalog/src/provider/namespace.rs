@@ -95,13 +95,9 @@ impl Namespace {
         other.is_child_of(self)
     }
 
-    pub fn is_descendant_of(&self, other: &Self) -> bool {
+    pub fn starts_with(&self, other: &Self) -> bool {
         self.head == other.head
-            && self.tail.len() > other.tail.len()
+            && self.tail.len() >= other.tail.len()
             && self.tail.iter().zip(other.tail.iter()).all(|(a, b)| a == b)
-    }
-
-    pub fn is_ancestor_of(&self, other: &Self) -> bool {
-        other.is_descendant_of(self)
     }
 }

@@ -1,31 +1,35 @@
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
 use sail_server::actor::ActorSystem;
 
-use crate::session_factory::SessionFactory;
+use crate::session_factory::{ServerSessionInfo, SessionFactory};
 
 #[readonly::make]
-pub struct SessionManagerOptions<I> {
-    pub config: Arc<AppConfig>,
+pub struct SessionManagerOptions {
+    pub session_timeout: Duration,
     pub runtime: RuntimeHandle,
     pub system: Arc<Mutex<ActorSystem>>,
-    pub factory: Box<dyn Fn() -> Box<dyn SessionFactory<I>> + Send>,
+    pub factory: Box<dyn Fn() -> Box<dyn SessionFactory<ServerSessionInfo>> + Send>,
 }
 
-impl<I> SessionManagerOptions<I> {
+impl SessionManagerOptions {
     pub fn new(
-        config: Arc<AppConfig>,
         runtime: RuntimeHandle,
         system: Arc<Mutex<ActorSystem>>,
-        factory: Box<dyn Fn() -> Box<dyn SessionFactory<I>> + Send>,
+        factory: Box<dyn Fn() -> Box<dyn SessionFactory<ServerSessionInfo>> + Send>,
     ) -> Self {
         Self {
-            config,
+            session_timeout: Duration::MAX,
             runtime,
             system,
             factory,
         }
+    }
+
+    pub fn with_session_timeout(mut self, timeout: Duration) -> Self {
+        self.session_timeout = timeout;
+        self
     }
 }

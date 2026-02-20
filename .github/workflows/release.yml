@@ -16,7 +16,7 @@ on:
 jobs:
   setup:
     name: Setup
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     permissions:
       # This is required for calling the GitHub API to generate release notes.
       contents: write
@@ -183,7 +183,10 @@ jobs:
         with:
           command: build
           target: ${{ matrix.platform.target }}
-          args: --release --out dist
+          # We need to specify the interpreter explicitly even if we are building for ABI3.
+          # This is to avoid unexpected PyPy wheels when building inside containers.
+          # https://github.com/PyO3/maturin/issues/2852
+          args: --release --out dist --interpreter python3.11
           # https://github.com/briansmith/ring/issues/1728
           # https://github.com/PyO3/maturin-action/issues/222
           manylinux: ${{ matrix.platform.target == 'aarch64' && matrix.platform.os == 'linux' && '2_24' || 'auto' }}
@@ -337,7 +340,7 @@ jobs:
 
   review:
     name: Review
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     needs:
       - test-sdist
       - test-wheel
@@ -359,7 +362,7 @@ jobs:
   release-pypi:
     name: Release to PyPI
     if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     environment: release
     permissions:
       id-token: write
@@ -388,7 +391,7 @@ jobs:
   release-github:
     name: Release to GitHub
     if: ${{ github.event_name == 'push' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     permissions:
       contents: write
       discussions: write

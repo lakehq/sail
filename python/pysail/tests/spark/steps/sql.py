@@ -49,6 +49,12 @@ def variable_for_temporary_directory(name, directory, tmp_path, variables):
     return variables
 
 
+@given(parsers.parse("config {key} = {value}"))
+def config_set(key, value, spark):
+    """Sets a Spark configuration value using spark.conf.set()."""
+    spark.conf.set(key, value)
+
+
 @given(parsers.re("statement(?P<template>( template)?)"))
 def statement(template, docstring, spark, variables):
     """Executes a SQL statement that is expected to succeed."""
@@ -56,7 +62,7 @@ def statement(template, docstring, spark, variables):
     spark.sql(s)
 
 
-@given(parsers.re("statement(?P<template>( template)?) with error {error}"))
+@given(parsers.re(r"statement(?P<template>( template)?) with error (?P<error>.*)"))
 def statement_with_error(template, error, docstring, spark, variables):
     """Executes a SQL statement that is expected to fail with an error."""
     s = Template(docstring).render(**variables) if template else docstring

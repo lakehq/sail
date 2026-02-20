@@ -26,12 +26,15 @@ use std::time::Instant;
 use async_trait::async_trait;
 use chrono::Utc;
 use datafusion::arrow::array::{ArrayRef, PrimitiveArray};
+use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::{
     ArrowTimestampType, DataType, Field, Schema, SchemaRef, TimeUnit, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
+use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::{LexOrdering, OrderingRequirements, PhysicalSortExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -114,7 +117,8 @@ impl DeltaWriterExec {
         operation_override: Option<DeltaOperation>,
     ) -> Result<Self> {
         let schema = delta_action_schema()?;
-        let cache = Self::compute_properties(schema);
+        let output_partitions = input.output_partitioning().partition_count().max(1);
+        let cache = Self::compute_properties(schema, output_partitions);
         Ok(Self {
             input,
             table_url,
@@ -129,10 +133,10 @@ impl DeltaWriterExec {
         })
     }
 
-    fn compute_properties(schema: SchemaRef) -> PlanProperties {
+    fn compute_properties(schema: SchemaRef, output_partitions: usize) -> PlanProperties {
         PlanProperties::new(
             EquivalenceProperties::new(schema),
-            Partitioning::UnknownPartitioning(1),
+            Partitioning::UnknownPartitioning(output_partitions.max(1)),
             EmissionType::Final,
             Boundedness::Bounded,
         )
@@ -190,7 +194,58 @@ impl ExecutionPlan for DeltaWriterExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::SinglePartition]
+        if self.partition_columns.is_empty() {
+            // Upstream repartitioning controls file counts and small-file behavior.
+            return vec![Distribution::UnspecifiedDistribution];
+        }
+
+        // For partitioned tables, require grouping by the partition key so that each task can
+        // write its partitions correctly without opening many writers concurrently.
+        //
+        // TODO(optimizer): Reduce the cost of meeting this distribution requirement.
+        let mut exprs: Vec<Arc<dyn datafusion_physical_expr::PhysicalExpr>> =
+            Vec::with_capacity(self.partition_columns.len());
+        for name in &self.partition_columns {
+            let idx = match self.input.schema().index_of(name) {
+                Ok(i) => i,
+                Err(_) => return vec![Distribution::UnspecifiedDistribution],
+            };
+            exprs.push(Arc::new(
+                datafusion_physical_expr::expressions::Column::new(name, idx),
+            ));
+        }
+
+        vec![Distribution::HashPartitioned(exprs)]
+    }
+
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
+        if self.partition_columns.is_empty() {
+            return vec![None];
+        }
+
+        // TODO(optimizer): Reduce the cost of meeting this ordering requirement.
+        // Goal: avoid unnecessary `SortExec` when we can prove the input is already ordered
+        // (or sufficiently grouped) by the partition key.
+        let mut sort_exprs: Vec<PhysicalSortExpr> =
+            Vec::with_capacity(self.partition_columns.len());
+        for name in &self.partition_columns {
+            let idx = match self.input.schema().index_of(name) {
+                Ok(i) => i,
+                Err(_) => return vec![None],
+            };
+            sort_exprs.push(PhysicalSortExpr {
+                expr: Arc::new(Column::new(name, idx)),
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                },
+            });
+        }
+
+        let Some(ordering) = LexOrdering::new(sort_exprs) else {
+            return vec![None];
+        };
+        vec![Some(OrderingRequirements::from(ordering))]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -222,19 +277,28 @@ impl ExecutionPlan for DeltaWriterExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if partition != 0 {
-            return internal_err!("DeltaWriterExec can only be executed in a single partition");
+        let input_partitions = self.input.output_partitioning().partition_count();
+        if input_partitions == 0 {
+            return internal_err!("DeltaWriterExec requires at least one input partition");
         }
 
-        let input_partitions = self.input.output_partitioning().partition_count();
-        if input_partitions != 1 {
+        if partition >= input_partitions {
             return internal_err!(
-                "DeltaWriterExec requires exactly one input partition, got {input_partitions}"
+                "DeltaWriterExec invalid partition {partition} (input partitions: {input_partitions})"
             );
         }
+        let stream = self.input.execute(partition, Arc::clone(&context))?;
+        self.execute_stream(stream, partition, context)
+    }
+}
 
-        let stream = self.input.execute(0, Arc::clone(&context))?;
-
+impl DeltaWriterExec {
+    fn execute_stream(
+        &self,
+        stream: SendableRecordBatchStream,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
         let output_rows = MetricBuilder::new(&self.metrics).output_rows(partition);
         let output_bytes = MetricBuilder::new(&self.metrics).output_bytes(partition);
         let elapsed_compute = MetricBuilder::new(&self.metrics).elapsed_compute(partition);
@@ -267,7 +331,11 @@ impl ExecutionPlan for DeltaWriterExec {
             let storage_config = StorageConfig;
             let object_store = get_object_store_from_context(&context, &table_url)?;
 
-            // Calculate initial_actions and operation based on sink_mode
+            // Calculate initial_actions and operation based on sink_mode.
+            //
+            // NOTE: The Delta log requires certain actions (Protocol/Metadata/schema evolution)
+            // to appear at most once in a commit. We compute them in every partition for
+            // consistency, but only emit them from partition 0 in the final action stream.
             let mut initial_actions: Vec<Action> = Vec::new();
             let mut operation: Option<DeltaOperation> = None;
 
@@ -278,9 +346,8 @@ impl ExecutionPlan for DeltaWriterExec {
             )
             .await;
 
-            #[allow(clippy::unwrap_used)]
             let table = if table_exists {
-                Some(table_result.unwrap())
+                Some(table_result?)
             } else {
                 None
             };
@@ -367,12 +434,8 @@ impl ExecutionPlan for DeltaWriterExec {
                     .map_err(|e| DataFusionError::External(Box::new(e)))?
                     .effective_column_mapping_mode();
                 match mode {
-                    delta_kernel::table_features::ColumnMappingMode::Name => {
-                        ColumnMappingModeOption::Name
-                    }
-                    delta_kernel::table_features::ColumnMappingMode::Id => {
-                        ColumnMappingModeOption::Id
-                    }
+                    ColumnMappingMode::Name => ColumnMappingModeOption::Name,
+                    ColumnMappingMode::Id => ColumnMappingModeOption::Id,
                     _ => ColumnMappingModeOption::None,
                 }
             } else {
@@ -411,14 +474,13 @@ impl ExecutionPlan for DeltaWriterExec {
                         writer_features.push("timestampNtz");
                     }
 
-                    #[allow(clippy::unwrap_used)]
                     let protocol: Protocol = serde_json::from_value(serde_json::json!({
                         "minReaderVersion": 3,
                         "minWriterVersion": 7,
                         "readerFeatures": reader_features,
                         "writerFeatures": writer_features
                     }))
-                    .unwrap();
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                     let mut configuration = HashMap::new();
                     let mode_str = match effective_mode {
@@ -429,18 +491,16 @@ impl ExecutionPlan for DeltaWriterExec {
                     configuration
                         .insert("delta.columnMapping.mode".to_string(), mode_str.to_string());
                     // Set maxColumnId for new tables
-                    #[allow(clippy::unwrap_used)]
-                    let max_id = compute_max_column_id(annotated_schema_opt.as_ref().unwrap());
+                    let max_id = compute_max_column_id(&annotated_schema);
                     configuration.insert(
                         "delta.columnMapping.maxColumnId".to_string(),
                         max_id.to_string(),
                     );
 
-                    #[allow(clippy::unwrap_used)]
                     let metadata = Metadata::try_new(
                         None,
                         None,
-                        annotated_schema_opt.as_ref().unwrap().clone(),
+                        annotated_schema.clone(),
                         partition_columns.clone(),
                         Utc::now().timestamp_millis(),
                         configuration,
@@ -462,14 +522,13 @@ impl ExecutionPlan for DeltaWriterExec {
                         metadata,
                     });
                 } else if has_timestamp_ntz {
-                    #[allow(clippy::unwrap_used)]
                     let protocol: Protocol = serde_json::from_value(serde_json::json!({
                         "minReaderVersion": 3,
                         "minWriterVersion": 7,
                         "readerFeatures": ["timestampNtz"],
                         "writerFeatures": ["timestampNtz"]
                     }))
-                    .unwrap();
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                     let metadata = Metadata::try_new(
                         None,
@@ -500,8 +559,6 @@ impl ExecutionPlan for DeltaWriterExec {
                 ColumnMappingModeOption::Name | ColumnMappingModeOption::Id
             ) {
                 // Determine logical kernel schema (annotated for new tables; from snapshot for existing tables)
-                #[allow(clippy::unwrap_used)]
-                #[allow(clippy::expect_used)]
                 let logical_kernel: StructType = if let Some(meta_action_schema) = schema_actions
                     .iter()
                     .find_map(|a| match a {
@@ -515,18 +572,25 @@ impl ExecutionPlan for DeltaWriterExec {
                 {
                     meta_action_schema
                 } else if table_exists {
+                    let table = table.as_ref().ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "table exists but was not loaded for column-mapped write planning"
+                                .to_string(),
+                        )
+                    })?;
                     table
-                        .as_ref()
-                        .unwrap()
                         .snapshot()
                         .map_err(|e| DataFusionError::External(Box::new(e)))?
                         .snapshot()
                         .schema()
                         .clone()
                 } else {
-                    annotated_schema_opt
-                        .clone()
-                        .expect("annotated schema should exist for new table with column mapping")
+                    annotated_schema_opt.clone().ok_or_else(|| {
+                        DataFusionError::Plan(
+                            "Annotated schema should be present for new table with column mapping"
+                                .to_string(),
+                        )
+                    })?
                 };
 
                 // Build physical Arrow schema enriched with PARQUET:field_id
@@ -673,19 +737,21 @@ impl ExecutionPlan for DeltaWriterExec {
             // - CommitMeta row (row_count + operation + metrics)
             let mut exec_actions: Vec<ExecAction> = Vec::new();
 
-            for ia in &initial_actions {
-                match ia {
-                    Action::Protocol(p) => exec_actions.push(p.clone().try_into()?),
-                    Action::Metadata(m) => exec_actions.push(m.clone().try_into()?),
-                    _ => {}
+            if partition == 0 {
+                for ia in &initial_actions {
+                    match ia {
+                        Action::Protocol(p) => exec_actions.push(p.clone().try_into()?),
+                        Action::Metadata(m) => exec_actions.push(m.clone().try_into()?),
+                        _ => {}
+                    }
                 }
-            }
 
-            for sa in &actions {
-                match sa {
-                    Action::Metadata(m) => exec_actions.push(m.clone().try_into()?),
-                    Action::Protocol(p) => exec_actions.push(p.clone().try_into()?),
-                    _ => {}
+                for sa in &actions {
+                    match sa {
+                        Action::Metadata(m) => exec_actions.push(m.clone().try_into()?),
+                        Action::Protocol(p) => exec_actions.push(p.clone().try_into()?),
+                        _ => {}
+                    }
                 }
             }
 
@@ -750,7 +816,7 @@ impl DeltaWriterExec {
         let table_schema = table_metadata
             .parse_schema()
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let table_arrow_schema = std::sync::Arc::new((&table_schema).try_into_arrow()?);
+        let table_arrow_schema = Arc::new((&table_schema).try_into_arrow()?);
 
         match schema_mode {
             Some(SchemaMode::Merge) => {
@@ -838,13 +904,18 @@ impl DeltaWriterExec {
         }
 
         // Build merged fields in the correct order
-        #[allow(clippy::unwrap_used)]
         let merged_fields: Vec<Field> = field_order
             .into_iter()
-            .map(|name| field_map.remove(&name).unwrap())
-            .collect();
+            .map(|name| {
+                field_map.remove(&name).ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                        "Field '{name}' missing during schema merge construction",
+                    ))
+                })
+            })
+            .collect::<Result<Vec<Field>>>()?;
 
-        Ok(std::sync::Arc::new(Schema::new(merged_fields)))
+        Ok(Arc::new(Schema::new(merged_fields)))
     }
 
     /// Validate schema compatibility

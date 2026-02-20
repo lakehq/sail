@@ -21,7 +21,10 @@ impl MetricEmitter for BuildProbeJoinMetricEmitter {
                     .execution_join_build_side_time
                     .recorder(time)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
                 MetricHandled::Yes
             }
@@ -30,7 +33,10 @@ impl MetricEmitter for BuildProbeJoinMetricEmitter {
                     .execution_join_operation_time
                     .recorder(time)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
                 MetricHandled::Yes
             }
@@ -39,7 +45,10 @@ impl MetricEmitter for BuildProbeJoinMetricEmitter {
                     .execution_join_build_side_batch_count
                     .recorder(count)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
                 MetricHandled::Yes
             }
@@ -48,7 +57,10 @@ impl MetricEmitter for BuildProbeJoinMetricEmitter {
                     .execution_join_build_side_row_count
                     .recorder(count)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
                 MetricHandled::Yes
             }
@@ -57,7 +69,10 @@ impl MetricEmitter for BuildProbeJoinMetricEmitter {
                     .execution_join_build_side_memory_used
                     .recorder(gauge)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
                 MetricHandled::Yes
             }
@@ -66,7 +81,10 @@ impl MetricEmitter for BuildProbeJoinMetricEmitter {
                     .execution_join_probe_side_batch_count
                     .recorder(count)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
                 MetricHandled::Yes
             }
@@ -75,17 +93,45 @@ impl MetricEmitter for BuildProbeJoinMetricEmitter {
                     .execution_join_probe_side_row_count
                     .recorder(count)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
                 MetricHandled::Yes
             }
-            MetricValue::Count { name, count } if name == "output_batches" => {
+            MetricValue::Ratio {
+                name,
+                ratio_metrics,
+            } if name == "probe_hit_rate" => {
                 registry
-                    .execution_join_output_batch_count
-                    .recorder(count)
+                    .execution_join_probe_side_matched_row_count
+                    .recorder(ratio_metrics.part())
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
+                // We ignore the denominator (total) as it should be the same as
+                // probe-side row count which is already emitted above.
+                MetricHandled::Yes
+            }
+            MetricValue::Ratio {
+                name,
+                ratio_metrics,
+            } if name == "avg_fanout" => {
+                registry
+                    .execution_join_build_side_match_count
+                    .recorder(ratio_metrics.part())
+                    .with_attributes(attributes)
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
+                    .emit();
+                // We ignore the denominator (total) as it should be the same as
+                // probe-side matched row count which is already emitted above.
                 MetricHandled::Yes
             }
             _ => MetricHandled::No,
@@ -113,13 +159,19 @@ impl MetricEmitter for NestedLoopJoinMetricEmitter {
                     .execution_join_candidate_count
                     .recorder(ratio_metrics.total())
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
                 registry
                     .execution_join_output_row_count
                     .recorder(ratio_metrics.part())
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
                 MetricHandled::Yes
             }
@@ -134,12 +186,73 @@ pub struct StreamJoinMetricEmitter;
 impl MetricEmitter for StreamJoinMetricEmitter {
     fn try_emit(
         &self,
-        _metric: &Metric,
-        _attributes: &[KeyValue],
-        _registry: &MetricRegistry,
+        metric: &Metric,
+        attributes: &[KeyValue],
+        registry: &MetricRegistry,
     ) -> MetricHandled {
-        // FIXME: https://github.com/apache/datafusion/pull/19283
-        MetricHandled::No
+        match metric.value() {
+            MetricValue::Count { name, count } if name == "left_input_batches" => {
+                registry
+                    .execution_join_left_input_batch_count
+                    .recorder(count)
+                    .with_attributes(attributes)
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
+                    .emit();
+                MetricHandled::Yes
+            }
+            MetricValue::Count { name, count } if name == "left_input_rows" => {
+                registry
+                    .execution_join_left_input_row_count
+                    .recorder(count)
+                    .with_attributes(attributes)
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
+                    .emit();
+                MetricHandled::Yes
+            }
+            MetricValue::Count { name, count } if name == "right_input_batches" => {
+                registry
+                    .execution_join_right_input_batch_count
+                    .recorder(count)
+                    .with_attributes(attributes)
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
+                    .emit();
+                MetricHandled::Yes
+            }
+            MetricValue::Count { name, count } if name == "right_input_rows" => {
+                registry
+                    .execution_join_right_input_row_count
+                    .recorder(count)
+                    .with_attributes(attributes)
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
+                    .emit();
+                MetricHandled::Yes
+            }
+            MetricValue::Gauge { name, gauge } if name == "stream_memory_usage" => {
+                registry
+                    .execution_join_memory_used
+                    .recorder(gauge)
+                    .with_attributes(attributes)
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
+                    .emit();
+                MetricHandled::Yes
+            }
+            _ => MetricHandled::No,
+        }
     }
 }
 
@@ -159,7 +272,10 @@ impl MetricEmitter for SortMergeJoinMetricEmitter {
                     .execution_join_operation_time
                     .recorder(time)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
                 MetricHandled::Yes
             }
@@ -168,7 +284,10 @@ impl MetricEmitter for SortMergeJoinMetricEmitter {
                     .execution_join_input_batch_count
                     .recorder(count)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
                 MetricHandled::Yes
             }
@@ -177,16 +296,10 @@ impl MetricEmitter for SortMergeJoinMetricEmitter {
                     .execution_join_input_row_count
                     .recorder(count)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
-                    .emit();
-                MetricHandled::Yes
-            }
-            MetricValue::Count { name, count } if name == "output_batches" => {
-                registry
-                    .execution_join_output_batch_count
-                    .recorder(count)
-                    .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
                 MetricHandled::Yes
             }
@@ -195,7 +308,10 @@ impl MetricEmitter for SortMergeJoinMetricEmitter {
                     .execution_join_memory_used
                     .recorder(gauge)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
                 MetricHandled::Yes
             }
@@ -229,10 +345,11 @@ mod tests {
             registry.execution_join_operation_time.name(),
             registry.execution_join_build_side_batch_count.name(),
             registry.execution_join_build_side_row_count.name(),
+            registry.execution_join_build_side_match_count.name(),
             registry.execution_join_build_side_memory_used.name(),
             registry.execution_join_probe_side_batch_count.name(),
             registry.execution_join_probe_side_row_count.name(),
-            registry.execution_join_output_batch_count.name(),
+            registry.execution_join_probe_side_matched_row_count.name(),
         ]
     }
 
@@ -243,12 +360,21 @@ mod tests {
         ]
     }
 
+    fn expected_stream_join_metrics(registry: &MetricRegistry) -> Vec<Cow<'static, str>> {
+        vec![
+            registry.execution_join_left_input_batch_count.name(),
+            registry.execution_join_left_input_row_count.name(),
+            registry.execution_join_right_input_batch_count.name(),
+            registry.execution_join_right_input_row_count.name(),
+            registry.execution_join_memory_used.name(),
+        ]
+    }
+
     fn expected_sort_merge_join_metrics(registry: &MetricRegistry) -> Vec<Cow<'static, str>> {
         vec![
             registry.execution_join_operation_time.name(),
             registry.execution_join_input_batch_count.name(),
             registry.execution_join_input_row_count.name(),
-            registry.execution_join_output_batch_count.name(),
             registry.execution_join_memory_used.name(),
             registry.execution_spill_count.name(),
             registry.execution_spill_size.name(),
@@ -280,9 +406,7 @@ mod tests {
             .await
     }
 
-    // FIXME: https://github.com/apache/datafusion/pull/19283
-    // #[tokio::test]
-    #[expect(unused)]
+    #[tokio::test]
     async fn test_piecewise_merge_join_metrics() -> Result<()> {
         let schema1 = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
         let schema2 = Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, true)]));
@@ -341,9 +465,7 @@ mod tests {
             .await
     }
 
-    // FIXME: https://github.com/apache/datafusion/pull/19283
-    // #[tokio::test]
-    #[expect(unused)]
+    #[tokio::test]
     async fn test_symmetric_hash_join_metrics() -> Result<()> {
         let schema1 = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
         let schema2 = Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, true)]));
@@ -363,7 +485,7 @@ mod tests {
 
         MetricEmitterTester::new()
             .with_plan(plan)
-            // FIXME: add expected metrics
+            .with_expected_metrics(expected_stream_join_metrics)
             .run()
             .await
     }

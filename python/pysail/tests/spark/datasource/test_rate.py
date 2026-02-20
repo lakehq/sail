@@ -52,6 +52,5 @@ def test_rate_with_filtering(spark):
 
 
 def test_rate_union_all_with_non_streaming_source(spark):
-    # This is not working in cluster mode yet since the boundedness for shuffle nodes are not correct in all cases.
     actual = spark.sql("(SELECT a.value FROM t2 AS a LIMIT 1) UNION ALL (SELECT * FROM VALUES (10), (20))").collect()
     assert sorted(actual) == [(0,), (10,), (20,)]

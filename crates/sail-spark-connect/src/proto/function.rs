@@ -6,18 +6,19 @@ mod tests {
     use datafusion::arrow::array::RecordBatch;
     use datafusion::arrow::error::ArrowError;
     use datafusion::arrow::util::display::{ArrayFormatter, FormatOptions};
+    use pyo3::Python;
     use sail_common::config::AppConfig;
     use sail_common::runtime::RuntimeManager;
     use sail_common::tests::test_gold_set;
     use sail_common_datafusion::extension::SessionExtensionAccessor;
-    use sail_common_datafusion::session::JobService;
+    use sail_common_datafusion::session::job::JobService;
     use sail_plan::resolve_and_execute_plan;
     use serde::{Deserialize, Serialize};
 
     use crate::error::{SparkError, SparkResult};
     use crate::executor::read_stream;
     use crate::proto::data_type_json::JsonDataType;
-    use crate::session::{SparkSession, SparkSessionKey};
+    use crate::session::SparkSession;
     use crate::session_manager::create_spark_session_manager;
     use crate::spark::connect::relation::RelType;
     use crate::spark::connect::{Relation, Sql};
@@ -54,6 +55,8 @@ mod tests {
 
     #[test]
     fn test_sql_function() -> Result<(), Box<dyn std::error::Error>> {
+        // Initialize Python for Python data source registration when creating sessions.
+        Python::initialize();
         let config = Arc::new(AppConfig::load()?);
         let runtime = RuntimeManager::try_new(&config.runtime)?;
         let handle = runtime.handle();
@@ -63,13 +66,9 @@ mod tests {
         let manager = handle
             .primary()
             .block_on(async { create_spark_session_manager(config, handle.clone()) })?;
-        let session_key = SparkSessionKey {
-            user_id: "".to_string(),
-            session_id: "test".to_string(),
-        };
         let context = handle
             .primary()
-            .block_on(manager.get_or_create_session_context(session_key))?;
+            .block_on(manager.get_or_create_session_context("test".to_string(), "".to_string()))?;
         test_gold_set(
             "tests/gold_data/function/*.json",
             |example: FunctionExample| -> SparkResult<String> {

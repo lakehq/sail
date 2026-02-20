@@ -59,14 +59,14 @@ impl ScalarUDFImpl for SparkUnixTimestamp {
                     None,
                 )?
                 .cast_to(&DataType::Int64, None),
-            DataType::Date64 | DataType::Date32 | DataType::Timestamp(_, None) => args.args[0]
+            DataType::Date64 | DataType::Date32 | DataType::Timestamp(_, _) => args.args[0]
                 .cast_to(
                     &DataType::Timestamp(TimeUnit::Second, Some(self.timezone.clone())),
                     None,
                 )?
                 .cast_to(&DataType::Int64, None),
             DataType::Utf8View | DataType::LargeUtf8 | DataType::Utf8 => {
-                ToTimestampSecondsFunc::new()
+                ToTimestampSecondsFunc::new_with_config(args.config_options.as_ref())
                     .invoke_with_args(args)?
                     .cast_to(
                         &DataType::Timestamp(TimeUnit::Second, Some(self.timezone.clone())),

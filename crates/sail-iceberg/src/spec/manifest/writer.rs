@@ -173,7 +173,7 @@ impl ManifestWriter {
 
         for e in &self.entries {
             let serde_entry =
-                super::_serde::ManifestEntryV2::from_entry((*e.clone()).clone(), &partition_type);
+                super::_serde::ManifestEntryV2::from_entry((*e.clone()).clone(), &partition_type)?;
             let value = to_value(serde_entry)
                 .map_err(|e| format!("Avro to_value error: {e}"))?
                 .resolve(&avro_schema)

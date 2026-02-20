@@ -5,7 +5,7 @@ use datafusion_expr::utils::{expand_qualified_wildcard, expand_wildcard};
 use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan};
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::session::PlanService;
+use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::multi_expr::MultiExpr;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
@@ -51,6 +51,11 @@ impl PlanResolver<'_> {
                 state.config_mut().arrow_allow_large_var_types = true;
             }
         }
+
+        // For functions that accept a date-part keyword as the first argument
+        // (e.g., DATEDIFF(DAY, start, end)), convert the unresolved attribute
+        // to a string literal before resolution.
+        let arguments = Self::convert_date_part_argument(&canonical_function_name, arguments);
 
         let (argument_display_names, arguments) = if canonical_function_name == "struct" {
             self.resolve_struct_expressions_and_names(arguments, schema, state)
@@ -250,5 +255,26 @@ impl PlanResolver<'_> {
         }
 
         Ok((names, exprs))
+    }
+
+    /// For functions that accept a date-part keyword as their first argument
+    /// (e.g., `DATEDIFF(DAY, start, end)`, `TIMESTAMPDIFF(HOUR, start, end)`),
+    /// convert the first argument from an unresolved attribute to a string literal.
+    fn convert_date_part_argument(
+        function_name: &str,
+        mut arguments: Vec<spec::Expr>,
+    ) -> Vec<spec::Expr> {
+        const DATE_PART_FUNCTIONS: &[&str] = &["datediff", "date_diff", "timestampdiff"];
+        if arguments.len() >= 3 && DATE_PART_FUNCTIONS.contains(&function_name) {
+            if let spec::Expr::UnresolvedAttribute { ref name, .. } = arguments[0] {
+                let parts: Vec<String> = name.clone().into();
+                if parts.len() == 1 {
+                    arguments[0] = spec::Expr::Literal(spec::Literal::Utf8 {
+                        value: Some(parts.into_iter().next().unwrap_or_default()),
+                    });
+                }
+            }
+        }
+        arguments
     }
 }

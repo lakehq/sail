@@ -196,6 +196,21 @@ impl GraphBuilder {
         // Inner Join output is concatenation of left and right child outputs
         let mut output_map = left_map;
         output_map.extend(right_map);
+        // A projection may be embedded into HashJoinExec; apply it so ColumnMap matches
+        // the actual join output schema (reorder/drop columns).
+        if let Some(projection) = join_plan.projection.as_ref() {
+            let mut projected: ColumnMap = Vec::with_capacity(projection.len());
+            for &idx in projection.iter() {
+                projected.push(output_map.get(idx).cloned().ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                        "HashJoinExec projection index {} out of bounds (len {})",
+                        idx,
+                        output_map.len()
+                    ))
+                })?);
+            }
+            output_map = projected;
+        }
         Ok(output_map)
     }
 
@@ -340,6 +355,10 @@ impl GraphBuilder {
                         relation_ids.push(*relation_id);
                     }
                     ColumnMapEntry::Expression { .. } => {
+                        // FIXME: Support join keys / predicates that reference derived columns by
+                        // recursively walking the expression's input_map and collecting all base
+                        // relation_ids it depends on (similar to predicate dependency analysis).
+
                         // This column comes from a complex expression (e.g., aggregate output)
                         // We cannot resolve it to a *specific base relation* for join condition purposes.
                         // If a join condition relies on a column that is an aggregate output,
@@ -631,6 +650,92 @@ mod tests {
 
         // Should have 2 join edges
         assert_eq!(graph.edges.len(), 2, "Should find 2 join edges");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_visit_inner_join_applies_hash_join_projection() -> Result<()> {
+        use datafusion::common::NullEquality;
+        use datafusion::logical_expr::JoinType;
+        use datafusion::physical_plan::joins::PartitionMode;
+
+        let mut builder = GraphBuilder::new();
+
+        // Two base relations, each with 2 columns, to test projection reorder/drop.
+        let schema_left = Arc::new(Schema::new(vec![
+            Field::new("l0", DataType::Int32, false),
+            Field::new("l1", DataType::Int32, false),
+        ]));
+        let schema_right = Arc::new(Schema::new(vec![
+            Field::new("r0", DataType::Int32, false),
+            Field::new("r1", DataType::Int32, false),
+        ]));
+
+        let left_plan = Arc::new(EmptyExec::new(schema_left.clone()));
+        let right_plan = Arc::new(EmptyExec::new(schema_right.clone()));
+
+        // Join on l0 = r0
+        let on_conditions = vec![(
+            Arc::new(Column::new("l0", 0)) as Arc<dyn PhysicalExpr>,
+            Arc::new(Column::new("r0", 0)) as Arc<dyn PhysicalExpr>,
+        )];
+
+        // Projection selects [r1, l0, r0] from the join output:
+        // join output (no projection) would be [l0, l1, r0, r1]
+        let projection = Some(vec![3usize, 0usize, 2usize]);
+
+        let join_plan = Arc::new(HashJoinExec::try_new(
+            left_plan,
+            right_plan,
+            on_conditions,
+            None,
+            &JoinType::Inner,
+            projection,
+            PartitionMode::Auto,
+            NullEquality::NullEqualsNothing,
+        )?);
+
+        let output_map = builder.visit_inner_join(&join_plan)?;
+
+        // After applying projection [3,0,2], output_map should have length 3.
+        assert_eq!(output_map.len(), 3);
+
+        // The first projected column is r1, which is stable (relation 1, col 1).
+        match &output_map[0] {
+            ColumnMapEntry::Stable {
+                relation_id,
+                column_index,
+            } => {
+                assert_eq!(*relation_id, 1);
+                assert_eq!(*column_index, 1);
+            }
+            _ => unreachable!("expected Stable for projected r1"),
+        }
+
+        // Second is l0 => (relation 0, col 0)
+        match &output_map[1] {
+            ColumnMapEntry::Stable {
+                relation_id,
+                column_index,
+            } => {
+                assert_eq!(*relation_id, 0);
+                assert_eq!(*column_index, 0);
+            }
+            _ => unreachable!("expected Stable for projected l0"),
+        }
+
+        // Third is r0 => (relation 1, col 0)
+        match &output_map[2] {
+            ColumnMapEntry::Stable {
+                relation_id,
+                column_index,
+            } => {
+                assert_eq!(*relation_id, 1);
+                assert_eq!(*column_index, 0);
+            }
+            _ => unreachable!("expected Stable for projected r0"),
+        }
 
         Ok(())
     }

@@ -1,0 +1,6 @@
+== Physical Plan ==
+ProjectionExec: expr=[#5@0 as session_id, #6@1 as user_id, #7@2 as status, #8@3 as created_at, #9@4 as deleted_at]
+  ProjectionExec: expr=[session_id@0 as #5, user_id@1 as #6, status@2 as #7, created_at@3 as #8, deleted_at@4 as #9]
+    GlobalLimitExec: skip=0, fetch=1
+      CooperativeExec
+        SystemTableExec: table=sessions, projection=Some([0, 1, 2, 3, 4]), filters=[BinaryExpr { left: Column { name: "session_id", index: 0 }, op: NotEq, right: Literal { value: Utf8(""), field: Field { name: "lit", data_type: Utf8 } }, fail_on_overflow: false }, BinaryExpr { left: Column { name: "session_id", index: 0 }, op: NotEq, right: Literal { value: Utf8("x"), field: Field { name: "lit", data_type: Utf8 } }, fail_on_overflow: false }], fetch=Some(1)

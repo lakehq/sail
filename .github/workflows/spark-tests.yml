@@ -12,33 +12,9 @@ on:
         required: false
 
 jobs:
-  setup:
-    name: Setup
-    runs-on: ubuntu-latest
-    outputs:
-      run_tests: ${{ ((github.event_name == 'pull_request' && (github.event.action == 'opened' || steps.match.outputs.result == 'true' || steps.label.outputs.has_label == 'true')) || github.event_name == 'push') && 'true' || 'false' }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: ./.github/actions/commit-message-match
-        id: match
-        with:
-          pattern: "\\[(spark )?tests?\\]"
-          ignore_case: true
-
-      - uses: actions/github-script@v7
-        id: label
-        with:
-          script: |
-            const labels = context.payload.pull_request?.labels?.map(label => label.name) || [];
-            core.setOutput('has_label', labels.includes('run spark tests') ? 'true' : 'false');
-
   test:
     name: Test
-    if: needs.setup.outputs.run_tests == 'true'
     runs-on: ubuntu-latest
-    needs:
-      - setup
     env:
       # Set the Hatch environment for `hatch run` commands.
       HATCH_ENV: "test-spark.spark-${{ inputs.spark_version }}"
@@ -115,6 +91,11 @@ jobs:
           hatch run install-pyspark
           hatch run install-pysail
 
+      - name: List Python packages
+        continue-on-error: true
+        run: |
+          hatch run uv pip freeze || hatch run python -m pip freeze
+
       - name: Run Spark Connect Server
         run: |
           nohup hatch run scripts/spark-tests/run-server.sh > /dev/null 2>&1 < /dev/null &
@@ -135,7 +116,7 @@ jobs:
           hatch run scripts/spark-tests/run-tests.sh
 
       - name: Shutdown Spark Connect Server
-        if: always()
+        if: ${{ !cancelled() }}
         run: |
           scripts/spark-tests/stop-server.sh
 
@@ -164,6 +145,7 @@ jobs:
           env_vars: OS
 
       - name: Upload Test Logs
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: spark-${{ inputs.spark_version }}-test-logs
@@ -172,7 +154,7 @@ jobs:
 
   analyze:
     name: Analyze
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     needs:
       - test
     steps:

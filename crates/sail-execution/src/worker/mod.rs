@@ -3,8 +3,8 @@ mod client;
 mod debug;
 pub(crate) mod entrypoint;
 mod event;
-mod flight_server;
 mod options;
+mod peer_tracker;
 mod server;
 
 #[allow(clippy::all)]
@@ -16,7 +16,7 @@ mod gen {
 }
 
 pub(crate) use actor::WorkerActor;
-pub(crate) use client::WorkerClient;
-pub(crate) use event::{WorkerEvent, WorkerLocation};
+pub(crate) use client::WorkerClientSet;
+pub(crate) use event::{WorkerEvent, WorkerLocation, WorkerStreamOwner};
 pub(crate) use gen::worker_service_client::WorkerServiceClient;
 pub(crate) use options::WorkerOptions;

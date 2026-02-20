@@ -111,7 +111,8 @@ impl KubernetesWorkerManager {
             driver_external_host,
             driver_external_port,
             worker_heartbeat_interval,
-            worker_stream_buffer,
+            task_stream_buffer,
+            task_stream_creation_timeout,
             rpc_retry_strategy,
         } = options;
         let w3c_traceparent =
@@ -190,8 +191,13 @@ impl KubernetesWorkerManager {
                 value_from: None,
             },
             EnvVar {
-                name: ClusterConfigEnv::WORKER_STREAM_BUFFER.to_string(),
-                value: Some(worker_stream_buffer.to_string()),
+                name: ClusterConfigEnv::TASK_STREAM_BUFFER.to_string(),
+                value: Some(task_stream_buffer.to_string()),
+                value_from: None,
+            },
+            EnvVar {
+                name: ClusterConfigEnv::TASK_STREAM_CREATION_TIMEOUT_SECS.to_string(),
+                value: Some(task_stream_creation_timeout.as_secs().to_string()),
                 value_from: None,
             },
             EnvVar {

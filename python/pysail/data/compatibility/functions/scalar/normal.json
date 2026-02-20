@@ -2,13 +2,13 @@
   {
     "module": "pyspark.sql.functions",
     "function": "broadcast",
-    "status": "not supported"
+    "status": "planned"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "call_function",
     "status": "partially supported",
-    "info": "Creating a function via Spark SQL does not work yet"
+    "note": "Creating a function via Spark SQL does not work yet."
   },
   {
     "module": "pyspark.sql.functions",

@@ -28,6 +28,7 @@ out/
 /opt/
 
 # Editor directories and files
+.cursor/
 .idea/
 .vscode/*
 *.iml
@@ -96,5 +97,8 @@ docs/.vitepress/.temp
 
 # LLVM coverage files
 *.profraw
+
+# Claude Code settings
+.claude/
 
 CLAUDE.md

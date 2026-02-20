@@ -6,6 +6,7 @@ use datafusion_expr::{EmptyRelation, LogicalPlan};
 use crate::resolver::state::PlanResolverState;
 
 pub(crate) mod explode;
+pub(crate) mod monotonic_id;
 pub(crate) mod table_input;
 pub(crate) mod window;
 

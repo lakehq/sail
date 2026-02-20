@@ -6,14 +6,14 @@ use crate::ast::data_type::DataType;
 use crate::ast::expression::{BooleanLiteral, Expr, OrderDirection};
 use crate::ast::identifier::{table_ident, Ident, ObjectName};
 use crate::ast::keywords::{
-    Add, After, All, Alter, Always, Analyze, And, As, Buckets, By, Cache, Cascade, Catalog, Change,
-    Clear, Cluster, Clustered, Codegen, Collection, Column, Columns, Comment, Compute, Cost,
-    Create, Data, Database, Databases, Dbproperties, Default, Defined, Delete, Delimited, Desc,
-    Describe, Directory, Distributed, Drop, Escaped, Evolution, Exists, Explain, Extended,
-    External, Fields, Fileformat, First, For, Format, Formatted, From, Function, Functions,
-    Generated, Global, If, In, Inpath, Inputformat, Insert, Into, Is, Items, Keys, Lazy, Like,
-    Lines, Load, Local, Location, Map, Matched, Merge, Name, Noscan, Not, Null, On, Options, Or,
-    Outputformat, Overwrite, Partition, Partitioned, Partitions, Properties, Purge, Recover,
+    Add, After, All, Alter, Always, Analyze, And, As, Buckets, By, Cache, Cascade, Catalog,
+    Catalogs, Change, Clear, Cluster, Clustered, Codegen, Collection, Column, Columns, Comment,
+    Compute, Cost, Create, Data, Database, Databases, Dbproperties, Default, Defined, Delete,
+    Delimited, Desc, Describe, Directory, Distributed, Drop, Escaped, Evolution, Exists, Explain,
+    Extended, External, Fields, Fileformat, First, For, Format, Formatted, From, Function,
+    Functions, Generated, Global, If, In, Inpath, Inputformat, Insert, Into, Is, Items, Keys, Lazy,
+    Like, Lines, Load, Local, Location, Map, Matched, Merge, Name, Noscan, Not, Null, On, Options,
+    Or, Outputformat, Overwrite, Partition, Partitioned, Partitions, Properties, Purge, Recover,
     Refresh, Rename, Replace, Restrict, Row, Schema, Schemas, Serde, Serdeproperties, Set, Show,
     Sorted, Source, Statistics, Stored, Table, Tables, Target, Tblproperties, Temp, Temporary,
     Terminated, Then, Time, To, Type, Uncache, Unset, Update, Use, Using, Values, Verbose, View,
@@ -43,6 +43,11 @@ pub enum Statement {
         database: Either<Database, Schema>,
         name: ObjectName,
     },
+    UseCatalog {
+        r#use: Use,
+        catalog: Catalog,
+        name: Ident,
+    },
     CreateDatabase {
         create: Create,
         database: Either<Database, Schema>,
@@ -67,6 +72,11 @@ pub enum Statement {
         show: Show,
         databases: Either<Databases, Schemas>,
         from: Option<(Either<From, In>, ObjectName)>,
+        like: Option<(Option<Like>, StringLiteral)>,
+    },
+    ShowCatalogs {
+        show: Show,
+        catalogs: Catalogs,
         like: Option<(Option<Like>, StringLiteral)>,
     },
     CreateTable {
@@ -927,14 +937,6 @@ pub enum AnalyzeTableModifier {
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "(Query, Expr)")]
 pub enum DescribeItem {
-    // We need to try `DESCRIBE QUERY` first since the `QUERY` keyword
-    // is optional. We will fall back to other choices if there is
-    // no valid query following the `DESCRIBE` keyword.
-    Query {
-        query: Option<ast::keywords::Query>,
-        #[parser(function = |(q, _), _| q)]
-        item: Query,
-    },
     Function {
         function: Function,
         extended: Option<Extended>,
@@ -950,13 +952,21 @@ pub enum DescribeItem {
         extended: Option<Extended>,
         item: ObjectName,
     },
+    // TODO: In Spark SQL, the `TABLE` keyword is optional.
+    //   Here we mark it as required to disambiguate between `DESCRIBE TABLE` and `DESCRIBE QUERY`.
     Table {
-        table: Option<Table>,
+        table: Table,
         extended: Option<Extended>,
         name: ObjectName,
         #[parser(function = |(_, e), o| compose(e, o))]
         partition: Option<PartitionClause>,
         column: Option<ObjectName>,
+    },
+    // We try `DESCRIBE QUERY` last since the `QUERY` keyword is optional.
+    Query {
+        query: Option<ast::keywords::Query>,
+        #[parser(function = |(q, _), _| q)]
+        item: Query,
     },
 }
 

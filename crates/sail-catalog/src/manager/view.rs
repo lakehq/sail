@@ -18,9 +18,10 @@ impl CatalogManager {
             .list_views(pattern)?
             .into_iter()
             .map(|(name, view)| TableStatus {
+                catalog: None,
+                database: database.clone().into(),
                 name,
                 kind: TableKind::GlobalTemporaryView {
-                    database: database.clone().into(),
                     plan: view.plan().clone(),
                     columns: view.columns().to_vec(),
                     comment: view.comment().clone(),
@@ -40,6 +41,8 @@ impl CatalogManager {
             .list_views(pattern)?
             .into_iter()
             .map(|(name, view)| TableStatus {
+                catalog: None,
+                database: vec![],
                 name,
                 kind: TableKind::TemporaryView {
                     plan: view.plan().clone(),
@@ -156,9 +159,10 @@ impl CatalogManager {
         let view = GLOBAL_TEMPORARY_VIEW_MANAGER.get_view(name)?;
         let database = self.state()?.global_temporary_database.clone();
         Ok(TableStatus {
+            catalog: None,
+            database: database.into(),
             name: name.to_string(),
             kind: TableKind::GlobalTemporaryView {
-                database: database.into(),
                 plan: view.plan().clone(),
                 columns: view.columns().to_vec(),
                 comment: view.comment().clone(),
@@ -170,6 +174,8 @@ impl CatalogManager {
     pub async fn get_temporary_view(&self, name: &str) -> CatalogResult<TableStatus> {
         let view = self.temporary_views.get_view(name)?;
         Ok(TableStatus {
+            catalog: None,
+            database: vec![],
             name: name.to_string(),
             kind: TableKind::TemporaryView {
                 plan: view.plan().clone(),

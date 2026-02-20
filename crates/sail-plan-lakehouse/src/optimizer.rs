@@ -1,4 +1,4 @@
-use std::fmt::{Debug, Formatter};
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use datafusion::datasource::{provider_as_source, source_as_provider, TableProvider};
@@ -14,7 +14,7 @@ use sail_logical_plan::merge::{expand_merge, MergeIntoNode, MergeIntoWriteNode};
 
 const PATH_COLUMN_NAME: &str = "__sail_file_path";
 
-#[derive(Clone, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ExpandMerge;
 
 impl ExpandMerge {
@@ -109,12 +109,6 @@ impl OptimizerRule for ExpandMerge {
 
     fn name(&self) -> &str {
         "expand_merge"
-    }
-}
-
-impl Debug for ExpandMerge {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.name())
     }
 }
 
