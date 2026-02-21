@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: st_geogfromwkb"
+        "success": "ok"
       }
     },
     {
@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: st_geomfromwkb"
+        "success": "ok"
       }
     },
     {
@@ -63,7 +63,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: st_srid"
+        "success": "ok"
       }
     },
     {
@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: st_geogfromwkb"
+        "success": "ok"
       }
     },
     {
@@ -107,12 +107,12 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: st_geomfromwkb"
+        "success": "ok"
       }
     },
     {
       "input": {
-        "query": "SELECT st_srid(st_setsrid(ST_GeogFromWKB(X'0101000000000000000000F03F0000000000000040'), 4326));",
+        "query": "SELECT st_srid(st_setsrid(st_geogfromwkb(X'0101000000000000000000F03F0000000000000040'), 4326));",
         "result": [
           "4326"
         ],
@@ -129,12 +129,12 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: ST_GeogFromWKB"
+        "success": "ok"
       }
     },
     {
       "input": {
-        "query": "SELECT st_srid(st_setsrid(ST_GeomFromWKB(X'0101000000000000000000F03F0000000000000040'), 3857));",
+        "query": "SELECT st_srid(st_setsrid(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040'), 3857));",
         "result": [
           "3857"
         ],
@@ -151,7 +151,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: ST_GeomFromWKB"
+        "success": "ok"
       }
     }
   ]

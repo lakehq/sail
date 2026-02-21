@@ -6192,6 +6192,7 @@ dependencies = [
  "aes",
  "aes-gcm",
  "base64 0.22.1",
+ "byteorder",
  "cbc",
  "chrono",
  "chrono-tz",
