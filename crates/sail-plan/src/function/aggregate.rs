@@ -3,9 +3,8 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field};
 use datafusion::functions_aggregate::{
-    approx_distinct, approx_percentile_cont, array_agg, average, bit_and_or_xor, bool_and_or,
-    correlation, count, covariance, first_last, grouping, min_max, percentile_cont, regr, stddev,
-    sum, variance,
+    approx_distinct, array_agg, average, bit_and_or_xor, bool_and_or, correlation, count,
+    covariance, first_last, grouping, min_max, percentile_cont, regr, stddev, sum, variance,
 };
 use datafusion::functions_nested::string::array_to_string;
 use datafusion_common::ScalarValue;
@@ -23,6 +22,7 @@ use sail_function::aggregate::percentile::PercentileFunction;
 use sail_function::aggregate::percentile_disc::percentile_disc_udaf;
 use sail_function::aggregate::skewness::SkewnessFunc;
 use sail_function::aggregate::try_avg::TryAvgFunction;
+use sail_function::error::invalid_arg_count_exec_err;
 use sail_function::scalar::struct_function::StructFunction;
 
 use crate::error::{PlanError, PlanResult};
@@ -462,6 +462,32 @@ fn percentile_exact(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
+fn approx_percentile(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    // Spark: approx_percentile(col, percentage, [accuracy])
+    // Drop the optional 3rd arg (accuracy) — PercentileFunction gives exact results.
+    // Currently delegates to PercentileFunction which computes exact percentiles.
+    // This produces slightly different results from Spark's Greenwald-Khanna approximate
+    // algorithm (see QuantileSummaries.scala). To match Spark exactly, we would need to
+    // port the Greenwald-Khanna algorithm and honor the accuracy parameter.
+    // Reference: https://doi.org/10.1145/375663.375670
+    // Spark impl: https://github.com/apache/spark/blob/master/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/util/QuantileSummaries.scala
+    let n = input.arguments.len();
+    if !(2..=3).contains(&n) {
+        return Err(invalid_arg_count_exec_err("approx_percentile", (2, 3), n).into());
+    }
+    let args: Vec<_> = input.arguments.into_iter().take(2).collect();
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(PercentileFunction::new())),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
 fn approx_count_distinct(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     Ok(cast(
         expr::Expr::AggregateFunction(AggregateFunction {
@@ -488,10 +514,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("any", F::default(bool_and_or::bool_or_udaf)),
         ("any_value", F::custom(first_value)),
         ("approx_count_distinct", F::custom(approx_count_distinct)),
-        (
-            "approx_percentile",
-            F::default(approx_percentile_cont::approx_percentile_cont_udaf),
-        ),
+        ("approx_percentile", F::custom(approx_percentile)),
         ("array_agg", F::custom(array_agg_compacted)),
         ("avg", F::custom(avg)),
         ("bit_and", F::default(bit_and_or_xor::bit_and_udaf)),
@@ -529,10 +552,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("min_by", F::custom(min_by)),
         ("mode", F::custom(mode)),
         ("percentile", F::custom(percentile_exact)),
-        (
-            "percentile_approx",
-            F::default(approx_percentile_cont::approx_percentile_cont_udaf),
-        ),
+        ("percentile_approx", F::custom(approx_percentile)),
         ("percentile_cont", F::custom(percentile_cont)),
         ("percentile_disc", F::custom(percentile_disc)),
         ("regr_avgx", F::default(regr::regr_avgx_udaf)),
