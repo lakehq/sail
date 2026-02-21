@@ -10,6 +10,7 @@ use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::{AggregateState, PlanResolverState};
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
+use crate::resolver::tree::rand::RandRewriter;
 use crate::resolver::tree::window::WindowRewriter;
 use crate::resolver::PlanResolver;
 
@@ -176,6 +177,8 @@ impl PlanResolver<'_> {
             }
             None => plan,
         };
+        let (plan, projections) =
+            self.rewrite_projection::<RandRewriter>(plan, projections, state)?;
         let (plan, projections) =
             self.rewrite_projection::<MonotonicIdRewriter>(plan, projections, state)?;
         let (plan, projections) =

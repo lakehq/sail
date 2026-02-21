@@ -165,11 +165,13 @@ use sail_function::scalar::url::parse_url::ParseUrl;
 use sail_function::scalar::url::spark_try_parse_url::SparkTryParseUrl;
 use sail_iceberg::physical_plan::{IcebergCommitExec, IcebergWriterExec};
 use sail_iceberg::TableIcebergOptions;
+use sail_logical_plan::rand::RandMode;
 use sail_logical_plan::range::Range;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
+use sail_physical_plan::rand::RandExec;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
 use sail_physical_plan::show_string::ShowStringExec;
@@ -849,6 +851,27 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     Arc::new(schema),
                 )?))
             }
+            NodeKind::Rand(gen::RandExecNode {
+                input,
+                column_name,
+                seed,
+                mode,
+                schema,
+            }) => {
+                let schema = Arc::new(self.try_decode_schema(&schema)?);
+                let mode = match mode.as_str() {
+                    "Uniform" => RandMode::Uniform,
+                    "Gaussian" => RandMode::Gaussian,
+                    other => return Err(plan_datafusion_err!("unknown RandMode: {other}")),
+                };
+                Ok(Arc::new(RandExec::try_new(
+                    self.try_decode_plan(&input, ctx)?,
+                    column_name,
+                    seed,
+                    mode,
+                    schema,
+                )?))
+            }
             NodeKind::IcebergWriter(gen::IcebergWriterExecNode {
                 input,
                 table_url,
@@ -1361,6 +1384,20 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::MonotonicId(gen::MonotonicIdExecNode {
                 input,
                 column_name: monotonic_id.column_name().to_string(),
+                schema,
+            })
+        } else if let Some(rand_exec) = node.as_any().downcast_ref::<RandExec>() {
+            let input = self.try_encode_plan(rand_exec.input().clone())?;
+            let schema = self.try_encode_schema(rand_exec.schema().as_ref())?;
+            let mode = match rand_exec.mode() {
+                RandMode::Uniform => "Uniform",
+                RandMode::Gaussian => "Gaussian",
+            };
+            NodeKind::Rand(gen::RandExecNode {
+                input,
+                column_name: rand_exec.column_name().to_string(),
+                seed: rand_exec.seed(),
+                mode: mode.to_string(),
                 schema,
             })
         } else if let Some(iceberg_writer_exec) = node.as_any().downcast_ref::<IcebergWriterExec>()

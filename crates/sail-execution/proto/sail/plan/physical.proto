@@ -49,6 +49,7 @@ message ExtendedPhysicalPlanNode {
     MergeCardinalityCheckExecNode merge_cardinality_check = 34;
     PythonDataSourceExecNode python_data_source = 35;
     MonotonicIdExecNode monotonic_id = 36;
+    RandExecNode rand = 37;
   }
 }
 
@@ -523,6 +524,14 @@ message MonotonicIdExecNode {
   bytes input = 1;
   string column_name = 2;
   bytes schema = 3;
+}
+
+message RandExecNode {
+  bytes input = 1;
+  string column_name = 2;
+  int64 seed = 3;
+  string mode = 4;
+  bytes schema = 5;
 }
 
 message JoinOn {

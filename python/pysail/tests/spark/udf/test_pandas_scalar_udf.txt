@@ -18,7 +18,7 @@
 ...     for s in iterator:
 ...         yield s**2
 ...
->>> spark.range(3).select(square("id")).show()
+>>> spark.range(3).select(square("id")).orderBy("square(id)").show()
 +----------+
 |square(id)|
 +----------+
