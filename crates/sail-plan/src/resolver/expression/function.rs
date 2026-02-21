@@ -117,6 +117,32 @@ impl PlanResolver<'_> {
                 Some(x) => self.resolve_sort_orders(x, true, schema, state).await?,
                 None => vec![],
             };
+            // For DISTINCT aggregate functions with a wildcard argument (e.g., COUNT(DISTINCT *)),
+            // expand the wildcard to visible column references here in the resolver where we have
+            // access to `state` for hidden-column filtering. This ensures hidden columns (e.g.,
+            // join keys) are excluded from the distinct count.
+            #[allow(deprecated)]
+            let arguments = if is_distinct
+                && matches!(
+                    arguments.as_slice(),
+                    [expr::Expr::Wildcard {
+                        qualifier: None,
+                        options: _
+                    }]
+                ) {
+                schema
+                    .columns()
+                    .into_iter()
+                    .filter(|c| {
+                        state
+                            .get_field_info(&c.name)
+                            .is_ok_and(|info| !info.is_hidden())
+                    })
+                    .map(expr::Expr::Column)
+                    .collect()
+            } else {
+                arguments
+            };
             let input = AggFunctionInput {
                 arguments,
                 distinct: is_distinct,
@@ -137,6 +163,26 @@ impl PlanResolver<'_> {
             )));
         };
 
+        // When `COUNT(DISTINCT *)` is used, expand the wildcard display names
+        // to individual column names so the output header matches Spark JVM behavior
+        // (e.g., `count(DISTINCT a, b, c)` instead of `count(DISTINCT *)`).
+        let argument_display_names =
+            if is_distinct && argument_display_names.iter().any(|n| n == "*") {
+                schema
+                    .columns()
+                    .iter()
+                    .filter_map(|c| {
+                        let info = state.get_field_info(&c.name).ok()?;
+                        if info.is_hidden() {
+                            None
+                        } else {
+                            Some(info.name().to_string())
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                argument_display_names
+            };
         let service = self.ctx.extension::<PlanService>()?;
         let name = service.plan_formatter().function_to_string(
             &function_name,

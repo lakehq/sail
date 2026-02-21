@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use datafusion::catalog::TableFunction;
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
+use datafusion_common::DFSchemaRef;
 use datafusion_expr::expr::Expr;
 use lazy_static::lazy_static;
 
@@ -67,6 +68,23 @@ pub(super) fn transform_count_star_wildcard_expr(arguments: Vec<Expr>) -> Vec<Ex
         }] => {
             vec![Expr::Literal(COUNT_STAR_EXPANSION, None)]
         }
+        _ => arguments,
+    }
+}
+
+/// Expands a wildcard argument to individual column references for `COUNT(DISTINCT *)`.
+///
+/// Unlike [`transform_count_star_wildcard_expr`], which replaces `*` with a literal `1`,
+/// this function expands `*` into one column reference per schema field so that
+/// `COUNT(DISTINCT *)` correctly counts distinct rows across all columns.
+#[inline(always)]
+pub(super) fn expand_wildcard_to_columns(arguments: Vec<Expr>, schema: &DFSchemaRef) -> Vec<Expr> {
+    match arguments.as_slice() {
+        #[allow(deprecated)]
+        [Expr::Wildcard {
+            qualifier: None,
+            options: _,
+        }] => schema.columns().into_iter().map(Expr::Column).collect(),
         _ => arguments,
     }
 }
