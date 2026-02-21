@@ -14,6 +14,7 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::drop_struct_field::DropStructField;
+use sail_function::scalar::multi_expr::MultiExpr;
 use sail_function::scalar::table_input::TableInput;
 use sail_function::scalar::update_struct_field::UpdateStructField;
 
@@ -33,7 +34,16 @@ impl PlanResolver<'_> {
     ) -> PlanResult<NamedExpr> {
         let expr = self.resolve_expression(expr, schema, state).await?;
         let name = name.into_iter().map(|x| x.into()).collect::<Vec<String>>();
-        let expr = if let [n] = name.as_slice() {
+        // Do not wrap a MultiExpr in an Alias even when there is a single alias name.
+        // MultiExpr is a placeholder that must remain visible to `rewrite_multi_expr`,
+        // which expands it into individual named expressions using the NamedExpr names.
+        let is_multi_expr = matches!(
+            &expr,
+            expr::Expr::ScalarFunction(sf) if sf.func.inner().as_any().is::<MultiExpr>()
+        );
+        let expr = if is_multi_expr {
+            expr
+        } else if let [n] = name.as_slice() {
             if let Some(metadata) = metadata {
                 let metadata_map: HashMap<String, String> = metadata.into_iter().collect();
                 let field_metadata = Some(FieldMetadata::from(metadata_map));

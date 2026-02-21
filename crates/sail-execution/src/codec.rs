@@ -121,7 +121,7 @@ use sail_function::scalar::drop_struct_field::DropStructField;
 use sail_function::scalar::explode::{explode_name_to_kind, Explode};
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
 use sail_function::scalar::hash::spark_xxhash64::SparkXxhash64;
-use sail_function::scalar::json::SparkToJson;
+use sail_function::scalar::json::{SparkJsonTuple, SparkToJson};
 use sail_function::scalar::map::str_to_map::StrToMap;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
@@ -1577,6 +1577,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "json_object_keys" | "json_keys" => {
                 Ok(sail_function::scalar::json::json_object_keys_udf())
             }
+            "json_tuple" => Ok(Arc::new(ScalarUDF::from(SparkJsonTuple::new()))),
             "spark_base64" | "base64" => Ok(Arc::new(ScalarUDF::from(SparkBase64::new()))),
             "spark_bround" | "bround" => Ok(Arc::new(ScalarUDF::from(SparkBRound::new()))),
             "spark_interval_div" => Ok(Arc::new(ScalarUDF::from(SparkIntervalDiv::new()))),
@@ -1728,6 +1729,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkFromCSV>()
             || node_inner.is::<SparkHex>()
             || node_inner.is::<SparkIntervalDiv>()
+            || node_inner.is::<SparkJsonTuple>()
             || node_inner.is::<SparkLastDay>()
             || node_inner.is::<SparkLuhnCheck>()
             || node_inner.is::<SparkMakeDtInterval>()
