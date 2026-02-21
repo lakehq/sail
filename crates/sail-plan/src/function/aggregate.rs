@@ -284,10 +284,7 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         {
             vec![expr::Expr::Case(expr::Case {
                 expr: None,
-                when_then_expr: vec![(
-                    Box::new(any_null),
-                    Box::new(lit(ScalarValue::Null)),
-                )],
+                when_then_expr: vec![(Box::new(any_null), Box::new(lit(ScalarValue::Null)))],
                 else_expr: Some(Box::new(struct_expr)),
             })]
         } else {
