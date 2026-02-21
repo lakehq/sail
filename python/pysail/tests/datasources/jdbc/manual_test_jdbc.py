@@ -54,7 +54,7 @@ def _make_spark():
 
 
 def _register(spark):
-    from pysail.datasources.jdbc import JdbcDataSource
+    from pysail.datasources.jdbc.datasource import JdbcDataSource
 
     spark.dataSource.register(JdbcDataSource)
 

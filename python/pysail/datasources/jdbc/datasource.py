@@ -62,7 +62,11 @@ def _jdbc_url_to_dsn(url: str, user: str | None, password: str | None) -> str:
 
     if user is not None or password is not None:
         sep = "://"
-        idx = dsn.index(sep)
+        try:
+            idx = dsn.index(sep)
+        except ValueError:
+            msg = f"Invalid JDBC URL: {url!r}. Expected format: jdbc:<subprotocol>://<host>:<port>/<database>"
+            raise ValueError(msg) from None
         scheme = dsn[:idx]
         rest = dsn[idx + len(sep) :]
 
@@ -339,7 +343,11 @@ class JdbcDataSource(DataSource):
             raise ValueError(msg)
 
         # --- table source ---
-        dbtable = opts.get("dbtable") or None
+        dbtable = opts.get("dbtable")
+        if dbtable is not None and not dbtable.strip():
+            msg = "Option 'dbtable' cannot be empty"
+            raise ValueError(msg)
+        dbtable = dbtable or None
         query = opts.get("query") or None
 
         if dbtable and query:
