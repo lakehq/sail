@@ -117,6 +117,32 @@ impl PlanResolver<'_> {
                 Some(x) => self.resolve_sort_orders(x, true, schema, state).await?,
                 None => vec![],
             };
+            // For DISTINCT aggregate functions with a wildcard argument (e.g., COUNT(DISTINCT *)),
+            // expand the wildcard to visible column references here in the resolver where we have
+            // access to `state` for hidden-column filtering. This ensures hidden columns (e.g.,
+            // join keys) are excluded from the distinct count.
+            #[allow(deprecated)]
+            let arguments = if is_distinct
+                && matches!(
+                    arguments.as_slice(),
+                    [expr::Expr::Wildcard {
+                        qualifier: None,
+                        options: _
+                    }]
+                ) {
+                schema
+                    .columns()
+                    .into_iter()
+                    .filter(|c| {
+                        state
+                            .get_field_info(&c.name)
+                            .is_ok_and(|info| !info.is_hidden())
+                    })
+                    .map(expr::Expr::Column)
+                    .collect()
+            } else {
+                arguments
+            };
             let input = AggFunctionInput {
                 arguments,
                 distinct: is_distinct,
