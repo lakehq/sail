@@ -72,7 +72,6 @@ use prost::Message;
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::array::record_batch::{read_record_batches, write_record_batches};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
-use sail_common_datafusion::physical_expr::PhysicalExprWithSource;
 use sail_common_datafusion::system::catalog::SystemTable;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_data_source::formats::binary::source::BinarySource;
@@ -2101,8 +2100,8 @@ impl RemoteExecutionCodec {
     fn try_decode_physical_sink_mode(
         &self,
         proto_mode: gen::PhysicalSinkMode,
-        schema: &Schema,
-        ctx: &TaskContext,
+        _schema: &Schema,
+        _ctx: &TaskContext,
     ) -> Result<PhysicalSinkMode> {
         let gen::PhysicalSinkMode { mode } = proto_mode;
         match mode {
@@ -2112,14 +2111,10 @@ impl RemoteExecutionCodec {
             Some(gen::physical_sink_mode::Mode::Overwrite(gen::OverwriteMode {})) => {
                 Ok(PhysicalSinkMode::Overwrite)
             }
-            Some(gen::physical_sink_mode::Mode::OverwriteIf(gen::OverwriteIfMode {
-                condition,
-                source,
-            })) => {
-                let expr = self.try_decode_message(&condition)?;
-                let expr = parse_physical_expr(&expr, ctx, schema, self)?;
+            Some(gen::physical_sink_mode::Mode::OverwriteIf(gen::OverwriteIfMode { source })) => {
                 Ok(PhysicalSinkMode::OverwriteIf {
-                    condition: PhysicalExprWithSource::new(expr, source),
+                    condition: None,
+                    source,
                 })
             }
             Some(gen::physical_sink_mode::Mode::ErrorIfExists(gen::ErrorIfExistsMode {})) => {
@@ -2144,12 +2139,8 @@ impl RemoteExecutionCodec {
             PhysicalSinkMode::Overwrite => {
                 gen::physical_sink_mode::Mode::Overwrite(gen::OverwriteMode {})
             }
-            PhysicalSinkMode::OverwriteIf {
-                condition: PhysicalExprWithSource { expr, source },
-            } => {
-                let expr = serialize_physical_expr(expr, self)?;
+            PhysicalSinkMode::OverwriteIf { source, .. } => {
                 gen::physical_sink_mode::Mode::OverwriteIf(gen::OverwriteIfMode {
-                    condition: self.try_encode_message(expr)?,
                     source: source.clone(),
                 })
             }

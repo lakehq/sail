@@ -406,8 +406,7 @@ message PartialSortExecNode {
 message AppendMode {}
 message OverwriteMode {}
 message OverwriteIfMode {
-  bytes condition = 1;
-  optional string source = 2;
+  optional string source = 1;
 }
 message ErrorIfExistsMode {}
 message IgnoreIfExistsMode {}

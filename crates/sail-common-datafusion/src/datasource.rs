@@ -6,15 +6,14 @@ use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::plan_datafusion_err;
 use datafusion::physical_expr::{
-    create_physical_sort_exprs, LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortRequirement,
+    create_physical_sort_exprs, LexOrdering, LexRequirement, PhysicalSortRequirement,
 };
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, DFSchemaRef, Result};
+use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, Result};
 use datafusion_expr::expr::Sort;
 
 use crate::extension::SessionExtension;
-use crate::logical_expr::ExprWithSource;
-use crate::physical_expr::PhysicalExprWithSource;
+use crate::logical_expr::{ExprWithSource, LogicalPredicateInfo};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
 pub enum SinkMode {
@@ -32,7 +31,12 @@ pub enum PhysicalSinkMode {
     IgnoreIfExists,
     Append,
     Overwrite,
-    OverwriteIf { condition: PhysicalExprWithSource },
+    OverwriteIf {
+        /// Driver-side logical predicate. Omitted on remote workers.
+        condition: Option<Box<LogicalPredicateInfo>>,
+        /// SQL source string used by commit metadata.
+        source: Option<String>,
+    },
     OverwritePartitions,
 }
 
@@ -75,7 +79,7 @@ pub struct SinkInfo {
 #[derive(Debug, Clone)]
 pub struct DeleteInfo {
     pub path: String,
-    pub condition: Option<PhysicalExprWithSource>,
+    pub condition: Option<LogicalPredicateInfo>,
     /// The sets of options for the data deletion.
     /// A later set of options can override earlier ones.
     pub options: Vec<HashMap<String, String>>,
@@ -87,52 +91,6 @@ pub struct MergeTargetInfo {
     pub path: String,
     pub partition_by: Vec<String>,
     pub options: Vec<HashMap<String, String>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct MergeAssignmentInfo {
-    pub column: String,
-    pub value: Arc<dyn PhysicalExpr>,
-}
-
-#[derive(Debug, Clone)]
-pub enum MergeMatchedActionInfo {
-    Delete,
-    UpdateAll,
-    UpdateSet(Vec<MergeAssignmentInfo>),
-}
-
-#[derive(Debug, Clone)]
-pub struct MergeMatchedClauseInfo {
-    pub condition: Option<PhysicalExprWithSource>,
-    pub action: MergeMatchedActionInfo,
-}
-
-#[derive(Debug, Clone)]
-pub enum MergeNotMatchedBySourceActionInfo {
-    Delete,
-    UpdateSet(Vec<MergeAssignmentInfo>),
-}
-
-#[derive(Debug, Clone)]
-pub struct MergeNotMatchedBySourceClauseInfo {
-    pub condition: Option<PhysicalExprWithSource>,
-    pub action: MergeNotMatchedBySourceActionInfo,
-}
-
-#[derive(Debug, Clone)]
-pub enum MergeNotMatchedByTargetActionInfo {
-    InsertAll,
-    InsertColumns {
-        columns: Vec<String>,
-        values: Vec<Arc<dyn PhysicalExpr>>,
-    },
-}
-
-#[derive(Debug, Clone)]
-pub struct MergeNotMatchedByTargetClauseInfo {
-    pub condition: Option<PhysicalExprWithSource>,
-    pub action: MergeNotMatchedByTargetActionInfo,
 }
 
 /// Merge operation metadata used to construct commit log `operationParameters`.
@@ -159,34 +117,12 @@ pub enum OperationOverride {
 #[derive(Debug, Clone)]
 pub struct MergeInfo {
     pub target: MergeTargetInfo,
-    pub target_input: Arc<dyn ExecutionPlan>,
-    pub source: Arc<dyn ExecutionPlan>,
-    pub target_schema: DFSchemaRef,
-    pub source_schema: DFSchemaRef,
-    /// Joined logical schema (target followed by source)
-    pub join_schema: Arc<Schema>,
     /// Indicates that join/filter/project have been expanded in the logical plan
     pub pre_expanded: bool,
     /// Final physical plan ready for writing (if pre_expanded)
     pub expanded_input: Option<Arc<dyn ExecutionPlan>>,
     /// Physical plan that yields touched file paths (if pre_expanded)
     pub touched_file_plan: Option<Arc<dyn ExecutionPlan>>,
-    pub on_condition: PhysicalExprWithSource,
-    /// Equality join keys extracted from the ON condition (target, source)
-    pub join_keys: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
-    /// Residual predicates from the ON condition (applied as join filter)
-    pub join_filter: Option<Arc<dyn PhysicalExpr>>,
-    /// Filters that only touch target columns (can be applied before join)
-    pub target_only_filters: Vec<Arc<dyn PhysicalExpr>>,
-    /// Predicates for matched clauses that rewrite target rows (delete/update)
-    pub rewrite_matched_predicates: Vec<Arc<dyn PhysicalExpr>>,
-    /// Predicates for NOT MATCHED BY SOURCE clauses that rewrite target rows
-    pub rewrite_not_matched_by_source_predicates: Vec<Arc<dyn PhysicalExpr>>,
-    /// Final output column order for the target table
-    pub output_columns: Vec<String>,
-    pub matched_clauses: Vec<MergeMatchedClauseInfo>,
-    pub not_matched_by_source_clauses: Vec<MergeNotMatchedBySourceClauseInfo>,
-    pub not_matched_by_target_clauses: Vec<MergeNotMatchedByTargetClauseInfo>,
     pub with_schema_evolution: bool,
     /// Optional override for commit operation metadata.
     pub operation_override: Option<OperationOverride>,

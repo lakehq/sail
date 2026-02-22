@@ -14,3 +14,6 @@ impl ExprWithSource {
         Self { expr, source }
     }
 }
+
+/// Canonical logical predicate payload used across planning layers.
+pub type LogicalPredicateInfo = ExprWithSource;
