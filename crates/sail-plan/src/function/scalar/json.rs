@@ -66,12 +66,14 @@ fn to_json(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
 }
 
 fn from_json(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+    // 2 required args 1 optional
     if args.len() < 2 && args.len() > 3 {
         return Err(PlanError::InvalidArgument(format!("Expected 2-3 args but got {}", args.len())));
     };
     let json_expr = args.get(0).unwrap().clone();
     let schema_expr = args.get(1).unwrap().clone();
     let _options = args.get(2).clone();
+
     let json_str = match json_expr {
         expr::Expr::Literal(ScalarValue::Utf8(Some(utf8)), _) => utf8,
         expr::Expr::Column(_) => return Err(PlanError::NotImplemented("Not yet implemented column support".to_string())),
@@ -79,8 +81,8 @@ fn from_json(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     };
     let value: Value = serde_json::from_str::<serde_json::Value>(json_str.as_str()).unwrap();
     let fields = get_schema_expr_as_fields(schema_expr)?;
-    //let num_rows = value.as_array().unwrap().len();
-    let num_rows = 1;
+
+    let num_rows = 1; // placeholder since cols aren't supported yet
     let mut field_builders = create_field_builders(&fields, num_rows)?;
     let mut struct_nulls = vec![true; num_rows];
     if let serde_json::Value::Object(obj) = value {
@@ -99,49 +101,68 @@ fn from_json(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
         .collect::<PlanResult<Vec<_>>>()?;
     let null_buffer = NullBuffer::from(struct_nulls);
     let struct_array = Arc::new(StructArray::new(fields.clone(), arrays, Some(null_buffer)));
-    dbg!(&struct_array);
     Ok(expr::Expr::Literal(ScalarValue::Struct(struct_array), None))
 }
 
-fn finish_builder(builder: FieldBuilder) -> PlanResult<ArrayRef> {
-    Ok(
-        match builder {
-            FieldBuilder::Int32(mut b) => Arc::new(b.finish()),
-            FieldBuilder::Int64(mut b) => Arc::new(b.finish()),
-            FieldBuilder::Float32(mut b) => Arc::new(b.finish()),
-            FieldBuilder::Float64(mut b) => Arc::new(b.finish()),
-            FieldBuilder::Decimal32(mut b) => Arc::new(b.finish()),
-            FieldBuilder::String(mut b) => Arc::new(b.finish()),
-            FieldBuilder::TimestampMicrosecondBuilder(mut b) => Arc::new(b.finish()),
-            FieldBuilder::Struct {
-                fields,
-                builders,
-                null_buffer
-            } => {
-                let nested_arrays: Vec<ArrayRef> = builders
-                    .into_iter()
-                    .map(finish_builder)
-                    .collect::<PlanResult<Vec<_>>>()?;
-                let null_buf = NullBuffer::from(null_buffer);
-                Arc::new(StructArray::new(fields, nested_arrays, Some(null_buf)))
+enum FieldBuilder {
+    Int32(Int32Builder),
+    Int64(Int64Builder),
+    Float32(Float32Builder),
+    Float64(Float64Builder),
+    Decimal32(Decimal32Builder),
+    String(StringBuilder),
+    TimestampMicrosecondBuilder(TimestampMicrosecondBuilder),
+    Struct {
+        fields: Fields,
+        builders: Vec<FieldBuilder>,
+        null_buffer: Vec<bool>,
+    },
+    List {
+        field: Arc<Field>,
+        offsets: Vec<i32>,
+        builder: Box<FieldBuilder>,
+        null_buffer: Vec<bool>,
+    },
+}
+
+fn create_field_builders(fields: &Fields, capacity: usize) -> PlanResult<Vec<FieldBuilder>> {
+    fields
+        .iter()
+        .map(|field| match field.data_type() {
+            DataType::Int32 => Ok(FieldBuilder::Int32(Int32Builder::with_capacity(capacity))),
+            DataType::Int64 => Ok(FieldBuilder::Int64(Int64Builder::with_capacity(capacity))),
+            DataType::Float32 => Ok(FieldBuilder::Float32(Float32Builder::with_capacity(capacity))),
+            DataType::Float64 => Ok(FieldBuilder::Float64(Float64Builder::with_capacity(capacity))),
+            DataType::Decimal32(_, _) => Ok(FieldBuilder::Decimal32(Decimal32Builder::with_capacity(capacity))),
+            DataType::Utf8 => Ok(FieldBuilder::String(StringBuilder::with_capacity(capacity, capacity*16))),
+            DataType::Timestamp(TimeUnit::Microsecond, _) =>
+                Ok(FieldBuilder::TimestampMicrosecondBuilder(TimestampMicrosecondBuilder::with_capacity(capacity))),
+            DataType::Struct(fields) => {
+                let builders = create_field_builders(fields, capacity)?;
+                Ok(FieldBuilder::Struct {
+                    fields: fields.clone(),
+                    builders: builders,
+                    null_buffer: Vec::with_capacity(capacity)
+
+                })
             },
-            FieldBuilder::List {
-                field,
-                offsets,
-                builder,
-                null_buffer
-            } => {
-                let field_builder = *builder;
-                let array_ref = finish_builder(field_builder)?;
-                Arc::new(ListArray::new(
-                    field,
-                    OffsetBuffer::new(ScalarBuffer::from(offsets)),
-                    array_ref,
-                    Some(NullBuffer::from(null_buffer)),
-                ))
-            }
-        }
-    )
+            DataType::List(field) => {
+                // TODO: allow passing in one field rather than Fields
+                let builder = create_field_builders(&Fields::from(vec![field.clone()]), capacity)?.pop().unwrap();
+                let mut offsets = Vec::with_capacity(capacity + 1);
+                offsets.push(0);
+                Ok(FieldBuilder::List {
+                    field: field.clone(),
+                    offsets: offsets,
+                    builder: Box::new(builder),
+                    null_buffer: Vec::with_capacity(capacity)
+                })
+            },
+            other => {
+                return Err(PlanError::unsupported(format!("Unsupported json type: {:?}", other)))
+            },
+        })
+        .collect()
 }
 
 fn append_field_value(
@@ -237,7 +258,7 @@ fn append_field_value(
             DataType::Timestamp(TimeUnit::Microsecond, _)
         ) => {
             let s = value.as_str().unwrap();
-            dbg!(s);
+            // TODO: hardcoded date parsing for test
             let micro_seconds = NaiveDate::parse_from_str(s, "%d/%m/%Y")
                 .unwrap()
                 .and_hms_opt(0, 0, 0)
@@ -328,6 +349,47 @@ fn append_null_to_all_builders(builders: &mut [FieldBuilder]) {
     }
 }
 
+fn finish_builder(builder: FieldBuilder) -> PlanResult<ArrayRef> {
+    Ok(
+        match builder {
+            FieldBuilder::Int32(mut b) => Arc::new(b.finish()),
+            FieldBuilder::Int64(mut b) => Arc::new(b.finish()),
+            FieldBuilder::Float32(mut b) => Arc::new(b.finish()),
+            FieldBuilder::Float64(mut b) => Arc::new(b.finish()),
+            FieldBuilder::Decimal32(mut b) => Arc::new(b.finish()),
+            FieldBuilder::String(mut b) => Arc::new(b.finish()),
+            FieldBuilder::TimestampMicrosecondBuilder(mut b) => Arc::new(b.finish()),
+            FieldBuilder::Struct {
+                fields,
+                builders,
+                null_buffer
+            } => {
+                let nested_arrays: Vec<ArrayRef> = builders
+                    .into_iter()
+                    .map(finish_builder)
+                    .collect::<PlanResult<Vec<_>>>()?;
+                let null_buf = NullBuffer::from(null_buffer);
+                Arc::new(StructArray::new(fields, nested_arrays, Some(null_buf)))
+            },
+            FieldBuilder::List {
+                field,
+                offsets,
+                builder,
+                null_buffer
+            } => {
+                let field_builder = *builder;
+                let array_ref = finish_builder(field_builder)?;
+                Arc::new(ListArray::new(
+                    field,
+                    OffsetBuffer::new(ScalarBuffer::from(offsets)),
+                    array_ref,
+                    Some(NullBuffer::from(null_buffer)),
+                ))
+            }
+        }
+    )
+}
+
 fn get_schema_expr_as_fields(schema_expr: expr::Expr) -> PlanResult<Fields> {
     let schema_struct = match schema_expr {
         expr::Expr::Literal(ScalarValue::Utf8(Some(utf8)), _) => {
@@ -338,8 +400,10 @@ fn get_schema_expr_as_fields(schema_expr: expr::Expr) -> PlanResult<Fields> {
                 parse_data_type(format!("struct<{schema}>").as_str())?
             }
         },
-        expr::Expr::Column(_) => return Err(PlanError::NotImplemented("Not implemented cols yet".to_string())),
-        other => return Err(PlanError::NotImplemented(format!("Not supported for type {other:?}"))),
+        expr::Expr::Literal(ScalarValue::Struct(struct_array), _) => return Ok(struct_array.fields().clone()),
+        expr::Expr::Literal(ScalarValue::Map(_map_array), _) => return Err(PlanError::NotImplemented("Schemas from literal Map not implemented yet".to_string())),
+        expr::Expr::Literal(ScalarValue::List(_list_array), _) => return Err(PlanError::NotImplemented("Schemas from literal Array not implemented yet".to_string())),
+        other => return Err(PlanError::NotSupported(format!("Schema of type {other:?} not supported"))),
     };
     let sail_dtype = from_ast_data_type(schema_struct.clone())?;
     let arrow_dtype = PlanResolver.resolve_data_type(&sail_dtype)?;
@@ -347,67 +411,6 @@ fn get_schema_expr_as_fields(schema_expr: expr::Expr) -> PlanResult<Fields> {
         DataType::Struct(fields) => Ok(fields),
         other => Err(PlanError::NotImplemented(format!("Not implemented {other:?}")))
     }
-}
-
-enum FieldBuilder {
-    Int32(Int32Builder),
-    Int64(Int64Builder),
-    Float32(Float32Builder),
-    Float64(Float64Builder),
-    Decimal32(Decimal32Builder),
-    String(StringBuilder),
-    TimestampMicrosecondBuilder(TimestampMicrosecondBuilder),
-    Struct {
-        fields: Fields,
-        builders: Vec<FieldBuilder>,
-        null_buffer: Vec<bool>,
-    },
-    List {
-        field: Arc<Field>,
-        offsets: Vec<i32>,
-        builder: Box<FieldBuilder>,
-        null_buffer: Vec<bool>,
-    },
-}
-
-fn create_field_builders(fields: &Fields, capacity: usize) -> PlanResult<Vec<FieldBuilder>> {
-    fields
-        .iter()
-        .map(|field| match field.data_type() {
-            DataType::Int32 => Ok(FieldBuilder::Int32(Int32Builder::with_capacity(capacity))),
-            DataType::Int64 => Ok(FieldBuilder::Int64(Int64Builder::with_capacity(capacity))),
-            DataType::Float32 => Ok(FieldBuilder::Float32(Float32Builder::with_capacity(capacity))),
-            DataType::Float64 => Ok(FieldBuilder::Float64(Float64Builder::with_capacity(capacity))),
-            DataType::Decimal32(_, _) => Ok(FieldBuilder::Decimal32(Decimal32Builder::with_capacity(capacity))),
-            DataType::Utf8 => Ok(FieldBuilder::String(StringBuilder::with_capacity(capacity, capacity*16))),
-            DataType::Timestamp(TimeUnit::Microsecond, _) =>
-                Ok(FieldBuilder::TimestampMicrosecondBuilder(TimestampMicrosecondBuilder::with_capacity(capacity))),
-            DataType::Struct(fields) => {
-                let builders = create_field_builders(fields, capacity)?;
-                Ok(FieldBuilder::Struct {
-                    fields: fields.clone(),
-                    builders: builders,
-                    null_buffer: Vec::with_capacity(capacity)
-
-                })
-            },
-            DataType::List(field) => {
-                // TODO: allow passing in one field rather than Fields
-                let builder = create_field_builders(&Fields::from(vec![field.clone()]), capacity)?.pop().unwrap();
-                let mut offsets = Vec::with_capacity(capacity + 1);
-                offsets.push(0);
-                Ok(FieldBuilder::List {
-                    field: field.clone(),
-                    offsets: offsets,
-                    builder: Box::new(builder),
-                    null_buffer: Vec::with_capacity(capacity)
-                })
-            },
-            other => {
-                return Err(PlanError::unsupported(format!("Unsupported json type: {:?}", other)))
-            },
-        })
-        .collect()
 }
 
 pub(super) fn list_built_in_json_functions() -> Vec<(&'static str, ScalarFunction)> {
@@ -428,13 +431,11 @@ pub(super) fn list_built_in_json_functions() -> Vec<(&'static str, ScalarFunctio
 mod tests {
 
     use arrow::array::{MapBuilder};
-    use datafusion::{prelude::Column};
-    use datafusion_common::Spans;
 
     use super::*;
 
     #[test]
-    fn test_utf8() {
+    fn test_from_json_spark_connect_tests() {
         let s = r#"
             {
                 "a": 1,
@@ -467,18 +468,5 @@ mod tests {
         map_builder.append(true).unwrap();
         let opt = expr::Expr::Literal(ScalarValue::Map(Arc::new(map_builder.finish())), None);
         from_json(vec![expr_.clone(), schema_expr.clone(), opt]).unwrap();
-    }
-
-    #[test]
-    fn test_column() {
-        let col = Column {
-            relation: None,
-            name: "meh".to_string(),
-            spans: Spans::new()
-        };
-        let expr_ = expr::Expr::Column(col);
-        // meh not done with this - not sure how to get data out
-        cast(expr_.clone(), DataType::Utf8);
-        from_json(vec![expr_.clone(), expr_.clone()]).unwrap();
     }
 }
