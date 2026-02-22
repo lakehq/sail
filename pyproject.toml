@@ -53,8 +53,8 @@ test = [
 mcp = [
     "mcp>=1.0.0,<2",
 ]
-postgres = [
-    "psycopg2-binary>=2.9,<3",
+jdbc = [
+    "connectorx>=0.3,<1",
     "pyarrow>=10.0,<20",
 ]
 

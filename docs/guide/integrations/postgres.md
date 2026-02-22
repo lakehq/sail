@@ -5,24 +5,34 @@ rank: 2
 
 # PostgreSQL
 
-Sail includes a Python DataSource V2 implementation for reading PostgreSQL tables as Spark DataFrames.
-It supports automatic schema inference, filter pushdown, and parallel partition-based reading.
+::: warning Deprecated
+The PostgreSQL-specific datasource (`format("postgres")`) has been removed and replaced by the
+generic [JDBC datasource](./jdbc.md). See the [migration guide](#migrating-to-the-jdbc-datasource)
+below.
+:::
 
-## Installation
+## Migrating to the JDBC Datasource
 
-Install PySail with the PostgreSQL extra:
+The legacy PostgreSQL datasource has been replaced by the generic JDBC datasource, which supports
+PostgreSQL and other databases through a unified API.
 
-```bash-vue
-pip install "pysail[postgres]=={{ libVersion }}"
-```
+**Installation:**
 
-This pulls in `psycopg2-binary` and `pyarrow` as additional dependencies.
+- Old: `pip install "pysail[postgres]"`
+- New: `pip install "pysail[jdbc]"`
 
-## Quick Start
+**Read API:**
 
-<!--@include: ../_common/spark-session.md-->
+- Old: `spark.read.format("postgres")...`
+- New: `spark.read.format("jdbc")...`
+
+All other options (`dbtable`, `user`, `password`, partitioning options, etc.) remain the same.
+The JDBC URL format is unchanged (e.g. `jdbc:postgresql://localhost:5432/mydb`).
+
+**Example migration:**
 
 ```python
+# Before
 from pysail.datasources.postgres import PostgresDataSource
 
 spark.dataSource.register(PostgresDataSource)
@@ -34,47 +44,20 @@ df = spark.read.format("postgres").options(
     dbtable="users",
 ).load()
 
-df.show()
-```
+# After
+from pysail.datasources.jdbc import JdbcDataSource
 
-## Parallel Reading
+spark.dataSource.register(JdbcDataSource)
 
-Split reads across multiple partitions using a numeric column.
-Each partition reads rows where `MOD(partitionColumn, numPartitions) = partition_id`.
-
-```python
-df = spark.read.format("postgres").options(
+df = spark.read.format("jdbc").options(
     url="jdbc:postgresql://localhost:5432/mydb",
     user="myuser",
     password="mypassword",
-    dbtable="large_table",
-    numPartitions="4",
-    partitionColumn="id",
+    dbtable="users",
 ).load()
 ```
 
-## Filter Pushdown
-
-Comparison filters (`=`, `>`, `>=`, `<`, `<=`) are automatically pushed down to PostgreSQL,
-so only matching rows are transferred over the network.
-
-```python
-# This WHERE clause runs in PostgreSQL, not in Spark
-df.filter("age > 25").show()
-```
-
-## Options
-
-| Option            | Required | Default  | Description                                                  |
-| ----------------- | -------- | -------- | ------------------------------------------------------------ |
-| `url`             | Yes      |          | PostgreSQL JDBC URL (`jdbc:postgresql://host:port/database`) |
-| `user`            | Yes      |          | Username                                                     |
-| `password`        | Yes      |          | Password                                                     |
-| `dbtable`         | Yes      |          | Table name                                                   |
-| `tableSchema`     | No       | `public` | PostgreSQL schema containing the table                       |
-| `numPartitions`   | No       | `1`      | Number of parallel readers (must be ≥ 1)                     |
-| `partitionColumn` | No       |          | Column for partitioning (required when `numPartitions > 1`)  |
-| `fetchsize`       | No       | `8192`   | Number of rows fetched per batch (must be ≥ 1)               |
+See the [JDBC datasource documentation](./jdbc.md) for full details.
 
 <script setup>
 import { useData } from "vitepress";
