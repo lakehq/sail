@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use datafusion::common::Statistics;
@@ -10,11 +11,30 @@ use datafusion::physical_plan::ExecutionPlan;
 use crate::join_reorder::join_set::JoinSet;
 
 /// Represents a stable column identifier across the query graph.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct StableColumn {
     pub relation_id: usize,
     pub column_index: usize,
     pub name: String,
+}
+
+// NOTE: `name` is for display/debugging only and must not participate in identity.
+// Join reordering uses StableColumn as a key in HashMaps/Sets. Column names can vary
+// (projection aliases, empty placeholder names, etc.) while (relation_id, column_index)
+// remain stable within the query graph.
+impl PartialEq for StableColumn {
+    fn eq(&self, other: &Self) -> bool {
+        self.relation_id == other.relation_id && self.column_index == other.column_index
+    }
+}
+
+impl Eq for StableColumn {}
+
+impl Hash for StableColumn {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.relation_id.hash(state);
+        self.column_index.hash(state);
+    }
 }
 
 /// Represents a single reorderable relation (e.g., TableScanExec).
@@ -395,7 +415,24 @@ impl QueryGraph {
             );
         }
 
-        edge_indices.into_iter().collect()
+        let union = left | right;
+
+        // NOTE: The trie neighbor lookup can surface hyperedges that *overlap* `left` and
+        // `right` but require additional relations not yet present. Those edges must not be used
+        // to connect two subsets in the DP enumerator, otherwise we may materialize only part of a
+        // multi-relation join predicate (e.g. split a compound join key across different joins),
+        // creating huge intermediates.
+        edge_indices
+            .into_iter()
+            .filter(|&idx| {
+                let Some(edge) = self.edges.get(idx) else {
+                    return false;
+                };
+                edge.join_set.is_subset(&union)
+                    && !edge.join_set.is_disjoint(&left)
+                    && !edge.join_set.is_disjoint(&right)
+            })
+            .collect()
     }
 
     /// Finds connecting edges for all subsets of given size.
@@ -657,5 +694,15 @@ mod tests {
         let set_01 = JoinSet::from_iter([0, 1]).unwrap();
         let neighbors_01 = graph.get_neighbors(set_01);
         assert!(neighbors_01.contains(&2));
+
+        // A hyperedge {0,1,2} must NOT be treated as a binary connecting edge between {0} and {1}
+        // because the join condition for that edge isn't fully available until relation 2 is
+        // present.
+        let set_1 = JoinSet::new_singleton(1).unwrap();
+        let connecting_edge_indices = graph.get_connecting_edge_indices(set_0, set_1);
+        assert!(
+            connecting_edge_indices.is_empty(),
+            "expected no connecting edges between {{0}} and {{1}} from a hyperedge {{0,1,2}}"
+        );
     }
 }
