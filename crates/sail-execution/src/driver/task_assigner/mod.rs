@@ -19,7 +19,9 @@ pub struct TaskAssigner {
     requested_worker_count: usize,
     /// A lookup table from task attempts to the place they are assigned to.
     /// This is more convenient than finding the task attempt in the task slots.
+    ///
     /// Each task attempt can only be assigned once throughout its lifetime.
+    ///
     /// This lookup table is updated when the task attempt is assigned,
     /// but there is no need to remove the task attempt when it is completed, as
     /// the mapping is still valid for historical purposes.

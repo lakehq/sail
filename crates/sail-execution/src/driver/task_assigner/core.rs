@@ -108,22 +108,19 @@ impl TaskAssigner {
             match assignment.assignment {
                 TaskAssignment::Driver => {
                     self.driver.add_task_set(assignment.set.clone());
-                    for key in assignment.set.tasks() {
-                        self.task_assignments
-                            .insert(key.clone(), TaskAssignment::Driver);
-                    }
                 }
                 TaskAssignment::Worker { worker_id, slot } => {
                     if let Some(worker) = self.workers.get_mut(&worker_id) {
                         worker.add_task_set(slot, assignment.set.clone());
-                        for key in assignment.set.tasks() {
-                            self.task_assignments
-                                .insert(key.clone(), TaskAssignment::Worker { worker_id, slot });
-                        }
                     } else {
                         error!("worker {worker_id} not found");
+                        continue;
                     }
                 }
+            }
+            for key in assignment.set.tasks() {
+                self.task_assignments
+                    .insert(key.clone(), assignment.assignment.clone());
             }
         }
 
