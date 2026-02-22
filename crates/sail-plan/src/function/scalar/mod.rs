@@ -7,6 +7,7 @@ mod conditional;
 mod conversion;
 mod csv;
 mod datetime;
+mod geo;
 mod hash;
 mod json;
 mod lambda;
@@ -29,6 +30,7 @@ pub(super) fn list_built_in_scalar_functions() -> Vec<(&'static str, ScalarFunct
     output.extend(conversion::list_built_in_conversion_functions());
     output.extend(csv::list_built_in_csv_functions());
     output.extend(datetime::list_built_in_datetime_functions());
+    output.extend(geo::list_built_in_geo_functions());
     output.extend(hash::list_built_in_hash_functions());
     output.extend(json::list_built_in_json_functions());
     output.extend(lambda::list_built_in_lambda_functions());

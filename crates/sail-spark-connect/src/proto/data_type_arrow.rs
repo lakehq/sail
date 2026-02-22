@@ -493,4 +493,68 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_geoarrow_geometry_srid_zero() -> SparkResult<()> {
+        let metadata: HashMap<String, String> = [
+            (
+                "ARROW:extension:name".to_string(),
+                "geoarrow.wkb".to_string(),
+            ),
+            (
+                "ARROW:extension:metadata".to_string(),
+                r#"{"crs":"SRID:0"}"#.to_string(),
+            ),
+        ]
+        .into_iter()
+        .collect();
+        let field = adt::Field::new("geom", adt::DataType::Binary, true).with_metadata(metadata);
+
+        let proto_field: sdt::StructField = field.try_into()?;
+
+        assert_eq!(proto_field.name, "geom");
+        assert_eq!(
+            proto_field.data_type,
+            Some(DataType {
+                kind: Some(sdt::Kind::Geometry(sdt::Geometry {
+                    srid: 0,
+                    type_variation_reference: 0,
+                })),
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_geoarrow_geography_srid_4326() -> SparkResult<()> {
+        let metadata: HashMap<String, String> = [
+            (
+                "ARROW:extension:name".to_string(),
+                "geoarrow.wkb".to_string(),
+            ),
+            (
+                "ARROW:extension:metadata".to_string(),
+                r#"{"crs":"OGC:CRS84","edges":"spherical"}"#.to_string(),
+            ),
+        ]
+        .into_iter()
+        .collect();
+        let field = adt::Field::new("geog", adt::DataType::Binary, true).with_metadata(metadata);
+
+        let proto_field: sdt::StructField = field.try_into()?;
+
+        assert_eq!(proto_field.name, "geog");
+        assert_eq!(
+            proto_field.data_type,
+            Some(DataType {
+                kind: Some(sdt::Kind::Geography(sdt::Geography {
+                    srid: 4326,
+                    type_variation_reference: 0,
+                })),
+            })
+        );
+
+        Ok(())
+    }
 }
