@@ -805,3 +805,30 @@
     The batch size for exporting logs. Multiple batches may be sent in each export interval
     if the number of queued log records exceeds the batch size.
   experimental: true
+
+- key: python.data_source_write_channel_capacity
+  type: number
+  default: "8"
+  description: |
+    The capacity of the channel used to stream RecordBatches to Python during write operations.
+    Larger values trade memory for throughput when the Python writer is slower than the producer.
+    This setting is specific to the Python data source write implementation.
+  experimental: true
+
+- key: python.data_source_slow_write_warn_ms
+  type: number
+  default: "30000"
+  description: |
+    The threshold in milliseconds for logging a warning when Python write operations are slow.
+    If a write operation takes longer than this duration, a warning is logged suggesting
+    faster I/O or subprocess isolation.
+  experimental: true
+
+- key: python.data_source_slow_read_warn_ms
+  type: number
+  default: "30000"
+  description: |
+    The threshold in milliseconds for logging a warning when Python read operations are slow.
+    If a read operation takes longer than this duration, a warning is logged suggesting
+    faster I/O or subprocess isolation.
+  experimental: true

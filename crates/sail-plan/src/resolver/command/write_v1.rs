@@ -57,41 +57,51 @@ impl PlanResolver<'_> {
         if let Some(source) = source {
             builder = builder.with_format(source);
         }
+        let to_write_mode = |mode: Option<SaveMode>| -> PlanResult<WriteMode> {
+            let write_mode = match mode {
+                Some(SaveMode::ErrorIfExists) | None => WriteMode::ErrorIfExists,
+                Some(SaveMode::IgnoreIfExists) => WriteMode::IgnoreIfExists,
+                Some(SaveMode::Append) => WriteMode::Append,
+                Some(SaveMode::Overwrite) => match replace_where {
+                    Some(ref replace_where) => {
+                        let ast_expr =
+                            sail_sql_analyzer::parser::parse_expression(replace_where.as_str())
+                                .map_err(|e| {
+                                    PlanError::invalid(format!(
+                                        "invalid replaceWhere expression: {replace_where} ({e})"
+                                    ))
+                                })?;
+                        let spec_expr = sail_sql_analyzer::expression::from_ast_expression(
+                            ast_expr,
+                        )
+                        .map_err(|e| {
+                            PlanError::invalid(format!(
+                                "invalid replaceWhere expression: {replace_where} ({e})"
+                            ))
+                        })?;
+                        WriteMode::OverwriteIf {
+                            condition: Box::new(spec::ExprWithSource {
+                                expr: spec_expr,
+                                source: Some(replace_where.clone()),
+                            }),
+                        }
+                    }
+                    None => WriteMode::Overwrite,
+                },
+            };
+            Ok(write_mode)
+        };
+
         match save_type {
             SaveType::Path(location) => {
-                let mode = match mode {
-                    Some(SaveMode::ErrorIfExists) | None => WriteMode::ErrorIfExists,
-                    Some(SaveMode::IgnoreIfExists) => WriteMode::IgnoreIfExists,
-                    Some(SaveMode::Append) => WriteMode::Append,
-                    Some(SaveMode::Overwrite) => match replace_where {
-                        Some(ref replace_where) => {
-                            let ast_expr =
-                                sail_sql_analyzer::parser::parse_expression(replace_where.as_str())
-                                    .map_err(|e| {
-                                        PlanError::invalid(format!(
-                                    "invalid replaceWhere expression: {replace_where} ({e})"
-                                ))
-                                    })?;
-                            let spec_expr =
-                                sail_sql_analyzer::expression::from_ast_expression(ast_expr)
-                                    .map_err(|e| {
-                                        PlanError::invalid(format!(
-                                            "invalid replaceWhere expression: {replace_where} ({e})"
-                                        ))
-                                    })?;
-                            WriteMode::OverwriteIf {
-                                condition: Box::new(spec::ExprWithSource {
-                                    expr: spec_expr,
-                                    source: Some(replace_where.clone()),
-                                }),
-                            }
-                        }
-                        None => WriteMode::Overwrite,
-                    },
-                };
+                let mode = to_write_mode(mode)?;
                 builder = builder
                     .with_target(WriteTarget::Path { location })
                     .with_mode(mode);
+            }
+            SaveType::Sink => {
+                let mode = to_write_mode(mode)?;
+                builder = builder.with_target(WriteTarget::Sink).with_mode(mode);
             }
             SaveType::Table {
                 table,

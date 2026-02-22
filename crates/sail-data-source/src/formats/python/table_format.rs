@@ -8,7 +8,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::Result;
 use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat, TableFormatRegistry};
 
 use super::discovery::DATA_SOURCE_REGISTRY;
@@ -193,12 +193,81 @@ impl TableFormat for PythonTableFormat {
     async fn create_writer(
         &self,
         _ctx: &dyn Session,
-        _info: SinkInfo,
+        info: SinkInfo,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        not_impl_err!(
-            "Write operations are not yet supported for Python datasource '{}'. Coming in PR #2.",
-            self.name
-        )
+        use sail_common_datafusion::datasource::PhysicalSinkMode;
+
+        let SinkInfo {
+            input,
+            path,
+            mode,
+            partition_by,
+            mut options,
+            ..
+        } = info;
+
+        // Warn about unsupported partitionBy (PySpark compat: silently ignored)
+        if !partition_by.is_empty() {
+            log::warn!(
+                "partitionBy is not supported for Python datasource '{}' and will be ignored. \
+                 Handle partitioning in your DataSourceWriter.write() method.",
+                self.name
+            );
+        }
+
+        // Inject save path into options so the Python DataSource receives it
+        // via self.options["path"] in __init__ (matches PySpark behavior).
+        if !path.is_empty() {
+            let path_option: HashMap<String, String> =
+                [("path".to_string(), path)].into_iter().collect();
+            options.push(path_option);
+        }
+
+        // Map save mode to overwrite bool (PySpark convention).
+        // PySpark's DataSource.writer(schema, overwrite) only receives a boolean:
+        //   Overwrite variants → True, everything else → False.
+        // ErrorIfExists and IgnoreIfExists are pre-write semantics that PySpark
+        // handles at the catalog level for managed tables. For Python datasources
+        // that manage their own storage, the mode is passed as an option so the
+        // datasource can implement its own existence checks if desired.
+        let overwrite = matches!(
+            mode,
+            PhysicalSinkMode::Overwrite
+                | PhysicalSinkMode::OverwriteIf { .. }
+                | PhysicalSinkMode::OverwritePartitions
+        );
+
+        // Pass the save mode as an option for datasources that need it
+        let mode_str = match &mode {
+            PhysicalSinkMode::ErrorIfExists => "error",
+            PhysicalSinkMode::IgnoreIfExists => "ignore",
+            PhysicalSinkMode::Append => "append",
+            PhysicalSinkMode::Overwrite => "overwrite",
+            PhysicalSinkMode::OverwriteIf { .. } => "overwrite",
+            PhysicalSinkMode::OverwritePartitions => "overwrite",
+        };
+        let mode_option: HashMap<String, String> = [("mode".to_string(), mode_str.to_string())]
+            .into_iter()
+            .collect();
+        options.push(mode_option);
+
+        // Create datasource and get writer using the same executor configuration
+        // path as write execution for consistent Python datasource behavior.
+        let datasource = self.create_datasource(&options)?;
+        let executor: Arc<dyn super::executor::PythonExecutor> =
+            Arc::new(InProcessExecutor::from_app_config());
+        let schema = input.schema();
+
+        let writer_plan = executor
+            .get_writer(datasource.command(), &schema, overwrite)
+            .await?;
+
+        Ok(Arc::new(super::write_exec::PythonDataSourceWriteExec::new(
+            input,
+            writer_plan.pickled_writer,
+            schema,
+            writer_plan.is_arrow,
+        )))
     }
 }
 
