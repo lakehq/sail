@@ -49,6 +49,8 @@ message ExtendedPhysicalPlanNode {
     MergeCardinalityCheckExecNode merge_cardinality_check = 34;
     PythonDataSourceExecNode python_data_source = 35;
     MonotonicIdExecNode monotonic_id = 36;
+    CacheWriteExecNode cache_write = 37;
+    CacheReadExecNode cache_read = 38;
   }
 }
 
@@ -523,6 +525,17 @@ message MonotonicIdExecNode {
   bytes input = 1;
   string column_name = 2;
   bytes schema = 3;
+}
+
+message CacheWriteExecNode {
+  bytes input = 1;
+  uint64 cache_id = 2;
+}
+
+message CacheReadExecNode {
+  uint64 cache_id = 1;
+  bytes schema = 2;
+  uint64 num_partitions = 3;
 }
 
 message JoinOn {

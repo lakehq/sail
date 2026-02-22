@@ -30,12 +30,14 @@ pub struct TaskSet {
     pub entries: Vec<TaskSetEntry>,
 }
 
+/// A single task within a task set, pairing a task key with its output stream kind.
 #[derive(Debug, Clone)]
 pub struct TaskSetEntry {
     pub key: TaskKey,
     pub output: TaskOutputKind,
 }
 
+/// Whether a task's output stream is stored locally on the executing node or written to a remote location.
 #[derive(Debug, Clone)]
 pub enum TaskOutputKind {
     Local,
@@ -72,6 +74,7 @@ impl TaskSet {
     }
 }
 
+/// Pairs a TaskSet with an execution location.
 #[derive(Debug, Clone)]
 pub struct TaskSetAssignment {
     pub set: TaskSet,
@@ -79,6 +82,7 @@ pub struct TaskSetAssignment {
 }
 
 #[derive(Debug, Clone)]
+/// The resolved execution location for a task, either the driver or a specific worker slot.
 pub enum TaskAssignment {
     Driver,
     Worker { worker_id: WorkerId, slot: usize },

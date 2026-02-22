@@ -14,4 +14,7 @@
     "editor.defaultFormatter": "charliermarsh.ruff",
   },
   "flake8.enabled": false,
+  "[rust]": {
+    "editor.defaultFormatter": "rust-lang.rust-analyzer"
+  },
 }

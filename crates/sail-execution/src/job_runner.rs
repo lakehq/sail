@@ -1,10 +1,15 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
+use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{internal_datafusion_err, internal_err, Result};
 use datafusion::execution::SendableRecordBatchStream;
+use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::{execute_stream, ExecutionPlan};
 use datafusion::prelude::SessionContext;
+use futures::StreamExt;
+use sail_common_datafusion::cache_manager::CacheManager;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::job::{JobRunner, JobRunnerHistory};
 use sail_common_datafusion::system::observable::{JobRunnerObserver, Observer, StateObservable};
 use sail_server::actor::{ActorHandle, ActorSystem};
@@ -14,6 +19,7 @@ use tokio::sync::mpsc::error::SendError;
 use tokio::sync::oneshot;
 
 use crate::driver::{DriverActor, DriverEvent, DriverOptions};
+use crate::plan::{CacheReadExec, CacheWriteExec};
 
 pub struct LocalJobRunner {
     next_job_id: AtomicU64,
@@ -84,6 +90,42 @@ impl ClusterJobRunner {
         let driver = system.spawn(options);
         Self { driver }
     }
+
+    /// Submits a physical plan to the driver for execution and returns the result stream.
+    async fn submit_job(
+        &self,
+        ctx: &SessionContext,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<SendableRecordBatchStream> {
+        let (tx, rx) = oneshot::channel();
+        self.driver
+            .send(DriverEvent::ExecuteJob {
+                plan,
+                context: ctx.task_ctx(),
+                result: tx,
+            })
+            .await
+            .map_err(|e| internal_datafusion_err!("{e}"))?;
+        rx.await
+            .map_err(|e| internal_datafusion_err!("failed to execute job: {e}"))?
+            .map_err(|e| internal_datafusion_err!("{e}"))
+    }
+
+    /// Submits a cache materialization job through the normal execution path and waits for completion.
+    async fn materialize_cache(
+        &self,
+        ctx: &SessionContext,
+        cache_id: u64,
+        plan: &LogicalPlan,
+    ) -> Result<()> {
+        let physical = ctx.state().create_physical_plan(plan).await?;
+        let cache_plan = Arc::new(CacheWriteExec::new_stub(physical, cache_id));
+        let mut stream = self.submit_job(ctx, cache_plan).await?;
+        while let Some(batch) = stream.next().await {
+            batch?;
+        }
+        Ok(())
+    }
 }
 
 #[tonic::async_trait]
@@ -103,24 +145,28 @@ impl StateObservable<JobRunnerObserver> for ClusterJobRunner {
 
 #[tonic::async_trait]
 impl JobRunner for ClusterJobRunner {
-    /// Executes a plan on the cluster. This is where the cool stuff happens.
+    /// Executes a plan on the cluster.
+    ///
+    /// Before running the main plan, checks for any CacheReadExec nodes that reference
+    /// unmaterialized caches and submits cache materialization jobs for them first.
     async fn execute(
         &self,
         ctx: &SessionContext,
         plan: Arc<dyn ExecutionPlan>,
     ) -> Result<SendableRecordBatchStream> {
-        let (tx, rx) = oneshot::channel();
-        self.driver
-            .send(DriverEvent::ExecuteJob {
-                plan,
-                context: ctx.task_ctx(),
-                result: tx,
-            })
-            .await
-            .map_err(|e| internal_datafusion_err!("{e}"))?;
-        rx.await
-            .map_err(|e| internal_datafusion_err!("failed to create job stream: {e}"))?
-            .map_err(|e| internal_datafusion_err!("{e}"))
+        let cache_ids = collect_cache_node_ids(&plan);
+        let cache = ctx.extension::<CacheManager>()?;
+
+        for cache_id in cache_ids {
+            if let Some(entry) = cache.find_by_id(cache_id) {
+                if !entry.materialized {
+                    self.materialize_cache(ctx, cache_id, &entry.plan).await?;
+                    cache.mark_materialized(cache_id);
+                }
+            }
+        }
+
+        self.submit_job(ctx, plan).await
     }
 
     async fn stop(&self, history: oneshot::Sender<JobRunnerHistory>) {
@@ -131,4 +177,19 @@ impl JobRunner for ClusterJobRunner {
             })
             .await;
     }
+}
+
+/// Walks a physical plan tree and collects cache IDs from any CacheReadExec nodes.
+fn collect_cache_node_ids(plan: &Arc<dyn ExecutionPlan>) -> Vec<u64> {
+    let mut ids = Vec::new();
+    let _ = plan.apply(|node: &Arc<dyn ExecutionPlan>| {
+        if let Some(cache_read) = node.as_any().downcast_ref::<CacheReadExec>() {
+            let id = cache_read.cache_id();
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        Ok(TreeNodeRecursion::Continue)
+    });
+    ids
 }
