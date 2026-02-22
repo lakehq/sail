@@ -97,6 +97,7 @@ impl TaskAssigner {
         self.task_queue.retain(|x| !x.contains(key));
     }
 
+    /// Dequeues pending task regions and assigns them to available driver or worker slots.
     pub fn assign_tasks(&mut self) -> Vec<TaskSetAssignment> {
         let mut assignments = vec![];
         let mut assigner = self.build_worker_task_slot_assigner();
@@ -163,6 +164,7 @@ impl TaskAssigner {
         Some(assignment.clone())
     }
 
+    /// Records local and remote stream ownership for each resource based on the given task assignments.
     pub fn track_streams(&mut self, assignments: &[TaskSetAssignment]) {
         for assignment in assignments {
             self.driver.track_remote_streams(&assignment.set);
