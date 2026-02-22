@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use datafusion_common::DFSchemaRef;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::registry::FunctionRegistry;
@@ -143,7 +145,40 @@ impl PlanResolver<'_> {
             argument_display_names.iter().map(|x| x.as_str()).collect(),
             is_distinct,
         )?;
-        Ok(NamedExpr::new(vec![name], func))
+
+        let metadata = match canonical_function_name.as_str() {
+            "st_geomfromwkb" => {
+                let mut metadata = HashMap::new();
+                metadata.insert(
+                    "ARROW:extension:name".to_string(),
+                    "geoarrow.wkb".to_string(),
+                );
+                metadata.insert(
+                    "ARROW:extension:metadata".to_string(),
+                    r#"{"crs":"SRID:0"}"#.to_string(),
+                );
+                metadata
+            }
+            "st_geogfromwkb" => {
+                let mut metadata = HashMap::new();
+                metadata.insert(
+                    "ARROW:extension:name".to_string(),
+                    "geoarrow.wkb".to_string(),
+                );
+                metadata.insert(
+                    "ARROW:extension:metadata".to_string(),
+                    r#"{"crs":"OGC:CRS84","edges":"spherical"}"#.to_string(),
+                );
+                metadata
+            }
+            _ => HashMap::new(),
+        };
+
+        if metadata.is_empty() {
+            Ok(NamedExpr::new(vec![name], func))
+        } else {
+            Ok(NamedExpr::new(vec![name], func).with_metadata(metadata.into_iter().collect()))
+        }
     }
 
     pub(super) async fn resolve_expression_call_function(
