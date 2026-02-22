@@ -3,11 +3,12 @@ use std::sync::Arc;
 
 use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::{DFSchemaRef, TableReference};
-use datafusion_expr::LogicalPlan;
+use datafusion_expr::{Expr, LogicalPlan};
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::expression::NamedExpr;
+use crate::resolver::expression_mapping::ExpressionMappingState;
 
 /// The field information for fields in the logical plan.
 #[derive(Debug, Clone)]
@@ -77,6 +78,8 @@ pub(super) struct PlanResolverState {
     ctes: HashMap<TableReference, Arc<LogicalPlan>>,
     /// Unresolved subquery references from a WithRelations node, keyed by plan_id.
     subquery_references: HashMap<i64, spec::QueryPlan>,
+    /// Expression rewrite and output-column mappings used by query resolvers.
+    expression_mapping: ExpressionMappingState,
     config: PlanResolverStateConfig,
 }
 
@@ -95,6 +98,7 @@ impl PlanResolverState {
             aggregate_state: AggregateState::default(),
             ctes: HashMap::new(),
             subquery_references: HashMap::new(),
+            expression_mapping: ExpressionMappingState::default(),
             config: PlanResolverStateConfig::default(),
         }
     }
@@ -215,6 +219,25 @@ impl PlanResolverState {
         plan: spec::QueryPlan,
     ) -> Option<spec::QueryPlan> {
         self.subquery_references.insert(plan_id, plan)
+    }
+
+    pub fn register_expression_rewrite(&mut self, original: Expr, rewritten: Expr) {
+        self.expression_mapping
+            .register_expression_rewrite(original, rewritten);
+    }
+
+    pub fn register_expression_output_field(&mut self, expr: Expr, field_id: impl Into<String>) {
+        self.expression_mapping
+            .register_expression_output_field(expr, field_id);
+    }
+
+    pub fn find_output_field_for_expression(
+        &self,
+        expr: &Expr,
+        output_field_ids: &[String],
+    ) -> Option<String> {
+        self.expression_mapping
+            .find_output_field_for_expression(expr, output_field_ids)
     }
 
     pub fn enter_with_relations_scope(&mut self) -> WithRelationsScope<'_> {

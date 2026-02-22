@@ -1,4 +1,4 @@
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter};
 use datafusion_common::ScalarValue;
 use datafusion_expr::utils::{expr_as_column_expr, find_aggregate_exprs};
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
@@ -11,7 +11,10 @@ use crate::resolver::state::{AggregateState, PlanResolverState};
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
 use crate::resolver::tree::window::WindowRewriter;
+use crate::resolver::tree::PlanRewriter;
 use crate::resolver::PlanResolver;
+
+type RewrittenAggregateExpressions = (LogicalPlan, Vec<NamedExpr>, Vec<NamedExpr>, Option<Expr>);
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_aggregate(
@@ -106,6 +109,22 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let grouping = self.resolve_grouping_positions(grouping, &projections)?;
+        let (input, projections, grouping, having) = self
+            .rewrite_aggregate_expressions::<MonotonicIdRewriter>(
+                input,
+                projections,
+                grouping,
+                having,
+                state,
+            )?;
+        let (input, projections, grouping, having) = self
+            .rewrite_aggregate_expressions::<ExplodeRewriter>(
+                input,
+                projections,
+                grouping,
+                having,
+                state,
+            )?;
         let mut aggregate_candidates = projections
             .iter()
             .map(|x| x.expr.clone())
@@ -160,7 +179,12 @@ impl PlanResolver<'_> {
                     expr,
                     metadata,
                 } = x;
-                let expr = Self::rebase_expression(expr, &aggregate_or_grouping_exprs, &plan)?;
+                let expr = Self::rebase_expression_with_state(
+                    expr,
+                    &aggregate_or_grouping_exprs,
+                    &plan,
+                    state,
+                )?;
                 Ok(NamedExpr {
                     name,
                     expr,
@@ -170,8 +194,12 @@ impl PlanResolver<'_> {
             .collect::<PlanResult<Vec<_>>>()?;
         let plan = match having {
             Some(having) => {
-                let having =
-                    Self::rebase_expression(having.clone(), &aggregate_or_grouping_exprs, &plan)?;
+                let having = Self::rebase_expression_with_state(
+                    having.clone(),
+                    &aggregate_or_grouping_exprs,
+                    &plan,
+                    state,
+                )?;
                 LogicalPlanBuilder::from(plan).having(having)?.build()?
             }
             None => plan,
@@ -190,12 +218,58 @@ impl PlanResolver<'_> {
                     expr,
                     metadata: _,
                 } = x;
-                Ok(expr.alias(state.register_field_name(name.one()?)))
+                let field_id = state.register_field_name(name.one()?);
+                state.register_expression_output_field(expr.clone(), field_id.clone());
+                Ok(expr.alias(field_id))
             })
             .collect::<PlanResult<Vec<_>>>()?;
         Ok(LogicalPlanBuilder::from(plan)
             .project(projections)?
             .build()?)
+    }
+
+    fn rewrite_aggregate_expressions<'s, T>(
+        &self,
+        input: LogicalPlan,
+        projections: Vec<NamedExpr>,
+        grouping: Vec<NamedExpr>,
+        having: Option<Expr>,
+        state: &'s mut PlanResolverState,
+    ) -> PlanResult<RewrittenAggregateExpressions>
+    where
+        T: PlanRewriter<'s> + TreeNodeRewriter<Node = Expr>,
+    {
+        fn rewrite_named_expressions<T>(
+            expr: Vec<NamedExpr>,
+            rewriter: &mut T,
+        ) -> PlanResult<Vec<NamedExpr>>
+        where
+            T: TreeNodeRewriter<Node = Expr>,
+        {
+            expr.into_iter()
+                .map(|e| {
+                    let NamedExpr {
+                        name,
+                        expr,
+                        metadata,
+                    } = e;
+                    Ok(NamedExpr {
+                        name,
+                        expr: expr.rewrite(rewriter)?.data,
+                        metadata,
+                    })
+                })
+                .collect::<PlanResult<Vec<_>>>()
+        }
+
+        let mut rewriter = T::new_from_plan(input, state);
+        let projections = rewrite_named_expressions(projections, &mut rewriter)?;
+        let grouping = rewrite_named_expressions(grouping, &mut rewriter)?;
+        let having = match having {
+            Some(expr) => Some(expr.rewrite(&mut rewriter)?.data),
+            None => None,
+        };
+        Ok((rewriter.into_plan(), projections, grouping, having))
     }
 
     /// Reference: [datafusion_sql::utils::rebase_expr]
@@ -208,6 +282,26 @@ impl PlanResolver<'_> {
             .transform_down(|e| {
                 if base.contains(&e) {
                     Ok(Transformed::yes(expr_as_column_expr(&e, plan)?))
+                } else {
+                    Ok(Transformed::no(e))
+                }
+            })
+            .data()?)
+    }
+
+    /// Rebase expression and record replacement edges in resolver state.
+    pub(super) fn rebase_expression_with_state(
+        expr: Expr,
+        base: &[Expr],
+        plan: &LogicalPlan,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Expr> {
+        Ok(expr
+            .transform_down(|e| {
+                if base.contains(&e) {
+                    let rebased = expr_as_column_expr(&e, plan)?;
+                    state.register_expression_rewrite(e, rebased.clone());
+                    Ok(Transformed::yes(rebased))
                 } else {
                     Ok(Transformed::no(e))
                 }
