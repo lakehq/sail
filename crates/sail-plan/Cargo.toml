@@ -11,6 +11,7 @@ sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-python-udf = { path = "../sail-python-udf" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
+sail-sql-parser = { path = "../sail-sql-parser" }
 sail-catalog = { path = "../sail-catalog" }
 sail-function = { path = "../sail-function" }
 sail-logical-plan = { path = "../sail-logical-plan" }
@@ -41,3 +42,4 @@ uuid = { workspace = true }
 indexmap = { workspace = true }
 log = { workspace = true }
 regex = { workspace = true }
+chrono = { workspace = true }
