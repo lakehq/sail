@@ -77,6 +77,29 @@ impl ShuffleWriteExec {
     }
 }
 
+impl ShuffleWriteExec {
+    /// Constructs a BatchPartitioner for the given partition, normalizing unknown partitioning to round-robin.
+    fn build_partitioner(&self, partition: usize) -> Result<BatchPartitioner> {
+        // TODO: Revisit this
+        let shuffle_partitioning = match &self.shuffle_partitioning {
+            Partitioning::UnknownPartitioning(size) => Partitioning::RoundRobinBatch(*size),
+            p => p.clone(),
+        };
+        // TODO: Support metrics in batch partitioner
+        let num_input_partitions = self
+            .plan
+            .properties()
+            .output_partitioning()
+            .partition_count();
+        BatchPartitioner::try_new(
+            shuffle_partitioning,
+            Default::default(),
+            partition,
+            num_input_partitions,
+        )
+    }
+}
+
 impl DisplayAs for ShuffleWriteExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
         write!(
@@ -140,23 +163,7 @@ impl ExecutionPlan for ShuffleWriteExec {
             );
         }
         let stream = self.plan.execute(partition, context)?;
-        // TODO: Revisit this
-        let shuffle_partitioning = match &self.shuffle_partitioning {
-            Partitioning::UnknownPartitioning(size) => Partitioning::RoundRobinBatch(*size),
-            shuffle_partitioning => shuffle_partitioning.clone(),
-        };
-        // TODO: Support metrics in batch partitioner
-        let num_input_partitions = self
-            .plan
-            .properties()
-            .output_partitioning()
-            .partition_count();
-        let partitioner = BatchPartitioner::try_new(
-            shuffle_partitioning,
-            Default::default(),
-            partition,
-            num_input_partitions,
-        )?;
+        let partitioner = self.build_partitioner(partition)?;
         let empty = RecordBatch::new_empty(self.schema());
         let output = futures::stream::once(async move {
             shuffle_write(writer, stream, &locations, partitioner).await?;

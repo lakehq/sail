@@ -173,6 +173,7 @@ impl WorkerPool {
         }
     }
 
+    /// Returns the network locations of all currently running workers.
     fn list_running_workers(&self) -> Vec<WorkerLocation> {
         self.workers
             .iter()
@@ -255,6 +256,7 @@ impl WorkerPool {
         }
     }
 
+    /// Dispatches a task to a specific worker by sending the task definition over gRPC.
     pub fn run_task(
         &mut self,
         ctx: &mut ActorContext<DriverActor>,
@@ -406,6 +408,7 @@ impl WorkerPool {
         Self::clean_up_job_for_worker(ctx, job_id, stage, worker_id, worker, &self.options);
     }
 
+    /// Returns or initializes the gRPC client set for the given worker.
     fn get_client_set(
         worker_id: WorkerId,
         worker: &mut WorkerDescriptor,
@@ -491,6 +494,7 @@ impl WorkerPool {
         );
     }
 
+    /// Schedules probes to monitor the worker for idle timeout and heartbeat loss.
     fn track_worker_activity(
         ctx: &mut ActorContext<DriverActor>,
         worker_id: WorkerId,

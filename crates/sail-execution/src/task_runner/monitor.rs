@@ -9,6 +9,7 @@ use crate::driver::TaskStatus;
 use crate::id::{TaskKey, TaskKeyDisplay};
 use crate::task_runner::TaskRunnerMessage;
 
+/// Manages the execution lifecycle of a task and asynchronously reports its status and completion events.
 pub struct TaskMonitor<T: Actor> {
     handle: ActorHandle<T>,
     key: TaskKey,
@@ -17,6 +18,7 @@ pub struct TaskMonitor<T: Actor> {
 }
 
 impl<T: Actor> TaskMonitor<T> {
+    /// Creates a new monitor to manage the given stream and handle cancellation signals.
     pub fn new(
         handle: ActorHandle<T>,
         key: TaskKey,
@@ -36,6 +38,7 @@ impl<T: Actor> TaskMonitor<T>
 where
     T::Message: TaskRunnerMessage,
 {
+    /// Starts the monitoring process, awaiting either successful stream completion or a cancellation signal.
     pub async fn run(self) {
         let Self {
             handle,
@@ -52,10 +55,12 @@ where
         let _ = handle.send(event).await;
     }
 
+    /// Creates a status event indicating that the task has started executing.
     fn running(key: TaskKey) -> T::Message {
         T::Message::report_task_status(key, TaskStatus::Running, None, None)
     }
 
+    /// Awaits the cancellation signal and produces a task canceled event if received.
     async fn cancel(key: TaskKey, signal: oneshot::Receiver<()>) -> T::Message {
         let _ = signal.await;
         T::Message::report_task_status(
@@ -66,6 +71,7 @@ where
         )
     }
 
+    /// Consumes the stream to completion, producing a success or failure status event based on the result.
     async fn execute(key: TaskKey, mut stream: SendableRecordBatchStream) -> T::Message {
         let event = loop {
             let Some(batch) = stream.next().await else {
