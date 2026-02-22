@@ -14,6 +14,7 @@ pub struct NamedPlan {
 }
 
 impl PlanResolver<'_> {
+    /// Resolves a Spark plan spec into a DataFusion logical plan with optional output field names.
     pub async fn resolve_named_plan(&self, plan: spec::Plan) -> PlanResult<NamedPlan> {
         let mut state = PlanResolverState::new();
         match plan {

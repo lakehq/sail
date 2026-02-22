@@ -62,6 +62,7 @@ impl JobScheduler {
         Ok((job_id, stream))
     }
 
+    /// Updates the state of a task attempt, triggering any downstream job progress transitions.
     pub fn update_task(
         &mut self,
         key: &TaskKey,
@@ -503,6 +504,7 @@ impl JobScheduler {
         actions
     }
 
+    /// Builds the serialized task definition and context for the given task key.
     pub fn get_task_definition(
         &self,
         key: &TaskKey,
@@ -575,6 +577,7 @@ impl JobScheduler {
         }
     }
 
+    /// Computes the correct input locations (driver, worker, or remote) to resolve a given stage input dependency.
     fn get_task_input(
         &self,
         job: &JobDescriptor,
@@ -704,6 +707,7 @@ impl JobScheduler {
         Ok(TaskInput { locator })
     }
 
+    /// Determines the output distribution and storage location (local or remote) for a given stage.
     fn get_task_output(
         &self,
         job: &JobDescriptor,

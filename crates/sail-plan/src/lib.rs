@@ -51,7 +51,7 @@ pub async fn execute_logical_plan(ctx: &SessionContext, plan: LogicalPlan) -> Re
     Ok(df)
 }
 
-pub async fn resolve_and_execute_plan(
+pub async fn resolve_to_execution_plan(
     ctx: &SessionContext,
     config: Arc<PlanConfig>,
     plan: spec::Plan,

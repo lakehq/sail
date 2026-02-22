@@ -38,6 +38,11 @@ impl TaskRunner {
         }
     }
 
+    /// Executes a task by building and running its physical plan, then spawns a monitor to track completion.
+    ///
+    /// Deserializes the plan from the task definition, executes it, and spawns a
+    /// background monitor that polls the resulting stream and reports task status.
+    /// If plan execution fails, the task is immediately reported as failed.
     pub fn run_task<T: Actor>(
         &mut self,
         ctx: &mut ActorContext<T>,
@@ -67,12 +72,17 @@ impl TaskRunner {
         ctx.spawn(monitor.run());
     }
 
+    /// Sends a cancellation signal to gracefully terminate the specified running task.
     pub fn stop_task(&mut self, key: &TaskKey) {
         if let Some(signal) = self.signals.remove(key) {
             let _ = signal.send(());
         }
     }
 
+    /// Deserializes and prepares a physical plan for execution on this node.
+    ///
+    /// Decodes the plan from protobuf, rewrites parquet adapters, and wraps the plan
+    /// with the appropriate output node (ShuffleWriteExec for normal jobs).
     fn execute_plan<T: Actor>(
         &mut self,
         ctx: &mut ActorContext<T>,
@@ -111,6 +121,7 @@ impl TaskRunner {
         Ok(stream)
     }
 
+    /// Rewrites Parquet scan nodes to attach a Delta expression adapter for predicate pushdown.
     fn rewrite_parquet_adapters(
         &mut self,
         plan: Arc<dyn ExecutionPlan>,
@@ -131,14 +142,13 @@ impl TaskRunner {
         Ok(result.data()?)
     }
 
-    fn rewrite_shuffle<T: Actor>(
+    /// Replaces StageInputExec placeholders with ShuffleReadExec nodes.
+    fn rewrite_stage_inputs<T: Actor>(
         &mut self,
         ctx: &mut ActorContext<T>,
         key: &TaskKey,
         inputs: &[TaskInput],
-        output: &TaskOutput,
         plan: Arc<dyn ExecutionPlan>,
-        context: &TaskContext,
     ) -> ExecutionResult<Arc<dyn ExecutionPlan>>
     where
         T::Message: TaskRunnerMessage + StreamAccessorMessage,
@@ -165,10 +175,28 @@ impl TaskRunner {
                 Ok(Transformed::no(node))
             }
         });
-        let plan = result.data()?;
+        Ok(result.data()?)
+    }
+
+    /// Rewrites the plan for normal job execution by replacing stage inputs and wrapping with ShuffleWriteExec.
+    fn rewrite_shuffle<T: Actor>(
+        &mut self,
+        ctx: &mut ActorContext<T>,
+        key: &TaskKey,
+        inputs: &[TaskInput],
+        output: &TaskOutput,
+        plan: Arc<dyn ExecutionPlan>,
+        context: &TaskContext,
+    ) -> ExecutionResult<Arc<dyn ExecutionPlan>>
+    where
+        T::Message: TaskRunnerMessage + StreamAccessorMessage,
+    {
+        let plan = self.rewrite_stage_inputs(ctx, key, inputs, plan)?;
+        let handle = ctx.handle();
         let schema = plan.schema();
         let accessor = StreamAccessor::new(handle.clone());
         let mut locations = vec![vec![]; plan.output_partitioning().partition_count()];
+
         match locations.get_mut(key.partition) {
             Some(x) => x.extend(output.locations(key)),
             None => {

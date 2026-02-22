@@ -50,6 +50,7 @@ impl TracingExecOptions {
     }
 }
 
+/// Wraps an execution plan with distributed tracing instrumentation, collecting spans and metrics per operator.
 pub fn trace_execution_plan(
     plan: Arc<dyn ExecutionPlan>,
     options: TracingExecOptions,

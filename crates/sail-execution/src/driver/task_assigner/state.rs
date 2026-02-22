@@ -18,6 +18,7 @@ pub struct DriverResource {
 }
 
 impl DriverResource {
+    /// Assigns a task set to the first available driver slot.
     pub fn add_task_set(&mut self, set: TaskSet) {
         for slot in &mut self.task_slots {
             if slot.is_vacant() {
@@ -30,6 +31,7 @@ impl DriverResource {
         self.task_slots.push(slot);
     }
 
+    /// Removes a task from all driver slots, returning true if the task was found.
     pub fn remove_task(&mut self, key: &TaskKey) -> bool {
         for slot in &mut self.task_slots {
             if slot.remove_task(key) {
@@ -39,14 +41,17 @@ impl DriverResource {
         false
     }
 
+    /// Records local output streams from the given task set as owned by the driver.
     pub fn track_local_streams(&mut self, set: &TaskSet) {
         self.local_streams.extend(set.local_streams().cloned());
     }
 
+    /// Records remote output streams from the given task set as tracked by the driver.
     pub fn track_remote_streams(&mut self, set: &TaskSet) {
         self.remote_streams.extend(set.remote_streams().cloned());
     }
 
+    /// Removes local streams for the given job (and optionally stage), returning true if any were removed.
     pub fn untrack_local_streams(&mut self, job_id: JobId, stage: Option<usize>) -> bool {
         let count = self.local_streams.len();
         if let Some(stage) = stage {
@@ -58,6 +63,7 @@ impl DriverResource {
         count != self.local_streams.len()
     }
 
+    /// Removes remote streams for the given job (and optionally stage), returning true if any were removed.
     pub fn untrack_remote_streams(&mut self, job_id: JobId, stage: Option<usize>) -> bool {
         let count = self.remote_streams.len();
         if let Some(stage) = stage {
@@ -71,6 +77,7 @@ impl DriverResource {
 }
 
 #[derive(Debug)]
+/// Represents the current state of a worker's resources as seen by the task assigner.
 pub enum WorkerResource {
     Active {
         /// The task slots on the worker.
@@ -94,6 +101,7 @@ pub enum WorkerResource {
 }
 
 impl WorkerResource {
+    /// Assigns a task set to the specified slot on this worker.
     pub fn add_task_set(&mut self, slot: usize, set: TaskSet) {
         match self {
             WorkerResource::Active { task_slots, .. } => {
@@ -109,6 +117,7 @@ impl WorkerResource {
         }
     }
 
+    /// Removes a task from the specified slot on this worker, returning true if the task was found.
     pub fn remove_task(&mut self, key: &TaskKey, slot: usize) -> bool {
         match self {
             WorkerResource::Active { task_slots, .. } => {
@@ -126,6 +135,7 @@ impl WorkerResource {
         }
     }
 
+    /// Records local output streams from the given task set as owned by this worker.
     pub fn track_local_streams(&mut self, set: &TaskSet) {
         match self {
             WorkerResource::Active { local_streams, .. } => {
@@ -137,6 +147,7 @@ impl WorkerResource {
         }
     }
 
+    /// Removes local streams for the given job (and optionally stage), returning true if any were removed.
     pub fn untrack_local_streams(&mut self, job_id: JobId, stage: Option<usize>) -> bool {
         match self {
             WorkerResource::Active { local_streams, .. } => {
@@ -181,20 +192,24 @@ impl Default for TaskSlot {
 }
 
 impl TaskSlot {
+    /// Returns true if no tasks are currently assigned to this slot.
     pub fn is_vacant(&self) -> bool {
         self.tasks.is_empty()
     }
 
+    /// Inserts a set of task keys into this slot.
     pub fn add_tasks(&mut self, tasks: impl IntoIterator<Item = TaskKey>) {
         for task in tasks {
             self.tasks.insert(task);
         }
     }
 
+    /// Removes a task from this slot, returning true if the task was present.
     pub fn remove_task(&mut self, task: &TaskKey) -> bool {
         self.tasks.swap_remove(task)
     }
 
+    /// Returns an iterator over all task keys currently in this slot.
     pub fn list_tasks(&self) -> impl Iterator<Item = &TaskKey> {
         self.tasks.iter()
     }

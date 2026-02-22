@@ -30,12 +30,14 @@ pub struct TaskSet {
     pub entries: Vec<TaskSetEntry>,
 }
 
+/// A single task within a task set, pairing a task key with its output stream kind.
 #[derive(Debug, Clone)]
 pub struct TaskSetEntry {
     pub key: TaskKey,
     pub output: TaskOutputKind,
 }
 
+/// Whether a task's output stream is stored locally on the executing node or written to a remote location.
 #[derive(Debug, Clone)]
 pub enum TaskOutputKind {
     Local,
@@ -43,16 +45,19 @@ pub enum TaskOutputKind {
 }
 
 impl TaskRegion {
+    /// Returns true if any task set in this region contains the specified task key.
     pub fn contains(&self, key: &TaskKey) -> bool {
         self.tasks.iter().any(|(_, set)| set.contains(key))
     }
 }
 
 impl TaskSet {
+    /// Returns an iterator over all task keys within this set.
     pub fn tasks(&self) -> impl Iterator<Item = &TaskKey> {
         self.entries.iter().map(|entry| &entry.key)
     }
 
+    /// Returns an iterator over all task keys in this set whose outputs are streamed locally.
     pub fn local_streams(&self) -> impl Iterator<Item = &TaskKey> {
         self.entries
             .iter()
@@ -60,6 +65,7 @@ impl TaskSet {
             .map(|entry| &entry.key)
     }
 
+    /// Returns an iterator over all task keys in this set whose outputs are streamed remotely.
     pub fn remote_streams(&self) -> impl Iterator<Item = &TaskKey> {
         self.entries
             .iter()
@@ -67,11 +73,13 @@ impl TaskSet {
             .map(|entry| &entry.key)
     }
 
+    /// Returns true if the specified task key is included in this set.
     pub fn contains(&self, key: &TaskKey) -> bool {
         self.entries.iter().any(|entry| &entry.key == key)
     }
 }
 
+/// Pairs a TaskSet with an execution location.
 #[derive(Debug, Clone)]
 pub struct TaskSetAssignment {
     pub set: TaskSet,
@@ -79,12 +87,14 @@ pub struct TaskSetAssignment {
 }
 
 #[derive(Debug, Clone)]
+/// The resolved execution location for a task, either the driver or a specific worker slot.
 pub enum TaskAssignment {
     Driver,
     Worker { worker_id: WorkerId, slot: usize },
 }
 
 pub trait TaskAssignmentGetter {
+    /// Retrieves the assigned execution location for a specific task attempt, if it exists.
     fn get(&self, key: &TaskKey) -> Option<&TaskAssignment>;
 }
 
