@@ -31,7 +31,95 @@ impl PlanResolver<'_> {
         let left = self.resolve_query_plan(*left, state).await?;
         let right = self.resolve_query_plan(*right, state).await?;
         match set_op_type {
-            SetOpType::Intersect => Ok(LogicalPlanBuilder::intersect(left, right, is_all)?),
+            SetOpType::Intersect => {
+                if is_all {
+                    let left_len = left.schema().fields().len();
+                    let right_len = right.schema().fields().len();
+                    if left_len != right_len {
+                        return Err(PlanError::invalid(format!(
+                            "`INTERSECT ALL` must have the same number of columns. Left has {left_len} columns, right has {right_len} columns."
+                        )));
+                    }
+                    let mut join_keys = left
+                        .schema()
+                        .fields()
+                        .iter()
+                        .zip(right.schema().fields().iter())
+                        .map(|(left_field, right_field)| {
+                            (
+                                Column::from_name(left_field.name()),
+                                Column::from_name(right_field.name()),
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    let left_row_number_alias = state.register_field_name("row_num");
+                    let right_row_number_alias = state.register_field_name("row_num");
+                    let left_row_number_window =
+                        Expr::WindowFunction(Box::new(expr::WindowFunction {
+                            fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+                            params: WindowFunctionParams {
+                                args: vec![],
+                                partition_by: left
+                                    .schema()
+                                    .fields()
+                                    .iter()
+                                    .map(|field| Expr::Column(Column::from_name(field.name())))
+                                    .collect::<Vec<_>>(),
+                                order_by: vec![],
+                                window_frame: WindowFrame::new(None),
+                                filter: None,
+                                null_treatment: Some(NullTreatment::RespectNulls),
+                                distinct: false,
+                            },
+                        }))
+                        .alias(left_row_number_alias.as_str());
+                    let right_row_number_window =
+                        Expr::WindowFunction(Box::new(expr::WindowFunction {
+                            fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+                            params: WindowFunctionParams {
+                                args: vec![],
+                                partition_by: right
+                                    .schema()
+                                    .fields()
+                                    .iter()
+                                    .map(|field| Expr::Column(Column::from_name(field.name())))
+                                    .collect::<Vec<_>>(),
+                                order_by: vec![],
+                                window_frame: WindowFrame::new(None),
+                                filter: None,
+                                null_treatment: Some(NullTreatment::RespectNulls),
+                                distinct: false,
+                            },
+                        }))
+                        .alias(right_row_number_alias.as_str());
+                    let left = LogicalPlanBuilder::from(left)
+                        .window(vec![left_row_number_window])?
+                        .build()?;
+                    let right = LogicalPlanBuilder::from(right)
+                        .window(vec![right_row_number_window])?
+                        .build()?;
+                    let left_project_columns = join_keys
+                        .iter()
+                        .map(|(left_col, _)| left_col.clone())
+                        .collect::<Vec<_>>();
+                    join_keys.push((
+                        Column::from_name(left_row_number_alias),
+                        Column::from_name(right_row_number_alias),
+                    ));
+                    Ok(LogicalPlanBuilder::from(left)
+                        .join_detailed(
+                            right,
+                            JoinType::Inner,
+                            join_keys.into_iter().unzip(),
+                            None,
+                            NullEquality::NullEqualsNull,
+                        )?
+                        .project(left_project_columns)?
+                        .build()?)
+                } else {
+                    Ok(LogicalPlanBuilder::intersect(left, right, false)?)
+                }
+            }
             SetOpType::Union => {
                 let (left, right) = if by_name {
                     let left_names = Self::get_field_names(left.schema(), state)?;
