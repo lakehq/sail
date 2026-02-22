@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 
 use indexmap::IndexSet;
 use log::{error, warn};
@@ -99,26 +99,9 @@ impl TaskAssigner {
 
     /// Dequeues pending task regions and assigns them to available driver or worker slots.
     pub fn assign_tasks(&mut self) -> Vec<TaskSetAssignment> {
-        let mut assignments = vec![];
-        let mut assigner = self.build_worker_task_slot_assigner();
-
-        while let Some(region) = self.task_queue.pop_front() {
-            match assigner.try_assign_task_region(region) {
-                Ok(x) => assignments.extend(x),
-                Err(region) => {
-                    // The region cannot be successfully assigned as a whole
-                    // due to insufficient worker task slots.
-                    // Put the region back to the queue and try again later.
-                    // We must put the region back to the front of the queue to
-                    // avoid starvation.
-                    // This does result in head-of-line blocking, but we would
-                    // like the regions to be assigned in the same order as they
-                    // are enqueued.
-                    self.task_queue.push_front(region);
-                    break;
-                }
-            }
-        }
+        let assignments = self
+            .build_worker_task_slot_assigner()
+            .assign_all_possible(&mut self.task_queue);
 
         // Update the driver and worker based on the assignments.
         for assignment in assignments.iter() {
@@ -238,6 +221,7 @@ impl TaskAssigner {
         }
     }
 
+    /// Builds a snapshot of available task slots across the driver and active workers for assignment.
     fn build_worker_task_slot_assigner(&self) -> TaskSlotAssigner {
         let slots = self
             .workers
@@ -270,6 +254,7 @@ impl TaskAssignmentGetter for TaskAssigner {
     }
 }
 
+/// Assigns task regions to driver or worker slots, consuming available slots as tasks are placed.
 struct TaskSlotAssigner {
     /// The available task slots on workers.
     slots: Vec<(WorkerId, Vec<usize>)>,
@@ -280,12 +265,37 @@ impl TaskSlotAssigner {
         Self { slots }
     }
 
+    /// Returns the next available worker slot and removes it from the pool of available slots.
     fn next(&mut self) -> Option<(WorkerId, usize)> {
         self.slots
             .iter_mut()
             .find_map(|(worker_id, slots)| slots.pop().map(|slot| (*worker_id, slot)))
     }
 
+    /// Drains as many task regions from the queue as possible, stopping when slots are exhausted.
+    fn assign_all_possible(mut self, queue: &mut VecDeque<TaskRegion>) -> Vec<TaskSetAssignment> {
+        let mut assignments = vec![];
+        while let Some(region) = queue.pop_front() {
+            match self.try_assign_task_region(region) {
+                Ok(x) => assignments.extend(x),
+                Err(region) => {
+                    // The region cannot be successfully assigned as a whole
+                    // due to insufficient worker task slots.
+                    // Put the region back to the queue and try again later.
+                    // We must put the region back to the front of the queue to
+                    // avoid starvation.
+                    // This does result in head-of-line blocking, but we would
+                    // like the regions to be assigned in the same order as they
+                    // are enqueued.
+                    queue.push_front(region);
+                    break;
+                }
+            }
+        }
+        assignments
+    }
+
+    /// Attempts to assign a task region, returning the region on failure.
     fn try_assign_task_region(
         &mut self,
         region: TaskRegion,

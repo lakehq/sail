@@ -11,6 +11,7 @@ use crate::driver::task_assigner::state::{DriverResource, WorkerResource};
 use crate::id::{TaskKey, WorkerId};
 use crate::task::scheduling::{TaskAssignment, TaskRegion};
 
+/// Manages task queuing and assignment across the driver and worker slots.
 pub struct TaskAssigner {
     options: TaskAssignerOptions,
     driver: DriverResource,
@@ -23,6 +24,7 @@ pub struct TaskAssigner {
     /// but there is no need to remove the task attempt when it is completed, as
     /// the mapping is still valid for historical purposes.
     task_assignments: IndexMap<TaskKey, TaskAssignment>,
+    /// Pending task regions waiting to be assigned to available driver or worker slots.
     task_queue: VecDeque<TaskRegion>,
 }
 

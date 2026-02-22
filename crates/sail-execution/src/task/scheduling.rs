@@ -72,6 +72,7 @@ impl TaskSet {
     }
 }
 
+/// Pairs a TaskSet with an execution location.
 #[derive(Debug, Clone)]
 pub struct TaskSetAssignment {
     pub set: TaskSet,

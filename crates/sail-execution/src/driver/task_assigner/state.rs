@@ -71,6 +71,7 @@ impl DriverResource {
 }
 
 #[derive(Debug)]
+/// Represents the current state of a worker's resources as seen by the task assigner.
 pub enum WorkerResource {
     Active {
         /// The task slots on the worker.
