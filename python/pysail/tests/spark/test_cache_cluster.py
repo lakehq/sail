@@ -45,7 +45,7 @@ class TestCacheCluster:
         result2 = cached.sort("n").toPandas()
 
         assert_frame_equal(result1, result2)
-        assert len(result1) == 2
+        assert len(result1) == 2  # noqa: PLR2004
 
     def test_cache_then_aggregate(self, spark):
         # groupBy/agg requires a shuffle exchange after reading from cache.

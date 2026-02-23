@@ -19,7 +19,7 @@ def test_cache_with_transformation(spark):
     result2 = cached.sort("n").toPandas()
 
     assert_frame_equal(result1, result2)
-    assert len(result1) == 2
+    assert len(result1) == 2  # noqa: PLR2004
 
 
 def test_cache_then_aggregate(spark):
