@@ -25,6 +25,21 @@ fn convert_string_columns(schema: Schema) -> Schema {
     Schema::new_with_metadata(string_fields, schema.metadata().clone())
 }
 
+/// Convert Int64 to Int32 to match Spark's default CSV integer inference.
+/// Spark tries IntegerType (int32) first and only promotes to LongType (int64) if the value
+/// doesn't fit, while DataFusion always infers Int64.
+fn convert_spark_integer_types(schema: Schema) -> Schema {
+    let fields = schema
+        .fields()
+        .iter()
+        .map(|field| match field.data_type() {
+            DataType::Int64 => Field::new(field.name(), DataType::Int32, field.is_nullable()),
+            _ => field.as_ref().clone(),
+        })
+        .collect::<Vec<_>>();
+    Schema::new_with_metadata(fields, schema.metadata().clone())
+}
+
 fn rename_default_csv_columns(schema: Schema) -> Schema {
     use std::collections::HashSet;
 
@@ -100,6 +115,8 @@ impl SchemaInfer for CsvSchemaInfer {
                 schema = convert_string_columns(schema);
             }
         }
+        // Convert Int64 → Int32 to match Spark's default integer inference
+        schema = convert_spark_integer_types(schema);
         // Rename default CSV columns (column_1 -> _c0, etc.)
         schema = rename_default_csv_columns(schema);
 
@@ -176,6 +193,23 @@ mod tests {
         assert_eq!(renamed.fields()[0].name(), "_c0");
         assert_eq!(renamed.fields()[1].name(), "_c1");
         assert_eq!(renamed.fields()[2].name(), "_c2");
+    }
+
+    #[test]
+    fn test_convert_spark_integer_types() {
+        let schema = Schema::new(vec![
+            Field::new("name", DataType::Utf8, true),
+            Field::new("price", DataType::Int64, true),
+            Field::new("weight", DataType::Float64, true),
+            Field::new("count", DataType::Int64, false),
+        ]);
+        let converted = convert_spark_integer_types(schema);
+        assert_eq!(converted.fields()[0].data_type(), &DataType::Utf8);
+        assert_eq!(converted.fields()[1].data_type(), &DataType::Int32);
+        assert!(converted.fields()[1].is_nullable());
+        assert_eq!(converted.fields()[2].data_type(), &DataType::Float64);
+        assert_eq!(converted.fields()[3].data_type(), &DataType::Int32);
+        assert!(!converted.fields()[3].is_nullable());
     }
 
     #[test]
