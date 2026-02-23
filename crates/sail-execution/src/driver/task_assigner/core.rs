@@ -51,6 +51,7 @@ impl TaskAssigner {
         let required_workers = required_slots
             .div_ceil(self.options.worker_task_slots)
             .min(allowed_workers);
+
         self.requested_worker_count = self.requested_worker_count.saturating_add(required_workers);
         required_workers
     }

@@ -36,6 +36,7 @@ pub struct StageTopology {
 }
 
 impl JobTopology {
+    /// Groups pipelined stages into components and builds the topology of task regions and stages.
     pub fn try_new(graph: &JobGraph) -> ExecutionResult<Self> {
         let mut stages = (0..graph.stages().len())
             .map(|_| StageTopology { consumers: vec![] })
@@ -64,10 +65,20 @@ impl JobTopology {
             }
         }
 
-        // find pipelined components
-        let mut visited = vec![false; stages.len()];
+        let mut regions = Self::build_task_regions(graph, &pipelined_adjacency)?;
+        Self::build_region_dependencies(graph, &mut regions);
+
+        Ok(Self { regions, stages })
+    }
+
+    /// Constructs task regions from connected components of pipelined stages.
+    fn build_task_regions(
+        graph: &JobGraph,
+        pipelined_adjacency: &[Vec<usize>],
+    ) -> ExecutionResult<Vec<TaskRegionTopology>> {
+        let mut visited = vec![false; graph.stages().len()];
         let mut components = vec![];
-        for s in 0..stages.len() {
+        for s in 0..graph.stages().len() {
             if !visited[s] {
                 let mut component = vec![];
                 let mut queue = VecDeque::new();
@@ -88,7 +99,6 @@ impl JobTopology {
             }
         }
 
-        // generate task region topology
         let mut regions = vec![];
 
         for component in components {
@@ -162,7 +172,11 @@ impl JobTopology {
             }
         }
 
-        // build region dependencies
+        Ok(regions)
+    }
+
+    /// Computes the execution dependencies between task regions based on stage inputs.
+    fn build_region_dependencies(graph: &JobGraph, regions: &mut [TaskRegionTopology]) {
         let mut task_to_region = HashMap::new();
         for (r, region) in regions.iter().enumerate() {
             for t in &region.tasks {
@@ -200,7 +214,5 @@ impl JobTopology {
                 }
             }
         }
-
-        Ok(Self { regions, stages })
     }
 }
