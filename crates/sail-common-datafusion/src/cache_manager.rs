@@ -61,10 +61,7 @@ impl CacheManager {
     /// Returns a clone of the cached entry with the given cache ID.
     pub fn find_by_id(&self, cache_id: u64) -> Option<CachedData> {
         let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-        entries
-            .iter()
-            .find(|e| e.cache_id == cache_id)
-            .cloned()
+        entries.iter().find(|e| e.cache_id == cache_id).cloned()
     }
 
     /// Marks a cache entry as materialized.
