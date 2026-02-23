@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_recursion::async_recursion;
-use datafusion::common::tree_node::{Transformed, TreeNode};
+use datafusion::common::tree_node::Transformed;
 use datafusion::dataframe::DataFrame;
 use datafusion::physical_plan::{displayable, ExecutionPlan};
 use datafusion::prelude::SessionContext;

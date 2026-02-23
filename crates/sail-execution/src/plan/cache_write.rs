@@ -27,6 +27,7 @@ pub(crate) struct CacheWriteExec {
 
 impl CacheWriteExec {
     /// Creates a new CacheWriteExec wrapping the given child plan.
+    #[allow(dead_code)]
     pub fn new(
         plan: Arc<dyn ExecutionPlan>,
         cache_store: Arc<LocalCacheStore>,
