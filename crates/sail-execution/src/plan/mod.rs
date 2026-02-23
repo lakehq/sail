@@ -1,3 +1,4 @@
+mod cache_injection;
 mod cache_read;
 mod cache_tests;
 mod cache_write;
@@ -7,6 +8,7 @@ mod stage_input;
 
 use std::fmt::Display;
 
+pub(crate) use cache_injection::inject_local_cache_store;
 pub use cache_read::CacheReadExec;
 pub(crate) use cache_write::CacheWriteExec;
 pub(crate) use shuffle_read::ShuffleReadExec;

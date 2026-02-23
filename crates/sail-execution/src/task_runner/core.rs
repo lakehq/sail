@@ -25,9 +25,7 @@ use crate::driver::TaskStatus;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{TaskKey, TaskKeyDisplay};
 use crate::local_cache_store::LocalCacheStore;
-use crate::plan::{
-    CacheReadExec, CacheWriteExec, ShuffleReadExec, ShuffleWriteExec, StageInputExec,
-};
+use crate::plan::{inject_local_cache_store, ShuffleReadExec, ShuffleWriteExec, StageInputExec};
 use crate::stream_accessor::{StreamAccessor, StreamAccessorMessage};
 use crate::task::definition::{TaskDefinition, TaskInput, TaskOutput};
 use crate::task_runner::monitor::TaskMonitor;
@@ -100,7 +98,7 @@ impl TaskRunner {
         let plan = PhysicalPlanNode::decode(definition.plan.as_ref())?;
         let plan = plan.try_into_physical_plan(&context, self.codec.as_ref())?;
         let plan = self.rewrite_parquet_adapters(plan)?;
-        let plan = self.inject_cache_stores(plan)?;
+        let plan = inject_local_cache_store(plan, self.cache_store.clone())?;
         let plan = self.rewrite_shuffle(
             ctx,
             key,
@@ -212,29 +210,5 @@ impl TaskRunner {
         let partitioning = output.partitioning(context, &schema, self.codec.as_ref())?;
         let shuffle = ShuffleWriteExec::new(plan, locations, Arc::new(accessor), partitioning);
         Ok(Arc::new(shuffle))
-    }
-
-    /// Injects the worker's local cache store into CacheWriteExec (root) and CacheReadExec (any depth) nodes.
-    fn inject_cache_stores(
-        &self,
-        plan: Arc<dyn ExecutionPlan>,
-    ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
-        let cache_store = self.cache_store.clone();
-        let plan = plan
-            .transform_down(|node| {
-                if let Some(cache_read) = node.as_any().downcast_ref::<CacheReadExec>() {
-                    let mut read = cache_read.clone();
-                    read.set_cache_store(cache_store.clone());
-                    Ok(Transformed::yes(Arc::new(read)))
-                } else if let Some(cache_write) = node.as_any().downcast_ref::<CacheWriteExec>() {
-                    let mut write = cache_write.clone();
-                    write.set_cache_store(cache_store.clone());
-                    Ok(Transformed::yes(Arc::new(write)))
-                } else {
-                    Ok(Transformed::no(node))
-                }
-            })
-            .map(|t| t.data)?;
-        Ok(plan)
     }
 }

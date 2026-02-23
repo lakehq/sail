@@ -19,11 +19,13 @@ use tokio::sync::mpsc::error::SendError;
 use tokio::sync::oneshot;
 
 use crate::driver::{DriverActor, DriverEvent, DriverOptions};
-use crate::plan::{CacheReadExec, CacheWriteExec};
+use crate::local_cache_store::LocalCacheStore;
+use crate::plan::{inject_local_cache_store, CacheReadExec, CacheWriteExec};
 
 pub struct LocalJobRunner {
     next_job_id: AtomicU64,
     stopped: AtomicBool,
+    cache_store: Arc<LocalCacheStore>,
 }
 
 impl LocalJobRunner {
@@ -31,7 +33,25 @@ impl LocalJobRunner {
         Self {
             next_job_id: AtomicU64::new(1),
             stopped: AtomicBool::new(false),
+            cache_store: Arc::new(LocalCacheStore::new()),
         }
+    }
+
+    async fn materialize_cache(
+        &self,
+        ctx: &SessionContext,
+        cache_id: u64,
+        plan: &LogicalPlan,
+    ) -> Result<()> {
+        let physical = ctx.state().create_physical_plan(plan).await?;
+        let cache_plan = Arc::new(CacheWriteExec::new_stub(physical, cache_id));
+        let cache_plan = inject_local_cache_store(cache_plan, self.cache_store.clone())?;
+
+        let mut stream = execute_stream(cache_plan, ctx.task_ctx())?;
+        while let Some(batch) = stream.next().await {
+            batch?;
+        }
+        Ok(())
     }
 }
 
@@ -58,6 +78,19 @@ impl JobRunner for LocalJobRunner {
         if self.stopped.load(Ordering::Relaxed) {
             return internal_err!("job runner is stopped");
         }
+
+        let cache_ids = collect_cache_node_ids(&plan);
+        let cache = ctx.extension::<CacheManager>()?;
+        for cache_id in cache_ids {
+            if let Some(entry) = cache.find_by_id(cache_id) {
+                if !entry.materialized {
+                    self.materialize_cache(ctx, cache_id, &entry.plan).await?;
+                    cache.mark_materialized(cache_id);
+                }
+            }
+        }
+
+        let plan = inject_local_cache_store(plan, self.cache_store.clone())?;
         let job_id = self.next_job_id.fetch_add(1, Ordering::Relaxed);
         let options = TracingExecOptions {
             metric_registry: global_metric_registry(),
