@@ -1,4 +1,5 @@
 mod cache_read;
+mod cache_tests;
 mod cache_write;
 mod shuffle_read;
 mod shuffle_write;
