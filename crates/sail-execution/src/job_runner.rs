@@ -24,6 +24,7 @@ use crate::plan::{CacheReadExec, CacheWriteExec};
 pub struct LocalJobRunner {
     next_job_id: AtomicU64,
     stopped: AtomicBool,
+    cache_store: Arc<crate::local_cache_store::LocalCacheStore>,
 }
 
 impl LocalJobRunner {
@@ -31,7 +32,30 @@ impl LocalJobRunner {
         Self {
             next_job_id: AtomicU64::new(1),
             stopped: AtomicBool::new(false),
+            cache_store: Arc::new(crate::local_cache_store::LocalCacheStore::new()),
         }
+    }
+
+    /// Injects the local cache store into CacheReadExec and CacheWriteExec nodes in the plan.
+    fn inject_cache_stores(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion::common::tree_node::{Transformed, TreeNode};
+        plan.transform_down(|node| {
+            if let Some(cache_read) = node.as_any().downcast_ref::<CacheReadExec>() {
+                let mut read = cache_read.clone();
+                read.set_cache_store(self.cache_store.clone());
+                Ok(Transformed::yes(Arc::new(read) as Arc<dyn ExecutionPlan>))
+            } else if let Some(cache_write) = node.as_any().downcast_ref::<CacheWriteExec>() {
+                let mut write = cache_write.clone();
+                write.set_cache_store(self.cache_store.clone());
+                Ok(Transformed::yes(Arc::new(write) as Arc<dyn ExecutionPlan>))
+            } else {
+                Ok(Transformed::no(node))
+            }
+        })
+        .map(|t| t.data)
     }
 }
 
@@ -58,6 +82,23 @@ impl JobRunner for LocalJobRunner {
         if self.stopped.load(Ordering::Relaxed) {
             return internal_err!("job runner is stopped");
         }
+        let cache_ids = collect_cache_node_ids(&plan);
+        let cache = ctx.extension::<CacheManager>()?;
+        for cache_id in cache_ids {
+            if let Some(entry) = cache.find_by_id(cache_id) {
+                if !entry.materialized {
+                    let physical = ctx.state().create_physical_plan(&entry.plan).await?;
+                    let cache_plan = Arc::new(CacheWriteExec::new_stub(physical, cache_id));
+                    let cache_plan = self.inject_cache_stores(cache_plan)?;
+                    let mut stream = execute_stream(cache_plan, ctx.task_ctx())?;
+                    while let Some(batch) = stream.next().await {
+                        batch?;
+                    }
+                    cache.mark_materialized(cache_id);
+                }
+            }
+        }
+        let plan = self.inject_cache_stores(plan)?;
         let job_id = self.next_job_id.fetch_add(1, Ordering::Relaxed);
         let options = TracingExecOptions {
             metric_registry: global_metric_registry(),
