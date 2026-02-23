@@ -55,7 +55,7 @@ impl CacheManager {
     /// Returns a clone of the cached entry if the given plan matches.
     pub fn find_match(&self, node: &LogicalPlan) -> Option<CachedData> {
         let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-        entries.iter().find(|e| e.plan == *node).map(|e| e.clone())
+        entries.iter().find(|e| e.plan == *node).cloned()
     }
 
     /// Returns a clone of the cached entry with the given cache ID.
@@ -64,7 +64,7 @@ impl CacheManager {
         entries
             .iter()
             .find(|e| e.cache_id == cache_id)
-            .map(|e| e.clone())
+            .cloned()
     }
 
     /// Marks a cache entry as materialized.
