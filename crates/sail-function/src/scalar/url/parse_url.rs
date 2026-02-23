@@ -57,13 +57,12 @@ impl ParseUrl {
     /// * `Err(DataFusionError)` - If the URL is malformed and cannot be parsed
     ///
     fn parse(value: &str, part: &str, key: Option<&str>) -> Result<Option<String>> {
-        Url::parse(value)
-            .map_err(|e| exec_datafusion_err!("{e:?}"))
-            .map(|url| match part {
+        match Url::parse(value) {
+            Ok(url) => Ok(match part {
                 "HOST" => url.host_str().map(String::from),
                 "PATH" => {
-                    let path: String = url.path().to_string();
-                    let path: String = if path == "/" { "".to_string() } else { path };
+                    let path = url.path().to_string();
+                    let path = if path == "/" { "".to_string() } else { path };
                     Some(path)
                 }
                 "QUERY" => match key {
@@ -86,7 +85,7 @@ impl ParseUrl {
                 "USERINFO" => {
                     let username = url.username();
                     if username.is_empty() {
-                        return None;
+                        return Ok(None);
                     }
                     match url.password() {
                         Some(password) => Some(format!("{username}:{password}")),
@@ -94,7 +93,18 @@ impl ParseUrl {
                     }
                 }
                 _ => None,
-            })
+            }),
+            Err(url::ParseError::RelativeUrlWithoutBase) => {
+                // Spark's java.net.URI treats schemeless strings as relative URIs
+                // where the string itself becomes the path component.
+                Ok(match part {
+                    "PATH" => Some(value.to_string()),
+                    "FILE" => Some(value.to_string()),
+                    _ => None,
+                })
+            }
+            Err(e) => Err(exec_datafusion_err!("{e:?}")),
+        }
     }
 }
 
