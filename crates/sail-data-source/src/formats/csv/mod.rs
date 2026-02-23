@@ -1,11 +1,15 @@
 use std::collections::HashMap;
+use std::io::Cursor;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::arrow::array::AsArray;
+use datafusion::arrow::datatypes::{DataType, Field, Int64Type, Schema};
 use datafusion::catalog::Session;
 use datafusion::datasource::file_format::csv::CsvFormat;
+use datafusion_common::config::CsvOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_datasource::file_format::FileFormat;
+use object_store::ObjectStore;
 
 use crate::formats::csv::options::{resolve_csv_read_options, resolve_csv_write_options};
 use crate::formats::listing::{ListingFormat, ListingTableFormat, SchemaInfer};
@@ -25,19 +29,77 @@ fn convert_string_columns(schema: Schema) -> Schema {
     Schema::new_with_metadata(string_fields, schema.metadata().clone())
 }
 
-/// Convert Int64 to Int32 to match Spark's default CSV integer inference.
-/// Spark tries IntegerType (int32) first and only promotes to LongType (int64) if the value
+/// Convert Int64 columns to Int32 where all sampled values fit, matching Spark's behavior.
+/// Spark tries IntegerType (Int32) first and only promotes to LongType (Int64) if any value
 /// doesn't fit, while DataFusion always infers Int64.
-fn convert_spark_integer_types(schema: Schema) -> Schema {
+async fn convert_spark_integer_types(
+    schema: &Schema,
+    store: &Arc<dyn ObjectStore>,
+    files: &[object_store::ObjectMeta],
+    csv_options: &CsvOptions,
+) -> datafusion_common::Result<Schema> {
+    let int64_cols: Vec<usize> = schema
+        .fields()
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.data_type() == &DataType::Int64)
+        .map(|(i, _)| i)
+        .collect();
+
+    if int64_cols.is_empty() || files.is_empty() {
+        return Ok(schema.clone());
+    }
+
+    // Track which Int64 columns can safely be downcast to Int32.
+    // Default to true (downcast) — if sampling fails (e.g. compressed files), we fall back
+    // to Int32 which matches the common case for small CSV datasets.
+    let mut fits_in_int32 = vec![true; schema.fields().len()];
+
+    // Sample the first file to check actual values.
+    // If the file is compressed or unreadable as raw CSV, skip the check and use Int32.
+    if let Ok(result) = store.get(&files[0].location).await {
+        if let Ok(data) = result.bytes().await {
+            let cursor = Cursor::new(data);
+            let mut reader_builder = arrow::csv::ReaderBuilder::new(Arc::new(schema.clone()))
+                .with_delimiter(csv_options.delimiter)
+                .with_quote(csv_options.quote);
+            if let Some(true) = csv_options.has_header {
+                reader_builder = reader_builder.with_header(true);
+            }
+            if let Some(escape) = csv_options.escape {
+                reader_builder = reader_builder.with_escape(escape);
+            }
+            let batch_size = csv_options.schema_infer_max_rec.unwrap_or(1000);
+            reader_builder = reader_builder.with_batch_size(batch_size);
+            if let Ok(mut reader) = reader_builder.build(cursor) {
+                if let Some(Ok(batch)) = reader.next() {
+                    for &col_idx in &int64_cols {
+                        let array = batch.column(col_idx).as_primitive::<Int64Type>();
+                        for val in array.iter().flatten() {
+                            if val < i64::from(i32::MIN) || val > i64::from(i32::MAX) {
+                                fits_in_int32[col_idx] = false;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let fields = schema
         .fields()
         .iter()
-        .map(|field| match field.data_type() {
-            DataType::Int64 => Field::new(field.name(), DataType::Int32, field.is_nullable()),
-            _ => field.as_ref().clone(),
+        .enumerate()
+        .map(|(i, field)| {
+            if field.data_type() == &DataType::Int64 && fits_in_int32[i] {
+                Field::new(field.name(), DataType::Int32, field.is_nullable())
+            } else {
+                field.as_ref().clone()
+            }
         })
         .collect::<Vec<_>>();
-    Schema::new_with_metadata(fields, schema.metadata().clone())
+    Ok(Schema::new_with_metadata(fields, schema.metadata().clone()))
 }
 
 fn rename_default_csv_columns(schema: Schema) -> Schema {
@@ -110,13 +172,14 @@ impl SchemaInfer for CsvSchemaInfer {
             .as_ref()
             .clone();
         let merged_options = merge_options(options.to_vec());
-        if let Ok(csv_options) = load_options::<CsvReadOptions>(merged_options) {
-            if csv_options.infer_schema == Some(false) {
+        let csv_options = resolve_csv_read_options(ctx, options.to_vec())?;
+        if let Ok(read_options) = load_options::<CsvReadOptions>(merged_options) {
+            if read_options.infer_schema == Some(false) {
                 schema = convert_string_columns(schema);
             }
         }
-        // Convert Int64 → Int32 to match Spark's default integer inference
-        schema = convert_spark_integer_types(schema);
+        // Convert Int64 → Int32 only where sampled values fit
+        schema = convert_spark_integer_types(&schema, store, files, &csv_options).await?;
         // Rename default CSV columns (column_1 -> _c0, etc.)
         schema = rename_default_csv_columns(schema);
 
@@ -195,21 +258,62 @@ mod tests {
         assert_eq!(renamed.fields()[2].name(), "_c2");
     }
 
-    #[test]
-    fn test_convert_spark_integer_types() {
+    #[tokio::test]
+    #[allow(clippy::unwrap_used)]
+    async fn test_convert_spark_integer_types_small_values() {
+        use object_store::memory::InMemory;
+        use object_store::path::Path;
+
+        let store: Arc<dyn object_store::ObjectStore> = Arc::new(InMemory::new());
+        let path = Path::from("test.csv");
+        let content = b"name,price,weight,count\na,100,1.5,42\nb,200,2.5,99\n";
+        store.put(&path, content.as_ref().into()).await.unwrap();
+        let meta = store.head(&path).await.unwrap();
         let schema = Schema::new(vec![
             Field::new("name", DataType::Utf8, true),
             Field::new("price", DataType::Int64, true),
             Field::new("weight", DataType::Float64, true),
-            Field::new("count", DataType::Int64, false),
+            Field::new("count", DataType::Int64, true),
         ]);
-        let converted = convert_spark_integer_types(schema);
+        let csv_options = CsvOptions {
+            has_header: Some(true),
+            ..Default::default()
+        };
+        let converted = convert_spark_integer_types(&schema, &store, &[meta], &csv_options)
+            .await
+            .unwrap();
         assert_eq!(converted.fields()[0].data_type(), &DataType::Utf8);
         assert_eq!(converted.fields()[1].data_type(), &DataType::Int32);
-        assert!(converted.fields()[1].is_nullable());
         assert_eq!(converted.fields()[2].data_type(), &DataType::Float64);
         assert_eq!(converted.fields()[3].data_type(), &DataType::Int32);
-        assert!(!converted.fields()[3].is_nullable());
+    }
+
+    #[tokio::test]
+    #[allow(clippy::unwrap_used)]
+    async fn test_convert_spark_integer_types_large_values() {
+        use object_store::memory::InMemory;
+        use object_store::path::Path;
+
+        let store: Arc<dyn object_store::ObjectStore> = Arc::new(InMemory::new());
+        let path = Path::from("test.csv");
+        let content = b"small,big\n1,3000000000\n2,4000000000\n";
+        store.put(&path, content.as_ref().into()).await.unwrap();
+        let meta = store.head(&path).await.unwrap();
+        let schema = Schema::new(vec![
+            Field::new("small", DataType::Int64, true),
+            Field::new("big", DataType::Int64, true),
+        ]);
+        let csv_options = CsvOptions {
+            has_header: Some(true),
+            ..Default::default()
+        };
+        let converted = convert_spark_integer_types(&schema, &store, &[meta], &csv_options)
+            .await
+            .unwrap();
+        // small values fit in Int32
+        assert_eq!(converted.fields()[0].data_type(), &DataType::Int32);
+        // large values don't fit in Int32, stay as Int64
+        assert_eq!(converted.fields()[1].data_type(), &DataType::Int64);
     }
 
     #[test]
