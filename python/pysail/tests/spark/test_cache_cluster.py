@@ -49,9 +49,7 @@ class TestCacheCluster:
 
     def test_cache_then_aggregate(self, spark):
         # groupBy/agg requires a shuffle exchange after reading from cache.
-        df = spark.createDataFrame(
-            [(1, "x"), (2, "x"), (3, "y"), (4, "y")], ["n", "group"]
-        )
+        df = spark.createDataFrame([(1, "x"), (2, "x"), (3, "y"), (4, "y")], ["n", "group"])
         cached = df.filter("n > 0").cache()
 
         result = cached.groupBy("group").sum("n").sort("group").toPandas()
