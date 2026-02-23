@@ -1,5 +1,3 @@
-import os
-
 import pandas as pd
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
@@ -7,29 +5,7 @@ from pandas.testing import assert_frame_equal
 from pyspark.sql.types import Row
 from pyspark.sql.window import Window
 
-from pysail.spark import SparkConnectServer
 from pysail.tests.spark.utils import is_jvm_spark
-
-
-@pytest.fixture(scope="session")
-def remote():
-    """Override the global remote fixture to use local-cluster mode for this module."""
-    original_mode = os.environ.get("SAIL_MODE")
-    os.environ["SAIL_MODE"] = "local-cluster"
-
-    try:
-        server = SparkConnectServer("127.0.0.1", 0)
-        server.start(background=True)
-        address = server.listening_address
-        _, port = address
-        yield f"sc://localhost:{port}"
-        server.stop()
-    finally:
-        # Restore original environment
-        if original_mode is None:
-            os.environ.pop("SAIL_MODE", None)
-        else:
-            os.environ["SAIL_MODE"] = original_mode
 
 
 @pytest.fixture(scope="module")
@@ -234,3 +210,4 @@ class TestLocalClusterExecution:
         coalesced_sum = coalesced.agg(F.sum("value")).collect()[0][0]
         assert coalesced_count == 1000  # noqa: PLR2004
         assert coalesced_sum == original_sum
+
