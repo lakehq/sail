@@ -542,6 +542,16 @@ Feature: Bitwise functions
       # Spark: INVALID_PARAMETER_VALUE.BIT_POSITION_RANGE, Sail: Compute error (different message, same semantics)
       Then query error bit_get
 
+    Scenario: shiftleft wraps on 32 with ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT shiftleft(1, 32) AS result
+        """
+      Then query result
+        | result |
+        | 1      |
+
     Scenario: shiftrightunsigned wraps on 32 with ANSI off
       Given config spark.sql.ansi.enabled = false
       When query
