@@ -11,18 +11,15 @@ use std::sync::Arc;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::Result;
 use datafusion::physical_plan::ExecutionPlan;
+use sail_server::actor::ActorHandle;
 
 use crate::local_cache_store::LocalCacheStore;
+use crate::worker::WorkerActor;
 pub use cache_read::CacheReadExec;
 pub(crate) use cache_write::CacheWriteExec;
 pub(crate) use shuffle_read::ShuffleReadExec;
 pub(crate) use shuffle_write::ShuffleWriteExec;
 pub(crate) use stage_input::StageInputExec;
-
-/// Notifies the runtime when a cache partition is stored locally.
-pub(crate) trait CachePartitionNotifier: Send + Sync {
-    fn notify(&self, cache_id: u64, partition: usize);
-}
 
 /// Injects a worker-local [`LocalCacheStore`] into all cache exec nodes in a physical plan.
 ///
@@ -48,15 +45,15 @@ pub(crate) fn inject_local_cache_store(
     .map(|t| t.data)
 }
 
-/// Injects a cache partition notifier into all cache write nodes in a physical plan.
-pub(crate) fn inject_cache_write_notifier(
+/// Injects the worker actor handle into all cache write nodes in a physical plan.
+pub(crate) fn inject_cache_write_worker_handle(
     plan: Arc<dyn ExecutionPlan>,
-    cache_notifier: Arc<dyn CachePartitionNotifier>,
+    worker_handle: ActorHandle<WorkerActor>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     plan.transform_down(|node| {
         if let Some(cache_write) = node.as_any().downcast_ref::<CacheWriteExec>() {
             let mut write = cache_write.clone();
-            write.set_cache_notifier(cache_notifier.clone());
+            write.set_worker_handle(worker_handle.clone());
             Ok(Transformed::yes(Arc::new(write)))
         } else {
             Ok(Transformed::no(node))

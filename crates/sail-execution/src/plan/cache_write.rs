@@ -14,15 +14,16 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
 use futures::StreamExt;
+use sail_server::actor::ActorHandle;
 
 use crate::local_cache_store::LocalCacheStore;
-use crate::plan::CachePartitionNotifier;
+use crate::worker::{WorkerActor, WorkerEvent};
 
 /// Physical execution node that consumes a child plan's output and stores it in the worker-local cache.
 pub(crate) struct CacheWriteExec {
     plan: Arc<dyn ExecutionPlan>,
     cache_store: Option<Arc<LocalCacheStore>>,
-    cache_notifier: Option<Arc<dyn CachePartitionNotifier>>,
+    worker_handle: Option<ActorHandle<WorkerActor>>,
     cache_id: u64,
     properties: PlanProperties,
 }
@@ -44,7 +45,7 @@ impl CacheWriteExec {
         Self {
             plan,
             cache_store: Some(cache_store),
-            cache_notifier: None,
+            worker_handle: None,
             cache_id,
             properties,
         }
@@ -61,7 +62,7 @@ impl CacheWriteExec {
         Self {
             plan,
             cache_store: None,
-            cache_notifier: None,
+            worker_handle: None,
             cache_id,
             properties,
         }
@@ -72,9 +73,9 @@ impl CacheWriteExec {
         self.cache_store = Some(cache_store);
     }
 
-    /// Sets the cache partition notifier after deserialization on a worker.
-    pub fn set_cache_notifier(&mut self, cache_notifier: Arc<dyn CachePartitionNotifier>) {
-        self.cache_notifier = Some(cache_notifier);
+    /// Sets the worker actor handle used for reporting cache partition storage.
+    pub fn set_worker_handle(&mut self, worker_handle: ActorHandle<WorkerActor>) {
+        self.worker_handle = Some(worker_handle);
     }
 
     /// Returns the cache ID for this node.
@@ -97,7 +98,7 @@ impl Clone for CacheWriteExec {
         Self {
             plan: self.plan.clone(),
             cache_store: self.cache_store.clone(),
-            cache_notifier: self.cache_notifier.clone(),
+            worker_handle: self.worker_handle.clone(),
             cache_id: self.cache_id,
             properties: self.properties.clone(),
         }
@@ -138,8 +139,8 @@ impl ExecutionPlan for CacheWriteExec {
                 if let Some(store) = &self.cache_store {
                     node.set_cache_store(store.clone());
                 }
-                if let Some(notifier) = &self.cache_notifier {
-                    node.set_cache_notifier(notifier.clone());
+                if let Some(handle) = &self.worker_handle {
+                    node.set_worker_handle(handle.clone());
                 }
                 Ok(Arc::new(node))
             }
@@ -163,7 +164,7 @@ impl ExecutionPlan for CacheWriteExec {
         let mut stream = self.plan.execute(partition, context)?;
         let cache_id = self.cache_id;
         let schema = self.schema();
-        let cache_notifier = self.cache_notifier.clone();
+        let worker_handle = self.worker_handle.clone();
 
         let output = futures::stream::once(async move {
             let mut batches = Vec::new();
@@ -171,8 +172,10 @@ impl ExecutionPlan for CacheWriteExec {
                 batches.push(batch?);
             }
             cache_store.store(cache_id, partition, batches);
-            if let Some(notifier) = cache_notifier {
-                notifier.notify(cache_id, partition);
+            if let Some(handle) = worker_handle {
+                let _ = handle
+                    .send(WorkerEvent::CachePartitionStored { cache_id, partition })
+                    .await;
             }
             Ok(RecordBatch::new_empty(schema))
         });

@@ -26,7 +26,7 @@ use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{TaskKey, TaskKeyDisplay};
 use crate::local_cache_store::LocalCacheStore;
 use crate::plan::{
-    inject_cache_write_notifier, inject_local_cache_store, ShuffleReadExec, ShuffleWriteExec,
+    inject_cache_write_worker_handle, inject_local_cache_store, ShuffleReadExec, ShuffleWriteExec,
     StageInputExec,
 };
 use crate::stream_accessor::{StreamAccessor, StreamAccessorMessage};
@@ -40,7 +40,7 @@ impl TaskRunner {
             signals: HashMap::new(),
             codec: Box::new(RemoteExecutionCodec),
             cache_store: Arc::new(LocalCacheStore::new()),
-            cache_notifier: None,
+            cache_write_worker_handle: None,
         }
     }
 
@@ -103,8 +103,8 @@ impl TaskRunner {
         let plan = plan.try_into_physical_plan(&context, self.codec.as_ref())?;
         let plan = self.rewrite_parquet_adapters(plan)?;
         let plan = inject_local_cache_store(plan, self.cache_store.clone())?;
-        let plan = match &self.cache_notifier {
-            Some(notifier) => inject_cache_write_notifier(plan, notifier.clone())?,
+        let plan = match &self.cache_write_worker_handle {
+            Some(handle) => inject_cache_write_worker_handle(plan, handle.clone())?,
             None => plan,
         };
         let plan = self.rewrite_shuffle(
