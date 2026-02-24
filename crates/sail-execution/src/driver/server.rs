@@ -6,9 +6,10 @@ use tonic::{Request, Response, Status};
 use crate::driver::actor::DriverActor;
 use crate::driver::gen::driver_service_server::DriverService;
 use crate::driver::gen::{
-    RegisterWorkerRequest, RegisterWorkerResponse, ReportTaskStatusRequest,
-    ReportTaskStatusResponse, ReportWorkerHeartbeatRequest, ReportWorkerHeartbeatResponse,
-    ReportWorkerKnownPeersRequest, ReportWorkerKnownPeersResponse,
+    NotifyCachePartitionStoredRequest, NotifyCachePartitionStoredResponse, RegisterWorkerRequest,
+    RegisterWorkerResponse, ReportTaskStatusRequest, ReportTaskStatusResponse,
+    ReportWorkerHeartbeatRequest, ReportWorkerHeartbeatResponse, ReportWorkerKnownPeersRequest,
+    ReportWorkerKnownPeersResponse,
 };
 use crate::driver::{gen, DriverEvent};
 use crate::error::ExecutionError;
@@ -113,7 +114,6 @@ impl DriverService for DriverServer {
             status,
             message,
             cause,
-            worker_id,
             sequence,
         } = request;
         let status = gen::TaskStatus::try_from(status).map_err(ExecutionError::from)?;
@@ -131,7 +131,6 @@ impl DriverService for DriverServer {
             status: status.into(),
             message,
             cause,
-            worker_id: Some(worker_id.into()),
             sequence: Some(sequence),
         };
         self.handle
@@ -139,6 +138,17 @@ impl DriverService for DriverServer {
             .await
             .map_err(ExecutionError::from)?;
         let response = ReportTaskStatusResponse {};
+        debug!("{response:?}");
+        Ok(Response::new(response))
+    }
+
+    async fn notify_cache_partition_stored(
+        &self,
+        request: Request<NotifyCachePartitionStoredRequest>,
+    ) -> Result<Response<NotifyCachePartitionStoredResponse>, Status> {
+        let request = request.into_inner();
+        debug!("{request:?}");
+        let response = NotifyCachePartitionStoredResponse {};
         debug!("{response:?}");
         Ok(Response::new(response))
     }

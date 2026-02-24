@@ -9,18 +9,10 @@ use tokio::sync::oneshot;
 
 use crate::driver::job_scheduler::JobScheduler;
 use crate::driver::task_assigner::TaskAssigner;
-use crate::id::{JobId, TaskKey};
+use crate::id::TaskKey;
 use crate::rpc::ServerMonitor;
 use crate::stream_manager::StreamManager;
 use crate::task_runner::TaskRunner;
-
-/// Tracks which cache materialization job writes which cache partition.
-#[derive(Clone)]
-pub struct CacheMaterializationJob {
-    pub cache_id: u64,
-    pub stage: usize,
-    pub context: std::sync::Arc<datafusion::execution::TaskContext>,
-}
 
 pub struct DriverActor {
     options: super::options::DriverOptions,
@@ -33,8 +25,6 @@ pub struct DriverActor {
     /// The sequence number corresponding to the last task status update from the worker.
     /// A different sequence number is tracked for each attempt.
     task_sequences: HashMap<TaskKey, u64>,
-    /// Cache materialization jobs keyed by job ID.
-    cache_materialization_jobs: HashMap<JobId, CacheMaterializationJob>,
     /// An optional channel to send history when stopping the driver.
     history: Option<oneshot::Sender<JobRunnerHistory>>,
 }

@@ -27,7 +27,6 @@ use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey};
 use crate::job_graph::{
     InputMode, JobGraph, OutputDistribution, OutputMode, Stage, StageInput, TaskPlacement,
 };
-use crate::plan::CacheWriteExec;
 use crate::task::definition::{
     TaskDefinition, TaskInput, TaskInputKey, TaskInputLocator, TaskOutput, TaskOutputDistribution,
     TaskOutputLocator,
@@ -61,27 +60,6 @@ impl JobScheduler {
         self.jobs.insert(job_id, descriptor);
 
         Ok((job_id, stream))
-    }
-
-    /// Returns the cache ID and stage index if this job materializes a cache.
-    pub fn cache_materialization_info(&self, job_id: JobId) -> Option<(u64, usize)> {
-        use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
-
-        let job = self.jobs.get(&job_id)?;
-        for (stage_idx, stage) in job.graph.stages().iter().enumerate() {
-            let mut cache_id: Option<u64> = None;
-            let _ = stage.plan.apply(|node: &Arc<dyn ExecutionPlan>| {
-                if let Some(write) = node.as_any().downcast_ref::<CacheWriteExec>() {
-                    cache_id = Some(write.cache_id());
-                    return Ok(TreeNodeRecursion::Stop);
-                }
-                Ok(TreeNodeRecursion::Continue)
-            });
-            if let Some(cache_id) = cache_id {
-                return Some((cache_id, stage_idx));
-            }
-        }
-        None
     }
 
     pub fn update_task(

@@ -36,8 +36,6 @@ message ReportTaskStatusRequest {
   optional string message = 6;
   // An optional JSON string that contains the cause of the task failure.
   optional string cause = 7;
-  // The worker that reports this task status.
-  uint64 worker_id = 8;
   uint64 sequence = 101;
 }
 
@@ -51,6 +49,15 @@ enum TaskStatus {
 message ReportTaskStatusResponse {
 }
 
+message NotifyCachePartitionStoredRequest {
+  uint64 cache_id = 1;
+  uint64 partition = 2;
+  uint64 worker_id = 3;
+}
+
+message NotifyCachePartitionStoredResponse {
+}
+
 service DriverService {
   rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse) {}
   rpc ReportWorkerHeartbeat(ReportWorkerHeartbeatRequest) returns (ReportWorkerHeartbeatResponse) {}
@@ -58,4 +65,5 @@ service DriverService {
   // send the peer information to the worker again when running tasks in the future.
   rpc ReportWorkerKnownPeers(ReportWorkerKnownPeersRequest) returns (ReportWorkerKnownPeersResponse) {}
   rpc ReportTaskStatus(ReportTaskStatusRequest) returns (ReportTaskStatusResponse) {}
+  rpc NotifyCachePartitionStored(NotifyCachePartitionStoredRequest) returns (NotifyCachePartitionStoredResponse) {}
 }

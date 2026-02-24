@@ -40,7 +40,6 @@ impl TaskRunnerMessage for DriverEvent {
             status,
             message,
             cause,
-            worker_id: None,
             sequence: None,
         }
     }
