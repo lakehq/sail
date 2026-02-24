@@ -1,3 +1,5 @@
+import itertools
+
 import pandas as pd
 from pandas.testing import assert_frame_equal
 
@@ -59,3 +61,17 @@ def test_sort(spark):
             {"a": [None, False, False], "b": [3, None, 1], "c": [3.0, 2.0, None]},
         ).astype({"c": object}),
     )
+
+
+def test_order_by_volatile_expression_not_rebound_to_projection_alias(spark):
+    rows = spark.sql(
+        """
+        SELECT rand() AS `random()`
+        FROM range(256)
+        ORDER BY rand()
+        LIMIT 256
+        """
+    ).collect()
+    values = [row["random()"] for row in rows]
+    is_non_decreasing = all(prev <= cur for prev, cur in itertools.pairwise(values))
+    assert not is_non_decreasing

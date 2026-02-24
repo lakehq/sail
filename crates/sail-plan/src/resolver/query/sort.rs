@@ -196,6 +196,14 @@ impl PlanResolver<'_> {
                     }
                 }
 
+                if expr.is_volatile() {
+                    return Ok(Sort {
+                        expr,
+                        asc,
+                        nulls_first,
+                    });
+                }
+
                 if let Some(field_id) =
                     state.find_output_field_for_expression(&expr, &output_field_ids)
                 {
