@@ -95,11 +95,35 @@ impl ParseUrl {
                 _ => None,
             }),
             Err(url::ParseError::RelativeUrlWithoutBase) => {
-                // Spark's java.net.URI treats schemeless strings as relative URIs
-                // where the string itself becomes the path component.
+                // Spark's java.net.URI treats schemeless strings as relative URIs.
+                // Parse the components manually: path?query#fragment
+                let (without_fragment, fragment) = match value.find('#') {
+                    Some(i) => (&value[..i], Some(&value[i + 1..])),
+                    None => (value, None),
+                };
+                let (path, query) = match without_fragment.find('?') {
+                    Some(i) => (&without_fragment[..i], Some(&without_fragment[i + 1..])),
+                    None => (without_fragment, None),
+                };
                 Ok(match part {
-                    "PATH" => Some(value.to_string()),
-                    "FILE" => Some(value.to_string()),
+                    "PATH" => Some(path.to_string()),
+                    "QUERY" => match key {
+                        None => query.map(String::from),
+                        Some(key) => query.and_then(|q| {
+                            q.split('&')
+                                .filter_map(|pair| pair.split_once('='))
+                                .find(|(k, _)| *k == key)
+                                .map(|(_, v)| v.to_string())
+                        }),
+                    },
+                    "REF" => fragment.map(String::from),
+                    "FILE" => {
+                        let file = match query {
+                            Some(q) => format!("{path}?{q}"),
+                            None => path.to_string(),
+                        };
+                        Some(file)
+                    }
                     _ => None,
                 })
             }

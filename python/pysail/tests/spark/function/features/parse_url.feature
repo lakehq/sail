@@ -114,6 +114,119 @@ Feature: parse_url() extracts URL component
         | result  |
         | notaurl |
 
+    Scenario: parse_url schemeless URL with query extracts PATH without query
+      When query
+        """
+        SELECT parse_url('notaurl?key=value', 'PATH') AS result
+        """
+      Then query result
+        | result  |
+        | notaurl |
+
+    Scenario: parse_url schemeless URL with query extracts FILE with query
+      When query
+        """
+        SELECT parse_url('notaurl?key=value', 'FILE') AS result
+        """
+      Then query result
+        | result             |
+        | notaurl?key=value  |
+
+    Scenario: parse_url schemeless URL extracts QUERY
+      When query
+        """
+        SELECT parse_url('notaurl?key=value', 'QUERY') AS result
+        """
+      Then query result
+        | result    |
+        | key=value |
+
+    Scenario: parse_url schemeless URL extracts QUERY with key
+      When query
+        """
+        SELECT parse_url('notaurl?a=1&b=2', 'QUERY', 'b') AS result
+        """
+      Then query result
+        | result |
+        | 2      |
+
+    Scenario: parse_url schemeless URL extracts REF
+      When query
+        """
+        SELECT parse_url('notaurl#reference', 'REF') AS result
+        """
+      Then query result
+        | result    |
+        | reference |
+
+    Scenario: parse_url schemeless URL with query and fragment
+      When query
+        """
+        SELECT parse_url('page?q=1#frag', 'PATH') AS r1,
+               parse_url('page?q=1#frag', 'QUERY') AS r2,
+               parse_url('page?q=1#frag', 'REF') AS r3,
+               parse_url('page?q=1#frag', 'FILE') AS r4
+        """
+      Then query result
+        | r1   | r2  | r3   | r4       |
+        | page | q=1 | frag | page?q=1 |
+
+    Scenario: parse_url schemeless URL with path segments
+      When query
+        """
+        SELECT parse_url('a/b/c?q=1', 'PATH') AS r1,
+               parse_url('a/b/c?q=1', 'QUERY') AS r2,
+               parse_url('a/b/c?q=1', 'FILE') AS r3
+        """
+      Then query result
+        | r1    | r2  | r3        |
+        | a/b/c | q=1 | a/b/c?q=1 |
+
+    Scenario: parse_url schemeless URL HOST AUTHORITY USERINFO are NULL
+      When query
+        """
+        SELECT parse_url('notaurl?q=1', 'HOST') AS r1,
+               parse_url('notaurl?q=1', 'AUTHORITY') AS r2,
+               parse_url('notaurl?q=1', 'USERINFO') AS r3,
+               parse_url('notaurl?q=1', 'PROTOCOL') AS r4
+        """
+      Then query result
+        | r1   | r2   | r3   | r4   |
+        | NULL | NULL | NULL | NULL |
+
+    Scenario: parse_url schemeless URL with only query
+      When query
+        """
+        SELECT parse_url('?key=value', 'QUERY') AS r1,
+               parse_url('?key=value', 'QUERY', 'key') AS r2,
+               parse_url('?key=value', 'PATH') AS r3
+        """
+      Then query result
+        | r1        | r2    | r3 |
+        | key=value | value |    |
+
+    Scenario: parse_url schemeless URL with only fragment
+      When query
+        """
+        SELECT parse_url('#frag', 'REF') AS r1,
+               parse_url('#frag', 'PATH') AS r2
+        """
+      Then query result
+        | r1   | r2 |
+        | frag |    |
+
+    Scenario: parse_url schemeless URL multiple query params
+      When query
+        """
+        SELECT parse_url('page?a=1&b=2&c=3', 'QUERY') AS r1,
+               parse_url('page?a=1&b=2&c=3', 'QUERY', 'a') AS r2,
+               parse_url('page?a=1&b=2&c=3', 'QUERY', 'c') AS r3,
+               parse_url('page?a=1&b=2&c=3', 'QUERY', 'missing') AS r4
+        """
+      Then query result
+        | r1          | r2 | r3 | r4   |
+        | a=1&b=2&c=3 | 1  | 3  | NULL |
+
     Scenario: parse_url with URL without scheme PROTOCOL returns NULL
       When query
         """
