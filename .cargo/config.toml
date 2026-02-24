@@ -1,1 +1,2 @@
-paths = ["third_party/fastrace-opentelemetry"]
+[patch.crates-io]
+fastrace-opentelemetry = { path = "third_party/fastrace-opentelemetry" }

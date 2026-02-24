@@ -38,7 +38,7 @@ name = "fastrace_opentelemetry"
 path = "src/lib.rs"
 
 [dependencies.fastrace]
-version = "0.7.14"
+version = "0.7.17"
 
 [dependencies.log]
 version = "0.4.27"

@@ -2851,8 +2851,6 @@ dependencies = [
 [[package]]
 name = "fastrace-opentelemetry"
 version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7e8ec7cff0ea398352764b6ee15c0902ccabf23d823525254b52d7f878fcf60"
 dependencies = [
  "fastrace",
  "log",
