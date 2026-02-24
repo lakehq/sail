@@ -2,14 +2,12 @@
   {
     "module": "pyspark.sql.Catalog",
     "function": "cacheTable",
-    "status": "planned",
-    "ref": "???"
+    "status": "planned"
   },
   {
     "module": "pyspark.sql.Catalog",
     "function": "clearCache",
-    "status": "planned",
-    "ref": "???"
+    "status": "planned"
   },
   {
     "module": "pyspark.sql.Catalog",
@@ -49,8 +47,7 @@
   {
     "module": "pyspark.sql.Catalog",
     "function": "functionExists",
-    "status": "planned",
-    "ref": "???"
+    "status": "planned"
   },
   {
     "module": "pyspark.sql.Catalog",
@@ -60,8 +57,7 @@
   {
     "module": "pyspark.sql.Catalog",
     "function": "getFunction",
-    "status": "planned",
-    "ref": "???"
+    "status": "planned"
   },
   {
     "module": "pyspark.sql.Catalog",
@@ -71,8 +67,7 @@
   {
     "module": "pyspark.sql.Catalog",
     "function": "isCached",
-    "status": "planned",
-    "ref": "???"
+    "status": "planned"
   },
   {
     "module": "pyspark.sql.Catalog",
@@ -92,8 +87,7 @@
   {
     "module": "pyspark.sql.Catalog",
     "function": "listFunctions",
-    "status": "planned",
-    "ref": "???"
+    "status": "planned"
   },
   {
     "module": "pyspark.sql.Catalog",
@@ -103,26 +97,22 @@
   {
     "module": "pyspark.sql.Catalog",
     "function": "recoverPartitions",
-    "status": "planned",
-    "ref": "???"
+    "status": "planned"
   },
   {
     "module": "pyspark.sql.Catalog",
     "function": "refreshByPath",
-    "status": "planned",
-    "ref": "???"
+    "status": "planned"
   },
   {
     "module": "pyspark.sql.Catalog",
     "function": "refreshTable",
-    "status": "planned",
-    "ref": "???"
+    "status": "planned"
   },
   {
     "module": "pyspark.sql.Catalog",
     "function": "registerFunction",
-    "status": "planned",
-    "ref": "???"
+    "status": "planned"
   },
   {
     "module": "pyspark.sql.Catalog",
@@ -142,7 +132,6 @@
   {
     "module": "pyspark.sql.Catalog",
     "function": "uncacheTable",
-    "status": "planned",
-    "ref": "???"
+    "status": "planned"
   }
 ]
