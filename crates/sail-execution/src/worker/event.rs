@@ -38,6 +38,11 @@ pub enum WorkerEvent {
         message: Option<String>,
         cause: Option<CommonErrorCause>,
     },
+    /// Indicates that a cache partition has been stored on this worker.
+    CachePartitionStored {
+        cache_id: u64,
+        partition: usize,
+    },
     ProbePendingLocalStream {
         key: TaskStreamKey,
     },
@@ -93,6 +98,7 @@ impl SpanAssociation for WorkerEvent {
             WorkerEvent::RunTask { .. } => "RunTask",
             WorkerEvent::StopTask { .. } => "StopTask",
             WorkerEvent::ReportTaskStatus { .. } => "ReportTaskStatus",
+            WorkerEvent::CachePartitionStored { .. } => "CachePartitionStored",
             WorkerEvent::ProbePendingLocalStream { .. } => "ProbePendingLocalStream",
             WorkerEvent::CreateLocalStream { .. } => "CreateLocalStream",
             WorkerEvent::CreateRemoteStream { .. } => "CreateRemoteStream",
@@ -170,6 +176,10 @@ impl SpanAssociation for WorkerEvent {
                     ));
                 }
             }
+            WorkerEvent::CachePartitionStored {
+                cache_id: _,
+                partition: _,
+            } => {}
             WorkerEvent::ProbePendingLocalStream {
                 key:
                     TaskStreamKey {

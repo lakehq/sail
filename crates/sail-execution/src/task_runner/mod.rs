@@ -11,12 +11,24 @@ use tokio::sync::oneshot;
 use crate::driver::{DriverEvent, TaskStatus};
 use crate::id::TaskKey;
 use crate::local_cache_store::LocalCacheStore;
+use crate::plan::CachePartitionNotifier;
 use crate::worker::WorkerEvent;
 
 pub struct TaskRunner {
     signals: HashMap<TaskKey, oneshot::Sender<()>>,
     codec: Box<dyn PhysicalExtensionCodec>,
     pub(crate) cache_store: Arc<LocalCacheStore>,
+    cache_notifier: Option<Arc<dyn CachePartitionNotifier>>,
+}
+
+impl TaskRunner {
+    /// Sets the notifier used by cache write nodes to publish partition locations.
+    pub fn set_cache_partition_notifier(
+        &mut self,
+        cache_notifier: Option<Arc<dyn CachePartitionNotifier>>,
+    ) {
+        self.cache_notifier = cache_notifier;
+    }
 }
 
 pub trait TaskRunnerMessage {

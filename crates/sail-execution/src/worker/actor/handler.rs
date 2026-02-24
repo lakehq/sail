@@ -164,6 +164,26 @@ impl WorkerActor {
         ActorAction::Continue
     }
 
+    /// Notifies the driver that a cache partition is stored on this worker.
+    pub(super) fn handle_cache_partition_stored(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        cache_id: u64,
+        partition: usize,
+    ) -> ActorAction {
+        let worker_id = self.options.worker_id;
+        let client = self.driver_client_set.core.clone();
+        ctx.spawn(async move {
+            if let Err(e) = client
+                .notify_cache_partition_stored(worker_id, cache_id, partition)
+                .await
+            {
+                warn!("failed to notify cache partition stored: {e}");
+            }
+        });
+        ActorAction::Continue
+    }
+
     pub(super) fn handle_probe_pending_local_stream(
         &mut self,
         _ctx: &mut ActorContext<Self>,

@@ -1,4 +1,5 @@
 use std::mem;
+use std::sync::Arc;
 
 use fastrace::future::FutureExt;
 use fastrace::Span;
@@ -13,6 +14,24 @@ use crate::worker::event::WorkerEvent;
 use crate::worker::options::WorkerOptions;
 use crate::worker::peer_tracker::{PeerTracker, PeerTrackerOptions};
 use crate::worker::WorkerActor;
+use crate::plan::CachePartitionNotifier;
+use sail_server::actor::ActorHandle;
+
+/// Sends cache partition notifications back to the worker actor.
+struct WorkerCachePartitionNotifier {
+    handle: ActorHandle<WorkerActor>,
+}
+
+impl CachePartitionNotifier for WorkerCachePartitionNotifier {
+    fn notify(&self, cache_id: u64, partition: usize) {
+        let handle = self.handle.clone();
+        tokio::spawn(async move {
+            let _ = handle
+                .send(WorkerEvent::CachePartitionStored { cache_id, partition })
+                .await;
+        });
+    }
+}
 
 #[tonic::async_trait]
 impl Actor for WorkerActor {
@@ -43,6 +62,11 @@ impl Actor for WorkerActor {
     }
 
     async fn start(&mut self, ctx: &mut ActorContext<Self>) {
+        self.task_runner.set_cache_partition_notifier(Some(Arc::new(
+            WorkerCachePartitionNotifier {
+                handle: ctx.handle().clone(),
+            },
+        )));
         let addr = (
             self.options.worker_listen_host.clone(),
             self.options.worker_listen_port,
@@ -75,6 +99,9 @@ impl Actor for WorkerActor {
                 message,
                 cause,
             } => self.handle_report_task_status(ctx, key, status, message, cause),
+            WorkerEvent::CachePartitionStored { cache_id, partition } => {
+                self.handle_cache_partition_stored(ctx, cache_id, partition)
+            }
             WorkerEvent::ProbePendingLocalStream { key } => {
                 self.handle_probe_pending_local_stream(ctx, key)
             }
