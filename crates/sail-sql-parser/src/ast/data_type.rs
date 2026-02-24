@@ -84,6 +84,10 @@ pub enum DataType {
     Date(Date),
     Date32(Date32),
     Date64(Date64),
+    Time(
+        Time,
+        Option<(LeftParenthesis, IntegerLiteral, RightParenthesis)>,
+    ),
     Interval(IntervalType),
     Array(
         Array,

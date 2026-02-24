@@ -6347,6 +6347,7 @@ dependencies = [
  "arrow",
  "async-recursion",
  "async-trait",
+ "chrono",
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
