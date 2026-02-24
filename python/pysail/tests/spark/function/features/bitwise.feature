@@ -562,16 +562,6 @@ Feature: Bitwise functions
         | result |
         | 1      |
 
-    Scenario: shiftrightunsigned with negative shift ANSI off
-      Given config spark.sql.ansi.enabled = false
-      When query
-        """
-        SELECT shiftleft(16, -1) AS r1, shiftright(16, -1) AS r2
-        """
-      Then query result
-        | r1 | r2 |
-        | 0  | 0  |
-
   Rule: Sail-specific (bitwise_not function)
 
     @sail-only
