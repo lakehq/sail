@@ -240,6 +240,15 @@ impl PlanResolverState {
             .find_output_field_for_expression(expr, output_field_ids)
     }
 
+    pub fn find_output_field_for_expression_via_rewrite(
+        &self,
+        expr: &Expr,
+        output_field_ids: &[String],
+    ) -> Option<String> {
+        self.expression_mapping
+            .find_output_field_for_expression_via_rewrite(expr, output_field_ids)
+    }
+
     pub fn enter_with_relations_scope(&mut self) -> WithRelationsScope<'_> {
         WithRelationsScope::new(self)
     }

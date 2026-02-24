@@ -197,6 +197,20 @@ impl PlanResolver<'_> {
                 }
 
                 if expr.is_volatile() {
+                    if let Some(field_id) =
+                        state.find_output_field_for_expression_via_rewrite(&expr, &output_field_ids)
+                    {
+                        if let Some((_, _, column)) = output_columns
+                            .iter()
+                            .find(|(output_field_id, _, _)| output_field_id == &field_id)
+                        {
+                            return Ok(Sort {
+                                expr: column.clone(),
+                                asc,
+                                nulls_first,
+                            });
+                        }
+                    }
                     return Ok(Sort {
                         expr,
                         asc,

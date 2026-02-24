@@ -107,4 +107,54 @@ impl ExpressionMappingState {
         }
         None
     }
+
+    pub fn find_output_field_for_expression_via_rewrite(
+        &self,
+        expr: &Expr,
+        output_field_ids: &[String],
+    ) -> Option<String> {
+        let output_field_ids = output_field_ids
+            .iter()
+            .map(|field_id| field_id.as_str())
+            .collect::<HashSet<_>>();
+        if output_field_ids.is_empty() {
+            return None;
+        }
+
+        let mut queue = VecDeque::new();
+        queue.push_back((expr.clone(), 0usize));
+        let mut visited = Vec::new();
+        while let Some((candidate, rewrite_steps)) = queue.pop_front() {
+            if visited.iter().any(|seen| seen == &candidate) {
+                continue;
+            }
+            visited.push(candidate.clone());
+
+            if rewrite_steps > 0 {
+                if let Some((_, field_id)) =
+                    self.expression_output_fields.iter().find(|(source, id)| {
+                        source == &candidate && output_field_ids.contains(id.as_str())
+                    })
+                {
+                    return Some(field_id.clone());
+                }
+            }
+
+            for (_, rewritten) in self
+                .expression_rewrites
+                .iter()
+                .filter(|(source, _)| source == &candidate)
+            {
+                queue.push_back((rewritten.clone(), rewrite_steps + 1));
+            }
+            for (source, _) in self
+                .expression_rewrites
+                .iter()
+                .filter(|(_, rewritten)| rewritten == &candidate)
+            {
+                queue.push_back((source.clone(), rewrite_steps + 1));
+            }
+        }
+        None
+    }
 }
