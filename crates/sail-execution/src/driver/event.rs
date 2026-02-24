@@ -63,6 +63,8 @@ pub enum DriverEvent {
         status: TaskStatus,
         message: Option<String>,
         cause: Option<CommonErrorCause>,
+        /// The worker that reported the task status, if available.
+        worker_id: Option<WorkerId>,
         /// The sequence number from the worker,
         /// or [None] if it is a forced update within the driver.
         sequence: Option<u64>,
@@ -228,6 +230,7 @@ impl SpanAssociation for DriverEvent {
                 status,
                 message,
                 cause,
+                worker_id,
                 sequence: _,
             } => {
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
@@ -235,6 +238,9 @@ impl SpanAssociation for DriverEvent {
                 p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 p.push((SpanAttribute::EXECUTION_TASK_STATUS, status.to_string()));
+                if let Some(worker_id) = worker_id {
+                    p.push((SpanAttribute::CLUSTER_WORKER_ID, worker_id.to_string()));
+                }
                 if let Some(message) = message {
                     p.push((SpanAttribute::EXECUTION_TASK_MESSAGE, message.clone()));
                 }

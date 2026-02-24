@@ -90,6 +90,7 @@ impl DriverClient {
 
     pub async fn report_task_status(
         &self,
+        worker_id: WorkerId,
         key: TaskKey,
         status: TaskStatus,
         message: Option<String>,
@@ -111,6 +112,7 @@ impl DriverClient {
             status: gen::TaskStatus::from(status) as i32,
             message,
             cause,
+            worker_id: worker_id.into(),
             sequence,
         });
         let response = self.inner.get().await?.report_task_status(request).await?;

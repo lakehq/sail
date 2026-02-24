@@ -136,6 +136,7 @@ impl WorkerActor {
             }
         };
         let client = self.driver_client_set.core.clone();
+        let worker_id = self.options.worker_id;
         let handle = ctx.handle().clone();
         let retry_strategy = self.options.rpc_retry_strategy.clone();
         ctx.spawn(async move {
@@ -147,7 +148,7 @@ impl WorkerActor {
                     let cause = cause.clone();
                     async move {
                         client
-                            .report_task_status(key, status, message, cause, sequence)
+                            .report_task_status(worker_id, key, status, message, cause, sequence)
                             .await
                     }
                 })

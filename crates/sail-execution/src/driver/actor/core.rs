@@ -40,6 +40,7 @@ impl Actor for DriverActor {
             task_runner: TaskRunner::new(),
             stream_manager,
             task_sequences: HashMap::new(),
+            cache_materialization_jobs: HashMap::new(),
             history: None,
         }
     }
@@ -94,8 +95,9 @@ impl Actor for DriverActor {
                 status,
                 message,
                 cause,
+                worker_id,
                 sequence,
-            } => self.handle_update_task(ctx, key, status, message, cause, sequence),
+            } => self.handle_update_task(ctx, key, status, message, cause, worker_id, sequence),
             DriverEvent::ProbePendingTask { key } => self.handle_probe_pending_task(ctx, key),
             DriverEvent::ProbePendingLocalStream { key } => {
                 self.handle_probe_pending_local_stream(ctx, key)

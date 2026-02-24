@@ -16,6 +16,7 @@ use sail_server::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
+use crate::driver::actor::CacheMaterializationJob;
 use crate::driver::actor::DriverActor;
 use crate::driver::job_scheduler::{JobAction, TaskState};
 use crate::driver::output::JobOutputItem;
@@ -26,6 +27,8 @@ use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
 use crate::task::scheduling::{TaskAssignment, TaskAssignmentGetter, TaskStreamAssignment};
+use sail_common_datafusion::cache_manager::CacheManager;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 
 impl DriverActor {
     pub(super) fn handle_server_ready(
@@ -170,8 +173,19 @@ impl DriverActor {
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     ) -> ActorAction {
-        let out = self.job_scheduler.accept_job(ctx, plan, context);
+        let out = self.job_scheduler.accept_job(ctx, plan, context.clone());
         if let Ok((job_id, _)) = &out {
+            if let Some((cache_id, stage)) = self.job_scheduler.cache_materialization_info(*job_id)
+            {
+                self.cache_materialization_jobs.insert(
+                    *job_id,
+                    CacheMaterializationJob {
+                        cache_id,
+                        stage,
+                        context,
+                    },
+                );
+            }
             self.refresh_job(ctx, *job_id);
             self.run_tasks(ctx);
             self.scale_up_workers(ctx);
@@ -196,6 +210,7 @@ impl DriverActor {
         status: TaskStatus,
         message: Option<String>,
         cause: Option<CommonErrorCause>,
+        worker_id: Option<WorkerId>,
         sequence: Option<u64>,
     ) -> ActorAction {
         if let Some(sequence) = sequence {
@@ -220,6 +235,19 @@ impl DriverActor {
                 self.job_scheduler
                     .update_task(&key, TaskState::Succeeded, message, cause);
                 self.task_assigner.unassign_task(&key);
+                if let (Some(worker_id), Some(info)) =
+                    (worker_id, self.cache_materialization_jobs.get(&key.job_id))
+                {
+                    if key.stage == info.stage {
+                        if let Ok(cache) = info.context.extension::<CacheManager>() {
+                            cache.add_partition_location(
+                                info.cache_id,
+                                key.partition,
+                                u64::from(worker_id),
+                            );
+                        }
+                    }
+                }
                 self.refresh_job(ctx, key.job_id);
                 self.run_tasks(ctx);
                 self.scale_up_workers(ctx);
@@ -263,6 +291,7 @@ impl DriverActor {
                 status: TaskStatus::Failed,
                 message: Some(message),
                 cause: Some(cause),
+                worker_id: None,
                 sequence: None,
             })
         }
@@ -418,6 +447,7 @@ impl DriverActor {
     }
 
     fn clean_up_job(&mut self, ctx: &mut ActorContext<Self>, job_id: JobId) {
+        self.cache_materialization_jobs.remove(&job_id);
         for action in self.job_scheduler.clean_up_job(job_id) {
             self.run_job_action(ctx, action);
         }
@@ -532,6 +562,7 @@ impl DriverActor {
                             status: TaskStatus::Failed,
                             message: Some(e.to_string()),
                             cause: Some(CommonErrorCause::new::<PyErrExtractor>(&e)),
+                            worker_id: None,
                             sequence: None,
                         });
                         continue;

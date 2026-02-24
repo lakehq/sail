@@ -113,6 +113,7 @@ impl DriverService for DriverServer {
             status,
             message,
             cause,
+            worker_id,
             sequence,
         } = request;
         let status = gen::TaskStatus::try_from(status).map_err(ExecutionError::from)?;
@@ -130,6 +131,7 @@ impl DriverService for DriverServer {
             status: status.into(),
             message,
             cause,
+            worker_id: Some(worker_id.into()),
             sequence: Some(sequence),
         };
         self.handle
