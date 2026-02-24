@@ -126,9 +126,10 @@ services:
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      - ./python/pysail/tests/datasources/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./python/pysail/tests/datasources/jdbc/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U testuser -d testdb"]
+      start_period: 10s
       interval: 5s
       timeout: 5s
       retries: 5
