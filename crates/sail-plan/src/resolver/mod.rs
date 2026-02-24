@@ -15,7 +15,6 @@ mod query;
 mod schema;
 mod state;
 mod tree;
-pub mod data_type_helper;
 
 pub struct PlanResolver<'a> {
     ctx: &'a SessionContext,
