@@ -4,6 +4,7 @@ pub mod map_partitions;
 pub mod merge;
 pub mod monotonic_id;
 pub mod precondition;
+pub mod procedure;
 pub mod range;
 pub mod repartition;
 pub mod schema_pivot;

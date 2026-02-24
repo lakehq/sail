@@ -3,21 +3,21 @@ use sail_sql_macro::{TreeParser, TreeSyntax, TreeText};
 
 use crate::ast;
 use crate::ast::data_type::DataType;
-use crate::ast::expression::{BooleanLiteral, Expr, OrderDirection};
+use crate::ast::expression::{BooleanLiteral, Expr, FunctionArgument, OrderDirection};
 use crate::ast::identifier::{table_ident, Ident, ObjectName};
 use crate::ast::keywords::{
-    Add, After, All, Alter, Always, Analyze, And, As, Buckets, By, Cache, Cascade, Catalog,
+    Add, After, All, Alter, Always, Analyze, And, As, Buckets, By, Cache, Call, Cascade, Catalog,
     Catalogs, Change, Clear, Cluster, Clustered, Codegen, Collection, Column, Columns, Comment,
     Compute, Cost, Create, Data, Database, Databases, Dbproperties, Default, Defined, Delete,
-    Delimited, Desc, Describe, Directory, Distributed, Drop, Escaped, Evolution, Exists, Explain,
-    Extended, External, Fields, Fileformat, First, For, Format, Formatted, From, Function,
+    Delimited, Desc, Describe, Directory, Distributed, Drop, Dry, Escaped, Evolution, Exists,
+    Explain, Extended, External, Fields, Fileformat, First, For, Format, Formatted, From, Function,
     Functions, Generated, Global, If, In, Inpath, Inputformat, Insert, Into, Is, Items, Keys, Lazy,
-    Like, Lines, Load, Local, Location, Map, Matched, Merge, Name, Noscan, Not, Null, On, Options,
-    Or, Outputformat, Overwrite, Partition, Partitioned, Partitions, Properties, Purge, Recover,
-    Refresh, Rename, Replace, Restrict, Row, Schema, Schemas, Serde, Serdeproperties, Set, Show,
-    Sorted, Source, Statistics, Stored, Table, Tables, Target, Tblproperties, Temp, Temporary,
-    Terminated, Then, Time, To, Type, Uncache, Unset, Update, Use, Using, Values, Verbose, View,
-    Views, When, With, Zone,
+    Like, Lines, Load, Local, Location, Map, Matched, Merge, Name, Noscan, Not, Null, On, Optimize,
+    Options, Or, Outputformat, Overwrite, Partition, Partitioned, Partitions, Properties, Purge,
+    Recover, Refresh, Rename, Replace, Restrict, Retain, Row, Run, Schema, Schemas, Serde,
+    Serdeproperties, Set, Show, Sorted, Source, Statistics, Stored, Table, Tables, Target,
+    Tblproperties, Temp, Temporary, Terminated, Then, Time, To, Type, Uncache, Unset, Update, Use,
+    Using, Vacuum, Values, Verbose, View, Views, When, With, Zone, Zorder,
 };
 use crate::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
 use crate::ast::operator::{
@@ -27,6 +27,14 @@ use crate::ast::query::{AliasClause, IdentList, Query, WhereClause};
 use crate::combinator::{boxed, compose, sequence, unit};
 use crate::common::Sequence;
 use crate::token::TokenLabel;
+
+type OptimizeZorderClause = (
+    Zorder,
+    By,
+    LeftParenthesis,
+    Sequence<ObjectName, Comma>,
+    RightParenthesis,
+);
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "(Statement, Query, Expr, DataType)", label = TokenLabel::Statement)]
@@ -198,6 +206,24 @@ pub enum Statement {
         show: Show,
         functions: Functions,
     },
+    Call {
+        call: Call,
+        name: ObjectName,
+        #[parser(function = |(_, _, e, _), o| compose(e, o))]
+        arguments: Option<ProcedureArgumentList>,
+    },
+    Optimize {
+        optimize: Optimize,
+        name: ObjectName,
+        zorder: Option<OptimizeZorderClause>,
+    },
+    Vacuum {
+        vacuum: Vacuum,
+        name: ObjectName,
+        #[parser(function = |(_, _, e, _), o| compose(e, o))]
+        retain: Option<VacuumRetainClause>,
+        dry_run: Option<(Dry, Run)>,
+    },
     Explain {
         explain: Explain,
         format: Option<ExplainFormat>,
@@ -357,6 +383,23 @@ pub enum ExplainFormat {
     Formatted(Formatted),
     Analyze(Analyze),
     Verbose(Verbose),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[parser(dependency = "Expr")]
+pub struct ProcedureArgumentList {
+    pub left: LeftParenthesis,
+    #[parser(function = |e, o| sequence(compose(e, o), unit(o)).or_not())]
+    pub arguments: Option<Sequence<FunctionArgument, Comma>>,
+    pub right: RightParenthesis,
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[parser(dependency = "Expr")]
+pub struct VacuumRetainClause {
+    pub retain: Retain,
+    #[parser(function = |e, _| e)]
+    pub value: Expr,
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]

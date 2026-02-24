@@ -439,6 +439,7 @@ pub enum CommandNode {
         row_format: Option<TableRowFormat>,
         options: Vec<(String, String)>,
     },
+    CallProcedure(CallProcedure),
     MergeInto(MergeInto),
     SetVariable {
         variable: String,
@@ -519,6 +520,15 @@ pub enum CommandNode {
         column: ObjectName,
         value: Option<String>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CallProcedure {
+    pub procedure: ObjectName,
+    pub positional_arguments: Vec<Expr>,
+    pub named_arguments: Vec<(Identifier, Expr)>,
+    pub target: Option<ObjectName>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

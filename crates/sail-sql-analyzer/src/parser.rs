@@ -142,4 +142,17 @@ mod tests {
         );
         Ok(())
     }
+
+    #[test]
+    fn test_parse_lakehouse_maintenance_statements() -> SqlResult<()> {
+        let call = parse_one_statement("CALL iceberg.system.rewrite_data_files(table => 'db.t')")?;
+        assert!(matches!(call, Statement::Call { .. }));
+
+        let optimize = parse_one_statement("OPTIMIZE my_table ZORDER BY (a, b)")?;
+        assert!(matches!(optimize, Statement::Optimize { .. }));
+
+        let vacuum = parse_one_statement("VACUUM my_table RETAIN 168 DRY RUN")?;
+        assert!(matches!(vacuum, Statement::Vacuum { .. }));
+        Ok(())
+    }
 }

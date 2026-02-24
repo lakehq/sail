@@ -26,6 +26,7 @@ use sail_logical_plan::file_write::FileWriteNode;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_logical_plan::merge::MergeIntoNode;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
+use sail_logical_plan::procedure::ProcedureNode;
 use sail_logical_plan::range::RangeNode;
 use sail_logical_plan::repartition::ExplicitRepartitionNode;
 use sail_logical_plan::schema_pivot::SchemaPivotNode;
@@ -40,6 +41,7 @@ use sail_physical_plan::file_delete::create_file_delete_physical_plan;
 use sail_physical_plan::file_write::create_file_write_physical_plan;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
+use sail_physical_plan::procedure::create_procedure_physical_plan;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
@@ -215,6 +217,11 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
             }?;
             create_file_delete_physical_plan(session_state, planner, schema, node.options().clone())
                 .await?
+        } else if let Some(node) = node.as_any().downcast_ref::<ProcedureNode>() {
+            if !logical_inputs.is_empty() || !physical_inputs.is_empty() {
+                return internal_err!("ProcedureNode should have no inputs");
+            }
+            create_procedure_physical_plan(session_state, node.options().clone()).await?
         } else if let Some(node) = node.as_any().downcast_ref::<MergeIntoNode>() {
             let _ = (
                 planner,
