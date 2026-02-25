@@ -53,7 +53,6 @@ message NotifyCachePartitionStoredRequest {
   uint64 cache_id = 1;
   uint64 partition = 2;
   uint64 worker_id = 3;
-  uint64 job_id = 4;
 }
 
 message NotifyCachePartitionStoredResponse {

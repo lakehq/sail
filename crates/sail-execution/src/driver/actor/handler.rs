@@ -7,9 +7,7 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::ExecutionPlan;
 use futures::TryStreamExt;
 use log::{debug, error, info, warn};
-use sail_common_datafusion::cache_manager::CacheManager;
 use sail_common_datafusion::error::CommonErrorCause;
-use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::job::JobRunnerHistory;
 use sail_common_datafusion::system::observable::JobRunnerObserver;
 use sail_common_datafusion::system::predicate::Predicates;
@@ -187,23 +185,17 @@ impl DriverActor {
     pub(super) fn handle_cache_partition_stored(
         &mut self,
         _ctx: &mut ActorContext<Self>,
-        job_id: JobId,
         cache_id: u64,
         partition: usize,
         worker_id: WorkerId,
     ) -> ActorAction {
-        let Some(context) = self.job_scheduler.get_job_context(job_id) else {
-            warn!("job {job_id} not found; cannot record cache partition {cache_id}/{partition} on worker {worker_id}");
-            return ActorAction::Continue;
-        };
-        let cache = match context.extension::<CacheManager>() {
-            Ok(x) => x,
-            Err(e) => {
-                warn!("failed to access cache manager extension: {e}");
-                return ActorAction::Continue;
-            }
-        };
-        cache.add_partition_location(cache_id, partition, worker_id.into());
+        let entry = self
+            .cache_partition_locations
+            .entry((cache_id, partition))
+            .or_default();
+        if !entry.contains(&worker_id) {
+            entry.push(worker_id);
+        }
         ActorAction::Continue
     }
 

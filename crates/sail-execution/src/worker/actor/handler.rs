@@ -168,7 +168,6 @@ impl WorkerActor {
     pub(super) fn handle_cache_partition_stored(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        job_id: JobId,
         cache_id: u64,
         partition: usize,
     ) -> ActorAction {
@@ -176,7 +175,7 @@ impl WorkerActor {
         let client = self.driver_client_set.core.clone();
         ctx.spawn(async move {
             if let Err(e) = client
-                .notify_cache_partition_stored(worker_id, job_id, cache_id, partition)
+                .notify_cache_partition_stored(worker_id, cache_id, partition)
                 .await
             {
                 warn!("failed to notify cache partition stored: {e}");

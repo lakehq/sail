@@ -9,7 +9,7 @@ use tokio::sync::oneshot;
 
 use crate::driver::job_scheduler::JobScheduler;
 use crate::driver::task_assigner::TaskAssigner;
-use crate::id::TaskKey;
+use crate::id::{TaskKey, WorkerId};
 use crate::rpc::ServerMonitor;
 use crate::stream_manager::StreamManager;
 use crate::task_runner::TaskRunner;
@@ -25,6 +25,8 @@ pub struct DriverActor {
     /// The sequence number corresponding to the last task status update from the worker.
     /// A different sequence number is tracked for each attempt.
     task_sequences: HashMap<TaskKey, u64>,
+    /// Mapping from (cache_id, partition) to workers that hold the partition locally.
+    cache_partition_locations: HashMap<(u64, usize), Vec<WorkerId>>,
     /// An optional channel to send history when stopping the driver.
     history: Option<oneshot::Sender<JobRunnerHistory>>,
 }

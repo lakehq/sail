@@ -149,7 +149,6 @@ impl DriverService for DriverServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let event = DriverEvent::CachePartitionStored {
-            job_id: request.job_id.into(),
             cache_id: request.cache_id,
             partition: request.partition as usize,
             worker_id: request.worker_id.into(),

@@ -61,7 +61,6 @@ pub enum DriverEvent {
     },
     /// Indicates that a cache partition has been stored on a node.
     CachePartitionStored {
-        job_id: JobId,
         cache_id: u64,
         partition: usize,
         worker_id: WorkerId,
@@ -227,13 +226,11 @@ impl SpanAssociation for DriverEvent {
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
             }
             DriverEvent::CachePartitionStored {
-                job_id,
                 cache_id,
                 partition,
                 worker_id,
             } => {
                 p.push((SpanAttribute::CLUSTER_WORKER_ID, worker_id.to_string()));
-                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
                 p.push(("cache_id", cache_id.to_string()));
                 p.push(("partition", partition.to_string()));
             }
@@ -403,9 +400,8 @@ impl SpanAssociation for DriverEvent {
 }
 
 impl CachePartitionReporterMessage for DriverEvent {
-    fn cache_partition_stored(job_id: JobId, cache_id: u64, partition: usize) -> Self {
+    fn cache_partition_stored(cache_id: u64, partition: usize) -> Self {
         Self::CachePartitionStored {
-            job_id,
             cache_id,
             partition,
             worker_id: WorkerId::from(0u64),

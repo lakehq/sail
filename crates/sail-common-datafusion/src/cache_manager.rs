@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
@@ -20,10 +19,6 @@ pub struct CachedData {
 /// Manages cached query results for a session.
 pub struct CacheManager {
     entries: Mutex<Vec<CachedData>>,
-    /// Mapping from (cache_id, partition) -> worker IDs that hold the partition locally.
-    ///
-    /// NOTE: worker IDs are currently tracked as raw `u64`; consider introducing a typed ID.
-    partition_locations: Mutex<HashMap<(u64, usize), Vec<u64>>>,
     next_id: AtomicU64,
 }
 
@@ -38,7 +33,6 @@ impl CacheManager {
     pub fn new() -> Self {
         Self {
             entries: Mutex::new(Vec::new()),
-            partition_locations: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
         }
     }
@@ -76,30 +70,6 @@ impl CacheManager {
         if let Some(entry) = entries.iter_mut().find(|e| e.cache_id == cache_id) {
             entry.materialized = true;
         }
-    }
-
-    /// Records that a cache partition is available on a worker.
-    pub fn add_partition_location(&self, cache_id: u64, partition: usize, worker_id: u64) {
-        let mut locations = self
-            .partition_locations
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let entry = locations.entry((cache_id, partition)).or_default();
-        if !entry.contains(&worker_id) {
-            entry.push(worker_id);
-        }
-    }
-
-    /// Returns worker IDs that currently hold the given cache partition.
-    pub fn get_partition_locations(&self, cache_id: u64, partition: usize) -> Vec<u64> {
-        let locations = self
-            .partition_locations
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        locations
-            .get(&(cache_id, partition))
-            .cloned()
-            .unwrap_or_default()
     }
 }
 

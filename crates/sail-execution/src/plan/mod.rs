@@ -13,7 +13,6 @@ use datafusion::common::Result;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_server::actor::{Actor, ActorHandle};
 
-use crate::id::JobId;
 use crate::local_cache_store::LocalCacheStore;
 pub use cache_read::CacheReadExec;
 pub(crate) use cache_write::CacheWriteExec;
@@ -28,19 +27,18 @@ pub(crate) trait CachePartitionReporter: Send + Sync {
 
 /// Builds a cache-partition-stored message for an actor.
 pub(crate) trait CachePartitionReporterMessage {
-    fn cache_partition_stored(job_id: JobId, cache_id: u64, partition: usize) -> Self;
+    fn cache_partition_stored(cache_id: u64, partition: usize) -> Self;
 }
 
 /// Reports cache partition materialization by sending an actor message.
 pub(crate) struct ActorCachePartitionReporter<T: Actor> {
     handle: ActorHandle<T>,
-    job_id: JobId,
 }
 
 impl<T: Actor> ActorCachePartitionReporter<T> {
     /// Creates a reporter backed by the given actor handle.
-    pub fn new(handle: ActorHandle<T>, job_id: JobId) -> Self {
-        Self { handle, job_id }
+    pub fn new(handle: ActorHandle<T>) -> Self {
+        Self { handle }
     }
 }
 
@@ -50,12 +48,9 @@ where
 {
     fn report_partition_stored(&self, cache_id: u64, partition: usize) {
         let handle = self.handle.clone();
-        let job_id = self.job_id;
         tokio::spawn(async move {
             let _ = handle
-                .send(T::Message::cache_partition_stored(
-                    job_id, cache_id, partition,
-                ))
+                .send(T::Message::cache_partition_stored(cache_id, partition))
                 .await;
         });
     }

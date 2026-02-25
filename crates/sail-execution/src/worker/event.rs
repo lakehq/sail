@@ -41,7 +41,6 @@ pub enum WorkerEvent {
     },
     /// Indicates that a cache partition has been stored on this worker.
     CachePartitionStored {
-        job_id: JobId,
         cache_id: u64,
         partition: usize,
     },
@@ -84,9 +83,8 @@ pub enum WorkerEvent {
 }
 
 impl CachePartitionReporterMessage for WorkerEvent {
-    fn cache_partition_stored(job_id: JobId, cache_id: u64, partition: usize) -> Self {
+    fn cache_partition_stored(cache_id: u64, partition: usize) -> Self {
         Self::CachePartitionStored {
-            job_id,
             cache_id,
             partition,
         }
@@ -189,7 +187,6 @@ impl SpanAssociation for WorkerEvent {
                 }
             }
             WorkerEvent::CachePartitionStored {
-                job_id: _,
                 cache_id: _,
                 partition: _,
             } => {}

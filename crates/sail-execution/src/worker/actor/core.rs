@@ -76,10 +76,9 @@ impl Actor for WorkerActor {
                 cause,
             } => self.handle_report_task_status(ctx, key, status, message, cause),
             WorkerEvent::CachePartitionStored {
-                job_id,
                 cache_id,
                 partition,
-            } => self.handle_cache_partition_stored(ctx, job_id, cache_id, partition),
+            } => self.handle_cache_partition_stored(ctx, cache_id, partition),
             WorkerEvent::ProbePendingLocalStream { key } => {
                 self.handle_probe_pending_local_stream(ctx, key)
             }

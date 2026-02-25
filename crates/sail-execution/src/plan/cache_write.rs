@@ -29,6 +29,7 @@ pub(crate) struct CacheWriteExec {
 
 impl CacheWriteExec {
     /// Creates a new CacheWriteExec wrapping the given child plan.
+    /// This code it not actually dead, it is used in tests.
     #[allow(dead_code)]
     pub fn new(
         plan: Arc<dyn ExecutionPlan>,

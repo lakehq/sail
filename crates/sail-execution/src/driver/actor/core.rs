@@ -40,6 +40,7 @@ impl Actor for DriverActor {
             task_runner: TaskRunner::new(),
             stream_manager,
             task_sequences: HashMap::new(),
+            cache_partition_locations: HashMap::new(),
             history: None,
         }
     }
@@ -90,11 +91,10 @@ impl Actor for DriverActor {
             } => self.handle_execute_job(ctx, plan, context, result),
             DriverEvent::CleanUpJob { job_id } => self.handle_clean_up_job(ctx, job_id),
             DriverEvent::CachePartitionStored {
-                job_id,
                 cache_id,
                 partition,
                 worker_id,
-            } => self.handle_cache_partition_stored(ctx, job_id, cache_id, partition, worker_id),
+            } => self.handle_cache_partition_stored(ctx, cache_id, partition, worker_id),
             DriverEvent::UpdateTask {
                 key,
                 status,

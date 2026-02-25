@@ -104,7 +104,7 @@ impl TaskRunner {
         let plan = self.rewrite_parquet_adapters(plan)?;
         let plan = inject_local_cache_store(plan, self.cache_store.clone())?;
         let reporter: Arc<dyn CachePartitionReporter> =
-            Arc::new(ActorCachePartitionReporter::new(ctx.handle().clone(), key.job_id));
+            Arc::new(ActorCachePartitionReporter::new(ctx.handle().clone()));
         let plan = inject_cache_write_reporter(plan, reporter)?;
         let plan = self.rewrite_shuffle(
             ctx,
