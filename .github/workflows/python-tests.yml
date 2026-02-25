@@ -67,7 +67,7 @@ jobs:
           fi
 
       - name: Run Tests
-        run: hatch run pytest --pyargs pysail.tests --ignore-glob='**/flight/**'
+        run: hatch run pytest --pyargs pysail.tests
 
       # Generate coverage report after Python tests
       - name: Generate coverage report

@@ -6441,6 +6441,7 @@ dependencies = [
  "pyo3",
  "sail-cli",
  "sail-common",
+ "sail-flight",
  "sail-spark-connect",
  "sail-telemetry",
  "tokio",

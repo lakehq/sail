@@ -1,141 +1,29 @@
-"""Tests for Sail Arrow Flight SQL integration using ADBC.
-
-This module tests the connectivity and basic functionality of the Sail Arrow Flight SQL server
-using the ADBC Flight SQL driver, which is the recommended way to interact with Flight SQL
-servers in Python.
-"""
-
-import logging
 import os
-import shutil
-import subprocess
-import time
-from contextlib import contextmanager
 
-import adbc_driver_manager
 import pytest
 from adbc_driver_flightsql import dbapi
 
-ADBC_AVAILABLE = True
-PYARROW_FLIGHT_AVAILABLE = True
+from pysail.flight import FlightSqlServer
 
-
-pytestmark = [
-    pytest.mark.flight_sql,
-    pytest.mark.skipif(
-        not ADBC_AVAILABLE,
-        reason="ADBC Flight SQL driver not available. Install with: pip install adbc-driver-flightsql adbc-driver-manager",
-    ),
-]
-
-
-@contextmanager
-def flight_server(host="127.0.0.1", port=32010):
-    """Context manager to start and stop a Sail Flight SQL server for testing.
-
-    Args:
-        host: The host to bind the server to.
-        port: The port to bind the server to.
-
-    Yields:
-        str: The URI where the server is listening (e.g., "grpc://127.0.0.1:32010").
-    """
-    logger = logging.getLogger(__name__)
-    uri = f"grpc://{host}:{port}"
-
-    # Check if server is already running
-    try:
-        conn = dbapi.connect(uri)
-        conn.close()
-        logger.info("Using existing Flight SQL server at %s", uri)
-    except ConnectionRefusedError:
-        logger.info("Server not running at %s, starting new instance", uri)
-    except OSError as e:
-        logger.warning("Unexpected error checking server: %s", e)
-    else:
-        yield uri
-        return
-
-    # Start the server process
-    workspace_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
-    cargo_path = shutil.which("cargo")
-    if not cargo_path:
-        msg = "cargo command not found in PATH"
-        raise RuntimeError(msg)
-
-    process = subprocess.Popen(
-        [cargo_path, "run", "--bin", "sail-flight", "--", "server", "--port", str(port), "--host", host],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        cwd=workspace_root,
-        env={**os.environ, "RUST_LOG": "info"},
-    )
-
-    # Wait for server to be ready
-    max_wait = 30  # seconds (cargo build can be slow)
-    start_time = time.time()
-    ready = False
-
-    while time.time() - start_time < max_wait:
-        if process.poll() is not None:
-            # Process died
-            stdout, stderr = process.communicate()
-            msg = f"Server process died. stdout: {stdout}, stderr: {stderr}"
-            raise RuntimeError(msg)
-
-        time.sleep(0.5)
-
-        # Try to connect to check if server is ready
-        try:
-            conn = dbapi.connect(uri)
-            conn.close()
-            ready = True
-            break
-        except OSError:
-            # Server not ready yet, continue waiting
-            continue
-
-    if not ready:
-        process.kill()
-        stdout, stderr = process.communicate()
-        msg = f"Server did not become ready in {max_wait}s. stdout: {stdout}, stderr: {stderr}"
-        raise RuntimeError(msg)
-
-    try:
-        yield uri
-    finally:
-        # Stop the server
-        process.terminate()
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
+pytestmark = [pytest.mark.flight_sql]
 
 
 @pytest.fixture(scope="module")
 def flight_uri():
-    """Fixture that provides the URI of a running Flight SQL server.
-
-    Yields:
-        str: The URI of the Flight SQL server.
-    """
-    # Allow overriding with environment variable for CI/CD
     if "SAIL_FLIGHT_URI" in os.environ:
         yield os.environ["SAIL_FLIGHT_URI"]
-    else:
-        with flight_server() as uri:
-            yield uri
+        return
+
+    server = FlightSqlServer(ip="127.0.0.1", port=0)
+    server.start(background=True)
+    addr = server.listening_address
+    uri = f"grpc://{addr[0]}:{addr[1]}"
+    yield uri
+    server.stop()
 
 
 @pytest.fixture
 def flight_connection(flight_uri):
-    """Fixture that provides a connected ADBC Flight SQL connection.
-
-    Yields:
-        Connection: An ADBC connection to the Flight SQL server.
-    """
     conn = dbapi.connect(flight_uri)
     yield conn
     conn.close()

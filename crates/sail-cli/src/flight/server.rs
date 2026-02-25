@@ -1,10 +1,11 @@
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 use log::info;
 use sail_common::config::AppConfig;
-use sail_flight::config::FlightSqlServerOptions;
+use sail_common::runtime::RuntimeManager;
 use sail_telemetry::telemetry::{init_telemetry, shutdown_telemetry, ResourceOptions};
+use tokio::net::TcpListener;
 
 async fn shutdown() {
     let _ = tokio::signal::ctrl_c().await;
@@ -18,19 +19,29 @@ pub fn run_flight_server(ip: IpAddr, port: u16) -> Result<(), Box<dyn std::error
         kind: "flight-server",
     };
 
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
+    let runtime_manager = RuntimeManager::try_new(&config.runtime)?;
 
-    runtime.block_on(async { init_telemetry(&config.telemetry, resource) })?;
+    runtime_manager
+        .handle()
+        .primary()
+        .block_on(async { init_telemetry(&config.telemetry, resource) })?;
 
-    runtime.block_on(async {
-        let options = FlightSqlServerOptions {
-            host: ip.to_string(),
-            port,
-        };
+    runtime_manager.handle().primary().block_on(async {
+        let address = SocketAddr::new(ip, port);
+        let listener = TcpListener::bind(address).await?;
+        let local_addr = listener.local_addr()?;
 
-        sail_flight::serve_with_shutdown(options, shutdown()).await?;
+        info!("Starting the Flight SQL server on {}...", local_addr);
+
+        sail_flight::serve(
+            listener,
+            shutdown(),
+            config,
+            runtime_manager.handle().clone(),
+        )
+        .await?;
+
+        info!("The Flight SQL server has stopped.");
         <Result<(), Box<dyn std::error::Error>>>::Ok(())
     })?;
 
