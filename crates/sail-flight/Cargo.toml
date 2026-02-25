@@ -27,8 +27,6 @@ futures = { workspace = true }
 prost = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
-serde = { workspace = true }
-figment = { workspace = true }
 
 [build-dependencies]
 tonic-build = { workspace = true }

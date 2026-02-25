@@ -41,12 +41,6 @@ enum FlightCommand {
         )]
         port: u16,
         #[arg(
-            long,
-            default_value_t = 0,
-            help = "Maximum rows to return per query (0 = unlimited)"
-        )]
-        max_rows: usize,
-        #[arg(
             short = 'C',
             long,
             help = "The directory to change to before starting the server"
@@ -165,13 +159,12 @@ pub fn main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
             FlightCommand::Server {
                 ip,
                 port,
-                max_rows,
                 directory,
             } => {
                 if let Some(directory) = directory {
                     std::env::set_current_dir(directory)?;
                 }
-                run_flight_server(ip.parse()?, port, max_rows)
+                run_flight_server(ip.parse()?, port)
             }
         },
     }
