@@ -19,6 +19,7 @@ use crate::local_cache_store::LocalCacheStore;
 use crate::plan::CachePartitionReporter;
 
 /// Physical execution node that consumes a child plan's output and stores it in the worker-local cache.
+#[derive(Clone)]
 pub(crate) struct CacheWriteExec {
     plan: Arc<dyn ExecutionPlan>,
     cache_store: Option<Arc<LocalCacheStore>>,
@@ -90,18 +91,6 @@ impl fmt::Debug for CacheWriteExec {
             .field("cache_id", &self.cache_id)
             .field("plan", &self.plan)
             .finish()
-    }
-}
-
-impl Clone for CacheWriteExec {
-    fn clone(&self) -> Self {
-        Self {
-            plan: self.plan.clone(),
-            cache_store: self.cache_store.clone(),
-            cache_reporter: self.cache_reporter.clone(),
-            cache_id: self.cache_id,
-            properties: self.properties.clone(),
-        }
     }
 }
 
