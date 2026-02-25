@@ -199,22 +199,58 @@ fn flatten(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
 
     let array = arguments.one()?;
+    let array_type = array.get_type(function_context.schema)?;
 
+    // Convert array type to nullable version to avoid Arrow errors with non-nullable empty arrays
+    let nullable_array_type = make_nullable_array_type(&array_type);
+    let nullable_array = cast(array.clone(), nullable_array_type.clone());
+
+    // Cast the null-only array to the nullable type to match
     let same_type_null_only_array = cast(
         make_array(vec![lit(ScalarValue::Null)]),
-        array.get_type(function_context.schema)?,
+        nullable_array_type,
     );
 
-    let array_has_null = expr_fn::array_has_any(array.clone(), same_type_null_only_array);
+    let array_has_null = expr_fn::array_has_any(nullable_array.clone(), same_type_null_only_array);
 
     Ok(expr::Expr::Case(expr::Case {
         expr: None,
         when_then_expr: vec![(
             Box::new(not(array_has_null)),
-            Box::new(expr_fn::flatten(array)),
+            Box::new(expr_fn::flatten(nullable_array)),
         )],
         else_expr: None,
     }))
+}
+
+/// Convert an array type to its nullable equivalent (all nested fields become nullable)
+fn make_nullable_array_type(data_type: &DataType) -> DataType {
+    match data_type {
+        DataType::List(field) => {
+            let inner_type = make_nullable_array_type(field.data_type());
+            DataType::List(std::sync::Arc::new(
+                datafusion::arrow::datatypes::Field::new(field.name(), inner_type, true),
+            ))
+        }
+        DataType::LargeList(field) => {
+            let inner_type = make_nullable_array_type(field.data_type());
+            DataType::LargeList(std::sync::Arc::new(
+                datafusion::arrow::datatypes::Field::new(field.name(), inner_type, true),
+            ))
+        }
+        DataType::FixedSizeList(field, size) => {
+            let inner_type = make_nullable_array_type(field.data_type());
+            DataType::FixedSizeList(
+                std::sync::Arc::new(datafusion::arrow::datatypes::Field::new(
+                    field.name(),
+                    inner_type,
+                    true,
+                )),
+                *size,
+            )
+        }
+        other => other.clone(),
+    }
 }
 
 pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFunction)> {

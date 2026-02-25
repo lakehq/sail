@@ -3,11 +3,12 @@ use std::ops::BitAnd;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, AsArray, FixedSizeListArray, GenericListArray, NullArray, OffsetSizeTrait,
+    new_empty_array, Array, ArrayRef, AsArray, FixedSizeListArray, GenericListArray, NullArray,
+    OffsetSizeTrait, StructArray,
 };
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
 use datafusion::arrow::compute::{cast, concat};
-use datafusion::arrow::datatypes::{DataType, Field};
+use datafusion::arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{arrow_err, exec_err, plan_err, DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions::utils::make_scalar_function;
@@ -287,13 +288,25 @@ fn arrays_zip_generic<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef>
         struct_arrays.push(struct_array);
     }
 
-    let values = concat(
-        struct_arrays
+    let values: ArrayRef = if struct_arrays.is_empty() {
+        // When all rows are null, struct_arrays is empty. Create an empty struct array.
+        let fields: Fields = field_names
             .iter()
-            .map(|a| a.as_ref())
-            .collect::<Vec<_>>()
-            .as_slice(),
-    )?;
+            .zip(data_types.iter())
+            .map(|(name, data_type)| Field::new(name, data_type.clone(), true))
+            .collect();
+        // Create empty arrays for each field
+        let empty_arrays: Vec<ArrayRef> = data_types.iter().map(|dt| new_empty_array(dt)).collect();
+        Arc::new(StructArray::try_new(fields, empty_arrays, None)?)
+    } else {
+        concat(
+            struct_arrays
+                .iter()
+                .map(|a| a.as_ref())
+                .collect::<Vec<_>>()
+                .as_slice(),
+        )?
+    };
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
         struct_result_field(&data_types),

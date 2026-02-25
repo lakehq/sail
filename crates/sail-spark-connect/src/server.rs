@@ -91,7 +91,9 @@ async fn handle_command(
             service::handle_execute_streaming_query_listener_bus_command(ctx, command, metadata)
                 .await
         }
-        CommandType::RegisterDataSource(_) => Err(SparkError::todo("register data source command")),
+        CommandType::RegisterDataSource(ds) => {
+            service::handle_execute_register_datasource(ctx, ds, metadata).await
+        }
         CommandType::CreateResourceProfileCommand(_) => {
             Err(SparkError::todo("create resource profile command"))
         }
@@ -101,7 +103,9 @@ async fn handle_command(
         CommandType::RemoveCachedRemoteRelationCommand(_) => {
             Err(SparkError::todo("remove cached remote relation command"))
         }
-        CommandType::MergeIntoTableCommand(_) => Err(SparkError::todo("merge into table command")),
+        CommandType::MergeIntoTableCommand(command) => {
+            service::handle_execute_merge_into_table_command(ctx, command, metadata).await
+        }
         CommandType::MlCommand(_) => Err(SparkError::todo("ml command")),
         CommandType::ExecuteExternalCommand(_) => Err(SparkError::todo("execute external command")),
         CommandType::PipelineCommand(_) => Err(SparkError::todo("pipeline command")),

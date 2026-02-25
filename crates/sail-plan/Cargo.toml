@@ -26,6 +26,7 @@ datafusion-spark = { workspace = true }
 futures = { workspace = true }
 thiserror = { workspace = true }
 tonic = { workspace = true }
+chrono = { workspace = true }
 async-trait = { workspace = true }
 async-recursion = { workspace = true }
 lazy_static = { workspace = true }
@@ -37,6 +38,7 @@ object_store = { workspace = true }
 half = { workspace = true }
 arrow = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 uuid = { workspace = true }
 indexmap = { workspace = true }
 log = { workspace = true }

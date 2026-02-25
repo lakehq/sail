@@ -17,12 +17,14 @@ datafusion-expr = { workspace = true }
 datafusion-expr-common = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-functions-nested = { workspace = true }
+datafusion-physical-expr = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = { workspace = true }
 regex = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
 rand_distr = { workspace = true }
+ordered-float = { workspace = true }
 lazy_static = { workspace = true }
 twox-hash = { workspace = true }
 aes = { workspace = true }

@@ -104,6 +104,10 @@ pub enum QueryNode {
         schema: Option<Schema>,
     },
     Sample(Sample),
+    TableSample {
+        input: Box<QueryPlan>,
+        sample: TableSample,
+    },
     Deduplicate(Deduplicate),
     Range(Range),
     SubqueryAlias {
@@ -253,6 +257,11 @@ pub enum QueryNode {
         recursive: bool,
         ctes: Vec<(Identifier, QueryPlan)>,
     },
+    /// A relation that wraps a root plan with referenced subquery plans.
+    WithRelations {
+        root: Box<QueryPlan>,
+        references: Vec<QueryPlan>,
+    },
     LateralView {
         input: Option<Box<QueryPlan>>,
         function: ObjectName,
@@ -278,6 +287,9 @@ pub enum CommandNode {
     },
     ListDatabases {
         qualifier: Option<ObjectName>,
+        pattern: Option<String>,
+    },
+    ListCatalogs {
         pattern: Option<String>,
     },
     ListTables {
@@ -351,9 +363,6 @@ pub enum CommandNode {
     CurrentCatalog,
     SetCurrentCatalog {
         catalog: Identifier,
-    },
-    ListCatalogs {
-        pattern: Option<String>,
     },
     CreateCatalog {
         catalog: Identifier,

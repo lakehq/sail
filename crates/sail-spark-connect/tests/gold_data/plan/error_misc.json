@@ -60,7 +60,7 @@
       "input": "SHOW TABLE EXTENDED IN hyphen-db LIKE \"str\"",
       "exception": "\n[INVALID_IDENTIFIER] The unquoted identifier hyphen-db is invalid and must be back quoted as: `hyphen-db`.\nUnquoted identifiers can only contain ASCII letters ('a' - 'z', 'A' - 'Z'), digits ('0' - '9'), and underbar ('_').\nUnquoted identifiers must also not start with a digit.\nDifferent data sources and meta stores may impose additional restrictions on valid identifiers. SQLSTATE: 42602 (line 1, pos 29)\n\n== SQL ==\nSHOW TABLE EXTENDED IN hyphen-db LIKE \"str\"\n-----------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found TABLE at 5:10 expected 'DATABASES', 'SCHEMAS', 'TABLES', 'CREATE', 'COLUMNS', 'VIEWS', or 'FUNCTIONS'"
+        "failure": "invalid argument: found TABLE at 5:10 expected 'DATABASES', 'SCHEMAS', 'CATALOGS', 'TABLES', 'CREATE', 'COLUMNS', 'VIEWS', or 'FUNCTIONS'"
       }
     },
     {
@@ -74,28 +74,28 @@
       "input": "USE https://www.spa.rk/bucket/pa-th.json?=&#%",
       "exception": "\n[INVALID_IDENTIFIER] The unquoted identifier https://www.spa.rk/bucket/pa-th.json?=&#% is invalid and must be back quoted as: `https://www.spa.rk/bucket/pa-th.json?=&#%`.\nUnquoted identifiers can only contain ASCII letters ('a' - 'z', 'A' - 'Z'), digits ('0' - '9'), and underbar ('_').\nUnquoted identifiers must also not start with a digit.\nDifferent data sources and meta stores may impose additional restrictions on valid identifiers. SQLSTATE: 42602 (line 1, pos 4)\n\n== SQL ==\nUSE https://www.spa.rk/bucket/pa-th.json?=&#%\n----^^^\n",
       "output": {
-        "failure": "invalid argument: found https at 4:9 expected 'DATABASE', or 'SCHEMA'"
+        "failure": "invalid argument: found https at 4:9 expected 'DATABASE', 'SCHEMA', or 'CATALOG'"
       }
     },
     {
       "input": "USE test-test",
       "exception": "\n[INVALID_IDENTIFIER] The unquoted identifier test-test is invalid and must be back quoted as: `test-test`.\nUnquoted identifiers can only contain ASCII letters ('a' - 'z', 'A' - 'Z'), digits ('0' - '9'), and underbar ('_').\nUnquoted identifiers must also not start with a digit.\nDifferent data sources and meta stores may impose additional restrictions on valid identifiers. SQLSTATE: 42602 (line 1, pos 8)\n\n== SQL ==\nUSE test-test\n--------^^^\n",
       "output": {
-        "failure": "invalid argument: found test at 4:8 expected 'DATABASE', or 'SCHEMA'"
+        "failure": "invalid argument: found test at 4:8 expected 'DATABASE', 'SCHEMA', or 'CATALOG'"
       }
     },
     {
       "input": "USE Ɩpfel",
       "exception": "\n[INVALID_IDENTIFIER] The unquoted identifier Ɩpfel is invalid and must be back quoted as: `Ɩpfel`.\nUnquoted identifiers can only contain ASCII letters ('a' - 'z', 'A' - 'Z'), digits ('0' - '9'), and underbar ('_').\nUnquoted identifiers must also not start with a digit.\nDifferent data sources and meta stores may impose additional restrictions on valid identifiers. SQLSTATE: 42602 (line 1, pos 4)\n\n== SQL ==\nUSE Ɩpfel\n----^^^\n",
       "output": {
-        "failure": "invalid argument: found Ɩpfel at 4:10 expected 'DATABASE', or 'SCHEMA'"
+        "failure": "invalid argument: found Ɩpfel at 4:10 expected 'DATABASE', 'SCHEMA', or 'CATALOG'"
       }
     },
     {
       "input": "USE 表1",
       "exception": "\n[INVALID_IDENTIFIER] The unquoted identifier 表1 is invalid and must be back quoted as: `表1`.\nUnquoted identifiers can only contain ASCII letters ('a' - 'z', 'A' - 'Z'), digits ('0' - '9'), and underbar ('_').\nUnquoted identifiers must also not start with a digit.\nDifferent data sources and meta stores may impose additional restrictions on valid identifiers. SQLSTATE: 42602 (line 1, pos 4)\n\n== SQL ==\nUSE 表1\n----^^^\n",
       "output": {
-        "failure": "invalid argument: found 表1 at 4:8 expected 'DATABASE', or 'SCHEMA'"
+        "failure": "invalid argument: found 表1 at 4:8 expected 'DATABASE', 'SCHEMA', or 'CATALOG'"
       }
     }
   ]

@@ -183,7 +183,10 @@ jobs:
         with:
           command: build
           target: ${{ matrix.platform.target }}
-          args: --release --out dist
+          # We need to specify the interpreter explicitly even if we are building for ABI3.
+          # This is to avoid unexpected PyPy wheels when building inside containers.
+          # https://github.com/PyO3/maturin/issues/2852
+          args: --release --out dist --interpreter python3.11
           # https://github.com/briansmith/ring/issues/1728
           # https://github.com/PyO3/maturin-action/issues/222
           manylinux: ${{ matrix.platform.target == 'aarch64' && matrix.platform.os == 'linux' && '2_24' || 'auto' }}

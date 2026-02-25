@@ -12,6 +12,7 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion::physical_plan::{
     with_new_children_if_necessary, ExecutionPlan, ExecutionPlanProperties, PhysicalExpr,
+    PlanProperties,
 };
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -219,20 +220,31 @@ fn build_job_graph(
         PartitionUsage::Shared => ShuffleConsumption::Multiple,
     };
     let plan = if let Some(repartition) = plan.as_any().downcast_ref::<RepartitionExec>() {
+        if repartition.preserve_order() {
+            // We haven't found a case when order-preserving repartition can be constructed,
+            // so it's fine to return an error for now.
+            // TODO: support order-preserving repartition
+            return Err(ExecutionError::InternalError(
+                "repartition is order-preserving and would result in incorrect results in distributed execution".to_string()
+            ));
+        }
+        let properties = repartition.properties().clone();
         let child = plan.children().one()?;
-        match repartition.partitioning() {
+        match &properties.partitioning {
             Partitioning::UnknownPartitioning(n) => {
-                create_shuffle(child, graph, Partitioning::RoundRobinBatch(*n), consumption)?
+                let n = *n;
+                let properties = properties.with_partitioning(Partitioning::RoundRobinBatch(n));
+                create_shuffle(child, graph, properties, consumption)?
             }
-            x @ Partitioning::RoundRobinBatch(_) | x @ Partitioning::Hash(_, _) => {
-                create_shuffle(child, graph, x.clone(), consumption)?
+            Partitioning::RoundRobinBatch(_) | Partitioning::Hash(_, _) => {
+                create_shuffle(child, graph, properties, consumption)?
             }
         }
     } else if let Some(coalesce) = plan.as_any().downcast_ref::<CoalescePartitionsExec>() {
+        let properties = coalesce.properties().clone();
         let child = plan.children().one()?;
-        let partitioning = coalesce.properties().partitioning.clone();
         let fetch = coalesce.fetch();
-        let shuffled = create_shuffle(child, graph, partitioning, consumption)?;
+        let shuffled = create_shuffle(child, graph, properties, consumption)?;
         if let Some(f) = fetch {
             Arc::new(GlobalLimitExec::new(shuffled, 0, Some(f))) as Arc<dyn ExecutionPlan>
         } else {
@@ -255,8 +267,7 @@ fn create_merge_input(
     plan: &Arc<dyn ExecutionPlan>,
     graph: &mut JobGraph,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
-    let schema = plan.schema();
-    let partitioning = plan.output_partitioning().clone();
+    let properties = plan.properties().clone();
     let (plan, inputs) = rewrite_inputs(plan.clone())?;
     let stage = Stage {
         inputs,
@@ -273,24 +284,24 @@ fn create_merge_input(
             stage: s,
             mode: InputMode::Merge,
         },
-        schema,
-        partitioning,
+        properties,
     )))
 }
 
 fn create_shuffle(
     plan: &Arc<dyn ExecutionPlan>,
     graph: &mut JobGraph,
-    partitioning: Partitioning,
+    // These are the properties after repartition/coalesce,
+    // which are different from the properties of the input plan.
+    properties: PlanProperties,
     consumption: ShuffleConsumption,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
-    let distribution = match partitioning.clone() {
+    let distribution = match properties.partitioning.clone() {
         Partitioning::RoundRobinBatch(channels) | Partitioning::UnknownPartitioning(channels) => {
             OutputDistribution::RoundRobin { channels }
         }
         Partitioning::Hash(keys, channels) => OutputDistribution::Hash { keys, channels },
     };
-    let schema = plan.schema();
     let (plan, inputs) = rewrite_inputs(plan.clone())?;
     let stage = Stage {
         inputs,
@@ -308,8 +319,7 @@ fn create_shuffle(
     };
     Ok(Arc::new(StageInputExec::new(
         StageInput { stage: s, mode },
-        schema,
-        partitioning.clone(),
+        properties,
     )))
 }
 
@@ -321,11 +331,7 @@ fn rewrite_inputs(
         if let Some(placeholder) = node.as_any().downcast_ref::<StageInputExec<StageInput>>() {
             let index = inputs.len();
             inputs.push(placeholder.input().clone());
-            let placeholder = StageInputExec::new(
-                index,
-                placeholder.schema(),
-                placeholder.properties().output_partitioning().clone(),
-            );
+            let placeholder = StageInputExec::new(index, placeholder.properties().clone());
             Ok(Transformed::yes(Arc::new(placeholder)))
         } else {
             Ok(Transformed::no(node))
@@ -339,8 +345,6 @@ fn create_driver_stage(
     plan: &Arc<dyn ExecutionPlan>,
     graph: &mut JobGraph,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
-    let schema = plan.schema();
-    let partitioning = plan.output_partitioning().clone();
     let stage = Stage {
         inputs: vec![],
         plan: plan.clone(),
@@ -356,7 +360,6 @@ fn create_driver_stage(
             stage: s,
             mode: InputMode::Forward,
         },
-        schema,
-        partitioning,
+        plan.properties().clone(),
     )))
 }

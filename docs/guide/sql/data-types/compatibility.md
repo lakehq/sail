@@ -121,10 +121,12 @@ but they are still supported in Sail. You can work with these types in Python UD
       <td>Date64</td>
     </tr>
     <tr>
-      <td>-</td>
-      <td>-</td>
       <td>
-        Time32(Second)<br />Time32(Millisecond)<br />Time64(Microsecond)<br />Time64(Nanosecond)
+        <code><SyntaxText raw="'TIME'['('<p>')']" /></code>
+      </td>
+      <td><strong>TimeType</strong></td>
+      <td>
+        Time32(Second)<br />Time32(Millisecond)<br />Time64(Microsecond)
       </td>
     </tr>
     <tr>
@@ -307,6 +309,7 @@ but they are still supported in Sail. You can work with these types in Python UD
 4. For the SQL timestamp types, the optional <code><SyntaxText raw="<p>" /></code> parameter specifies the precision of the timestamp. A number of `0`, `3`, `6`, or `9` represents second, millisecond, microsecond, or nanosecond precision respectively. The default value is `6` (microsecond precision). Note that only the microsecond precision timestamp is compatible with Spark.
 5. For the SQL decimal types, the optional <code><SyntaxText raw="<p>" /></code> and <code><SyntaxText raw="<s>" /></code> parameters specify the precision and scale of the decimal number respectively. The default precision is `10` and the default scale is `0`. The decimal type maps to either Decimal128 or Decimal256 type in Arrow depending on the specified precision.
 6. The SQL `INTERVAL` type is mapped to the Interval(MonthDayNano) Arrow type which has nanosecond precision. **CalendarIntervalType** in Spark has microsecond precision so the supported data range is different.
+7. For the SQL `TIME` type, the optional <code><SyntaxText raw="<p>" /></code> parameter specifies the precision of the time value. Spark 4.0 supports precision `0`, `3`, and `6` (second, millisecond, microsecond). The default value is `6` (microsecond precision). The TIME type is available in Spark 4.0 and later.
 
 <script setup>
 import SyntaxText from "@theme/components/SyntaxText.vue";
