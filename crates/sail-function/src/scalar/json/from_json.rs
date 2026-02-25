@@ -1,6 +1,6 @@
-use std::sync::{Arc, OnceLock};
+use core::any::type_name;
+use std::sync::{Arc};
 
-use datafusion::apache_avro::schema;
 use sail_sql_analyzer::parser::parse_data_type;
 use sail_sql_analyzer::data_type::from_ast_data_type;
 
@@ -10,10 +10,11 @@ use sail_common::spec::{
 };
 
 use datafusion::arrow::datatypes as adt;
-use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature, Volatility};
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility};
 use datafusion::arrow::{
     array::{
+        Array,
         ArrayRef, MapArray, StringArray, StructArray,
         ListArray,
         Int32Builder, Int64Builder, Float32Builder,
@@ -21,7 +22,7 @@ use datafusion::arrow::{
         TimestampMicrosecondBuilder,
     },
     datatypes::{
-        DataType, Fields, Field, TimeUnit
+        DataType, Fields, Field, TimeUnit, FieldRef
     },
     buffer::{
         NullBuffer, OffsetBuffer, ScalarBuffer
@@ -34,6 +35,8 @@ use serde_json::Value;
 use chrono::NaiveDate;
 
 use std::collections::HashMap;
+
+use crate::functions_nested_utils::downcast_arg;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkFromJson {
@@ -50,19 +53,11 @@ impl Default for SparkFromJson {
 impl SparkFromJson {
     pub fn new() -> Self {
         Self {
-            signature: Signature::new(
-                TypeSignature::OneOf(
-                    vec![
-                        TypeSignature::Any(1),
-                        TypeSignature::Any(2),
-                        TypeSignature::Any(3),
-                    ]
-                ),
-                Volatility::Immutable,
-            ),
+            signature: Signature::user_defined(Volatility::Immutable),
             aliases: ["from_json".to_string()],
         }
     }
+
 }
 
 impl ScalarUDFImpl for SparkFromJson {
@@ -86,16 +81,36 @@ impl ScalarUDFImpl for SparkFromJson {
         Ok(DataType::Struct(Fields::empty()))
     }
 
+    fn return_field_from_args(&self, args: datafusion_expr::ReturnFieldArgs) -> Result<FieldRef> {
+        let schema_field = args.arg_fields.get(1).unwrap();
+        let schema_value = args.scalar_arguments.get(1).unwrap();
+        match schema_field.data_type() {
+            DataType::Utf8 => {
+                match schema_value {
+                    Some(ScalarValue::Utf8(Some(uft8))) => {
+                        let fields = get_schema_as_fields(uft8)?;
+                        Ok(Arc::new(Field::new("struct", DataType::Struct(fields), true)))
+                    },
+                    _ => unimplemented!("Blah")
+                }
+            },
+            DataType::Struct(_) => Ok(schema_field.clone()),
+            other => Err(DataFusionError::Plan(format!("Unimplemented field args: {other:?}")))
+        }
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(from_json_inner, vec![])(&args.args)
     }
-}
 
-pub fn from_json_udf() -> Arc<ScalarUDF> {
-    static STATIC_FROM_JSON: OnceLock<Arc<ScalarUDF>> = OnceLock::new();
-    STATIC_FROM_JSON
-        .get_or_init(|| Arc::new(ScalarUDF::new_from_impl(SparkFromJson::new())))
-        .clone()
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        match arg_types {
+            [DataType::Utf8 | DataType::LargeUtf8, DataType::Utf8] => {
+                Ok(vec![arg_types[0].clone(), arg_types[1].clone()])
+            }
+            other => Err(DataFusionError::Plan(format!("Not supporting other input args yet: {other:?}")))
+        }
+    }
 }
 
 fn from_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -105,24 +120,16 @@ fn from_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         ));
     };
 
-    let strings = args
-        .get(0)
-        .unwrap()
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .ok_or_else(|| DataFusionError::Plan("Couldn't downcast to string array".to_string()))?;
-
-    let schema = args
-        .get(1)
-        .unwrap()
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .ok_or_else(|| DataFusionError::Plan("Couldn't downcast to string array".to_string()))?
-        .iter()
-        .next()
-        .unwrap()
-        .unwrap();
-
+    let strings: &StringArray = downcast_arg!(&args[0], StringArray);
+    let schema_array: &StringArray = downcast_arg!(&args[1], StringArray);
+    let schema: &str = if schema_array.is_empty() {
+        return exec_err!(
+            "`{}` function requires a schema string, got an empty string",
+            "from_json"
+        )
+    } else {
+        schema_array.value(0)
+    };
     let schema_fields = get_schema_as_fields(schema)?;
 
     string_array_to_json_array(strings, schema_fields, None)
@@ -133,12 +140,30 @@ fn string_array_to_json_array(
     schema_fields: Fields,
     _options: Option<&MapArray>,
 ) -> Result<ArrayRef> {
-    for string in strings.iter() {
-        dbg!(string);
+    let mut field_builders = create_field_builders(&schema_fields, strings.len())?;
+    let mut struct_nulls = vec![true; strings.len()];
+    for i in 0..strings.len() {
+        let json_str = strings.value(i);
+        let value = serde_json::from_str::<serde_json::Value>(json_str).unwrap();
+        if let serde_json::Value::Object(obj) = value {
+            struct_nulls[i] = true;
+            for (field, builder) in schema_fields.iter().zip(field_builders.iter_mut()) {
+                let field_value = obj.get(field.name());
+                append_field_value(builder, field, field_value)?;
+            }
+        } else {
+            struct_nulls[i] = false;
+            append_null_to_all_builders(&mut field_builders);
+        }
     }
-    dbg!(&schema_fields);
-
-    Ok(Arc::new(StructArray::new(schema_fields, vec![], None)))
+    let field_arrays: Vec<ArrayRef> = field_builders
+        .into_iter()
+        .map(finish_builder)
+        .collect::<Result<Vec<_>>>()?;
+    let nulls = NullBuffer::from(struct_nulls);
+    let struct_array = StructArray::new(schema_fields.clone(), field_arrays, Some(nulls));
+    dbg!(&struct_array);
+    Ok(Arc::new(struct_array))
 }
 
 enum FieldBuilder {
@@ -450,16 +475,16 @@ fn get_schema_as_fields(schema_str: &str) -> Result<Fields> {
     //};
     let sail_dtype = from_ast_data_type(schema_struct.clone())
         .map_err(|e| DataFusionError::Plan("Could not convert struct to sail type".to_string()))?;
-    let arrow_dtype = PlanResolver.resolve_data_type(&sail_dtype)?;
+    let arrow_dtype = SailToArrayDataType.resolve_data_type(&sail_dtype)?;
     match arrow_dtype {
         DataType::Struct(fields) => Ok(fields),
         other => Err(DataFusionError::NotImplemented(format!("Not implemented {other:?}")))
     }
 }
 
-pub(crate) struct PlanResolver;
+struct SailToArrayDataType;
 
-impl PlanResolver {
+impl SailToArrayDataType {
     //fn arrow_binary_type(&self, state: &mut PlanResolverState) -> adt::DataType {
     //    if self.config.arrow_use_large_var_types && state.config().arrow_allow_large_var_types {
     //        adt::DataType::LargeBinary
@@ -780,10 +805,11 @@ mod test {
     #[test]
     fn test_tmp() {
         let json_str = r#"{
-            "a": 1
+            "a": 1,
+            "b": 2
         }"#;
-        let strings = StringArray::from(vec![json_str]);
-        let schema = get_schema_as_fields("a int").unwrap();
+        let strings = StringArray::from(vec![json_str, json_str]);
+        let schema = get_schema_as_fields("a int, b int").unwrap();
         string_array_to_json_array(&strings, schema, None).unwrap();
     }
 }
