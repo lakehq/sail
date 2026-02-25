@@ -1,15 +1,15 @@
-//! Error types for Python DataSource operations.
+//! Error types for Python data source operations.
 //!
 //! Provides structured error types with context for debugging Python datasource issues.
 
 use datafusion_common::DataFusionError;
 use thiserror::Error;
 
-/// Result type alias for Python DataSource operations.
+/// Result type alias for Python data source operations.
 #[allow(dead_code)]
 pub type PythonDataSourceResult<T> = Result<T, PythonDataSourceError>;
 
-/// Errors specific to Python DataSource operations.
+/// Errors specific to Python data source operations.
 #[derive(Debug, Error)]
 pub enum PythonDataSourceError {
     /// Error from Python execution
@@ -145,11 +145,11 @@ pub fn py_err(e: pyo3::PyErr) -> DataFusionError {
 /// the need for a separate cloudpickle package installation.
 pub fn import_cloudpickle(
     py: pyo3::Python<'_>,
-) -> std::result::Result<pyo3::Bound<'_, pyo3::types::PyModule>, DataFusionError> {
+) -> Result<pyo3::Bound<'_, pyo3::types::PyModule>, DataFusionError> {
     py.import("pyspark.cloudpickle").map_err(|e| {
         DataFusionError::Execution(format!(
             "Failed to import pyspark.cloudpickle: {}. \
-            PySpark must be installed to use Python DataSources.",
+            PySpark must be installed to use Python data sources.",
             e
         ))
     })

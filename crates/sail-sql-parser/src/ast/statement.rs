@@ -937,14 +937,6 @@ pub enum AnalyzeTableModifier {
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "(Query, Expr)")]
 pub enum DescribeItem {
-    // We need to try `DESCRIBE QUERY` first since the `QUERY` keyword
-    // is optional. We will fall back to other choices if there is
-    // no valid query following the `DESCRIBE` keyword.
-    Query {
-        query: Option<ast::keywords::Query>,
-        #[parser(function = |(q, _), _| q)]
-        item: Query,
-    },
     Function {
         function: Function,
         extended: Option<Extended>,
@@ -960,13 +952,21 @@ pub enum DescribeItem {
         extended: Option<Extended>,
         item: ObjectName,
     },
+    // TODO: In Spark SQL, the `TABLE` keyword is optional.
+    //   Here we mark it as required to disambiguate between `DESCRIBE TABLE` and `DESCRIBE QUERY`.
     Table {
-        table: Option<Table>,
+        table: Table,
         extended: Option<Extended>,
         name: ObjectName,
         #[parser(function = |(_, e), o| compose(e, o))]
         partition: Option<PartitionClause>,
         column: Option<ObjectName>,
+    },
+    // We try `DESCRIBE QUERY` last since the `QUERY` keyword is optional.
+    Query {
+        query: Option<ast::keywords::Query>,
+        #[parser(function = |(q, _), _| q)]
+        item: Query,
     },
 }
 

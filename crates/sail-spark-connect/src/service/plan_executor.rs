@@ -28,9 +28,9 @@ use crate::spark::connect::execute_plan_response::{
 use crate::spark::connect::{
     relation, CheckpointCommand, CheckpointCommandResult, CommonInlineUserDefinedDataSource,
     CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction,
-    CreateDataFrameViewCommand, ExecutePlanResponse, GetResourcesCommand, LocalRelation, Relation,
-    SqlCommand, StreamingQueryCommand, StreamingQueryCommandResult,
-    StreamingQueryListenerBusCommand, StreamingQueryManagerCommand,
+    CreateDataFrameViewCommand, ExecutePlanResponse, GetResourcesCommand, LocalRelation,
+    MergeIntoTableCommand, Relation, SqlCommand, StreamingQueryCommand,
+    StreamingQueryCommandResult, StreamingQueryListenerBusCommand, StreamingQueryManagerCommand,
     StreamingQueryManagerCommandResult, WriteOperation, WriteOperationV2,
     WriteStreamOperationStart, WriteStreamOperationStartResult,
 };
@@ -207,6 +207,15 @@ pub(crate) async fn handle_execute_write_operation_v2(
     let plan = spec::Plan::Command(spec::CommandPlan::new(spec::CommandNode::WriteTo(
         write.try_into()?,
     )));
+    handle_execute_plan(ctx, plan, metadata, ExecutePlanMode::EagerSilent).await
+}
+
+pub(crate) async fn handle_execute_merge_into_table_command(
+    ctx: &SessionContext,
+    command: MergeIntoTableCommand,
+    metadata: ExecutorMetadata,
+) -> SparkResult<ExecutePlanResponseStream> {
+    let plan = spec::Plan::Command(spec::CommandPlan::new(command.try_into()?));
     handle_execute_plan(ctx, plan, metadata, ExecutePlanMode::EagerSilent).await
 }
 

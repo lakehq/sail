@@ -1,6 +1,6 @@
 [project]
 name = "pysail"
-version = "0.5.0"
+version = "0.5.1"
 description = "Sail Python library"
 authors = [
     { name = "LakeSail", email = "hello@lakesail.com" },
@@ -47,9 +47,15 @@ test = [
     "jedi>=0.19.2,<0.20",
     "jsonpath-ng>=1.6,<2",
     "PyYAML>=6.0,<7",
+    "moto[glue]>=5,<6",
+    "testcontainers>=4,<5",
 ]
 mcp = [
     "mcp>=1.0.0,<2",
+]
+jdbc = [
+    "connectorx>=0.3,<1",
+    "pyarrow>=10.0,<20",
 ]
 
 [project.urls]
@@ -96,6 +102,8 @@ dependencies = [
     "jedi>=0.19.2,<0.20",
     "jsonpath-ng>=1.6,<2",
     "PyYAML>=6.0,<7",
+    "moto[glue]>=5,<6",
+    "testcontainers>=4,<5",
 ]
 path = ".venvs/default"
 
@@ -143,6 +151,8 @@ dependencies = [
     "jedi>=0.19.2,<0.20",
     "jsonpath-ng>=1.6,<2",
     "PyYAML>=6.0,<7",
+    "moto[glue]>=5,<6",
+    "testcontainers>=4,<5",
 ]
 
 [[tool.hatch.envs.test.matrix]]
@@ -237,8 +247,9 @@ line-length = 120
 "crates/**/*.py" = ["INP001"]
 "python/pysail/docs/conf.py" = ["INP001"]
 "python/pysail/examples/**/*.py" = ["T201", "PLC0415"]
-"python/pysail/spark/datasource/registry.py" = ["PLC0415"]
+"python/pysail/datasources/**/*.py" = ["PLC0415"]
 "python/pysail/tests/**/*.py" = ["S101", "PLC0415"]
+"python/pysail/tests/**/manual_*.py" = ["S106", "PLR2004"]
 "scripts/**/*.py" = ["SLF001", "PLC0415"]
 
 [tool.pytest.ini_options]

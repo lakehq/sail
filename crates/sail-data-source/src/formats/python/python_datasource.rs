@@ -2,10 +2,10 @@ use std::sync::{Arc, Mutex};
 
 use arrow_schema::SchemaRef;
 use datafusion_common::Result;
-/// Core Python DataSource implementation using PyO3.
+/// Core Python data source implementation using PyO3.
 ///
-/// This module provides the bridge between Rust and Python DataSources, managing
-/// the Python interpreter lifecycle and invoking Python DataSource methods.
+/// This module provides the bridge between Rust and Python data sources, managing
+/// the Python interpreter lifecycle and invoking Python data source methods.
 use once_cell::sync::OnceCell;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
@@ -13,9 +13,9 @@ use pyo3::types::PyBytes;
 use super::arrow_utils::py_schema_to_rust;
 use super::error::{import_cloudpickle, PythonDataSourceContext, PythonDataSourceError};
 
-/// Represents a Python-defined DataSource.
+/// Represents a Python data source.
 ///
-/// This struct holds the serialized Python DataSource and provides methods
+/// This struct holds the serialized Python data source and provides methods
 /// to interact with it via PyO3.
 ///
 /// # Caching Strategy
@@ -25,7 +25,7 @@ use super::error::{import_cloudpickle, PythonDataSourceContext, PythonDataSource
 /// GIL-independent storage - the object stays on the Python heap and can be
 /// accessed when the GIL is acquired.
 pub struct PythonDataSource {
-    /// Pickled Python DataSource command (serialized DataSource instance)
+    /// Pickled Python data source command (serialized DataSource instance)
     command: Vec<u8>,
     /// DataSource name (cached for efficiency)
     name: String,
@@ -53,7 +53,7 @@ impl PythonDataSource {
     /// Create a new PythonDataSource from serialized command.
     ///
     /// # Arguments
-    /// * `command` - Pickled Python DataSource instance
+    /// * `command` - Pickled Python data source instance
     /// * `python_ver` - Python version string (e.g., "3.11")
     ///
     /// # Returns
@@ -130,7 +130,7 @@ impl PythonDataSource {
 
     /// Get the schema of the DataSource.
     ///
-    /// This calls the Python DataSource's `schema()` method and caches the result.
+    /// This calls the Python data source's `schema()` method and caches the result.
     ///
     /// # Returns
     /// * `Result<SchemaRef>` - Arrow schema
@@ -180,7 +180,7 @@ impl PythonDataSource {
 
     /// Get the number of partitions for parallel reading.
     ///
-    /// Calls the Python DataSource's `partitioning()` method.
+    /// Calls the Python data source's `partitioning()` method.
     ///
     /// # Returns
     /// * `Result<usize>` - Number of partitions

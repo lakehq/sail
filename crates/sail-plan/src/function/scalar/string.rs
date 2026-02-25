@@ -8,6 +8,7 @@ use datafusion_expr::{cast, expr, lit, try_cast, when, ExprSchemable};
 use datafusion_functions_nested::expr_fn::array_element;
 use datafusion_spark::function::string::elt::SparkElt;
 use datafusion_spark::function::string::expr_fn as string_fn;
+use datafusion_spark::function::string::format_string::FormatStringFunc;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::string::format_number::FormatNumber;
 use sail_function::scalar::string::levenshtein::Levenshtein;
@@ -251,7 +252,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("endswith", F::custom(endswith)),
         ("find_in_set", F::binary(expr_fn::find_in_set)),
         ("format_number", F::udf(FormatNumber::new())),
-        ("format_string", F::binary(string_fn::format_string)),
+        ("format_string", F::udf(FormatStringFunc::new())),
         ("initcap", F::unary(expr_fn::initcap)),
         ("instr", F::binary(expr_fn::instr)),
         ("is_valid_utf8", F::custom(is_valid_utf8)),
@@ -270,7 +271,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("octet_length", F::custom(octet_length)),
         ("overlay", F::var_arg(overlay)),
         ("position", F::custom(position)),
-        ("printf", F::unknown("printf")),
+        ("printf", F::udf(FormatStringFunc::new())),
         ("randstr", F::udf(Randstr::new())),
         ("regexp_count", F::udf(RegexpCountFunc::new())),
         ("regexp_extract", F::custom(regexp_extract)),
