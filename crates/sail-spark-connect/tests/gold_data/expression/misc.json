@@ -873,7 +873,11 @@
     {
       "input": "TIME'23:59:59.999999'",
       "output": {
-        "failure": "invalid argument: found '23:59:59.999999' at 4:21 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', 'AS', identifier, something else, or end of input"
+        "success": {
+          "unresolvedTime": {
+            "value": "23:59:59.999999"
+          }
+        }
       }
     },
     {
@@ -4410,14 +4414,22 @@
     {
       "input": "tIme '12:13:14'",
       "output": {
-        "failure": "invalid argument: found '12:13:14' at 5:15 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', 'AS', identifier, something else, or end of input"
+        "success": {
+          "unresolvedTime": {
+            "value": "12:13:14"
+          }
+        }
       }
     },
     {
       "input": "time '12-13.14'",
       "exception": "\n[INVALID_TYPED_LITERAL] The value of the typed literal \"TIME\" is invalid: '12-13.14'. SQLSTATE: 42604\n== SQL (line 1, position 1) ==\ntime '12-13.14'\n^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found '12-13.14' at 5:15 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', 'AS', identifier, something else, or end of input"
+        "success": {
+          "unresolvedTime": {
+            "value": "12-13.14"
+          }
+        }
       }
     },
     {

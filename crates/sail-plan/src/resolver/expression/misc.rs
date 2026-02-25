@@ -181,9 +181,18 @@ impl PlanResolver<'_> {
             return Ok(NamedExpr::new(vec![result_name], result_expr));
         }
 
-        // For other types (List, Struct), extraction must be a literal
-        let spec::Expr::Literal(extraction) = extraction else {
-            return Err(PlanError::invalid("extraction must be a literal"));
+        // For other types (List, Struct), extraction must be a literal.
+        // An UnresolvedAttribute from dot notation (e.g. `a.b`) is treated as a
+        // literal field name so that the spec can keep the attribute unresolved.
+        let extraction = match extraction {
+            spec::Expr::Literal(lit) => lit,
+            spec::Expr::UnresolvedAttribute { name, .. } => {
+                let name: Vec<String> = name.into();
+                spec::Literal::Utf8 {
+                    value: Some(name.one()?),
+                }
+            }
+            _ => return Err(PlanError::invalid("extraction must be a literal")),
         };
         let extraction = self.resolve_literal(extraction, state)?;
         let service = self.ctx.extension::<PlanService>()?;

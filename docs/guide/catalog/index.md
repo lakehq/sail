@@ -48,5 +48,6 @@ Here is a list of the supported (:white_check_mark:) catalog providers and the o
 | [Memory](./memory)             | :white_check_mark: |
 | [Iceberg REST](./iceberg-rest) | :white_check_mark: |
 | [Unity Catalog](./unity)       | :white_check_mark: |
-| AWS Glue                       | :construction:     |
+| [AWS Glue](./glue)             | :white_check_mark: |
+| [OneLake](./onelake)           | :white_check_mark: |
 | Hive Metastore                 | :construction:     |

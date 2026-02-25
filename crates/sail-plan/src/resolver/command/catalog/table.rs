@@ -177,6 +177,13 @@ impl PlanResolver<'_> {
         } else {
             WriteTableAction::Create
         };
+        let partition_by = partition_by
+            .into_iter()
+            .map(|c| CatalogPartitionField {
+                column: c.into(),
+                transform: None,
+            })
+            .collect();
         let builder = WritePlanBuilder::new()
             .with_target(WriteTarget::NewTable { table, action })
             .with_mode(write_mode)

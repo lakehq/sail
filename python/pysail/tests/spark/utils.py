@@ -24,7 +24,7 @@ def to_pandas(df):
     """
 
     def _to_pandas_type(dt):
-        if isinstance(dt, (FloatType, DoubleType, DecimalType)):
+        if isinstance(dt, FloatType | DoubleType | DecimalType):
             return pd.Float64Dtype()
         return None
 

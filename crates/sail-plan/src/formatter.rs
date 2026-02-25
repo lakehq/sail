@@ -778,6 +778,46 @@ mod tests {
             to_string(ScalarValue::TimestampMicrosecond(Some(-1), None))?,
             "TIMESTAMP_NTZ '1969-12-31 23:59:59.999999'",
         );
+        // Time32 Second
+        assert_eq!(
+            to_string(ScalarValue::Time32Second(Some(3661)))?,
+            "TIME '01:01:01'",
+        );
+        assert_eq!(
+            to_string(ScalarValue::Time32Second(Some(0)))?,
+            "TIME '00:00:00'",
+        );
+        assert_eq!(
+            to_string(ScalarValue::Time32Second(Some(86399)))?,
+            "TIME '23:59:59'",
+        );
+        // Time32 Millisecond
+        assert_eq!(
+            to_string(ScalarValue::Time32Millisecond(Some(3661500)))?,
+            "TIME '01:01:01.5'",
+        );
+        assert_eq!(
+            to_string(ScalarValue::Time32Millisecond(Some(86399999)))?,
+            "TIME '23:59:59.999'",
+        );
+        // Time64 Microsecond
+        assert_eq!(
+            to_string(ScalarValue::Time64Microsecond(Some(3661500000)))?,
+            "TIME '01:01:01.5'",
+        );
+        assert_eq!(
+            to_string(ScalarValue::Time64Microsecond(Some(86399999999)))?,
+            "TIME '23:59:59.999999'",
+        );
+        // Time64 Nanosecond
+        assert_eq!(
+            to_string(ScalarValue::Time64Nanosecond(Some(3661500000000)))?,
+            "TIME '01:01:01.5'",
+        );
+        assert_eq!(
+            to_string(ScalarValue::Time64Nanosecond(Some(86399999999999)))?,
+            "TIME '23:59:59.999999999'",
+        );
         assert_eq!(
             to_string(ScalarValue::IntervalMonthDayNano(Some(
                 IntervalMonthDayNano {
@@ -902,6 +942,30 @@ mod tests {
             ])?)))?,
             "struct(array(1, NULL) AS foo, struct(hello AS baz) AS bar)",
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_time_data_type_to_string() -> PlanResult<()> {
+        let formatter = SparkPlanFormatter;
+
+        assert_eq!(
+            formatter.data_type_to_simple_string(&DataType::Time32(TimeUnit::Second))?,
+            "time32(second)"
+        );
+        assert_eq!(
+            formatter.data_type_to_simple_string(&DataType::Time32(TimeUnit::Millisecond))?,
+            "time32(millisecond)"
+        );
+        assert_eq!(
+            formatter.data_type_to_simple_string(&DataType::Time64(TimeUnit::Microsecond))?,
+            "time64(microsecond)"
+        );
+        assert_eq!(
+            formatter.data_type_to_simple_string(&DataType::Time64(TimeUnit::Nanosecond))?,
+            "time64(nanosecond)"
+        );
+
         Ok(())
     }
 }
