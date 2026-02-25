@@ -18,10 +18,6 @@ use sail_session::session_manager::{SessionManager, SessionManagerOptions};
 
 use crate::error::FlightError;
 
-/// Session mutator for Flight SQL sessions.
-///
-/// This mutator configures the session with the necessary extensions for
-/// Flight SQL query processing, reusing Sail's shared components.
 pub struct FlightSessionMutator {
     #[allow(dead_code)]
     config: Arc<AppConfig>,
@@ -33,7 +29,6 @@ impl ServerSessionMutator for FlightSessionMutator {
         config: SessionConfig,
         _info: &ServerSessionInfo,
     ) -> Result<SessionConfig> {
-        // Create the PlanService extension required by the resolver
         let plan_service = PlanService::new(
             Box::new(DefaultCatalogDisplay::<SparkCatalogObjectDisplay>::default()),
             Box::new(SparkPlanFormatter),
@@ -69,23 +64,6 @@ fn create_flight_session_factory(
     Box::new(ServerSessionFactory::new(config, runtime, system, mutator))
 }
 
-/// Creates a SessionManager configured for Flight SQL.
-///
-/// This provides multi-session support for Flight SQL, allowing per-connection
-/// session isolation similar to Spark Connect.
-///
-/// # Architecture
-///
-/// Uses the same SessionManager infrastructure as `sail-spark-connect`:
-/// - Actor-based session management for concurrent requests
-/// - Session factory for creating new sessions on demand
-/// - Automatic session cleanup and lifecycle management
-///
-/// # Shared components with sail-spark-connect
-/// - `sail_session::SessionManager`: Multi-session orchestration
-/// - `sail_session::ServerSessionFactory`: Session creation and configuration
-/// - `sail_plan`: PlanResolver, PlanConfig, execute_logical_plan
-/// - `sail_session`: Optimizer rules, analyzer rules, table format registry
 pub fn create_flight_session_manager(
     config: Arc<AppConfig>,
     runtime: RuntimeHandle,
