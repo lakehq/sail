@@ -5,7 +5,7 @@ use std::str::FromStr;
 use monostate::MustBe;
 use serde::{Deserialize, Serialize};
 
-use crate::error::SparkResult;
+use crate::error::{SparkError, SparkResult};
 use crate::spark::connect as sc;
 use crate::spark::connect::data_type as dt;
 
@@ -33,6 +33,15 @@ pub enum JsonDataType {
     #[serde(rename = "interval")]
     CalendarInterval,
     Variant,
+    #[serde(untagged, with = "serde_geometry")]
+    Geometry {
+        srid: i32,
+    },
+    #[serde(untagged, with = "serde_geography")]
+    Geography {
+        srid: i32,
+        algorithm: String,
+    },
     #[serde(untagged, with = "serde_char")]
     Char {
         length: i32,
@@ -296,6 +305,90 @@ mod serde_fixed_decimal {
     }
 }
 
+mod serde_geometry {
+    use lazy_static::lazy_static;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use crate::proto::data_type_json::create_regex;
+
+    lazy_static! {
+        static ref GEOMETRY: regex::Regex =
+            create_regex(regex::Regex::new(r"^geometry\(\s*(\d+|ANY)\s*\)$"));
+    }
+
+    pub fn serialize<S>(srid: &i32, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        if *srid == -1 {
+            "geometry(ANY)".serialize(serializer)
+        } else {
+            format!("geometry({})", *srid).serialize(serializer)
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<i32, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        let caps = GEOMETRY
+            .captures(&s)
+            .ok_or_else(|| serde::de::Error::custom(format!("invalid geometry type: {s}")))?;
+        let srid_str = &caps[1];
+        if srid_str == "ANY" {
+            Ok(-1)
+        } else {
+            srid_str.parse().map_err(serde::de::Error::custom)
+        }
+    }
+}
+
+mod serde_geography {
+    use lazy_static::lazy_static;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use crate::proto::data_type_json::create_regex;
+
+    lazy_static! {
+        static ref GEOGRAPHY: regex::Regex = create_regex(regex::Regex::new(
+            r"^geography\(\s*(\d+|ANY)\s*(?:,\s*(\w+)\s*)?\)$"
+        ));
+    }
+
+    pub fn serialize<S>(srid: &i32, algorithm: &str, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        if *srid == -1 {
+            format!("geography(ANY, {})", algorithm).serialize(serializer)
+        } else {
+            format!("geography({}, {})", *srid, algorithm).serialize(serializer)
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<(i32, String), D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        let caps = GEOGRAPHY
+            .captures(&s)
+            .ok_or_else(|| serde::de::Error::custom(format!("invalid geography type: {s}")))?;
+        let srid_str = &caps[1];
+        let srid = if srid_str == "ANY" {
+            -1
+        } else {
+            srid_str.parse().map_err(serde::de::Error::custom)?
+        };
+        let algorithm = caps
+            .get(2)
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_else(|| "spherical".to_string());
+        Ok((srid, algorithm))
+    }
+}
+
 mod serde_day_time_interval {
     use std::str::FromStr;
 
@@ -514,6 +607,26 @@ fn from_spark_json_data_type(data_type: JsonDataType) -> SparkResult<sc::DataTyp
         JsonDataType::Variant => sc::DataType {
             kind: Some(dt::Kind::Variant(dt::Variant::default())),
         },
+        JsonDataType::Geometry { srid } => sc::DataType {
+            kind: Some(dt::Kind::Geometry(dt::Geometry {
+                srid,
+                type_variation_reference: 0,
+            })),
+        },
+        JsonDataType::Geography { srid, algorithm } => {
+            // Validate algorithm: Spark 4.1 only supports "spherical" for Geography
+            if algorithm != "spherical" {
+                return Err(SparkError::invalid(format!(
+                    "Algorithm '{algorithm}' is not valid for GEOGRAPHY. Only 'spherical' is supported in Spark 4.1"
+                )));
+            }
+            sc::DataType {
+                kind: Some(dt::Kind::Geography(dt::Geography {
+                    srid,
+                    type_variation_reference: 0,
+                })),
+            }
+        }
         JsonDataType::Array {
             r#type: _,
             element_type,
@@ -993,6 +1106,60 @@ mod tests {
                             kind: Some(dt::Kind::Integer(dt::Integer::default())),
                         })),
                     }))),
+                },
+            ),
+            (
+                r#""geometry(4326)""#,
+                sc::DataType {
+                    kind: Some(dt::Kind::Geometry(dt::Geometry {
+                        srid: 4326,
+                        type_variation_reference: 0,
+                    })),
+                },
+            ),
+            (
+                r#""geometry(3857)""#,
+                sc::DataType {
+                    kind: Some(dt::Kind::Geometry(dt::Geometry {
+                        srid: 3857,
+                        type_variation_reference: 0,
+                    })),
+                },
+            ),
+            (
+                r#""geometry(0)""#,
+                sc::DataType {
+                    kind: Some(dt::Kind::Geometry(dt::Geometry {
+                        srid: 0,
+                        type_variation_reference: 0,
+                    })),
+                },
+            ),
+            (
+                r#""geometry(ANY)""#,
+                sc::DataType {
+                    kind: Some(dt::Kind::Geometry(dt::Geometry {
+                        srid: -1,
+                        type_variation_reference: 0,
+                    })),
+                },
+            ),
+            (
+                r#""geography(4326, spherical)""#,
+                sc::DataType {
+                    kind: Some(dt::Kind::Geography(dt::Geography {
+                        srid: 4326,
+                        type_variation_reference: 0,
+                    })),
+                },
+            ),
+            (
+                r#""geography(ANY, spherical)""#,
+                sc::DataType {
+                    kind: Some(dt::Kind::Geography(dt::Geography {
+                        srid: -1,
+                        type_variation_reference: 0,
+                    })),
                 },
             ),
         ];

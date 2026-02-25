@@ -365,5 +365,8 @@ pub fn data_type_to_null_literal(data_type: spec::DataType) -> CommonResult<Lite
         spec::DataType::ConfiguredUtf8 { .. } => Ok(Literal::Utf8 { value: None }),
         spec::DataType::ConfiguredBinary => Ok(Literal::Binary { value: None }),
         spec::DataType::UserDefined { sql_type, .. } => data_type_to_null_literal(*sql_type),
+        // Geometry and Geography are stored as WKB-encoded Binary at the Arrow level
+        spec::DataType::Geometry { .. } => Ok(Literal::Binary { value: None }),
+        spec::DataType::Geography { .. } => Ok(Literal::Binary { value: None }),
     }
 }

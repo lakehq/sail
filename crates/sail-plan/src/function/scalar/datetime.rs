@@ -155,6 +155,65 @@ fn date_days_arithmetic(dt1: Expr, dt2: Expr, op: Operator) -> Expr {
     })
 }
 
+fn datediff(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let args = input.arguments;
+    match args.len() {
+        2 => {
+            let [start, end] = <[Expr; 2]>::try_from(args)
+                .map_err(|_| PlanError::invalid("datediff requires 2 or 3 arguments"))?;
+            Ok(date_days_arithmetic(start, end, Operator::Minus))
+        }
+        3 => {
+            let [unit, start, end] = <[Expr; 3]>::try_from(args)
+                .map_err(|_| PlanError::invalid("datediff requires 2 or 3 arguments"))?;
+            let unit_str = match &unit {
+                Expr::Literal(ScalarValue::Utf8(Some(s)), _)
+                | Expr::Literal(ScalarValue::LargeUtf8(Some(s)), _) => s.to_uppercase(),
+                Expr::Column(col) => col.name().to_uppercase(),
+                _ => {
+                    return Err(PlanError::invalid(
+                        "datediff unit must be a string literal or keyword",
+                    ))
+                }
+            };
+            match unit_str.as_str() {
+                "DAY" => Ok(date_days_arithmetic(end, start, Operator::Minus)),
+                "HOUR" | "MINUTE" | "SECOND" | "MONTH" | "YEAR" | "WEEK" | "QUARTER" => {
+                    let start_ts = cast(start, DataType::Timestamp(TimeUnit::Microsecond, None));
+                    let end_ts = cast(end, DataType::Timestamp(TimeUnit::Microsecond, None));
+                    let diff_seconds = cast(
+                        Expr::BinaryExpr(BinaryExpr {
+                            left: Box::new(cast(end_ts, DataType::Int64)),
+                            op: Operator::Minus,
+                            right: Box::new(cast(start_ts, DataType::Int64)),
+                        }),
+                        DataType::Int64,
+                    );
+                    let divisor = match unit_str.as_str() {
+                        "SECOND" => 1_000_000i64,
+                        "MINUTE" => 60_000_000i64,
+                        "HOUR" => 3_600_000_000i64,
+                        "WEEK" => 7 * 24 * 3_600_000_000i64,
+                        "MONTH" => 30 * 24 * 3_600_000_000i64,
+                        "YEAR" => 365 * 24 * 3_600_000_000i64,
+                        "QUARTER" => 91 * 24 * 3_600_000_000i64,
+                        _ => 1i64,
+                    };
+                    Ok(Expr::BinaryExpr(BinaryExpr {
+                        left: Box::new(diff_seconds),
+                        op: Operator::Divide,
+                        right: Box::new(lit(divisor)),
+                    }))
+                }
+                other => Err(PlanError::unsupported(format!("datediff unit: {other}"))),
+            }
+        }
+        n => Err(PlanError::invalid(format!(
+            "datediff requires 2 or 3 arguments, got {n}"
+        ))),
+    }
+}
+
 fn session_timezone(input: &ScalarFunctionInput) -> Expr {
     lit(input
         .function_context
@@ -220,6 +279,19 @@ fn to_unix_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
 }
 
 fn date_format(expr: Expr, format: Expr) -> Expr {
+    // Handle standalone fractional seconds format (e.g., 'SSS' for milliseconds).
+    // Chrono's %.Nf always includes a leading dot (e.g., ".000"), so for standalone
+    // S-patterns we strip the dot using substr.
+    if let Expr::Literal(ref sv, _) = &format {
+        if let Some(Some(fmt)) = sv.try_as_str() {
+            if !fmt.is_empty() && fmt.chars().all(|c| c == 'S') {
+                let n = fmt.len();
+                let chrono_fmt = format!("%.{n}f");
+                let result = expr_fn::to_char(expr, lit(chrono_fmt));
+                return expr_fn::substr(result, lit(2i64));
+            }
+        }
+    }
     let format = to_chrono_fmt(format);
     expr_fn::to_char(expr, format)
 }
@@ -474,10 +546,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             "date_add",
             F::custom(|input| interval_arithmetic(input, "days", Operator::Plus)),
         ),
-        (
-            "date_diff",
-            F::binary(|start, end| date_days_arithmetic(start, end, Operator::Minus)),
-        ),
+        ("date_diff", F::custom(datediff)),
         ("date_format", F::binary(date_format)),
         ("date_from_unix_date", F::cast(DataType::Date32)),
         ("date_part", F::binary(date_part)),
@@ -490,10 +559,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             "dateadd",
             F::custom(|input| interval_arithmetic(input, "days", Operator::Plus)),
         ),
-        (
-            "datediff",
-            F::binary(|start, end| date_days_arithmetic(start, end, Operator::Minus)),
-        ),
+        ("datediff", F::custom(datediff)),
         ("datepart", F::binary(date_part)),
         ("day", F::unary(|arg| integer_part(arg, "DAY"))),
         ("dayname", F::unary(|arg| expr_fn::to_char(arg, lit("%a")))),

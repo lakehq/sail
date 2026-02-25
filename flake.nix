@@ -63,11 +63,11 @@
           };
         };
 
-        # ── Dev shell (unchanged) ─────────────────────────────────────
+        # ── Dev shell ─────────────────────────────────────────────────
         devShells.default = pkgs.mkShell {
           buildInputs =
             (with pkgs; [
-              # Shell utils commonly assumed by scripts
+              # Shell utils
               fzf
               bashInteractive
               coreutils
@@ -79,34 +79,33 @@
               procps
               ripgrep
 
-              # Prereqs from Sail docs
-              protobuf   # protoc
-              nodejs_20
+              # Sail prerequisites
+              protobuf
+              nodejs_22
               pnpm
               zig
               maturin
 
-              # Rust toolchains (stable available; nightly is default)
+              # Rust
               rustStable
               rustNightly
-
               cargo-nextest
               pkg-config
 
-              # Java for Spark
+              # Java (Spark)
               jdk17
 
-              # Tooling for hatch + uv
-              hatch
-              uv
-
-              # Python base for venvs
+              # Python
               py
               pyp.virtualenv
               pyp.setuptools
               pyp.wheel
 
-              # Native deps often needed by Arrow/Spark ecosystems
+              # Other tooling
+              hatch
+              uv
+
+              # Native deps
               arrow-cpp
               openssl
             ])
@@ -118,9 +117,19 @@
             ''
               export RUST_BACKTRACE=1
               export JAVA_HOME=${pkgs.jdk17}
+              export PROTOC="${pkgs.protobuf}/bin/protoc"
 
-              export PYTHONPATH="$PWD/python:$PYTHONPATH"
+              # Clean Python env
+              unset PYTHONHOME
+              unset PYTHONPATH
+
+              # Force PyO3 to exact interpreter
               export PYO3_PYTHON="${py}/bin/python"
+              export PYTHON_SYS_EXECUTABLE="${py}/bin/python"
+              export PYO3_USE_ABI3=0
+              export PKG_CONFIG_PATH="${py}/lib/pkgconfig:$PKG_CONFIG_PATH"
+
+              export PYTHONPATH="$PWD/python"
 
               # Accept `cargo +nightly ...` even without rustup (already on nightly via Nix)
               cargo() {
@@ -130,11 +139,10 @@
                 command cargo "$@"
               }
 
-              # Pretty powerline prompt (Sail ⛵)
               if [ -z "$_NIX_OLD_PS1" ]; then
                 export _NIX_OLD_PS1="$PS1"
               fi
-              export PS1="\[\e[48;5;24m\]\[\e[38;5;231m\]  ⛵ sail  \[\e[0m\] \[\e[38;5;75m\]\w\[\e[0m\] \$ "
+              export PS1="\[\e[48;5;24m\]\[\e[38;5;231m\]  ⛵ sail  \[\e[0m\] \[\e[38;5;75m\]\w\[\e[0m\] \$ "
 
               # Enable fzf keybindings (Ctrl-R, Ctrl-T, Alt-C)
               if [ -e "${pkgs.fzf}/share/fzf/key-bindings.bash" ]; then
@@ -143,6 +151,37 @@
               if [ -e "${pkgs.fzf}/share/fzf/completion.bash" ]; then
                 source "${pkgs.fzf}/share/fzf/completion.bash"
               fi
+
+              echo ""
+              echo -e "\033[1;36m=== Sail Development Commands ===\033[0m"
+              echo ""
+              echo "hatch run maturin develop"
+              echo "hatch run test-spark.spark-4.1.1:pip install 'pyspark[connect]==4.1.1' 'pandas'"
+              echo "hatch run test-spark.spark-4.1.1:bash scripts/spark-tests/run-tests.sh"
+              echo "export SPARK_REMOTE=\"sc://localhost:50051\" && hatch run pytest --pyargs pysail"
+              echo ""
+              echo "env RUST_LOG=\"DEBUG\" SAIL_EXECUTION__DEFAULT_PARALLELISM=4 cargo run -p sail-cli -- spark server"
+              echo ""
+              echo -e "\033[1;32m✓ Ibis test data ready at opt/ibis-testing-data\033[0m"
+              echo ""
+              echo -e "\033[1;33m1. Run Sail server (port 50051):\033[0m"
+              echo "   hatch run test-ibis:scripts/spark-tests/run-server.sh"
+              echo ""
+              echo -e "\033[1;33m2. Run Ibis tests (against Sail server on localhost:50051):\033[0m"
+              echo "   hatch run test-ibis:env SPARK_REMOTE=\"sc://localhost:50051\" scripts/spark-tests/run-tests.sh"
+              echo ""
+              echo -e "\033[1;33m3. Run feature tests (BDD with pytest-bdd):\033[0m"
+              echo "   hatch run pytest python/pysail/tests/spark/*/test_features.py"
+              echo ""
+              echo -e "\033[1;33m4. Run all tests (against Sail server on localhost:50051):\033[0m"
+              echo "   env SPARK_REMOTE=\"sc://localhost:50051\" hatch run pytest --pyargs pysail"
+              echo ""
+              echo -e "\033[1;33m5. Run tests with Spark local (not Sail):\033[0m"
+              echo "   env SPARK_REMOTE=\"local\" hatch run pytest --pyargs pysail"
+              echo ""
+              echo -e "\033[1;33m6. Run only function feature tests:\033[0m"
+              echo "   export SPARK_REMOTE=\"sc://localhost:50051\" && hatch run pytest python/pysail/tests/spark/function/test_features.py"
+              echo ""
             ''
             + lib.optionalString isLinux ''
               export ARROW_LIB_DIR=${pkgs.arrow-cpp}/lib
