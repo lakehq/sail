@@ -56,3 +56,41 @@ Feature: COUNT(DISTINCT *) function
       Then query result
         | count(DISTINCT MyCol, UPPER_COL) |
         | 2                                |
+
+  Rule: COUNT(DISTINCT *) with NULLs
+
+    Scenario: count distinct star skips rows where any column is null
+      When query
+        """
+        SELECT COUNT(DISTINCT *) FROM VALUES (1, 'a'), (NULL, 'b'), (1, 'a') AS t(a, b)
+        """
+      Then query result
+        | count(DISTINCT a, b) |
+        | 1                    |
+
+    Scenario: count distinct star all nulls returns zero
+      When query
+        """
+        SELECT COUNT(DISTINCT *) FROM VALUES (NULL, NULL), (NULL, NULL) AS t(a, b)
+        """
+      Then query result
+        | count(DISTINCT a, b) |
+        | 0                    |
+
+    Scenario: count distinct star with some null columns
+      When query
+        """
+        SELECT COUNT(DISTINCT *) FROM VALUES (1, NULL), (2, NULL), (1, NULL) AS t(a, b)
+        """
+      Then query result
+        | count(DISTINCT a, b) |
+        | 0                    |
+
+    Scenario: count distinct star mixed nulls and values
+      When query
+        """
+        SELECT COUNT(DISTINCT *) FROM VALUES (1, 'a'), (1, NULL), (2, 'b'), (2, 'b'), (NULL, NULL) AS t(a, b)
+        """
+      Then query result
+        | count(DISTINCT a, b) |
+        | 2                    |
