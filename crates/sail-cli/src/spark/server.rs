@@ -56,13 +56,9 @@ pub fn run_spark_connect_server(
             let flight_config = Arc::clone(&config);
             let flight_handle = handle.clone();
             tokio::spawn(async move {
-                if let Err(e) = sail_flight::serve(
-                    flight_listener,
-                    shutdown(),
-                    flight_config,
-                    flight_handle,
-                )
-                .await
+                if let Err(e) =
+                    sail_flight::serve(flight_listener, shutdown(), flight_config, flight_handle)
+                        .await
                 {
                     log::error!("Flight SQL server error: {e:?}");
                 }

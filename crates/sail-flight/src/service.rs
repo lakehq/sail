@@ -151,7 +151,6 @@ impl SailFlightSqlService {
     // Metrics helpers
     // =========================================================================
 
-
     /// Record query execution metrics
     fn record_query_metrics(
         &self,
@@ -205,7 +204,6 @@ impl SailFlightSqlService {
         }
     }
 
-
     /// Helper to convert schemas to IPC format for Flight SQL protocol
     ///
     /// Returns a tuple of (dataset_schema_bytes, parameter_schema_bytes)
@@ -228,7 +226,6 @@ impl SailFlightSqlService {
 
         Ok((dataset_schema_data.0, param_schema_data.0))
     }
-
 
     /// Execute SQL using Sail's full pipeline (parser + resolver + executor)
     ///

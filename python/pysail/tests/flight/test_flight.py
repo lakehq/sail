@@ -1,5 +1,6 @@
 import os
 
+import adbc_driver_manager
 import pytest
 from adbc_driver_flightsql import dbapi
 

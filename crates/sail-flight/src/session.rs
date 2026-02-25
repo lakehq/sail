@@ -78,7 +78,9 @@ pub fn create_flight_session_manager(
         })
     };
     let options = SessionManagerOptions::new(runtime.clone(), system, factory)
-        .with_session_timeout(std::time::Duration::from_secs(config.spark.session_timeout_secs));
+        .with_session_timeout(std::time::Duration::from_secs(
+            config.spark.session_timeout_secs,
+        ));
     SessionManager::try_new(options).map_err(|e| {
         FlightError::Internal(internal_datafusion_err!(
             "Failed to create session manager: {}",

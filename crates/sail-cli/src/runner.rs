@@ -65,10 +65,7 @@ enum SparkCommand {
             help = "The port number that the server listens on"
         )]
         port: u16,
-        #[arg(
-            long,
-            help = "Also start the Arrow Flight SQL server on this port"
-        )]
+        #[arg(long, help = "Also start the Arrow Flight SQL server on this port")]
         flight_port: Option<u16>,
         #[arg(
             short = 'C',
