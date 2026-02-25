@@ -102,6 +102,9 @@ dependencies = [
     "jedi>=0.19.2,<0.20",
     "jsonpath-ng>=1.6,<2",
     "PyYAML>=6.0,<7",
+    "pyarrow>=19.0,<20",
+    "adbc-driver-flightsql>=1.0,<2",
+    "adbc-driver-manager>=1.0,<2",
     "moto[glue]>=5,<6",
     "testcontainers>=4,<5",
 ]
@@ -151,6 +154,9 @@ dependencies = [
     "jedi>=0.19.2,<0.20",
     "jsonpath-ng>=1.6,<2",
     "PyYAML>=6.0,<7",
+    "pyarrow>=19.0,<20",
+    "adbc-driver-flightsql>=1.0,<2",
+    "adbc-driver-manager>=1.0,<2",
     "moto[glue]>=5,<6",
     "testcontainers>=4,<5",
 ]

@@ -1,0 +1,33 @@
+[package]
+name = "sail-flight"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+sail-common = { path = "../sail-common" }
+sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-catalog = { path = "../sail-catalog" }
+sail-catalog-memory = { path = "../sail-catalog-memory" }
+sail-plan = { path = "../sail-plan" }
+sail-server = { path = "../sail-server" }
+sail-sql-analyzer = { path = "../sail-sql-analyzer" }
+sail-sql-parser = { path = "../sail-sql-parser" }
+sail-session = { path = "../sail-session" }
+sail-telemetry = { path = "../sail-telemetry" }
+
+arrow = { workspace = true }
+arrow-flight = { workspace = true }
+datafusion = { workspace = true }
+tokio = { workspace = true }
+tonic = { workspace = true }
+tonic-health = { workspace = true }
+futures = { workspace = true }
+prost = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+
+[build-dependencies]
+tonic-build = { workspace = true }

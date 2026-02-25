@@ -23,10 +23,14 @@ use tokio::net::TcpListener;
 ///   - [2] https://github.com/PyO3/pyo3/issues/3218
 async fn shutdown() {
     let _ = tokio::signal::ctrl_c().await;
-    info!("Shutting down the Spark Connect server...");
+    info!("Shutting down...");
 }
 
-pub fn run_spark_connect_server(ip: IpAddr, port: u16) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run_spark_connect_server(
+    ip: IpAddr,
+    port: u16,
+    flight_port: Option<u16>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let config = Arc::new(AppConfig::load()?);
     let runtime = RuntimeManager::try_new(&config.runtime)?;
 
@@ -37,12 +41,31 @@ pub fn run_spark_connect_server(ip: IpAddr, port: u16) -> Result<(), Box<dyn std
 
     let handle = runtime.handle();
     runtime.handle().primary().block_on(async {
-        // A secure connection can be handled by a gateway in production.
         let listener = TcpListener::bind((ip, port)).await?;
         info!(
             "Starting the Spark Connect server on {}...",
             listener.local_addr()?
         );
+
+        if let Some(flight_port) = flight_port {
+            let flight_listener = TcpListener::bind((ip, flight_port)).await?;
+            info!(
+                "Starting the Flight SQL server on {}...",
+                flight_listener.local_addr()?
+            );
+            let flight_config = Arc::clone(&config);
+            let flight_handle = handle.clone();
+            tokio::spawn(async move {
+                if let Err(e) =
+                    sail_flight::serve(flight_listener, shutdown(), flight_config, flight_handle)
+                        .await
+                {
+                    log::error!("Flight SQL server error: {e:?}");
+                }
+                info!("The Flight SQL server has stopped.");
+            });
+        }
+
         serve(listener, shutdown(), config, handle).await?;
         info!("The Spark Connect server has stopped.");
         <Result<(), Box<dyn std::error::Error>>>::Ok(())
