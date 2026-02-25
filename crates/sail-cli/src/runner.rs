@@ -43,6 +43,11 @@ enum SparkCommand {
             help = "The directory to change to before starting the server"
         )]
         directory: Option<String>,
+        #[arg(
+            long,
+            help = "gRPC endpoint of a remote Arrow Flight plugin server (e.g. grpc://localhost:50052)"
+        )]
+        plugin_endpoint: Vec<String>,
     },
     #[command(
         about = "Start the PySpark shell with a Spark Connect server running in the background"
@@ -98,11 +103,12 @@ pub fn main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
                 ip,
                 port,
                 directory,
+                plugin_endpoint,
             } => {
                 if let Some(directory) = directory {
                     std::env::set_current_dir(directory)?;
                 }
-                run_spark_connect_server(ip.parse()?, port)
+                run_spark_connect_server(ip.parse()?, port, plugin_endpoint)
             }
             SparkCommand::Shell => {
                 // TODO: Why is there warning about leaked semaphore objects

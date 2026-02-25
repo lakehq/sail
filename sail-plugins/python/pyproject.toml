@@ -1,0 +1,18 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sail-plugin"
+version = "0.1.0"
+description = "SDK for writing Sail plugins in Python via Arrow Flight"
+requires-python = ">=3.9"
+license = "Apache-2.0"
+dependencies = [
+    "pyarrow>=14.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]

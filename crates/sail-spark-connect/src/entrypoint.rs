@@ -18,11 +18,12 @@ pub async fn serve<F>(
     signal: F,
     config: Arc<AppConfig>,
     runtime: RuntimeHandle,
+    plugin_endpoints: Vec<String>,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
     F: Future<Output = ()>,
 {
-    let session_manager = create_spark_session_manager(config, runtime)?;
+    let session_manager = create_spark_session_manager(config, runtime, plugin_endpoints).await?;
     let server = SparkConnectServer::new(session_manager);
     let service = SparkConnectServiceServer::new(server)
         // The original Spark Connect server seems to have configuration for inbound (decoding) message size only.

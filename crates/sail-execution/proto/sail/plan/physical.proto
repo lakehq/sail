@@ -76,7 +76,13 @@ message ExtendedScalarUdf {
     TimestampNowUdf timestamp_now = 9;
     SparkTimestampUdf spark_timestamp = 10;
     SparkDateUdf spark_date = 11;
+    RemotePluginUdf remote_plugin = 12;
   }
+}
+
+message RemotePluginUdf {
+  string name = 1;
+  string endpoint = 2;
 }
 
 message ExtendedStreamUdf {

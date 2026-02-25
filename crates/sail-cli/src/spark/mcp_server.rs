@@ -55,7 +55,7 @@ fn run_spark_connect_server(
         let port = listener.local_addr()?.port();
         let task = async move {
             info!("Starting the Spark Connect server on port {port}...");
-            let _ = serve(listener, shutdown(), config, handle).await;
+            let _ = serve(listener, shutdown(), config, handle, vec![]).await;
             info!("The Spark Connect server has stopped.");
         };
         <Result<_, Box<dyn std::error::Error>>>::Ok((port, task))
