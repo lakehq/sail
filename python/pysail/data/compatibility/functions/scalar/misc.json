@@ -53,15 +53,13 @@
     "module": "pyspark.sql.functions",
     "function": "from_avro",
     "status": "planned",
-    "note": "Spark SQL only; not available in PySpark",
-    "ref": "???"
+    "note": "This is Spark SQL only (not available in PySpark)."
   },
   {
     "module": "pyspark.sql.functions",
     "function": "from_protobuf",
     "status": "planned",
-    "note": "Spark SQL only; not available in PySpark",
-    "ref": "???"
+    "note": "This is Spark SQL only (not available in PySpark)."
   },
   {
     "module": "pyspark.sql.functions",
@@ -96,14 +94,14 @@
   {
     "module": "pyspark.sql.functions",
     "function": "java_method",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/507"
+    "status": "not supported",
+    "ref": "https://github.com/lakehq/sail/issues/507",
+    "note": "This is specific to the Java implementation."
   },
   {
     "module": "pyspark.sql.functions",
     "function": "monotonically_increasing_id",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/507"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
@@ -113,15 +111,15 @@
   {
     "module": "pyspark.sql.functions",
     "function": "reflect",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/507"
+    "status": "not supported",
+    "ref": "https://github.com/lakehq/sail/issues/507",
+    "note": "This is specific to the Java implementation."
   },
   {
     "module": "pyspark.sql.functions",
     "function": "schema_of_avro",
     "status": "planned",
-    "note": "Spark SQL only; not available in PySpark",
-    "ref": "???"
+    "note": "This is Spark SQL only (not available in PySpark)."
   },
   {
     "module": "pyspark.sql.functions",
@@ -138,15 +136,13 @@
     "module": "pyspark.sql.functions",
     "function": "to_avro",
     "status": "planned",
-    "note": "Spark SQL only; not available in PySpark",
-    "ref": "???"
+    "note": "This is Spark SQL only (not available in PySpark)."
   },
   {
     "module": "pyspark.sql.functions",
     "function": "to_protobuf",
     "status": "planned",
-    "note": "Spark SQL only; not available in PySpark",
-    "ref": "???"
+    "note": "This is Spark SQL only (not available in PySpark)."
   },
   {
     "module": "pyspark.sql.functions",
@@ -157,13 +153,13 @@
     "module": "pyspark.sql.functions",
     "function": "try_aes_encrypt",
     "status": "supported",
-    "note": "Sail exclusive; not available in PySpark or Spark SQL"
+    "note": "This is Sail exclusive (not available in PySpark or Spark SQL)."
   },
   {
     "module": "pyspark.sql.functions",
     "function": "try_reflect",
     "status": "not supported",
-    "note": "Java specific"
+    "note": "This is specific to the Java implementation."
   },
   {
     "module": "pyspark.sql.functions",

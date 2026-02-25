@@ -113,6 +113,10 @@ impl PlanResolver<'_> {
                     .await?
             }
             QueryNode::Sample(sample) => self.resolve_query_sample(sample, state).await?,
+            QueryNode::TableSample { input, sample } => {
+                let plan = self.resolve_query_plan(*input, state).await?;
+                self.apply_table_sample(plan, sample, state).await?
+            }
             QueryNode::Deduplicate(deduplicate) => {
                 self.resolve_query_deduplicate(deduplicate, state).await?
             }
