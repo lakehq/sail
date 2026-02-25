@@ -16,7 +16,7 @@ use crate::ast::keywords::{
     Ilike, In, Interval, Is, Last, Leading, Like, Microsecond, Microseconds, Millisecond,
     Milliseconds, Minute, Minutes, Month, Months, Not, Null, Nulls, Or, Order, Over, Overlay,
     Placing, Position, Preceding, Range, Regexp, Respect, Rlike, Rollup, Row, Rows, Second,
-    Seconds, Sets, Similar, Struct, Substr, Substring, Table, Then, Timestamp, TimestampLtz,
+    Seconds, Sets, Similar, Struct, Substr, Substring, Table, Then, Time, Timestamp, TimestampLtz,
     TimestampNtz, To, Trailing, Trim, True, TryCast, Unbounded, Unknown, Week, Weeks, When, Where,
     Within, Year, Years,
 };
@@ -226,6 +226,7 @@ pub enum AtomExpr {
     TimestampLtzLiteral(TimestampLtz, StringLiteral),
     TimestampNtzLiteral(TimestampNtz, StringLiteral),
     DateLiteral(Date, StringLiteral),
+    TimeLiteral(Time, StringLiteral),
     Null(Null),
     Interval(
         Interval,
