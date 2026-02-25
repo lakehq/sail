@@ -1528,6 +1528,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkDate(gen::SparkDateUdf { is_try }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkDate::new(is_try))));
             }
+            UdfKind::SparkFromCsv(gen::SparkFromCsvUdf { session_timezone }) => {
+                let udf = SparkFromCSV::new(Arc::from(session_timezone));
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
         };
         match name {
             "array_item_with_position" => {
@@ -1559,7 +1563,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_concat" | "concat" | "array_concat" => {
                 Ok(Arc::new(ScalarUDF::from(SparkConcat::new())))
             }
-            "spark_from_csv" | "from_csv" => Ok(Arc::new(ScalarUDF::from(SparkFromCSV::new()))),
+            "spark_from_csv" | "from_csv" => Ok(Arc::new(ScalarUDF::from(SparkFromCSV::default()))),
             "spark_to_number" | "to_number" => Ok(Arc::new(ScalarUDF::from(SparkToNumber::new()))),
             "spark_try_to_number" | "try_to_number" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryToNumber::new())))
@@ -1856,6 +1860,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkDate>() {
             let is_try = func.is_try();
             UdfKind::SparkDate(gen::SparkDateUdf { is_try })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkFromCSV>() {
+            let session_timezone = func.session_timezone().to_string();
+            UdfKind::SparkFromCsv(gen::SparkFromCsvUdf { session_timezone })
         } else {
             return Ok(());
         };

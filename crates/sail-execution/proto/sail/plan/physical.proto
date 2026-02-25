@@ -76,6 +76,7 @@ message ExtendedScalarUdf {
     TimestampNowUdf timestamp_now = 9;
     SparkTimestampUdf spark_timestamp = 10;
     SparkDateUdf spark_date = 11;
+    SparkFromCsvUdf spark_from_csv = 12;
   }
 }
 
@@ -152,6 +153,10 @@ message SparkTimestampUdf {
 
 message SparkDateUdf {
   bool is_try = 1;
+}
+
+message SparkFromCsvUdf {
+  string session_timezone = 1;
 }
 
 message StandardUdaf {}

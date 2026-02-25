@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use chrono::prelude::*;
-use chrono::ParseError;
+use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::*;
 use datafusion::error::{DataFusionError, Result};
@@ -16,11 +16,14 @@ use sail_common::spec::{
     self, SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME,
     SAIL_MAP_VALUE_FIELD_NAME,
 };
+use sail_common_datafusion::utils::datetime::localize_with_fallback;
 use sail_sql_analyzer::data_type::from_ast_data_type;
 use sail_sql_analyzer::parser as sail_parser;
 
 use crate::functions_nested_utils::*;
 use crate::functions_utils::make_scalar_function;
+
+const DEFAULT_SESSION_TIMEZONE: &str = "UTC";
 
 /// UDF implementation of `from_csv`, similar to Spark's `from_csv`.
 /// This function parses a column of CSV entries using a specified schema string
@@ -34,6 +37,7 @@ use crate::functions_utils::make_scalar_function;
 ///   This may include a "sep" field to specify a custom separator, with the default being a comma (",").
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkFromCSV {
+    session_timezone: Arc<str>,
     signature: Signature,
 }
 
@@ -95,21 +99,29 @@ impl Default for SparkFromCSVOptions {
 
 impl Default for SparkFromCSV {
     fn default() -> Self {
-        Self::new()
+        Self::new(Arc::from(DEFAULT_SESSION_TIMEZONE))
     }
 }
 
 impl SparkFromCSV {
     pub const FROM_CSV_NAME: &'static str = "from_csv";
 
-    /// Constructor for the UDF
-    pub fn new() -> Self {
+    /// Constructor for the UDF.
+    ///
+    /// `session_timezone` is the Spark session timezone (e.g. `"UTC"`, `"Asia/Shanghai"`).
+    /// It is used to interpret bare `TIMESTAMP` (LTZ) strings that carry no explicit offset.
+    pub fn new(session_timezone: Arc<str>) -> Self {
         Self {
+            session_timezone,
             // - The first element is a `StringArray` containing CSV-formatted values.
             // - The second element is a `StringArray` representing the schema associated with the CSV data.
             // - Optionally, the third element is a `MapArray` containing options related to CSV parsing.
             signature: Signature::user_defined(Volatility::Immutable),
         }
+    }
+
+    pub fn session_timezone(&self) -> &str {
+        &self.session_timezone
     }
 }
 
@@ -152,14 +164,18 @@ impl ScalarUDFImpl for SparkFromCSV {
             );
         };
 
-        let dt: DataType = DataType::Struct(parse_fields(schema)?);
+        let dt: DataType = DataType::Struct(parse_fields(schema, &self.session_timezone)?);
         Ok(Arc::new(Field::new(self.name(), dt, true)))
     }
 
     /// Executes the function with given arguments and produces the resulting array
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let session_timezone = self.session_timezone.to_string();
         let ScalarFunctionArgs { args, .. } = args;
-        make_scalar_function(spark_from_csv_inner, vec![])(&args)
+        make_scalar_function(
+            move |inner_args| spark_from_csv_inner(inner_args, session_timezone.as_str()),
+            vec![],
+        )(&args)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -204,7 +220,7 @@ impl ScalarUDFImpl for SparkFromCSV {
 /// - The number of arguments is incorrect (not 2 or 3).
 /// - Schema parsing fails due to errors in the schema string.
 /// - CSV line parsing fails, such as when field count mismatches or data type conversion errors occur.
-fn spark_from_csv_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn spark_from_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<ArrayRef> {
     if args.len() < 2 || args.len() > 3 {
         return exec_err!(
             "`{}` function requires 2 or 3 arguments, got {}",
@@ -230,7 +246,7 @@ fn spark_from_csv_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         SparkFromCSVOptions::default()
     };
 
-    let fields: Fields = parse_fields(schema_str)?;
+    let fields: Fields = parse_fields(schema_str, session_timezone)?;
 
     let mut children_scalars: Vec<Vec<ScalarValue>> =
         vec![Vec::with_capacity(array.len()); fields.len()];
@@ -342,17 +358,59 @@ fn parse_timestamp(
     value: &str,
     options: &SparkFromCSVOptions,
 ) -> Result<ScalarValue> {
-    let format: &String = &options.timestamp_format;
-    let datetime: std::result::Result<String, ParseError> = if let Ok(datetime) =
-        NaiveDateTime::parse_from_str(value, format).map(|datetime| format!("{datetime}"))
-    {
-        Ok(datetime)
-    } else {
-        NaiveDate::parse_from_str(value, format).map(|date| format!("{date}"))
+    let (time_unit, timezone) = match data_type {
+        DataType::Timestamp(time_unit, timezone) => (*time_unit, timezone.clone()),
+        _ => {
+            return exec_err!(
+                "Expected timestamp data type for CSV timestamp parsing, got {data_type:?}"
+            );
+        }
     };
-    match datetime {
-        Ok(datetime) => ScalarValue::try_from_string(datetime, data_type),
-        Err(e) => exec_err!("Failed to parse timestamp: {}", e),
+
+    let format = options.timestamp_format.as_str();
+    let naive_datetime = if let Ok(datetime) = NaiveDateTime::parse_from_str(value, format) {
+        datetime
+    } else if let Ok(date) = NaiveDate::parse_from_str(value, format) {
+        // `from_csv` accepts date-only inputs for timestamp columns.
+        let Some(datetime) = date.and_hms_opt(0, 0, 0) else {
+            return exec_err!("Failed to parse timestamp '{value}': invalid date");
+        };
+        datetime
+    } else {
+        return exec_err!("Failed to parse timestamp '{value}' with format '{format}'");
+    };
+
+    let utc_datetime = if let Some(tz) = timezone.as_ref() {
+        let tz: Tz = tz
+            .as_ref()
+            .parse()
+            .map_err(|e| DataFusionError::Execution(format!("Invalid timezone '{tz}': {e}")))?;
+        localize_with_fallback(&tz, &naive_datetime)?
+    } else {
+        naive_datetime.and_utc()
+    };
+
+    match time_unit {
+        TimeUnit::Second => Ok(ScalarValue::TimestampSecond(
+            Some(utc_datetime.timestamp()),
+            timezone,
+        )),
+        TimeUnit::Millisecond => Ok(ScalarValue::TimestampMillisecond(
+            Some(utc_datetime.timestamp_millis()),
+            timezone,
+        )),
+        TimeUnit::Microsecond => Ok(ScalarValue::TimestampMicrosecond(
+            Some(utc_datetime.timestamp_micros()),
+            timezone,
+        )),
+        TimeUnit::Nanosecond => {
+            let nanos = utc_datetime.timestamp_nanos_opt().ok_or_else(|| {
+                DataFusionError::Execution(format!(
+                    "Failed to parse timestamp '{value}': value out of range for nanoseconds"
+                ))
+            })?;
+            Ok(ScalarValue::TimestampNanosecond(Some(nanos), timezone))
+        }
     }
 }
 
@@ -375,7 +433,7 @@ fn parse_timestamp(
 /// # Errors
 /// Returns an error if the schema string is invalid, such as if it contains
 /// duplicate field names or uses an unsupported field type syntax.
-fn parse_fields(schema: &str) -> Result<Fields> {
+fn parse_fields(schema: &str, session_timezone: &str) -> Result<Fields> {
     let schema = schema.trim();
     let type_str = if schema
         .get(..6)
@@ -408,7 +466,7 @@ fn parse_fields(schema: &str) -> Result<Fields> {
                 "Duplicate field name '{name}'"
             )));
         }
-        let dt = spec_to_arrow_data_type(&f.data_type)?;
+        let dt = spec_to_arrow_data_type(&f.data_type, session_timezone)?;
         out.push(Arc::new(Field::new(name, dt, f.nullable)));
     }
     Ok(Fields::from(out))
@@ -416,21 +474,18 @@ fn parse_fields(schema: &str) -> Result<Fields> {
 
 /// Parses a raw SQL type string into an Arrow `DataType`.
 pub fn parse_data_type(raw: &str) -> Result<DataType> {
-    if raw.trim().eq_ignore_ascii_case("timestamp") {
-        return Ok(DataType::Timestamp(
-            TimeUnit::Nanosecond,
-            Some(Arc::from("UTC")),
-        ));
-    }
+    parse_data_type_with_session_timezone(raw, DEFAULT_SESSION_TIMEZONE)
+}
 
+fn parse_data_type_with_session_timezone(raw: &str, session_timezone: &str) -> Result<DataType> {
     let ast = sail_parser::parse_data_type(raw)
         .map_err(|e| DataFusionError::Plan(format!("Failed to parse SQL type '{raw}': {e}")))?;
     let spec_dt = from_ast_data_type(ast)
         .map_err(|e| DataFusionError::Plan(format!("Failed to analyze SQL type '{raw}': {e}")))?;
-    spec_to_arrow_data_type(&spec_dt)
+    spec_to_arrow_data_type(&spec_dt, session_timezone)
 }
 
-fn spec_to_arrow_data_type(dt: &spec::DataType) -> Result<DataType> {
+fn spec_to_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Result<DataType> {
     use spec::DataType as SDT;
 
     fn to_time_unit(unit: &spec::TimeUnit) -> TimeUnit {
@@ -468,13 +523,15 @@ fn spec_to_arrow_data_type(dt: &spec::DataType) -> Result<DataType> {
         SDT::Timestamp {
             time_unit,
             timestamp_type,
-        } => {
-            let _ = (time_unit, timestamp_type);
-            Ok(DataType::Timestamp(
-                TimeUnit::Nanosecond,
-                Some(Arc::from("UTC")),
-            ))
-        }
+        } => Ok(DataType::Timestamp(
+            to_time_unit(time_unit),
+            match timestamp_type {
+                spec::TimestampType::Configured | spec::TimestampType::WithLocalTimeZone => {
+                    Some(Arc::from(session_timezone))
+                }
+                spec::TimestampType::WithoutTimeZone => None,
+            },
+        )),
         SDT::Time32 { time_unit: u } => Ok(DataType::Time32(to_time_unit(u))),
         SDT::Time64 { time_unit: u } => Ok(DataType::Time64(to_time_unit(u))),
         SDT::Duration { time_unit: u } => Ok(DataType::Duration(to_time_unit(u))),
@@ -490,7 +547,7 @@ fn spec_to_arrow_data_type(dt: &spec::DataType) -> Result<DataType> {
             nullable,
         } => Ok(DataType::List(Arc::new(Field::new(
             SAIL_LIST_FIELD_NAME,
-            spec_to_arrow_data_type(data_type.as_ref())?,
+            spec_to_arrow_data_type(data_type.as_ref(), session_timezone)?,
             *nullable,
         )))),
         SDT::FixedSizeList {
@@ -500,7 +557,7 @@ fn spec_to_arrow_data_type(dt: &spec::DataType) -> Result<DataType> {
         } => Ok(DataType::FixedSizeList(
             Arc::new(Field::new(
                 SAIL_LIST_FIELD_NAME,
-                spec_to_arrow_data_type(data_type.as_ref())?,
+                spec_to_arrow_data_type(data_type.as_ref(), session_timezone)?,
                 *nullable,
             )),
             *length,
@@ -510,7 +567,7 @@ fn spec_to_arrow_data_type(dt: &spec::DataType) -> Result<DataType> {
             nullable,
         } => Ok(DataType::LargeList(Arc::new(Field::new(
             SAIL_LIST_FIELD_NAME,
-            spec_to_arrow_data_type(data_type.as_ref())?,
+            spec_to_arrow_data_type(data_type.as_ref(), session_timezone)?,
             *nullable,
         )))),
         SDT::Struct { fields } => {
@@ -518,7 +575,7 @@ fn spec_to_arrow_data_type(dt: &spec::DataType) -> Result<DataType> {
             for f in fields.iter() {
                 out.push(Arc::new(Field::new(
                     f.name.clone(),
-                    spec_to_arrow_data_type(&f.data_type)?,
+                    spec_to_arrow_data_type(&f.data_type, session_timezone)?,
                     f.nullable,
                 )));
             }
@@ -533,12 +590,12 @@ fn spec_to_arrow_data_type(dt: &spec::DataType) -> Result<DataType> {
             let fields = Fields::from(vec![
                 Arc::new(Field::new(
                     SAIL_MAP_KEY_FIELD_NAME,
-                    spec_to_arrow_data_type(key_type.as_ref())?,
+                    spec_to_arrow_data_type(key_type.as_ref(), session_timezone)?,
                     false,
                 )),
                 Arc::new(Field::new(
                     SAIL_MAP_VALUE_FIELD_NAME,
-                    spec_to_arrow_data_type(value_type.as_ref())?,
+                    spec_to_arrow_data_type(value_type.as_ref(), session_timezone)?,
                     *value_type_nullable,
                 )),
             ]);
@@ -614,7 +671,7 @@ mod tests {
         let schema_str = Arc::new(StringArray::from(vec!["name STRING, age INT"])) as ArrayRef;
 
         // Execute the function with CSV column and schema
-        let result = spark_from_csv_inner(&[input_array, schema_str])?;
+        let result = spark_from_csv_inner(&[input_array, schema_str], DEFAULT_SESSION_TIMEZONE)?;
 
         // Downcast the result to a StructArray
         let struct_array = result.as_any().downcast_ref::<StructArray>();
@@ -709,7 +766,7 @@ mod tests {
         let schema_str = Arc::new(StringArray::from(vec![
             "price DECIMAL(5,2), created TIMESTAMP",
         ])) as ArrayRef;
-        let result = spark_from_csv_inner(&[input_array, schema_str])?;
+        let result = spark_from_csv_inner(&[input_array, schema_str], DEFAULT_SESSION_TIMEZONE)?;
 
         let struct_array: &StructArray = downcast_option!(
             result.as_any().downcast_ref::<StructArray>(),
@@ -731,16 +788,39 @@ mod tests {
         assert!(price_array.is_null(3));
         assert_eq!(price_array.value(4), 777);
 
-        let ts_array: &TimestampNanosecondArray = downcast_option!(
+        let ts_array: &TimestampMicrosecondArray = downcast_option!(
             struct_array.column_by_name("created"),
-            TimestampNanosecondArray,
+            TimestampMicrosecondArray,
             "Expected `created` field not found"
         );
-        assert_eq!(ts_array.value(0), 1672531200000000000);
-        assert_eq!(ts_array.value(1), 1715010300000000000);
+        assert_eq!(ts_array.value(0), 1672531200000000);
+        assert_eq!(ts_array.value(1), 1715010300000000);
         assert!(ts_array.is_null(2));
-        assert_eq!(ts_array.value(3), 1735732800000000000);
+        assert_eq!(ts_array.value(3), 1735732800000000);
         assert!(ts_array.is_null(4));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_from_csv_timestamp_uses_session_timezone() -> Result<()> {
+        let csv_data = vec![Some("1970-01-01 00:00:00")];
+        let input_array = Arc::new(StringArray::from(csv_data)) as ArrayRef;
+        let schema_str = Arc::new(StringArray::from(vec!["created TIMESTAMP"])) as ArrayRef;
+        let result = spark_from_csv_inner(&[input_array, schema_str], "Asia/Shanghai")?;
+
+        let struct_array: &StructArray = downcast_option!(
+            result.as_any().downcast_ref::<StructArray>(),
+            StructArray,
+            "Expected StructArray"
+        );
+        let ts_array: &TimestampMicrosecondArray = downcast_option!(
+            struct_array.column_by_name("created"),
+            TimestampMicrosecondArray,
+            "Expected `created` field not found"
+        );
+        assert_eq!(ts_array.timezone(), Some("Asia/Shanghai"));
+        assert_eq!(ts_array.value(0), -28_800_000_000);
 
         Ok(())
     }
@@ -789,8 +869,31 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_data_type_timestamp_respects_time_unit_and_timezone() -> Result<()> {
+        let dt = parse_data_type("TIMESTAMP")?;
+        assert_eq!(
+            dt,
+            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC")))
+        );
+
+        let dt = parse_data_type_with_session_timezone("TIMESTAMP(3)", "Asia/Shanghai")?;
+        assert_eq!(
+            dt,
+            DataType::Timestamp(TimeUnit::Millisecond, Some(Arc::from("Asia/Shanghai")))
+        );
+
+        let dt = parse_data_type_with_session_timezone("TIMESTAMP_NTZ(9)", "Asia/Shanghai")?;
+        assert_eq!(dt, DataType::Timestamp(TimeUnit::Nanosecond, None));
+
+        Ok(())
+    }
+
+    #[test]
     fn test_parse_fields_nested_struct() -> Result<()> {
-        let fields = parse_fields("id INT, addr STRUCT<city STRING, zip INT>")?;
+        let fields = parse_fields(
+            "id INT, addr STRUCT<city STRING, zip INT>",
+            DEFAULT_SESSION_TIMEZONE,
+        )?;
         assert_eq!(fields.len(), 2);
         assert_eq!(fields[0].name(), "id");
         assert_eq!(fields[0].data_type(), &DataType::Int32);
@@ -814,7 +917,7 @@ mod tests {
         let schema_str = Arc::new(StringArray::from(vec![
             "id INT, tags ARRAY<INT>, m MAP<STRING, INT>",
         ])) as ArrayRef;
-        let result = spark_from_csv_inner(&[input_array, schema_str])?;
+        let result = spark_from_csv_inner(&[input_array, schema_str], DEFAULT_SESSION_TIMEZONE)?;
 
         let struct_array: &StructArray = downcast_option!(
             result.as_any().downcast_ref::<StructArray>(),
@@ -844,7 +947,7 @@ mod tests {
         let schema_str = Arc::new(StringArray::from(vec![
             "id INT, addr STRUCT<city STRING, zip INT>",
         ])) as ArrayRef;
-        let result = spark_from_csv_inner(&[input_array, schema_str])?;
+        let result = spark_from_csv_inner(&[input_array, schema_str], DEFAULT_SESSION_TIMEZONE)?;
 
         let struct_array: &StructArray = downcast_option!(
             result.as_any().downcast_ref::<StructArray>(),
