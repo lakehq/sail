@@ -11,7 +11,7 @@ use sail_common::spec::{
 
 use datafusion::arrow::datatypes as adt;
 use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion::arrow::{
     array::{
         Array,
@@ -89,7 +89,7 @@ impl ScalarUDFImpl for SparkFromJson {
                 match schema_value {
                     Some(ScalarValue::Utf8(Some(uft8))) => {
                         let fields = get_schema_as_fields(uft8)?;
-                        Ok(Arc::new(Field::new("struct", DataType::Struct(fields), true)))
+                        Ok(Arc::new(Field::new("_name", DataType::Struct(fields), true)))
                     },
                     _ => unimplemented!("Blah")
                 }
@@ -107,14 +107,17 @@ impl ScalarUDFImpl for SparkFromJson {
         match arg_types {
             [DataType::Utf8 | DataType::LargeUtf8, DataType::Utf8] => {
                 Ok(vec![arg_types[0].clone(), arg_types[1].clone()])
-            }
+            },
+            [DataType::Utf8 | DataType::LargeUtf8, DataType::Utf8, DataType::Map(_, _)] => {
+                Ok(vec![arg_types[0].clone(), arg_types[1].clone(), arg_types[2].clone()])
+            },
             other => Err(DataFusionError::Plan(format!("Not supporting other input args yet: {other:?}")))
         }
     }
 }
 
 fn from_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() < 2 && args.len() > 3 {
+    if args.len() < 2 || args.len() > 3 {
         return Err(datafusion_common::DataFusionError::Plan(
             format!("from_json requires 2 or 3 arguments but got {}", args.len())
         ));
