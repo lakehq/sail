@@ -192,12 +192,6 @@
   default: "3"
   description: The maximum number of attempts for a task.
 
-- key: cluster.job_output_buffer
-  type: number
-  default: "16"
-  description: The number of batches to buffer in the job output stream.
-  experimental: true
-
 - key: cluster.rpc_retry_strategy.type
   type: string
   default: "fixed"

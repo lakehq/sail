@@ -4,14 +4,14 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use datafusion::arrow::array::{Array, BooleanArray, LargeStringArray, StringArray};
+use datafusion::arrow::array::{Array, BooleanArray, Int64Array, LargeStringArray, StringArray};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
 };
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result, Statistics};
 use futures::Stream;
 
 #[derive(Debug)]
@@ -107,7 +107,24 @@ impl ExecutionPlan for MergeCardinalityCheckExec {
     }
 
     fn required_input_distribution(&self) -> Vec<datafusion::physical_plan::Distribution> {
-        vec![datafusion::physical_plan::Distribution::SinglePartition]
+        // Keep rows for the same target row id in one partition so local de-dup is globally valid.
+        // Fall back to single partition if the expected column is missing to preserve correctness.
+        let idx = match self
+            .input
+            .schema()
+            .index_of(self.target_row_id_col.as_str())
+        {
+            Ok(i) => i,
+            Err(_) => return vec![datafusion::physical_plan::Distribution::SinglePartition],
+        };
+        let expr: Arc<dyn datafusion::physical_expr::PhysicalExpr> =
+            Arc::new(datafusion::physical_expr::expressions::Column::new(
+                self.target_row_id_col.as_str(),
+                idx,
+            ));
+        vec![datafusion::physical_plan::Distribution::HashPartitioned(
+            vec![expr],
+        )]
     }
 
     fn execute(
@@ -115,13 +132,7 @@ impl ExecutionPlan for MergeCardinalityCheckExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if partition != 0 {
-            return internal_err!(
-                "MergeCardinalityCheckExec can only be executed in a single partition"
-            );
-        }
-
-        let input = self.input.execute(0, context)?;
+        let input = self.input.execute(partition, context)?;
         let schema = self.schema.clone();
 
         let row_id_idx = schema
@@ -144,6 +155,10 @@ impl ExecutionPlan for MergeCardinalityCheckExec {
         };
         Ok(Box::pin(stream))
     }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        self.input.partition_statistics(partition)
+    }
 }
 
 struct MergeCardinalityCheckStream {
@@ -152,7 +167,7 @@ struct MergeCardinalityCheckStream {
     row_id_idx: usize,
     target_present_idx: usize,
     source_present_idx: usize,
-    seen: HashSet<String>,
+    seen: HashSet<RowIdKey>,
 }
 
 impl RecordBatchStream for MergeCardinalityCheckStream {
@@ -196,11 +211,13 @@ impl Stream for MergeCardinalityCheckStream {
                 let row_id_values: RowIdView<'_> =
                     if let Some(a) = row_id_any.as_any().downcast_ref::<StringArray>() {
                         RowIdView::Utf8(a)
+                    } else if let Some(a) = row_id_any.as_any().downcast_ref::<Int64Array>() {
+                        RowIdView::Int64(a)
                     } else if let Some(a) = row_id_any.as_any().downcast_ref::<LargeStringArray>() {
                         RowIdView::LargeUtf8(a)
                     } else {
                         return Poll::Ready(Some(Err(DataFusionError::Internal(format!(
-                            "expected Utf8/LargeUtf8 for target row id but got {:?}",
+                            "expected Int64/Utf8/LargeUtf8 for target row id but got {:?}",
                             row_id_any.data_type()
                         )))));
                     };
@@ -216,7 +233,7 @@ impl Stream for MergeCardinalityCheckStream {
                     if row_id_values.is_null(i) {
                         continue;
                     }
-                    let id = row_id_values.value(i).to_string();
+                    let id = row_id_values.key(i);
                     if !self.seen.insert(id.clone()) {
                         return Poll::Ready(Some(Err(DataFusionError::Execution(
                             format!(
@@ -235,6 +252,7 @@ impl Stream for MergeCardinalityCheckStream {
 
 enum RowIdView<'a> {
     Utf8(&'a StringArray),
+    Int64(&'a Int64Array),
     LargeUtf8(&'a LargeStringArray),
 }
 
@@ -242,14 +260,31 @@ impl<'a> RowIdView<'a> {
     fn is_null(&self, i: usize) -> bool {
         match self {
             RowIdView::Utf8(a) => a.is_null(i),
+            RowIdView::Int64(a) => a.is_null(i),
             RowIdView::LargeUtf8(a) => a.is_null(i),
         }
     }
 
-    fn value(&self, i: usize) -> &str {
+    fn key(&self, i: usize) -> RowIdKey {
         match self {
-            RowIdView::Utf8(a) => a.value(i),
-            RowIdView::LargeUtf8(a) => a.value(i),
+            RowIdView::Utf8(a) => RowIdKey::Utf8(a.value(i).to_string()),
+            RowIdView::Int64(a) => RowIdKey::Int64(a.value(i)),
+            RowIdView::LargeUtf8(a) => RowIdKey::Utf8(a.value(i).to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum RowIdKey {
+    Utf8(String),
+    Int64(i64),
+}
+
+impl std::fmt::Display for RowIdKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RowIdKey::Utf8(s) => f.write_str(s),
+            RowIdKey::Int64(i) => write!(f, "{i}"),
         }
     }
 }

@@ -47,6 +47,8 @@ message ExtendedPhysicalPlanNode {
     IcebergWriterExecNode iceberg_writer = 32;
     IcebergCommitExecNode iceberg_commit = 33;
     MergeCardinalityCheckExecNode merge_cardinality_check = 34;
+    PythonDataSourceExecNode python_data_source = 35;
+    MonotonicIdExecNode monotonic_id = 36;
   }
 }
 
@@ -517,6 +519,12 @@ message MergeCardinalityCheckExecNode {
   string source_present_col = 4;
 }
 
+message MonotonicIdExecNode {
+  bytes input = 1;
+  string column_name = 2;
+  bytes schema = 3;
+}
+
 message JoinOn {
   bytes left = 1;
   bytes right = 2;
@@ -571,4 +579,16 @@ message DeltaLogReplayExecNode {
   repeated string partition_columns = 4;
   repeated string checkpoint_files = 5;
   repeated string commit_files = 6;
+}
+
+message PythonDataSourceInputPartition {
+  uint64 partition_id = 1;
+  bytes data = 2;
+}
+
+message PythonDataSourceExecNode {
+  // Pickled Python DataSourceReader instance (with filters already applied)
+  bytes pickled_reader = 1;
+  bytes schema = 2;
+  repeated PythonDataSourceInputPartition partitions = 3;
 }

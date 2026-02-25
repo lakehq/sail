@@ -57,7 +57,7 @@
     "module": "pyspark.sql.functions",
     "function": "and",
     "status": "supported",
-    "note": "Spark SQL only; not available in PySpark"
+    "note": "This is Spark SQL only (not available in PySpark)."
   },
   {
     "module": "pyspark.sql.functions",
@@ -73,7 +73,7 @@
     "module": "pyspark.sql.functions",
     "function": "in",
     "status": "supported",
-    "note": "Spark SQL only; not available in PySpark"
+    "note": "This is Spark SQL only (not available in PySpark)."
   },
   {
     "module": "pyspark.sql.functions",
@@ -99,13 +99,13 @@
     "module": "pyspark.sql.functions",
     "function": "not",
     "status": "supported",
-    "note": "Spark SQL only; not available in PySpark"
+    "note": "This is Spark SQL only (not available in PySpark)."
   },
   {
     "module": "pyspark.sql.functions",
     "function": "or",
     "status": "supported",
-    "note": "Spark SQL only; not available in PySpark"
+    "note": "This is Spark SQL only (not available in PySpark)."
   },
   {
     "module": "pyspark.sql.functions",

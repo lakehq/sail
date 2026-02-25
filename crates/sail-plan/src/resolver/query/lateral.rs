@@ -11,6 +11,7 @@ use crate::function::get_outer_built_in_generator_functions;
 use crate::resolver::function::PythonUdtf;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::explode::ExplodeRewriter;
+use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
@@ -108,6 +109,7 @@ impl PlanResolver<'_> {
             .resolve_named_expression(expression, &schema, state)
             .await?;
         let (input, expr) = self.rewrite_wildcard(input, vec![expr], state)?;
+        let (input, expr) = self.rewrite_projection::<MonotonicIdRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
         let expr = self.rewrite_multi_expr(expr)?;
         let expr = self.rewrite_named_expressions(expr, state)?;
