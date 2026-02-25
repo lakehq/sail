@@ -94,6 +94,11 @@ impl TaskAssigner {
         self.task_queue.push_back(region);
     }
 
+    /// Returns whether the given task attempt is still queued for assignment.
+    pub fn is_task_queued(&self, key: &TaskKey) -> bool {
+        self.task_queue.iter().any(|x| x.contains(key))
+    }
+
     pub fn exclude_task(&mut self, key: &TaskKey) {
         self.task_queue.retain(|x| !x.contains(key));
     }
@@ -270,6 +275,15 @@ impl TaskSlotAssigner {
             .find_map(|(worker_id, slots)| slots.pop().map(|slot| (*worker_id, slot)))
     }
 
+    /// Returns the next available slot on the required worker.
+    fn next_for(&mut self, required_worker: WorkerId) -> Option<(WorkerId, usize)> {
+        self.slots.iter_mut().find_map(|(worker_id, slots)| {
+            (*worker_id == required_worker)
+                .then_some(())
+                .and_then(|_| slots.pop().map(|slot| (*worker_id, slot)))
+        })
+    }
+
     /// Drains as many task regions from the queue as possible, stopping when slots are exhausted.
     fn assign_all_possible(mut self, queue: &mut VecDeque<TaskRegion>) -> Vec<TaskSetAssignment> {
         let mut assignments = vec![];
@@ -309,7 +323,11 @@ impl TaskSlotAssigner {
                     });
                 }
                 TaskPlacement::Worker => {
-                    if let Some((worker_id, slot)) = self.next() {
+                    let slot = match set.required_worker {
+                        Some(required) => self.next_for(required),
+                        None => self.next(),
+                    };
+                    if let Some((worker_id, slot)) = slot {
                         assignments.push(TaskSetAssignment {
                             set: set.clone(),
                             assignment: TaskAssignment::Worker { worker_id, slot },

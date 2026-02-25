@@ -22,12 +22,84 @@ use crate::driver::output::JobOutputItem;
 use crate::driver::{DriverEvent, TaskStatus};
 use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey, TaskStreamKeyDisplay, WorkerId};
+use crate::job_graph::TaskPlacement;
 use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
-use crate::task::scheduling::{TaskAssignment, TaskAssignmentGetter, TaskStreamAssignment};
+use crate::task::scheduling::{
+    TaskAssignment, TaskAssignmentGetter, TaskRegion, TaskStreamAssignment,
+};
 
 impl DriverActor {
+    /// Resolves the single worker that holds a cache partition.
+    fn resolve_cache_partition_worker(
+        &self,
+        cache_id: u64,
+        partition: usize,
+    ) -> Result<WorkerId, String> {
+        let workers = self
+            .cache_partition_locations
+            .get(&(cache_id, partition))
+            .ok_or_else(|| {
+                format!("no worker location for cache {cache_id} partition {partition}")
+            })?;
+        match workers.as_slice() {
+            [] => Err(format!(
+                "no worker location for cache {cache_id} partition {partition}"
+            )),
+            [worker_id] => {
+                let driver_worker_id = WorkerId::from(0u64);
+                if *worker_id == driver_worker_id {
+                    Err(format!(
+                        "cache {cache_id} partition {partition} is located on driver but task requires a worker"
+                    ))
+                } else {
+                    Ok(*worker_id)
+                }
+            }
+            _ => Err(format!(
+                "expected exactly one worker for cache {cache_id} partition {partition} but found {}",
+                workers.len()
+            )),
+        }
+    }
+
+    /// Pins worker task sets in a region to cache-holding workers.
+    fn apply_cache_worker_pins(&self, region: &mut TaskRegion) -> Result<(), String> {
+        for (placement, set) in region.tasks.iter_mut() {
+            if !matches!(placement, TaskPlacement::Worker) {
+                continue;
+            }
+            let mut required: Option<WorkerId> = None;
+            for entry in &set.entries {
+                let cache_reads = self
+                    .job_scheduler
+                    .stage_cache_reads(entry.key.job_id, entry.key.stage)
+                    .ok_or_else(|| {
+                        format!(
+                            "job {} stage {} not found while resolving cache locations",
+                            entry.key.job_id, entry.key.stage
+                        )
+                    })?;
+                for &cache_id in cache_reads {
+                    let worker_id =
+                        self.resolve_cache_partition_worker(cache_id, entry.key.partition)?;
+                    required = match required {
+                        None => Some(worker_id),
+                        Some(existing) if existing == worker_id => Some(existing),
+                        Some(existing) => {
+                            return Err(format!(
+                                "cache reads require multiple workers ({existing} vs {worker_id}) for the same task set"
+                            ));
+                        }
+                    };
+                }
+            }
+            set.required_worker = required;
+        }
+        Ok(())
+    }
+
     pub(super) fn handle_server_ready(
         &mut self,
         ctx: &mut ActorContext<Self>,
@@ -275,6 +347,9 @@ impl DriverActor {
             .get_task_state(&key)
             .is_some_and(|x| matches!(x, TaskState::Created))
         {
+            if self.task_assigner.is_task_queued(&key) {
+                return ActorAction::Continue;
+            }
             let message = "task scheduling timeout".to_string();
             let cause = CommonErrorCause::Execution(message.clone());
             ctx.send(DriverEvent::UpdateTask {
@@ -445,7 +520,25 @@ impl DriverActor {
     fn run_job_action(&mut self, ctx: &mut ActorContext<Self>, action: JobAction) {
         debug!("job action: {action:?}");
         match action {
-            JobAction::ScheduleTaskRegion { region } => {
+            JobAction::ScheduleTaskRegion { mut region } => {
+                if let Err(message) = self.apply_cache_worker_pins(&mut region) {
+                    let mut keys = HashSet::new();
+                    for (_, set) in &region.tasks {
+                        for entry in &set.entries {
+                            keys.insert(entry.key.clone());
+                        }
+                    }
+                    for key in keys {
+                        ctx.send(DriverEvent::UpdateTask {
+                            key,
+                            status: TaskStatus::Failed,
+                            message: Some(message.clone()),
+                            cause: Some(CommonErrorCause::Execution(message.clone())),
+                            sequence: None,
+                        });
+                    }
+                    return;
+                }
                 for (_, set) in &region.tasks {
                     for entry in &set.entries {
                         ctx.send_with_delay(

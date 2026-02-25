@@ -89,6 +89,8 @@ impl fmt::Display for JobGraph {
 pub struct Stage {
     pub inputs: Vec<StageInput>,
     pub plan: Arc<dyn ExecutionPlan>,
+    /// Cache IDs read by this stage's physical plan.
+    pub cache_reads: Vec<u64>,
     /// The name of the "slot sharing group" for the stage.
     pub group: String,
     pub mode: OutputMode,

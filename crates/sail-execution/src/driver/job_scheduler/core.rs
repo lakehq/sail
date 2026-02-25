@@ -62,6 +62,13 @@ impl JobScheduler {
         Ok((job_id, stream))
     }
 
+    /// Returns cache IDs read by the given stage of a job.
+    pub fn stage_cache_reads(&self, job_id: JobId, stage: usize) -> Option<&[u64]> {
+        let job = self.jobs.get(&job_id)?;
+        let stage = job.graph.stages().get(stage)?;
+        Some(stage.cache_reads.as_slice())
+    }
+
     pub fn update_task(
         &mut self,
         key: &TaskKey,
@@ -378,7 +385,13 @@ impl JobScheduler {
         let mut tasks: Vec<(TaskPlacement, TaskSet)> = vec![];
         for (key, value) in stage_groups {
             for entries in value.buckets {
-                tasks.push((key.placement, TaskSet { entries }));
+                tasks.push((
+                    key.placement,
+                    TaskSet {
+                        required_worker: None,
+                        entries,
+                    },
+                ));
             }
         }
 

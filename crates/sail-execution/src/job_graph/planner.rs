@@ -21,7 +21,24 @@ use crate::error::{ExecutionError, ExecutionResult};
 use crate::job_graph::{
     InputMode, JobGraph, OutputDistribution, OutputMode, Stage, StageInput, TaskPlacement,
 };
-use crate::plan::{ShuffleConsumption, StageInputExec};
+use crate::plan::{CacheReadExec, ShuffleConsumption, StageInputExec};
+
+/// Collects cache IDs read by [`CacheReadExec`] nodes in a physical plan.
+fn collect_cache_reads(plan: &Arc<dyn ExecutionPlan>) -> Vec<u64> {
+    let mut ids = std::collections::HashSet::<u64>::new();
+    let mut stack = vec![Arc::clone(plan)];
+    while let Some(node) = stack.pop() {
+        if let Some(read) = node.as_any().downcast_ref::<CacheReadExec>() {
+            ids.insert(read.cache_id());
+        }
+        for child in node.children() {
+            stack.push(Arc::clone(child));
+        }
+    }
+    let mut out = ids.into_iter().collect::<Vec<_>>();
+    out.sort_unstable();
+    out
+}
 
 impl JobGraph {
     pub fn try_new(plan: Arc<dyn ExecutionPlan>) -> ExecutionResult<Self> {
@@ -33,9 +50,11 @@ impl JobGraph {
         };
         let last = build_job_graph(plan, PartitionUsage::Once, &mut graph)?;
         let (last, inputs) = rewrite_inputs(last)?;
+        let cache_reads = collect_cache_reads(&last);
         graph.stages.push(Stage {
             inputs,
             plan: last,
+            cache_reads,
             group: String::new(),
             mode: OutputMode::Pipelined,
             distribution: OutputDistribution::RoundRobin { channels: 1 },
@@ -270,9 +289,11 @@ fn create_merge_input(
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
     let properties = plan.properties().clone();
     let (plan, inputs) = rewrite_inputs(plan.clone())?;
+    let cache_reads = collect_cache_reads(&plan);
     let stage = Stage {
         inputs,
         plan,
+        cache_reads,
         group: String::new(),
         mode: OutputMode::Pipelined,
         distribution: OutputDistribution::RoundRobin { channels: 1 },
@@ -304,9 +325,11 @@ fn create_shuffle(
         Partitioning::Hash(keys, channels) => OutputDistribution::Hash { keys, channels },
     };
     let (plan, inputs) = rewrite_inputs(plan.clone())?;
+    let cache_reads = collect_cache_reads(&plan);
     let stage = Stage {
         inputs,
         plan,
+        cache_reads,
         group: String::new(),
         mode: OutputMode::Pipelined,
         distribution,
@@ -349,6 +372,7 @@ fn create_driver_stage(
     let stage = Stage {
         inputs: vec![],
         plan: plan.clone(),
+        cache_reads: collect_cache_reads(plan),
         group: String::new(),
         mode: OutputMode::Pipelined,
         distribution: OutputDistribution::RoundRobin { channels: 1 },

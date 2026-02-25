@@ -26,6 +26,8 @@ pub struct DriverActor {
     /// A different sequence number is tracked for each attempt.
     task_sequences: HashMap<TaskKey, u64>,
     /// Mapping from (cache_id, partition) to workers that hold the partition locally.
+    ///
+    /// TODO: this mapping can become stale if workers stop or evict cached partitions.
     cache_partition_locations: HashMap<(u64, usize), Vec<WorkerId>>,
     /// An optional channel to send history when stopping the driver.
     history: Option<oneshot::Sender<JobRunnerHistory>>,

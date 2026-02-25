@@ -27,6 +27,8 @@ pub struct TaskRegion {
 /// different task sets.
 #[derive(Debug, Clone)]
 pub struct TaskSet {
+    /// If set, tasks in this set must run on the given worker.
+    pub required_worker: Option<WorkerId>,
     pub entries: Vec<TaskSetEntry>,
 }
 
