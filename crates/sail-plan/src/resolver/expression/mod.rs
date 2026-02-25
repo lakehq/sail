@@ -319,6 +319,7 @@ impl PlanResolver<'_> {
                 value,
                 timestamp_type,
             } => self.resolve_expression_timestamp(value, timestamp_type, state),
+            Expr::UnresolvedTime { value } => self.resolve_expression_time(value, state),
         }
     }
 
