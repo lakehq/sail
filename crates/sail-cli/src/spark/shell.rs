@@ -28,7 +28,7 @@ pub fn run_pyspark_shell() -> Result<(), Box<dyn std::error::Error>> {
             let _ = rx.await;
         };
         let task = async {
-            let _ = serve(listener, shutdown, config, handle).await;
+            let _ = serve(listener, shutdown, config, handle, vec![]).await;
         };
         <Result<_, Box<dyn std::error::Error>>>::Ok((port, task))
     })?;

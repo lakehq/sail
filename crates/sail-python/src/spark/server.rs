@@ -141,7 +141,7 @@ impl SparkConnectServer {
         rx: Receiver<()>,
     ) -> PyResult<()> {
         handle
-            .block_on(async { serve(listener, Self::shutdown(rx), config, runtime).await })
+            .block_on(async { serve(listener, Self::shutdown(rx), config, runtime, vec![]).await })
             .map_err(|e| {
                 PyErr::new::<PyRuntimeError, _>(format!(
                     "failed to run the Spark Connect server: {e:?}"

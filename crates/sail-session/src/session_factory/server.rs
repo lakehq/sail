@@ -62,6 +62,9 @@ pub struct ServerSessionFactory {
     system: Arc<Mutex<ActorSystem>>,
     mutator: Box<dyn ServerSessionMutator>,
     runtime_env: RuntimeEnvFactory,
+    remote_plugins: Vec<Arc<crate::remote_plugin::RemotePluginManager>>,
+    /// Endpoints that failed at startup and should be retried on session creation.
+    pending_plugin_endpoints: Vec<String>,
 }
 
 impl ServerSessionFactory {
@@ -70,6 +73,8 @@ impl ServerSessionFactory {
         runtime: RuntimeHandle,
         system: Arc<Mutex<ActorSystem>>,
         mutator: Box<dyn ServerSessionMutator>,
+        remote_plugins: Vec<Arc<crate::remote_plugin::RemotePluginManager>>,
+        pending_plugin_endpoints: Vec<String>,
     ) -> Self {
         let runtime_env = RuntimeEnvFactory::new(config.clone(), runtime.clone());
         Self {
@@ -78,12 +83,17 @@ impl ServerSessionFactory {
             system,
             mutator,
             runtime_env,
+            remote_plugins,
+            pending_plugin_endpoints,
         }
     }
 }
 
 impl SessionFactory<ServerSessionInfo> for ServerSessionFactory {
     fn create(&mut self, info: ServerSessionInfo) -> Result<SessionContext> {
+        // Retry pending plugin endpoints (lazy discovery)
+        self.retry_pending_plugins();
+
         let state = self.create_session_state(&info)?;
         let context = SessionContext::new_with_state(state);
 
@@ -100,7 +110,39 @@ impl SessionFactory<ServerSessionInfo> for ServerSessionFactory {
             context.deregister_udtf(name);
         }
 
+        // Register remote plugin UDFs
+        for plugin in &self.remote_plugins {
+            plugin.register_on(&context);
+        }
+
         Ok(context)
+    }
+}
+
+impl ServerSessionFactory {
+    fn retry_pending_plugins(&mut self) {
+        if self.pending_plugin_endpoints.is_empty() {
+            return;
+        }
+        let runtime = self.runtime.primary().clone();
+        let mut still_pending = Vec::new();
+        for endpoint in &self.pending_plugin_endpoints {
+            let result = tokio::task::block_in_place(|| {
+                runtime.block_on(crate::remote_plugin::RemotePluginManager::connect(
+                    endpoint,
+                    runtime.clone(),
+                ))
+            });
+            match result {
+                Ok(manager) => {
+                    self.remote_plugins.push(Arc::new(manager));
+                }
+                Err(_) => {
+                    still_pending.push(endpoint.clone());
+                }
+            }
+        }
+        self.pending_plugin_endpoints = still_pending;
     }
 }
 

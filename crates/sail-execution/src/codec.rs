@@ -1528,6 +1528,21 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkDate(gen::SparkDateUdf { is_try }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkDate::new(is_try))));
             }
+            UdfKind::RemotePlugin(gen::RemotePluginUdf { name, endpoint }) => {
+                let client =
+                    crate::remote_plugin::RemotePluginClient::new(&endpoint).map_err(|e| {
+                        plan_datafusion_err!("failed to create remote plugin client: {e}")
+                    })?;
+                let runtime = tokio::runtime::Handle::current();
+                let udf = crate::remote_plugin::RemoteScalarUdf::new(
+                    name,
+                    endpoint,
+                    client,
+                    datafusion::logical_expr::Volatility::Volatile,
+                    runtime,
+                );
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
         };
         match name {
             "array_item_with_position" => {
@@ -1856,6 +1871,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkDate>() {
             let is_try = func.is_try();
             UdfKind::SparkDate(gen::SparkDateUdf { is_try })
+        } else if let Some(func) = node
+            .inner()
+            .as_any()
+            .downcast_ref::<crate::remote_plugin::RemoteScalarUdf>()
+        {
+            UdfKind::RemotePlugin(gen::RemotePluginUdf {
+                name: func.name().to_string(),
+                endpoint: func.endpoint().to_string(),
+            })
         } else {
             return Ok(());
         };

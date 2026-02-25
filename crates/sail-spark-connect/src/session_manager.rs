@@ -70,24 +70,62 @@ fn create_spark_session_factory(
     config: Arc<AppConfig>,
     runtime: RuntimeHandle,
     system: Arc<Mutex<ActorSystem>>,
+    remote_plugins: Vec<Arc<sail_session::remote_plugin::RemotePluginManager>>,
+    pending_plugin_endpoints: Vec<String>,
 ) -> Box<dyn SessionFactory<ServerSessionInfo>> {
     let mutator = Box::new(SparkSessionMutator {
         config: config.clone(),
     });
-    Box::new(ServerSessionFactory::new(config, runtime, system, mutator))
+    Box::new(ServerSessionFactory::new(
+        config,
+        runtime,
+        system,
+        mutator,
+        remote_plugins,
+        pending_plugin_endpoints,
+    ))
 }
 
-pub fn create_spark_session_manager(
+pub async fn create_spark_session_manager(
     config: Arc<AppConfig>,
     runtime: RuntimeHandle,
+    plugin_endpoints: Vec<String>,
 ) -> SparkResult<SessionManager> {
+    // Connect to remote Flight plugin servers (best-effort: warn and skip on failure)
+    let mut remote_plugins = Vec::new();
+    let mut pending_endpoints = Vec::new();
+    for endpoint in &plugin_endpoints {
+        match sail_session::remote_plugin::RemotePluginManager::connect(
+            endpoint,
+            runtime.primary().clone(),
+        )
+        .await
+        {
+            Ok(manager) => remote_plugins.push(Arc::new(manager)),
+            Err(e) => {
+                log::warn!(
+                    "Failed to connect to plugin {endpoint}, will retry on session creation: {e}"
+                );
+                pending_endpoints.push(endpoint.clone());
+            }
+        }
+    }
+
     let system = Arc::new(Mutex::new(ActorSystem::new()));
     let factory = {
         let config = config.clone();
         let runtime = runtime.clone();
         let system = system.clone();
+        let remote_plugins = remote_plugins.clone();
+        let pending_endpoints = pending_endpoints.clone();
         Box::new(move || {
-            create_spark_session_factory(config.clone(), runtime.clone(), system.clone())
+            create_spark_session_factory(
+                config.clone(),
+                runtime.clone(),
+                system.clone(),
+                remote_plugins.clone(),
+                pending_endpoints.clone(),
+            )
         })
     };
     let options = SessionManagerOptions::new(runtime.clone(), system, factory)

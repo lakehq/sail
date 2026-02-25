@@ -63,9 +63,9 @@ mod tests {
         // We create the session manager inside an async context, even though the
         // `SessionManager::try_new()` function itself is sync. This is because the actor system
         // may need to spawn actors when the session runs in cluster mode.
-        let manager = handle
-            .primary()
-            .block_on(async { create_spark_session_manager(config, handle.clone()) })?;
+        let manager = handle.primary().block_on(async {
+            create_spark_session_manager(config, handle.clone(), vec![]).await
+        })?;
         let context = handle
             .primary()
             .block_on(manager.get_or_create_session_context("test".to_string(), "".to_string()))?;

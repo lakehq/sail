@@ -26,7 +26,11 @@ async fn shutdown() {
     info!("Shutting down the Spark Connect server...");
 }
 
-pub fn run_spark_connect_server(ip: IpAddr, port: u16) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run_spark_connect_server(
+    ip: IpAddr,
+    port: u16,
+    plugin_endpoints: Vec<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let config = Arc::new(AppConfig::load()?);
     let runtime = RuntimeManager::try_new(&config.runtime)?;
 
@@ -43,7 +47,7 @@ pub fn run_spark_connect_server(ip: IpAddr, port: u16) -> Result<(), Box<dyn std
             "Starting the Spark Connect server on {}...",
             listener.local_addr()?
         );
-        serve(listener, shutdown(), config, handle).await?;
+        serve(listener, shutdown(), config, handle, plugin_endpoints).await?;
         info!("The Spark Connect server has stopped.");
         <Result<(), Box<dyn std::error::Error>>>::Ok(())
     })?;
