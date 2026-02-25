@@ -62,6 +62,15 @@ impl JobScheduler {
         Ok((job_id, stream))
     }
 
+    /// Returns the session task context for the given running job.
+    pub fn get_job_context(&self, job_id: JobId) -> Option<Arc<TaskContext>> {
+        let job = self.jobs.get(&job_id)?;
+        match &job.state {
+            JobState::Running { context, .. } => Some(context.clone()),
+            _ => None,
+        }
+    }
+
     pub fn update_task(
         &mut self,
         key: &TaskKey,

@@ -89,6 +89,12 @@ impl Actor for DriverActor {
                 result,
             } => self.handle_execute_job(ctx, plan, context, result),
             DriverEvent::CleanUpJob { job_id } => self.handle_clean_up_job(ctx, job_id),
+            DriverEvent::CachePartitionStored {
+                job_id,
+                cache_id,
+                partition,
+                worker_id,
+            } => self.handle_cache_partition_stored(ctx, job_id, cache_id, partition, worker_id),
             DriverEvent::UpdateTask {
                 key,
                 status,

@@ -8,6 +8,7 @@ use tokio::sync::oneshot;
 use crate::driver::TaskStatus;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
+use crate::plan::CachePartitionReporterMessage;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
 use crate::task::definition::TaskDefinition;
@@ -40,6 +41,7 @@ pub enum WorkerEvent {
     },
     /// Indicates that a cache partition has been stored on this worker.
     CachePartitionStored {
+        job_id: JobId,
         cache_id: u64,
         partition: usize,
     },
@@ -79,6 +81,16 @@ pub enum WorkerEvent {
         stage: Option<usize>,
     },
     Shutdown,
+}
+
+impl CachePartitionReporterMessage for WorkerEvent {
+    fn cache_partition_stored(job_id: JobId, cache_id: u64, partition: usize) -> Self {
+        Self::CachePartitionStored {
+            job_id,
+            cache_id,
+            partition,
+        }
+    }
 }
 
 pub enum WorkerStreamOwner {
@@ -177,6 +189,7 @@ impl SpanAssociation for WorkerEvent {
                 }
             }
             WorkerEvent::CachePartitionStored {
+                job_id: _,
                 cache_id: _,
                 partition: _,
             } => {}

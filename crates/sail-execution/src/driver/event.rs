@@ -16,6 +16,7 @@ use tokio::time::Instant;
 use crate::driver::gen;
 use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
+use crate::plan::CachePartitionReporterMessage;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
 
@@ -57,6 +58,13 @@ pub enum DriverEvent {
     },
     CleanUpJob {
         job_id: JobId,
+    },
+    /// Indicates that a cache partition has been stored on a node.
+    CachePartitionStored {
+        job_id: JobId,
+        cache_id: u64,
+        partition: usize,
+        worker_id: WorkerId,
     },
     UpdateTask {
         key: TaskKey,
@@ -163,6 +171,7 @@ impl SpanAssociation for DriverEvent {
             DriverEvent::ProbeLostWorker { .. } => "ProbeLostWorker",
             DriverEvent::ExecuteJob { .. } => "ExecuteJob",
             DriverEvent::CleanUpJob { .. } => "CleanUpJob",
+            DriverEvent::CachePartitionStored { .. } => "CachePartitionStored",
             DriverEvent::UpdateTask { .. } => "UpdateTask",
             DriverEvent::ProbePendingTask { .. } => "ProbePendingTask",
             DriverEvent::ProbePendingLocalStream { .. } => "ProbePendingLocalStream",
@@ -216,6 +225,17 @@ impl SpanAssociation for DriverEvent {
             } => {}
             DriverEvent::CleanUpJob { job_id } => {
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+            }
+            DriverEvent::CachePartitionStored {
+                job_id,
+                cache_id,
+                partition,
+                worker_id,
+            } => {
+                p.push((SpanAttribute::CLUSTER_WORKER_ID, worker_id.to_string()));
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                p.push(("cache_id", cache_id.to_string()));
+                p.push(("partition", partition.to_string()));
             }
             DriverEvent::UpdateTask {
                 key:
@@ -379,5 +399,16 @@ impl SpanAssociation for DriverEvent {
             DriverEvent::Shutdown { .. } => {}
         }
         p.into_iter().map(|(k, v)| (k.into(), v.into()))
+    }
+}
+
+impl CachePartitionReporterMessage for DriverEvent {
+    fn cache_partition_stored(job_id: JobId, cache_id: u64, partition: usize) -> Self {
+        Self::CachePartitionStored {
+            job_id,
+            cache_id,
+            partition,
+            worker_id: WorkerId::from(0u64),
+        }
     }
 }

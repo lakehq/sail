@@ -8,7 +8,7 @@ use crate::driver::gen::{
     RegisterWorkerResponse, ReportTaskStatusRequest, ReportTaskStatusResponse,
 };
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{TaskKey, WorkerId};
+use crate::id::{JobId, TaskKey, WorkerId};
 use crate::rpc::{ClientHandle, ClientOptions, ClientService};
 use crate::stream_service::TaskStreamFlightClient;
 
@@ -122,10 +122,12 @@ impl DriverClient {
     pub async fn notify_cache_partition_stored(
         &self,
         worker_id: WorkerId,
+        job_id: JobId,
         cache_id: u64,
         partition: usize,
     ) -> ExecutionResult<()> {
         let request = tonic::Request::new(NotifyCachePartitionStoredRequest {
+            job_id: job_id.into(),
             cache_id,
             partition: partition as u64,
             worker_id: worker_id.into(),

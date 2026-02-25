@@ -11,15 +11,55 @@ use std::sync::Arc;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::Result;
 use datafusion::physical_plan::ExecutionPlan;
-use sail_server::actor::ActorHandle;
+use sail_server::actor::{Actor, ActorHandle};
 
+use crate::id::JobId;
 use crate::local_cache_store::LocalCacheStore;
-use crate::worker::WorkerActor;
 pub use cache_read::CacheReadExec;
 pub(crate) use cache_write::CacheWriteExec;
 pub(crate) use shuffle_read::ShuffleReadExec;
 pub(crate) use shuffle_write::ShuffleWriteExec;
 pub(crate) use stage_input::StageInputExec;
+
+/// Reports cache partition materialization back to the runtime.
+pub(crate) trait CachePartitionReporter: Send + Sync {
+    fn report_partition_stored(&self, cache_id: u64, partition: usize);
+}
+
+/// Builds a cache-partition-stored message for an actor.
+pub(crate) trait CachePartitionReporterMessage {
+    fn cache_partition_stored(job_id: JobId, cache_id: u64, partition: usize) -> Self;
+}
+
+/// Reports cache partition materialization by sending an actor message.
+pub(crate) struct ActorCachePartitionReporter<T: Actor> {
+    handle: ActorHandle<T>,
+    job_id: JobId,
+}
+
+impl<T: Actor> ActorCachePartitionReporter<T> {
+    /// Creates a reporter backed by the given actor handle.
+    pub fn new(handle: ActorHandle<T>, job_id: JobId) -> Self {
+        Self { handle, job_id }
+    }
+}
+
+impl<T: Actor> CachePartitionReporter for ActorCachePartitionReporter<T>
+where
+    T::Message: CachePartitionReporterMessage,
+{
+    fn report_partition_stored(&self, cache_id: u64, partition: usize) {
+        let handle = self.handle.clone();
+        let job_id = self.job_id;
+        tokio::spawn(async move {
+            let _ = handle
+                .send(T::Message::cache_partition_stored(
+                    job_id, cache_id, partition,
+                ))
+                .await;
+        });
+    }
+}
 
 /// Injects a worker-local [`LocalCacheStore`] into all cache exec nodes in a physical plan.
 ///
@@ -45,15 +85,15 @@ pub(crate) fn inject_local_cache_store(
     .map(|t| t.data)
 }
 
-/// Injects the worker actor handle into all cache write nodes in a physical plan.
-pub(crate) fn inject_cache_write_worker_handle(
+/// Injects a cache partition reporter into all cache write nodes in a physical plan.
+pub(crate) fn inject_cache_write_reporter(
     plan: Arc<dyn ExecutionPlan>,
-    worker_handle: ActorHandle<WorkerActor>,
+    reporter: Arc<dyn CachePartitionReporter>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     plan.transform_down(|node| {
         if let Some(cache_write) = node.as_any().downcast_ref::<CacheWriteExec>() {
             let mut write = cache_write.clone();
-            write.set_worker_handle(worker_handle.clone());
+            write.set_cache_reporter(reporter.clone());
             Ok(Transformed::yes(Arc::new(write)))
         } else {
             Ok(Transformed::no(node))

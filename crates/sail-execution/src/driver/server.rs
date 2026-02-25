@@ -148,6 +148,16 @@ impl DriverService for DriverServer {
     ) -> Result<Response<NotifyCachePartitionStoredResponse>, Status> {
         let request = request.into_inner();
         debug!("{request:?}");
+        let event = DriverEvent::CachePartitionStored {
+            job_id: request.job_id.into(),
+            cache_id: request.cache_id,
+            partition: request.partition as usize,
+            worker_id: request.worker_id.into(),
+        };
+        self.handle
+            .send(event)
+            .await
+            .map_err(ExecutionError::from)?;
         let response = NotifyCachePartitionStoredResponse {};
         debug!("{response:?}");
         Ok(Response::new(response))
