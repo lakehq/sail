@@ -36,36 +36,69 @@ use sail_plan::resolver::PlanResolver;
 use sail_session::session_manager::SessionManager;
 use sail_sql_analyzer::parser::parse_one_statement;
 use sail_sql_analyzer::statement::from_ast_statement;
+use sail_sql_parser::ast::statement::Statement;
 use sail_telemetry::metrics::{MetricAttribute, MetricRegistry};
 use sail_telemetry::telemetry::global_metric_registry;
 use tonic::{Request, Response, Status, Streaming};
 
-/// Sail Flight SQL Service implementation
-///
-/// This service provides an Arrow Flight SQL server that executes queries using Sail's
-/// full SQL pipeline: parsing → resolution → optimization → execution.
-///
-/// # Architecture
-///
-/// Uses the **same Sail crates** as `sail-spark-connect` for query processing:
-/// 1. Parse SQL using `sail-sql-analyzer` (shared)
-/// 2. Convert AST to `spec::Plan` (shared)
-/// 3. Resolve plan using `PlanResolver` (shared - handles Spark semantics)
-/// 4. Execute via DataFusion (shared)
-///
-/// # Session Management
-///
-/// Uses `SessionManager` from `sail-session` for multi-session support:
-/// - Actor-based session management for concurrent requests
-/// - Per-connection session isolation
-/// - Automatic session cleanup and lifecycle management
-///
-/// # Shared components with sail-spark-connect
-///
-/// - `sail_session::SessionManager`: Multi-session orchestration
-/// - `sail_plan`: PlanResolver, PlanConfig, execute_logical_plan
-/// - `sail_sql_analyzer`: SQL parser and AST conversion
-/// - `sail_session`: Optimizer and analyzer rules
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QueryKind {
+    Select,
+    Ddl,
+    Dml,
+    Other,
+}
+
+impl QueryKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Select => "SELECT",
+            Self::Ddl => "DDL",
+            Self::Dml => "DML",
+            Self::Other => "OTHER",
+        }
+    }
+
+    fn from_statement(stmt: &Statement) -> Self {
+        match stmt {
+            Statement::Query(_) | Statement::Explain { .. } => Self::Select,
+            Statement::ShowDatabases { .. }
+            | Statement::ShowCatalogs { .. }
+            | Statement::ShowTables { .. }
+            | Statement::ShowCreateTable { .. }
+            | Statement::ShowColumns { .. }
+            | Statement::ShowViews { .. }
+            | Statement::ShowFunctions { .. }
+            | Statement::Describe { .. } => Self::Select,
+            Statement::CreateDatabase { .. }
+            | Statement::CreateTable { .. }
+            | Statement::ReplaceTable { .. }
+            | Statement::CreateView { .. }
+            | Statement::AlterDatabase { .. }
+            | Statement::AlterTable { .. }
+            | Statement::AlterView { .. }
+            | Statement::DropDatabase { .. }
+            | Statement::DropTable { .. }
+            | Statement::DropView { .. }
+            | Statement::DropFunction { .. }
+            | Statement::CommentOnCatalog { .. }
+            | Statement::CommentOnDatabase { .. }
+            | Statement::CommentOnTable { .. }
+            | Statement::CommentOnColumn { .. }
+            | Statement::RefreshTable { .. }
+            | Statement::RefreshFunction { .. } => Self::Ddl,
+            Statement::InsertInto { .. }
+            | Statement::InsertOverwriteDirectory { .. }
+            | Statement::InsertIntoAndReplace { .. }
+            | Statement::Update { .. }
+            | Statement::Delete { .. }
+            | Statement::MergeInto { .. }
+            | Statement::LoadData { .. } => Self::Dml,
+            _ => Self::Other,
+        }
+    }
+}
+
 pub struct SailFlightSqlService {
     session_manager: SessionManager,
     config: Arc<PlanConfig>,
@@ -118,30 +151,6 @@ impl SailFlightSqlService {
     // Metrics helpers
     // =========================================================================
 
-    /// Get query type for metrics labeling
-    fn get_query_type(sql: &str) -> &'static str {
-        let cleaned = Self::strip_sql_comments(sql);
-        let upper = cleaned.to_uppercase();
-        if upper.starts_with("SELECT ")
-            || upper.starts_with("SHOW ")
-            || upper.starts_with("DESC")
-            || upper.starts_with("EXPLAIN ")
-        {
-            "SELECT"
-        } else if upper.starts_with("CREATE ")
-            || upper.starts_with("DROP ")
-            || upper.starts_with("ALTER ")
-        {
-            "DDL"
-        } else if upper.starts_with("INSERT ")
-            || upper.starts_with("UPDATE ")
-            || upper.starts_with("DELETE ")
-        {
-            "DML"
-        } else {
-            "OTHER"
-        }
-    }
 
     /// Record query execution metrics
     fn record_query_metrics(
@@ -196,15 +205,6 @@ impl SailFlightSqlService {
         }
     }
 
-    /// Remove SQL comments (-- style) from the beginning of a query
-    fn strip_sql_comments(sql: &str) -> String {
-        sql.lines()
-            .filter(|line| !line.trim().starts_with("--"))
-            .collect::<Vec<_>>()
-            .join("\n")
-            .trim()
-            .to_string()
-    }
 
     /// Helper to convert schemas to IPC format for Flight SQL protocol
     ///
@@ -229,37 +229,6 @@ impl SailFlightSqlService {
         Ok((dataset_schema_data.0, param_schema_data.0))
     }
 
-    /// Check if a SQL statement is DDL (Data Definition Language)
-    ///
-    /// This inspects the first SQL keyword (case-insensitive) to identify DDL statements.
-    /// Note: Handles common DDL types but may have false positives with CTEs or subqueries.
-    fn is_ddl_statement(sql: &str) -> bool {
-        let cleaned = Self::strip_sql_comments(sql);
-        let trimmed = cleaned.trim_start();
-
-        // Extract first token, handling leading parentheses
-        let first_token = trimmed
-            .split_whitespace()
-            .next()
-            .map(|tok| tok.trim_start_matches('('))
-            .unwrap_or("")
-            .to_uppercase();
-
-        matches!(
-            first_token.as_str(),
-            "CREATE" | "DROP" | "ALTER" | "TRUNCATE" | "RENAME" | "COMMENT"
-        )
-    }
-
-    /// Check if a SQL statement is DML (INSERT/UPDATE/DELETE)
-    fn is_dml_statement(sql: &str) -> bool {
-        let cleaned = Self::strip_sql_comments(sql);
-        let upper = cleaned.to_uppercase();
-        upper.starts_with("INSERT ")
-            || upper.starts_with("UPDATE ")
-            || upper.starts_with("DELETE ")
-            || upper.starts_with("MERGE ")
-    }
 
     /// Execute SQL using Sail's full pipeline (parser + resolver + executor)
     ///
@@ -279,13 +248,23 @@ impl SailFlightSqlService {
     /// All `RecordBatch`es containing the query results.
     async fn execute_sql_batches(&self, query: &str) -> Result<Vec<RecordBatch>, Status> {
         let total_start = Instant::now();
-        let query_type = Self::get_query_type(query);
-        info!("Executing SQL query (type={}): {}", query_type, query);
-
-        // Track active queries metric
         self.record_active_query(1);
 
-        // Helper macro to record error metrics and return
+        // Step 1: Parse SQL to AST
+        let parse_start = Instant::now();
+        let statement = match parse_one_statement(query) {
+            Ok(s) => s,
+            Err(e) => {
+                self.record_active_query(-1);
+                error!("Parse error for query '{}': {}", query, e);
+                return Err(Status::invalid_argument(format!("Parse error: {}", e)));
+            }
+        };
+        let query_kind = QueryKind::from_statement(&statement);
+        let query_type = query_kind.label();
+        debug!("  [parse_sql] completed in {:?}", parse_start.elapsed());
+        info!("Executing SQL query (type={}): {}", query_type, query);
+
         macro_rules! fail {
             ($err:expr) => {{
                 self.record_active_query(-1);
@@ -298,17 +277,6 @@ impl SailFlightSqlService {
                 return Err($err);
             }};
         }
-
-        // Step 1: Parse SQL to AST using Sail's parser
-        let parse_start = Instant::now();
-        let statement = match parse_one_statement(query) {
-            Ok(s) => s,
-            Err(e) => {
-                error!("Parse error for query '{}': {}", query, e);
-                fail!(Status::invalid_argument(format!("Parse error: {}", e)));
-            }
-        };
-        debug!("  [parse_sql] completed in {:?}", parse_start.elapsed());
 
         // Step 2: Convert AST to spec::Plan
         let convert_start = Instant::now();
@@ -442,13 +410,6 @@ impl SailFlightSqlService {
         ),
         Status,
     > {
-        let query_type = Self::get_query_type(query);
-        info!(
-            "Executing SQL query (streaming, type={}): {}",
-            query_type, query
-        );
-
-        // Track active queries metric
         self.record_active_query(1);
 
         // Step 1: Parse SQL to AST
@@ -457,6 +418,11 @@ impl SailFlightSqlService {
             error!("Parse error for query '{}': {}", query, e);
             Status::invalid_argument(format!("Parse error: {}", e))
         })?;
+        let query_type = QueryKind::from_statement(&statement).label();
+        info!(
+            "Executing SQL query (streaming, type={}): {}",
+            query_type, query
+        );
 
         // Step 2: Convert AST to spec::Plan
         let plan = from_ast_statement(statement).map_err(|e| {
@@ -501,13 +467,13 @@ impl SailFlightSqlService {
     async fn execute_sql(&self, query: &str) -> Result<RecordBatch, Status> {
         let batches = self.execute_sql_batches(query).await?;
 
-        if batches.is_empty() {
-            debug!("Query returned no rows, returning success batch");
-            return self.create_success_batch();
+        match batches.into_iter().next() {
+            Some(batch) => Ok(batch),
+            None => {
+                debug!("Query returned no rows, returning success batch");
+                self.create_success_batch()
+            }
         }
-
-        // Safety: We just checked that batches is not empty
-        Ok(batches.into_iter().next().expect("batches is not empty"))
     }
 
     /// Resolve SQL plan to get schema without executing
@@ -1212,9 +1178,11 @@ impl FlightSqlService for SailFlightSqlService {
         let sql = String::from_utf8_lossy(&query.prepared_statement_handle).to_string();
         info!("do_put_prepared_statement_update: SQL = {}", sql);
 
-        // DDL statements were already executed in do_action_create_prepared_statement
-        // Don't re-execute them here to avoid "table already exists" errors
-        if Self::is_ddl_statement(&sql) {
+        let kind = parse_one_statement(&sql)
+            .map(|s| QueryKind::from_statement(&s))
+            .unwrap_or(QueryKind::Other);
+
+        if kind == QueryKind::Ddl {
             info!(
                 "DDL already executed in prepare phase, skipping re-execution: {}",
                 sql
@@ -1222,11 +1190,8 @@ impl FlightSqlService for SailFlightSqlService {
             return Ok(0);
         }
 
-        // Execute the update statement (DML only: INSERT/UPDATE/DELETE)
         info!("Executing update statement: {}", sql);
         let _batch = self.execute_sql(&sql).await?;
-
-        // Return 0 for update statements (standard JDBC behavior)
         Ok(0)
     }
 
@@ -1245,30 +1210,28 @@ impl FlightSqlService for SailFlightSqlService {
     ) -> Result<ActionCreatePreparedStatementResult, Status> {
         info!("do_action_create_prepared_statement: SQL = {}", query.query);
 
-        let is_ddl = Self::is_ddl_statement(&query.query);
-        let is_dml = Self::is_dml_statement(&query.query);
+        let kind = parse_one_statement(&query.query)
+            .map(|s| QueryKind::from_statement(&s))
+            .unwrap_or(QueryKind::Other);
 
-        // Strategy depends on query type:
-        // - DDL: Execute now (creates table), return empty schema (DDL has no result set)
-        // - DML: Execute now (INSERT/UPDATE/DELETE), return empty schema
-        // - SELECT: Only resolve to get schema (don't execute yet)
-        let schema = if is_ddl {
-            // DDL: Execute now
-            info!("DDL detected, executing immediately: {}", query.query);
-            let _batch = self.execute_sql(&query.query).await?;
-            Arc::new(Schema::empty())
-        } else if is_dml {
-            // DML: Execute now (INSERT/UPDATE/DELETE)
-            info!("DML detected, executing immediately: {}", query.query);
-            let _batch = self.execute_sql(&query.query).await?;
-            Arc::new(Schema::empty())
-        } else {
-            // SELECT: Only resolve plan to get schema (don't execute)
-            info!(
-                "SELECT detected, resolving plan for schema only: {}",
-                query.query
-            );
-            self.get_query_schema(&query.query).await?
+        let schema = match kind {
+            QueryKind::Ddl => {
+                info!("DDL detected, executing immediately: {}", query.query);
+                let _batch = self.execute_sql(&query.query).await?;
+                Arc::new(Schema::empty())
+            }
+            QueryKind::Dml => {
+                info!("DML detected, executing immediately: {}", query.query);
+                let _batch = self.execute_sql(&query.query).await?;
+                Arc::new(Schema::empty())
+            }
+            _ => {
+                info!(
+                    "SELECT detected, resolving plan for schema only: {}",
+                    query.query
+                );
+                self.get_query_schema(&query.query).await?
+            }
         };
 
         // Use the query as the prepared statement handle

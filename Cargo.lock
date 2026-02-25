@@ -6213,6 +6213,7 @@ dependencies = [
  "sail-server",
  "sail-session",
  "sail-sql-analyzer",
+ "sail-sql-parser",
  "sail-telemetry",
  "tokio",
  "tonic",
