@@ -42,6 +42,8 @@ use crate::physical_plan::{decode_adds_from_batch, meta_adds, COL_ACTION};
 use crate::schema::get_physical_schema;
 use crate::session_extension::{load_table_uncached, DeltaTableCache};
 
+// TODO(dynamic-file-scheduling): Replace fixed file-count chunking with byte-aware chunking
+// and optional work-stealing so executors pull remaining file work dynamically under skew.
 const ADD_SCAN_CHUNK_FILES: usize = 1024;
 
 struct ScanByAddsStreamState {
@@ -252,6 +254,8 @@ impl ScanByAddsStreamState {
             .ok_or_else(|| DataFusionError::Internal("missing logical_names".into()))?
             .clone();
 
+        // TODO(size-aware-bin-packing): Build file groups from `Add.size` with bin-packing
+        // instead of static grouping to reduce per-partition size skew.
         let adds = std::mem::take(&mut self.pending_adds);
         let file_scan_config = build_file_scan_config(
             snapshot,

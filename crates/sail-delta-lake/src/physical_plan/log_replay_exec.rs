@@ -55,6 +55,9 @@ enum ReplayMode {
 /// - This exec is designed to be **spill-friendly** by requiring the input to be hash-partitioned
 ///   and sorted by `__sail_delta_replay_path`, enabling streaming replay without materializing the
 ///   full active set in memory.
+///
+/// TODO(aqe-after-log-replay): Emit replay output cardinality/bytes as first-class runtime
+/// feedback and allow adaptive re-planning (e.g., add shuffle, switch HashJoin to BroadcastJoin).
 #[derive(Debug, Clone)]
 pub struct DeltaLogReplayExec {
     mode: ReplayMode,

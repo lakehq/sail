@@ -358,6 +358,9 @@ async fn build_old_data_plan(
     )?);
 
     // Spread Add actions across partitions so `DeltaScanByAddsExec` can scan files in parallel.
+    // TODO(adaptive-partitioning): Keep this aligned with `scan_planner.rs`.
+    // Plan: switch from fixed `target_partitions` + round-robin to size-driven partition count
+    // first, then size-aware distribution to avoid oversharding and worker skew.
     let target_partitions = ctx.session().config().target_partitions().max(1);
     let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
         find_files_exec,

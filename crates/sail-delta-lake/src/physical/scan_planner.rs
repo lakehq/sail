@@ -316,6 +316,9 @@ pub(crate) async fn plan_delta_scan(
                 "failed to build log replay pipeline: {e}"
             ))
         })?;
+    // TODO(metadata-as-data-aqe): This path intentionally prioritizes metadata scalability and
+    // low TTFB over perfect static CBO. Add a runtime re-optimization hook after replay/discovery
+    // so downstream repartitioning and join strategy can react to exact file cardinality/bytes.
 
     let find_files: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
         meta_scan,
@@ -327,6 +330,10 @@ pub(crate) async fn plan_delta_scan(
         false,
     )?);
 
+    // TODO(adaptive-partitioning): Replace fixed fan-out with adaptive planning.
+    // Plan: (1) pick partition count from discovered `size_bytes` (clamped to [1, target_partitions]
+    // and gated by `optimizer.repartition_file_min_size`), then (2) replace round-robin with
+    // size-aware distribution to reduce small-task overhead and skew.
     let target_partitions = session.config().target_partitions().max(1);
     let find_files: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
         find_files,
