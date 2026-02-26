@@ -16,8 +16,8 @@ pub struct FileDeleteOptions {
     pub options: Vec<Vec<(String, String)>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Educe)]
-#[educe(Eq, Hash, PartialOrd)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
+#[educe(PartialOrd)]
 pub struct FileDeleteNode {
     options: FileDeleteOptions,
     #[educe(PartialOrd(ignore))]

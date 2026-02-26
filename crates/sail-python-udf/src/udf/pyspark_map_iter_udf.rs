@@ -20,8 +20,8 @@ pub enum PySparkMapIterKind {
     Arrow,
 }
 
-#[derive(Debug, PartialEq, Educe)]
-#[educe(Eq, Hash, PartialOrd)]
+#[derive(Debug, PartialEq, Eq, Hash, Educe)]
+#[educe(PartialOrd)]
 pub struct PySparkMapIterUDF {
     kind: PySparkMapIterKind,
     name: String,

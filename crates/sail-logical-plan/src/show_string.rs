@@ -207,8 +207,8 @@ impl ShowStringFormat {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Educe)]
-#[educe(Eq, Hash, PartialOrd)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
+#[educe(PartialOrd)]
 pub struct ShowStringNode {
     input: Arc<LogicalPlan>,
     // names is part of schema so we skip it in PartialOrd

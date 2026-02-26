@@ -11,8 +11,8 @@ use sail_common_datafusion::streaming::event::schema::try_from_flow_event_schema
 /// into final data batches.
 /// This is a special "streaming sink" that allows returning query results
 /// for streaming queries, with the requirement that the query is bounded.
-#[derive(Clone, Debug, PartialEq, Educe)]
-#[educe(Eq, Hash, PartialOrd)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
+#[educe(PartialOrd)]
 pub struct StreamCollectorNode {
     input: Arc<LogicalPlan>,
     #[educe(PartialOrd(ignore))]
