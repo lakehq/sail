@@ -67,7 +67,7 @@ pub enum DeltaLogReplayStrategyOption {
     #[default]
     Auto,
     Sort,
-    HashNoSort,
+    Hash,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
