@@ -53,9 +53,7 @@ pub(crate) async fn plan_delta_scan(
         &config.commit_timestamp_column_name,
         Some(schema.clone()),
     )?;
-
     let table_partition_cols = snapshot.metadata().partition_columns().clone();
-
     let logical_schema = if let Some(used_columns) = projection {
         let mut fields = vec![];
         for idx in used_columns {
