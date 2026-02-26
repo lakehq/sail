@@ -49,6 +49,8 @@ message ExtendedPhysicalPlanNode {
     MergeCardinalityCheckExecNode merge_cardinality_check = 34;
     PythonDataSourceExecNode python_data_source = 35;
     MonotonicIdExecNode monotonic_id = 36;
+    PythonDataSourceWriteExecNode python_data_source_write = 37;
+    PythonDataSourceWriteCommitExecNode python_data_source_write_commit = 38;
   }
 }
 
@@ -591,4 +593,26 @@ message PythonDataSourceExecNode {
   bytes pickled_reader = 1;
   bytes schema = 2;
   repeated PythonDataSourceInputPartition partitions = 3;
+}
+
+message PythonDataSourceWriteExecNode {
+  // Pickled Python DataSourceWriter instance obtained from
+  // DataSource.writer(schema, overwrite), ready for write(), commit(),
+  // and abort() calls (stateless boundary matches write_exec.rs).
+  bytes pickled_writer = 1;
+  // Schema of the data being written
+  bytes schema = 2;
+  // Whether writer is DataSourceArrowWriter (true) or DataSourceWriter (false)
+  bool is_arrow = 3;
+  // Input plan that generates data to write
+  bytes input = 4;
+}
+
+message PythonDataSourceWriteCommitExecNode {
+  // Pickled Python DataSourceWriter instance used for commit()/abort().
+  bytes pickled_writer = 1;
+  // Number of partition-level write results expected from the write stage.
+  uint64 expected_partitions = 2;
+  // Input plan that yields per-partition write results.
+  bytes input = 3;
 }

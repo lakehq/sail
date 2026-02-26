@@ -100,5 +100,6 @@ docs/.vitepress/.temp
 
 # Claude Code settings
 .claude/
+.worktrees/
 
 CLAUDE.md
