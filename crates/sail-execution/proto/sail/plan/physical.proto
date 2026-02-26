@@ -50,6 +50,7 @@ message ExtendedPhysicalPlanNode {
     PythonDataSourceExecNode python_data_source = 35;
     MonotonicIdExecNode monotonic_id = 36;
     PythonDataSourceWriteExecNode python_data_source_write = 37;
+    PythonDataSourceWriteCommitExecNode python_data_source_write_commit = 38;
   }
 }
 
@@ -603,6 +604,15 @@ message PythonDataSourceWriteExecNode {
   bytes schema = 2;
   // Whether writer is DataSourceArrowWriter (true) or DataSourceWriter (false)
   bool is_arrow = 3;
-  // Input plan (data to write)
+  // Input plan that generates data to write
   bytes input = 4;
+}
+
+message PythonDataSourceWriteCommitExecNode {
+  // Pickled Python DataSourceWriter instance used for commit()/abort().
+  bytes pickled_writer = 1;
+  // Number of partition-level write results expected from the write stage.
+  uint64 expected_partitions = 2;
+  // Input plan that yields per-partition write results.
+  bytes input = 3;
 }

@@ -283,7 +283,7 @@ impl PythonDataSourceStream {
 
             // Record total GIL hold time
             metrics.gil_hold_ns.fetch_add(
-                gil_acquired.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+                gil_acquired.elapsed().as_nanos().min(MAX_NANOS_U64) as u64,
                 Ordering::Relaxed,
             );
 

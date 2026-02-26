@@ -257,17 +257,27 @@ impl TableFormat for PythonTableFormat {
         let executor: Arc<dyn super::executor::PythonExecutor> =
             Arc::new(InProcessExecutor::from_app_config());
         let schema = input.schema();
+        let expected_partitions = input.properties().partitioning.partition_count();
 
         let writer_plan = executor
             .get_writer(datasource.command(), &schema, overwrite)
             .await?;
 
-        Ok(Arc::new(super::write_exec::PythonDataSourceWriteExec::new(
-            input,
-            writer_plan.pickled_writer,
-            schema,
-            writer_plan.is_arrow,
-        )))
+        let pickled_writer = writer_plan.pickled_writer;
+        let write_exec: Arc<dyn ExecutionPlan> =
+            Arc::new(super::write_exec::PythonDataSourceWriteExec::new(
+                input,
+                pickled_writer.clone(),
+                writer_plan.is_arrow,
+            ));
+
+        Ok(Arc::new(
+            super::commit_exec::PythonDataSourceWriteCommitExec::new(
+                write_exec,
+                pickled_writer,
+                expected_partitions,
+            ),
+        ))
     }
 }
 

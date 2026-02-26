@@ -1,55 +1,68 @@
-//! Execution plan for Python data source writes.
+//! Distributed write execution plan for Python data sources.
 //!
-//! This execution plan writes data to a Python datasource using the two-phase
-//! commit protocol: write() → commit() or abort().
-//!
-//! # Architecture
-//!
-//! The write exec is a sink node with one child (the input data plan). It:
-//! 1. Executes the input plan to get RecordBatch streams from all partitions
-//! 2. Feeds batches to Python writer.write() per partition
-//! 3. Collects WriterCommitMessages from all partitions
-//! 4. Calls writer.commit() or writer.abort() based on success/failure
-//!
-//! Only partition 0 orchestrates the entire write operation. Other partitions
-//! return empty streams immediately.
+//! This execution plan runs `writer.write(iterator)` per input partition and
+//! emits one result row per partition. A separate
+//! `PythonDataSourceWriteCommitExec` node consumes these rows and performs
+//! `writer.commit(messages)` or `writer.abort(messages)`.
 //!
 //! # Stateless Writer Boundary
 //!
-//! Each phase (write, commit, abort) deserializes a **fresh** Python writer
-//! instance from the pickled bytes. Writers must not rely on in-memory state
-//! across the write → commit/abort boundary. Commit messages are the only
-//! channel for passing state from write() to commit()/abort(). This matches
-//! PySpark's distributed execution semantics.
-//!
+//! Each phase (write, commit, abort) deserializes a fresh Python writer from
+//! pickled bytes. Writers must not rely on in-memory state across the
+//! write -> commit/abort boundary.
 use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
-use arrow::array::RecordBatch;
-use arrow_schema::{Schema, SchemaRef};
+use arrow::array::{BinaryArray, RecordBatch, StringArray, UInt64Array};
+use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
-use datafusion_common::{exec_err, internal_err, Result};
-use futures::stream::StreamExt;
+use datafusion_common::{internal_err, Result};
+use futures::StreamExt;
 
 use super::executor::{InProcessExecutor, PythonExecutor};
 
-/// Execution plan for writing to a Python datasource.
-///
-/// This is a sink node (one child: the input data plan) that orchestrates
-/// the two-phase commit protocol for writing data.
+pub(crate) const COL_PARTITION_ID: &str = "partition_id";
+pub(crate) const COL_COMMIT_MESSAGE: &str = "commit_message";
+pub(crate) const COL_ERROR: &str = "error";
+
+pub(crate) fn write_result_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new(COL_PARTITION_ID, DataType::UInt64, false),
+        Field::new(COL_COMMIT_MESSAGE, DataType::Binary, true),
+        Field::new(COL_ERROR, DataType::Utf8, true),
+    ]))
+}
+
+pub(crate) fn build_write_result_batch(
+    partition_id: usize,
+    commit_message: Option<Vec<u8>>,
+    error: Option<String>,
+) -> Result<RecordBatch> {
+    let partition_ids = UInt64Array::from(vec![partition_id as u64]);
+    let commit_messages = BinaryArray::from(vec![commit_message.as_deref()]);
+    let errors = StringArray::from(vec![error.as_deref()]);
+    Ok(RecordBatch::try_new(
+        write_result_schema(),
+        vec![
+            Arc::new(partition_ids),
+            Arc::new(commit_messages),
+            Arc::new(errors),
+        ],
+    )?)
+}
+
+/// Execution plan for distributed partition-local writes to a Python datasource.
 #[derive(Debug)]
 pub struct PythonDataSourceWriteExec {
     /// Input execution plan (data to write)
     input: Arc<dyn ExecutionPlan>,
     /// Pickled Python DataSourceWriter instance
     pickled_writer: Vec<u8>,
-    /// Schema of the data being written
-    schema: SchemaRef,
     /// Whether writer is DataSourceArrowWriter (true) or DataSourceWriter (false)
     is_arrow: bool,
     /// Execution plan properties
@@ -57,42 +70,19 @@ pub struct PythonDataSourceWriteExec {
 }
 
 impl PythonDataSourceWriteExec {
-    /// Create a new write execution plan.
-    ///
-    /// # Arguments
-    ///
-    /// * `input` - Input execution plan providing data to write
-    /// * `pickled_writer` - Pickled Python DataSourceWriter instance
-    /// * `schema` - Schema of the data being written
-    /// * `is_arrow` - Whether writer is Arrow-based (DataSourceArrowWriter)
-    pub fn new(
-        input: Arc<dyn ExecutionPlan>,
-        pickled_writer: Vec<u8>,
-        schema: SchemaRef,
-        is_arrow: bool,
-    ) -> Self {
-        // Write exec has single partition, empty output schema, final emission, bounded
-        let empty_schema = Arc::new(Schema::empty());
+    /// Create a new distributed write execution plan.
+    pub fn new(input: Arc<dyn ExecutionPlan>, pickled_writer: Vec<u8>, is_arrow: bool) -> Self {
+        let output_partition_count = input.properties().partitioning.partition_count();
         let properties = PlanProperties::new(
-            EquivalenceProperties::new(empty_schema),
-            Partitioning::UnknownPartitioning(1),
+            EquivalenceProperties::new(write_result_schema()),
+            Partitioning::UnknownPartitioning(output_partition_count),
             EmissionType::Final,
             Boundedness::Bounded,
-        );
-
-        // Sanity check: write schema should match input plan's output schema
-        debug_assert_eq!(
-            schema.fields().len(),
-            input.schema().fields().len(),
-            "PythonDataSourceWriteExec: write schema field count ({}) != input schema field count ({})",
-            schema.fields().len(),
-            input.schema().fields().len(),
         );
 
         Self {
             input,
             pickled_writer,
-            schema,
             is_arrow,
             properties,
         }
@@ -111,11 +101,6 @@ impl PythonDataSourceWriteExec {
     /// Get the input plan.
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
-    }
-
-    /// Get the schema of the data being written.
-    pub fn schema(&self) -> &SchemaRef {
-        &self.schema
     }
 }
 
@@ -157,7 +142,6 @@ impl ExecutionPlan for PythonDataSourceWriteExec {
         Ok(Arc::new(PythonDataSourceWriteExec::new(
             children[0].clone(),
             self.pickled_writer.clone(),
-            self.schema.clone(),
             self.is_arrow,
         )))
     }
@@ -167,122 +151,42 @@ impl ExecutionPlan for PythonDataSourceWriteExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        // Only partition 0 orchestrates the write
-        if partition != 0 {
-            return Ok(Box::pin(
-                datafusion::physical_plan::stream::EmptyRecordBatchStream::new(Arc::new(
-                    Schema::empty(),
-                )),
-            ));
-        }
-
         let input = self.input.clone();
         let pickled_writer = self.pickled_writer.clone();
         let is_arrow = self.is_arrow;
-        let write_schema = self.schema.clone();
+        let input_schema = input.schema();
+        let output_schema = write_result_schema();
 
-        // Create async stream that orchestrates the write/commit/abort
         let stream = futures::stream::once(async move {
-            // Load executor with config from application.yaml (python.data_source_write_channel_capacity,
-            // python.data_source_slow_write_warn_ms). Falls back to defaults if config loading fails.
             let executor = Arc::new(InProcessExecutor::from_app_config());
-            let num_partitions = input.properties().partitioning.partition_count();
 
-            // Phase 1: Execute writes in parallel for all partitions
-            let mut write_futures = Vec::new();
-
-            for p in 0..num_partitions {
-                let input_stream = input.execute(p, context.clone())?;
-                let executor_clone = executor.clone();
-                let pickled_writer_clone = pickled_writer.clone();
-                let schema_clone = write_schema.clone();
-
-                // Create a future for this partition's write
-                let write_future = async move {
-                    // Create a stream that validates schema for each batch
-                    let schema_for_validation = schema_clone.clone();
-                    let stream = input_stream.map(move |batch_result| {
-                        let batch = batch_result?;
-                        super::arrow_utils::validate_schema(
-                            &schema_for_validation,
-                            batch.schema_ref(),
-                        )?;
-                        Ok(batch)
-                    });
-
-                    // Execute write for this partition (streaming)
-                    executor_clone
-                        .execute_write(
-                            &pickled_writer_clone,
-                            schema_clone,
-                            is_arrow,
-                            Box::pin(stream),
-                        )
-                        .await
-                };
-
-                write_futures.push(write_future);
-            }
-
-            // Phase 2: Collect results from all partitions
-            let results = futures::future::join_all(write_futures).await;
-            let mut commit_messages = Vec::new();
-            let mut had_failure = false;
-            let mut first_error = None;
-
-            for result in results {
-                match result {
-                    Ok(write_result) => {
-                        commit_messages.push(write_result.commit_message);
-                    }
-                    Err(e) => {
-                        had_failure = true;
-                        if first_error.is_none() {
-                            first_error = Some(e);
-                        }
-                        // Push None for failed partition
-                        commit_messages.push(None);
-                    }
+            let input_stream = match input.execute(partition, context) {
+                Ok(stream) => stream,
+                Err(e) => {
+                    return build_write_result_batch(partition, None, Some(e.to_string()));
                 }
-            }
+            };
 
-            // Phase 3: Commit or abort based on results
-            if had_failure {
-                // Attempt abort (best effort, errors are logged)
-                let _ = executor.abort_write(&pickled_writer, commit_messages).await;
+            let schema_for_validation = input_schema.clone();
+            let stream = input_stream.map(move |batch_result| {
+                let batch = batch_result?;
+                super::arrow_utils::validate_schema(&schema_for_validation, batch.schema_ref())?;
+                Ok(batch)
+            });
 
-                // Return the first error we encountered
-                if let Some(err) = first_error {
-                    return Err(err);
-                } else {
-                    return exec_err!("Write operation failed but no error was captured");
+            match executor
+                .execute_write(&pickled_writer, input_schema, is_arrow, Box::pin(stream))
+                .await
+            {
+                Ok(write_result) => {
+                    build_write_result_batch(partition, write_result.commit_message, None)
                 }
-            } else {
-                // All writes succeeded, attempt commit.
-                // Clone messages before commit so abort can use them on failure.
-                let messages_for_abort = commit_messages.clone();
-                match executor
-                    .commit_write(&pickled_writer, commit_messages)
-                    .await
-                {
-                    Ok(()) => { /* commit succeeded */ }
-                    Err(commit_err) => {
-                        // Commit failed — must abort to avoid leaving writer in limbo.
-                        log::error!("Commit failed, attempting abort: {}", commit_err);
-                        let _ = executor
-                            .abort_write(&pickled_writer, messages_for_abort)
-                            .await;
-                        return Err(commit_err);
-                    }
-                }
+                Err(e) => build_write_result_batch(partition, None, Some(e.to_string())),
             }
-
-            // Return empty batch to signal completion
-            Ok(RecordBatch::new_empty(Arc::new(Schema::empty())))
         });
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
-            Arc::new(Schema::empty()),
+            output_schema,
             stream,
         )))
     }
@@ -290,6 +194,7 @@ impl ExecutionPlan for PythonDataSourceWriteExec {
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::Array;
     use arrow::datatypes::{DataType, Field};
 
     use super::*;
@@ -301,7 +206,6 @@ mod tests {
             Field::new("value", DataType::Float64, true),
         ]));
 
-        // Create a mock input plan (empty exec)
         let input = Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
             schema.clone(),
         ));
@@ -309,8 +213,7 @@ mod tests {
         let exec = PythonDataSourceWriteExec::new(
             input,
             vec![1, 2, 3], // mock pickled writer
-            schema.clone(),
-            true, // is_arrow
+            true,          // is_arrow
         );
 
         assert!(exec.is_arrow());
@@ -318,7 +221,6 @@ mod tests {
         assert_eq!(exec.children().len(), 1);
         assert_eq!(exec.name(), "PythonDataSourceWriteExec");
 
-        // Check properties
         let props = exec.properties();
         assert!(matches!(
             props.partitioning,
@@ -334,7 +236,7 @@ mod tests {
             schema.clone(),
         ));
 
-        let exec = PythonDataSourceWriteExec::new(input, vec![], schema.clone(), false);
+        let exec = PythonDataSourceWriteExec::new(input, vec![], false);
 
         assert!(!exec.is_arrow());
         assert_eq!(exec.name(), "PythonDataSourceWriteExec");
@@ -352,14 +254,8 @@ mod tests {
             schema.clone(),
         ));
 
-        let exec = Arc::new(PythonDataSourceWriteExec::new(
-            input1,
-            vec![],
-            schema.clone(),
-            true,
-        ));
+        let exec = Arc::new(PythonDataSourceWriteExec::new(input1, vec![], true));
 
-        // Replace with new child
         let new_exec = exec.clone().with_new_children(vec![input2]).unwrap();
 
         assert!(new_exec.as_any().is::<PythonDataSourceWriteExec>());
@@ -373,14 +269,8 @@ mod tests {
             schema.clone(),
         ));
 
-        let exec = Arc::new(PythonDataSourceWriteExec::new(
-            input,
-            vec![],
-            schema.clone(),
-            true,
-        ));
+        let exec = Arc::new(PythonDataSourceWriteExec::new(input, vec![], true));
 
-        // Should fail with wrong number of children
         assert!(exec.clone().with_new_children(vec![]).is_err());
         assert!(exec
             .clone()
@@ -393,5 +283,40 @@ mod tests {
                 ))
             ])
             .is_err());
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn test_build_write_result_batch() {
+        let batch =
+            build_write_result_batch(2, Some(vec![1, 2, 3]), Some("failed".to_string())).unwrap();
+
+        assert_eq!(batch.num_rows(), 1);
+        assert_eq!(batch.schema().field(0).name(), COL_PARTITION_ID);
+        assert_eq!(batch.schema().field(1).name(), COL_COMMIT_MESSAGE);
+        assert_eq!(batch.schema().field(2).name(), COL_ERROR);
+
+        let partition_ids = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .unwrap();
+        assert_eq!(partition_ids.value(0), 2);
+
+        let commit_messages = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap();
+        assert!(!commit_messages.is_null(0));
+        assert_eq!(commit_messages.value(0), [1, 2, 3]);
+
+        let errors = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert!(!errors.is_null(0));
+        assert_eq!(errors.value(0), "failed");
     }
 }
