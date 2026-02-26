@@ -1,6 +1,9 @@
 use core::any::type_name;
+use std::fs::File;
 use std::sync::{Arc};
 
+use datafusion::arrow::array::MapFieldNames;
+use datafusion_expr::function::Hint;
 use sail_sql_analyzer::parser::parse_data_type;
 use sail_sql_analyzer::data_type::from_ast_data_type;
 
@@ -10,7 +13,7 @@ use sail_common::spec::{
 };
 
 use datafusion::arrow::datatypes as adt;
-use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion::arrow::{
     array::{
@@ -66,7 +69,7 @@ impl ScalarUDFImpl for SparkFromJson {
     }
 
     fn name(&self) -> &str {
-        self.aliases[0].as_str()
+        &"from_json"
     }
 
     fn aliases(&self) -> &[String] {
@@ -82,36 +85,82 @@ impl ScalarUDFImpl for SparkFromJson {
     }
 
     fn return_field_from_args(&self, args: datafusion_expr::ReturnFieldArgs) -> Result<FieldRef> {
-        let schema_field = args.arg_fields.get(1).unwrap();
-        let schema_value = args.scalar_arguments.get(1).unwrap();
-        match schema_field.data_type() {
-            DataType::Utf8 => {
-                match schema_value {
-                    Some(ScalarValue::Utf8(Some(uft8))) => {
-                        let fields = get_schema_as_fields(uft8)?;
-                        Ok(Arc::new(Field::new("_name", DataType::Struct(fields), true)))
-                    },
-                    _ => unimplemented!("Blah")
-                }
+        let schema_scalar_value = match args.scalar_arguments[1] {
+            Some(value) => Ok(value),
+            None => plan_err!("Function {} got a non-literal schema argument which is not allowed", self.name())
+        }?;
+        let schema_data_type = args.arg_fields[1].data_type();
+
+        match (schema_data_type, schema_scalar_value) {
+            (
+                DataType::Utf8,
+                ScalarValue::Utf8(Some(utf8))
+            ) | (
+                DataType::LargeUtf8,
+                ScalarValue::LargeUtf8(Some(utf8))
+            )=> {
+                let dtype = get_schema_data_type(utf8)?;
+                Ok(Arc::new(Field::new(
+                    "from_utf8",
+                    dtype,
+                    true // TODO: can we get nullable from here? maybe it's an option?
+                )))
             },
-            DataType::Struct(_) => Ok(schema_field.clone()),
-            other => Err(DataFusionError::Plan(format!("Unimplemented field args: {other:?}")))
+            (DataType::Struct(_), ScalarValue::Struct(struct_array)) => {
+                Ok(Arc::new(Field::new(
+                    "struct",
+                    schema_data_type.clone(),
+                    struct_array.is_nullable()
+                )))
+            },
+            (DataType::Map(_, _), ScalarValue::Map(map_array)) => {
+                Ok(Arc::new(Field::new(
+                    "map",
+                    schema_data_type.clone(),
+                    map_array.is_nullable()
+                )))
+            },
+            (DataType::List(_), ScalarValue::List(list_array)) => {
+                Ok(Arc::new(Field::new(
+                    "list",
+                    schema_data_type.clone(),
+                    list_array.is_nullable()
+                )))
+            },
+            (other, _) => plan_err!("Function {} expects a schema argument of literal datatype string, struct, map, or list. Instead got {other:?}", self.name())
+
         }
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(from_json_inner, vec![])(&args.args)
+        let hints = vec![Hint::Pad, Hint::AcceptsSingular, Hint::AcceptsSingular];
+        make_scalar_function(from_json_inner, hints)(&args.args)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         match arg_types {
-            [DataType::Utf8 | DataType::LargeUtf8, DataType::Utf8] => {
+            [
+                DataType::Utf8 | DataType::LargeUtf8,
+                DataType::Utf8 | DataType::Struct(_) | DataType::Map(_, _) | DataType::List(_)
+            ] => {
                 Ok(vec![arg_types[0].clone(), arg_types[1].clone()])
             },
-            [DataType::Utf8 | DataType::LargeUtf8, DataType::Utf8, DataType::Map(_, _)] => {
+            [
+                DataType::Utf8 | DataType::LargeUtf8,
+                DataType::Utf8 | DataType::Struct(_) | DataType::Map(_, _) | DataType::List(_),
+                DataType::Map(_, _)
+            ] => {
                 Ok(vec![arg_types[0].clone(), arg_types[1].clone(), arg_types[2].clone()])
             },
-            other => Err(DataFusionError::Plan(format!("Not supporting other input args yet: {other:?}")))
+            other => {
+                plan_err!(
+                    "Unsupported datatypes for function `{}`: found {}, {}, {}",
+                    self.name(),
+                    other[0],
+                    other[1],
+                    other[2]
+                )
+            }
         }
     }
 }
@@ -134,6 +183,7 @@ fn from_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         schema_array.value(0)
     };
     let schema_fields = get_schema_as_fields(schema)?;
+    let d = get_schema_data_type(schema)?;
 
     string_array_to_json_array(strings, schema_fields, None)
 }
@@ -182,6 +232,13 @@ enum FieldBuilder {
         builders: Vec<FieldBuilder>,
         null_buffer: Vec<bool>,
     },
+    Map {
+        field_names: Option<MapFieldNames>,
+        key_builder: Box<FieldBuilder>,
+        key_field: Field,
+        value_builder: Box<FieldBuilder>,
+        value_field: Field,
+    },
     List {
         field: Arc<Field>,
         offsets: Vec<i32>,
@@ -211,6 +268,23 @@ fn create_field_builders(fields: &Fields, capacity: usize) -> Result<Vec<FieldBu
 
                 })
             },
+            DataType::Map(struct_field, _ordered) => { // field is a struct
+                let mut f = match struct_field.data_type() {
+                    DataType::Struct(fields) => {
+                        create_field_builders(fields, 1)?
+                    },
+                    _ => unreachable!()
+                };
+
+                let key_builder = f.pop().unwrap();
+                let value_builder = f.pop().unwrap();
+
+                Ok(FieldBuilder::Map {
+                    field_names: None, // entries, keys, values
+                    key_builder: Box::new(key_builder),
+                    value_builder: Box::new(value_builder)
+                })
+            }
             DataType::List(field) => {
                 // TODO: allow passing in one field rather than Fields
                 let builder = create_field_builders(&Fields::from(vec![field.clone()]), capacity)?.pop().unwrap();
@@ -252,6 +326,14 @@ fn append_field_value(
                 } => {
                     null_buffer.push(false);
                     append_null_to_all_builders(nested_builders)
+                },
+                FieldBuilder::Map {
+                    key_builder,
+                    value_builder,
+                    ..
+                } => {
+                    append_null_to_all_builders(std::slice::from_mut(key_builder));
+                    append_null_to_all_builders(std::slice::from_mut(value_builder));
                 },
                 FieldBuilder::List {
 					offsets,
@@ -353,6 +435,23 @@ fn append_field_value(
             }
         },
         (
+            FieldBuilder::Map {
+				key_builder,
+                key_field,
+				value_builder,
+                value_field,
+                ..
+            },
+            DataType::Map(_field, _ordered),
+        ) => {
+            if let Some(obj) = value.as_object() {
+                for (k, v) in obj.iter() {
+                    append_field_value(key_builder, key_field, Some(&Value::String(k.clone())));
+                    append_field_value(value_builder, value_field, Some(v));
+                }
+            }
+        },
+        (
             FieldBuilder::List {
                 field,
                 offsets,
@@ -399,6 +498,14 @@ fn append_null_to_all_builders(builders: &mut [FieldBuilder]) {
                 null_buffer.push(false);
                 append_null_to_all_builders(nested_builder);
             },
+            FieldBuilder::Map {
+                key_builder,
+                value_builder,
+                ..
+            } => {
+                append_null_to_all_builders(std::slice::from_mut(key_builder));
+                append_null_to_all_builders(std::slice::from_mut(value_builder));
+            }
             FieldBuilder::List {
 				offsets,
 				builder,
@@ -436,6 +543,17 @@ fn finish_builder(builder: FieldBuilder) -> Result<ArrayRef> {
                 let null_buf = NullBuffer::from(null_buffer);
                 Arc::new(StructArray::new(fields, nested_arrays, Some(null_buf)))
             },
+            FieldBuilder::Map {
+
+            } => {
+                Arc::new(MapArray::new(
+                    field,
+                    offsets,
+                    entries,
+                    nulls,
+                    ordered
+                ))
+            }
             FieldBuilder::List {
                 field,
                 offsets,
@@ -453,6 +571,22 @@ fn finish_builder(builder: FieldBuilder) -> Result<ArrayRef> {
             }
         }
     )
+}
+
+fn get_schema_data_type(schema_str: &str) -> Result<DataType> {
+    let ast_type = if let Ok(schema_struct) = parse_data_type(schema_str) {
+        schema_struct
+    } else {
+        parse_data_type(format!("struct<{schema_str}>").as_str())
+            .map_err(|_| DataFusionError::Plan("Could not convert str to struct".to_string()))?
+    };
+    let sail_dtype = from_ast_data_type(ast_type.clone())
+        .map_err(|_| DataFusionError::Plan("Could not convert struct to sail type".to_string()))?;
+    let arrow_dtype = SailToArrayDataType.resolve_data_type(&sail_dtype)?;
+    match arrow_dtype {
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Struct(_) | DataType::Map(_, _) | DataType::List(_) => Ok(arrow_dtype),
+        other => plan_err!("Function `from_json` using unsupported schema type: {other:?}")
+    }
 }
 
 fn get_schema_as_fields(schema_str: &str) -> Result<Fields> {
