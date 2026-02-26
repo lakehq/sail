@@ -1,4 +1,5 @@
 use log::debug;
+use sail_common_datafusion::cache_manager::CacheId;
 use sail_server::actor::ActorHandle;
 use tokio::sync::oneshot;
 use tonic::{Request, Response, Status};
@@ -149,7 +150,7 @@ impl DriverService for DriverServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let event = DriverEvent::CachePartitionStored {
-            cache_id: request.cache_id,
+            cache_id: CacheId::from(request.cache_id),
             partition: request.partition as usize,
             worker_id: request.worker_id.into(),
         };

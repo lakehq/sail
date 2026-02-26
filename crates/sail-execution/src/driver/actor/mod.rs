@@ -4,6 +4,7 @@ mod rpc;
 
 use std::collections::HashMap;
 
+use sail_common_datafusion::cache_manager::CacheId;
 use sail_common_datafusion::session::job::JobRunnerHistory;
 use tokio::sync::oneshot;
 
@@ -28,7 +29,7 @@ pub struct DriverActor {
     /// Mapping from (cache_id, partition) to workers that hold the partition locally.
     ///
     /// TODO: this mapping can become stale if workers stop or evict cached partitions.
-    cache_partition_locations: HashMap<(u64, usize), Vec<WorkerId>>,
+    cache_partition_locations: HashMap<(CacheId, usize), Vec<WorkerId>>,
     /// An optional channel to send history when stopping the driver.
     history: Option<oneshot::Sender<JobRunnerHistory>>,
 }

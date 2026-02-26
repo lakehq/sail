@@ -1,3 +1,4 @@
+use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
@@ -5,13 +6,35 @@ use datafusion::logical_expr::LogicalPlan;
 
 use crate::extension::SessionExtension;
 
+/// Strongly typed identifier for a cached plan entry.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+pub struct CacheId(u64);
+
+impl From<u64> for CacheId {
+    fn from(value: u64) -> Self {
+        Self(value)
+    }
+}
+
+impl From<CacheId> for u64 {
+    fn from(value: CacheId) -> Self {
+        value.0
+    }
+}
+
+impl fmt::Display for CacheId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// A cached plan entry.
 #[derive(Clone)]
 pub struct CachedData {
     /// The resolved logical plan used as the cache key.
     pub plan: LogicalPlan,
     /// Unique identifier for this cache entry.
-    pub cache_id: u64,
+    pub cache_id: CacheId,
     /// Whether the cached data has been materialized on worker nodes.
     pub materialized: bool,
 }
@@ -38,12 +61,12 @@ impl CacheManager {
     }
 
     /// Registers a plan for caching. Returns the assigned cache ID.
-    pub fn cache_plan(&self, plan: LogicalPlan) -> u64 {
+    pub fn cache_plan(&self, plan: LogicalPlan) -> CacheId {
         let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(existing) = entries.iter().find(|e| e.plan == plan) {
             return existing.cache_id;
         }
-        let cache_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let cache_id = CacheId::from(self.next_id.fetch_add(1, Ordering::Relaxed));
         entries.push(CachedData {
             plan,
             cache_id,
@@ -59,13 +82,13 @@ impl CacheManager {
     }
 
     /// Returns a clone of the cached entry with the given cache ID.
-    pub fn find_by_id(&self, cache_id: u64) -> Option<CachedData> {
+    pub fn find_by_id(&self, cache_id: CacheId) -> Option<CachedData> {
         let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         entries.iter().find(|e| e.cache_id == cache_id).cloned()
     }
 
     /// Marks a cache entry as materialized.
-    pub fn mark_materialized(&self, cache_id: u64) {
+    pub fn mark_materialized(&self, cache_id: CacheId) {
         let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = entries.iter_mut().find(|e| e.cache_id == cache_id) {
             entry.materialized = true;

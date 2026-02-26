@@ -2,6 +2,7 @@ use std::mem;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use log::{error, info, warn};
+use sail_common_datafusion::cache_manager::CacheId;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_server::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
@@ -168,7 +169,7 @@ impl WorkerActor {
     pub(super) fn handle_cache_partition_stored(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        cache_id: u64,
+        cache_id: CacheId,
         partition: usize,
     ) -> ActorAction {
         let worker_id = self.options.worker_id;

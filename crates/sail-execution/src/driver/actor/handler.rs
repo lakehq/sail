@@ -7,6 +7,7 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::ExecutionPlan;
 use futures::TryStreamExt;
 use log::{debug, error, info, warn};
+use sail_common_datafusion::cache_manager::CacheId;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_common_datafusion::session::job::JobRunnerHistory;
 use sail_common_datafusion::system::observable::JobRunnerObserver;
@@ -34,7 +35,7 @@ impl DriverActor {
     /// Resolves the single worker that holds a cache partition.
     fn resolve_cache_partition_worker(
         &self,
-        cache_id: u64,
+        cache_id: CacheId,
         partition: usize,
     ) -> Result<WorkerId, String> {
         let workers = self
@@ -257,7 +258,7 @@ impl DriverActor {
     pub(super) fn handle_cache_partition_stored(
         &mut self,
         _ctx: &mut ActorContext<Self>,
-        cache_id: u64,
+        cache_id: CacheId,
         partition: usize,
         worker_id: WorkerId,
     ) -> ActorAction {

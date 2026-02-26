@@ -14,6 +14,7 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
 use futures::StreamExt;
+use sail_common_datafusion::cache_manager::CacheId;
 
 use crate::local_cache_store::LocalCacheStore;
 use crate::plan::CachePartitionReporter;
@@ -24,7 +25,7 @@ pub(crate) struct CacheWriteExec {
     plan: Arc<dyn ExecutionPlan>,
     cache_store: Option<Arc<LocalCacheStore>>,
     cache_reporter: Option<Arc<dyn CachePartitionReporter>>,
-    cache_id: u64,
+    cache_id: CacheId,
     properties: PlanProperties,
 }
 
@@ -35,7 +36,7 @@ impl CacheWriteExec {
     pub fn new(
         plan: Arc<dyn ExecutionPlan>,
         cache_store: Arc<LocalCacheStore>,
-        cache_id: u64,
+        cache_id: CacheId,
     ) -> Self {
         let properties = PlanProperties::new(
             EquivalenceProperties::new(Arc::new(Schema::empty())),
@@ -53,7 +54,7 @@ impl CacheWriteExec {
     }
 
     /// Creates a stub CacheWriteExec without a cache store, for serialization on the driver side.
-    pub fn new_stub(plan: Arc<dyn ExecutionPlan>, cache_id: u64) -> Self {
+    pub fn new_stub(plan: Arc<dyn ExecutionPlan>, cache_id: CacheId) -> Self {
         let properties = PlanProperties::new(
             EquivalenceProperties::new(Arc::new(Schema::empty())),
             Partitioning::UnknownPartitioning(plan.output_partitioning().partition_count()),
@@ -80,7 +81,7 @@ impl CacheWriteExec {
     }
 
     /// Returns the cache ID for this node.
-    pub fn cache_id(&self) -> u64 {
+    pub fn cache_id(&self) -> CacheId {
         self.cache_id
     }
 }

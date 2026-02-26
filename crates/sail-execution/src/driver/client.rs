@@ -1,4 +1,5 @@
 use sail_common_datafusion::error::CommonErrorCause;
+use sail_common_datafusion::cache_manager::CacheId;
 
 use crate::driver::event::TaskStatus;
 use crate::driver::gen;
@@ -122,11 +123,11 @@ impl DriverClient {
     pub async fn notify_cache_partition_stored(
         &self,
         worker_id: WorkerId,
-        cache_id: u64,
+        cache_id: CacheId,
         partition: usize,
     ) -> ExecutionResult<()> {
         let request = tonic::Request::new(NotifyCachePartitionStoredRequest {
-            cache_id,
+            cache_id: cache_id.into(),
             partition: partition as u64,
             worker_id: worker_id.into(),
         });

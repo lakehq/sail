@@ -11,6 +11,7 @@ use datafusion_proto::protobuf::PhysicalPlanNode;
 use indexmap::{IndexMap, IndexSet};
 use log::{debug, warn};
 use prost::Message;
+use sail_common_datafusion::cache_manager::CacheId;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::ActorContext;
@@ -63,7 +64,7 @@ impl JobScheduler {
     }
 
     /// Returns cache IDs read by the given stage of a job.
-    pub fn stage_cache_reads(&self, job_id: JobId, stage: usize) -> Option<&[u64]> {
+    pub fn stage_cache_reads(&self, job_id: JobId, stage: usize) -> Option<&[CacheId]> {
         let job = self.jobs.get(&job_id)?;
         let stage = job.graph.stages().get(stage)?;
         Some(stage.cache_reads.as_slice())

@@ -6,6 +6,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::ExecutionPlan;
+use sail_common_datafusion::cache_manager::CacheId;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_common_datafusion::session::job::JobRunnerHistory;
 use sail_common_datafusion::system::observable::JobRunnerObserver;
@@ -61,7 +62,7 @@ pub enum DriverEvent {
     },
     /// Indicates that a cache partition has been stored on a node.
     CachePartitionStored {
-        cache_id: u64,
+        cache_id: CacheId,
         partition: usize,
         worker_id: WorkerId,
     },
@@ -400,11 +401,11 @@ impl SpanAssociation for DriverEvent {
 }
 
 impl CachePartitionReporterMessage for DriverEvent {
-    fn cache_partition_stored(cache_id: u64, partition: usize) -> Self {
+    fn cache_partition_stored(cache_id: CacheId, partition: usize) -> Self {
         Self::CachePartitionStored {
             cache_id,
             partition,
-            worker_id: WorkerId::from(0u64),
+            worker_id: WorkerId::from(0_u64),
         }
     }
 }

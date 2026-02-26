@@ -11,6 +11,7 @@ mod tests {
     use datafusion::execution::TaskContext;
     use datafusion::physical_plan::ExecutionPlan;
     use futures::StreamExt;
+    use sail_common_datafusion::cache_manager::CacheId;
 
     use crate::local_cache_store::LocalCacheStore;
     use crate::plan::{CacheReadExec, CacheWriteExec};
@@ -18,7 +19,7 @@ mod tests {
     /// Verifies that CacheWriteExec stores batches and CacheReadExec retrieves them from the same store.
     #[tokio::test]
     async fn test_cache_write_then_read() {
-        let cache_id = 1u64;
+        let cache_id = CacheId::from(1_u64);
         let partition = 0usize;
         let ctx = Arc::new(TaskContext::default());
         // The store is shared between write and read, simulating the TaskRunner injecting

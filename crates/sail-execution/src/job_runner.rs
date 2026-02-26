@@ -8,7 +8,7 @@ use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::{execute_stream, ExecutionPlan};
 use datafusion::prelude::SessionContext;
 use futures::StreamExt;
-use sail_common_datafusion::cache_manager::CacheManager;
+use sail_common_datafusion::cache_manager::{CacheId, CacheManager};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::job::{JobRunner, JobRunnerHistory};
 use sail_common_datafusion::system::observable::{JobRunnerObserver, Observer, StateObservable};
@@ -40,7 +40,7 @@ impl LocalJobRunner {
     async fn materialize_cache(
         &self,
         ctx: &SessionContext,
-        cache_id: u64,
+        cache_id: CacheId,
         plan: &LogicalPlan,
     ) -> Result<()> {
         let physical = ctx.state().create_physical_plan(plan).await?;
@@ -148,7 +148,7 @@ impl ClusterJobRunner {
     async fn materialize_cache(
         &self,
         ctx: &SessionContext,
-        cache_id: u64,
+        cache_id: CacheId,
         plan: &LogicalPlan,
     ) -> Result<()> {
         let physical = ctx.state().create_physical_plan(plan).await?;
@@ -213,7 +213,7 @@ impl JobRunner for ClusterJobRunner {
 }
 
 /// Walks a physical plan tree and collects cache IDs from any CacheReadExec nodes.
-fn collect_cache_node_ids(plan: &Arc<dyn ExecutionPlan>) -> Vec<u64> {
+fn collect_cache_node_ids(plan: &Arc<dyn ExecutionPlan>) -> Vec<CacheId> {
     let mut ids = Vec::new();
     let _ = plan.apply(|node: &Arc<dyn ExecutionPlan>| {
         if let Some(cache_read) = node.as_any().downcast_ref::<CacheReadExec>() {

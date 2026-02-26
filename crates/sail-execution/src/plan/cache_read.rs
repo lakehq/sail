@@ -10,6 +10,7 @@ use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
+use sail_common_datafusion::cache_manager::CacheId;
 
 use crate::local_cache_store::LocalCacheStore;
 
@@ -18,7 +19,7 @@ use crate::local_cache_store::LocalCacheStore;
 /// This node is a placeholder created during physical planning from an InMemoryRelationNode.
 /// At execution time, the TaskRunner injects the worker's LocalCacheStore before execution.
 pub struct CacheReadExec {
-    cache_id: u64,
+    cache_id: CacheId,
     cache_store: Option<Arc<LocalCacheStore>>,
     schema: SchemaRef,
     properties: PlanProperties,
@@ -26,7 +27,7 @@ pub struct CacheReadExec {
 
 impl CacheReadExec {
     /// Creates a new CacheReadExec for the given cache ID and schema.
-    pub fn new(cache_id: u64, schema: SchemaRef, num_partitions: usize) -> Self {
+    pub fn new(cache_id: CacheId, schema: SchemaRef, num_partitions: usize) -> Self {
         let properties = PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             Partitioning::UnknownPartitioning(num_partitions),
@@ -42,7 +43,7 @@ impl CacheReadExec {
     }
 
     /// Returns the cache ID this node reads from.
-    pub fn cache_id(&self) -> u64 {
+    pub fn cache_id(&self) -> CacheId {
         self.cache_id
     }
 

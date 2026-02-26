@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 
 use datafusion::arrow::datatypes::SchemaRef;
+use sail_common_datafusion::cache_manager::CacheId;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_telemetry::common::{SpanAssociation, SpanAttribute};
 use tokio::sync::oneshot;
@@ -41,7 +42,7 @@ pub enum WorkerEvent {
     },
     /// Indicates that a cache partition has been stored on this worker.
     CachePartitionStored {
-        cache_id: u64,
+        cache_id: CacheId,
         partition: usize,
     },
     ProbePendingLocalStream {
@@ -83,7 +84,7 @@ pub enum WorkerEvent {
 }
 
 impl CachePartitionReporterMessage for WorkerEvent {
-    fn cache_partition_stored(cache_id: u64, partition: usize) -> Self {
+    fn cache_partition_stored(cache_id: CacheId, partition: usize) -> Self {
         Self::CachePartitionStored {
             cache_id,
             partition,

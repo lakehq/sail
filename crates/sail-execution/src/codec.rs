@@ -71,6 +71,7 @@ use datafusion_spark::function::url::url_encode::UrlEncode;
 use prost::Message;
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::array::record_batch::{read_record_batches, write_record_batches};
+use sail_common_datafusion::cache_manager::CacheId;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::physical_expr::PhysicalExprWithSource;
 use sail_common_datafusion::system::catalog::SystemTable;
@@ -851,7 +852,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             NodeKind::CacheWrite(gen::CacheWriteExecNode { input, cache_id }) => {
                 let plan = self.try_decode_plan(&input, ctx)?;
-                Ok(Arc::new(CacheWriteExec::new_stub(plan, cache_id)))
+                Ok(Arc::new(CacheWriteExec::new_stub(
+                    plan,
+                    CacheId::from(cache_id),
+                )))
             }
             NodeKind::CacheRead(gen::CacheReadExecNode {
                 cache_id,
@@ -860,7 +864,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }) => {
                 let schema = Arc::new(self.try_decode_schema(&schema)?);
                 Ok(Arc::new(CacheReadExec::new(
-                    cache_id,
+                    CacheId::from(cache_id),
                     schema,
                     num_partitions as usize,
                 )))
@@ -1383,12 +1387,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let input = self.try_encode_plan(cache_write.children()[0].clone())?;
             NodeKind::CacheWrite(gen::CacheWriteExecNode {
                 input,
-                cache_id: cache_write.cache_id(),
+                cache_id: cache_write.cache_id().into(),
             })
         } else if let Some(cache_read) = node.as_any().downcast_ref::<CacheReadExec>() {
             let schema = self.try_encode_schema(cache_read.schema().as_ref())?;
             NodeKind::CacheRead(gen::CacheReadExecNode {
-                cache_id: cache_read.cache_id(),
+                cache_id: cache_read.cache_id().into(),
                 schema,
                 num_partitions: cache_read
                     .properties()

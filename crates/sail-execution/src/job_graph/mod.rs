@@ -6,6 +6,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties, PhysicalExpr};
+use sail_common_datafusion::cache_manager::CacheId;
 
 /// A job graph represents a distributed execution plan for a job.
 /// A job consists of multiple *stages*, where each stage has one or more
@@ -90,7 +91,7 @@ pub struct Stage {
     pub inputs: Vec<StageInput>,
     pub plan: Arc<dyn ExecutionPlan>,
     /// Cache IDs read by this stage's physical plan.
-    pub cache_reads: Vec<u64>,
+    pub cache_reads: Vec<CacheId>,
     /// The name of the "slot sharing group" for the stage.
     pub group: String,
     pub mode: OutputMode,

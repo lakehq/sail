@@ -11,6 +11,7 @@ use std::sync::Arc;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::Result;
 use datafusion::physical_plan::ExecutionPlan;
+use sail_common_datafusion::cache_manager::CacheId;
 use sail_server::actor::{Actor, ActorHandle};
 
 use crate::local_cache_store::LocalCacheStore;
@@ -22,12 +23,12 @@ pub(crate) use stage_input::StageInputExec;
 
 /// Reports cache partition materialization back to the runtime.
 pub(crate) trait CachePartitionReporter: Send + Sync {
-    fn report_partition_stored(&self, cache_id: u64, partition: usize);
+    fn report_partition_stored(&self, cache_id: CacheId, partition: usize);
 }
 
 /// Builds a cache-partition-stored message for an actor.
 pub(crate) trait CachePartitionReporterMessage {
-    fn cache_partition_stored(cache_id: u64, partition: usize) -> Self;
+    fn cache_partition_stored(cache_id: CacheId, partition: usize) -> Self;
 }
 
 /// Reports cache partition materialization by sending an actor message.
@@ -46,7 +47,7 @@ impl<T: Actor> CachePartitionReporter for ActorCachePartitionReporter<T>
 where
     T::Message: CachePartitionReporterMessage,
 {
-    fn report_partition_stored(&self, cache_id: u64, partition: usize) {
+    fn report_partition_stored(&self, cache_id: CacheId, partition: usize) {
         let handle = self.handle.clone();
         tokio::spawn(async move {
             let _ = handle

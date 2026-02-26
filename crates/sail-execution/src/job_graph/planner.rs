@@ -15,6 +15,7 @@ use datafusion::physical_plan::{
     PlanProperties,
 };
 use sail_catalog_system::physical_plan::SystemTableExec;
+use sail_common_datafusion::cache_manager::CacheId;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{ExecutionError, ExecutionResult};
@@ -24,8 +25,8 @@ use crate::job_graph::{
 use crate::plan::{CacheReadExec, ShuffleConsumption, StageInputExec};
 
 /// Collects cache IDs read by [`CacheReadExec`] nodes in a physical plan.
-fn collect_cache_reads(plan: &Arc<dyn ExecutionPlan>) -> Vec<u64> {
-    let mut ids = std::collections::HashSet::<u64>::new();
+fn collect_cache_reads(plan: &Arc<dyn ExecutionPlan>) -> Vec<CacheId> {
+    let mut ids = std::collections::HashSet::<CacheId>::new();
     let mut stack = vec![Arc::clone(plan)];
     while let Some(node) = stack.pop() {
         if let Some(read) = node.as_any().downcast_ref::<CacheReadExec>() {
