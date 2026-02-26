@@ -78,7 +78,10 @@ use sail_common_datafusion::system::catalog::SystemTable;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_data_source::formats::binary::source::BinarySource;
 use sail_data_source::formats::console::ConsoleSinkExec;
-use sail_data_source::formats::python::{InputPartition, PythonDataSourceExec};
+use sail_data_source::formats::python::{
+    InputPartition, PythonDataSourceExec, PythonDataSourceWriteCommitExec,
+    PythonDataSourceWriteExec,
+};
 use sail_data_source::formats::rate::{RateSourceExec, TableRateOptions};
 use sail_data_source::formats::socket::{SocketSourceExec, TableSocketOptions};
 use sail_data_source::formats::text::source::TextSource;
@@ -995,6 +998,37 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     partitions,
                 )))
             }
+            NodeKind::PythonDataSourceWrite(gen::PythonDataSourceWriteExecNode {
+                pickled_writer,
+                schema,
+                is_arrow,
+                input,
+            }) => {
+                let schema = Arc::new(self.try_decode_schema(&schema)?);
+                let input = self.try_decode_plan(&input, ctx)?;
+                if schema.as_ref() != input.schema().as_ref() {
+                    return plan_err!(
+                        "PythonDataSourceWriteExec schema mismatch: encoded schema does not match input schema"
+                    );
+                }
+                Ok(Arc::new(PythonDataSourceWriteExec::new(
+                    input,
+                    pickled_writer,
+                    is_arrow,
+                )))
+            }
+            NodeKind::PythonDataSourceWriteCommit(gen::PythonDataSourceWriteCommitExecNode {
+                pickled_writer,
+                expected_partitions,
+                input,
+            }) => {
+                let input = self.try_decode_plan(&input, ctx)?;
+                Ok(Arc::new(PythonDataSourceWriteCommitExec::new(
+                    input,
+                    pickled_writer,
+                    expected_partitions as usize,
+                )))
+            }
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
         }
     }
@@ -1525,6 +1559,27 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 pickled_reader: python_exec.pickled_reader().to_vec(),
                 schema,
                 partitions,
+            })
+        } else if let Some(python_write_exec) =
+            node.as_any().downcast_ref::<PythonDataSourceWriteExec>()
+        {
+            let schema = self.try_encode_schema(python_write_exec.input().schema().as_ref())?;
+            let input = self.try_encode_plan(python_write_exec.input().clone())?;
+            NodeKind::PythonDataSourceWrite(gen::PythonDataSourceWriteExecNode {
+                pickled_writer: python_write_exec.pickled_writer().to_vec(),
+                schema,
+                is_arrow: python_write_exec.is_arrow(),
+                input,
+            })
+        } else if let Some(python_commit_exec) = node
+            .as_any()
+            .downcast_ref::<PythonDataSourceWriteCommitExec>()
+        {
+            let input = self.try_encode_plan(python_commit_exec.input().clone())?;
+            NodeKind::PythonDataSourceWriteCommit(gen::PythonDataSourceWriteCommitExecNode {
+                pickled_writer: python_commit_exec.pickled_writer().to_vec(),
+                expected_partitions: python_commit_exec.expected_partitions() as u64,
+                input,
             })
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");
