@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use datafusion_common::{DFSchema, DFSchemaRef};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
+use educe::Educe;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::utils::items::ItemTaker;
 
@@ -15,9 +16,11 @@ pub struct FileDeleteOptions {
     pub options: Vec<Vec<(String, String)>>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, PartialEq, Educe)]
+#[educe(Eq, Hash, PartialOrd)]
 pub struct FileDeleteNode {
     options: FileDeleteOptions,
+    #[educe(PartialOrd(ignore))]
     schema: DFSchemaRef,
 }
 
@@ -31,25 +34,6 @@ impl FileDeleteNode {
 
     pub fn options(&self) -> &FileDeleteOptions {
         &self.options
-    }
-}
-
-#[derive(PartialEq, PartialOrd)]
-struct FileDeleteNodeOrd<'a> {
-    options: &'a FileDeleteOptions,
-}
-
-impl<'a> From<&'a FileDeleteNode> for FileDeleteNodeOrd<'a> {
-    fn from(node: &'a FileDeleteNode) -> Self {
-        Self {
-            options: &node.options,
-        }
-    }
-}
-
-impl PartialOrd for FileDeleteNode {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        FileDeleteNodeOrd::from(self).partial_cmp(&other.into())
     }
 }
 

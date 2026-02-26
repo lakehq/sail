@@ -1,37 +1,22 @@
-use std::cmp::Ordering;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
 use datafusion::logical_expr::LogicalPlan;
 use datafusion_common::{plan_err, DFSchema, DFSchemaRef, Result};
 use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
+use educe::Educe;
 use sail_common_datafusion::streaming::event::schema::try_from_flow_event_schema;
 
 /// A logical plan node that collects a stream of retractable data batches
 /// into final data batches.
 /// This is a special "streaming sink" that allows returning query results
 /// for streaming queries, with the requirement that the query is bounded.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, PartialEq, Educe)]
+#[educe(Eq, Hash, PartialOrd)]
 pub struct StreamCollectorNode {
     input: Arc<LogicalPlan>,
+    #[educe(PartialOrd(ignore))]
     schema: DFSchemaRef,
-}
-
-#[derive(PartialEq, PartialOrd)]
-struct StreamCollectorNodeOrd<'a> {
-    input: &'a Arc<LogicalPlan>,
-}
-
-impl<'a> From<&'a StreamCollectorNode> for StreamCollectorNodeOrd<'a> {
-    fn from(node: &'a StreamCollectorNode) -> Self {
-        Self { input: &node.input }
-    }
-}
-
-impl PartialOrd for StreamCollectorNode {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        StreamCollectorNodeOrd::from(self).partial_cmp(&other.into())
-    }
 }
 
 impl StreamCollectorNode {
