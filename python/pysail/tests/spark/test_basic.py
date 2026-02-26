@@ -389,6 +389,13 @@ def test_sql_parameters(spark):
     assert_frame_equal(actual, expected)
 
 
+def test_sql_dataframe_argument(spark):
+    df = spark.range(10)
+    actual = spark.sql("SELECT * FROM {df} WHERE id > {bound1} AND id < :bound2", df=df, bound1=7, args={"bound2": 9}).toPandas()
+    expected = pd.DataFrame({"id": [8]}, dtype="int64")
+    assert_frame_equal(actual, expected)
+
+
 def test_select_expression(df):
     assert_frame_equal(df.selectExpr("b.foo").toPandas(), pd.DataFrame({"foo": ["hello", "world"]}))
     assert_frame_equal(df.selectExpr("b.*").toPandas(), pd.DataFrame({"foo": ["hello", "world"]}))
