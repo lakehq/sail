@@ -1,0 +1,52 @@
+name: Copilot Setup Steps
+
+on:
+  # Allow manual triggering of this workflow for testing purposes.
+  workflow_dispatch:
+
+jobs:
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/adjust-swap-space
+
+      - uses: ./.github/actions/mount-target-directory
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ github.token }}
+
+      # We do not use our `setup-rust` action so that the environment is better suited
+      # for development purposes.
+      # We skip cache download and allow incremental build.
+
+      - name: Install Rust toolchains
+        run: |
+          rustup toolchain install stable --profile default --component llvm-tools-preview
+          rustup toolchain install nightly --profile default
+
+      - name: Install grcov
+        uses: taiki-e/install-action@grcov
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install Hatch
+        uses: pypa/hatch@install
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
