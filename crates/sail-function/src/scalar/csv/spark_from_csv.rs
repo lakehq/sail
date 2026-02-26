@@ -97,12 +97,6 @@ impl Default for SparkFromCSVOptions {
     }
 }
 
-impl Default for SparkFromCSV {
-    fn default() -> Self {
-        Self::new(Arc::from(DEFAULT_SESSION_TIMEZONE))
-    }
-}
-
 impl SparkFromCSV {
     pub const FROM_CSV_NAME: &'static str = "from_csv";
 

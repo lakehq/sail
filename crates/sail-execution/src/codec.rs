@@ -1563,7 +1563,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_concat" | "concat" | "array_concat" => {
                 Ok(Arc::new(ScalarUDF::from(SparkConcat::new())))
             }
-            "spark_from_csv" | "from_csv" => Ok(Arc::new(ScalarUDF::from(SparkFromCSV::default()))),
             "spark_to_number" | "to_number" => Ok(Arc::new(ScalarUDF::from(SparkToNumber::new()))),
             "spark_try_to_number" | "try_to_number" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryToNumber::new())))
