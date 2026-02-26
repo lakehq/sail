@@ -192,6 +192,31 @@ pub struct MergeInfo {
     pub operation_override: Option<OperationOverride>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ProcedureParameter {
+    pub name: String,
+    pub required: bool,
+}
+// TODO: use yaml to generate the code.
+#[derive(Debug, Clone)]
+pub struct ProcedureCapability {
+    pub canonical_name: String,
+    pub aliases: Vec<String>,
+    pub supports_dry_run: bool,
+    pub is_destructive: bool,
+    pub parameters: Vec<ProcedureParameter>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProcedureInfo {
+    pub format: String,
+    pub procedure_name: Vec<String>,
+    pub positional_arguments: Vec<String>,
+    pub named_arguments: Vec<(String, String)>,
+    pub target_table: Option<Vec<String>>,
+    pub target_path: Option<String>,
+}
+
 // TODO: MERGE schema evolution end-to-end
 // - Expand sink schema during MERGE: detect source-only columns (case-insensitive), keep target order, append new cols, project source/NULL for them.
 // - Emit Metadata (and Protocol if required) in writer/commit so the new schema is persisted and readable.
@@ -239,6 +264,24 @@ pub trait TableFormat: Send + Sync {
         let _ = (ctx, info);
         not_impl_err!(
             "MERGE operation is not yet implemented for {} format",
+            self.name()
+        )
+    }
+
+    /// Returns procedure capabilities exposed by this format.
+    fn procedure_capabilities(&self) -> Vec<ProcedureCapability> {
+        vec![]
+    }
+
+    /// Creates an `ExecutionPlan` for table maintenance procedures.
+    async fn create_procedure_executor(
+        &self,
+        ctx: &dyn Session,
+        info: ProcedureInfo,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let _ = (ctx, info);
+        not_impl_err!(
+            "Procedure is not yet implemented for {} format",
             self.name()
         )
     }

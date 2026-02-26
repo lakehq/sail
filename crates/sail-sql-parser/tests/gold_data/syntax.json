@@ -3989,6 +3989,14 @@
               }
             },
             {
+              "name": "Keyword(Call)",
+              "node": {
+                "terminal": {
+                  "keyword": "CALL"
+                }
+              }
+            },
+            {
               "name": "Keyword(Cascade)",
               "node": {
                 "terminal": {
@@ -4377,6 +4385,14 @@
               "node": {
                 "terminal": {
                   "keyword": "DROP"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Dry)",
+              "node": {
+                "terminal": {
+                  "keyword": "DRY"
                 }
               }
             },
@@ -5125,6 +5141,14 @@
               }
             },
             {
+              "name": "Keyword(Optimize)",
+              "node": {
+                "terminal": {
+                  "keyword": "OPTIMIZE"
+                }
+              }
+            },
+            {
               "name": "Keyword(Options)",
               "node": {
                 "terminal": {
@@ -5373,6 +5397,14 @@
               }
             },
             {
+              "name": "Keyword(Retain)",
+              "node": {
+                "terminal": {
+                  "keyword": "RETAIN"
+                }
+              }
+            },
+            {
               "name": "Keyword(Right)",
               "node": {
                 "terminal": {
@@ -5409,6 +5441,14 @@
               "node": {
                 "terminal": {
                   "keyword": "ROWS"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Run)",
+              "node": {
+                "terminal": {
+                  "keyword": "RUN"
                 }
               }
             },
@@ -5901,6 +5941,14 @@
               }
             },
             {
+              "name": "Keyword(Vacuum)",
+              "node": {
+                "terminal": {
+                  "keyword": "VACUUM"
+                }
+              }
+            },
+            {
               "name": "Keyword(Values)",
               "node": {
                 "terminal": {
@@ -6041,6 +6089,14 @@
               "node": {
                 "terminal": {
                   "keyword": "ZONE"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Zorder)",
+              "node": {
+                "terminal": {
+                  "keyword": "ZORDER"
                 }
               }
             },
@@ -7166,6 +7222,14 @@
               }
             },
             {
+              "name": "Option(ProcedureArgumentList)",
+              "node": {
+                "optional": {
+                  "nonTerminal": "ProcedureArgumentList"
+                }
+              }
+            },
+            {
               "name": "Option(PropertyKeyValue)",
               "node": {
                 "optional": {
@@ -7290,6 +7354,14 @@
               "node": {
                 "optional": {
                   "nonTerminal": "Tuple(Keyword(Comment), StringLiteral)"
+                }
+              }
+            },
+            {
+              "name": "Option(Tuple(Keyword(Dry), Keyword(Run)))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Tuple(Keyword(Dry), Keyword(Run))"
                 }
               }
             },
@@ -7430,6 +7502,14 @@
               }
             },
             {
+              "name": "Option(Tuple(Keyword(Zorder), Keyword(By), Operator(LeftParenthesis), Sequence(ObjectName, Operator(Comma)), Operator(RightParenthesis)))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Tuple(Keyword(Zorder), Keyword(By), Operator(LeftParenthesis), Sequence(ObjectName, Operator(Comma)), Operator(RightParenthesis))"
+                }
+              }
+            },
+            {
               "name": "Option(Tuple(Operator(Comma), IntegerLiteral))",
               "node": {
                 "optional": {
@@ -7538,6 +7618,14 @@
               "node": {
                 "optional": {
                   "nonTerminal": "UpdateTableAlias"
+                }
+              }
+            },
+            {
+              "name": "Option(VacuumRetainClause)",
+              "node": {
+                "optional": {
+                  "nonTerminal": "VacuumRetainClause"
                 }
               }
             },
@@ -7820,6 +7908,22 @@
                   },
                   {
                     "nonTerminal": "NamedExprList"
+                  },
+                  {
+                    "nonTerminal": "Operator(RightParenthesis)"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "ProcedureArgumentList",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Operator(LeftParenthesis)"
+                  },
+                  {
+                    "nonTerminal": "Option(Sequence(FunctionArgument, Operator(Comma)))"
                   },
                   {
                     "nonTerminal": "Operator(RightParenthesis)"
@@ -9336,6 +9440,48 @@
                   {
                     "sequence": [
                       {
+                        "nonTerminal": "Keyword(Call)"
+                      },
+                      {
+                        "nonTerminal": "ObjectName"
+                      },
+                      {
+                        "nonTerminal": "Option(ProcedureArgumentList)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Optimize)"
+                      },
+                      {
+                        "nonTerminal": "ObjectName"
+                      },
+                      {
+                        "nonTerminal": "Option(Tuple(Keyword(Zorder), Keyword(By), Operator(LeftParenthesis), Sequence(ObjectName, Operator(Comma)), Operator(RightParenthesis)))"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Vacuum)"
+                      },
+                      {
+                        "nonTerminal": "ObjectName"
+                      },
+                      {
+                        "nonTerminal": "Option(VacuumRetainClause)"
+                      },
+                      {
+                        "nonTerminal": "Option(Tuple(Keyword(Dry), Keyword(Run)))"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
                         "nonTerminal": "Keyword(Explain)"
                       },
                       {
@@ -10454,6 +10600,19 @@
               }
             },
             {
+              "name": "Tuple(Keyword(Dry), Keyword(Run))",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Keyword(Dry)"
+                  },
+                  {
+                    "nonTerminal": "Keyword(Run)"
+                  }
+                ]
+              }
+            },
+            {
               "name": "Tuple(Keyword(Escaped), Keyword(By), StringLiteral)",
               "node": {
                 "sequence": [
@@ -10881,6 +11040,28 @@
               }
             },
             {
+              "name": "Tuple(Keyword(Zorder), Keyword(By), Operator(LeftParenthesis), Sequence(ObjectName, Operator(Comma)), Operator(RightParenthesis))",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Keyword(Zorder)"
+                  },
+                  {
+                    "nonTerminal": "Keyword(By)"
+                  },
+                  {
+                    "nonTerminal": "Operator(LeftParenthesis)"
+                  },
+                  {
+                    "nonTerminal": "Sequence(ObjectName, Operator(Comma))"
+                  },
+                  {
+                    "nonTerminal": "Operator(RightParenthesis)"
+                  }
+                ]
+              }
+            },
+            {
               "name": "Tuple(Operator(Comma), IntegerLiteral)",
               "node": {
                 "sequence": [
@@ -11208,6 +11389,19 @@
                   },
                   {
                     "nonTerminal": "Option(IdentList)"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "VacuumRetainClause",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Keyword(Retain)"
+                  },
+                  {
+                    "nonTerminal": "Expression"
                   }
                 ]
               }

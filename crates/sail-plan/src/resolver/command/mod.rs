@@ -16,6 +16,7 @@ mod explain;
 mod function;
 mod insert;
 mod merge;
+mod procedure;
 mod show;
 mod variable;
 mod write;
@@ -238,6 +239,9 @@ impl PlanResolver<'_> {
                     state,
                 )
                 .await
+            }
+            CommandNode::CallProcedure(call) => {
+                self.resolve_command_call_procedure(call, state).await
             }
             CommandNode::MergeInto(merge) => self.resolve_command_merge_into(merge, state).await,
             CommandNode::SetVariable { variable, value } => {

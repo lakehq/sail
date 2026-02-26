@@ -2,12 +2,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion::arrow::datatypes::Schema;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion::datasource::listing::ListingTableUrl;
+use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::datasource::{
-    DeleteInfo, MergeInfo, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
+    DeleteInfo, MergeInfo, PhysicalSinkMode, ProcedureCapability, ProcedureInfo,
+    ProcedureParameter, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_data_source::options::{
@@ -231,6 +234,76 @@ impl TableFormat for DeltaTableFormat {
         let merge_ctx = PlannerContext::new(ctx, merge_config);
         let merge_exec = plan_merge(&merge_ctx, info).await?;
         Ok(merge_exec)
+    }
+
+    fn procedure_capabilities(&self) -> Vec<ProcedureCapability> {
+        vec![
+            ProcedureCapability {
+                canonical_name: "system.optimize".to_string(),
+                aliases: vec!["optimize".to_string()],
+                supports_dry_run: false,
+                is_destructive: false,
+                parameters: vec![ProcedureParameter {
+                    name: "table".to_string(),
+                    required: true,
+                }],
+            },
+            ProcedureCapability {
+                canonical_name: "system.vacuum".to_string(),
+                aliases: vec![
+                    "vacuum".to_string(),
+                    "expire_snapshots".to_string(),
+                    "remove_orphan_files".to_string(),
+                ],
+                supports_dry_run: true,
+                is_destructive: true,
+                parameters: vec![ProcedureParameter {
+                    name: "table".to_string(),
+                    required: true,
+                }],
+            },
+            ProcedureCapability {
+                canonical_name: "system.expire_snapshots".to_string(),
+                aliases: vec!["expire_snapshots".to_string()],
+                supports_dry_run: true,
+                is_destructive: true,
+                parameters: vec![ProcedureParameter {
+                    name: "table".to_string(),
+                    required: true,
+                }],
+            },
+            ProcedureCapability {
+                canonical_name: "system.remove_orphan_files".to_string(),
+                aliases: vec!["remove_orphan_files".to_string()],
+                supports_dry_run: true,
+                is_destructive: true,
+                parameters: vec![ProcedureParameter {
+                    name: "table".to_string(),
+                    required: true,
+                }],
+            },
+        ]
+    }
+
+    async fn create_procedure_executor(
+        &self,
+        _ctx: &dyn Session,
+        info: ProcedureInfo,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let procedure = info.procedure_name.join(".").to_ascii_lowercase();
+        match procedure.as_str() {
+            "system.optimize"
+            | "system.vacuum"
+            | "system.expire_snapshots"
+            | "system.remove_orphan_files" => {}
+            _ => {
+                return not_impl_err!(
+                    "unsupported Delta procedure: {}",
+                    info.procedure_name.join(".")
+                );
+            }
+        }
+        Ok(Arc::new(EmptyExec::new(Arc::new(Schema::empty()))))
     }
 }
 

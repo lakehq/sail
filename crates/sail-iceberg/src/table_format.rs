@@ -13,12 +13,15 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion::arrow::datatypes::Schema as ArrowSchema;
 use datafusion::catalog::Session;
 use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion::datasource::TableProvider;
+use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::datasource::{
-    PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
+    PhysicalSinkMode, ProcedureCapability, ProcedureInfo, ProcedureParameter, SinkInfo, SourceInfo,
+    TableFormat, TableFormatRegistry,
 };
 use sail_data_source::options::{
     load_default_options, load_options, IcebergReadOptions, IcebergWriteOptions,
@@ -178,6 +181,72 @@ impl TableFormat for IcebergTableFormat {
         let builder = IcebergPlanBuilder::new(input, table_config, mode, physical_sort, ctx);
         let exec = builder.build().await?;
         Ok(exec)
+    }
+
+    fn procedure_capabilities(&self) -> Vec<ProcedureCapability> {
+        vec![
+            ProcedureCapability {
+                canonical_name: "system.optimize".to_string(),
+                aliases: vec!["optimize".to_string(), "rewrite_data_files".to_string()],
+                supports_dry_run: false,
+                is_destructive: false,
+                parameters: vec![ProcedureParameter {
+                    name: "table".to_string(),
+                    required: true,
+                }],
+            },
+            ProcedureCapability {
+                canonical_name: "system.vacuum".to_string(),
+                aliases: vec!["vacuum".to_string()],
+                supports_dry_run: true,
+                is_destructive: true,
+                parameters: vec![ProcedureParameter {
+                    name: "table".to_string(),
+                    required: true,
+                }],
+            },
+            ProcedureCapability {
+                canonical_name: "system.expire_snapshots".to_string(),
+                aliases: vec!["expire_snapshots".to_string()],
+                supports_dry_run: true,
+                is_destructive: true,
+                parameters: vec![ProcedureParameter {
+                    name: "table".to_string(),
+                    required: true,
+                }],
+            },
+            ProcedureCapability {
+                canonical_name: "system.remove_orphan_files".to_string(),
+                aliases: vec!["remove_orphan_files".to_string()],
+                supports_dry_run: true,
+                is_destructive: true,
+                parameters: vec![ProcedureParameter {
+                    name: "table".to_string(),
+                    required: true,
+                }],
+            },
+        ]
+    }
+
+    async fn create_procedure_executor(
+        &self,
+        _ctx: &dyn Session,
+        info: ProcedureInfo,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let procedure = info.procedure_name.join(".").to_ascii_lowercase();
+        match procedure.as_str() {
+            "system.optimize"
+            | "system.vacuum"
+            | "system.expire_snapshots"
+            | "system.remove_orphan_files" => {}
+            _ => {
+                return not_impl_err!(
+                    "unsupported Iceberg procedure: {}",
+                    info.procedure_name.join(".")
+                );
+            }
+        }
+        Ok(Arc::new(EmptyExec::new(Arc::new(ArrowSchema::empty()))))
     }
 }
 

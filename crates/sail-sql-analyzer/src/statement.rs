@@ -23,7 +23,10 @@ use sail_sql_parser::tree::TreeText;
 
 use crate::data_type::from_ast_data_type;
 use crate::error::{SqlError, SqlResult};
-use crate::expression::{from_ast_expression, from_ast_identifier_list, from_ast_object_name};
+use crate::expression::{
+    from_ast_expression, from_ast_function_arguments, from_ast_identifier_list,
+    from_ast_object_name,
+};
 use crate::query::from_ast_query;
 use crate::value::from_ast_string;
 
@@ -449,6 +452,82 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
         Statement::ShowFunctions { .. } => Err(SqlError::todo("SHOW FUNCTIONS")),
+        Statement::Call {
+            call: _,
+            name,
+            arguments,
+        } => {
+            let args = if let Some(arguments) = arguments.and_then(|x| x.arguments) {
+                arguments.into_items().collect::<Vec<_>>()
+            } else {
+                vec![]
+            };
+            let (positional_arguments, named_arguments) = from_ast_function_arguments(args)?;
+            let node = spec::CommandNode::CallProcedure(spec::CallProcedure {
+                procedure: from_ast_object_name(name)?,
+                positional_arguments,
+                named_arguments,
+                target: None,
+            });
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::Optimize {
+            optimize: _,
+            name,
+            zorder,
+        } => {
+            let table = from_ast_object_name(name)?;
+            let mut named_arguments: Vec<(spec::Identifier, spec::Expr)> = vec![];
+            if let Some((_, _, _, columns, _)) = zorder {
+                let value = columns
+                    .into_items()
+                    .map(from_ast_object_name)
+                    .collect::<SqlResult<Vec<_>>>()?
+                    .into_iter()
+                    .map(|x| {
+                        let parts: Vec<String> = x.into();
+                        parts.join(".")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",");
+                named_arguments.push((
+                    "zorder_by".into(),
+                    spec::Expr::Literal(spec::Literal::Utf8 { value: Some(value) }),
+                ));
+            }
+            let node = spec::CommandNode::CallProcedure(spec::CallProcedure {
+                procedure: spec::ObjectName::bare("system").child("optimize"),
+                positional_arguments: vec![],
+                named_arguments,
+                target: Some(table),
+            });
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::Vacuum {
+            vacuum: _,
+            name,
+            retain,
+            dry_run,
+        } => {
+            let table = from_ast_object_name(name)?;
+            let mut named_arguments: Vec<(spec::Identifier, spec::Expr)> = vec![];
+            if let Some(retain) = retain {
+                named_arguments.push(("retain".into(), from_ast_expression(retain.value)?));
+            }
+            if dry_run.is_some() {
+                named_arguments.push((
+                    "dry_run".into(),
+                    spec::Expr::Literal(spec::Literal::Boolean { value: Some(true) }),
+                ));
+            }
+            let node = spec::CommandNode::CallProcedure(spec::CallProcedure {
+                procedure: spec::ObjectName::bare("system").child("vacuum"),
+                positional_arguments: vec![],
+                named_arguments,
+                target: Some(table),
+            });
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::Explain {
             explain: _,
             format,
