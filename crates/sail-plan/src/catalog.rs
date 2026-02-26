@@ -1,4 +1,3 @@
-use std::cmp::Ordering;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
@@ -9,6 +8,7 @@ use datafusion::logical_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use datafusion::prelude::SessionContext;
 use datafusion_common::{exec_datafusion_err, internal_datafusion_err, DFSchema};
 use datafusion_expr::{TableScan, UNNAMED_TABLE};
+use educe::Educe;
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::utils::quote_names_if_needed;
@@ -20,32 +20,13 @@ use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::formatter::SparkPlanFormatter;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, PartialEq, Educe)]
+#[educe(Eq, Hash, PartialOrd)]
 pub(crate) struct CatalogCommandNode {
     name: String,
+    #[educe(PartialOrd(ignore))]
     schema: DFSchemaRef,
     command: CatalogCommand,
-}
-
-#[derive(PartialEq, PartialOrd)]
-struct CatalogCommandNodeOrd<'a> {
-    name: &'a String,
-    command: &'a CatalogCommand,
-}
-
-impl<'a> From<&'a CatalogCommandNode> for CatalogCommandNodeOrd<'a> {
-    fn from(node: &'a CatalogCommandNode) -> Self {
-        Self {
-            name: &node.name,
-            command: &node.command,
-        }
-    }
-}
-
-impl PartialOrd for CatalogCommandNode {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        CatalogCommandNodeOrd::from(self).partial_cmp(&other.into())
-    }
 }
 
 impl CatalogCommandNode {
