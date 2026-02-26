@@ -13,7 +13,7 @@ use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, Result};
 use datafusion_expr::expr::Sort;
 
 use crate::extension::SessionExtension;
-use crate::logical_expr::{ExprWithSource, LogicalPredicateInfo};
+use crate::logical_expr::ExprWithSource;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
 pub enum SinkMode {
@@ -33,7 +33,7 @@ pub enum PhysicalSinkMode {
     Overwrite,
     OverwriteIf {
         /// Driver-side logical predicate. Omitted on remote workers.
-        condition: Option<Box<LogicalPredicateInfo>>,
+        condition: Option<Box<ExprWithSource>>,
         /// SQL source string used by commit metadata.
         source: Option<String>,
     },
@@ -79,7 +79,7 @@ pub struct SinkInfo {
 #[derive(Debug, Clone)]
 pub struct DeleteInfo {
     pub path: String,
-    pub condition: Option<LogicalPredicateInfo>,
+    pub condition: Option<ExprWithSource>,
     /// The sets of options for the data deletion.
     /// A later set of options can override earlier ones.
     pub options: Vec<HashMap<String, String>>,

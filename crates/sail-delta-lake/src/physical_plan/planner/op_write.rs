@@ -22,7 +22,7 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
-use sail_common_datafusion::logical_expr::LogicalPredicateInfo;
+use sail_common_datafusion::logical_expr::ExprWithSource;
 
 use super::context::PlannerContext;
 use super::utils::{
@@ -156,7 +156,7 @@ async fn build_full_overwrite_plan(
 async fn build_overwrite_if_plan(
     ctx: &PlannerContext<'_>,
     input: Arc<dyn ExecutionPlan>,
-    condition: LogicalPredicateInfo,
+    condition: ExprWithSource,
     source: Option<String>,
     sort_order: Option<LexRequirement>,
 ) -> Result<Arc<dyn ExecutionPlan>> {

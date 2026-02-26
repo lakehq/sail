@@ -21,7 +21,7 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
-use sail_common_datafusion::logical_expr::LogicalPredicateInfo;
+use sail_common_datafusion::logical_expr::ExprWithSource;
 
 use super::context::PlannerContext;
 use super::utils::{build_log_replay_pipeline_with_options, LogReplayFilter, LogReplayOptions};
@@ -35,7 +35,7 @@ use crate::physical_plan::{
 
 pub async fn build_delete_plan(
     ctx: &PlannerContext<'_>,
-    condition: LogicalPredicateInfo,
+    condition: ExprWithSource,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let table = ctx.open_table().await?;
     let snapshot_state = table
