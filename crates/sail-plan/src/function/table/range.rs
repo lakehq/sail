@@ -5,6 +5,9 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::{Session, TableFunctionImpl, TableProvider};
+use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{logical_plan, Expr, LogicalPlan, TableType, UserDefinedLogicalNodeCore};
@@ -42,15 +45,31 @@ impl TableProvider for RangeTableProvider {
     async fn scan(
         &self,
         _state: &dyn Session,
-        _projection: Option<&Vec<usize>>,
+        projection: Option<&Vec<usize>>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(RangeExec::new(
+        let schema = self.node.schema().inner().clone();
+        let exec: Arc<dyn ExecutionPlan> = Arc::new(RangeExec::new(
             self.node.range().clone(),
             self.node.num_partitions(),
-            self.node.schema().inner().clone(),
-        )))
+            schema.clone(),
+        ));
+        if let Some(projection) = projection {
+            let exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = projection
+                .iter()
+                .map(|&i| {
+                    let field = schema.field(i);
+                    (
+                        Arc::new(Column::new(field.name(), i)) as Arc<dyn PhysicalExpr>,
+                        field.name().to_string(),
+                    )
+                })
+                .collect();
+            Ok(Arc::new(ProjectionExec::try_new(exprs, exec)?))
+        } else {
+            Ok(exec)
+        }
     }
 }
 
