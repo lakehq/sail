@@ -21,6 +21,7 @@ pub struct RangeExec {
     original_schema: SchemaRef,
     projected_schema: SchemaRef,
     projection: Vec<usize>,
+    has_id_column: bool,
     properties: PlanProperties,
 }
 
@@ -33,6 +34,7 @@ impl RangeExec {
         schema: SchemaRef,
         projection: Vec<usize>,
     ) -> Result<Self> {
+        let has_id_column = projection.contains(&0);
         let projected_schema = Arc::new(schema.project(&projection)?);
         let properties = PlanProperties::new(
             EquivalenceProperties::new(projected_schema.clone()),
@@ -46,6 +48,7 @@ impl RangeExec {
             original_schema: schema,
             projected_schema,
             projection,
+            has_id_column,
             properties,
         })
     }
@@ -117,7 +120,7 @@ impl ExecutionPlan for RangeExec {
             .partition(partition, self.num_partitions)
             .into_iter();
         let projected_schema = self.projected_schema.clone();
-        let has_id_column = self.projection.contains(&0);
+        let has_id_column = self.has_id_column;
         let chunks = std::iter::from_fn(move || {
             Some(iter.by_ref().take(RANGE_BATCH_SIZE).collect::<Vec<i64>>())
                 .filter(|x| !x.is_empty())
