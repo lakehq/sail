@@ -76,8 +76,8 @@ impl Iterator for RangeIterator {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Educe)]
-#[educe(Eq, Hash, PartialOrd)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
+#[educe(PartialOrd)]
 pub struct RangeNode {
     range: Range,
     num_partitions: usize,

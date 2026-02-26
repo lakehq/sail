@@ -23,8 +23,8 @@ pub enum PySparkUdtfKind {
     ArrowTable,
 }
 
-#[derive(Debug, Clone, PartialEq, Educe)]
-#[educe(Eq, Hash, PartialOrd)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Educe)]
+#[educe(PartialOrd)]
 pub struct PySparkUDTF {
     kind: PySparkUdtfKind,
     name: String,

@@ -8,8 +8,8 @@ use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use educe::Educe;
 use sail_common_datafusion::utils::items::ItemTaker;
 
-#[derive(Clone, Debug, PartialEq, Educe)]
-#[educe(Eq, Hash, PartialOrd)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
+#[educe(PartialOrd)]
 pub struct SchemaPivotNode {
     input: Arc<LogicalPlan>,
     // names is part of schema so we skip it in PartialOrd

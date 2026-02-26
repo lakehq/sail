@@ -20,8 +20,8 @@ use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::formatter::SparkPlanFormatter;
 
-#[derive(Clone, Debug, PartialEq, Educe)]
-#[educe(Eq, Hash, PartialOrd)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
+#[educe(PartialOrd)]
 pub(crate) struct CatalogCommandNode {
     name: String,
     #[educe(PartialOrd(ignore))]

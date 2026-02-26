@@ -19,8 +19,8 @@ pub struct FileWriteOptions {
     pub options: Vec<Vec<(String, String)>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Educe)]
-#[educe(Eq, Hash, PartialOrd)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
+#[educe(PartialOrd)]
 pub struct FileWriteNode {
     input: Arc<LogicalPlan>,
     options: FileWriteOptions,

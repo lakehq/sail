@@ -11,8 +11,8 @@ use sail_common_datafusion::streaming::event::schema::to_flow_event_schema;
 /// to a streaming source so that it can be used in a streaming query.
 /// The wrapped source contains retraction flag for each row,
 /// and emits data flow markers.
-#[derive(Clone, Debug, PartialEq, Educe)]
-#[educe(Eq, Hash, PartialOrd)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
+#[educe(PartialOrd)]
 pub struct StreamSourceAdapterNode {
     input: Arc<LogicalPlan>,
     #[educe(PartialOrd(ignore))]
