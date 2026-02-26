@@ -943,6 +943,7 @@ pub struct Write {
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum SaveType {
     Path(String),
+    Sink,
     Table {
         table: ObjectName,
         save_method: TableSaveMethod,
