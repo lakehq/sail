@@ -231,13 +231,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 step,
                 num_partitions,
                 schema,
+                projection,
             }) => {
                 let schema = self.try_decode_schema(&schema)?;
-                Ok(Arc::new(RangeExec::new(
+                let projection = self.try_decode_projection(&projection)?;
+                Ok(Arc::new(RangeExec::try_new(
                     Range { start, end, step },
                     num_partitions as usize,
                     Arc::new(schema),
-                )))
+                    projection,
+                )?))
             }
             NodeKind::ShowString(gen::ShowStringExecNode {
                 input,
@@ -952,13 +955,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()> {
         #[allow(deprecated)]
         let node_kind = if let Some(range) = node.as_any().downcast_ref::<RangeExec>() {
-            let schema = self.try_encode_schema(range.schema().as_ref())?;
+            let schema = self.try_encode_schema(range.original_schema().as_ref())?;
+            let projection = self.try_encode_projection(range.projection())?;
             NodeKind::Range(gen::RangeExecNode {
                 start: range.range().start,
                 end: range.range().end,
                 step: range.range().step,
                 num_partitions: range.num_partitions() as u64,
                 schema,
+                projection,
             })
         } else if let Some(show_string) = node.as_any().downcast_ref::<ShowStringExec>() {
             let schema = self.try_encode_schema(show_string.schema().as_ref())?;

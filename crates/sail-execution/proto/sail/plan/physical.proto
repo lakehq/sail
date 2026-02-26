@@ -292,6 +292,7 @@ message RangeExecNode {
   int64 step = 3;
   uint64 num_partitions = 4;
   bytes schema = 5;
+  repeated uint64 projection = 6;
 }
 
 message ShowStringExecNode {

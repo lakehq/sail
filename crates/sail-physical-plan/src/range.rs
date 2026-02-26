@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::Int64Array;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -18,24 +18,36 @@ const RANGE_BATCH_SIZE: usize = 1024;
 pub struct RangeExec {
     range: Range,
     num_partitions: usize,
-    schema: SchemaRef,
+    original_schema: SchemaRef,
+    projected_schema: SchemaRef,
+    projection: Vec<usize>,
     properties: PlanProperties,
 }
 
 impl RangeExec {
-    pub fn new(range: Range, num_partitions: usize, schema: SchemaRef) -> Self {
+    /// Creates a new execution plan for the range source.
+    /// The schema should be the original schema before projection.
+    pub fn try_new(
+        range: Range,
+        num_partitions: usize,
+        schema: SchemaRef,
+        projection: Vec<usize>,
+    ) -> Result<Self> {
+        let projected_schema = Arc::new(schema.project(&projection)?);
         let properties = PlanProperties::new(
-            EquivalenceProperties::new(schema.clone()),
+            EquivalenceProperties::new(projected_schema.clone()),
             Partitioning::RoundRobinBatch(num_partitions),
             EmissionType::Both,
             Boundedness::Bounded,
         );
-        Self {
+        Ok(Self {
             range,
             num_partitions,
-            schema,
+            original_schema: schema,
+            projected_schema,
+            projection,
             properties,
-        }
+        })
     }
 
     pub fn range(&self) -> &Range {
@@ -44,6 +56,14 @@ impl RangeExec {
 
     pub fn num_partitions(&self) -> usize {
         self.num_partitions
+    }
+
+    pub fn original_schema(&self) -> &SchemaRef {
+        &self.original_schema
+    }
+
+    pub fn projection(&self) -> &[usize] {
+        &self.projection
     }
 }
 
@@ -96,18 +116,28 @@ impl ExecutionPlan for RangeExec {
             .range
             .partition(partition, self.num_partitions)
             .into_iter();
-        let schema = self.schema.clone();
+        let projected_schema = self.projected_schema.clone();
+        let has_id_column = self.projection.contains(&0);
         let chunks = std::iter::from_fn(move || {
             Some(iter.by_ref().take(RANGE_BATCH_SIZE).collect::<Vec<i64>>())
                 .filter(|x| !x.is_empty())
                 .map(|x| -> Result<RecordBatch> {
-                    let array = Arc::new(Int64Array::from(x));
-                    Ok(RecordBatch::try_new(schema.clone(), vec![array])?)
+                    let num_rows = x.len();
+                    if has_id_column {
+                        let array = Arc::new(Int64Array::from(x));
+                        Ok(RecordBatch::try_new(projected_schema.clone(), vec![array])?)
+                    } else {
+                        Ok(RecordBatch::try_new_with_options(
+                            projected_schema.clone(),
+                            vec![],
+                            &RecordBatchOptions::new().with_row_count(Some(num_rows)),
+                        )?)
+                    }
                 })
         });
         let stream = tokio_stream::iter(chunks);
         Ok(Box::pin(RecordBatchStreamAdapter::new(
-            self.schema.clone(),
+            self.projected_schema.clone(),
             stream,
         )))
     }
