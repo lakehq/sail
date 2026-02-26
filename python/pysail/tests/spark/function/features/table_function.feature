@@ -29,3 +29,13 @@ Feature: Table function queries
       | id |
       | 0  |
       | 1  |
+
+    Scenario: select duplicate columns on range table function
+      When query
+      """
+      SELECT id, id FROM range(2)
+      """
+      Then query result
+      | id | id |
+      | 0  | 0  |
+      | 1  | 1  |

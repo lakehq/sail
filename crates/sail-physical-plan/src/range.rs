@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::arrow::array::Int64Array;
+use datafusion::arrow::array::{ArrayRef, Int64Array};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -9,7 +9,7 @@ use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
-use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_common::{exec_err, internal_err, plan_err, Result};
 use sail_logical_plan::range::Range;
 
 const RANGE_BATCH_SIZE: usize = 1024;
@@ -21,7 +21,6 @@ pub struct RangeExec {
     original_schema: SchemaRef,
     projected_schema: SchemaRef,
     projection: Vec<usize>,
-    has_id_column: bool,
     properties: PlanProperties,
 }
 
@@ -34,7 +33,6 @@ impl RangeExec {
         schema: SchemaRef,
         projection: Vec<usize>,
     ) -> Result<Self> {
-        let has_id_column = projection.contains(&0);
         let projected_schema = Arc::new(schema.project(&projection)?);
         let properties = PlanProperties::new(
             EquivalenceProperties::new(projected_schema.clone()),
@@ -48,7 +46,6 @@ impl RangeExec {
             original_schema: schema,
             projected_schema,
             projection,
-            has_id_column,
             properties,
         })
     }
@@ -120,22 +117,28 @@ impl ExecutionPlan for RangeExec {
             .partition(partition, self.num_partitions)
             .into_iter();
         let projected_schema = self.projected_schema.clone();
-        let has_id_column = self.has_id_column;
+        let projection = self.projection.clone();
         let chunks = std::iter::from_fn(move || {
             Some(iter.by_ref().take(RANGE_BATCH_SIZE).collect::<Vec<i64>>())
                 .filter(|x| !x.is_empty())
                 .map(|x| -> Result<RecordBatch> {
                     let num_rows = x.len();
-                    if has_id_column {
-                        let array = Arc::new(Int64Array::from(x));
-                        Ok(RecordBatch::try_new(projected_schema.clone(), vec![array])?)
-                    } else {
-                        Ok(RecordBatch::try_new_with_options(
+                    if projection.is_empty() {
+                        return Ok(RecordBatch::try_new_with_options(
                             projected_schema.clone(),
                             vec![],
                             &RecordBatchOptions::new().with_row_count(Some(num_rows)),
-                        )?)
+                        )?);
                     }
+                    let id_array: ArrayRef = Arc::new(Int64Array::from(x));
+                    let columns: Vec<ArrayRef> = projection
+                        .iter()
+                        .map(|&i| match i {
+                            0 => Ok(id_array.clone()),
+                            _ => plan_err!("invalid projection index {i} for range table"),
+                        })
+                        .collect::<Result<_>>()?;
+                    Ok(RecordBatch::try_new(projected_schema.clone(), columns)?)
                 })
         });
         let stream = tokio_stream::iter(chunks);
