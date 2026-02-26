@@ -178,9 +178,7 @@ impl PlanResolver<'_> {
         if !partition.is_empty() {
             return Err(PlanError::todo("PARTITION for write"));
         }
-        if !cluster_by.is_empty() {
-            return Err(PlanError::todo("CLUSTER BY for write"));
-        }
+        let clustering_columns = self.resolve_write_clustering_columns(cluster_by.clone())?;
         let input_schema = input.schema().inner().clone();
         let options_map = options
             .clone()
@@ -192,6 +190,7 @@ impl PlanResolver<'_> {
             mode: SinkMode::ErrorIfExists,
             format: format.unwrap_or_default(),
             partition_by: self.resolve_write_partition_by(partition_by.clone())?,
+            clustering_columns,
             sort_by: self
                 .resolve_sort_orders(sort_by.clone(), true, input.schema(), state)
                 .await?,
@@ -254,6 +253,7 @@ impl PlanResolver<'_> {
                     .resolve_write_mode(mode, Some(&info.schema()), state)
                     .await?;
                 file_write_options.partition_by = info.partition_by;
+                file_write_options.clustering_columns = vec![];
                 file_write_options.sort_by = info.sort_by.into_iter().map(|x| x.into()).collect();
                 file_write_options.bucket_by = info.bucket_by.map(|x| x.into());
                 file_write_options.path = info.location.ok_or_else(|| {
@@ -366,6 +366,23 @@ impl PlanResolver<'_> {
         cluster_by: Vec<spec::Identifier>,
     ) -> PlanResult<Vec<spec::ObjectName>> {
         Ok(cluster_by.into_iter().map(spec::ObjectName::bare).collect())
+    }
+
+    fn resolve_write_clustering_columns(
+        &self,
+        cluster_by: Vec<spec::ObjectName>,
+    ) -> PlanResult<Vec<String>> {
+        cluster_by
+            .into_iter()
+            .map(|name| {
+                let parts: Vec<String> = name.into();
+                parts.one().map_err(|_| {
+                    PlanError::invalid(
+                        "cluster column must be a column reference without qualification",
+                    )
+                })
+            })
+            .collect()
     }
 
     pub(super) async fn resolve_write_input(

@@ -79,6 +79,7 @@ impl TableFormat for IcebergTableFormat {
             path,
             mode,
             partition_by,
+            clustering_columns: _,
             bucket_by,
             sort_order,
             options,

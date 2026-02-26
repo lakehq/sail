@@ -48,7 +48,7 @@ use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use delta_kernel::schema::StructType;
 use delta_kernel::table_features::ColumnMappingMode;
 use futures::stream::{once, StreamExt};
-use sail_common_datafusion::datasource::PhysicalSinkMode;
+use sail_common_datafusion::datasource::{BucketBy, PhysicalSinkMode};
 use serde_json::Value;
 use url::Url;
 
@@ -81,6 +81,8 @@ pub struct DeltaWriterExec {
     table_url: Url,
     options: TableDeltaOptions,
     partition_columns: Vec<String>,
+    bucket_by: Option<BucketBy>,
+    clustering_columns: Vec<String>,
     sink_mode: PhysicalSinkMode,
     table_exists: bool,
     sink_schema: SchemaRef,
@@ -111,6 +113,8 @@ impl DeltaWriterExec {
         table_url: Url,
         options: TableDeltaOptions,
         partition_columns: Vec<String>,
+        bucket_by: Option<BucketBy>,
+        clustering_columns: Vec<String>,
         sink_mode: PhysicalSinkMode,
         table_exists: bool,
         sink_schema: SchemaRef,
@@ -124,6 +128,8 @@ impl DeltaWriterExec {
             table_url,
             options,
             partition_columns,
+            bucket_by,
+            clustering_columns,
             sink_mode,
             table_exists,
             sink_schema,
@@ -152,6 +158,14 @@ impl DeltaWriterExec {
 
     pub fn partition_columns(&self) -> &[String] {
         &self.partition_columns
+    }
+
+    pub fn bucket_by(&self) -> Option<&BucketBy> {
+        self.bucket_by.as_ref()
+    }
+
+    pub fn clustering_columns(&self) -> &[String] {
+        &self.clustering_columns
     }
 
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
@@ -194,18 +208,22 @@ impl ExecutionPlan for DeltaWriterExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        if self.partition_columns.is_empty() {
+        let distribution_columns = if let Some(bucket_by) = &self.bucket_by {
+            &bucket_by.columns
+        } else {
+            &self.partition_columns
+        };
+
+        if distribution_columns.is_empty() {
             // Upstream repartitioning controls file counts and small-file behavior.
             return vec![Distribution::UnspecifiedDistribution];
         }
 
-        // For partitioned tables, require grouping by the partition key so that each task can
-        // write its partitions correctly without opening many writers concurrently.
-        //
-        // TODO(optimizer): Reduce the cost of meeting this distribution requirement.
+        // For strict bucketing we require hash distribution on bucket columns.
+        // Otherwise we preserve the existing partition-key distribution requirement.
         let mut exprs: Vec<Arc<dyn datafusion_physical_expr::PhysicalExpr>> =
-            Vec::with_capacity(self.partition_columns.len());
-        for name in &self.partition_columns {
+            Vec::with_capacity(distribution_columns.len());
+        for name in distribution_columns {
             let idx = match self.input.schema().index_of(name) {
                 Ok(i) => i,
                 Err(_) => return vec![Distribution::UnspecifiedDistribution],
@@ -265,6 +283,8 @@ impl ExecutionPlan for DeltaWriterExec {
             self.table_url.clone(),
             self.options.clone(),
             self.partition_columns.clone(),
+            self.bucket_by.clone(),
+            self.clustering_columns.clone(),
             self.sink_mode.clone(),
             self.table_exists,
             self.sink_schema.clone(),
@@ -306,6 +326,8 @@ impl DeltaWriterExec {
         let table_url = self.table_url.clone();
         let options = self.options.clone();
         let partition_columns = self.partition_columns.clone();
+        let bucket_by = self.bucket_by.clone();
+        let clustering_columns = self.clustering_columns.clone();
         let sink_mode = self.sink_mode.clone();
         let table_exists = self.table_exists;
         let input_schema = normalize_delta_schema(&self.input.schema());
@@ -636,6 +658,8 @@ impl DeltaWriterExec {
                 *write_batch_size,
                 32,
                 None,
+                bucket_by.clone(),
+                clustering_columns.clone(),
             );
 
             let writer_path = object_store::path::Path::from(table_url.path());

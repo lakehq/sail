@@ -75,8 +75,18 @@ async fn build_full_overwrite_plan(
 
     let target_partitions = ctx.session().config().target_partitions().max(1);
     let plan = create_projection(input, ctx.partition_columns().to_vec())?;
-    let plan = create_repartition(plan, ctx.partition_columns().to_vec(), target_partitions)?;
-    let plan = create_sort(plan, ctx.partition_columns().to_vec(), sort_order)?;
+    let plan = create_repartition(
+        plan,
+        ctx.partition_columns().to_vec(),
+        ctx.bucket_by().cloned(),
+        target_partitions,
+    )?;
+    let plan = create_sort(
+        plan,
+        ctx.partition_columns().to_vec(),
+        ctx.clustering_columns().to_vec(),
+        sort_order,
+    )?;
 
     let writer_schema = plan.schema();
     let writer: Arc<dyn ExecutionPlan> = Arc::new(DeltaWriterExec::new(
@@ -84,6 +94,8 @@ async fn build_full_overwrite_plan(
         ctx.table_url().clone(),
         ctx.options().clone(),
         ctx.partition_columns().to_vec(),
+        ctx.bucket_by().cloned(),
+        ctx.clustering_columns().to_vec(),
         PhysicalSinkMode::Overwrite,
         ctx.table_exists(),
         writer_schema,
@@ -172,9 +184,21 @@ async fn build_overwrite_if_plan(
     let target_partitions = ctx.session().config().target_partitions().max(1);
     let new_plan = create_projection(Arc::clone(&input), ctx.partition_columns().to_vec())
         .and_then(|plan| {
-            create_repartition(plan, ctx.partition_columns().to_vec(), target_partitions)
+            create_repartition(
+                plan,
+                ctx.partition_columns().to_vec(),
+                ctx.bucket_by().cloned(),
+                target_partitions,
+            )
         })
-        .and_then(|plan| create_sort(plan, ctx.partition_columns().to_vec(), sort_order))?;
+        .and_then(|plan| {
+            create_sort(
+                plan,
+                ctx.partition_columns().to_vec(),
+                ctx.clustering_columns().to_vec(),
+                sort_order,
+            )
+        })?;
 
     let (aligned_new, aligned_old) = align_schemas_for_union(new_plan, old_data_plan)?;
     let union_plan = UnionExec::try_new(vec![aligned_new, aligned_old])?;
@@ -194,6 +218,8 @@ async fn build_overwrite_if_plan(
         ctx.table_url().clone(),
         ctx.options().clone(),
         ctx.partition_columns().to_vec(),
+        ctx.bucket_by().cloned(),
+        ctx.clustering_columns().to_vec(),
         PhysicalSinkMode::OverwriteIf {
             condition: condition.clone(),
         },

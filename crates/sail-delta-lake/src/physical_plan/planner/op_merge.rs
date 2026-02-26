@@ -245,6 +245,8 @@ async fn finalize_merge(
         table_url.clone(),
         options,
         partition_columns.clone(),
+        ctx.bucket_by().cloned(),
+        ctx.clustering_columns().to_vec(),
         PhysicalSinkMode::Append,
         true,
         table_schema.clone(),

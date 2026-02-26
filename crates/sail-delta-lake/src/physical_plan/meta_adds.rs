@@ -8,13 +8,18 @@ use datafusion_common::{DataFusionError, Result};
 
 use crate::datasource::{COMMIT_TIMESTAMP_COLUMN, COMMIT_VERSION_COLUMN, PATH_COLUMN};
 use crate::kernel::models::Add;
+use crate::operations::write::stats::{BUCKET_COLUMNS_TAG, BUCKET_COUNT_TAG, CLUSTER_COLUMNS_TAG};
 
 const COL_SIZE_BYTES: &str = "size_bytes";
 const COL_MODIFICATION_TIME: &str = "modification_time";
 const COL_STATS_JSON: &str = "stats_json";
 const COL_PARTITION_SCAN: &str = "partition_scan";
+pub const COL_CLUSTERING_PROVIDER: &str = "clustering_provider";
+pub const COL_BUCKET_COLUMNS_TAG: &str = "__sail_bucket_columns_tag";
+pub const COL_BUCKET_COUNT_TAG: &str = "__sail_bucket_count_tag";
+pub const COL_CLUSTER_COLUMNS_TAG: &str = "__sail_cluster_columns_tag";
 
-const RESERVED_META_COLUMNS: [&str; 7] = [
+const RESERVED_META_COLUMNS: [&str; 11] = [
     PATH_COLUMN,
     COL_SIZE_BYTES,
     COL_MODIFICATION_TIME,
@@ -22,6 +27,10 @@ const RESERVED_META_COLUMNS: [&str; 7] = [
     COL_PARTITION_SCAN,
     COMMIT_VERSION_COLUMN,
     COMMIT_TIMESTAMP_COLUMN,
+    COL_CLUSTERING_PROVIDER,
+    COL_BUCKET_COLUMNS_TAG,
+    COL_BUCKET_COUNT_TAG,
+    COL_CLUSTER_COLUMNS_TAG,
 ];
 
 /// Infer partition column names from a metadata batch schema by excluding known reserved columns.
@@ -67,6 +76,18 @@ pub fn decode_adds_from_meta_batch(
     let commit_timestamp_arr: Option<&Int64Array> = batch
         .column_by_name(COMMIT_TIMESTAMP_COLUMN)
         .and_then(|c| c.as_any().downcast_ref::<Int64Array>());
+    let clustering_provider_arr: Option<&StringArray> = batch
+        .column_by_name(COL_CLUSTERING_PROVIDER)
+        .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+    let bucket_columns_arr: Option<&StringArray> = batch
+        .column_by_name(COL_BUCKET_COLUMNS_TAG)
+        .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+    let bucket_count_arr: Option<&StringArray> = batch
+        .column_by_name(COL_BUCKET_COUNT_TAG)
+        .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+    let cluster_columns_arr: Option<&StringArray> = batch
+        .column_by_name(COL_CLUSTER_COLUMNS_TAG)
+        .and_then(|c| c.as_any().downcast_ref::<StringArray>());
 
     // stats_json may arrive as LargeUtf8 depending on upstream casts.
     let stats_arr: Option<ArrayRef> = batch
@@ -129,6 +150,37 @@ pub fn decode_adds_from_meta_batch(
                 Some(a.value(row).to_string())
             }
         });
+        let clustering_provider = clustering_provider_arr.and_then(|a| {
+            if a.is_null(row) {
+                None
+            } else {
+                Some(a.value(row).to_string())
+            }
+        });
+
+        let mut tags = HashMap::new();
+        if let Some(a) = bucket_columns_arr {
+            if !a.is_null(row) {
+                tags.insert(
+                    BUCKET_COLUMNS_TAG.to_string(),
+                    Some(a.value(row).to_string()),
+                );
+            }
+        }
+        if let Some(a) = bucket_count_arr {
+            if !a.is_null(row) {
+                tags.insert(BUCKET_COUNT_TAG.to_string(), Some(a.value(row).to_string()));
+            }
+        }
+        if let Some(a) = cluster_columns_arr {
+            if !a.is_null(row) {
+                tags.insert(
+                    CLUSTER_COLUMNS_TAG.to_string(),
+                    Some(a.value(row).to_string()),
+                );
+            }
+        }
+        let tags = if tags.is_empty() { None } else { Some(tags) };
 
         let mut partition_values: HashMap<String, Option<String>> =
             HashMap::with_capacity(part_arrays.len());
@@ -150,11 +202,11 @@ pub fn decode_adds_from_meta_batch(
             modification_time,
             data_change: true,
             stats,
-            tags: None,
+            tags,
             deletion_vector: None,
             base_row_id: None,
             default_row_commit_version: None,
-            clustering_provider: None,
+            clustering_provider,
             commit_version,
             commit_timestamp,
         });

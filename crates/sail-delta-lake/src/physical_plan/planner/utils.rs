@@ -39,6 +39,10 @@ use super::log_scan::{build_delta_log_datasource_union_with_options, LogScanOpti
 use crate::datasource::{
     simplify_expr, COMMIT_TIMESTAMP_COLUMN, COMMIT_VERSION_COLUMN, PATH_COLUMN,
 };
+use crate::operations::write::stats::{BUCKET_COLUMNS_TAG, BUCKET_COUNT_TAG, CLUSTER_COLUMNS_TAG};
+use crate::physical_plan::meta_adds::{
+    COL_BUCKET_COLUMNS_TAG, COL_BUCKET_COUNT_TAG, COL_CLUSTERING_PROVIDER, COL_CLUSTER_COLUMNS_TAG,
+};
 use crate::physical_plan::{
     create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaLogReplayExec,
     DeltaPhysicalExprAdapterFactory, DeltaWriterExec, COL_LOG_IS_REMOVE, COL_LOG_VERSION,
@@ -88,8 +92,18 @@ pub fn build_standard_write_layers(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let target_partitions = ctx.session().config().target_partitions().max(1);
     let plan = create_projection(Arc::clone(&input), ctx.partition_columns().to_vec())?;
-    let plan = create_repartition(plan, ctx.partition_columns().to_vec(), target_partitions)?;
-    let plan = create_sort(plan, ctx.partition_columns().to_vec(), sort_order)?;
+    let plan = create_repartition(
+        plan,
+        ctx.partition_columns().to_vec(),
+        ctx.bucket_by().cloned(),
+        target_partitions,
+    )?;
+    let plan = create_sort(
+        plan,
+        ctx.partition_columns().to_vec(),
+        ctx.clustering_columns().to_vec(),
+        sort_order,
+    )?;
 
     let writer_schema = plan.schema();
     let writer = Arc::new(DeltaWriterExec::new(
@@ -97,6 +111,8 @@ pub fn build_standard_write_layers(
         ctx.table_url().clone(),
         ctx.options().clone(),
         ctx.partition_columns().to_vec(),
+        ctx.bucket_by().cloned(),
+        ctx.clustering_columns().to_vec(),
         sink_mode.clone(),
         ctx.table_exists(),
         writer_schema,
@@ -289,6 +305,14 @@ pub async fn build_log_replay_pipeline_with_options(
     } else {
         "stats_json"
     };
+    let tags_field = has_add_field("tags").then_some("tags");
+    let clustering_provider_field = if has_add_field("clusteringProvider") {
+        Some("clusteringProvider")
+    } else if has_add_field("clustering_provider") {
+        Some("clustering_provider")
+    } else {
+        None
+    };
 
     let get_add_field = |field_name: &str| get_field_expr(add_col_expr.clone(), field_name);
     let guard_add = |e: Expr| guard_with(add_is_not_null.clone(), e);
@@ -358,6 +382,39 @@ pub async fn build_log_replay_pipeline_with_options(
     }
     if let Some(stats_expr) = stats_expr {
         final_proj.push((stats_expr, "stats_json".to_string()));
+    }
+    if let Some(provider_field) = clustering_provider_field {
+        let provider_expr = simplify(Expr::Cast(Cast::new(
+            Box::new(guard_add(get_add_field(provider_field))),
+            DataType::Utf8,
+        )))?;
+        final_proj.push((provider_expr, COL_CLUSTERING_PROVIDER.to_string()));
+    }
+    if let Some(tags_field) = tags_field {
+        let tags_expr = guard_add(get_add_field(tags_field));
+        let tag_expr_for = |key: &str| -> Result<Arc<dyn PhysicalExpr>> {
+            let extracted = Expr::ScalarFunction(ScalarFunction::new_udf(
+                map_extract_udf(),
+                vec![tags_expr.clone(), lit_str(key)],
+            ));
+            let elem = Expr::ScalarFunction(ScalarFunction::new_udf(
+                array_element_udf(),
+                vec![extracted, lit_i64(1)],
+            ));
+            simplify(Expr::Cast(Cast::new(Box::new(elem), DataType::Utf8)))
+        };
+        final_proj.push((
+            tag_expr_for(BUCKET_COLUMNS_TAG)?,
+            COL_BUCKET_COLUMNS_TAG.to_string(),
+        ));
+        final_proj.push((
+            tag_expr_for(BUCKET_COUNT_TAG)?,
+            COL_BUCKET_COUNT_TAG.to_string(),
+        ));
+        final_proj.push((
+            tag_expr_for(CLUSTER_COLUMNS_TAG)?,
+            COL_CLUSTER_COLUMNS_TAG.to_string(),
+        ));
     }
 
     // Replay key columns (consumed by replay; stripped from replay output schema).

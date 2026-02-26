@@ -33,6 +33,7 @@ use parquet::basic::Compression;
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::WriterProperties;
 use parquet::schema::types::ColumnPath;
+use sail_common_datafusion::datasource::BucketBy;
 use uuid::Uuid;
 
 use super::async_utils::AsyncShareableBuffer;
@@ -85,6 +86,10 @@ pub struct WriterConfig {
     pub num_indexed_cols: i32,
     /// Specific columns to collect stats from
     pub stats_columns: Option<Vec<String>>,
+    /// Strict bucket specification for this write, if any.
+    pub bucket_by: Option<BucketBy>,
+    /// Clustering columns used by this write.
+    pub clustering_columns: Vec<String>,
 }
 
 impl WriterConfig {
@@ -97,6 +102,8 @@ impl WriterConfig {
         write_batch_size: usize,
         num_indexed_cols: i32,
         stats_columns: Option<Vec<String>>,
+        bucket_by: Option<BucketBy>,
+        clustering_columns: Vec<String>,
     ) -> Self {
         let writer_properties = writer_properties.unwrap_or_else(|| {
             WriterProperties::builder()
@@ -113,6 +120,8 @@ impl WriterConfig {
             write_batch_size,
             num_indexed_cols,
             stats_columns,
+            bucket_by,
+            clustering_columns,
         }
     }
 
@@ -247,6 +256,8 @@ impl DeltaWriter {
             self.config.writer_properties.clone(),
             self.config.target_file_size,
             self.config.write_batch_size,
+            self.config.bucket_by.clone(),
+            self.config.clustering_columns.clone(),
         );
 
         let writer = PartitionWriter::try_with_config(
@@ -288,6 +299,10 @@ pub struct PartitionWriterConfig {
     pub target_file_size: u64,
     /// Row chunks passed to parquet writer
     pub write_batch_size: usize,
+    /// Strict bucket specification for this write, if any.
+    pub bucket_by: Option<BucketBy>,
+    /// Clustering columns used by this write.
+    pub clustering_columns: Vec<String>,
 }
 
 impl PartitionWriterConfig {
@@ -298,6 +313,8 @@ impl PartitionWriterConfig {
         writer_properties: WriterProperties,
         target_file_size: u64,
         write_batch_size: usize,
+        bucket_by: Option<BucketBy>,
+        clustering_columns: Vec<String>,
     ) -> Self {
         let partition_segments = partition_values.hive_partition_segments();
 
@@ -309,6 +326,8 @@ impl PartitionWriterConfig {
             writer_properties,
             target_file_size,
             write_batch_size,
+            bucket_by,
+            clustering_columns,
         }
     }
 }
@@ -491,6 +510,8 @@ impl PartitionWriter {
             metadata,
             self.num_indexed_cols,
             &self.stats_columns,
+            self.config.bucket_by.as_ref(),
+            &self.config.clustering_columns,
         )
     }
 
@@ -584,6 +605,8 @@ mod tests {
             1024,
             32,
             None,
+            None,
+            vec![],
         );
         Ok(DeltaWriter::new(object_store, table_path, config))
     }

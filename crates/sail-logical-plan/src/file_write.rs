@@ -13,6 +13,7 @@ pub struct FileWriteOptions {
     pub format: String,
     pub mode: SinkMode,
     pub partition_by: Vec<String>,
+    pub clustering_columns: Vec<String>,
     pub sort_by: Vec<Sort>,
     pub bucket_by: Option<BucketBy>,
     pub options: Vec<Vec<(String, String)>>,

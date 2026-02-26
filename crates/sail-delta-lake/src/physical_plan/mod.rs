@@ -25,6 +25,7 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_physical_expr::expressions::{lit, Column as PhysicalColumn};
+use sail_common_datafusion::datasource::BucketBy;
 
 mod action_schema;
 mod commit_exec;
@@ -114,6 +115,7 @@ fn create_projection_expressions(
 pub fn create_sort(
     input: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
+    clustering_columns: Vec<String>,
     sort_order: Option<LexRequirement>,
 ) -> Result<Arc<SortExec>> {
     let schema = input.schema();
@@ -127,6 +129,24 @@ pub fn create_sort(
             options: SortOptions::default(), // Default ascending
         })
         .collect();
+
+    let mut seen: HashSet<String> = partition_columns
+        .iter()
+        .map(|name| name.to_ascii_lowercase())
+        .collect();
+
+    for name in clustering_columns {
+        if !seen.insert(name.to_ascii_lowercase()) {
+            continue;
+        }
+        let idx = schema.index_of(&name).map_err(|_| {
+            DataFusionError::Plan(format!("Clustering column '{name}' not found in schema"))
+        })?;
+        sort_exprs.push(PhysicalSortExpr {
+            expr: Arc::new(PhysicalColumn::new(&name, idx)) as Arc<dyn PhysicalExpr>,
+            options: SortOptions::default(),
+        });
+    }
 
     // Add user-specified sort columns
     if let Some(ref user_sort_order) = sort_order {
@@ -163,13 +183,36 @@ pub fn create_sort(
 pub fn create_repartition(
     input: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
+    bucket_by: Option<BucketBy>,
     num_partitions: usize,
 ) -> Result<Arc<RepartitionExec>> {
-    let num_partitions = num_partitions.max(1);
-    let partitioning = if partition_columns.is_empty() {
+    let partitioning = if let Some(bucket_by) = bucket_by {
+        if bucket_by.columns.is_empty() {
+            return Err(DataFusionError::Plan(
+                "bucketing requires at least one bucket column".to_string(),
+            ));
+        }
+        let num_buckets = bucket_by.num_buckets.max(1);
+        let schema = input.schema();
+        let bucket_exprs: Vec<Arc<dyn PhysicalExpr>> = bucket_by
+            .columns
+            .iter()
+            .map(|name| {
+                let idx = schema.index_of(name).map_err(|_| {
+                    DataFusionError::Plan(format!("Bucket column '{name}' not found in schema"))
+                })?;
+                Ok(Arc::new(PhysicalColumn::new(name, idx)) as Arc<dyn PhysicalExpr>)
+            })
+            .collect::<Result<_>>()?;
+        // Strict bucketing: hash partition directly by bucket columns with exactly numBuckets
+        // output partitions so the partitioner is aligned with bucket cardinality.
+        Partitioning::Hash(bucket_exprs, num_buckets)
+    } else if partition_columns.is_empty() {
+        let num_partitions = num_partitions.max(1);
         // No partition columns, ensure some parallelism
         Partitioning::RoundRobinBatch(num_partitions)
     } else {
+        let num_partitions = num_partitions.max(1);
         // Since create_projection moves partition columns to the end, we can rely on their positions.
         let schema = input.schema();
         let num_cols = schema.fields().len();

@@ -132,6 +132,8 @@ pub async fn build_delete_plan(
         ctx.table_url().clone(),
         ctx.options().clone(),
         partition_columns.clone(),
+        ctx.bucket_by().cloned(),
+        ctx.clustering_columns().to_vec(),
         PhysicalSinkMode::Append,
         ctx.table_exists(),
         table_schema.clone(),

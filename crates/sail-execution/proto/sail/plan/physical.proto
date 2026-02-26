@@ -440,6 +440,13 @@ message DeltaWriterExecNode {
   bool table_exists = 6;
   PhysicalSinkMode sink_mode = 7;
   optional string operation_override_json = 8;
+  optional DeltaBucketBy bucket_by = 9;
+  repeated string clustering_columns = 10;
+}
+
+message DeltaBucketBy {
+  repeated string columns = 1;
+  uint64 num_buckets = 2;
 }
 
 message DeltaCommitExecNode {

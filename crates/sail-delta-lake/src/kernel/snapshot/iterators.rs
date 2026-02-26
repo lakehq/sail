@@ -48,6 +48,9 @@ const FIELD_NAME_FILE_CONSTANT_VALUES: &str = "fileConstantValues";
 const FIELD_NAME_PARTITION_VALUES: &str = "partitionValues";
 const FIELD_NAME_PARTITION_VALUES_PARSED: &str = "partitionValues_parsed";
 const FIELD_NAME_DELETION_VECTOR: &str = "deletionVector";
+const FIELD_NAME_TAGS: &str = "tags";
+const FIELD_NAME_CLUSTERING_PROVIDER: &str = "clusteringProvider";
+const FIELD_NAME_CLUSTERING_PROVIDER_FALLBACK: &str = "clustering_provider";
 
 const STATS_FIELD_NUM_RECORDS: &str = "numRecords";
 const STATS_FIELD_MIN_VALUES: &str = "minValues";
@@ -78,6 +81,12 @@ static FIELD_INDICES: LazyLock<HashMap<&'static str, usize>> = LazyLock::new(|| 
 
     if let Some(stats_idx) = schema.index_of(FIELD_NAME_STATS) {
         indices.insert(FIELD_NAME_STATS, stats_idx);
+    }
+
+    if let Some(cluster_idx) = schema.index_of(FIELD_NAME_CLUSTERING_PROVIDER) {
+        indices.insert(FIELD_NAME_CLUSTERING_PROVIDER, cluster_idx);
+    } else if let Some(cluster_idx) = schema.index_of(FIELD_NAME_CLUSTERING_PROVIDER_FALLBACK) {
+        indices.insert(FIELD_NAME_CLUSTERING_PROVIDER_FALLBACK, cluster_idx);
     }
 
     indices
@@ -292,11 +301,11 @@ impl LogicalFileView {
             modification_time: self.modification_time(),
             data_change: true,
             stats: self.stats().map(|v| v.to_string()),
-            tags: None,
+            tags: self.tags_map(),
             deletion_vector: self.deletion_vector().map(|dv| dv.descriptor()),
             base_row_id: None,
             default_row_commit_version: None,
-            clustering_provider: None,
+            clustering_provider: self.clustering_provider(),
             commit_version: None,
             commit_timestamp: None,
         }
@@ -316,6 +325,38 @@ impl LogicalFileView {
             tags: None,
             base_row_id: None,
             default_row_commit_version: None,
+        }
+    }
+
+    fn clustering_provider(&self) -> Option<String> {
+        FIELD_INDICES
+            .get(FIELD_NAME_CLUSTERING_PROVIDER)
+            .or_else(|| FIELD_INDICES.get(FIELD_NAME_CLUSTERING_PROVIDER_FALLBACK))
+            .and_then(|&idx| get_string_value(self.files.column(idx), self.index))
+            .map(ToString::to_string)
+    }
+
+    fn tags_map(&self) -> Option<HashMap<String, Option<String>>> {
+        let col = self.files.column_by_name(FIELD_NAME_TAGS)?;
+        let scalar = Scalar::from_array(col.as_ref(), self.index)?;
+        match scalar {
+            Scalar::Map(map_data) => Some(
+                map_data
+                    .pairs()
+                    .iter()
+                    .map(|(key, value)| {
+                        (
+                            key.to_string(),
+                            if value.is_null() {
+                                None
+                            } else {
+                                Some(value.serialize().into_owned())
+                            },
+                        )
+                    })
+                    .collect(),
+            ),
+            _ => None,
         }
     }
 }

@@ -196,6 +196,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             // TODO: sink mode is ignored since the file formats only support append operation
             mode: _,
             partition_by,
+            clustering_columns: _,
             bucket_by,
             sort_order,
             options,

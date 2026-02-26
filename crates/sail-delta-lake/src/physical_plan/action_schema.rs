@@ -54,6 +54,8 @@ pub struct AddAction {
     modification_time: i64,
     data_change: bool,
     stats_json: Option<String>,
+    tags: Option<Vec<(String, Option<String>)>>,
+    clustering_provider: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -162,6 +164,8 @@ impl From<Add> for ExecAction {
             modification_time: add.modification_time,
             data_change: add.data_change,
             stats_json: add.stats,
+            tags: add.tags.map(|tags| tags.into_iter().collect()),
+            clustering_provider: add.clustering_provider,
         })
     }
 }
@@ -255,11 +259,11 @@ pub fn decode_actions_and_meta_from_batch(
                     modification_time: a.modification_time,
                     data_change: a.data_change,
                     stats: a.stats_json,
-                    tags: None,
+                    tags: a.tags.map(|tags| tags.into_iter().collect()),
                     deletion_vector: None,
                     base_row_id: None,
                     default_row_commit_version: None,
-                    clustering_provider: None,
+                    clustering_provider: a.clustering_provider,
                     commit_version: None,
                     commit_timestamp: None,
                 }));
@@ -349,11 +353,14 @@ mod tests {
             modification_time: 2,
             data_change: true,
             stats: None,
-            tags: None,
+            tags: Some(HashMap::from([
+                ("sail.bucket.columns".to_string(), Some("id".to_string())),
+                ("sail.bucket.count".to_string(), Some("4".to_string())),
+            ])),
             deletion_vector: None,
             base_row_id: None,
             default_row_commit_version: None,
-            clustering_provider: None,
+            clustering_provider: Some("sail".to_string()),
             commit_version: None,
             commit_timestamp: None,
         }];
@@ -390,6 +397,26 @@ mod tests {
         assert_eq!(actions.len(), 2);
         assert!(matches!(actions[0], Action::Add(_)));
         assert!(matches!(actions[1], Action::Remove(_)));
+        let Action::Add(decoded_add) = &actions[0] else {
+            return Err(DataFusionError::Internal("expected add action".to_string()));
+        };
+        assert_eq!(decoded_add.clustering_provider.as_deref(), Some("sail"));
+        let decoded_tags = decoded_add
+            .tags
+            .as_ref()
+            .ok_or_else(|| DataFusionError::Internal("expected add tags".to_string()))?;
+        assert_eq!(
+            decoded_tags
+                .get("sail.bucket.columns")
+                .and_then(|v| v.as_deref()),
+            Some("id")
+        );
+        assert_eq!(
+            decoded_tags
+                .get("sail.bucket.count")
+                .and_then(|v| v.as_deref()),
+            Some("4")
+        );
         let decoded_meta = decoded_meta.ok_or_else(|| {
             DataFusionError::Internal("expected CommitMeta to be present in roundtrip batch".into())
         })?;
