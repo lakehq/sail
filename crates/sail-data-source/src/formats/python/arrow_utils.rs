@@ -1,4 +1,4 @@
-//! Arrow conversion utilities for Python DataSources.
+//! Arrow conversion utilities for Python data sources.
 //!
 //! This module provides efficient conversion between Arrow and Python types
 //! using the Arrow C Data Interface for zero-copy transfer.

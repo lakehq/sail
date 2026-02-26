@@ -1,22 +1,21 @@
-"""Entry point discovery for Python datasources."""
+"""Entry point discovery for Python data sources."""
 
 import logging
+from importlib.metadata import entry_points
 
 logger = logging.getLogger(__name__)
 
 
-def discover_entry_points(group: str = "sail.datasources") -> list[tuple[str, type]]:
+def discover_entry_points(group: str) -> list[tuple[str, type]]:
     """
-    Discover datasources from Python entry points.
+    Discover data sources from Python entry points.
 
     Args:
         group: Entry point group name to scan
 
     Returns:
-        List of (name, class) tuples for discovered datasources
+        List of (name, class) tuples for discovered data sources
     """
-    from importlib.metadata import entry_points
-
     result = []
     for ep in entry_points(group=group):
         try:

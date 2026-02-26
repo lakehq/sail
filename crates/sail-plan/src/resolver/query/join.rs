@@ -46,10 +46,14 @@ impl PlanResolver<'_> {
                 Ok(LogicalPlanBuilder::from(left).cross_join(right)?.build()?)
             }
             (Some(join_type), Some(spec::JoinCriteria::On(condition))) => {
+                // Use Inner to build the schema for resolving the ON condition,
+                // because the condition may reference columns from both sides.
+                // Semi/anti/mark joins restrict the output schema, but the ON
+                // condition still needs access to both sides.
                 let join_schema = Arc::new(build_join_schema(
                     left.schema(),
                     right.schema(),
-                    &join_type,
+                    &JoinType::Inner,
                 )?);
                 let condition = self
                     .resolve_expression(condition, &join_schema, state)
@@ -120,34 +124,36 @@ impl PlanResolver<'_> {
             None,
             NullEquality::NullEqualsNothing,
         )?;
+        // Re-register join key columns as hidden fields so that subsequent
+        // attribute resolution (by plan_id) can still find them.
+        let hidden_columns = builder
+            .schema()
+            .columns()
+            .into_iter()
+            .map(|col| {
+                if left_columns.iter().any(|x| x.name == col.name)
+                    || right_columns.iter().any(|x| x.name == col.name)
+                {
+                    let info = state.get_field_info(col.name())?.clone();
+                    let field_id = state.register_hidden_field_name(info.name());
+                    for plan_id in info.plan_ids() {
+                        state.register_plan_id_for_field(&field_id, plan_id)?;
+                    }
+                    Ok(Expr::Column(col).alias(field_id))
+                } else {
+                    Ok(Expr::Column(col))
+                }
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
         let builder = match join_type {
             JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
-                let columns = builder
-                    .schema()
-                    .columns()
-                    .into_iter()
-                    .map(|col| {
-                        if left_columns.iter().any(|x| x.name == col.name)
-                            || right_columns.iter().any(|x| x.name == col.name)
-                        {
-                            let info = state.get_field_info(col.name())?.clone();
-                            let field_id = state.register_hidden_field_name(info.name());
-                            for plan_id in info.plan_ids() {
-                                state.register_plan_id_for_field(&field_id, plan_id)?;
-                            }
-                            Ok(Expr::Column(col).alias(field_id))
-                        } else {
-                            Ok(Expr::Column(col))
-                        }
-                    })
-                    .collect::<PlanResult<Vec<_>>>()?;
                 let projections = join_columns
                     .into_iter()
                     .map(|(name, (left, right))| {
                         coalesce(vec![Expr::Column(left), Expr::Column(right)])
                             .alias(state.register_field_name(name))
                     })
-                    .chain(columns);
+                    .chain(hidden_columns);
                 builder.project(projections)?
             }
             JoinType::LeftSemi
@@ -155,7 +161,20 @@ impl PlanResolver<'_> {
             | JoinType::LeftAnti
             | JoinType::RightAnti
             | JoinType::LeftMark
-            | JoinType::RightMark => builder,
+            | JoinType::RightMark => {
+                let uses_right = matches!(
+                    join_type,
+                    JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark
+                );
+                let projections = join_columns
+                    .into_iter()
+                    .map(|(name, (left, right))| {
+                        let col = if uses_right { right } else { left };
+                        Expr::Column(col).alias(state.register_field_name(name))
+                    })
+                    .chain(hidden_columns);
+                builder.project(projections)?
+            }
         };
         Ok(builder.build()?)
     }

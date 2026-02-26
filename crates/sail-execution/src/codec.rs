@@ -113,6 +113,7 @@ use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval
 use sail_function::scalar::datetime::spark_next_day::SparkNextDay;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
+use sail_function::scalar::datetime::spark_try_make_timestamp_ntz::SparkTryMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::timestamp_now::TimestampNow;
@@ -168,6 +169,7 @@ use sail_logical_plan::range::Range;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
+use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
 use sail_physical_plan::show_string::ShowStringExec;
@@ -835,6 +837,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 target_present_col,
                 source_present_col,
             )?)),
+            NodeKind::MonotonicId(gen::MonotonicIdExecNode {
+                input,
+                column_name,
+                schema,
+            }) => {
+                let schema = self.try_decode_schema(&schema)?;
+                Ok(Arc::new(MonotonicIdExec::try_new(
+                    self.try_decode_plan(&input, ctx)?,
+                    column_name,
+                    Arc::new(schema),
+                )?))
+            }
             NodeKind::IcebergWriter(gen::IcebergWriterExecNode {
                 input,
                 table_url,
@@ -1341,6 +1355,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 target_present_col: cardinality_check.target_present_col().to_string(),
                 source_present_col: cardinality_check.source_present_col().to_string(),
             })
+        } else if let Some(monotonic_id) = node.as_any().downcast_ref::<MonotonicIdExec>() {
+            let input = self.try_encode_plan(monotonic_id.input().clone())?;
+            let schema = self.try_encode_schema(monotonic_id.schema().as_ref())?;
+            NodeKind::MonotonicId(gen::MonotonicIdExecNode {
+                input,
+                column_name: monotonic_id.column_name().to_string(),
+                schema,
+            })
         } else if let Some(iceberg_writer_exec) = node.as_any().downcast_ref::<IcebergWriterExec>()
         {
             let input = self.try_encode_plan(iceberg_writer_exec.input().clone())?;
@@ -1603,6 +1625,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_make_timestamp_ntz" | "make_timestamp_ntz" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeTimestampNtz::new())))
             }
+            "spark_try_make_timestamp_ntz" | "try_make_timestamp_ntz" => {
+                Ok(Arc::new(ScalarUDF::from(SparkTryMakeTimestampNtz::new())))
+            }
             "spark_mask" | "mask" => Ok(Arc::new(ScalarUDF::from(SparkMask::new()))),
             "spark_concat_ws" | "concat_ws" => Ok(Arc::new(ScalarUDF::from(SparkConcatWs::new()))),
             "spark_sequence" | "sequence" => Ok(Arc::new(ScalarUDF::from(SparkSequence::new()))),
@@ -1711,6 +1736,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkMakeDtInterval>()
             || node_inner.is::<SparkMakeInterval>()
             || node_inner.is::<SparkMakeTimestampNtz>()
+            || node_inner.is::<SparkTryMakeTimestampNtz>()
             || node_inner.is::<SparkMakeYmInterval>()
             || node_inner.is::<SparkMask>()
             || node_inner.is::<SparkConcatWs>()
