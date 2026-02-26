@@ -11,7 +11,7 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
 };
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result, Statistics};
 use futures::Stream;
 
 #[derive(Debug)]
@@ -107,7 +107,24 @@ impl ExecutionPlan for MergeCardinalityCheckExec {
     }
 
     fn required_input_distribution(&self) -> Vec<datafusion::physical_plan::Distribution> {
-        vec![datafusion::physical_plan::Distribution::SinglePartition]
+        // Keep rows for the same target row id in one partition so local de-dup is globally valid.
+        // Fall back to single partition if the expected column is missing to preserve correctness.
+        let idx = match self
+            .input
+            .schema()
+            .index_of(self.target_row_id_col.as_str())
+        {
+            Ok(i) => i,
+            Err(_) => return vec![datafusion::physical_plan::Distribution::SinglePartition],
+        };
+        let expr: Arc<dyn datafusion::physical_expr::PhysicalExpr> =
+            Arc::new(datafusion::physical_expr::expressions::Column::new(
+                self.target_row_id_col.as_str(),
+                idx,
+            ));
+        vec![datafusion::physical_plan::Distribution::HashPartitioned(
+            vec![expr],
+        )]
     }
 
     fn execute(
@@ -115,13 +132,7 @@ impl ExecutionPlan for MergeCardinalityCheckExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if partition != 0 {
-            return internal_err!(
-                "MergeCardinalityCheckExec can only be executed in a single partition"
-            );
-        }
-
-        let input = self.input.execute(0, context)?;
+        let input = self.input.execute(partition, context)?;
         let schema = self.schema.clone();
 
         let row_id_idx = schema
@@ -143,6 +154,10 @@ impl ExecutionPlan for MergeCardinalityCheckExec {
             seen: HashSet::new(),
         };
         Ok(Box::pin(stream))
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        self.input.partition_statistics(partition)
     }
 }
 
@@ -202,7 +217,7 @@ impl Stream for MergeCardinalityCheckStream {
                         RowIdView::LargeUtf8(a)
                     } else {
                         return Poll::Ready(Some(Err(DataFusionError::Internal(format!(
-                            "expected Utf8/LargeUtf8 for target row id but got {:?}",
+                            "expected Int64/Utf8/LargeUtf8 for target row id but got {:?}",
                             row_id_any.data_type()
                         )))));
                     };

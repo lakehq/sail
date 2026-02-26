@@ -1,4 +1,3 @@
-use std::cmp::Ordering;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -8,6 +7,7 @@ use datafusion::error::Result;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion_common::{exec_err, plan_err};
 use datafusion_expr::Expr;
+use educe::Educe;
 use pyo3::Python;
 use sail_common_datafusion::udf::StreamUDF;
 
@@ -23,7 +23,8 @@ pub enum PySparkUdtfKind {
     ArrowTable,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Educe)]
+#[educe(PartialOrd)]
 pub struct PySparkUDTF {
     kind: PySparkUdtfKind,
     name: String,
@@ -45,44 +46,8 @@ pub struct PySparkUDTF {
     /// The output schema of the UDTF output stream.
     /// The output batch contains the passthrough non-argument columns from the input batch,
     /// followed by the columns of the UDTF output.
+    #[educe(PartialOrd(ignore))]
     output_schema: SchemaRef,
-}
-
-#[derive(PartialEq, PartialOrd)]
-struct PySparkUDTFOrd<'a> {
-    kind: PySparkUdtfKind,
-    name: &'a str,
-    payload: &'a [u8],
-    input_names: &'a [String],
-    input_types: &'a [DataType],
-    passthrough_columns: usize,
-    function_return_type: &'a DataType,
-    function_output_names: &'a Option<Vec<String>>,
-    deterministic: &'a bool,
-    config: &'a PySparkUdfConfig,
-}
-
-impl<'a> From<&'a PySparkUDTF> for PySparkUDTFOrd<'a> {
-    fn from(udtf: &'a PySparkUDTF) -> Self {
-        Self {
-            kind: udtf.kind,
-            name: &udtf.name,
-            payload: &udtf.payload,
-            input_names: &udtf.input_names,
-            input_types: &udtf.input_types,
-            passthrough_columns: udtf.passthrough_columns,
-            function_return_type: &udtf.function_return_type,
-            function_output_names: &udtf.function_output_names,
-            deterministic: &udtf.deterministic,
-            config: &udtf.config,
-        }
-    }
-}
-
-impl PartialOrd for PySparkUDTF {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        PySparkUDTFOrd::from(self).partial_cmp(&other.into())
-    }
 }
 
 impl PySparkUDTF {

@@ -77,7 +77,10 @@ use sail_common_datafusion::system::catalog::SystemTable;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_data_source::formats::binary::source::BinarySource;
 use sail_data_source::formats::console::ConsoleSinkExec;
-use sail_data_source::formats::python::{InputPartition, PythonDataSourceExec};
+use sail_data_source::formats::python::{
+    InputPartition, PythonDataSourceExec, PythonDataSourceWriteCommitExec,
+    PythonDataSourceWriteExec,
+};
 use sail_data_source::formats::rate::{RateSourceExec, TableRateOptions};
 use sail_data_source::formats::socket::{SocketSourceExec, TableSocketOptions};
 use sail_data_source::formats::text::source::TextSource;
@@ -114,6 +117,7 @@ use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval
 use sail_function::scalar::datetime::spark_next_day::SparkNextDay;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
+use sail_function::scalar::datetime::spark_try_make_timestamp_ntz::SparkTryMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::timestamp_now::TimestampNow;
@@ -910,6 +914,37 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     partitions,
                 )))
             }
+            NodeKind::PythonDataSourceWrite(gen::PythonDataSourceWriteExecNode {
+                pickled_writer,
+                schema,
+                is_arrow,
+                input,
+            }) => {
+                let schema = Arc::new(self.try_decode_schema(&schema)?);
+                let input = self.try_decode_plan(&input, ctx)?;
+                if schema.as_ref() != input.schema().as_ref() {
+                    return plan_err!(
+                        "PythonDataSourceWriteExec schema mismatch: encoded schema does not match input schema"
+                    );
+                }
+                Ok(Arc::new(PythonDataSourceWriteExec::new(
+                    input,
+                    pickled_writer,
+                    is_arrow,
+                )))
+            }
+            NodeKind::PythonDataSourceWriteCommit(gen::PythonDataSourceWriteCommitExecNode {
+                pickled_writer,
+                expected_partitions,
+                input,
+            }) => {
+                let input = self.try_decode_plan(&input, ctx)?;
+                Ok(Arc::new(PythonDataSourceWriteCommitExec::new(
+                    input,
+                    pickled_writer,
+                    expected_partitions as usize,
+                )))
+            }
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
         }
     }
@@ -1399,6 +1434,27 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 schema,
                 partitions,
             })
+        } else if let Some(python_write_exec) =
+            node.as_any().downcast_ref::<PythonDataSourceWriteExec>()
+        {
+            let schema = self.try_encode_schema(python_write_exec.input().schema().as_ref())?;
+            let input = self.try_encode_plan(python_write_exec.input().clone())?;
+            NodeKind::PythonDataSourceWrite(gen::PythonDataSourceWriteExecNode {
+                pickled_writer: python_write_exec.pickled_writer().to_vec(),
+                schema,
+                is_arrow: python_write_exec.is_arrow(),
+                input,
+            })
+        } else if let Some(python_commit_exec) = node
+            .as_any()
+            .downcast_ref::<PythonDataSourceWriteCommitExec>()
+        {
+            let input = self.try_encode_plan(python_commit_exec.input().clone())?;
+            NodeKind::PythonDataSourceWriteCommit(gen::PythonDataSourceWriteCommitExecNode {
+                pickled_writer: python_commit_exec.pickled_writer().to_vec(),
+                expected_partitions: python_commit_exec.expected_partitions() as u64,
+                input,
+            })
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");
         };
@@ -1527,6 +1583,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkDate(gen::SparkDateUdf { is_try }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkDate::new(is_try))));
             }
+            UdfKind::SparkFromCsv(gen::SparkFromCsvUdf { session_timezone }) => {
+                let udf = SparkFromCSV::new(Arc::from(session_timezone));
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
         };
         match name {
             "array_item_with_position" => {
@@ -1558,7 +1618,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_concat" | "concat" | "array_concat" => {
                 Ok(Arc::new(ScalarUDF::from(SparkConcat::new())))
             }
-            "spark_from_csv" | "from_csv" => Ok(Arc::new(ScalarUDF::from(SparkFromCSV::new()))),
             "spark_to_number" | "to_number" => Ok(Arc::new(ScalarUDF::from(SparkToNumber::new()))),
             "spark_try_to_number" | "try_to_number" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryToNumber::new())))
@@ -1624,6 +1683,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "spark_make_timestamp_ntz" | "make_timestamp_ntz" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeTimestampNtz::new())))
+            }
+            "spark_try_make_timestamp_ntz" | "try_make_timestamp_ntz" => {
+                Ok(Arc::new(ScalarUDF::from(SparkTryMakeTimestampNtz::new())))
             }
             "spark_mask" | "mask" => Ok(Arc::new(ScalarUDF::from(SparkMask::new()))),
             "spark_concat_ws" | "concat_ws" => Ok(Arc::new(ScalarUDF::from(SparkConcatWs::new()))),
@@ -1733,6 +1795,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkMakeDtInterval>()
             || node_inner.is::<SparkMakeInterval>()
             || node_inner.is::<SparkMakeTimestampNtz>()
+            || node_inner.is::<SparkTryMakeTimestampNtz>()
             || node_inner.is::<SparkMakeYmInterval>()
             || node_inner.is::<SparkMask>()
             || node_inner.is::<SparkConcatWs>()
@@ -1851,6 +1914,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkDate>() {
             let is_try = func.is_try();
             UdfKind::SparkDate(gen::SparkDateUdf { is_try })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkFromCSV>() {
+            let session_timezone = func.session_timezone().to_string();
+            UdfKind::SparkFromCsv(gen::SparkFromCsvUdf { session_timezone })
         } else {
             return Ok(());
         };

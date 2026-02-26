@@ -1,5 +1,9 @@
+use datafusion::arrow::array::types::{
+    Date32Type, Float64Type, Int32Type, Time64MicrosecondType, UInt32Type,
+};
+use datafusion::arrow::array::{AsArray, Float64Array, Int32Array, PrimitiveArray, UInt32Array};
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{exec_err, plan_datafusion_err, Result};
+use datafusion_common::{exec_err, plan_datafusion_err, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 use regex::Regex;
 
@@ -121,4 +125,94 @@ pub fn spark_datetime_format_to_chrono_strftime(format: &str) -> Result<String> 
     result = result.replace(".%.", "%.");
 
     Ok(result)
+}
+
+// Shared array conversion helpers for make_timestamp functions
+
+pub(crate) fn to_date32_array(
+    col: &ColumnarValue,
+    arg_name: &str,
+    fn_name: &str,
+    number_rows: usize,
+) -> Result<PrimitiveArray<Date32Type>> {
+    match col {
+        ColumnarValue::Array(array) => Ok(array.as_primitive::<Date32Type>().to_owned()),
+        ColumnarValue::Scalar(ScalarValue::Date32(Some(value))) => Ok(
+            PrimitiveArray::<Date32Type>::from_value(*value, number_rows),
+        ),
+        other => {
+            exec_err!("Unsupported {arg_name} arg {other:?} for Spark function `{fn_name}`")
+        }
+    }
+}
+
+pub(crate) fn to_time64_array(
+    col: &ColumnarValue,
+    arg_name: &str,
+    fn_name: &str,
+    number_rows: usize,
+) -> Result<PrimitiveArray<Time64MicrosecondType>> {
+    match col {
+        ColumnarValue::Array(array) => Ok(array.as_primitive::<Time64MicrosecondType>().to_owned()),
+        ColumnarValue::Scalar(ScalarValue::Time64Microsecond(Some(value))) => {
+            Ok(PrimitiveArray::<Time64MicrosecondType>::from_value(
+                *value,
+                number_rows,
+            ))
+        }
+        other => {
+            exec_err!("Unsupported {arg_name} arg {other:?} for Spark function `{fn_name}`")
+        }
+    }
+}
+
+pub(crate) fn to_int32_array(
+    col: &ColumnarValue,
+    arg_name: &str,
+    fn_name: &str,
+    number_rows: usize,
+) -> Result<Int32Array> {
+    match col {
+        ColumnarValue::Array(array) => Ok(array.as_primitive::<Int32Type>().to_owned()),
+        ColumnarValue::Scalar(ScalarValue::Int32(Some(value))) => {
+            Ok(Int32Array::from_value(*value, number_rows))
+        }
+        other => {
+            exec_err!("Unsupported {arg_name} arg {other:?} for Spark function `{fn_name}`")
+        }
+    }
+}
+
+pub(crate) fn to_uint32_array(
+    col: &ColumnarValue,
+    arg_name: &str,
+    fn_name: &str,
+    number_rows: usize,
+) -> Result<UInt32Array> {
+    match col {
+        ColumnarValue::Array(array) => Ok(array.as_primitive::<UInt32Type>().to_owned()),
+        ColumnarValue::Scalar(ScalarValue::UInt32(Some(value))) => {
+            Ok(UInt32Array::from_value(*value, number_rows))
+        }
+        other => {
+            exec_err!("Unsupported {arg_name} arg {other:?} for Spark function `{fn_name}`")
+        }
+    }
+}
+
+pub(crate) fn to_float64_array(
+    col: &ColumnarValue,
+    arg_name: &str,
+    fn_name: &str,
+    number_rows: usize,
+) -> Result<Float64Array> {
+    match col {
+        ColumnarValue::Array(array) => Ok(array.as_primitive::<Float64Type>().to_owned()),
+        ColumnarValue::Scalar(ScalarValue::Float64(Some(value))) => {
+            Ok(Float64Array::from_value(*value, number_rows))
+        }
+        other => {
+            exec_err!("Unsupported {arg_name} arg {other:?} for Spark function `{fn_name}`")
+        }
+    }
 }

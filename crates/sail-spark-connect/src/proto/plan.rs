@@ -1597,9 +1597,11 @@ impl TryFrom<WriteOperation> for spec::Write {
             None => None,
         };
         let options = options.into_iter().collect();
-        let save_type = match save_type.required("save type")? {
-            SaveType::Path(x) => spec::SaveType::Path(x),
-            SaveType::Table(table) => {
+        // Spark Connect 4.1 may omit `save_type` for DataFrameWriter.save() with no path.
+        // Represent this as an explicit sink destination instead of an implicit empty path.
+        let save_type = match save_type {
+            Some(SaveType::Path(x)) => spec::SaveType::Path(x),
+            Some(SaveType::Table(table)) => {
                 let SaveTable {
                     table_name,
                     save_method,
@@ -1615,6 +1617,7 @@ impl TryFrom<WriteOperation> for spec::Write {
                 };
                 spec::SaveType::Table { table, save_method }
             }
+            None => spec::SaveType::Sink,
         };
         Ok(spec::Write {
             input: Box::new(input),
@@ -2024,6 +2027,37 @@ mod tests {
             |sql: String| Ok(from_ast_statement(parse_one_statement(&sql)?)?),
             SparkError::internal,
         )
+    }
+
+    #[test]
+    fn test_write_operation_without_save_type_uses_sink() -> SparkResult<()> {
+        use sc::relation;
+        use sc::write_operation::SaveMode;
+
+        let input = sc::Relation {
+            common: None,
+            rel_type: Some(relation::RelType::Sql({
+                #[expect(deprecated)]
+                sc::Sql {
+                    query: "select 1".to_string(),
+                    args: Default::default(),
+                    pos_args: vec![],
+                    named_arguments: Default::default(),
+                    pos_arguments: vec![],
+                }
+            })),
+        };
+        let write = sc::WriteOperation {
+            input: Some(input),
+            source: Some("python".to_string()),
+            mode: SaveMode::Append as i32,
+            save_type: None,
+            ..Default::default()
+        };
+
+        let write: spec::Write = write.try_into()?;
+        assert!(matches!(write.save_type, spec::SaveType::Sink));
+        Ok(())
     }
 
     #[test]
