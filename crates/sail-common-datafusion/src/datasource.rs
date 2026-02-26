@@ -64,6 +64,7 @@ pub struct SinkInfo {
     pub path: String,
     pub mode: PhysicalSinkMode,
     pub partition_by: Vec<String>,
+    pub clustering_columns: Vec<String>,
     pub bucket_by: Option<BucketBy>,
     pub sort_order: Option<LexRequirement>,
     /// The sets of options for the data sink.

@@ -40,9 +40,7 @@ impl PlanResolver<'_> {
         if row_format.is_some() {
             return Err(PlanError::todo("ROW FORMAT in CREATE TABLE statement"));
         }
-        if !cluster_by.is_empty() {
-            return Err(PlanError::todo("CLUSTER BY in CREATE TABLE statement"));
-        }
+        let _cluster_by = cluster_by;
         let columns = self.resolve_table_columns(columns, state)?;
         let constraints = self.resolve_table_constraints(constraints)?;
         let location = if let Some(location) = location {
@@ -110,11 +108,6 @@ impl PlanResolver<'_> {
                 "ROW FORMAT in CREATE TABLE AS SELECT statement",
             ));
         }
-        if !cluster_by.is_empty() {
-            return Err(PlanError::todo(
-                "CLUSTER BY in CREATE TABLE AS SELECT statement",
-            ));
-        }
         if replace {
             return Err(PlanError::todo(
                 "REPLACE in CREATE TABLE AS SELECT statement",
@@ -126,16 +119,6 @@ impl PlanResolver<'_> {
             ));
         }
 
-        if !sort_by.is_empty() {
-            return Err(PlanError::todo(
-                "SORT_BY in CREATE TABLE AS SELECT statement",
-            ));
-        }
-        if bucket_by.is_some() {
-            return Err(PlanError::todo(
-                "BUCKET_BY in CREATE TABLE AS SELECT statement",
-            ));
-        }
         if comment.is_some() {
             return Err(PlanError::todo(
                 "COMMENT in CREATE TABLE AS SELECT statement",
@@ -189,6 +172,9 @@ impl PlanResolver<'_> {
             .with_mode(write_mode)
             .with_format(format)
             .with_partition_by(partition_by)
+            .with_sort_by(sort_by)
+            .with_bucket_by(bucket_by)
+            .with_cluster_by(cluster_by)
             .with_options(write_options);
 
         self.resolve_write_with_builder(input, builder, state).await

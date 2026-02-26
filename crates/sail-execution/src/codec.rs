@@ -71,7 +71,7 @@ use datafusion_spark::function::url::url_encode::UrlEncode;
 use prost::Message;
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::array::record_batch::{read_record_batches, write_record_batches};
-use sail_common_datafusion::datasource::PhysicalSinkMode;
+use sail_common_datafusion::datasource::{BucketBy, PhysicalSinkMode};
 use sail_common_datafusion::physical_expr::PhysicalExprWithSource;
 use sail_common_datafusion::system::catalog::SystemTable;
 use sail_common_datafusion::udf::StreamUDF;
@@ -558,6 +558,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_exists,
                 sink_mode,
                 operation_override_json,
+                bucket_by,
+                clustering_columns,
             }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let sink_schema = self.try_decode_schema(&sink_schema)?;
@@ -578,11 +580,29 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 } else {
                     None
                 };
+                let bucket_by = match bucket_by {
+                    Some(bucket_by) => {
+                        let num_buckets: usize =
+                            bucket_by.num_buckets.try_into().map_err(|_| {
+                                plan_datafusion_err!(
+                                    "Delta bucket count does not fit in usize: {}",
+                                    bucket_by.num_buckets
+                                )
+                            })?;
+                        Some(BucketBy {
+                            columns: bucket_by.columns,
+                            num_buckets,
+                        })
+                    }
+                    None => None,
+                };
                 Ok(Arc::new(DeltaWriterExec::new(
                     input,
                     table_url,
                     options,
                     partition_columns,
+                    bucket_by,
+                    clustering_columns,
                     sink_mode,
                     table_exists,
                     Arc::new(sink_schema),
@@ -1158,6 +1178,21 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             } else {
                 None
             };
+            let bucket_by = match delta_writer_exec.bucket_by() {
+                Some(bucket_by) => {
+                    let num_buckets = u64::try_from(bucket_by.num_buckets).map_err(|_| {
+                        plan_datafusion_err!(
+                            "Delta bucket count does not fit in u64: {}",
+                            bucket_by.num_buckets
+                        )
+                    })?;
+                    Some(gen::DeltaBucketBy {
+                        columns: bucket_by.columns.clone(),
+                        num_buckets,
+                    })
+                }
+                None => None,
+            };
             NodeKind::DeltaWriter(gen::DeltaWriterExecNode {
                 input,
                 table_url: delta_writer_exec.table_url().to_string(),
@@ -1168,6 +1203,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_exists: delta_writer_exec.table_exists(),
                 sink_mode: Some(sink_mode),
                 operation_override_json,
+                bucket_by,
+                clustering_columns: delta_writer_exec.clustering_columns().to_vec(),
             })
         } else if let Some(delta_commit_exec) = node.as_any().downcast_ref::<DeltaCommitExec>() {
             let input = self.try_encode_plan(delta_commit_exec.input().clone())?;

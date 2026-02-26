@@ -71,6 +71,7 @@ impl TableFormat for DeltaTableFormat {
             path,
             mode,
             partition_by,
+            clustering_columns,
             bucket_by,
             sort_order,
             options,
@@ -79,10 +80,6 @@ impl TableFormat for DeltaTableFormat {
         if is_flow_event_schema(&input.schema()) {
             return not_impl_err!("writing streaming data to Delta table");
         }
-        if bucket_by.is_some() {
-            return not_impl_err!("bucketing for Delta format");
-        }
-
         let table_url = Self::parse_table_url(ctx, vec![path]).await?;
         let delta_options = resolve_delta_write_options(options)?;
 
@@ -178,6 +175,8 @@ impl TableFormat for DeltaTableFormat {
             table_url,
             delta_options,
             partition_columns,
+            bucket_by,
+            clustering_columns,
             table_schema_for_cond,
             table_exists,
         );
@@ -207,7 +206,15 @@ impl TableFormat for DeltaTableFormat {
 
         let delta_options = resolve_delta_write_options(options)?;
 
-        let delete_config = DeltaTableConfig::new(table_url, delta_options, Vec::new(), None, true);
+        let delete_config = DeltaTableConfig::new(
+            table_url,
+            delta_options,
+            Vec::new(),
+            None,
+            vec![],
+            None,
+            true,
+        );
         let delete_ctx = PlannerContext::new(ctx, delete_config);
         let delete_exec = plan_delete(&delete_ctx, condition).await?;
 
@@ -225,6 +232,8 @@ impl TableFormat for DeltaTableFormat {
             table_url,
             delta_options,
             info.target.partition_by.clone(),
+            None,
+            vec![],
             None,
             true,
         );

@@ -77,7 +77,7 @@ Feature: CREATE TABLE AS SELECT error handling
       """
       DROP TABLE IF EXISTS ctas_error_sort_by
       """
-    Given statement template with error SORT_BY in CREATE TABLE AS SELECT statement
+    Given statement template with error cannot resolve attribute
       """
       CREATE TABLE ctas_error_sort_by
       USING PARQUET
@@ -95,7 +95,7 @@ Feature: CREATE TABLE AS SELECT error handling
       """
       DROP TABLE IF EXISTS ctas_error_bucket_by
       """
-    Given statement template with error BUCKET_BY in CREATE TABLE AS SELECT statement
+    Given statement template with error bucketing for writing listing table format
       """
       CREATE TABLE ctas_error_bucket_by
       USING PARQUET
@@ -107,13 +107,13 @@ Feature: CREATE TABLE AS SELECT error handling
       AS t(id, name)
       """
 
-  Scenario: CREATE TABLE AS SELECT fails with CLUSTER BY clause
+  Scenario: CREATE TABLE AS SELECT supports CLUSTER BY clause
     Given variable location for temporary directory ctas_error_cluster_by
     Given final statement
       """
       DROP TABLE IF EXISTS ctas_error_cluster_by
       """
-    Given statement template with error CLUSTER BY in CREATE TABLE AS SELECT statement
+    Given statement template
       """
       CREATE TABLE ctas_error_cluster_by
       USING PARQUET
@@ -124,6 +124,14 @@ Feature: CREATE TABLE AS SELECT error handling
         (2, 'Bob')
       AS t(id, name)
       """
+    When query
+      """
+      SELECT * FROM ctas_error_cluster_by ORDER BY id
+      """
+    Then query result ordered
+      | id | name |
+      | 1  | Alice |
+      | 2  | Bob   |
 
   Scenario: CREATE TABLE AS SELECT fails with ROW FORMAT clause
     Given variable location for temporary directory ctas_error_row_format

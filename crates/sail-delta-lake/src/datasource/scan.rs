@@ -21,10 +21,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
-use datafusion::common::{DataFusionError, Result};
+use datafusion::common::{DataFusionError, Result, ScalarValue};
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{
@@ -32,7 +33,8 @@ use datafusion::datasource::physical_plan::{
     FileScanConfigBuilder, ParquetSource,
 };
 use datafusion::datasource::table_schema::TableSchema;
-use datafusion::physical_expr::{LexOrdering, PhysicalExpr};
+use datafusion::physical_expr::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
+use datafusion_physical_expr::expressions::Column as PhysicalColumn;
 use object_store::path::Path;
 
 use crate::datasource::{
@@ -40,6 +42,7 @@ use crate::datasource::{
     DeltaTableStateExt,
 };
 use crate::kernel::models::Add;
+use crate::operations::write::stats::{BUCKET_COLUMNS_TAG, BUCKET_COUNT_TAG, CLUSTER_COLUMNS_TAG};
 use crate::physical_plan::DeltaPhysicalExprAdapterFactory;
 use crate::storage::LogStoreRef;
 use crate::table::DeltaTableState;
@@ -93,10 +96,7 @@ pub fn build_file_scan_config(
     }
 
     // Build file groups by partition values
-    let mut file_groups: HashMap<
-        Vec<datafusion::common::scalar::ScalarValue>,
-        Vec<PartitionedFile>,
-    > = HashMap::new();
+    let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
 
     for action in files.iter() {
         let mut part =
@@ -129,10 +129,28 @@ pub fn build_file_scan_config(
                 ));
         }
 
-        file_groups
-            .entry(part.partition_values.clone())
-            .or_default()
-            .push(part);
+        let bucket_columns = action
+            .tags
+            .as_ref()
+            .and_then(|tags| tags.get(BUCKET_COLUMNS_TAG))
+            .and_then(|v| v.clone());
+        let bucket_count = action
+            .tags
+            .as_ref()
+            .and_then(|tags| tags.get(BUCKET_COUNT_TAG))
+            .and_then(|v| v.clone());
+        let cluster_columns = action
+            .tags
+            .as_ref()
+            .and_then(|tags| tags.get(CLUSTER_COLUMNS_TAG))
+            .and_then(|v| v.clone());
+        let mut group_key = part.partition_values.clone();
+        group_key.push(ScalarValue::Utf8(action.clustering_provider.clone()));
+        group_key.push(ScalarValue::Utf8(bucket_columns));
+        group_key.push(ScalarValue::Utf8(bucket_count));
+        group_key.push(ScalarValue::Utf8(cluster_columns));
+
+        file_groups.entry(group_key).or_default().push(part);
     }
 
     // Rewrite file paths with table location prefix
@@ -244,7 +262,10 @@ pub fn build_file_scan_config(
     if file_groups.is_empty() {
         file_groups = vec![FileGroup::from(vec![])];
     }
-    if let Some(sort_order) = &params.sort_order {
+    let sort_order = params
+        .sort_order
+        .or_else(|| derive_sort_order_from_metadata(files, &file_schema));
+    if let Some(sort_order) = &sort_order {
         let all_have_stats = file_groups
             .iter()
             .flat_map(FileGroup::iter)
@@ -264,6 +285,52 @@ pub fn build_file_scan_config(
         .build();
 
     Ok(file_scan_config)
+}
+
+fn derive_sort_order_from_metadata(files: &[Add], file_schema: &SchemaRef) -> Option<LexOrdering> {
+    let parse_columns = |value: Option<&String>| {
+        value
+            .map(|s| {
+                s.split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
+
+    for action in files {
+        let tags = match &action.tags {
+            Some(tags) => tags,
+            None => continue,
+        };
+        let mut columns = parse_columns(tags.get(CLUSTER_COLUMNS_TAG).and_then(|v| v.as_ref()));
+        if columns.is_empty() {
+            columns = parse_columns(tags.get(BUCKET_COLUMNS_TAG).and_then(|v| v.as_ref()));
+        }
+        if columns.is_empty() {
+            continue;
+        }
+
+        let sort_exprs: Vec<PhysicalSortExpr> = columns
+            .into_iter()
+            .filter_map(|name| {
+                file_schema
+                    .index_of(&name)
+                    .ok()
+                    .map(|idx| PhysicalSortExpr {
+                        expr: Arc::new(PhysicalColumn::new(&name, idx)) as Arc<dyn PhysicalExpr>,
+                        options: SortOptions::default(),
+                    })
+            })
+            .collect();
+        if sort_exprs.is_empty() {
+            continue;
+        }
+        return LexOrdering::new(sort_exprs);
+    }
+    None
 }
 
 fn stats_for_add(
@@ -380,5 +447,48 @@ fn scalar_from_json(
             datafusion::common::ScalarValue::try_from_string(s.clone(), dt).ok()
         }
         other => datafusion::common::ScalarValue::try_from_string(other.to_string(), dt).ok(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+
+    use super::*;
+
+    fn make_add_with_tags(tags: HashMap<String, Option<String>>) -> Add {
+        Add {
+            path: "part-00000.parquet".to_string(),
+            partition_values: HashMap::new(),
+            size: 1,
+            modification_time: 1,
+            data_change: true,
+            stats: None,
+            tags: Some(tags),
+            deletion_vector: None,
+            base_row_id: None,
+            default_row_commit_version: None,
+            clustering_provider: Some("sail".to_string()),
+            commit_version: None,
+            commit_timestamp: None,
+        }
+    }
+
+    #[test]
+    fn derive_sort_order_prefers_cluster_columns() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new("ts", DataType::Int64, true),
+        ]));
+        let tags = HashMap::from([
+            (CLUSTER_COLUMNS_TAG.to_string(), Some("ts,id".to_string())),
+            (BUCKET_COLUMNS_TAG.to_string(), Some("id".to_string())),
+        ]);
+        let files = vec![make_add_with_tags(tags)];
+
+        let ordering = derive_sort_order_from_metadata(&files, &schema);
+        assert!(ordering.is_some());
     }
 }

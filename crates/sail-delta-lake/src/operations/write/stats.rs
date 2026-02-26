@@ -32,9 +32,15 @@ use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
 use parquet::file::statistics::Statistics;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
+use sail_common_datafusion::datasource::BucketBy;
 
 use crate::kernel::models::{Add, ColumnCountStat, ColumnValueStat, ScalarExt, Stats};
 use crate::kernel::DeltaTableError;
+
+pub const BUCKET_COLUMNS_TAG: &str = "sail.bucket.columns";
+pub const BUCKET_COUNT_TAG: &str = "sail.bucket.count";
+pub const CLUSTER_COLUMNS_TAG: &str = "sail.cluster.columns";
+pub const SAIL_CLUSTERING_PROVIDER: &str = "sail";
 
 /// Creates an [`Add`] log action struct with statistics.
 pub fn create_add(
@@ -44,6 +50,8 @@ pub fn create_add(
     file_metadata: &ParquetMetaData,
     num_indexed_cols: i32,
     stats_columns: &Option<Vec<String>>,
+    bucket_by: Option<&BucketBy>,
+    clustering_columns: &[String],
 ) -> Result<Add, DeltaTableError> {
     let stats = stats_from_file_metadata(
         partition_values,
@@ -60,6 +68,27 @@ pub fn create_add(
         .duration_since(UNIX_EPOCH)
         .map_err(|e| DeltaTableError::generic(format!("System time before Unix epoch: {e}")))?
         .as_millis() as i64;
+
+    let mut tags = HashMap::new();
+    if let Some(bucket_by) = bucket_by {
+        tags.insert(
+            BUCKET_COLUMNS_TAG.to_string(),
+            Some(bucket_by.columns.join(",")),
+        );
+        tags.insert(
+            BUCKET_COUNT_TAG.to_string(),
+            Some(bucket_by.num_buckets.to_string()),
+        );
+    }
+    if !clustering_columns.is_empty() {
+        tags.insert(
+            CLUSTER_COLUMNS_TAG.to_string(),
+            Some(clustering_columns.join(",")),
+        );
+    }
+    let tags = if tags.is_empty() { None } else { Some(tags) };
+    let clustering_provider =
+        (!clustering_columns.is_empty()).then(|| SAIL_CLUSTERING_PROVIDER.to_string());
 
     Ok(Add {
         path,
@@ -80,11 +109,11 @@ pub fn create_add(
         modification_time,
         data_change: true,
         stats: Some(stats_string),
-        tags: None,
+        tags,
         deletion_vector: None,
         base_row_id: None,
         default_row_commit_version: None,
-        clustering_provider: None,
+        clustering_provider,
         commit_version: None,
         commit_timestamp: None,
     })

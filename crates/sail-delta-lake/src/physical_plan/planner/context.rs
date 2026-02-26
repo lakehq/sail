@@ -16,6 +16,7 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::common::{DataFusionError, Result};
 use object_store::ObjectStore;
+use sail_common_datafusion::datasource::BucketBy;
 use url::Url;
 
 use crate::kernel::DeltaTableConfig as KernelDeltaTableConfig;
@@ -29,6 +30,8 @@ pub struct DeltaTableConfig {
     pub table_url: Url,
     pub options: TableDeltaOptions,
     pub partition_columns: Vec<String>,
+    pub bucket_by: Option<BucketBy>,
+    pub clustering_columns: Vec<String>,
     pub table_schema_for_cond: Option<SchemaRef>,
     pub table_exists: bool,
 }
@@ -38,6 +41,8 @@ impl DeltaTableConfig {
         table_url: Url,
         options: TableDeltaOptions,
         partition_columns: Vec<String>,
+        bucket_by: Option<BucketBy>,
+        clustering_columns: Vec<String>,
         table_schema_for_cond: Option<SchemaRef>,
         table_exists: bool,
     ) -> Self {
@@ -45,6 +50,8 @@ impl DeltaTableConfig {
             table_url,
             options,
             partition_columns,
+            bucket_by,
+            clustering_columns,
             table_schema_for_cond,
             table_exists,
         }
@@ -80,6 +87,14 @@ impl<'a> PlannerContext<'a> {
 
     pub fn partition_columns(&self) -> &[String] {
         &self.config.partition_columns
+    }
+
+    pub fn bucket_by(&self) -> Option<&BucketBy> {
+        self.config.bucket_by.as_ref()
+    }
+
+    pub fn clustering_columns(&self) -> &[String] {
+        &self.config.clustering_columns
     }
 
     pub fn table_schema_for_cond(&self) -> Option<SchemaRef> {

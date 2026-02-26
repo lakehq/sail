@@ -24,6 +24,7 @@ pub async fn create_file_write_physical_plan(
         format,
         mode,
         partition_by,
+        clustering_columns,
         sort_by,
         bucket_by,
         options,
@@ -48,6 +49,7 @@ pub async fn create_file_write_physical_plan(
         path,
         mode,
         partition_by,
+        clustering_columns,
         bucket_by,
         sort_order,
         // TODO: detect duplicated keys in each set of options
