@@ -136,7 +136,8 @@ impl PlanResolver<'_> {
                     &self.config.pyspark_udf_config,
                 )?;
                 let function = match function.eval_type {
-                    spec::PySparkUdfType::GroupedAggPandas => {
+                    spec::PySparkUdfType::GroupedAggPandas
+                    | spec::PySparkUdfType::GroupedAggArrow => {
                         let udaf = PySparkGroupAggregateUDF::new(
                             get_udf_name(&function_name, &payload),
                             payload,

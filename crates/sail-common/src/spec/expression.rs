@@ -335,7 +335,7 @@ pub struct CommonInlineUserDefinedTableFunction {
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum TableFunctionDefinition {
     PythonUdtf {
-        return_type: Option<DataType>,
+        return_type: DataType,
         eval_type: PySparkUdfType,
         command: Vec<u8>,
         python_version: String,
@@ -373,6 +373,10 @@ pub enum PySparkUdfType {
     GroupedMapPandasWithState = 208,
     GroupedMapArrow = 209,
     CogroupedMapArrow = 210,
+    ScalarArrow = 250,
+    ScalarArrowIter = 251,
+    GroupedAggArrow = 252,
+    WindowAggArrow = 253,
     Table = 300,
     ArrowTable = 301,
 }

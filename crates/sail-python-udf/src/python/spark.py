@@ -711,9 +711,17 @@ class PySparkArrowTableUdf:
         self._passthrough_columns = passthrough_columns
         self._output_schema = output_schema
         self._output_type = pa.struct([output_schema.field(i) for i in range(len(output_schema.names))])
-        self._serializer = ArrowStreamPandasUDTFSerializer(
-            timezone=config.session_timezone, safecheck=config.arrow_convert_safely
-        )
+        if pyspark.__version__.startswith(("3.", "4.0.")):
+            self._serializer = ArrowStreamPandasUDTFSerializer(
+                timezone=config.session_timezone, safecheck=config.arrow_convert_safely
+            )
+        else:
+            self._serializer = ArrowStreamPandasUDTFSerializer(
+                timezone=config.session_timezone,
+                safecheck=config.arrow_convert_safely,
+                input_types=[],
+                int_to_decimal_coercion_enabled=False,
+            )
 
     def __call__(self, args: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
         for output in self._iter_output(args):

@@ -71,11 +71,6 @@ impl PlanResolver<'_> {
                 python_version,
             } => (return_type, eval_type, command, python_version),
         };
-        let return_type = return_type.ok_or_else(|| {
-            PlanError::unsupported(
-                "Python UDTF without a return type (UDTFs with analyze method are not supported yet)",
-            )
-        })?;
         let return_type = self.resolve_data_type(&return_type, state)?;
         Ok(PythonUdtf {
             python_version,

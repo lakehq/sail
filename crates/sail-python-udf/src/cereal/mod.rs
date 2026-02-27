@@ -58,6 +58,7 @@ fn supports_kwargs(eval_type: spec::PySparkUdfType) -> bool {
         | PySparkUdfType::GroupedMapPandas
         | PySparkUdfType::GroupedMapArrow
         | PySparkUdfType::WindowAggPandas
+        | PySparkUdfType::WindowAggArrow
         | PySparkUdfType::MapPandasIter
         | PySparkUdfType::CogroupedMapPandas
         | PySparkUdfType::CogroupedMapArrow
@@ -68,8 +69,11 @@ fn supports_kwargs(eval_type: spec::PySparkUdfType) -> bool {
         PySparkUdfType::Batched
         | PySparkUdfType::ArrowBatched
         | PySparkUdfType::ScalarPandas
+        | PySparkUdfType::ScalarArrow
         | PySparkUdfType::GroupedAggPandas
-        | PySparkUdfType::ScalarPandasIter => true,
+        | PySparkUdfType::GroupedAggArrow
+        | PySparkUdfType::ScalarPandasIter
+        | PySparkUdfType::ScalarArrowIter => true,
     }
 }
 
@@ -80,11 +84,15 @@ fn should_write_config(eval_type: spec::PySparkUdfType) -> bool {
         PySparkUdfType::None | PySparkUdfType::Batched | PySparkUdfType::Table => false,
         PySparkUdfType::ArrowBatched
         | PySparkUdfType::ScalarPandas
+        | PySparkUdfType::ScalarArrow
         | PySparkUdfType::GroupedMapPandas
         | PySparkUdfType::GroupedMapArrow
         | PySparkUdfType::GroupedAggPandas
+        | PySparkUdfType::GroupedAggArrow
         | PySparkUdfType::WindowAggPandas
+        | PySparkUdfType::WindowAggArrow
         | PySparkUdfType::ScalarPandasIter
+        | PySparkUdfType::ScalarArrowIter
         | PySparkUdfType::MapPandasIter
         | PySparkUdfType::CogroupedMapPandas
         | PySparkUdfType::CogroupedMapArrow
