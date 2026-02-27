@@ -381,14 +381,6 @@ impl PlanEnumerator {
         Ok(new_cost)
     }
 
-    /// Check if two disjoint subsets are connected by at least one edge.
-    fn are_subsets_connected(&self, left_subset: JoinSet, right_subset: JoinSet) -> bool {
-        !self
-            .query_graph
-            .get_connecting_edge_indices(left_subset, right_subset)
-            .is_empty()
-    }
-
     /// Create a JoinSet containing all relations.
     fn create_all_relations_set(&self) -> JoinSet {
         let relation_count = self.query_graph.relation_count();
@@ -397,7 +389,9 @@ impl PlanEnumerator {
     }
 
     /// Greedy join reorder algorithm as fallback when DP exceeds threshold.
-    /// Starts with all single relations and repeatedly joins the pair with lowest cost.
+    ///
+    /// This fallback intentionally constructs a strict left-deep tree to avoid catastrophic
+    /// bushy plans on large star/snowflake schemas.
     pub fn solve_greedy(&mut self) -> Result<Arc<DPPlan>> {
         let relation_count = self.query_graph.relation_count();
 
@@ -417,8 +411,18 @@ impl PlanEnumerator {
         }
 
         if relation_count == 1 {
-            // Return the single relation
-            let single_relation_set = JoinSet::new_singleton(0)?;
+            // Return the single relation.
+            let relation_id = self
+                .query_graph
+                .relations
+                .first()
+                .map(|relation| relation.relation_id)
+                .ok_or_else(|| {
+                    DataFusionError::Internal(
+                        "Expected one relation but query graph is empty".to_string(),
+                    )
+                })?;
+            let single_relation_set = JoinSet::new_singleton(relation_id)?;
             return self
                 .dp_table
                 .get(&single_relation_set)
@@ -426,209 +430,139 @@ impl PlanEnumerator {
                 .ok_or_else(|| DataFusionError::Internal("Single relation not found".to_string()));
         }
 
-        // Create an initial list of disjoint subplans.
-        let mut remaining = all_relations_set;
-        let mut current_plans: Vec<JoinSet> = Vec::new();
+        // Start from the largest base relation (typically fact table in star/snowflake schemas).
+        let start_relation = self
+            .query_graph
+            .relations
+            .iter()
+            .max_by(|left, right| {
+                left.initial_cardinality
+                    .total_cmp(&right.initial_cardinality)
+            })
+            .map(|relation| relation.relation_id)
+            .ok_or_else(|| {
+                DataFusionError::Internal("Failed to determine greedy start relation".to_string())
+            })?;
 
+        let mut current_set = JoinSet::new_singleton(start_relation)?;
+        let mut current_plan = self.dp_table.get(&current_set).cloned().ok_or_else(|| {
+            DataFusionError::Internal("Start relation plan not found in DP table".to_string())
+        })?;
+        let mut remaining = all_relations_set - current_set;
+
+        // Grow the plan one relation at a time to preserve left-deep shape.
         while remaining.bits() != 0 {
-            let mut best_set: Option<JoinSet> = None;
-            let mut best_cardinality: u32 = 0;
-            let mut best_cost: f64 = f64::INFINITY;
+            let mut best_next_rel: Option<usize> = None;
+            let mut best_edges = Vec::new();
+            let mut best_cardinality = f64::INFINITY;
+            let mut best_cost = f64::INFINITY;
 
-            // Prefer larger subgraphs; tie-break by lower cost.
-            for (set, plan) in &self.dp_table {
-                if set.cardinality() <= 1 {
+            // Prefer connected extensions first.
+            for next_rel in remaining.iter() {
+                let next_set = JoinSet::new_singleton(next_rel)?;
+                let next_plan = self.dp_table.get(&next_set).ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                        "Leaf plan for relation {} not found in DP table",
+                        next_rel
+                    ))
+                })?;
+
+                let edge_indices = self
+                    .query_graph
+                    .get_connecting_edge_indices(current_set, next_set);
+                if edge_indices.is_empty() {
                     continue;
                 }
-                let set_bits = set.bits();
-                if (set_bits & remaining.bits()) != set_bits {
-                    continue; // not a subset of remaining
-                }
 
-                let card = set.cardinality();
-                if card > best_cardinality || (card == best_cardinality && plan.cost < best_cost) {
-                    best_set = Some(*set);
-                    best_cardinality = card;
-                    best_cost = plan.cost;
-                }
-            }
-
-            let chosen = if let Some(s) = best_set {
-                s
-            } else {
-                // Fallback: pick one remaining relation.
-                let rel = remaining.iter().next().ok_or_else(|| {
-                    DataFusionError::Internal("Remaining set is empty".to_string())
-                })?;
-                JoinSet::new_singleton(rel)?
-            };
-
-            current_plans.push(chosen);
-            remaining -= chosen;
-        }
-
-        // Repeatedly find and merge the best pair until only one plan remains
-        while current_plans.len() > 1 {
-            let mut best_cost = f64::INFINITY;
-            let mut best_left_idx = 0;
-            let mut best_right_idx = 1;
-            let mut best_plan: Option<Arc<DPPlan>> = None;
-
-            // Try all pairs of current plans
-            for i in 0..current_plans.len() {
-                for j in (i + 1)..current_plans.len() {
-                    let left_set = current_plans[i];
-                    let right_set = current_plans[j];
-
-                    // Check if these subplans are connected
-                    if !self.are_subsets_connected(left_set, right_set) {
-                        continue; // Skip disconnected pairs to avoid cartesian products
-                    }
-
-                    // Get existing plans from DP table
-                    let left_plan = match self.dp_table.get(&left_set) {
-                        Some(plan) => plan.clone(),
-                        None => continue,
-                    };
-
-                    let right_plan = match self.dp_table.get(&right_set) {
-                        Some(plan) => plan.clone(),
-                        None => continue,
-                    };
-
-                    // Get connecting edge indices
-                    let edge_indices = self
-                        .query_graph
-                        .get_connecting_edge_indices(left_set, right_set);
-
-                    // Estimate join cardinality
-                    let new_cardinality = self.cardinality_estimator.estimate_join_cardinality(
-                        left_plan.cardinality,
-                        right_plan.cardinality,
-                        &edge_indices,
-                    );
-
-                    // Compute cost
-                    let new_cost =
-                        self.cost_model
-                            .compute_cost(&left_plan, &right_plan, new_cardinality);
-
-                    // Check if this is the best pair so far
-                    if new_cost < best_cost {
-                        best_cost = new_cost;
-                        best_left_idx = i;
-                        best_right_idx = j;
-
-                        // Create the join plan
-                        best_plan = Some(Arc::new(DPPlan::new_join(
-                            left_set,
-                            right_set,
-                            edge_indices,
-                            new_cost,
-                            new_cardinality,
-                        )));
-                    }
-                }
-            }
-
-            // Create cartesian product with minimum cardinality if no connected pairs found
-            if best_plan.is_none() && current_plans.len() >= 2 {
-                let mut min_cardinality_product = f64::INFINITY;
-                let mut selected_left_idx = 0;
-                let mut selected_right_idx = 1;
-
-                // Find pair with minimum cardinality product
-                for i in 0..current_plans.len() {
-                    for j in (i + 1)..current_plans.len() {
-                        let left_set = current_plans[i];
-                        let right_set = current_plans[j];
-
-                        if let (Some(left_plan), Some(right_plan)) =
-                            (self.dp_table.get(&left_set), self.dp_table.get(&right_set))
-                        {
-                            let cardinality_product =
-                                left_plan.cardinality * right_plan.cardinality;
-                            if cardinality_product < min_cardinality_product {
-                                min_cardinality_product = cardinality_product;
-                                selected_left_idx = i;
-                                selected_right_idx = j;
-                            }
-                        }
-                    }
-                }
-
-                let left_set = current_plans[selected_left_idx];
-                let right_set = current_plans[selected_right_idx];
-
-                let left_plan = self.dp_table.get(&left_set).cloned().ok_or_else(|| {
-                    DataFusionError::Internal(
-                        "Left plan not found in DP table for cartesian product".to_string(),
-                    )
-                })?;
-                let right_plan = self.dp_table.get(&right_set).cloned().ok_or_else(|| {
-                    DataFusionError::Internal(
-                        "Right plan not found in DP table for cartesian product".to_string(),
-                    )
-                })?;
-
-                let new_cardinality = left_plan.cardinality * right_plan.cardinality;
-                let cartesian_penalty = 1000000.0;
+                let new_cardinality = self.cardinality_estimator.estimate_join_cardinality(
+                    current_plan.cardinality,
+                    next_plan.cardinality,
+                    &edge_indices,
+                );
                 let new_cost =
                     self.cost_model
-                        .compute_cost(&left_plan, &right_plan, new_cardinality)
-                        + cartesian_penalty;
+                        .compute_cost(&current_plan, next_plan, new_cardinality);
 
-                best_plan = Some(Arc::new(DPPlan::new_join(
-                    left_set,
-                    right_set,
-                    vec![], // No connecting edges for cartesian product
-                    new_cost,
-                    new_cardinality,
-                )));
-                best_left_idx = selected_left_idx;
-                best_right_idx = selected_right_idx;
+                if new_cardinality < best_cardinality
+                    || (new_cardinality == best_cardinality && new_cost < best_cost)
+                {
+                    best_next_rel = Some(next_rel);
+                    best_edges = edge_indices;
+                    best_cardinality = new_cardinality;
+                    best_cost = new_cost;
+                }
             }
 
-            // Verify we have a valid plan
-            let plan = best_plan.ok_or_else(|| {
+            // If no connected relation exists, use a penalized cross join fallback.
+            if best_next_rel.is_none() {
+                for next_rel in remaining.iter() {
+                    let next_set = JoinSet::new_singleton(next_rel)?;
+                    let next_plan = self.dp_table.get(&next_set).ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "Leaf plan for relation {} not found in DP table",
+                            next_rel
+                        ))
+                    })?;
+
+                    let new_cardinality = current_plan.cardinality * next_plan.cardinality;
+                    let new_cost =
+                        self.cost_model
+                            .compute_cost(&current_plan, next_plan, new_cardinality)
+                            + 1_000_000.0;
+
+                    if new_cardinality < best_cardinality
+                        || (new_cardinality == best_cardinality && new_cost < best_cost)
+                    {
+                        best_next_rel = Some(next_rel);
+                        best_edges = Vec::new();
+                        best_cardinality = new_cardinality;
+                        best_cost = new_cost;
+                    }
+                }
+            }
+
+            let next_rel = best_next_rel.ok_or_else(|| {
                 DataFusionError::Internal(
-                    "Failed to find any joinable pair in greedy algorithm".to_string(),
+                    "Failed to select next relation in greedy algorithm".to_string(),
                 )
             })?;
 
-            // Add the new plan to DP table
-            self.dp_table.insert(plan.join_set, plan.clone());
+            let next_set = JoinSet::new_singleton(next_rel)?;
+            let next_join_set = current_set | next_set;
+            let new_plan = Arc::new(DPPlan::new_join(
+                current_set,
+                next_set,
+                best_edges,
+                best_cost,
+                best_cardinality,
+            ));
 
-            // Remove merged plans and add new one (reverse order to maintain indices)
-            if best_left_idx < best_right_idx {
-                current_plans.remove(best_right_idx);
-                current_plans.remove(best_left_idx);
-            } else {
-                current_plans.remove(best_left_idx);
-                current_plans.remove(best_right_idx);
-            }
-            current_plans.push(plan.join_set);
+            self.dp_table.insert(next_join_set, new_plan.clone());
+            current_set = next_join_set;
+            current_plan = new_plan;
+            remaining -= next_set;
         }
 
-        // Return the final plan
-        let final_set = current_plans[0];
-        self.dp_table.get(&final_set).cloned().ok_or_else(|| {
-            DataFusionError::Internal("Final plan not found in greedy algorithm".to_string())
-        })
+        Ok(current_plan)
     }
 }
 
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::common::Statistics;
+    use datafusion::logical_expr::{JoinType, Operator};
+    use datafusion::physical_expr::expressions::{BinaryExpr, Column};
+    use datafusion::physical_expr::PhysicalExpr;
     use datafusion::physical_plan::empty::EmptyExec;
 
     use super::*;
-    use crate::join_reorder::graph::{QueryGraph, RelationNode};
+    use crate::join_reorder::dp_plan::PlanType;
+    use crate::join_reorder::graph::{JoinEdge, QueryGraph, RelationNode, StableColumn};
 
     fn create_test_graph_with_relations(count: usize) -> QueryGraph {
         let mut graph = QueryGraph::new();
@@ -640,11 +574,97 @@ mod tests {
 
         for i in 0..count {
             let plan = Arc::new(EmptyExec::new(schema.clone()));
-            let relation = RelationNode::new(plan, i, 1000.0, 1000.0, Statistics::new_unknown(&schema));
+            let relation =
+                RelationNode::new(plan, i, 1000.0, 1000.0, Statistics::new_unknown(&schema));
             graph.add_relation(relation);
         }
 
         graph
+    }
+
+    fn create_star_graph(cardinalities: &[f64], center: usize) -> Result<QueryGraph> {
+        let mut graph = QueryGraph::new();
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+
+        for (relation_id, &rows) in cardinalities.iter().enumerate() {
+            let plan = Arc::new(EmptyExec::new(schema.clone()));
+            let relation = RelationNode::new(
+                plan,
+                relation_id,
+                rows,
+                rows,
+                Statistics::new_unknown(&schema),
+            );
+            graph.add_relation(relation);
+        }
+
+        for relation_id in 0..cardinalities.len() {
+            if relation_id == center {
+                continue;
+            }
+
+            let join_filter = Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
+                Operator::Eq,
+                Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
+            )) as Arc<dyn PhysicalExpr>;
+
+            let edge = JoinEdge::new(
+                JoinSet::new_singleton(center)? | JoinSet::new_singleton(relation_id)?,
+                join_filter,
+                JoinType::Inner,
+                vec![(
+                    StableColumn {
+                        relation_id: center,
+                        column_index: 0,
+                        name: format!("R{}.C0", center),
+                    },
+                    StableColumn {
+                        relation_id,
+                        column_index: 0,
+                        name: format!("R{}.C0", relation_id),
+                    },
+                )],
+            );
+            graph.add_edge(edge)?;
+        }
+
+        Ok(graph)
+    }
+
+    fn assert_strict_left_deep(plan: &Arc<DPPlan>, dp_table: &HashMap<JoinSet, Arc<DPPlan>>) {
+        match &plan.plan_type {
+            PlanType::Leaf { .. } => {}
+            PlanType::Join {
+                left_set,
+                right_set,
+                ..
+            } => {
+                assert_eq!(
+                    right_set.cardinality(),
+                    1,
+                    "each greedy step should add exactly one base relation"
+                );
+                let right_plan = dp_table.get(right_set).unwrap();
+                assert!(
+                    matches!(right_plan.plan_type, PlanType::Leaf { .. }),
+                    "right side must be a leaf in strict left-deep plan"
+                );
+
+                let left_plan = dp_table.get(left_set).unwrap();
+                assert_strict_left_deep(left_plan, dp_table);
+            }
+        }
+    }
+
+    fn leftmost_relation_id(plan: &Arc<DPPlan>, dp_table: &HashMap<JoinSet, Arc<DPPlan>>) -> usize {
+        match &plan.plan_type {
+            PlanType::Leaf { relation_id } => *relation_id,
+            PlanType::Join { left_set, .. } => {
+                let left_plan = dp_table.get(left_set).unwrap();
+                leftmost_relation_id(left_plan, dp_table)
+            }
+        }
     }
 
     #[test]
@@ -682,5 +702,29 @@ mod tests {
         let all_set = enumerator.create_all_relations_set();
         assert_eq!(all_set.bits(), 7); // 111 in binary = 7
         assert_eq!(all_set.cardinality(), 3);
+    }
+
+    #[test]
+    fn test_solve_greedy_generates_strict_left_deep_plan() -> Result<()> {
+        let graph = create_star_graph(&[1_000_000.0, 4_000.0, 3_000.0, 2_000.0, 1_500.0], 0)?;
+        let mut enumerator = PlanEnumerator::new(graph);
+
+        let plan = enumerator.solve_greedy()?;
+        assert_eq!(plan.join_set.cardinality(), 5);
+        assert_strict_left_deep(&plan, &enumerator.dp_table);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_solve_greedy_starts_from_largest_relation() -> Result<()> {
+        let graph = create_star_graph(&[1_000.0, 2_000.0, 50_000.0, 3_000.0], 2)?;
+        let mut enumerator = PlanEnumerator::new(graph);
+
+        let plan = enumerator.solve_greedy()?;
+        let start_relation = leftmost_relation_id(&plan, &enumerator.dp_table);
+        assert_eq!(start_relation, 2);
+
+        Ok(())
     }
 }
