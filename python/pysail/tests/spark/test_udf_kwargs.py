@@ -1,8 +1,14 @@
 import pandas as pd
+import pyspark
 import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql.functions import col, lit, udf, udtf
 from pyspark.sql.types import IntegerType, Row, StringType
+
+pytestmark = pytest.mark.skipif(
+    int(pyspark.__version__.split(".")[0]) < 4,  # noqa: PLR2004
+    reason="UDF/UDTF keyword arguments require PySpark 4+",
+)
 
 
 @pytest.fixture(scope="module")
