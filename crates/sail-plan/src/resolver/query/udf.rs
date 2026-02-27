@@ -66,6 +66,8 @@ impl PlanResolver<'_> {
             function.eval_type,
             // MapPartitions UDF has the iterator as the only argument
             &[0],
+            // No kwargs extraction needed: MapPartitions takes an iterator as a single
+            // argument, not individual user-specified keyword arguments.
             &[],
             &self.config.pyspark_udf_config,
         )?;
@@ -209,6 +211,9 @@ impl PlanResolver<'_> {
             &function.command,
             function.eval_type,
             &offsets,
+            // No kwargs extraction needed: GroupMap UDF arguments are derived from
+            // DataFrame columns and grouping expressions, not user-specified keyword
+            // arguments.
             &[],
             &self.config.pyspark_udf_config,
         )?;
@@ -340,6 +345,9 @@ impl PlanResolver<'_> {
             &function.command,
             function.eval_type,
             &offsets,
+            // No kwargs extraction needed: CoGroupMap UDF arguments are derived from
+            // column offsets of two grouped DataFrames, not user-specified keyword
+            // arguments.
             &[],
             &self.config.pyspark_udf_config,
         )?;

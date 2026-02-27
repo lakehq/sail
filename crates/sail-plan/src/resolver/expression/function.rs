@@ -83,6 +83,10 @@ impl PlanResolver<'_> {
                     &function_name,
                     arguments,
                     &argument_display_names,
+                    // No kwargs extraction needed: this path resolves registered UDFs via
+                    // `UnresolvedFunction`. PySpark sends Python UDF calls with keyword
+                    // arguments via `CommonInlineUserDefinedFunction` instead, where
+                    // `extract_kwargs` is already called.
                     &[],
                     schema,
                     f.deterministic(),
