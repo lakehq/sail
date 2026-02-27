@@ -145,6 +145,57 @@ impl PlanEnumerator {
             .collect()
     }
 
+    fn relation_initial_cardinality(&self, relation_id: usize) -> f64 {
+        self.query_graph
+            .relations
+            .iter()
+            .find(|relation| relation.relation_id == relation_id)
+            .map(|relation| relation.initial_cardinality)
+            .unwrap_or(f64::INFINITY)
+    }
+
+    fn sort_neighbors_by_heuristic(
+        &self,
+        anchor_set: JoinSet,
+        neighbors: &mut [usize],
+    ) -> Result<()> {
+        let mut scores: HashMap<usize, (usize, f64)> = HashMap::with_capacity(neighbors.len());
+        for &neighbor in neighbors.iter() {
+            let neighbor_set = JoinSet::new_singleton(neighbor)?;
+            let edge_count = self
+                .query_graph
+                .get_connecting_edge_indices(anchor_set, neighbor_set)
+                .len();
+            let cardinality = self.relation_initial_cardinality(neighbor);
+            scores.insert(neighbor, (edge_count, cardinality));
+        }
+
+        neighbors.sort_unstable_by(|left, right| {
+            let (left_edges, left_card) = scores.get(left).copied().unwrap_or((0, f64::INFINITY));
+            let (right_edges, right_card) =
+                scores.get(right).copied().unwrap_or((0, f64::INFINITY));
+
+            right_edges
+                .cmp(&left_edges)
+                .then_with(|| left_card.total_cmp(&right_card))
+                .then_with(|| left.cmp(right))
+        });
+        Ok(())
+    }
+
+    fn prune_neighbors(&self, anchor_set: JoinSet, neighbors: &mut Vec<usize>) -> Result<()> {
+        if self.query_graph.relation_count() < RELATION_THRESHOLD {
+            return Ok(());
+        }
+
+        self.sort_neighbors_by_heuristic(anchor_set, neighbors)?;
+        let limit = anchor_set.cardinality() as usize;
+        if neighbors.len() > limit {
+            neighbors.truncate(limit);
+        }
+        Ok(())
+    }
+
     /// Start enumeration from a single relation index.
     fn process_node_as_start(&mut self, idx: usize) -> Result<bool> {
         let nodes = JoinSet::new_singleton(idx)?;
@@ -226,14 +277,7 @@ impl PlanEnumerator {
             return Ok(true);
         }
 
-        // TODO: Implement heuristic pruning for neighbor selection to accelerate DP.
-        // Instead of simple truncation, sort neighbors based on a heuristic.
-        if self.query_graph.relation_count() >= RELATION_THRESHOLD {
-            let limit = nodes.cardinality() as usize;
-            if neighbors.len() > limit {
-                neighbors.truncate(limit);
-            }
-        }
+        self.prune_neighbors(nodes, &mut neighbors)?;
 
         // Generate all non-empty neighbor subsets and union with current nodes
         let all_subsets = self.generate_all_nonempty_subsets(&neighbors);
@@ -276,13 +320,7 @@ impl PlanEnumerator {
             return Ok(true);
         }
 
-        // TODO: Apply better pruning here as well, similar to `enumerate_csg_rec`.
-        if self.query_graph.relation_count() >= RELATION_THRESHOLD {
-            let limit = right.cardinality() as usize;
-            if neighbor_ids.len() > limit {
-                neighbor_ids.truncate(limit);
-            }
-        }
+        self.prune_neighbors(right, &mut neighbor_ids)?;
 
         // Generate all non-empty neighbor subsets and union with current right set
         let all_subsets = self.generate_all_nonempty_subsets(&neighbor_ids);
@@ -725,6 +763,38 @@ mod tests {
         let start_relation = leftmost_relation_id(&plan, &enumerator.dp_table);
         assert_eq!(start_relation, 2);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_prune_neighbors_uses_cardinality_heuristic_when_threshold_applies() -> Result<()> {
+        // RELATION_THRESHOLD is 10. Build a graph with 11 relations so pruning is active.
+        // All neighbors have identical edge counts to center relation 0, so ordering should
+        // fall back to ascending initial_cardinality instead of relation-id order.
+        let graph = create_star_graph(
+            &[
+                1_000_000.0, // center
+                1_000.0,
+                900.0,
+                800.0,
+                700.0,
+                600.0,
+                500.0,
+                400.0,
+                300.0,
+                200.0,
+                1.0, // relation_id 10 is smallest, should be kept first after pruning
+            ],
+            0,
+        )?;
+        let enumerator = PlanEnumerator::new(graph);
+
+        let mut neighbors: Vec<usize> = (1..=10).collect();
+        enumerator.prune_neighbors(JoinSet::new_singleton(0)?, &mut neighbors)?;
+
+        // anchor_set cardinality is 1, so prune keeps one neighbor.
+        assert_eq!(neighbors.len(), 1);
+        assert_eq!(neighbors[0], 10);
         Ok(())
     }
 }

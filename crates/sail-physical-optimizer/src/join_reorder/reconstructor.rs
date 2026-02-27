@@ -371,6 +371,7 @@ impl<'a> PlanReconstructor<'a> {
 
         // Determine join type from edge information before deciding whether we can swap sides.
         let join_type = self.determine_join_type(edge_indices)?;
+        let null_equality = self.determine_null_equality(edge_indices)?;
 
         // Build/probe side reordering is semantics-preserving only for inner joins.
         let should_swap_for_build =
@@ -466,8 +467,7 @@ impl<'a> PlanReconstructor<'a> {
             &join_type,          // Use determined join type
             projection.clone(),  // projection
             PartitionMode::Auto, // partition_mode
-            NullEquality::NullEqualsNothing, // TODO: Skip the optimizer completely
-                                 // if NullEquality is something else in the input region.
+            null_equality,
         )?);
 
         if let Some(projection) = projection {
@@ -563,6 +563,34 @@ impl<'a> PlanReconstructor<'a> {
 
         // Default to Inner join if no edges found
         Ok(JoinType::Inner)
+    }
+
+    /// Determines null-equality semantics from edge information.
+    ///
+    /// If multiple edges participate in one reconstructed join, they must agree on
+    /// null-equality behavior. Mixed semantics are rejected because a single
+    /// HashJoinExec has one null-equality mode.
+    fn determine_null_equality(&self, edge_indices: &[usize]) -> Result<NullEquality> {
+        let mut selected: Option<NullEquality> = None;
+
+        for &edge_index in edge_indices {
+            let edge = self.query_graph.edges.get(edge_index).ok_or_else(|| {
+                DataFusionError::Internal(format!("Edge with index {} not found", edge_index))
+            })?;
+
+            if let Some(existing) = selected {
+                if existing != edge.null_equality {
+                    return Err(DataFusionError::Internal(format!(
+                        "Inconsistent null_equality across join edges: {:?} vs {:?}",
+                        existing, edge.null_equality
+                    )));
+                }
+            } else {
+                selected = Some(edge.null_equality);
+            }
+        }
+
+        Ok(selected.unwrap_or(NullEquality::NullEqualsNothing))
     }
 
     /// Builds join filter for non-equi conditions from edge information.
@@ -680,19 +708,39 @@ impl<'a> PlanReconstructor<'a> {
                 }
             }
             // Fallback by matching current plan schema names.
-            // If the name exists on both sides, it's ambiguous and unsafe to guess.
-            let left_match = left_plan
+            // If there are duplicate matches on one side or matches on both sides,
+            // fallback-by-name is unsafe and we fail fast.
+            let left_matches: Vec<usize> = left_plan
                 .schema()
                 .fields()
                 .iter()
-                .position(|f| f.name() == col.name());
-            let right_match = right_plan
+                .enumerate()
+                .filter_map(|(idx, field)| (field.name() == col.name()).then_some(idx))
+                .collect();
+            let right_matches: Vec<usize> = right_plan
                 .schema()
                 .fields()
                 .iter()
-                .position(|f| f.name() == col.name());
+                .enumerate()
+                .filter_map(|(idx, field)| (field.name() == col.name()).then_some(idx))
+                .collect();
 
-            match (left_match, right_match) {
+            if left_matches.len() > 1 {
+                return Err(DataFusionError::Internal(format!(
+                    "Ambiguous column reference '{}' found {} times in left join input during reconstruction",
+                    col.name(),
+                    left_matches.len()
+                )));
+            }
+            if right_matches.len() > 1 {
+                return Err(DataFusionError::Internal(format!(
+                    "Ambiguous column reference '{}' found {} times in right join input during reconstruction",
+                    col.name(),
+                    right_matches.len()
+                )));
+            }
+
+            match (left_matches.first().copied(), right_matches.first().copied()) {
                 (Some(_), Some(_)) => Err(DataFusionError::Internal(format!(
                     "Ambiguous column reference '{}' found in both left and right join inputs during reconstruction",
                     col.name()
@@ -820,13 +868,23 @@ impl<'a> PlanReconstructor<'a> {
                     }
                 }
 
-                // Fallback: try to match by current schema field name
-                if let Some(pos) = plan
+                // Fallback: try to match by current schema field name.
+                // A non-unique match is unsafe to rewrite.
+                let matches: Vec<usize> = plan
                     .schema()
                     .fields()
                     .iter()
-                    .position(|f| f.name() == col.name())
-                {
+                    .enumerate()
+                    .filter_map(|(idx, field)| (field.name() == col.name()).then_some(idx))
+                    .collect();
+                if matches.len() > 1 {
+                    return Err(DataFusionError::Internal(format!(
+                        "Ambiguous output column '{}' found {} times while rewriting expression",
+                        col.name(),
+                        matches.len()
+                    )));
+                }
+                if let Some(pos) = matches.first().copied() {
                     let new_col = Column::new(col.name(), pos);
                     return Ok(Transformed::yes(Arc::new(new_col)));
                 }
@@ -895,6 +953,27 @@ impl<'a> PlanReconstructor<'a> {
         left_plan: &Arc<dyn ExecutionPlan>,
         right_plan: &Arc<dyn ExecutionPlan>,
     ) -> Result<JoinSet> {
+        let unique_field_index = |plan: &Arc<dyn ExecutionPlan>, name: &str, side_name: &str| {
+            let matches: Vec<usize> = plan
+                .schema()
+                .fields()
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, field)| (field.name() == name).then_some(idx))
+                .collect();
+
+            match matches.as_slice() {
+                [] => Ok(None),
+                [idx] => Ok(Some(*idx)),
+                _ => Err(DataFusionError::Internal(format!(
+                    "Ambiguous column '{}' matched {} fields on {} side while analyzing predicate dependencies",
+                    name,
+                    matches.len(),
+                    side_name
+                ))),
+            }
+        };
+
         let mut bits: u64 = 0;
         let cols = collect_columns(predicate);
         for c in &cols {
@@ -902,45 +981,36 @@ impl<'a> PlanReconstructor<'a> {
                 bits |= Self::relation_bit(rel);
                 continue;
             }
-            let mut matched = false;
-            for (i, f) in left_plan.schema().fields().iter().enumerate() {
-                if f.name() == c.name() {
-                    match left_map.get(i) {
-                        Some(ColumnMapEntry::Stable { relation_id, .. }) => {
-                            bits |= Self::relation_bit(*relation_id);
-                            matched = true;
-                            break;
-                        }
-                        Some(ColumnMapEntry::Expression { expr, input_map }) => {
-                            self.add_relation_bits_from_expr(expr, input_map, &mut bits)?;
-                            matched = true;
-                            break;
-                        }
-                        None => {}
-                    }
+            let left_match = unique_field_index(left_plan, c.name(), "left")?;
+            let right_match = unique_field_index(right_plan, c.name(), "right")?;
+
+            match (left_match, right_match) {
+                (Some(_), Some(_)) => {
+                    return Err(DataFusionError::Internal(format!(
+                        "Ambiguous column '{}' found in both left and right join inputs while analyzing predicate dependencies",
+                        c.name()
+                    )));
                 }
-            }
-            if matched {
-                continue;
-            }
-            for (i, f) in right_plan.schema().fields().iter().enumerate() {
-                if f.name() == c.name() {
-                    match right_map.get(i) {
-                        Some(ColumnMapEntry::Stable { relation_id, .. }) => {
-                            bits |= Self::relation_bit(*relation_id);
-                            matched = true;
-                            break;
-                        }
-                        Some(ColumnMapEntry::Expression { expr, input_map }) => {
-                            self.add_relation_bits_from_expr(expr, input_map, &mut bits)?;
-                            matched = true;
-                            break;
-                        }
-                        None => {}
+                (Some(i), None) => match left_map.get(i) {
+                    Some(ColumnMapEntry::Stable { relation_id, .. }) => {
+                        bits |= Self::relation_bit(*relation_id);
                     }
-                }
+                    Some(ColumnMapEntry::Expression { expr, input_map }) => {
+                        self.add_relation_bits_from_expr(expr, input_map, &mut bits)?;
+                    }
+                    None => {}
+                },
+                (None, Some(i)) => match right_map.get(i) {
+                    Some(ColumnMapEntry::Stable { relation_id, .. }) => {
+                        bits |= Self::relation_bit(*relation_id);
+                    }
+                    Some(ColumnMapEntry::Expression { expr, input_map }) => {
+                        self.add_relation_bits_from_expr(expr, input_map, &mut bits)?;
+                    }
+                    None => {}
+                },
+                (None, None) => {}
             }
-            let _ = matched;
         }
 
         Ok(JoinSet::from_bits(bits))
@@ -1111,7 +1181,7 @@ impl<'a> PlanReconstructor<'a> {
 #[expect(clippy::unwrap_used)]
 mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::common::Statistics;
+    use datafusion::common::{NullEquality, Statistics};
     use datafusion::logical_expr::{JoinType, Operator};
     use datafusion::physical_expr::expressions::{BinaryExpr, Column};
     use datafusion::physical_plan::empty::EmptyExec;
@@ -1318,6 +1388,83 @@ mod tests {
     }
 
     #[test]
+    fn test_hash_join_preserves_null_equality() -> Result<()> {
+        let schema_a = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let schema_b = Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, true)]));
+
+        let plan_a: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema_a.clone()));
+        let plan_b: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema_b.clone()));
+
+        let mut graph = QueryGraph::new();
+        graph.add_relation(RelationNode::new(
+            plan_a,
+            0,
+            100.0,
+            100.0,
+            Statistics::new_unknown(&schema_a),
+        ));
+        graph.add_relation(RelationNode::new(
+            plan_b,
+            1,
+            100.0,
+            100.0,
+            Statistics::new_unknown(&schema_b),
+        ));
+
+        let join_set = JoinSet::from_iter([0usize, 1usize].into_iter())?;
+        let filter: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("R0.C0", 0)),
+            Operator::Eq,
+            Arc::new(Column::new("R1.C0", 0)),
+        ));
+        let mut edge = JoinEdge::new(
+            join_set,
+            filter,
+            JoinType::Inner,
+            vec![(
+                StableColumn {
+                    relation_id: 0,
+                    column_index: 0,
+                    name: "R0.C0".to_string(),
+                },
+                StableColumn {
+                    relation_id: 1,
+                    column_index: 0,
+                    name: "R1.C0".to_string(),
+                },
+            )],
+        );
+        edge.null_equality = NullEquality::NullEqualsNull;
+        graph.add_edge(edge)?;
+
+        let mut dp_table: HashMap<JoinSet, Arc<DPPlan>> = HashMap::new();
+        let leaf0 = Arc::new(DPPlan::new_leaf(0, 100.0)?);
+        let leaf1 = Arc::new(DPPlan::new_leaf(1, 100.0)?);
+        dp_table.insert(leaf0.join_set, leaf0);
+        dp_table.insert(leaf1.join_set, leaf1);
+
+        let root = Arc::new(DPPlan::new_join(
+            JoinSet::new_singleton(0)?,
+            JoinSet::new_singleton(1)?,
+            vec![0],
+            0.0,
+            100.0,
+        ));
+        dp_table.insert(root.join_set, root.clone());
+
+        let mut reconstructor = PlanReconstructor::new(&dp_table, &graph);
+        let (plan, _) = reconstructor.reconstruct(&root)?;
+        #[expect(clippy::expect_used)]
+        let hj = plan
+            .as_any()
+            .downcast_ref::<HashJoinExec>()
+            .expect("expected HashJoinExec");
+
+        assert_eq!(hj.null_equality(), NullEquality::NullEqualsNull);
+        Ok(())
+    }
+
+    #[test]
     fn test_reconstruct_join_missing_subplans() {
         let dp_table = HashMap::new(); // Empty table
         let graph = create_test_graph();
@@ -1434,6 +1581,54 @@ mod tests {
     }
 
     #[test]
+    fn test_analyze_predicate_dependencies_ambiguous_left_name_fails() -> Result<()> {
+        let left_schema = Arc::new(Schema::new(vec![
+            Field::new("dup", DataType::Int32, false),
+            Field::new("dup", DataType::Int32, false),
+        ]));
+        let right_schema = Arc::new(Schema::new(vec![Field::new("r", DataType::Int32, false)]));
+        let left_plan: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(left_schema.clone()));
+        let right_plan: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(right_schema.clone()));
+
+        let left_map: ColumnMap = vec![
+            ColumnMapEntry::Stable {
+                relation_id: 0,
+                column_index: 0,
+            },
+            ColumnMapEntry::Stable {
+                relation_id: 0,
+                column_index: 1,
+            },
+        ];
+        let right_map: ColumnMap = vec![ColumnMapEntry::Stable {
+            relation_id: 1,
+            column_index: 0,
+        }];
+
+        let pred: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("dup", 0)),
+            Operator::Gt,
+            Arc::new(Column::new("R1.C0", 0)),
+        ));
+
+        let dp_table = HashMap::new();
+        let graph = QueryGraph::new();
+        let reconstructor = PlanReconstructor::new(&dp_table, &graph);
+        let res = reconstructor.analyze_predicate_dependencies(
+            &pred,
+            &left_map,
+            &right_map,
+            &left_plan,
+            &right_plan,
+        );
+        assert!(
+            res.is_err(),
+            "expected duplicate left-name dependency to error"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_build_join_filter_ambiguous_name_fails() -> Result<()> {
         // Regression test: name-based fallback in join filter reconstruction must not silently
         // bind to the wrong side when a column name exists in both left and right inputs.
@@ -1527,6 +1722,36 @@ mod tests {
         );
 
         assert!(res.is_err(), "expected ambiguous-name join filter to error");
+        Ok(())
+    }
+
+    #[test]
+    fn test_rewrite_expr_to_output_schema_ambiguous_output_name_fails() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("dup", DataType::Int32, false),
+            Field::new("dup", DataType::Int32, false),
+        ]));
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema.clone()));
+        let output_map: ColumnMap = vec![
+            ColumnMapEntry::Stable {
+                relation_id: 0,
+                column_index: 0,
+            },
+            ColumnMapEntry::Stable {
+                relation_id: 1,
+                column_index: 0,
+            },
+        ];
+
+        let expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("dup", 0));
+        let dp_table = HashMap::new();
+        let graph = QueryGraph::new();
+        let reconstructor = PlanReconstructor::new(&dp_table, &graph);
+        let res = reconstructor.rewrite_expr_to_output_schema(&expr, &plan, &output_map);
+        assert!(
+            res.is_err(),
+            "expected ambiguous output-name rewrite to error"
+        );
         Ok(())
     }
 

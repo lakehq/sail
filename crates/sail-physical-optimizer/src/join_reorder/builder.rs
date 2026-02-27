@@ -243,7 +243,8 @@ impl GraphBuilder {
 
         for (join_set, preds) in grouped {
             let (filter, equi_pairs) = Self::combine_predicates(preds)?;
-            let edge = JoinEdge::new(join_set, filter, *join_plan.join_type(), equi_pairs);
+            let mut edge = JoinEdge::new(join_set, filter, *join_plan.join_type(), equi_pairs);
+            edge.null_equality = join_plan.null_equality();
             self.graph.add_edge(edge)?;
         }
 

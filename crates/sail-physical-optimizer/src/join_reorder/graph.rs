@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use datafusion::common::Statistics;
+use datafusion::common::{NullEquality, Statistics};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::JoinType;
 use datafusion::physical_expr::PhysicalExpr;
@@ -104,6 +104,8 @@ pub struct JoinEdge {
     pub filter: Arc<dyn PhysicalExpr>,
     /// Join type (Inner for reorderable joins).
     pub join_type: JoinType,
+    /// Null semantics for equi-join key comparison.
+    pub null_equality: NullEquality,
 
     // pub selectivity: f64,
     /// Parsed equi-join pairs from the join condition
@@ -121,6 +123,7 @@ impl JoinEdge {
             join_set,
             filter,
             join_type,
+            null_equality: NullEquality::NullEqualsNothing,
             equi_pairs,
         }
     }
