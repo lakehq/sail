@@ -332,22 +332,15 @@ impl TaskSlotAssigner {
                         assignment: TaskAssignment::Driver,
                     });
                 }
-                SchedulableTaskPlacement::Worker => {
-                    let slot = self.next();
-                    if let Some((worker_id, slot)) = slot {
-                        assignments.push(TaskSetAssignment {
-                            set: set.clone(),
-                            assignment: TaskAssignment::Worker { worker_id, slot },
-                        });
-                    } else {
-                        // The worker task slots are not enough for assigning all the
-                        // worker tasks in this region. So we return the region back
-                        // to indicate the error.
-                        return Err(region);
-                    }
-                }
-                SchedulableTaskPlacement::PinnedWorker { worker_id } => {
-                    let slot = self.next_for(*worker_id);
+                SchedulableTaskPlacement::Worker
+                | SchedulableTaskPlacement::PinnedWorker { .. } => {
+                    let slot = match placement {
+                        SchedulableTaskPlacement::Worker => self.next(),
+                        SchedulableTaskPlacement::PinnedWorker { worker_id } => {
+                            self.next_for(*worker_id)
+                        }
+                        SchedulableTaskPlacement::Driver => unreachable!(),
+                    };
                     if let Some((worker_id, slot)) = slot {
                         assignments.push(TaskSetAssignment {
                             set: set.clone(),
