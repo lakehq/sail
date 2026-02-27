@@ -22,7 +22,7 @@ struct RelationMetadata {
 impl From<Option<RelationCommon>> for RelationMetadata {
     fn from(common: Option<RelationCommon>) -> Self {
         match common {
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             Some(RelationCommon {
                 source_info: _,
                 plan_id,
@@ -434,7 +434,7 @@ impl TryFrom<RelType> for RelationNode {
                 Ok(RelationNode::Query(node))
             }
             RelType::Sql(sql) => {
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 let sc::Sql {
                     query,
                     args,

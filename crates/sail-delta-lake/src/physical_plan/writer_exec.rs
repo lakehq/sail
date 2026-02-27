@@ -105,7 +105,6 @@ impl DeltaWriterExec {
         }
         map
     }
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         table_url: Url,

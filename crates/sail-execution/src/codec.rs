@@ -949,7 +949,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()> {
-        #[allow(deprecated)]
         let node_kind = if let Some(range) = node.as_any().downcast_ref::<RangeExec>() {
             let schema = self.try_encode_schema(range.schema().as_ref())?;
             NodeKind::Range(gen::RangeExecNode {
