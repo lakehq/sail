@@ -923,7 +923,9 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                             .into_iter()
                             .map(from_ast_order_by)
                             .collect::<SqlResult<Vec<_>>>()?;
-                        let frame = window_frame.map(from_ast_window_frame).transpose()?;
+                        let frame = window_frame
+                            .map(|f| from_ast_window_frame(*f))
+                            .transpose()?;
                         spec::Window::Unnamed {
                             cluster_by,
                             partition_by,

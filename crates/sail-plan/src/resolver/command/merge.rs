@@ -163,7 +163,7 @@ impl PlanResolver<'_> {
             options: vec![],
         };
         let plan = spec::QueryPlan::new(spec::QueryNode::Read {
-            read_type: spec::ReadType::NamedTable(read),
+            read_type: spec::ReadType::NamedTable(Box::new(read)),
             is_streaming: false,
         });
         self.resolve_query_plan(plan, state).await
