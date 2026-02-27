@@ -649,19 +649,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                             plan_datafusion_err!("failed to decode Delta scan config: {e}")
                         })?
                     };
-                let projection = if projection.is_empty() {
-                    None
-                } else {
-                    Some(
-                        projection
-                            .iter()
-                            .map(|v| usize::try_from(*v))
-                            .collect::<std::result::Result<Vec<_>, _>>()
-                            .map_err(|_| {
-                                plan_datafusion_err!("invalid projection for DeltaScanByAddsExec")
-                            })?,
-                    )
-                };
+                let projection = projection
+                    .map(|p| self.try_decode_projection(&p.columns))
+                    .transpose()
+                    .map_err(|_| {
+                        plan_datafusion_err!("invalid projection for DeltaScanByAddsExec")
+                    })?;
                 let limit = limit
                     .map(usize::try_from)
                     .transpose()
@@ -1307,8 +1300,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 .map_err(|e| plan_datafusion_err!("failed to encode Delta scan config: {e}"))?;
             let projection = delta_scan_by_adds_exec
                 .projection()
-                .map(|p| p.iter().map(|v| *v as u64).collect())
-                .unwrap_or_default();
+                .map(|p| {
+                    self.try_encode_projection(p)
+                        .map(|columns| gen::PhysicalProjection { columns })
+                })
+                .transpose()
+                .map_err(|_| plan_datafusion_err!("invalid projection for DeltaScanByAddsExec"))?;
             let limit = delta_scan_by_adds_exec
                 .limit()
                 .map(u64::try_from)
