@@ -72,6 +72,7 @@ impl PlanResolver<'_> {
                     &function_name,
                     input,
                     arguments,
+                    &[],
                     output_names,
                     output_qualifier,
                     f.deterministic(),

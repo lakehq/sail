@@ -124,6 +124,10 @@ pub enum Expr {
         escape_char: Option<char>,
         case_insensitive: bool,
     },
+    NamedArgument {
+        key: String,
+        value: Box<Expr>,
+    },
     Table {
         expr: Box<Expr>,
     },

@@ -244,6 +244,7 @@ impl PlanResolver<'_> {
                         &function_name,
                         input,
                         arguments,
+                        &[],
                         None,
                         None,
                         f.deterministic(),

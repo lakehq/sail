@@ -83,6 +83,7 @@ impl PlanResolver<'_> {
                     &function_name,
                     arguments,
                     &argument_display_names,
+                    &[],
                     schema,
                     f.deterministic(),
                     is_distinct,

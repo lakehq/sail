@@ -42,6 +42,7 @@ impl PySparkUdfPayload {
         command: &[u8],
         eval_type: spec::PySparkUdfType,
         arg_offsets: &[usize],
+        kwargs: &[Option<String>],
         config: &PySparkUdfConfig,
     ) -> PyUdfResult<Vec<u8>> {
         check_python_udf_version(python_version)?;
@@ -76,14 +77,20 @@ impl PySparkUdfPayload {
         let allow_kwargs =
             matches!(pyspark_version, PySparkVersion::V4) && supports_kwargs(eval_type);
 
-        for offset in arg_offsets {
-            // TODO: support keyword arguments
+        for (i, offset) in arg_offsets.iter().enumerate() {
             let offset: i32 = (*offset)
                 .try_into()
                 .map_err(|e| PyUdfError::invalid(format!("arg offset: {e}")))?;
             data.extend(offset.to_be_bytes()); // argument offset
             if allow_kwargs {
-                data.extend(0u8.to_be_bytes()); // not a keyword argument
+                if let Some(name) = kwargs.get(i).and_then(|k| k.as_deref()) {
+                    data.extend(1u8.to_be_bytes()); // keyword argument
+                    let name_bytes = name.as_bytes();
+                    data.extend((name_bytes.len() as i32).to_be_bytes());
+                    data.extend(name_bytes);
+                } else {
+                    data.extend(0u8.to_be_bytes()); // not a keyword argument
+                }
             }
         }
 

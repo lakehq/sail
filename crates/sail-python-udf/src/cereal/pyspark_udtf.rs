@@ -43,6 +43,7 @@ impl PySparkUdtfPayload {
         command: &[u8],
         eval_type: spec::PySparkUdfType,
         num_args: usize,
+        kwargs: &[Option<String>],
         return_type: &DataType,
         config: &PySparkUdfConfig,
     ) -> PyUdfResult<Vec<u8>> {
@@ -68,10 +69,16 @@ impl PySparkUdtfPayload {
             .map_err(|e| PyUdfError::invalid(format!("num_args: {e}")))?;
         data.extend(num_args.to_be_bytes()); // number of arguments
         for index in 0..num_args {
-            // TODO: support keyword arguments
             data.extend(index.to_be_bytes()); // argument offset
             if matches!(pyspark_version, PySparkVersion::V4) {
-                data.extend(0u8.to_be_bytes()); // not a keyword argument
+                if let Some(name) = kwargs.get(index as usize).and_then(|k| k.as_deref()) {
+                    data.extend(1u8.to_be_bytes()); // keyword argument
+                    let name_bytes = name.as_bytes();
+                    data.extend((name_bytes.len() as i32).to_be_bytes());
+                    data.extend(name_bytes);
+                } else {
+                    data.extend(0u8.to_be_bytes()); // not a keyword argument
+                }
             }
         }
 
