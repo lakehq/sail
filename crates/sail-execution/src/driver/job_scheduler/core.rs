@@ -64,7 +64,7 @@ impl JobScheduler {
     }
 
     /// Returns cache IDs read by the given stage of a job.
-    pub fn stage_cache_reads(&self, job_id: JobId, stage: usize) -> Option<&[CacheId]> {
+    pub fn get_stage_cache_id_reads(&self, job_id: JobId, stage: usize) -> Option<&[CacheId]> {
         let job = self.jobs.get(&job_id)?;
         let stage = job.graph.stages().get(stage)?;
         Some(stage.cache_reads.as_slice())
@@ -280,6 +280,7 @@ impl JobScheduler {
         actions
     }
 
+    /// Creates scheduling actions for all runnable task regions in a job.
     fn schedule_task_regions(job_id: JobId, job: &mut JobDescriptor) -> Vec<JobAction> {
         let mut actions = vec![];
 
@@ -329,6 +330,7 @@ impl JobScheduler {
         actions
     }
 
+    /// Builds a runnable task region from topology and job state.
     fn build_task_region(
         job_id: JobId,
         job: &JobDescriptor,

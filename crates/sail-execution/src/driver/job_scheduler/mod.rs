@@ -36,6 +36,7 @@ impl JobScheduler {
 }
 
 #[derive(Debug)]
+/// Scheduler directive describing the next driver-side action to execute.
 pub enum JobAction {
     ScheduleTaskRegion {
         region: TaskRegion,

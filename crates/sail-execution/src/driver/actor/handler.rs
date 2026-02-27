@@ -75,7 +75,7 @@ impl DriverActor {
             for entry in &set.entries {
                 let cache_reads = self
                     .job_scheduler
-                    .stage_cache_reads(entry.key.job_id, entry.key.stage)
+                    .get_stage_cache_id_reads(entry.key.job_id, entry.key.stage)
                     .ok_or_else(|| {
                         format!(
                             "job {} stage {} not found while resolving cache locations",
@@ -506,30 +506,32 @@ impl DriverActor {
         ActorAction::Stop
     }
 
+    /// Refreshes job state and executes the resulting scheduler actions.
     fn refresh_job(&mut self, ctx: &mut ActorContext<Self>, job_id: JobId) {
         for action in self.job_scheduler.refresh_job(job_id) {
             self.run_job_action(ctx, action);
         }
     }
 
+    /// Cleans up a job and executes the resulting scheduler actions.
     fn clean_up_job(&mut self, ctx: &mut ActorContext<Self>, job_id: JobId) {
         for action in self.job_scheduler.clean_up_job(job_id) {
             self.run_job_action(ctx, action);
         }
     }
 
+    /// Executes a scheduler action for the driver.
     fn run_job_action(&mut self, ctx: &mut ActorContext<Self>, action: JobAction) {
         debug!("job action: {action:?}");
         match action {
             JobAction::ScheduleTaskRegion { mut region } => {
                 if let Err(message) = self.apply_cache_worker_pins(&mut region) {
-                    let mut keys = HashSet::new();
-                    for (_, set) in &region.tasks {
-                        for entry in &set.entries {
-                            keys.insert(entry.key.clone());
-                        }
-                    }
-                    for key in keys {
+                    for key in region
+                        .tasks
+                        .iter()
+                        .flat_map(|(_, set)| set.entries.iter().map(|entry| entry.key.clone()))
+                        .collect::<HashSet<_>>()
+                    {
                         ctx.send(DriverEvent::UpdateTask {
                             key,
                             status: TaskStatus::Failed,

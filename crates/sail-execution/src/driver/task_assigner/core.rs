@@ -307,7 +307,11 @@ impl TaskSlotAssigner {
         assignments
     }
 
-    /// Attempts to assign a task region, returning the region on failure.
+    /// Assigns all task sets in a region to slots.
+    ///
+    /// Returns `Ok(Vec<TaskSetAssignment>)` only if every task set in the region can be placed
+    /// (respecting `required_worker` pins). Otherwise returns `Err(region)` so the caller can
+    /// requeue it.
     fn try_assign_task_region(
         &mut self,
         region: TaskRegion,
