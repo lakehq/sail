@@ -15,12 +15,12 @@ impl PlanResolver<'_> {
         references: Vec<spec::QueryPlan>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let mut with_relations_scope = state.enter_with_relations_scope();
-        let state = with_relations_scope.state();
+        let mut scope = state.enter_with_relations_scope();
+        let state = scope.state();
         // Enter a CTE scope so that DataFrame aliases registered below do not leak
         // into the outer query scope.
-        let mut cte_scope = state.enter_cte_scope();
-        let state = cte_scope.state();
+        let mut scope = state.enter_cte_scope();
+        let state = scope.state();
         for ref_plan in references {
             // If the reference is a SubqueryAlias, register it as a named table so that
             // SQL queries can reference the DataFrame by its alias name.
@@ -53,6 +53,6 @@ impl PlanResolver<'_> {
                 )));
             }
         }
-        self.resolve_query_plan(root, cte_scope.state()).await
+        self.resolve_query_plan(root, scope.state()).await
     }
 }
