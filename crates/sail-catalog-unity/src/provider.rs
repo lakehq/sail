@@ -797,7 +797,7 @@ impl CatalogProvider for UnityCatalogProvider {
     }
 }
 
-#[allow(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use secrecy::ExposeSecret;

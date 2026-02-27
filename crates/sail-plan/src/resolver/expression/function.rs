@@ -197,14 +197,13 @@ impl PlanResolver<'_> {
                 // Expand wildcard inside `struct(...)` only, to match Spark behavior:
                 // - struct(*) expands to all visible columns
                 // - struct(alias.*) expands to all visible columns from that qualifier
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 Expr::Wildcard { qualifier, options } => {
                     let plan = LogicalPlan::EmptyRelation(EmptyRelation {
                         produce_one_row: false,
                         schema: schema.clone(),
                     });
 
-                    #[allow(deprecated)]
                     let expanded = match qualifier {
                         Some(q) => expand_qualified_wildcard(&q, schema, Some(&options))?,
                         None => expand_wildcard(schema, &plan, Some(&options))?,

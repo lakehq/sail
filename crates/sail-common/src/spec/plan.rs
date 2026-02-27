@@ -601,7 +601,7 @@ pub enum MergeNotMatchedByTargetAction {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
-#[allow(clippy::large_enum_variant)]
+#[expect(clippy::large_enum_variant)]
 pub enum ReadType {
     // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
     NamedTable(ReadNamedTable),
@@ -943,6 +943,7 @@ pub struct Write {
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum SaveType {
     Path(String),
+    Sink,
     Table {
         table: ObjectName,
         save_method: TableSaveMethod,

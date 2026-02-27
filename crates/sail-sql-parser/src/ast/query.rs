@@ -79,7 +79,7 @@ pub struct IdentList {
 }
 
 #[derive(Debug, Clone, TreeSyntax, TreeText)]
-#[allow(clippy::large_enum_variant)]
+#[expect(clippy::large_enum_variant)]
 pub enum QueryBody {
     // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
     Term(QueryTerm),
@@ -158,7 +158,7 @@ pub enum SetQuantifier {
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "(Query, Expr, TableWithJoins)")]
-#[allow(clippy::large_enum_variant)]
+#[expect(clippy::large_enum_variant)]
 pub enum QueryTerm {
     // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
     Select(#[parser(function = |(q, e, t), o| compose((q, e, t), o))] QuerySelect),
@@ -257,7 +257,7 @@ pub struct TableWithJoins {
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "(Query, Expr, TableWithJoins)")]
-#[allow(clippy::large_enum_variant)]
+#[expect(clippy::large_enum_variant)]
 pub enum TableFactor {
     Values {
         #[parser(function = |(_, e, _), o| compose(e, o))]
@@ -361,7 +361,6 @@ pub struct TableSampleRepeatable {
     pub right: RightParenthesis,
 }
 
-#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "Expr")]
 pub enum TableModifier {
@@ -407,7 +406,7 @@ pub enum UnpivotColumns {
         name: Ident,
         r#in: In,
         left: LeftParenthesis,
-        #[allow(clippy::type_complexity)]
+        #[expect(clippy::type_complexity)]
         columns: Sequence<(Ident, Option<(Option<As>, Ident)>), Comma>,
         right: RightParenthesis,
     },
@@ -417,7 +416,7 @@ pub enum UnpivotColumns {
         name: Ident,
         r#in: In,
         left: LeftParenthesis,
-        #[allow(clippy::type_complexity)]
+        #[expect(clippy::type_complexity)]
         columns: Sequence<(IdentList, Option<(Option<As>, Ident)>), Comma>,
         right: RightParenthesis,
     },
@@ -590,7 +589,7 @@ pub struct LimitClause {
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "Expr")]
-#[allow(clippy::large_enum_variant)]
+#[expect(clippy::large_enum_variant)]
 pub enum LimitValue {
     All(All),
     // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning

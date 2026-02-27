@@ -314,7 +314,7 @@ fn invoke_array_scalars<R: InvokeResult>(
     path: &[JsonPath],
     jiter_find: impl Fn(Option<&str>, &[JsonPath]) -> Result<R::Item, GetError>,
 ) -> Result<ArrayRef> {
-    #[allow(clippy::needless_pass_by_value)] // ArrayAccessor is implemented on references
+    #[expect(clippy::needless_pass_by_value)] // ArrayAccessor is implemented on references
     fn inner<'j, R: InvokeResult>(
         json_array: impl ArrayAccessor<Item = &'j str>,
         path: &[JsonPath],
@@ -434,7 +434,7 @@ fn zip_apply<'a, R: InvokeResult>(
         Some((json, path))
     }
 
-    #[allow(clippy::needless_pass_by_value)] // ArrayAccessor is implemented on references
+    #[expect(clippy::needless_pass_by_value)] // ArrayAccessor is implemented on references
     fn inner<'a, 'p, P: Into<JsonPath<'p>>, R: InvokeResult>(
         json_array: impl ArrayAccessor<Item = &'a str>,
         path_array: impl ArrayAccessor<Item = P>,

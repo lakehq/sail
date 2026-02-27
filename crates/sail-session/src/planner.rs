@@ -21,6 +21,7 @@ use sail_common_datafusion::rename::physical_plan::rename_projected_physical_pla
 use sail_common_datafusion::streaming::event::schema::{
     to_flow_event_field_names, to_flow_event_projection,
 };
+use sail_delta_lake::logical::RewriteDeltaTableSource;
 use sail_logical_plan::file_delete::FileDeleteNode;
 use sail_logical_plan::file_write::FileWriteNode;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
@@ -61,7 +62,10 @@ impl QueryPlanner for ExtensionQueryPlanner {
         session_state: &SessionState,
     ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
         // TODO: show rewriters and the final logical plan in `EXPLAIN`
-        let rewriters = vec![RewriteSystemTableSource];
+        let rewriters: Vec<Box<dyn LogicalRewriter>> = vec![
+            Box::new(RewriteSystemTableSource),
+            Box::new(RewriteDeltaTableSource),
+        ];
         let mut logical_plan = logical_plan.clone();
         for rewriter in rewriters {
             logical_plan = rewriter.rewrite(logical_plan)?.data
@@ -91,11 +95,14 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
         let plan: Arc<dyn ExecutionPlan> = if let Some(node) =
             node.as_any().downcast_ref::<RangeNode>()
         {
-            Arc::new(RangeExec::new(
+            let schema = UserDefinedLogicalNode::schema(node).inner().clone();
+            let projection = (0..schema.fields().len()).collect();
+            Arc::new(RangeExec::try_new(
                 node.range().clone(),
                 node.num_partitions(),
-                UserDefinedLogicalNode::schema(node).inner().clone(),
-            ))
+                schema,
+                projection,
+            )?)
         } else if let Some(node) = node.as_any().downcast_ref::<ShowStringNode>() {
             let [input] = physical_inputs else {
                 return internal_err!("ShowStringExec requires exactly one physical input");
@@ -199,11 +206,11 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                         options: vec![],
                     };
                     let registry = session_state.extension::<TableFormatRegistry>()?;
-                    let provider = registry
+                    let source = registry
                         .get(format)?
-                        .create_provider(session_state, source_info)
+                        .create_source(session_state, source_info)
                         .await?;
-                    Ok(provider.schema().to_dfschema_ref()?)
+                    Ok(source.schema().to_dfschema_ref()?)
                 }
                 TableKind::Table { columns, .. } => {
                     let schema = datafusion::arrow::datatypes::Schema::new(

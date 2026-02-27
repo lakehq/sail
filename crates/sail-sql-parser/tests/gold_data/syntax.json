@@ -887,6 +887,16 @@
                   {
                     "sequence": [
                       {
+                        "nonTerminal": "Keyword(Time)"
+                      },
+                      {
+                        "nonTerminal": "StringLiteral"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
                         "nonTerminal": "Keyword(Null)"
                       }
                     ]
@@ -2036,6 +2046,16 @@
                   {
                     "sequence": [
                       {
+                        "nonTerminal": "Keyword(Time)"
+                      },
+                      {
+                        "nonTerminal": "Option(Tuple(Operator(LeftParenthesis), IntegerLiteral, Operator(RightParenthesis)))"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
                         "nonTerminal": "IntervalType"
                       }
                     ]
@@ -2408,6 +2428,19 @@
                   },
                   {
                     "nonTerminal": "Keyword(In)"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "Either(Keyword(Function), Keyword(Functions))",
+              "node": {
+                "choice": [
+                  {
+                    "nonTerminal": "Keyword(Function)"
+                  },
+                  {
+                    "nonTerminal": "Keyword(Functions)"
                   }
                 ]
               }
@@ -9293,7 +9326,7 @@
                         "nonTerminal": "Option(Either(Keyword(Temp), Keyword(Temporary)))"
                       },
                       {
-                        "nonTerminal": "Keyword(Functions)"
+                        "nonTerminal": "Either(Keyword(Function), Keyword(Functions))"
                       },
                       {
                         "nonTerminal": "Option(Tuple(Keyword(If), Keyword(Exists)))"
