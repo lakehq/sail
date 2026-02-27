@@ -321,9 +321,7 @@ pub struct PartitionWriter {
     arrow_writer: Option<AsyncArrowWriter<AsyncShareableBuffer>>,
     part_counter: usize,
     files_written: Vec<Add>,
-    #[allow(dead_code)]
     num_indexed_cols: i32,
-    #[allow(dead_code)]
     stats_columns: Option<Vec<String>>,
 }
 
@@ -628,11 +626,11 @@ mod tests {
     #[tokio::test]
     #[should_panic(expected = "input violated partition grouping contract")]
     async fn debug_contract_panics_on_partition_key_regression() {
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let mut writer = make_writer().unwrap();
 
         // Key re-appears after switching away: a -> b -> a
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let batch = make_batch(vec![1, 2, 3], vec!["a", "b", "a"]).unwrap();
         let _ = writer.write(&batch).await;
     }

@@ -35,7 +35,7 @@ fn partitions_field() -> AvroRecordField {
     }
 
     let element_record = AvroSchema::Record(RecordSchema {
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         name: Name::new("field_summary").unwrap_or_else(|_| Name::new("field_summary").unwrap()),
         aliases: None,
         doc: None,
@@ -86,7 +86,7 @@ pub static MANIFEST_LIST_AVRO_SCHEMA_V2: Lazy<AvroSchema> = Lazy::new(|| {
     }
 
     AvroSchema::Record(RecordSchema {
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         name: Name::new("manifest_file").unwrap_or_else(|_| Name::new("manifest_file").unwrap()),
         aliases: None,
         doc: None,

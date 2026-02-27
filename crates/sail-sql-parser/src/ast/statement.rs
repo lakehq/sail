@@ -30,7 +30,6 @@ use crate::token::TokenLabel;
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "(Statement, Query, Expr, DataType)", label = TokenLabel::Statement)]
-#[allow(clippy::large_enum_variant)]
 pub enum Statement {
     Query(#[parser(function = |(_, q, _, _), _| q)] Query),
     SetCatalog {
@@ -454,7 +453,7 @@ pub struct ColumnTypeDefinition {
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "DataType")]
-#[allow(clippy::large_enum_variant)]
+#[expect(clippy::large_enum_variant)]
 pub enum PartitionColumn {
     // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
     Typed(#[parser(function = |d, o| compose(d, o))] ColumnTypeDefinition),
@@ -774,7 +773,7 @@ pub enum ColumnDropList {
     },
 }
 
-#[allow(clippy::large_enum_variant)]
+#[expect(clippy::large_enum_variant)]
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 pub enum InsertDirectoryDestination {
     Spark {

@@ -5,7 +5,7 @@ pub mod file_listing_cache;
 pub mod file_metadata_cache;
 pub mod file_statistics_cache;
 
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub(crate) fn try_parse_memory_limit(limit: &str) -> Option<usize> {
     let (number, unit) = limit.split_at(limit.len() - 1);
     let number: f64 = match number.parse() {
