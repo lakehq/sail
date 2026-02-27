@@ -1413,9 +1413,9 @@ dependencies = [
 
 [[package]]
 name = "chumsky"
-version = "0.11.2"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "acc17a6284abccac6e50db35c1cee87f605474a72939b959a3a67d9371800efd"
+checksum = "4ba4a05c9ce83b07de31b31c874e87c069881ac4355db9e752e3a55c11ec75a6"
 dependencies = [
  "hashbrown 0.15.5",
  "unicode-ident",
@@ -6409,6 +6409,7 @@ dependencies = [
  "datafusion-functions",
  "datafusion-functions-nested",
  "datafusion-spark",
+ "educe",
  "either",
  "half",
  "indexmap 2.13.0",
@@ -6472,6 +6473,7 @@ dependencies = [
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
+ "educe",
  "futures",
  "md-5",
  "num-bigint",
