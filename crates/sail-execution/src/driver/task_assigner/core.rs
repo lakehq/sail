@@ -6,9 +6,9 @@ use log::{error, warn};
 use crate::driver::task_assigner::state::{TaskSlot, WorkerResource};
 use crate::driver::task_assigner::{TaskAssigner, TaskRegion};
 use crate::id::{JobId, TaskKey, WorkerId};
-use crate::job_graph::TaskPlacement;
 use crate::task::scheduling::{
-    TaskAssignment, TaskAssignmentGetter, TaskSetAssignment, TaskStreamAssignment,
+    SchedulableTaskPlacement, TaskAssignment, TaskAssignmentGetter, TaskSetAssignment,
+    TaskStreamAssignment,
 };
 
 impl TaskAssigner {
@@ -20,7 +20,13 @@ impl TaskAssigner {
                 region
                     .tasks
                     .iter()
-                    .filter(|(placement, _)| matches!(placement, TaskPlacement::Worker))
+                    .filter(|(placement, _)| {
+                        matches!(
+                            placement,
+                            SchedulableTaskPlacement::Worker
+                                | SchedulableTaskPlacement::PinnedWorker { .. }
+                        )
+                    })
                     .count()
             })
             .sum::<usize>();
@@ -310,7 +316,7 @@ impl TaskSlotAssigner {
     /// Assigns all task sets in a region to slots.
     ///
     /// Returns `Ok(Vec<TaskSetAssignment>)` only if every task set in the region can be placed
-    /// (respecting `required_worker` pins). Otherwise returns `Err(region)` so the caller can
+    /// (respecting pinned workers). Otherwise returns `Err(region)` so the caller can
     /// requeue it.
     fn try_assign_task_region(
         &mut self,
@@ -320,17 +326,28 @@ impl TaskSlotAssigner {
 
         for (placement, set) in &region.tasks {
             match placement {
-                TaskPlacement::Driver => {
+                SchedulableTaskPlacement::Driver => {
                     assignments.push(TaskSetAssignment {
                         set: set.clone(),
                         assignment: TaskAssignment::Driver,
                     });
                 }
-                TaskPlacement::Worker => {
-                    let slot = match set.required_worker {
-                        Some(required) => self.next_for(required),
-                        None => self.next(),
-                    };
+                SchedulableTaskPlacement::Worker => {
+                    let slot = self.next();
+                    if let Some((worker_id, slot)) = slot {
+                        assignments.push(TaskSetAssignment {
+                            set: set.clone(),
+                            assignment: TaskAssignment::Worker { worker_id, slot },
+                        });
+                    } else {
+                        // The worker task slots are not enough for assigning all the
+                        // worker tasks in this region. So we return the region back
+                        // to indicate the error.
+                        return Err(region);
+                    }
+                }
+                SchedulableTaskPlacement::PinnedWorker { worker_id } => {
+                    let slot = self.next_for(*worker_id);
                     if let Some((worker_id, slot)) = slot {
                         assignments.push(TaskSetAssignment {
                             set: set.clone(),

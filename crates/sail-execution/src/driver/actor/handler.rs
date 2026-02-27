@@ -18,7 +18,7 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use crate::driver::actor::DriverActor;
-use crate::driver::job_scheduler::{JobAction, TaskState};
+use crate::driver::job_scheduler::{CachePinError, JobAction, TaskState};
 use crate::driver::output::JobOutputItem;
 use crate::driver::{DriverEvent, TaskStatus};
 use crate::error::ExecutionResult;
@@ -34,30 +34,34 @@ impl DriverActor {
         cache_partition_locations: &HashMap<(CacheId, usize), Vec<WorkerId>>,
         cache_id: CacheId,
         partition: usize,
-    ) -> Result<WorkerId, String> {
+    ) -> Result<WorkerId, CachePinError> {
         let workers = cache_partition_locations
             .get(&(cache_id, partition))
-            .ok_or_else(|| {
-                format!("no worker location for cache {cache_id} partition {partition}")
+            .ok_or(CachePinError::MissingLocation {
+                cache_id,
+                partition,
             })?;
         match workers.as_slice() {
-            [] => Err(format!(
-                "no worker location for cache {cache_id} partition {partition}"
-            )),
+            [] => Err(CachePinError::MissingLocation {
+                cache_id,
+                partition,
+            }),
             [worker_id] => {
                 let driver_worker_id = WorkerId::from(0_u64);
                 if *worker_id == driver_worker_id {
-                    Err(format!(
-                        "cache {cache_id} partition {partition} is located on driver but task requires a worker"
-                    ))
+                    Err(CachePinError::DriverLocationForWorkerTask {
+                        cache_id,
+                        partition,
+                    })
                 } else {
                     Ok(*worker_id)
                 }
             }
-            _ => Err(format!(
-                "expected exactly one worker for cache {cache_id} partition {partition} but found {}",
-                workers.len()
-            )),
+            _ => Err(CachePinError::MultipleLocations {
+                cache_id,
+                partition,
+                workers: workers.len(),
+            }),
         }
     }
 
@@ -507,13 +511,15 @@ impl DriverActor {
                 }
                 self.task_assigner.enqueue_tasks(region);
             }
-            JobAction::FailTasks { keys, message } => {
+            JobAction::FailTasks { keys, error } => {
+                let message = error.to_string();
+                let cause = CommonErrorCause::Execution(message.clone());
                 for key in keys {
                     ctx.send(DriverEvent::UpdateTask {
                         key,
                         status: TaskStatus::Failed,
                         message: Some(message.clone()),
-                        cause: Some(CommonErrorCause::Execution(message.clone())),
+                        cause: Some(cause.clone()),
                         sequence: None,
                     });
                 }

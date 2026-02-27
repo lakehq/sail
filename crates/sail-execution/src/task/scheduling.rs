@@ -1,5 +1,4 @@
 use crate::id::{TaskKey, WorkerId};
-use crate::job_graph::TaskPlacement;
 
 /// A task region represents multiple task sets that should be scheduled together.
 /// Each task set can be placed either on the driver or on the workers.
@@ -17,7 +16,7 @@ use crate::job_graph::TaskPlacement;
 ///         if there are more than one stage involved.
 #[derive(Debug, Clone)]
 pub struct TaskRegion {
-    pub tasks: Vec<(TaskPlacement, TaskSet)>,
+    pub tasks: Vec<(SchedulableTaskPlacement, TaskSet)>,
 }
 
 /// A task set represents a collection of tasks that are assigned to
@@ -27,8 +26,6 @@ pub struct TaskRegion {
 /// different task sets.
 #[derive(Debug, Clone)]
 pub struct TaskSet {
-    /// If set, tasks in this set must run on the given worker.
-    pub required_worker: Option<WorkerId>,
     pub entries: Vec<TaskSetEntry>,
 }
 
@@ -88,6 +85,14 @@ pub struct TaskSetAssignment {
 pub enum TaskAssignment {
     Driver,
     Worker { worker_id: WorkerId, slot: usize },
+}
+
+/// The schedulable placement for a task set after pinning constraints are resolved.
+#[derive(Debug, Clone)]
+pub enum SchedulableTaskPlacement {
+    Driver,
+    Worker,
+    PinnedWorker { worker_id: WorkerId },
 }
 
 pub trait TaskAssignmentGetter {
