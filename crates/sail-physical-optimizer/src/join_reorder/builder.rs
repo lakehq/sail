@@ -548,7 +548,7 @@ impl GraphBuilder {
         // statistics from its *input* (pre-filter) so we retain the most original/accurate
         // datasource stats (e.g., Parquet), and apply the filter's selectivity as a penalty
         // factor to initial cardinality.
-        let (stats, initial_cardinality) = if plan.as_any().is::<FilterExec>() {
+        let (stats, initial_cardinality, base_cardinality) = if plan.as_any().is::<FilterExec>() {
             // NOTE: We still keep FilterExec as the boundary leaf (strategy A), but we must avoid
             // an inconsistent stats state where num_rows is "post-filter" while distinct_count
             // (and thus TDom) remains "pre-filter". That mismatch can cause greedy join ordering
@@ -574,7 +574,7 @@ impl GraphBuilder {
                 .total_byte_size
                 .with_estimated_selectivity(selectivity);
 
-            (adjusted, base * selectivity)
+            (adjusted, base * selectivity, base)
         } else if plan.as_any().is::<ProjectionExec>() {
             // Preserve ProjectionExec as a relation leaf, but prefer its input statistics
             // (ProjectionExec may not have accurate stats of its own).
@@ -588,7 +588,7 @@ impl GraphBuilder {
                 Precision::Inexact(count) => count as f64,
                 Precision::Absent => 1000.0, // Default estimation
             };
-            (stats, initial_cardinality)
+            (stats, initial_cardinality, initial_cardinality)
         } else {
             let stats = plan.partition_statistics(None)?;
             let initial_cardinality = match stats.num_rows {
@@ -596,11 +596,16 @@ impl GraphBuilder {
                 Precision::Inexact(count) => count as f64,
                 Precision::Absent => 1000.0, // Default estimation
             };
-            (stats, initial_cardinality)
+            (stats, initial_cardinality, initial_cardinality)
         };
 
-        let relation_node =
-            RelationNode::new(plan.clone(), relation_id, initial_cardinality, stats);
+        let relation_node = RelationNode::new(
+            plan.clone(),
+            relation_id,
+            initial_cardinality,
+            base_cardinality,
+            stats,
+        );
         self.graph.add_relation(relation_node);
 
         // Create stable IDs for all output columns of this new relation and build ColumnMap
@@ -1382,6 +1387,11 @@ mod tests {
             (rel.initial_cardinality - 0.5).abs() < 1e-9,
             "expected initial_cardinality ~= 0.5, got {}",
             rel.initial_cardinality
+        );
+        assert!(
+            (rel.base_cardinality - 1.0).abs() < 1e-9,
+            "expected base_cardinality ~= 1.0, got {}",
+            rel.base_cardinality
         );
 
         Ok(())

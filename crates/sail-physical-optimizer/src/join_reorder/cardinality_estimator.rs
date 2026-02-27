@@ -206,7 +206,7 @@ impl CardinalityEstimator {
     /// Estimate TDom (Total Domain) for an equivalence set.
     fn estimate_tdom_for_set(&self, set: &mut EquivalenceSet) {
         let mut max_known_distinct: f64 = 0.0;
-        let mut min_relation_card: f64 = f64::INFINITY;
+        let mut min_base_card: f64 = f64::INFINITY;
         let mut has_known_stats = false;
 
         for stable_col in &set.columns {
@@ -216,7 +216,7 @@ impl CardinalityEstimator {
             }
 
             if let Some(relation) = self.graph.get_relation(stable_col.relation_id) {
-                min_relation_card = min_relation_card.min(relation.initial_cardinality);
+                min_base_card = min_base_card.min(relation.base_cardinality);
             }
         }
 
@@ -230,15 +230,15 @@ impl CardinalityEstimator {
         // count, and using `min` avoids the pathological underestimation caused by `max`.
         let mut tdom = if has_known_stats {
             max_known_distinct.max(1.0)
-        } else if min_relation_card.is_finite() {
-            min_relation_card.max(1.0)
+        } else if min_base_card.is_finite() {
+            min_base_card.max(1.0)
         } else {
             1.0
         };
 
         // Enforce the obvious upper bound when relation cardinalities are available.
-        if min_relation_card.is_finite() {
-            tdom = tdom.min(min_relation_card).max(1.0);
+        if min_base_card.is_finite() {
+            tdom = tdom.min(min_base_card).max(1.0);
         }
 
         set.set_t_dom_count(tdom);
@@ -337,13 +337,13 @@ impl CardinalityEstimator {
         }
 
         // Base fallback: smallest relation cardinality in the edge.
-        let min_relation_card = edge
+        let min_base_card = edge
             .join_set
             .iter()
             .map(|id| {
                 self.graph
                     .get_relation(id)
-                    .map(|r| r.initial_cardinality)
+                    .map(|r| r.base_cardinality)
                     .unwrap_or(1.0)
             })
             .fold(f64::INFINITY, f64::min)
@@ -352,7 +352,7 @@ impl CardinalityEstimator {
         // Defensive fallback: should not happen when equi_pairs is non-empty, but avoid returning
         // an overly-large domain that would make the join appear unrealistically selective.
         if used_equiv_sets.is_empty() {
-            return min_relation_card;
+            return min_base_card;
         }
 
         // Multiply the domains of each distinct equivalence set used by this edge.
@@ -369,7 +369,7 @@ impl CardinalityEstimator {
 
         // Cap by the smallest relation cardinality to avoid unrealistically tiny selectivity
         // for multi-key joins (composite-key distinct count cannot exceed row count).
-        tdom_product.min(min_relation_card).max(1.0)
+        tdom_product.min(min_base_card).max(1.0)
     }
 
     /// Estimate join cardinality for a specific split (used by PlanEnumerator).
@@ -457,11 +457,23 @@ mod tests {
 
         // Add two relations
         let plan1 = Arc::new(EmptyExec::new(schema.clone()));
-        let relation1 = RelationNode::new(plan1, 0, 1000.0, Statistics::new_unknown(&schema));
+        let relation1 = RelationNode::new(
+            plan1,
+            0,
+            1000.0,
+            1000.0,
+            Statistics::new_unknown(&schema),
+        );
         graph.add_relation(relation1);
 
         let plan2 = Arc::new(EmptyExec::new(schema.clone()));
-        let relation2 = RelationNode::new(plan2, 1, 2000.0, Statistics::new_unknown(&schema));
+        let relation2 = RelationNode::new(
+            plan2,
+            1,
+            2000.0,
+            2000.0,
+            Statistics::new_unknown(&schema),
+        );
         graph.add_relation(relation2);
 
         graph
@@ -482,11 +494,13 @@ mod tests {
             Arc::new(EmptyExec::new(schema.clone())),
             0,
             1_000_000.0,
+            1_000_000.0,
             stats.clone(),
         ));
         graph.add_relation(RelationNode::new(
             Arc::new(EmptyExec::new(schema.clone())),
             1,
+            1_000_000.0,
             1_000_000.0,
             stats,
         ));
@@ -645,7 +659,7 @@ mod tests {
         for (id, rows) in [(0, 1000.0), (1, 2000.0), (2, 3000.0)] {
             let plan: Arc<EmptyExec> = Arc::new(EmptyExec::new(schema.clone()));
             let rel: RelationNode =
-                RelationNode::new(plan, id, rows, Statistics::new_unknown(&schema));
+                RelationNode::new(plan, id, rows, rows, Statistics::new_unknown(&schema));
             graph.add_relation(rel);
         }
 
@@ -734,12 +748,12 @@ mod tests {
         let plan0 = Arc::new(EmptyExec::new(schema.clone()));
         let mut stats0 = Statistics::new_unknown(&schema);
         stats0.column_statistics[0].distinct_count = Precision::Exact(10);
-        graph.add_relation(RelationNode::new(plan0, 0, 1000.0, stats0));
+        graph.add_relation(RelationNode::new(plan0, 0, 1000.0, 1000.0, stats0));
 
         // R1 has no distinct stats on join key (k)
         let plan1 = Arc::new(EmptyExec::new(schema.clone()));
         let stats1 = Statistics::new_unknown(&schema);
-        graph.add_relation(RelationNode::new(plan1, 1, 2000.0, stats1));
+        graph.add_relation(RelationNode::new(plan1, 1, 2000.0, 2000.0, stats1));
 
         // Edge R0.k = R1.k
         let l: Arc<dyn PhysicalExpr> = Arc::new(Column::new("k", 0));
@@ -776,6 +790,76 @@ mod tests {
     }
 
     #[test]
+    fn test_tdom_cap_uses_base_cardinality_for_filtered_dimension() -> Result<()> {
+        use datafusion::logical_expr::JoinType;
+        use datafusion::physical_expr::expressions::{BinaryExpr, Column};
+        use datafusion::physical_expr::PhysicalExpr;
+
+        let mut graph = QueryGraph::new();
+        let schema: Arc<Schema> =
+            Arc::new(Schema::new(vec![Field::new("k", DataType::Int32, false)]));
+
+        // Simulate a filtered dimension table:
+        // - base rows = 2,000,000
+        // - post-filter rows = 400,000
+        // - join-key distincts still reflect base-domain scale
+        let mut dim_stats = Statistics::new_unknown(&schema);
+        dim_stats.column_statistics[0].distinct_count = Precision::Exact(2_000_000);
+        graph.add_relation(RelationNode::new(
+            Arc::new(EmptyExec::new(schema.clone())),
+            0,
+            400_000.0,
+            2_000_000.0,
+            dim_stats,
+        ));
+
+        // Fact table with large cardinality.
+        graph.add_relation(RelationNode::new(
+            Arc::new(EmptyExec::new(schema.clone())),
+            1,
+            60_000_000.0,
+            60_000_000.0,
+            Statistics::new_unknown(&schema),
+        ));
+
+        let l: Arc<dyn PhysicalExpr> = Arc::new(Column::new("k", 0));
+        let r: Arc<dyn PhysicalExpr> = Arc::new(Column::new("k", 0));
+        let filter = Arc::new(BinaryExpr::new(l, Operator::Eq, r)) as Arc<dyn PhysicalExpr>;
+        let join_set = JoinSet::new_singleton(0)?.union(&JoinSet::new_singleton(1)?);
+        graph.add_edge(JoinEdge::new(
+            join_set,
+            filter,
+            JoinType::Inner,
+            vec![(
+                StableColumn {
+                    relation_id: 0,
+                    column_index: 0,
+                    name: "k0".into(),
+                },
+                StableColumn {
+                    relation_id: 1,
+                    column_index: 0,
+                    name: "k1".into(),
+                },
+            )],
+        ))?;
+
+        let estimator = CardinalityEstimator::new(graph);
+        let s01 = JoinSet::from_iter([0, 1])?;
+        let edges = estimator.get_edges_contained_in_set(s01);
+        assert_eq!(edges.len(), 1);
+
+        // Cap by base cardinality (2M), not post-filter cardinality (400k).
+        assert!((estimator.get_tdom_for_edge(edges[0]) - 2_000_000.0).abs() < 1e-9);
+
+        // This preserves the dimension-side filtering benefit in join output estimation.
+        let join_card = estimator.estimate_join_cardinality(400_000.0, 60_000_000.0, &[0]);
+        assert!((join_card - 12_000_000.0).abs() < 1e-6);
+
+        Ok(())
+    }
+
+    #[test]
     fn test_tdom_fallback_uses_min_relation_cardinality() -> Result<()> {
         use datafusion::logical_expr::JoinType;
         use datafusion::physical_expr::expressions::{BinaryExpr, Column};
@@ -791,12 +875,14 @@ mod tests {
             plan0,
             0,
             1_500_000.0,
+            1_500_000.0,
             Statistics::new_unknown(&schema),
         ));
         let plan1 = Arc::new(EmptyExec::new(schema.clone()));
         graph.add_relation(RelationNode::new(
             plan1,
             1,
+            100_000.0,
             100_000.0,
             Statistics::new_unknown(&schema),
         ));
@@ -855,14 +941,14 @@ mod tests {
         let mut stats0 = Statistics::new_unknown(&schema);
         stats0.column_statistics[0].distinct_count = Precision::Exact(10);
         stats0.column_statistics[1].distinct_count = Precision::Exact(100);
-        graph.add_relation(RelationNode::new(plan0, 0, huge_card, stats0));
+        graph.add_relation(RelationNode::new(plan0, 0, huge_card, huge_card, stats0));
 
         // R1: k1 distinct=20, k2 distinct=200
         let plan1 = Arc::new(EmptyExec::new(schema.clone()));
         let mut stats1 = Statistics::new_unknown(&schema);
         stats1.column_statistics[0].distinct_count = Precision::Exact(20);
         stats1.column_statistics[1].distinct_count = Precision::Exact(200);
-        graph.add_relation(RelationNode::new(plan1, 1, huge_card, stats1));
+        graph.add_relation(RelationNode::new(plan1, 1, huge_card, huge_card, stats1));
 
         // Edge: (R0.k1 = R1.k1) AND (R0.k2 = R1.k2)
         let k1_l: Arc<dyn PhysicalExpr> = Arc::new(Column::new("k1", 0));
@@ -938,14 +1024,14 @@ mod tests {
         let mut stats0 = Statistics::new_unknown(&schema);
         stats0.column_statistics[0].distinct_count = Precision::Exact(100);
         stats0.column_statistics[1].distinct_count = Precision::Exact(200);
-        graph.add_relation(RelationNode::new(plan0, 0, small_card, stats0));
+        graph.add_relation(RelationNode::new(plan0, 0, small_card, small_card, stats0));
 
         // R1: k1 distinct=100, k2 distinct=200
         let plan1 = Arc::new(EmptyExec::new(schema.clone()));
         let mut stats1 = Statistics::new_unknown(&schema);
         stats1.column_statistics[0].distinct_count = Precision::Exact(100);
         stats1.column_statistics[1].distinct_count = Precision::Exact(200);
-        graph.add_relation(RelationNode::new(plan1, 1, huge_card, stats1));
+        graph.add_relation(RelationNode::new(plan1, 1, huge_card, huge_card, stats1));
 
         // Edge: (R0.k1 = R1.k1) AND (R0.k2 = R1.k2)
         let k1_l: Arc<dyn PhysicalExpr> = Arc::new(Column::new("k1", 0));

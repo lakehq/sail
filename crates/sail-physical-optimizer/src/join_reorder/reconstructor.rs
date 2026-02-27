@@ -1168,7 +1168,7 @@ mod tests {
         )]));
 
         let plan = Arc::new(EmptyExec::new(schema.clone()));
-        let relation = RelationNode::new(plan, 0, 1000.0, Statistics::new_unknown(&schema));
+        let relation = RelationNode::new(plan, 0, 1000.0, 1000.0, Statistics::new_unknown(&schema));
         graph.add_relation(relation);
 
         graph
@@ -1212,11 +1212,13 @@ mod tests {
             plan_a,
             0,
             1_000_000.0,
+            1_000_000.0,
             Statistics::new_unknown(&schema_a),
         ));
         graph.add_relation(RelationNode::new(
             plan_b,
             1,
+            10.0,
             10.0,
             Statistics::new_unknown(&schema_b),
         ));
@@ -1426,11 +1428,13 @@ mod tests {
             dummy_plan.clone(),
             0,
             1000.0,
+            1000.0,
             Statistics::new_unknown(&dummy_schema),
         ));
         graph.add_relation(RelationNode::new(
             dummy_plan,
             1,
+            1000.0,
             1000.0,
             Statistics::new_unknown(&dummy_schema),
         ));
@@ -1507,7 +1511,7 @@ mod tests {
         let mut graph = QueryGraph::new();
         for i in 0..3 {
             let plan = Arc::new(EmptyExec::new(schema.clone()));
-            let relation = RelationNode::new(plan, i, 1000.0, Statistics::new_unknown(&schema));
+            let relation = RelationNode::new(plan, i, 1000.0, 1000.0, Statistics::new_unknown(&schema));
             graph.add_relation(relation);
         }
 
@@ -1593,7 +1597,7 @@ mod tests {
         let mut graph = QueryGraph::new();
         for i in 0..2 {
             let plan = Arc::new(EmptyExec::new(schema.clone()));
-            let relation = RelationNode::new(plan, i, 1000.0, Statistics::new_unknown(&schema));
+            let relation = RelationNode::new(plan, i, 1000.0, 1000.0, Statistics::new_unknown(&schema));
             graph.add_relation(relation);
         }
 

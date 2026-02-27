@@ -46,6 +46,8 @@ pub struct RelationNode {
     pub relation_id: usize,
     /// Initial cardinality estimate.
     pub initial_cardinality: f64,
+    /// Base cardinality before local filters are applied.
+    pub base_cardinality: f64,
     /// Statistics provided by DataFusion.
     pub statistics: Statistics,
     // TODO: Enhance statistics and its usage.
@@ -56,12 +58,14 @@ impl RelationNode {
         plan: Arc<dyn ExecutionPlan>,
         relation_id: usize,
         initial_cardinality: f64,
+        base_cardinality: f64,
         statistics: Statistics,
     ) -> Self {
         Self {
             plan,
             relation_id,
             initial_cardinality,
+            base_cardinality,
             statistics,
         }
     }
@@ -554,7 +558,7 @@ mod tests {
             false,
         )]));
         let plan = Arc::new(EmptyExec::new(schema.clone()));
-        RelationNode::new(plan, id, 1000.0, Statistics::new_unknown(&schema))
+        RelationNode::new(plan, id, 1000.0, 1000.0, Statistics::new_unknown(&schema))
     }
 
     #[test]
@@ -612,6 +616,7 @@ mod tests {
             let relation = RelationNode::new(
                 plan,
                 i,
+                1000.0,
                 1000.0,
                 datafusion::common::Statistics::new_unknown(&schema),
             );
@@ -673,6 +678,7 @@ mod tests {
             let relation = RelationNode::new(
                 plan,
                 i,
+                1000.0,
                 1000.0,
                 datafusion::common::Statistics::new_unknown(&schema),
             );

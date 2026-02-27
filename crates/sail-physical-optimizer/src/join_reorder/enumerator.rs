@@ -640,7 +640,7 @@ mod tests {
 
         for i in 0..count {
             let plan = Arc::new(EmptyExec::new(schema.clone()));
-            let relation = RelationNode::new(plan, i, 1000.0, Statistics::new_unknown(&schema));
+            let relation = RelationNode::new(plan, i, 1000.0, 1000.0, Statistics::new_unknown(&schema));
             graph.add_relation(relation);
         }
 
