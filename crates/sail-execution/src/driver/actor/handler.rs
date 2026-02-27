@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::mem;
 use std::sync::Arc;
 
@@ -23,23 +23,19 @@ use crate::driver::output::JobOutputItem;
 use crate::driver::{DriverEvent, TaskStatus};
 use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey, TaskStreamKeyDisplay, WorkerId};
-use crate::job_graph::TaskPlacement;
 use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
-use crate::task::scheduling::{
-    TaskAssignment, TaskAssignmentGetter, TaskRegion, TaskStreamAssignment,
-};
+use crate::task::scheduling::{TaskAssignment, TaskAssignmentGetter, TaskStreamAssignment};
 
 impl DriverActor {
-    /// Resolves the single worker that holds a cache partition.
+    /// Resolves the worker for a cache partition from the location map.
     fn resolve_cache_partition_worker(
-        &self,
+        cache_partition_locations: &HashMap<(CacheId, usize), Vec<WorkerId>>,
         cache_id: CacheId,
         partition: usize,
     ) -> Result<WorkerId, String> {
-        let workers = self
-            .cache_partition_locations
+        let workers = cache_partition_locations
             .get(&(cache_id, partition))
             .ok_or_else(|| {
                 format!("no worker location for cache {cache_id} partition {partition}")
@@ -49,7 +45,7 @@ impl DriverActor {
                 "no worker location for cache {cache_id} partition {partition}"
             )),
             [worker_id] => {
-                let driver_worker_id = WorkerId::from(0u64);
+                let driver_worker_id = WorkerId::from(0_u64);
                 if *worker_id == driver_worker_id {
                     Err(format!(
                         "cache {cache_id} partition {partition} is located on driver but task requires a worker"
@@ -63,42 +59,6 @@ impl DriverActor {
                 workers.len()
             )),
         }
-    }
-
-    /// Pins worker task sets in a region to cache-holding workers.
-    fn apply_cache_worker_pins(&self, region: &mut TaskRegion) -> Result<(), String> {
-        for (placement, set) in region.tasks.iter_mut() {
-            if !matches!(placement, TaskPlacement::Worker) {
-                continue;
-            }
-            let mut required: Option<WorkerId> = None;
-            for entry in &set.entries {
-                let cache_reads = self
-                    .job_scheduler
-                    .get_stage_cache_id_reads(entry.key.job_id, entry.key.stage)
-                    .ok_or_else(|| {
-                        format!(
-                            "job {} stage {} not found while resolving cache locations",
-                            entry.key.job_id, entry.key.stage
-                        )
-                    })?;
-                for &cache_id in cache_reads {
-                    let worker_id =
-                        self.resolve_cache_partition_worker(cache_id, entry.key.partition)?;
-                    required = match required {
-                        None => Some(worker_id),
-                        Some(existing) if existing == worker_id => Some(existing),
-                        Some(existing) => {
-                            return Err(format!(
-                                "cache reads require multiple workers ({existing} vs {worker_id}) for the same task set"
-                            ));
-                        }
-                    };
-                }
-            }
-            set.required_worker = required;
-        }
-        Ok(())
     }
 
     pub(super) fn handle_server_ready(
@@ -508,7 +468,17 @@ impl DriverActor {
 
     /// Refreshes job state and executes the resulting scheduler actions.
     fn refresh_job(&mut self, ctx: &mut ActorContext<Self>, job_id: JobId) {
-        for action in self.job_scheduler.refresh_job(job_id) {
+        let cache_partition_locations = self.cache_partition_locations.clone();
+        for action in self
+            .job_scheduler
+            .refresh_job(job_id, |cache_id, partition| {
+                Self::resolve_cache_partition_worker(
+                    &cache_partition_locations,
+                    cache_id,
+                    partition,
+                )
+            })
+        {
             self.run_job_action(ctx, action);
         }
     }
@@ -524,24 +494,7 @@ impl DriverActor {
     fn run_job_action(&mut self, ctx: &mut ActorContext<Self>, action: JobAction) {
         debug!("job action: {action:?}");
         match action {
-            JobAction::ScheduleTaskRegion { mut region } => {
-                if let Err(message) = self.apply_cache_worker_pins(&mut region) {
-                    for key in region
-                        .tasks
-                        .iter()
-                        .flat_map(|(_, set)| set.entries.iter().map(|entry| entry.key.clone()))
-                        .collect::<HashSet<_>>()
-                    {
-                        ctx.send(DriverEvent::UpdateTask {
-                            key,
-                            status: TaskStatus::Failed,
-                            message: Some(message.clone()),
-                            cause: Some(CommonErrorCause::Execution(message.clone())),
-                            sequence: None,
-                        });
-                    }
-                    return;
-                }
+            JobAction::ScheduleTaskRegion { region } => {
                 for (_, set) in &region.tasks {
                     for entry in &set.entries {
                         ctx.send_with_delay(
@@ -553,6 +506,17 @@ impl DriverActor {
                     }
                 }
                 self.task_assigner.enqueue_tasks(region);
+            }
+            JobAction::FailTasks { keys, message } => {
+                for key in keys {
+                    ctx.send(DriverEvent::UpdateTask {
+                        key,
+                        status: TaskStatus::Failed,
+                        message: Some(message.clone()),
+                        cause: Some(CommonErrorCause::Execution(message.clone())),
+                        sequence: None,
+                    });
+                }
             }
             JobAction::CancelTask { key } => {
                 self.task_assigner.exclude_task(&key);

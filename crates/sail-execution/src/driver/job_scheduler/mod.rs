@@ -41,6 +41,10 @@ pub enum JobAction {
     ScheduleTaskRegion {
         region: TaskRegion,
     },
+    FailTasks {
+        keys: Vec<TaskKey>,
+        message: String,
+    },
     CancelTask {
         key: TaskKey,
     },
