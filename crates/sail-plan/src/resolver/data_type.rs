@@ -130,15 +130,18 @@ impl PlanResolver<'_> {
                 start_field: _,
                 end_field: _,
             } => match interval_unit {
+                spec::IntervalUnit::YearMonth => {
+                    Ok(adt::DataType::Interval(adt::IntervalUnit::YearMonth))
+                }
                 // Spark's DayTimeInterval has microsecond precision.
                 // Arrow's IntervalUnit::DayTime has millisecond precision.
                 // Use Duration to preserve microsecond precision.
                 spec::IntervalUnit::DayTime => {
                     Ok(adt::DataType::Duration(adt::TimeUnit::Microsecond))
                 }
-                _ => Ok(adt::DataType::Interval(Self::resolve_interval_unit(
-                    interval_unit,
-                ))),
+                spec::IntervalUnit::MonthDayNano => {
+                    Ok(adt::DataType::Interval(adt::IntervalUnit::MonthDayNano))
+                }
             },
             DataType::Binary => Ok(adt::DataType::Binary),
             DataType::FixedSizeBinary { size } => Ok(adt::DataType::FixedSizeBinary(*size)),
@@ -380,14 +383,6 @@ impl PlanResolver<'_> {
             spec::TimeUnit::Millisecond => Ok(adt::TimeUnit::Millisecond),
             spec::TimeUnit::Microsecond => Ok(adt::TimeUnit::Microsecond),
             spec::TimeUnit::Nanosecond => Ok(adt::TimeUnit::Nanosecond),
-        }
-    }
-
-    pub fn resolve_interval_unit(interval_unit: &spec::IntervalUnit) -> adt::IntervalUnit {
-        match interval_unit {
-            spec::IntervalUnit::YearMonth => adt::IntervalUnit::YearMonth,
-            spec::IntervalUnit::DayTime => adt::IntervalUnit::DayTime,
-            spec::IntervalUnit::MonthDayNano => adt::IntervalUnit::MonthDayNano,
         }
     }
 
