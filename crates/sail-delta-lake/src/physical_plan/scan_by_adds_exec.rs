@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::stats::ColumnStatistics;
 use datafusion::execution::context::TaskContext;
 use datafusion::execution::SessionStateBuilder;
@@ -72,18 +72,6 @@ struct ScanByAddsStreamState {
     pending_adds: Vec<crate::kernel::models::Add>,
     current_scan: Option<SendableRecordBatchStream>,
     input_done: bool,
-}
-
-fn empty_batch(schema: SchemaRef) -> Result<RecordBatch> {
-    if schema.fields().is_empty() {
-        return RecordBatch::try_new_with_options(
-            schema,
-            vec![],
-            &RecordBatchOptions::default().with_row_count(Some(0)),
-        )
-        .map_err(|e| DataFusionError::ArrowError(Box::new(e), None));
-    }
-    Ok(RecordBatch::new_empty(schema))
 }
 
 impl ScanByAddsStreamState {
@@ -520,7 +508,7 @@ impl ExecutionPlan for DeltaScanByAddsExec {
                 // Partition-only scans: emit a single empty batch then stop.
                 if st.partition_scan == Some(true) && !st.emitted_partition_empty {
                     st.emitted_partition_empty = true;
-                    return Ok(Some((empty_batch(st.output_schema.clone())?, st)));
+                    return Ok(Some((RecordBatch::new_empty(st.output_schema.clone()), st)));
                 }
                 if st.partition_scan == Some(true) && st.emitted_partition_empty {
                     return Ok(None);
@@ -564,7 +552,10 @@ impl ExecutionPlan for DeltaScanByAddsExec {
                         // No adds at all: emit a single empty batch.
                         if !st.emitted_partition_empty {
                             st.emitted_partition_empty = true;
-                            return Ok(Some((empty_batch(st.output_schema.clone())?, st)));
+                            return Ok(Some((
+                                RecordBatch::new_empty(st.output_schema.clone()),
+                                st,
+                            )));
                         }
                         return Ok(None);
                     }
