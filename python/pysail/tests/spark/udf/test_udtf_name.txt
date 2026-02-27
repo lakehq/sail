@@ -1,0 +1,57 @@
+>>> from pyspark.sql.functions import lit, udtf
+
+Test that a UDTF registered with a specific name works correctly when called by that name.
+
+>>> @udtf(returnType="x: int, y: int")
+... class PointGenerator:
+...     def eval(self, n: int):
+...         for i in range(n):
+...             yield (i, i * i)
+...
+>>> spark.udtf.register("generate_points", PointGenerator)
+<...UserDefinedTableFunction object at ...>
+>>> spark.sql("SELECT * FROM generate_points(3)").show()
++---+---+
+|  x|  y|
++---+---+
+|  0|  0|
+|  1|  1|
+|  2|  4|
++---+---+
+
+Test that multiple UDTFs can be registered and called by different names.
+
+>>> @udtf(returnType="value: string")
+... class Repeater:
+...     def eval(self, text: str, n: int):
+...         for _ in range(n):
+...             yield (text,)
+...
+>>> spark.udtf.register("repeat_text", Repeater)
+<...UserDefinedTableFunction object at ...>
+>>> spark.sql("SELECT * FROM repeat_text('hello', 2)").show()
++-----+
+|value|
++-----+
+|hello|
+|hello|
++-----+
+
+Test that a UDTF name is preserved when used with LATERAL join.
+
+>>> spark.sql(
+...     "SELECT id, x, y "
+...     "FROM VALUES (1, 2), (2, 3) AS t(id, n), "
+...     "LATERAL generate_points(n) "
+...     "ORDER BY id, x"
+... ).show()
++---+---+---+
+| id|  x|  y|
++---+---+---+
+|  1|  0|  0|
+|  1|  1|  1|
+|  2|  0|  0|
+|  2|  1|  1|
+|  2|  2|  4|
++---+---+---+
+
