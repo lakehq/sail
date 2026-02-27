@@ -313,9 +313,8 @@ impl PlanResolver<'_> {
                 )
                 .await
             }
-            Expr::NamedArgument { key, value } => {
-                let named = self.resolve_named_expression(*value, schema, state).await?;
-                Ok(NamedExpr::new(vec![key], named.expr))
+            Expr::NamedArgument { value, .. } => {
+                self.resolve_named_expression(*value, schema, state).await
             }
             Expr::Table { expr } => self.resolve_expression_table(*expr, state).await,
             Expr::UnresolvedDate { value } => self.resolve_expression_date(value, state),
