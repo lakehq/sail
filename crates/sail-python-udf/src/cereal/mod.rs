@@ -53,10 +53,10 @@ fn supports_kwargs(eval_type: spec::PySparkUdfType) -> bool {
         | PySparkUdfType::CogroupedMapPandas
         | PySparkUdfType::CogroupedMapArrow
         | PySparkUdfType::MapArrowIter
-        | PySparkUdfType::GroupedMapPandasWithState
-        | PySparkUdfType::Table
-        | PySparkUdfType::ArrowTable => false,
-        PySparkUdfType::Batched
+        | PySparkUdfType::GroupedMapPandasWithState => false,
+        PySparkUdfType::Table
+        | PySparkUdfType::ArrowTable
+        | PySparkUdfType::Batched
         | PySparkUdfType::ArrowBatched
         | PySparkUdfType::ScalarPandas
         | PySparkUdfType::GroupedAggPandas
