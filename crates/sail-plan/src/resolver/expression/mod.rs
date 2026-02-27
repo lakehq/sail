@@ -320,6 +320,10 @@ impl PlanResolver<'_> {
                 timestamp_type,
             } => self.resolve_expression_timestamp(value, timestamp_type, state),
             Expr::UnresolvedTime { value } => self.resolve_expression_time(value, state),
+            Expr::IdentifierClause { expr } => {
+                self.resolve_expression_identifier_clause(*expr, schema, state)
+                    .await
+            }
         }
     }
 

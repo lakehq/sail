@@ -702,6 +702,124 @@
           }
         }
       }
+    },
+    {
+      "input": "SELECT IDENTIFIER('a') FROM t",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "t"
+                    ],
+                    "temporal": null,
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "identifierClause": {
+                    "expr": {
+                      "literal": {
+                        "utf8": {
+                          "value": "a"
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "SELECT * FROM IDENTIFIER('my_table')",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "dynamicTable": {
+                    "name": {
+                      "literal": {
+                        "utf8": {
+                          "value": "my_table"
+                        }
+                      }
+                    },
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "planId": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "SELECT IDENTIFIER(:param) FROM t",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "t"
+                    ],
+                    "temporal": null,
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "identifierClause": {
+                    "expr": {
+                      "placeholder": ":param"
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
     }
   ]
 }

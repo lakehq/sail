@@ -112,6 +112,45 @@ impl PlanResolver<'_> {
         }
     }
 
+    pub(super) async fn resolve_query_read_dynamic_table(
+        &self,
+        table: spec::ReadDynamicTable,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let spec::ReadDynamicTable {
+            name,
+            sample,
+            options,
+        } = table;
+        let schema = Arc::new(DFSchema::empty());
+        let resolved = self.resolve_expression(name, &schema, state).await?;
+        let evaluator = LiteralEvaluator::new();
+        let scalar = evaluator.evaluate(&resolved).map_err(|e| {
+            PlanError::invalid(format!("IDENTIFIER expression must be a constant: {e}"))
+        })?;
+        let name_str = match scalar {
+            ScalarValue::Utf8(Some(s))
+            | ScalarValue::LargeUtf8(Some(s))
+            | ScalarValue::Utf8View(Some(s)) => s,
+            _ => {
+                return Err(PlanError::invalid(
+                    "IDENTIFIER expression must evaluate to a string",
+                ))
+            }
+        };
+        let name = spec::ObjectName::bare(name_str);
+        self.resolve_query_read_named_table(
+            spec::ReadNamedTable {
+                name,
+                temporal: None,
+                sample,
+                options,
+            },
+            state,
+        )
+        .await
+    }
+
     /// Apply TABLESAMPLE clause to a LogicalPlan
     pub(super) async fn apply_table_sample(
         &self,

@@ -137,6 +137,9 @@ pub enum Expr {
         value: String,
         timestamp_type: TimestampType,
     },
+    IdentifierClause {
+        expr: Box<Expr>,
+    },
 }
 
 /// An identifier with only one part.

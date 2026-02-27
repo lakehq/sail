@@ -11,6 +11,7 @@ use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_functions_nested::expr_fn::{array_element, map_extract};
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::drop_struct_field::DropStructField;
@@ -54,6 +55,31 @@ impl PlanResolver<'_> {
         let name = placeholder.clone();
         let expr = expr::Expr::Placeholder(expr::Placeholder::new_with_field(placeholder, None));
         Ok(NamedExpr::new(vec![name], expr))
+    }
+
+    pub(super) async fn resolve_expression_identifier_clause(
+        &self,
+        expr: spec::Expr,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let resolved = self.resolve_expression(expr, schema, state).await?;
+        let evaluator = LiteralEvaluator::new();
+        let scalar = evaluator.evaluate(&resolved).map_err(|e| {
+            PlanError::invalid(format!("IDENTIFIER expression must be a constant: {e}"))
+        })?;
+        let name = match scalar {
+            ScalarValue::Utf8(Some(s))
+            | ScalarValue::LargeUtf8(Some(s))
+            | ScalarValue::Utf8View(Some(s)) => s,
+            _ => {
+                return Err(PlanError::invalid(
+                    "IDENTIFIER expression must evaluate to a string",
+                ))
+            }
+        };
+        let col = expr::Expr::Column(Column::new_unqualified(name.clone()));
+        Ok(NamedExpr::new(vec![name], col))
     }
 
     pub(super) async fn resolve_expression_table(
