@@ -89,6 +89,13 @@ def any_of(*values):
     return AnyOf(*values)
 
 
+def escape_sql_identifier(s: str) -> str:
+    """Escapes a string for use as a SQL identifier enclosed in backticks.
+    Backtick characters in the raw string are replaced with two backticks.
+    """
+    return s.replace("`", "``")
+
+
 def escape_sql_string_literal(s: str) -> str:
     """Escapes a string for use in SQL literals.
     All non-ASCII characters remain unchanged,
