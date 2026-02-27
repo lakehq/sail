@@ -40,6 +40,28 @@ impl PlanResolver<'_> {
             return Err(PlanError::todo("read table AS OF clause"));
         }
 
+        // Check if the name is in the form `<format>.<path>` where `<format>` is a
+        // registered table format. In that case, treat it as a direct data source read.
+        if let [format, path] = name.parts() {
+            let format = format.as_ref().to_ascii_lowercase();
+            let registry = self.ctx.extension::<TableFormatRegistry>()?;
+            if registry.get(&format).is_ok() {
+                let source = spec::ReadDataSource {
+                    format: Some(format),
+                    schema: None,
+                    options,
+                    paths: vec![path.as_ref().to_string()],
+                    predicates: vec![],
+                };
+                let plan = self.resolve_query_read_data_source(source, state).await?;
+                return if let Some(table_sample) = sample {
+                    self.apply_table_sample(plan, table_sample, state).await
+                } else {
+                    Ok(plan)
+                };
+            }
+        }
+
         let table_reference = self.resolve_table_reference(&name)?;
         if let Some(cte) = state.get_cte(&table_reference) {
             let plan = cte.clone();

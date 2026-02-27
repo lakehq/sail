@@ -541,3 +541,32 @@ class TestBinaryDataSource:
         large_count = large_files.count()
         expected_large = sum(1 for _, content in files.values() if len(content) > min_file_size)
         assert large_count == expected_large
+
+
+class TestFormatPathSqlSyntax:
+    """Tests for the `SELECT * FROM <format>.\`<path>\`` SQL syntax."""
+
+    def test_csv_format_path(self, spark, tmp_path):
+        csv_file = tmp_path / "data.csv"
+        csv_file.write_text("id,name\n1,Alice\n2,Bob\n")
+        path = str(csv_file)
+        df = spark.sql(f"SELECT * FROM csv.`{path}`")
+        assert df.count() == 2  # noqa: PLR2004
+        assert "id" in df.columns
+        assert "name" in df.columns
+
+    def test_parquet_format_path(self, spark, sample_df, tmp_path):
+        path = str(tmp_path / "data.parquet")
+        sample_df.write.parquet(path, mode="overwrite")
+        df = spark.sql(f"SELECT * FROM parquet.`{path}`")
+        assert df.count() == sample_df.count()
+        assert sorted(df.collect(), key=safe_sort_key) == sorted(sample_df.collect(), key=safe_sort_key)
+
+    def test_json_format_path(self, spark, tmp_path):
+        json_file = tmp_path / "data.json"
+        json_file.write_text('{"id": 1, "value": "a"}\n{"id": 2, "value": "b"}\n')
+        path = str(json_file)
+        df = spark.sql(f"SELECT * FROM json.`{path}`")
+        assert df.count() == 2  # noqa: PLR2004
+        assert "id" in df.columns
+        assert "value" in df.columns
