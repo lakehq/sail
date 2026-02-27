@@ -2,15 +2,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::execution::SessionState;
-use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{internal_err, Result};
 use sail_common_datafusion::datasource::{
     MergeInfo as PhysicalMergeInfo, MergePredicateInfo, MergeTargetInfo, OperationOverride,
     TableFormatRegistry,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::physical_expr::PhysicalExprWithSource;
 use sail_logical_plan::merge::MergeIntoWriteNode;
 
 fn convert_options(options: &[Vec<(String, String)>]) -> Vec<HashMap<String, String>> {
@@ -37,14 +35,6 @@ pub async fn create_preexpanded_merge_physical_plan(
     };
 
     let format = node.options().target.format.clone();
-    let output_columns: Vec<String> = node
-        .input()
-        .schema()
-        .fields()
-        .iter()
-        .map(|f| f.name().clone())
-        .collect();
-
     // Build a structured operation override from the logical MERGE options.
     // Downstream (format-specific) writers are responsible for converting this
     // to commit log metadata (e.g. Delta commitInfo.operationParameters).
@@ -117,11 +107,6 @@ pub async fn create_preexpanded_merge_physical_plan(
 
     let info = PhysicalMergeInfo {
         target,
-        target_input: write_input.clone(),
-        source: write_input.clone(),
-        target_schema: node.input().schema().clone(),
-        source_schema: node.input().schema().clone(),
-        join_schema: Arc::new(node.input().schema().as_ref().as_arrow().clone()),
         pre_expanded: true,
         expanded_input: Some(write_input.clone()),
         touched_file_plan: if is_insert_only {
@@ -130,19 +115,6 @@ pub async fn create_preexpanded_merge_physical_plan(
         } else {
             Some(touched_plan.clone())
         },
-        on_condition: PhysicalExprWithSource::new(
-            Arc::new(Literal::new(ScalarValue::Boolean(Some(true)))),
-            Some("true".to_string()),
-        ),
-        join_keys: vec![],
-        join_filter: None,
-        target_only_filters: vec![],
-        rewrite_matched_predicates: vec![],
-        rewrite_not_matched_by_source_predicates: vec![],
-        output_columns,
-        matched_clauses: vec![],
-        not_matched_by_source_clauses: vec![],
-        not_matched_by_target_clauses: vec![],
         with_schema_evolution: node.options().with_schema_evolution,
         operation_override,
     };
