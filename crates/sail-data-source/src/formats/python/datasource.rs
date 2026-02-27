@@ -156,16 +156,21 @@ impl PythonDataSource {
                             .call_method0("schema")
                             .map_err(|e| ctx.wrap_py_error(e))?;
 
-                        // Schema should be a PyArrow Schema or DDL string
+                        // Schema should be a PyArrow Schema, PySpark DataType, or DDL string
                         // Try PyArrow Schema first
                         if let Ok(schema) = py_schema_to_rust(py, &schema_obj) {
+                            return Ok(schema);
+                        }
+
+                        // Try PySpark DataType (StructType)
+                        if let Some(schema) = self.try_pyspark_data_type_schema(py, &schema_obj, &ctx)? {
                             return Ok(schema);
                         }
 
                         // Try DDL string
                         let schema_str: String = schema_obj.extract().map_err(|e| {
                             PythonDataSourceError::SchemaError(format!(
-                                "[{}::schema] schema() must return PyArrow Schema or DDL string: {}",
+                                "[{}::schema] schema() must return PyArrow Schema, PySpark DataType, or DDL string: {}",
                                 self.name, e
                             ))
                         })?;
@@ -176,6 +181,72 @@ impl PythonDataSource {
                 })
                 .cloned()
         }
+    }
+
+    fn try_pyspark_data_type_schema(
+        &self,
+        py: Python<'_>,
+        schema_obj: &Bound<'_, PyAny>,
+        ctx: &PythonDataSourceContext,
+    ) -> Result<Option<SchemaRef>> {
+        let types_module = match py.import("pyspark.sql.types") {
+            Ok(module) => module,
+            Err(_) => return Ok(None),
+        };
+        let data_type_class = types_module
+            .getattr("DataType")
+            .map_err(|e| ctx.wrap_py_error(e))?;
+
+        let is_data_type = schema_obj
+            .is_instance(&data_type_class)
+            .map_err(|e| ctx.wrap_py_error(e))?;
+        if !is_data_type {
+            return Ok(None);
+        }
+
+        let pandas_types = py
+            .import("pyspark.sql.pandas.types")
+            .map_err(|e| ctx.wrap_py_error(e))?;
+        let to_arrow_type = pandas_types
+            .getattr("to_arrow_type")
+            .map_err(|e| ctx.wrap_py_error(e))?;
+        // TODO: pass options such as `prefers_large_types` as specified for the session
+        let arrow_type = to_arrow_type
+            .call1((schema_obj,))
+            .map_err(|e| ctx.wrap_py_error(e))?;
+
+        let pa_types = py
+            .import("pyarrow.types")
+            .map_err(|e| ctx.wrap_py_error(e))?;
+        let is_struct: bool = pa_types
+            .getattr("is_struct")
+            .map_err(|e| ctx.wrap_py_error(e))?
+            .call1((arrow_type.clone(),))
+            .map_err(|e| ctx.wrap_py_error(e))?
+            .extract()
+            .map_err(|e| ctx.wrap_py_error(e))?;
+
+        if !is_struct {
+            return Err(PythonDataSourceError::SchemaError(format!(
+                "[{}::schema] schema() DataType must be StructType to be used as a schema",
+                self.name
+            ))
+            .into());
+        }
+
+        let builtins = py.import("builtins").map_err(|e| ctx.wrap_py_error(e))?;
+        let list_fn = builtins.getattr("list").map_err(|e| ctx.wrap_py_error(e))?;
+        let fields_list = list_fn
+            .call1((arrow_type,))
+            .map_err(|e| ctx.wrap_py_error(e))?;
+        let pa = py.import("pyarrow").map_err(|e| ctx.wrap_py_error(e))?;
+        let pa_schema = pa
+            .getattr("schema")
+            .map_err(|e| ctx.wrap_py_error(e))?
+            .call1((fields_list,))
+            .map_err(|e| ctx.wrap_py_error(e))?;
+
+        Ok(Some(py_schema_to_rust(py, &pa_schema)?))
     }
 
     /// Get the number of partitions for parallel reading.
