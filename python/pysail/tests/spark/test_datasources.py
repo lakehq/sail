@@ -550,26 +550,23 @@ class TestFormatPathSqlSyntax:
 
     def test_csv_format_path(self, spark, tmp_path):
         csv_file = tmp_path / "data.csv"
-        csv_file.write_text("id,name\n1,Alice\n2,Bob\n")
-        path = escape_sql_identifier(str(csv_file))
-        df = spark.sql(f"SELECT * FROM csv.`{path}`")
+        # No header row: CSV options cannot be specified with this syntax,
+        # so column names cannot be asserted.
+        csv_file.write_text("1,Alice\n2,Bob\n")
+        df = spark.sql(f"SELECT * FROM csv.`{escape_sql_identifier(str(csv_file))}`")
         assert df.count() == 2  # noqa: PLR2004
-        assert "id" in df.columns
-        assert "name" in df.columns
 
     def test_parquet_format_path(self, spark, sample_df, tmp_path):
         path = str(tmp_path / "data.parquet")
         sample_df.write.parquet(path, mode="overwrite")
-        path = escape_sql_identifier(path)
-        df = spark.sql(f"SELECT * FROM parquet.`{path}`")
+        df = spark.sql(f"SELECT * FROM parquet.`{escape_sql_identifier(path)}`")
         assert df.count() == sample_df.count()
         assert sorted(df.collect(), key=safe_sort_key) == sorted(sample_df.collect(), key=safe_sort_key)
 
     def test_json_format_path(self, spark, tmp_path):
         json_file = tmp_path / "data.json"
         json_file.write_text('{"id": 1, "value": "a"}\n{"id": 2, "value": "b"}\n')
-        path = escape_sql_identifier(str(json_file))
-        df = spark.sql(f"SELECT * FROM json.`{path}`")
+        df = spark.sql(f"SELECT * FROM json.`{escape_sql_identifier(str(json_file))}`")
         assert df.count() == 2  # noqa: PLR2004
         assert "id" in df.columns
         assert "value" in df.columns
