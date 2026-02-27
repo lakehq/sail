@@ -457,23 +457,13 @@ mod tests {
 
         // Add two relations
         let plan1 = Arc::new(EmptyExec::new(schema.clone()));
-        let relation1 = RelationNode::new(
-            plan1,
-            0,
-            1000.0,
-            1000.0,
-            Statistics::new_unknown(&schema),
-        );
+        let relation1 =
+            RelationNode::new(plan1, 0, 1000.0, 1000.0, Statistics::new_unknown(&schema));
         graph.add_relation(relation1);
 
         let plan2 = Arc::new(EmptyExec::new(schema.clone()));
-        let relation2 = RelationNode::new(
-            plan2,
-            1,
-            2000.0,
-            2000.0,
-            Statistics::new_unknown(&schema),
-        );
+        let relation2 =
+            RelationNode::new(plan2, 1, 2000.0, 2000.0, Statistics::new_unknown(&schema));
         graph.add_relation(relation2);
 
         graph

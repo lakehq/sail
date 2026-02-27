@@ -1511,7 +1511,8 @@ mod tests {
         let mut graph = QueryGraph::new();
         for i in 0..3 {
             let plan = Arc::new(EmptyExec::new(schema.clone()));
-            let relation = RelationNode::new(plan, i, 1000.0, 1000.0, Statistics::new_unknown(&schema));
+            let relation =
+                RelationNode::new(plan, i, 1000.0, 1000.0, Statistics::new_unknown(&schema));
             graph.add_relation(relation);
         }
 
@@ -1597,7 +1598,8 @@ mod tests {
         let mut graph = QueryGraph::new();
         for i in 0..2 {
             let plan = Arc::new(EmptyExec::new(schema.clone()));
-            let relation = RelationNode::new(plan, i, 1000.0, 1000.0, Statistics::new_unknown(&schema));
+            let relation =
+                RelationNode::new(plan, i, 1000.0, 1000.0, Statistics::new_unknown(&schema));
             graph.add_relation(relation);
         }
 
