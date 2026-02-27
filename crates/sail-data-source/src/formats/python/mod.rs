@@ -28,7 +28,6 @@ mod error;
 mod exec;
 mod executor;
 mod filter;
-#[allow(clippy::module_inception)]
 mod python_datasource;
 mod python_table_provider;
 mod stream;

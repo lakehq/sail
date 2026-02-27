@@ -438,7 +438,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     fn test_scalar_to_iceberg_literal_preserves_nanoseconds() {
         let sv = ScalarValue::TimestampNanosecond(Some(123_456), None);
         let result =
@@ -448,7 +448,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     fn test_scalar_to_iceberg_literal() {
         // Int32
         let sv = ScalarValue::Int32(Some(42));
@@ -480,7 +480,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::unwrap_used, clippy::expect_used)]
+    #[expect(clippy::expect_used)]
     fn test_array_value_to_literal_retains_nanoseconds() {
         use datafusion::arrow::array::TimestampNanosecondArray;
 

@@ -48,9 +48,9 @@ fn build_proto() -> Result<(), Box<dyn std::error::Error>> {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SparkConfig {
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     spark_version: String,
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     comment: String,
     entries: Vec<SparkConfigEntry>,
 }

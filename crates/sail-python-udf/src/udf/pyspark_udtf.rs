@@ -51,7 +51,7 @@ pub struct PySparkUDTF {
 }
 
 impl PySparkUDTF {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn try_new(
         kind: PySparkUdtfKind,
         name: String,

@@ -7,7 +7,7 @@ use crate::provider::Namespace;
 
 lazy_static! {
     static ref VALID_IDENTIFIER_REGEX: Regex = {
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         Regex::new(r"^[a-zA-Z_][a-zA-Z0-9_]*$").unwrap()
     };
 }

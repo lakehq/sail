@@ -292,6 +292,7 @@ message RangeExecNode {
   int64 step = 3;
   uint64 num_partitions = 4;
   bytes schema = 5;
+  repeated uint64 projection = 6;
 }
 
 message ShowStringExecNode {
@@ -413,8 +414,7 @@ message PartialSortExecNode {
 message AppendMode {}
 message OverwriteMode {}
 message OverwriteIfMode {
-  bytes condition = 1;
-  optional string source = 2;
+  optional string source = 1;
 }
 message ErrorIfExistsMode {}
 message IgnoreIfExistsMode {}

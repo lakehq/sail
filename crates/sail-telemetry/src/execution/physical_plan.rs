@@ -201,7 +201,7 @@ impl ExecutionPlan for TracingExec {
         self.inner.metrics()
     }
 
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     fn statistics(&self) -> Result<Statistics> {
         self.inner.statistics()
     }

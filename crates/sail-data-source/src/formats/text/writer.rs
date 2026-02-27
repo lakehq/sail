@@ -101,7 +101,7 @@ impl<W: Write> TextWriter<W> {
         Ok(())
     }
 
-    #[allow(unused)]
+    #[expect(unused)]
     fn into_inner(self) -> W {
         self.writer
     }
