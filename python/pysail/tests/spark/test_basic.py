@@ -1,11 +1,10 @@
 import pandas as pd
-import pyspark
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql.types import IntegerType, Row, StringType, StructField, StructType
 
-from pysail.tests.spark.utils import is_jvm_spark
+from pysail.tests.spark.utils import is_jvm_spark, pyspark_version
 
 
 @pytest.fixture(scope="module")
@@ -391,8 +390,8 @@ def test_sql_parameters(spark):
 
 
 @pytest.mark.skipif(
-    int(pyspark.__version__.split(".")[0]) < 4,  # noqa: PLR2004
-    reason="DataFrame arguments in spark.sql() require PySpark 4+",
+    pyspark_version() < (4,),
+    reason="DataFrame arguments in spark.sql() require Spark 4+",
 )
 def test_sql_dataframe_argument(spark):
     df = spark.range(10)
