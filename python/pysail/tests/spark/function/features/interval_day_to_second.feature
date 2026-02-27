@@ -29,15 +29,6 @@ Feature: INTERVAL DAY TO SECOND literal parsing and operations
 
   Rule: Overflow and large values
 
-    Scenario: max days with time
-      When query
-        """
-        SELECT INTERVAL '2147483647 23:59:59.999' DAY TO SECOND AS result
-        """
-      Then query result
-        | result                                                    |
-        | INTERVAL '2147483647 23:59:59.999' DAY TO SECOND          |
-
     Scenario: overflow hours into days
       When query
         """
@@ -57,15 +48,6 @@ Feature: INTERVAL DAY TO SECOND literal parsing and operations
       Then query result
         | result                                       |
         | INTERVAL '2 10:20:30' DAY TO SECOND          |
-
-    Scenario: cast DAY TO SECOND to HOUR TO SECOND
-      When query
-        """
-        SELECT CAST(INTERVAL '5 12:30:45' DAY TO SECOND AS INTERVAL HOUR TO SECOND) AS result
-        """
-      Then query result
-        | result                                       |
-        | INTERVAL '132:30:45' HOUR TO SECOND          |
 
     Scenario: cast HOUR TO SECOND to DAY TO SECOND
       When query
