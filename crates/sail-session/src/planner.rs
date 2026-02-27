@@ -21,8 +21,8 @@ use sail_common_datafusion::rename::physical_plan::rename_projected_physical_pla
 use sail_common_datafusion::streaming::event::schema::{
     to_flow_event_field_names, to_flow_event_projection,
 };
-use sail_execution::plan::CacheReadExec;
 use sail_delta_lake::logical::RewriteDeltaTableSource;
+use sail_execution::plan::CacheReadExec;
 use sail_logical_plan::file_delete::FileDeleteNode;
 use sail_logical_plan::file_write::FileWriteNode;
 use sail_logical_plan::in_memory_relation::InMemoryRelationNode;
