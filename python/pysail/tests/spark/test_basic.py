@@ -1,4 +1,5 @@
 import pandas as pd
+import pyspark
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pandas.testing import assert_frame_equal
@@ -389,6 +390,10 @@ def test_sql_parameters(spark):
     assert_frame_equal(actual, expected)
 
 
+@pytest.mark.skipif(
+    int(pyspark.__version__.split(".")[0]) < 4,  # noqa: PLR2004
+    reason="DataFrame arguments in spark.sql() require PySpark 4+",
+)
 def test_sql_dataframe_argument(spark):
     df = spark.range(10)
     actual = spark.sql(
