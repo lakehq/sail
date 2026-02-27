@@ -39,12 +39,34 @@ impl PlanResolver<'_> {
             order_by,
         } = function;
 
+        if !named_arguments.is_empty() {
+            // Merge named arguments into the positional argument list.
+            // Named arguments are appended in the order they were provided.
+            let mut all_arguments = arguments;
+            for (_name, expr) in named_arguments {
+                all_arguments.push(expr);
+            }
+            return Box::pin(self.resolve_expression_function(
+                spec::UnresolvedFunction {
+                    function_name,
+                    arguments: all_arguments,
+                    named_arguments: vec![],
+                    is_distinct,
+                    is_user_defined_function: false,
+                    is_internal: None,
+                    ignore_nulls,
+                    filter,
+                    order_by,
+                },
+                schema,
+                state,
+            ))
+            .await;
+        }
+
         let Ok(function_name) = <Vec<String>>::from(function_name).one() else {
             return Err(PlanError::unsupported("qualified function name"));
         };
-        if !named_arguments.is_empty() {
-            return Err(PlanError::todo("named function arguments"));
-        }
         let canonical_function_name = function_name.to_ascii_lowercase();
         if let Ok(udf) = self.ctx.udf(&canonical_function_name) {
             if udf.inner().as_any().is::<PySparkUnresolvedUDF>() {

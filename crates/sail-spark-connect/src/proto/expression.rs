@@ -63,20 +63,34 @@ impl TryFrom<Expression> for spec::Expr {
                 is_distinct,
                 is_user_defined_function,
                 is_internal,
-            }) => Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-                function_name: spec::ObjectName::bare(function_name),
-                arguments: arguments
-                    .into_iter()
-                    .map(|x| x.try_into())
-                    .collect::<SparkResult<_>>()?,
-                named_arguments: vec![],
-                is_distinct,
-                is_user_defined_function,
-                is_internal,
-                ignore_nulls: None,
-                filter: None,
-                order_by: None,
-            })),
+            }) => {
+                let mut positional_arguments = Vec::new();
+                let mut named_arguments = Vec::new();
+                for arg in arguments {
+                    let Expression { common, expr_type } = arg;
+                    match expr_type {
+                        Some(ExprType::NamedArgumentExpression(named)) => {
+                            let value = named.value.required("named argument value")?;
+                            named_arguments
+                                .push((spec::Identifier::from(named.key), (*value).try_into()?));
+                        }
+                        _ => {
+                            positional_arguments.push(Expression { common, expr_type }.try_into()?);
+                        }
+                    }
+                }
+                Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                    function_name: spec::ObjectName::bare(function_name),
+                    arguments: positional_arguments,
+                    named_arguments,
+                    is_distinct,
+                    is_user_defined_function,
+                    is_internal,
+                    ignore_nulls: None,
+                    filter: None,
+                    order_by: None,
+                }))
+            }
             ExprType::ExpressionString(ExpressionString { expression }) => {
                 let expr = parse_expression(expression.as_str())
                     .and_then(from_ast_expression)
@@ -235,8 +249,9 @@ impl TryFrom<Expression> for spec::Expr {
                         .collect::<SparkResult<_>>()?,
                 })
             }
-            ExprType::NamedArgumentExpression(_) => {
-                Err(SparkError::todo("named argument expression"))
+            ExprType::NamedArgumentExpression(named) => {
+                let value = named.value.required("named argument value")?;
+                (*value).try_into()
             }
             ExprType::MergeAction(_) => Err(SparkError::todo("merge action expression")),
             ExprType::TypedAggregateExpression(_) => {
@@ -519,9 +534,9 @@ impl TryFrom<udtf::Function> for spec::TableFunctionDefinition {
                 command,
                 python_ver,
             }) => {
-                let return_type = return_type.required("Python UDTF return type")?;
+                let return_type = return_type.map(|rt| rt.try_into()).transpose()?;
                 Ok(spec::TableFunctionDefinition::PythonUdtf {
-                    return_type: return_type.try_into()?,
+                    return_type,
                     eval_type: spec::PySparkUdfType::try_from(eval_type)?,
                     command,
                     python_version: python_ver,

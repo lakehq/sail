@@ -63,6 +63,16 @@ impl PySparkUdtfPayload {
             }
         }
 
+        // PySpark 4.1+ reads input_types for SQL_ARROW_TABLE_UDF after the config block.
+        // We write an empty StructType since input_types is only used for legacy pandas conversion.
+        if matches!(pyspark_version, PySparkVersion::V4_1)
+            && eval_type == spec::PySparkUdfType::ArrowTable
+        {
+            let input_types_json = r#"{"type":"struct","fields":[]}"#;
+            data.extend((input_types_json.len() as i32).to_be_bytes());
+            data.extend(input_types_json.as_bytes());
+        }
+
         let num_args: i32 = num_args
             .try_into()
             .map_err(|e| PyUdfError::invalid(format!("num_args: {e}")))?;
@@ -70,12 +80,12 @@ impl PySparkUdtfPayload {
         for index in 0..num_args {
             // TODO: support keyword arguments
             data.extend(index.to_be_bytes()); // argument offset
-            if matches!(pyspark_version, PySparkVersion::V4) {
+            if pyspark_version.is_v4() {
                 data.extend(0u8.to_be_bytes()); // not a keyword argument
             }
         }
 
-        if matches!(pyspark_version, PySparkVersion::V4) {
+        if pyspark_version.is_v4() {
             data.extend(0i32.to_be_bytes()); // number of partition child indexes
             data.extend(0u8.to_be_bytes()); // pickled analyze result is not present
         }
@@ -95,7 +105,7 @@ impl PySparkUdtfPayload {
         data.extend((type_string.len() as u32).to_be_bytes());
         data.extend(type_string.as_bytes());
 
-        if matches!(pyspark_version, PySparkVersion::V4) {
+        if pyspark_version.is_v4() {
             // TODO: support UDTF name
             data.extend(0u32.to_be_bytes()); // length of UDTF name
         }
