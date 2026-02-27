@@ -68,12 +68,12 @@ impl PlanResolver<'_> {
                 plan_id: None,
                 is_metadata_column: false,
             } => spec::QueryPlan::new(spec::QueryNode::Read {
-                read_type: spec::ReadType::NamedTable(spec::ReadNamedTable {
+                read_type: spec::ReadType::NamedTable(Box::new(spec::ReadNamedTable {
                     name,
                     temporal: None,
                     sample: None,
                     options: vec![],
-                }),
+                })),
                 is_streaming: false,
             }),
             _ => {

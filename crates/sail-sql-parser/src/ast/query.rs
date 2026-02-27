@@ -79,10 +79,8 @@ pub struct IdentList {
 }
 
 #[derive(Debug, Clone, TreeSyntax, TreeText)]
-#[expect(clippy::large_enum_variant)]
 pub enum QueryBody {
-    // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
-    Term(QueryTerm),
+    Term(Box<QueryTerm>),
     SetOperation {
         left: Box<QueryBody>,
         operator: SetOperator,
@@ -106,7 +104,8 @@ where
         options: &'a ParserOptions,
     ) -> impl Parser<'a, I, Self, E> + Clone {
         let quantifier = SetQuantifier::parser((), options).or_not();
-        let term = QueryTerm::parser((query, expr, table_with_joins), options).map(QueryBody::Term);
+        let term = QueryTerm::parser((query, expr, table_with_joins), options)
+            .map(|t| QueryBody::Term(Box::new(t)));
         term.pratt((
             infix(
                 left(2),
@@ -158,10 +157,8 @@ pub enum SetQuantifier {
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "(Query, Expr, TableWithJoins)")]
-#[expect(clippy::large_enum_variant)]
 pub enum QueryTerm {
-    // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
-    Select(#[parser(function = |(q, e, t), o| compose((q, e, t), o))] QuerySelect),
+    Select(#[parser(function = |(q, e, t), o| boxed(compose((q, e, t), o)))] Box<QuerySelect>),
     Table(Table, ObjectName),
     Values(#[parser(function = |(_, e, _), o| compose(e, o))] ValuesClause),
     Nested(
@@ -257,7 +254,6 @@ pub struct TableWithJoins {
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "(Query, Expr, TableWithJoins)")]
-#[expect(clippy::large_enum_variant)]
 pub enum TableFactor {
     Values {
         #[parser(function = |(_, e, _), o| compose(e, o))]
@@ -269,8 +265,8 @@ pub enum TableFactor {
         #[parser(function = |(q, _, _), _| q)]
         query: Query,
         right: RightParenthesis,
-        #[parser(function = |(_, e, _), o| compose(e, o))]
-        sample: Option<TableSampleClause>,
+        #[parser(function = |(_, e, _), o| boxed(compose(e, o)).or_not())]
+        sample: Option<Box<TableSampleClause>>,
         #[parser(function = |(_, e, _), o| compose(e, o))]
         modifiers: Vec<TableModifier>,
         alias: Option<AliasClause>,
@@ -291,11 +287,10 @@ pub enum TableFactor {
     },
     Name {
         name: ObjectName,
-        #[parser(function = |(_, e, _), o| compose(e, o))]
-        temporal: Option<TemporalClause>,
-        // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
-        #[parser(function = |(_, e, _), o| compose(e, o))]
-        sample: Option<TableSampleClause>,
+        #[parser(function = |(_, e, _), o| boxed(compose(e, o)).or_not())]
+        temporal: Option<Box<TemporalClause>>,
+        #[parser(function = |(_, e, _), o| boxed(compose(e, o)).or_not())]
+        sample: Option<Box<TableSampleClause>>,
         #[parser(function = |(_, e, _), o| compose(e, o))]
         modifiers: Vec<TableModifier>,
         alias: Option<AliasClause>,
@@ -589,11 +584,9 @@ pub struct LimitClause {
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "Expr")]
-#[expect(clippy::large_enum_variant)]
 pub enum LimitValue {
     All(All),
-    // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
-    Value(#[parser(function = |e, _| e)] Expr),
+    Value(#[parser(function = |e, _| boxed(e))] Box<Expr>),
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]

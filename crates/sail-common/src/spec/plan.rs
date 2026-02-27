@@ -601,12 +601,10 @@ pub enum MergeNotMatchedByTargetAction {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
-#[expect(clippy::large_enum_variant)]
 pub enum ReadType {
-    // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
-    NamedTable(ReadNamedTable),
-    Udtf(ReadUdtf),
-    DataSource(ReadDataSource),
+    NamedTable(Box<ReadNamedTable>),
+    Udtf(Box<ReadUdtf>),
+    DataSource(Box<ReadDataSource>),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
