@@ -18,6 +18,29 @@ pub struct StableColumn {
     pub name: String,
 }
 
+impl StableColumn {
+    /// Build the canonical stable-column name used across join reordering.
+    pub fn format_stable_name(relation_id: usize, column_index: usize) -> String {
+        format!("R{}.C{}", relation_id, column_index)
+    }
+
+    /// Parse a stable-column name like "R{rel}.C{col}" -> (rel, col).
+    pub fn parse_stable_name(name: &str) -> Option<(usize, usize)> {
+        if !name.starts_with('R') {
+            return None;
+        }
+        let dot = name.find('.')?;
+        let rel_str = &name[1..dot];
+        if !name[dot + 1..].starts_with('C') {
+            return None;
+        }
+        let col_str = &name[dot + 2..];
+        let rel = rel_str.parse::<usize>().ok()?;
+        let col = col_str.parse::<usize>().ok()?;
+        Some((rel, col))
+    }
+}
+
 // NOTE: `name` is for display/debugging only and must not participate in identity.
 // Join reordering uses StableColumn as a key in HashMaps/Sets. Column names can vary
 // (projection aliases, empty placeholder names, etc.) while (relation_id, column_index)
@@ -559,6 +582,18 @@ mod tests {
         )]));
         let plan = Arc::new(EmptyExec::new(schema.clone()));
         RelationNode::new(plan, id, 1000.0, 1000.0, Statistics::new_unknown(&schema))
+    }
+
+    #[test]
+    fn test_stable_name_round_trip() {
+        let samples = [(0usize, 0usize), (1, 3), (12, 99), (63, 7)];
+        for (relation_id, column_index) in samples {
+            let stable = StableColumn::format_stable_name(relation_id, column_index);
+            assert_eq!(
+                StableColumn::parse_stable_name(&stable),
+                Some((relation_id, column_index))
+            );
+        }
     }
 
     #[test]

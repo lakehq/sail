@@ -356,6 +356,8 @@ impl CardinalityEstimator {
         }
 
         // Multiply the domains of each distinct equivalence set used by this edge.
+        // This assumes key components are roughly independent; correlated multi-column keys can
+        // make this overestimate selectivity. The cap by `min_base_card` below keeps it bounded.
         let mut tdom_product = 1.0;
         for idx in used_equiv_sets {
             let tdom = self

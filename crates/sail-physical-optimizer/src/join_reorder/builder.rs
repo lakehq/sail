@@ -269,22 +269,6 @@ impl GraphBuilder {
         Ok(output_map)
     }
 
-    /// Parse stable column name like "R{rel}.C{col}" -> (rel, col)
-    fn parse_stable_name(name: &str) -> Option<(usize, usize)> {
-        if !name.starts_with('R') {
-            return None;
-        }
-        let dot = name.find('.')?;
-        let rel_str = &name[1..dot];
-        if !name[dot + 1..].starts_with('C') {
-            return None;
-        }
-        let col_str = &name[dot + 2..];
-        let rel = rel_str.parse::<usize>().ok()?;
-        let col = col_str.parse::<usize>().ok()?;
-        Some((rel, col))
-    }
-
     fn decompose_conjuncts(expr: &Arc<dyn PhysicalExpr>) -> Vec<Arc<dyn PhysicalExpr>> {
         let mut result = Vec::new();
         if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>() {
@@ -342,7 +326,7 @@ impl GraphBuilder {
 
         for c in &cols {
             // Prefer parsing stable names if present.
-            if let Some((rel, _cidx)) = Self::parse_stable_name(c.name()) {
+            if let Some((rel, _cidx)) = StableColumn::parse_stable_name(c.name()) {
                 bits |= 1u64 << rel;
                 continue;
             }
@@ -397,7 +381,7 @@ impl GraphBuilder {
     ) -> Result<()> {
         let cols = collect_columns(expr);
         for c in &cols {
-            if let Some((rel, _)) = Self::parse_stable_name(c.name()) {
+            if let Some((rel, _)) = StableColumn::parse_stable_name(c.name()) {
                 *bits |= 1u64 << rel;
                 continue;
             }
@@ -493,9 +477,8 @@ impl GraphBuilder {
                     column_index,
                 }) = stable_entry_opt.cloned()
                 {
-                    // Build a stable name like R{relation_id}.C{column_index}
-                    // TODO: Consider implement PhysicalExpr trait for StableColumn.
-                    let stable_name = format!("R{}.C{}", relation_id, column_index);
+                    // Build the canonical stable name used by dependency analysis.
+                    let stable_name = StableColumn::format_stable_name(relation_id, column_index);
                     // TODO: Reconstructor will retarget indices to its compact schema
                     let new_col = Column::new(&stable_name, 0);
                     return Ok(Transformed::yes(Arc::new(new_col) as Arc<dyn PhysicalExpr>));
@@ -538,6 +521,14 @@ impl GraphBuilder {
     }
 
     fn create_relation_node(&mut self, plan: Arc<dyn ExecutionPlan>) -> Result<ColumnMap> {
+        if self.graph.relation_count() >= MAX_RELATIONS {
+            return Err(DataFusionError::Internal(format!(
+                "JoinReorder: relation_count {} reached MAX_RELATIONS {}",
+                self.graph.relation_count(),
+                MAX_RELATIONS
+            )));
+        }
+
         // Assign new relation_id
         let relation_id = self.relation_counter;
         self.relation_counter += 1;
@@ -549,7 +540,8 @@ impl GraphBuilder {
         // datasource stats (e.g., Parquet), and apply the filter's selectivity as a penalty
         // factor to initial cardinality.
         let (stats, initial_cardinality, base_cardinality) = if plan.as_any().is::<FilterExec>() {
-            // NOTE: We still keep FilterExec as the boundary leaf (strategy A), but we must avoid
+            // NOTE: We still keep FilterExec as the boundary leaf (filter-boundary strategy), but
+            // we must avoid
             // an inconsistent stats state where num_rows is "post-filter" while distinct_count
             // (and thus TDom) remains "pre-filter". That mismatch can cause greedy join ordering
             // to prefer catastrophic NLJs.
@@ -715,7 +707,9 @@ impl GraphBuilder {
             Operator::Or => {
                 let l = self.estimate_selectivity_from_stats(bin.left(), schema, input_stats)?;
                 let r = self.estimate_selectivity_from_stats(bin.right(), schema, input_stats)?;
-                // Independence assumption: P(A ∪ B) = P(A) + P(B) - P(A)P(B)
+                // Independence assumption: P(A ∪ B) = P(A) + P(B) - P(A)P(B).
+                // This can misestimate correlated predicates (e.g. `x > 10 OR x > 5`), but is
+                // still a reasonable fallback when we do not have correlation statistics.
                 Some((l + r - l * r).clamp(0.0, 1.0))
             }
             Operator::Eq | Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq => {
@@ -1372,7 +1366,7 @@ mod tests {
         assert_eq!(builder.graph.relation_count(), 1);
 
         let rel = &builder.graph.relations[0];
-        // Keep the boundary plan as FilterExec (structural behavior unchanged for strategy A).
+        // Keep FilterExec as the boundary leaf (filter-boundary strategy).
         assert_eq!(rel.plan.name(), "FilterExec");
 
         // Statistics should reflect the estimated selectivity.

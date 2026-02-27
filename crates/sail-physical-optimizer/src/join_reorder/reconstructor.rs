@@ -14,6 +14,7 @@ use datafusion::physical_plan::joins::{
 };
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_plan::ExecutionPlan;
+use log::warn;
 
 use crate::join_reorder::builder::{ColumnMap, ColumnMapEntry};
 use crate::join_reorder::dp_plan::{DPPlan, PlanType};
@@ -114,7 +115,7 @@ impl<'a> PlanReconstructor<'a> {
         let cols = collect_columns(expr);
         for c in &cols {
             // Prefer stable names if they are already present.
-            if let Some((rel, col_idx)) = Self::parse_stable_name(c.name()) {
+            if let Some((rel, col_idx)) = StableColumn::parse_stable_name(c.name()) {
                 out.insert((rel, col_idx));
                 continue;
             }
@@ -166,24 +167,24 @@ impl<'a> PlanReconstructor<'a> {
                     })?;
 
                     for (a, b) in &edge.equi_pairs {
-                        if (left_set.bits() & (1u64 << a.relation_id)) != 0 {
+                        if Self::join_set_contains_relation(left_set, a.relation_id) {
                             req_left.insert((a.relation_id, a.column_index));
-                        } else if (right_set.bits() & (1u64 << a.relation_id)) != 0 {
+                        } else if Self::join_set_contains_relation(right_set, a.relation_id) {
                             req_right.insert((a.relation_id, a.column_index));
                         }
-                        if (left_set.bits() & (1u64 << b.relation_id)) != 0 {
+                        if Self::join_set_contains_relation(left_set, b.relation_id) {
                             req_left.insert((b.relation_id, b.column_index));
-                        } else if (right_set.bits() & (1u64 << b.relation_id)) != 0 {
+                        } else if Self::join_set_contains_relation(right_set, b.relation_id) {
                             req_right.insert((b.relation_id, b.column_index));
                         }
                     }
 
                     // Best-effort: add stable columns referenced in the filter expression.
                     for c in collect_columns(&edge.filter) {
-                        if let Some((rel, col_idx)) = Self::parse_stable_name(c.name()) {
-                            if (left_set.bits() & (1u64 << rel)) != 0 {
+                        if let Some((rel, col_idx)) = StableColumn::parse_stable_name(c.name()) {
+                            if Self::join_set_contains_relation(left_set, rel) {
                                 req_left.insert((rel, col_idx));
-                            } else if (right_set.bits() & (1u64 << rel)) != 0 {
+                            } else if Self::join_set_contains_relation(right_set, rel) {
                                 req_right.insert((rel, col_idx));
                             }
                         }
@@ -204,25 +205,64 @@ impl<'a> PlanReconstructor<'a> {
     ) -> HashSet<(usize, usize)> {
         required
             .iter()
-            .filter(|(rel, _)| (join_set.bits() & (1u64 << *rel)) != 0)
+            .filter(|(rel, _)| Self::join_set_contains_relation(join_set, *rel))
             .cloned()
             .collect()
     }
 
-    /// Parse stable column name like "R{rel}.C{col}" -> (rel, col)
-    fn parse_stable_name(name: &str) -> Option<(usize, usize)> {
-        if !name.starts_with('R') {
+    #[inline]
+    fn relation_bit(relation_id: usize) -> u64 {
+        debug_assert!(
+            relation_id < u64::BITS as usize,
+            "relation_id {} must be < {} to fit in JoinSet bitmap",
+            relation_id,
+            u64::BITS
+        );
+        1u64 << relation_id
+    }
+
+    #[inline]
+    fn join_set_contains_relation(join_set: &JoinSet, relation_id: usize) -> bool {
+        (join_set.bits() & Self::relation_bit(relation_id)) != 0
+    }
+
+    fn compute_required_projection(
+        &self,
+        join_set: JoinSet,
+        column_map: &ColumnMap,
+    ) -> Option<Vec<usize>> {
+        let required = self.required_output_cols.get(&join_set)?;
+        let keep: Vec<usize> = column_map
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| match e {
+                ColumnMapEntry::Stable {
+                    relation_id,
+                    column_index,
+                } => required
+                    .contains(&(*relation_id, *column_index))
+                    .then_some(i),
+                ColumnMapEntry::Expression { .. } => None,
+            })
+            .collect();
+
+        if keep.is_empty() {
+            if !required.is_empty() && !column_map.is_empty() {
+                warn!(
+                    "JoinReorder: required columns resolved to empty projection for join_set bits={:#x} (required={}, columns={})",
+                    join_set.bits(),
+                    required.len(),
+                    column_map.len()
+                );
+                debug_assert!(
+                    required.is_empty() || column_map.is_empty(),
+                    "non-empty required columns should not produce empty projection indices"
+                );
+            }
             return None;
         }
-        let dot = name.find('.')?;
-        let rel_str = &name[1..dot];
-        if !name[dot + 1..].starts_with('C') {
-            return None;
-        }
-        let col_str = &name[dot + 2..];
-        let rel = rel_str.parse::<usize>().ok()?;
-        let col = col_str.parse::<usize>().ok()?;
-        Some((rel, col))
+
+        (keep.len() < column_map.len()).then_some(keep)
     }
 
     /// Main entry point: recursively reconstruct ExecutionPlan from DPPlan
@@ -297,33 +337,17 @@ impl<'a> PlanReconstructor<'a> {
             .collect();
 
         // Apply leaf projection if required columns were precomputed.
-        if let Some(required) = self.required_output_cols.get(&join_set) {
-            let keep: Vec<usize> = column_map
+        if let Some(keep) = self.compute_required_projection(join_set, &column_map) {
+            let exprs: Vec<ProjectionExpr> = keep
                 .iter()
-                .enumerate()
-                .filter_map(|(i, e)| match e {
-                    ColumnMapEntry::Stable {
-                        relation_id,
-                        column_index,
-                    } => required
-                        .contains(&(*relation_id, *column_index))
-                        .then_some(i),
-                    ColumnMapEntry::Expression { .. } => None,
+                .map(|&i| ProjectionExpr {
+                    expr: Arc::new(Column::new(plan.schema().field(i).name(), i)),
+                    alias: plan.schema().field(i).name().to_string(),
                 })
                 .collect();
-
-            if !keep.is_empty() && keep.len() < column_map.len() {
-                let exprs: Vec<ProjectionExpr> = keep
-                    .iter()
-                    .map(|&i| ProjectionExpr {
-                        expr: Arc::new(Column::new(plan.schema().field(i).name(), i)),
-                        alias: plan.schema().field(i).name().to_string(),
-                    })
-                    .collect();
-                let proj = ProjectionExec::try_new(exprs, plan)?;
-                plan = Arc::new(proj);
-                column_map = keep.into_iter().map(|i| column_map[i].clone()).collect();
-            }
+            let proj = ProjectionExec::try_new(exprs, plan)?;
+            plan = Arc::new(proj);
+            column_map = keep.into_iter().map(|i| column_map[i].clone()).collect();
         }
 
         Ok((plan, column_map))
@@ -345,12 +369,17 @@ impl<'a> PlanReconstructor<'a> {
             DataFusionError::Internal("Right subplan not found in DP table".to_string())
         })?;
 
-        let (build_set, probe_set, build_dp, probe_dp) =
-            if left_dp_plan.cardinality <= right_dp_plan.cardinality {
-                (left_set, right_set, left_dp_plan, right_dp_plan)
-            } else {
-                (right_set, left_set, right_dp_plan, left_dp_plan)
-            };
+        // Determine join type from edge information before deciding whether we can swap sides.
+        let join_type = self.determine_join_type(edge_indices)?;
+
+        // Build/probe side reordering is semantics-preserving only for inner joins.
+        let should_swap_for_build =
+            join_type == JoinType::Inner && left_dp_plan.cardinality > right_dp_plan.cardinality;
+        let (build_set, probe_set, build_dp, probe_dp) = if should_swap_for_build {
+            (right_set, left_set, right_dp_plan, left_dp_plan)
+        } else {
+            (left_set, right_set, left_dp_plan, right_dp_plan)
+        };
 
         // Recursively reconstruct build and probe subplans
         let (build_plan, build_map) = self.reconstruct(build_dp)?;
@@ -365,8 +394,10 @@ impl<'a> PlanReconstructor<'a> {
             &probe_plan,
         )?;
 
-        // Determine join type from edge information
-        let join_type = self.determine_join_type(edge_indices)?;
+        debug_assert!(
+            !should_swap_for_build || join_type == JoinType::Inner,
+            "JoinReorder must only swap build/probe sides for inner joins"
+        );
 
         // Build join filter for non-equi conditions
         let join_filter = self.build_join_filter(
@@ -382,6 +413,7 @@ impl<'a> PlanReconstructor<'a> {
         // Merge left and right ColumnMap to create output ColumnMap for new Join plan
         let mut join_output_map = build_map;
         join_output_map.extend(probe_map);
+        let projection = self.compute_required_projection(current_join_set, &join_output_map);
 
         // If there are no connecting edges, this is a cartesian product. HashJoinExec does not
         // support empty join keys; use CrossJoinExec instead to avoid optimizer-stage crashes.
@@ -389,26 +421,6 @@ impl<'a> PlanReconstructor<'a> {
             if let Some(join_filter) = join_filter {
                 // Theta join: no equi-join pairs were reconstructed, but we have a join predicate.
                 // Use NestedLoopJoinExec which supports joins without equi-keys.
-                let mut projection: Option<Vec<usize>> = None;
-                if let Some(required) = self.required_output_cols.get(&current_join_set) {
-                    let keep: Vec<usize> = join_output_map
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(i, e)| match e {
-                            ColumnMapEntry::Stable {
-                                relation_id,
-                                column_index,
-                            } => required
-                                .contains(&(*relation_id, *column_index))
-                                .then_some(i),
-                            ColumnMapEntry::Expression { .. } => None,
-                        })
-                        .collect();
-                    if !keep.is_empty() && keep.len() < join_output_map.len() {
-                        projection = Some(keep);
-                    }
-                }
-
                 let join_plan = Arc::new(NestedLoopJoinExec::try_new(
                     build_plan,
                     probe_plan,
@@ -427,57 +439,22 @@ impl<'a> PlanReconstructor<'a> {
             }
             let join_plan = Arc::new(CrossJoinExec::new(build_plan, probe_plan));
             // CrossJoinExec does not support a built-in projection; wrap with ProjectionExec if needed.
-            if let Some(required) = self.required_output_cols.get(&current_join_set) {
-                let keep: Vec<usize> = join_output_map
+            if let Some(keep) = projection.clone() {
+                let exprs: Vec<ProjectionExpr> = keep
                     .iter()
-                    .enumerate()
-                    .filter_map(|(i, e)| match e {
-                        ColumnMapEntry::Stable {
-                            relation_id,
-                            column_index,
-                        } => required
-                            .contains(&(*relation_id, *column_index))
-                            .then_some(i),
-                        ColumnMapEntry::Expression { .. } => None,
+                    .map(|&i| ProjectionExpr {
+                        expr: Arc::new(Column::new(join_plan.schema().field(i).name(), i)),
+                        alias: join_plan.schema().field(i).name().to_string(),
                     })
                     .collect();
-                if !keep.is_empty() && keep.len() < join_output_map.len() {
-                    let exprs: Vec<ProjectionExpr> = keep
-                        .iter()
-                        .map(|&i| ProjectionExpr {
-                            expr: Arc::new(Column::new(join_plan.schema().field(i).name(), i)),
-                            alias: join_plan.schema().field(i).name().to_string(),
-                        })
-                        .collect();
-                    let proj = Arc::new(ProjectionExec::try_new(exprs, join_plan)?);
-                    join_output_map = keep
-                        .into_iter()
-                        .map(|i| join_output_map[i].clone())
-                        .collect();
-                    return Ok((proj, join_output_map));
-                }
+                let proj = Arc::new(ProjectionExec::try_new(exprs, join_plan)?);
+                join_output_map = keep
+                    .into_iter()
+                    .map(|i| join_output_map[i].clone())
+                    .collect();
+                return Ok((proj, join_output_map));
             }
             return Ok((join_plan, join_output_map));
-        }
-
-        let mut projection: Option<Vec<usize>> = None;
-        if let Some(required) = self.required_output_cols.get(&current_join_set) {
-            let keep: Vec<usize> = join_output_map
-                .iter()
-                .enumerate()
-                .filter_map(|(i, e)| match e {
-                    ColumnMapEntry::Stable {
-                        relation_id,
-                        column_index,
-                    } => required
-                        .contains(&(*relation_id, *column_index))
-                        .then_some(i),
-                    ColumnMapEntry::Expression { .. } => None,
-                })
-                .collect();
-            if !keep.is_empty() && keep.len() < join_output_map.len() {
-                projection = Some(keep);
-            }
         }
 
         // Otherwise, create HashJoinExec
@@ -693,7 +670,7 @@ impl<'a> PlanReconstructor<'a> {
 
         // Find side and base index for a column, supporting stable names and schema field names
         let find_side_and_index = |col: &Column| -> Result<Option<(JoinSide, usize)>> {
-            if let Some((rel, cidx)) = Self::parse_stable_name(col.name()) {
+            if let Some((rel, cidx)) = StableColumn::parse_stable_name(col.name()) {
                 // Look up in left_map by stable, else right_map
                 if let Some(pos) = left_map.iter().position(|e| matches!(e, ColumnMapEntry::Stable{ relation_id, column_index } if *relation_id==rel && *column_index==cidx)) {
                     return Ok(Some((JoinSide::Left, pos)));
@@ -826,7 +803,7 @@ impl<'a> PlanReconstructor<'a> {
         let transformed = expr_arc.transform(|node| {
             if let Some(col) = node.as_any().downcast_ref::<Column>() {
                 // Prefer stable name mapping first
-                if let Some((rel, cidx)) = self.parse_stable_column_name(col.name()) {
+                if let Some((rel, cidx)) = StableColumn::parse_stable_name(col.name()) {
                     if let Some(pos) = output_map.iter().position(|e| {
                         matches!(
                             e,
@@ -885,8 +862,8 @@ impl<'a> PlanReconstructor<'a> {
         let cols = collect_columns(expr);
         for c in &cols {
             // If the expression already uses stable names, prefer that.
-            if let Some((rel, _)) = Self::parse_stable_name(c.name()) {
-                *bits |= 1u64 << rel;
+            if let Some((rel, _)) = StableColumn::parse_stable_name(c.name()) {
+                *bits |= Self::relation_bit(rel);
                 continue;
             }
 
@@ -900,7 +877,7 @@ impl<'a> PlanReconstructor<'a> {
 
             match entry {
                 ColumnMapEntry::Stable { relation_id, .. } => {
-                    *bits |= 1u64 << *relation_id;
+                    *bits |= Self::relation_bit(*relation_id);
                 }
                 ColumnMapEntry::Expression { expr, input_map } => {
                     self.add_relation_bits_from_expr(expr, input_map, bits)?;
@@ -921,8 +898,8 @@ impl<'a> PlanReconstructor<'a> {
         let mut bits: u64 = 0;
         let cols = collect_columns(predicate);
         for c in &cols {
-            if let Some((rel, _)) = Self::parse_stable_name(c.name()) {
-                bits |= 1u64 << rel;
+            if let Some((rel, _)) = StableColumn::parse_stable_name(c.name()) {
+                bits |= Self::relation_bit(rel);
                 continue;
             }
             let mut matched = false;
@@ -930,7 +907,7 @@ impl<'a> PlanReconstructor<'a> {
                 if f.name() == c.name() {
                     match left_map.get(i) {
                         Some(ColumnMapEntry::Stable { relation_id, .. }) => {
-                            bits |= 1u64 << *relation_id;
+                            bits |= Self::relation_bit(*relation_id);
                             matched = true;
                             break;
                         }
@@ -950,7 +927,7 @@ impl<'a> PlanReconstructor<'a> {
                 if f.name() == c.name() {
                     match right_map.get(i) {
                         Some(ColumnMapEntry::Stable { relation_id, .. }) => {
-                            bits |= 1u64 << *relation_id;
+                            bits |= Self::relation_bit(*relation_id);
                             matched = true;
                             break;
                         }
@@ -1093,7 +1070,7 @@ impl<'a> PlanReconstructor<'a> {
         column_map: &ColumnMap,
     ) -> bool {
         // Check by stable column name format (R{rel}.C{col})
-        if let Some((rel, cidx)) = self.parse_stable_column_name(col.name()) {
+        if let Some((rel, cidx)) = StableColumn::parse_stable_name(col.name()) {
             return column_map.iter().any(|entry| {
                 matches!(entry, ColumnMapEntry::Stable { relation_id, column_index }
                     if *relation_id == rel && *column_index == cidx)
@@ -1105,22 +1082,6 @@ impl<'a> PlanReconstructor<'a> {
             .fields()
             .iter()
             .any(|f| f.name() == col.name())
-    }
-
-    /// Parse stable column name format "R{rel}.C{col}" -> (rel, col)
-    fn parse_stable_column_name(&self, name: &str) -> Option<(usize, usize)> {
-        if !name.starts_with('R') {
-            return None;
-        }
-        let dot = name.find('.')?;
-        let rel_str = &name[1..dot];
-        if !name[dot + 1..].starts_with('C') {
-            return None;
-        }
-        let col_str = &name[dot + 2..];
-        let rel = rel_str.parse::<usize>().ok()?;
-        let col = col_str.parse::<usize>().ok()?;
-        Some((rel, col))
     }
 
     /// Combine multiple filter expressions with AND logic.
@@ -1274,6 +1235,84 @@ mod tests {
 
         assert_eq!(hj.left.schema().fields()[0].name(), "b");
         assert_eq!(hj.right.schema().fields()[0].name(), "a");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_hash_join_build_side_keeps_order_when_cardinality_equal() -> Result<()> {
+        // When cardinalities are equal, keep the DP plan's original left/right assignment.
+        let schema_a = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let schema_b = Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, false)]));
+
+        let plan_a: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema_a.clone()));
+        let plan_b: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema_b.clone()));
+
+        let mut graph = QueryGraph::new();
+        graph.add_relation(RelationNode::new(
+            plan_a,
+            0,
+            100.0,
+            100.0,
+            Statistics::new_unknown(&schema_a),
+        ));
+        graph.add_relation(RelationNode::new(
+            plan_b,
+            1,
+            100.0,
+            100.0,
+            Statistics::new_unknown(&schema_b),
+        ));
+
+        let join_set = JoinSet::from_iter([0usize, 1usize].into_iter())?;
+        let filter: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("R0.C0", 0)),
+            Operator::Eq,
+            Arc::new(Column::new("R1.C0", 0)),
+        ));
+        graph.add_edge(JoinEdge::new(
+            join_set,
+            filter,
+            JoinType::Inner,
+            vec![(
+                StableColumn {
+                    relation_id: 0,
+                    column_index: 0,
+                    name: "R0.C0".to_string(),
+                },
+                StableColumn {
+                    relation_id: 1,
+                    column_index: 0,
+                    name: "R1.C0".to_string(),
+                },
+            )],
+        ))?;
+
+        let mut dp_table: HashMap<JoinSet, Arc<DPPlan>> = HashMap::new();
+        let leaf0 = Arc::new(DPPlan::new_leaf(0, 100.0)?);
+        let leaf1 = Arc::new(DPPlan::new_leaf(1, 100.0)?);
+        dp_table.insert(leaf0.join_set, leaf0);
+        dp_table.insert(leaf1.join_set, leaf1);
+
+        let root = Arc::new(DPPlan::new_join(
+            JoinSet::new_singleton(0)?,
+            JoinSet::new_singleton(1)?,
+            vec![0],
+            0.0,
+            100.0,
+        ));
+        dp_table.insert(root.join_set, root.clone());
+
+        let mut reconstructor = PlanReconstructor::new(&dp_table, &graph);
+        let (plan, _map) = reconstructor.reconstruct(&root)?;
+        #[expect(clippy::expect_used)]
+        let hj = plan
+            .as_any()
+            .downcast_ref::<HashJoinExec>()
+            .expect("expected HashJoinExec");
+
+        assert_eq!(hj.left.schema().fields()[0].name(), "a");
+        assert_eq!(hj.right.schema().fields()[0].name(), "b");
 
         Ok(())
     }
