@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use datafusion_common::TableReference;
 use datafusion_expr::{LogicalPlan, SubqueryAlias};
 use sail_common::spec;
 
@@ -16,8 +15,12 @@ impl PlanResolver<'_> {
         references: Vec<spec::QueryPlan>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let mut scope = state.enter_with_relations_scope();
-        let state = scope.state();
+        let mut with_relations_scope = state.enter_with_relations_scope();
+        let state = with_relations_scope.state();
+        // Enter a CTE scope so that DataFrame aliases registered below do not leak
+        // into the outer query scope.
+        let mut cte_scope = state.enter_cte_scope();
+        let state = cte_scope.state();
         for ref_plan in references {
             // If the reference is a SubqueryAlias, register it as a named table so that
             // SQL queries can reference the DataFrame by its alias name.
@@ -27,11 +30,13 @@ impl PlanResolver<'_> {
             if let spec::QueryNode::SubqueryAlias {
                 ref input,
                 ref alias,
-                ..
+                ref qualifier,
             } = ref_plan.node
             {
                 let resolved = self.resolve_query_plan((**input).clone(), state).await?;
-                let table_ref = TableReference::bare(alias.as_ref());
+                let table_ref = self.resolve_table_reference(
+                    &spec::ObjectName::from(qualifier.clone()).child(alias.clone()),
+                )?;
                 let aliased = LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
                     Arc::new(resolved),
                     table_ref.clone(),
@@ -48,6 +53,6 @@ impl PlanResolver<'_> {
                 )));
             }
         }
-        self.resolve_query_plan(root, scope.state()).await
+        self.resolve_query_plan(root, cte_scope.state()).await
     }
 }

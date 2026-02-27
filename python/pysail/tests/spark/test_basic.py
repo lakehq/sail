@@ -391,7 +391,12 @@ def test_sql_parameters(spark):
 
 def test_sql_dataframe_argument(spark):
     df = spark.range(10)
-    actual = spark.sql("SELECT * FROM {df} WHERE id > {bound1} AND id < :bound2", df=df, bound1=7, args={"bound2": 9}).toPandas()
+    actual = spark.sql(
+        "SELECT * FROM {df} WHERE id > {bound1} AND id < :bound2",
+        df=df,
+        bound1=7,
+        args={"bound2": 9},
+    ).toPandas()
     expected = pd.DataFrame({"id": [8]}, dtype="int64")
     assert_frame_equal(actual, expected)
 
