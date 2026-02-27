@@ -43,7 +43,7 @@ jobs:
         uses: pypa/hatch@install
 
       - name: Install Maturin
-        run: pip install maturin
+        run: pip install 'maturin>=1.0,<2.0'
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
