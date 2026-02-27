@@ -95,11 +95,14 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
         let plan: Arc<dyn ExecutionPlan> = if let Some(node) =
             node.as_any().downcast_ref::<RangeNode>()
         {
-            Arc::new(RangeExec::new(
+            let schema = UserDefinedLogicalNode::schema(node).inner().clone();
+            let projection = (0..schema.fields().len()).collect();
+            Arc::new(RangeExec::try_new(
                 node.range().clone(),
                 node.num_partitions(),
-                UserDefinedLogicalNode::schema(node).inner().clone(),
-            ))
+                schema,
+                projection,
+            )?)
         } else if let Some(node) = node.as_any().downcast_ref::<ShowStringNode>() {
             let [input] = physical_inputs else {
                 return internal_err!("ShowStringExec requires exactly one physical input");
