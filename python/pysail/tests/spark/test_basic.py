@@ -1,4 +1,5 @@
 import pandas as pd
+import pyspark
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pandas.testing import assert_frame_equal
@@ -386,6 +387,22 @@ def test_sql_parameters(spark):
     assert_frame_equal(actual, expected)
     actual = spark.sql("SELECT 1 AS text WHERE $foo > 'a'", {"foo": "b"}).toPandas()
     expected = pd.DataFrame({"text": [1]}).astype({"text": "int32"})
+    assert_frame_equal(actual, expected)
+
+
+@pytest.mark.skipif(
+    int(pyspark.__version__.split(".")[0]) < 4,  # noqa: PLR2004
+    reason="DataFrame arguments in spark.sql() require PySpark 4+",
+)
+def test_sql_dataframe_argument(spark):
+    df = spark.range(10)
+    actual = spark.sql(
+        "SELECT * FROM {df} WHERE id > {bound1} AND id < :bound2",
+        df=df,
+        bound1=7,
+        args={"bound2": 9},
+    ).toPandas()
+    expected = pd.DataFrame({"id": [8]}, dtype="int64")
     assert_frame_equal(actual, expected)
 
 
