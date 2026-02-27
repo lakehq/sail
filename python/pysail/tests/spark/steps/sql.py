@@ -17,10 +17,10 @@ def variables():
 
 @pytest.fixture
 def _step_counter():
-    """Tracks the number of queries and statements executed in a scenario.
+    """Tracks the number of SQL query and statement steps encountered in a scenario.
 
     This is used to enforce that the 'final statement' step is defined
-    before any other queries or statements in a scenario.
+    before any other query or statement steps in a scenario.
     """
     return [0]
 
@@ -86,7 +86,8 @@ def statement_with_error(template, error, docstring, spark, variables, _step_cou
 def final_statement(template, docstring, spark, variables, _step_counter):
     """Executes a SQL statement at the end of a scenario.
 
-    This step must be executed before any other statements or queries in a scenario.
+    This step must be defined before any other statements or queries in a scenario,
+    so that its teardown action is registered before other steps are executed.
     """
     if _step_counter[0] > 0:
         msg = "The 'final statement' step must be defined before any other statements or queries in the scenario."
