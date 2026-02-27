@@ -14,6 +14,8 @@ from pyspark.sql.types import (
     StructType,
 )
 
+from pysail.tests.spark.utils import escape_sql_identifier
+
 
 def safe_sort_key(row):
     return tuple((v is not None, v) for v in row)
@@ -549,7 +551,7 @@ class TestFormatPathSqlSyntax:
     def test_csv_format_path(self, spark, tmp_path):
         csv_file = tmp_path / "data.csv"
         csv_file.write_text("id,name\n1,Alice\n2,Bob\n")
-        path = str(csv_file)
+        path = escape_sql_identifier(str(csv_file))
         df = spark.sql(f"SELECT * FROM csv.`{path}`")
         assert df.count() == 2  # noqa: PLR2004
         assert "id" in df.columns
@@ -558,6 +560,7 @@ class TestFormatPathSqlSyntax:
     def test_parquet_format_path(self, spark, sample_df, tmp_path):
         path = str(tmp_path / "data.parquet")
         sample_df.write.parquet(path, mode="overwrite")
+        path = escape_sql_identifier(path)
         df = spark.sql(f"SELECT * FROM parquet.`{path}`")
         assert df.count() == sample_df.count()
         assert sorted(df.collect(), key=safe_sort_key) == sorted(sample_df.collect(), key=safe_sort_key)
@@ -565,7 +568,7 @@ class TestFormatPathSqlSyntax:
     def test_json_format_path(self, spark, tmp_path):
         json_file = tmp_path / "data.json"
         json_file.write_text('{"id": 1, "value": "a"}\n{"id": 2, "value": "b"}\n')
-        path = str(json_file)
+        path = escape_sql_identifier(str(json_file))
         df = spark.sql(f"SELECT * FROM json.`{path}`")
         assert df.count() == 2  # noqa: PLR2004
         assert "id" in df.columns
