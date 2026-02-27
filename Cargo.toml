@@ -152,10 +152,10 @@ datafusion = { version = "52.1.0", default-features = false, features = [
     "compression",
     "parquet",
     "serde",
-    "avro",
 ] }
 datafusion-common = { version = "52.1.0", features = ["object_store", "avro", "recursive_protection"] }
 datafusion-datasource = { version = "52.1.0" }
+datafusion-datasource-avro = { version = "52.1.0" }
 datafusion-expr = { version = "52.1.0", default-features = false, features = ["recursive_protection"] }
 datafusion-expr-common = { version = "52.1.0" }
 datafusion-optimizer = { version = "52.1.0", features = ["recursive_protection"] }
