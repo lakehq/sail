@@ -2433,6 +2433,19 @@
               }
             },
             {
+              "name": "Either(Keyword(Function), Keyword(Functions))",
+              "node": {
+                "choice": [
+                  {
+                    "nonTerminal": "Keyword(Function)"
+                  },
+                  {
+                    "nonTerminal": "Keyword(Functions)"
+                  }
+                ]
+              }
+            },
+            {
               "name": "Either(Keyword(Into), Keyword(Overwrite))",
               "node": {
                 "choice": [
@@ -9313,7 +9326,7 @@
                         "nonTerminal": "Option(Either(Keyword(Temp), Keyword(Temporary)))"
                       },
                       {
-                        "nonTerminal": "Keyword(Functions)"
+                        "nonTerminal": "Either(Keyword(Function), Keyword(Functions))"
                       },
                       {
                         "nonTerminal": "Option(Tuple(Keyword(If), Keyword(Exists)))"
