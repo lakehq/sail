@@ -644,7 +644,7 @@ fn find_key_value(options: &MapArray, search_key: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

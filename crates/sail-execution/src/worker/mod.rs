@@ -7,7 +7,6 @@ mod options;
 mod peer_tracker;
 mod server;
 
-#[allow(clippy::all)]
 mod gen {
     tonic::include_proto!("sail.worker");
 

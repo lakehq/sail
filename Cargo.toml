@@ -14,6 +14,9 @@ readme = "README.md"
 repository = "https://github.com/lakehq/sail"
 rust-version = "1.88.0"
 
+[workspace.lints.rust]
+allow_attributes = "deny"
+
 [workspace.lints.clippy]
 unwrap_used = "deny"
 expect_used = "deny"

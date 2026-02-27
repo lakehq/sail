@@ -66,7 +66,7 @@ impl<'a> TimestampValue<'a> {
     }
 }
 
-#[allow(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used)]
 fn signed<'a, T, E>(min_digits: usize, max_digits: usize) -> impl Parser<'a, &'a str, T, E>
 where
     T: FromStr,
@@ -85,7 +85,7 @@ where
         .map(|s: &str| s.parse::<T>().unwrap())
 }
 
-#[allow(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used)]
 fn unsigned<'a, T, E>(min_digits: usize, max_digits: usize) -> impl Parser<'a, &'a str, T, E>
 where
     T: FromStr,
@@ -100,7 +100,7 @@ where
         .map(|s: &str| s.parse::<T>().unwrap())
 }
 
-#[allow(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used)]
 fn fraction<'a, T, E>(min_digits: usize, max_digits: usize) -> impl Parser<'a, &'a str, T, E>
 where
     T: FromStr,

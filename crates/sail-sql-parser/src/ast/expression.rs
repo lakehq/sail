@@ -432,7 +432,7 @@ pub struct OverClause {
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "Expr")]
-#[allow(clippy::large_enum_variant)]
+#[expect(clippy::large_enum_variant)]
 pub enum WindowSpec {
     Named(Ident),
     Unnamed {
@@ -446,7 +446,7 @@ pub enum WindowSpec {
     },
 }
 
-#[allow(clippy::enum_variant_names)]
+#[expect(clippy::enum_variant_names)]
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "Expr")]
 pub enum WindowModifier {

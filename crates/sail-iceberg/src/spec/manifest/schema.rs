@@ -42,7 +42,7 @@ fn avro_primitive(prim: &PrimitiveType) -> AvroSchema {
         PrimitiveType::String => AvroSchema::String,
         PrimitiveType::Uuid => AvroSchema::Uuid,
         PrimitiveType::Fixed(len) => AvroSchema::Fixed(FixedSchema {
-            #[allow(clippy::unwrap_used)]
+            #[expect(clippy::unwrap_used)]
             name: Name::new(format!("fixed_{len}").as_str())
                 .unwrap_or_else(|_| Name::new("fixed").unwrap()),
             aliases: None,
@@ -56,7 +56,7 @@ fn avro_primitive(prim: &PrimitiveType) -> AvroSchema {
             precision: *precision as usize,
             scale: *scale as usize,
             inner: Box::new(AvroSchema::Fixed(FixedSchema {
-                #[allow(clippy::unwrap_used)]
+                #[expect(clippy::unwrap_used)]
                 name: Name::new(format!("decimal_{precision}_{scale}").as_str())
                     .unwrap_or_else(|_| Name::new("decimal").unwrap()),
                 aliases: None,
@@ -106,7 +106,6 @@ fn struct_to_avro_record(name: &str, s: &StructType) -> AvroSchema {
             }
             Type::Map(map) => {
                 // Represent non-string-key maps as array of records with logicalType: map
-                #[allow(clippy::unwrap_used)]
                 let key_field = AvroRecordField {
                     name: map.key_field.name.clone(),
                     doc: None,
@@ -154,7 +153,7 @@ fn struct_to_avro_record(name: &str, s: &StructType) -> AvroSchema {
                     item_lookup.insert(f.name.clone(), idx);
                 }
                 let item_record = AvroSchema::Record(RecordSchema {
-                    #[allow(clippy::unwrap_used)]
+                    #[expect(clippy::unwrap_used)]
                     name: Name::new(
                         format!("k{}_v{}", map.key_field.id, map.value_field.id).as_str(),
                     )
@@ -185,7 +184,7 @@ fn struct_to_avro_record(name: &str, s: &StructType) -> AvroSchema {
         lookup.insert(f.name.clone(), idx);
     }
     AvroSchema::Record(RecordSchema {
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         name: Name::new(name).unwrap_or_else(|_| Name::new("record").unwrap()),
         aliases: None,
         doc: None,
@@ -287,7 +286,7 @@ pub fn data_file_schema_v2(partition_type: &StructType) -> AvroSchema {
         lookup.insert(f.name.clone(), idx);
     }
     AvroSchema::Record(RecordSchema {
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         name: Name::new("data_file").unwrap_or_else(|_| Name::new("data_file_fallback").unwrap()),
         aliases: None,
         doc: None,
@@ -324,7 +323,7 @@ pub fn manifest_entry_schema_v2(partition_type: &StructType) -> AvroSchema {
         lookup.insert(f.name.clone(), idx);
     }
     AvroSchema::Record(RecordSchema {
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         name: Name::new("manifest_entry")
             .unwrap_or_else(|_| Name::new("manifest_entry_fallback").unwrap()),
         aliases: None,

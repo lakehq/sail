@@ -89,7 +89,6 @@ pub enum CatalogCommand {
     RegisterFunction {
         udf: ScalarUDF,
     },
-    #[allow(unused)]
     RegisterTableFunction {
         name: String,
         // We have to be explicit about the UDTF types we support.

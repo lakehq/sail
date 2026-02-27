@@ -61,7 +61,7 @@ impl std::str::FromStr for SaveMode {
     }
 }
 
-#[allow(clippy::large_enum_variant)]
+#[expect(clippy::large_enum_variant)]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub enum DeltaOperation {

@@ -8,7 +8,7 @@ use sail_common_datafusion::rename::schema::rename_schema;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_common_datafusion::utils::items::ItemTaker;
 
-#[allow(clippy::derived_hash_with_manual_eq)]
+#[expect(clippy::derived_hash_with_manual_eq)]
 #[derive(Clone, Debug, Eq, Hash, Educe)]
 #[educe(PartialOrd)]
 pub struct MapPartitionsNode {

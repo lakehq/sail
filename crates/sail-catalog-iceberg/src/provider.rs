@@ -1262,7 +1262,7 @@ fn build_sort_order(
     })))
 }
 
-#[allow(clippy::unwrap_used, clippy::panic)]
+#[expect(clippy::unwrap_used, clippy::panic)]
 #[cfg(test)]
 mod tests {
     use wiremock::matchers::{method, path, query_param, query_param_is_missing};
