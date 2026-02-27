@@ -15,6 +15,16 @@ def variables():
     return {}
 
 
+@pytest.fixture
+def _step_counter():
+    """Tracks the number of queries and statements executed in a scenario.
+
+    This is used to enforce that the 'final statement' step is defined
+    before any other queries or statements in a scenario.
+    """
+    return [0]
+
+
 @given(parsers.parse("variable {name} for JSON value {definition}"), target_fixture="variables")
 def variable_for_json_value(name, definition, variables):
     """Defines a variable with a JSON value."""
@@ -56,31 +66,40 @@ def config_set(key, value, spark):
 
 
 @given(parsers.re("statement(?P<template>( template)?)"))
-def statement(template, docstring, spark, variables):
+def statement(template, docstring, spark, variables, _step_counter):
     """Executes a SQL statement that is expected to succeed."""
+    _step_counter[0] += 1
     s = Template(docstring).render(**variables) if template else docstring
     spark.sql(s)
 
 
 @given(parsers.re(r"statement(?P<template>( template)?) with error (?P<error>.*)"))
-def statement_with_error(template, error, docstring, spark, variables):
+def statement_with_error(template, error, docstring, spark, variables, _step_counter):
     """Executes a SQL statement that is expected to fail with an error."""
+    _step_counter[0] += 1
     s = Template(docstring).render(**variables) if template else docstring
     with pytest.raises(Exception, match=error):
         spark.sql(s)
 
 
 @given(parsers.re("final statement(?P<template>( template)?)"))
-def final_statement(template, docstring, spark, variables):
-    """Executes a SQL statement at the end of a scenario."""
+def final_statement(template, docstring, spark, variables, _step_counter):
+    """Executes a SQL statement at the end of a scenario.
+
+    This step must be executed before any other statements or queries in a scenario.
+    """
+    if _step_counter[0] > 0:
+        msg = "The 'final statement' step must be defined before any other statements or queries in the scenario."
+        raise ValueError(msg)
     s = Template(docstring).render(**variables) if template else docstring
     yield
     spark.sql(s)
 
 
 @when(parsers.re("query(?P<template>( template)?)"), target_fixture="query")
-def query(template, docstring, variables):
+def query(template, docstring, variables, _step_counter):
     """Defines a SQL query (not executed here)."""
+    _step_counter[0] += 1
     return Template(docstring).render(**variables) if template else docstring
 
 
