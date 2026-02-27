@@ -189,7 +189,7 @@ pub enum Statement {
     DropFunction {
         drop: Drop,
         temporary: Option<Either<Temp, Temporary>>,
-        function: Functions,
+        function: Either<Function, Functions>,
         if_exists: Option<(If, Exists)>,
         name: ObjectName,
     },
