@@ -35,7 +35,6 @@ pub(super) struct ManifestEntryV2 {
     pub data_file: DataFileSerde,
 }
 
-#[allow(dead_code)]
 #[derive(Serialize, Deserialize)]
 pub(super) struct ManifestEntryV1 {
     pub status: i32,
@@ -110,7 +109,7 @@ impl ManifestEntryV2 {
     }
 }
 
-#[allow(dead_code)]
+#[expect(dead_code)]
 impl ManifestEntryV1 {
     pub fn from_entry(
         entry: super::ManifestEntry,

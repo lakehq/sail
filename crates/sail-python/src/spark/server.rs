@@ -56,13 +56,15 @@ impl SparkConnectServer {
     #[new]
     #[pyo3(signature = (ip, port, /))]
     fn new(py: Python<'_>, ip: &str, port: u16) -> PyResult<Self> {
+        let config = AppConfig::load().map_err(|e| {
+            PyErr::new::<PyRuntimeError, _>(format!("failed to load the application config: {e}"))
+        })?;
         let globals = GlobalState::instance(py)?;
-        let config = globals.config.clone();
         let runtime = globals.runtime.handle();
         Ok(Self {
             ip: ip.to_string(),
             port,
-            config,
+            config: Arc::new(config),
             runtime,
             state: None,
         })

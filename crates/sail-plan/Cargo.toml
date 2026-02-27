@@ -23,8 +23,10 @@ datafusion-expr-common = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-functions-nested = { workspace = true }
 datafusion-spark = { workspace = true }
+educe = { workspace = true }
 thiserror = { workspace = true }
 tonic = { workspace = true }
+chrono = { workspace = true }
 async-trait = { workspace = true }
 async-recursion = { workspace = true }
 lazy_static = { workspace = true }
@@ -36,6 +38,7 @@ object_store = { workspace = true }
 half = { workspace = true }
 arrow = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 uuid = { workspace = true }
 indexmap = { workspace = true }
 log = { workspace = true }

@@ -104,6 +104,10 @@ pub enum QueryNode {
         schema: Option<Schema>,
     },
     Sample(Sample),
+    TableSample {
+        input: Box<QueryPlan>,
+        sample: TableSample,
+    },
     Deduplicate(Deduplicate),
     Range(Range),
     SubqueryAlias {
@@ -252,6 +256,11 @@ pub enum QueryNode {
         input: Box<QueryPlan>,
         recursive: bool,
         ctes: Vec<(Identifier, QueryPlan)>,
+    },
+    /// A relation that wraps a root plan with referenced subquery plans.
+    WithRelations {
+        root: Box<QueryPlan>,
+        references: Vec<QueryPlan>,
     },
     LateralView {
         input: Option<Box<QueryPlan>>,
@@ -592,7 +601,7 @@ pub enum MergeNotMatchedByTargetAction {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
-#[allow(clippy::large_enum_variant)]
+#[expect(clippy::large_enum_variant)]
 pub enum ReadType {
     // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
     NamedTable(ReadNamedTable),
@@ -934,6 +943,7 @@ pub struct Write {
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum SaveType {
     Path(String),
+    Sink,
     Table {
         table: ObjectName,
         save_method: TableSaveMethod,

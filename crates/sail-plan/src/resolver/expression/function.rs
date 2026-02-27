@@ -52,6 +52,11 @@ impl PlanResolver<'_> {
             }
         }
 
+        // For functions that accept a date-part keyword as the first argument
+        // (e.g., DATEDIFF(DAY, start, end)), convert the unresolved attribute
+        // to a string literal before resolution.
+        let arguments = Self::convert_date_part_argument(&canonical_function_name, arguments);
+
         let (argument_display_names, arguments) = if canonical_function_name == "struct" {
             self.resolve_struct_expressions_and_names(arguments, schema, state)
                 .await?
@@ -192,14 +197,13 @@ impl PlanResolver<'_> {
                 // Expand wildcard inside `struct(...)` only, to match Spark behavior:
                 // - struct(*) expands to all visible columns
                 // - struct(alias.*) expands to all visible columns from that qualifier
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 Expr::Wildcard { qualifier, options } => {
                     let plan = LogicalPlan::EmptyRelation(EmptyRelation {
                         produce_one_row: false,
                         schema: schema.clone(),
                     });
 
-                    #[allow(deprecated)]
                     let expanded = match qualifier {
                         Some(q) => expand_qualified_wildcard(&q, schema, Some(&options))?,
                         None => expand_wildcard(schema, &plan, Some(&options))?,
@@ -250,5 +254,26 @@ impl PlanResolver<'_> {
         }
 
         Ok((names, exprs))
+    }
+
+    /// For functions that accept a date-part keyword as their first argument
+    /// (e.g., `DATEDIFF(DAY, start, end)`, `TIMESTAMPDIFF(HOUR, start, end)`),
+    /// convert the first argument from an unresolved attribute to a string literal.
+    fn convert_date_part_argument(
+        function_name: &str,
+        mut arguments: Vec<spec::Expr>,
+    ) -> Vec<spec::Expr> {
+        const DATE_PART_FUNCTIONS: &[&str] = &["datediff", "date_diff", "timestampdiff"];
+        if arguments.len() >= 3 && DATE_PART_FUNCTIONS.contains(&function_name) {
+            if let spec::Expr::UnresolvedAttribute { ref name, .. } = arguments[0] {
+                let parts: Vec<String> = name.clone().into();
+                if parts.len() == 1 {
+                    arguments[0] = spec::Expr::Literal(spec::Literal::Utf8 {
+                        value: Some(parts.into_iter().next().unwrap_or_default()),
+                    });
+                }
+            }
+        }
+        arguments
     }
 }

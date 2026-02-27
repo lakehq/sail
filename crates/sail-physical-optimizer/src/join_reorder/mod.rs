@@ -266,7 +266,6 @@ impl JoinReorder {
         )?))
     }
 
-    #[allow(clippy::only_used_in_recursion)]
     fn rewrite_expr_to_final_map(
         &self,
         expr: Arc<dyn datafusion::physical_expr::PhysicalExpr>,
@@ -893,7 +892,7 @@ mod tests {
             &target_map,
             &["result".to_string()],
         )?;
-        #[allow(clippy::expect_used)]
+        #[expect(clippy::expect_used)]
         let proj = plan
             .as_any()
             .downcast_ref::<ProjectionExec>()

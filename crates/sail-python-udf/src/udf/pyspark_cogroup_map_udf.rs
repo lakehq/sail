@@ -36,7 +36,7 @@ pub struct PySparkCoGroupMapUDF {
 }
 
 impl PySparkCoGroupMapUDF {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn try_new(
         name: String,
         payload: Vec<u8>,

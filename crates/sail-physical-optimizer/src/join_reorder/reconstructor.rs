@@ -876,7 +876,6 @@ impl<'a> PlanReconstructor<'a> {
         result
     }
 
-    #[allow(clippy::only_used_in_recursion)]
     fn add_relation_bits_from_expr(
         &self,
         expr: &Arc<dyn PhysicalExpr>,
@@ -1148,7 +1147,7 @@ impl<'a> PlanReconstructor<'a> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::common::Statistics;

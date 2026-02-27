@@ -35,7 +35,7 @@ impl<'a> ProtoBuilder<'a> {
 lazy_static! {
     /// A restricted SQL identifier pattern for database, table, and column names.
     static ref SQL_IDENTIFIER_PATTERN: Regex = {
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         Regex::new(r"^[a-z]+(_[a-z]+)*$").unwrap()
     };
 }

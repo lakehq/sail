@@ -38,7 +38,7 @@ pub struct IcebergPlanBuilder<'a> {
     table_config: IcebergTableConfig,
     sink_mode: PhysicalSinkMode,
     sort_order: Option<Vec<PhysicalSortExpr>>,
-    #[allow(unused)]
+    #[expect(unused)]
     session: &'a dyn Session,
 }
 

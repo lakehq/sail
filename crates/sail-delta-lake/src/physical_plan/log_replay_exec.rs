@@ -594,7 +594,7 @@ mod tests {
         let input: Arc<dyn ExecutionPlan> = Arc::new(OneBatchExec::new(batch));
         let exec = Arc::new(DeltaLogReplayExec::new(
             input,
-            #[allow(clippy::unwrap_used)]
+            #[expect(clippy::unwrap_used)]
             Url::parse("file:///tmp/delta").unwrap(),
             0,
             vec![],
@@ -604,15 +604,15 @@ mod tests {
 
         let ctx = Arc::new(TaskContext::default());
         let mut stream = exec.execute(0, ctx)?;
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let out = stream.try_next().await?.unwrap();
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let add = out
             .column(0)
             .as_any()
             .downcast_ref::<StructArray>()
             .unwrap();
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let path_col = add
             .column_by_name("path")
             .unwrap()
@@ -669,7 +669,7 @@ mod tests {
         let input: Arc<dyn ExecutionPlan> = Arc::new(OneBatchExec::new(batch));
         let exec = Arc::new(DeltaLogReplayExec::new(
             input,
-            #[allow(clippy::unwrap_used)]
+            #[expect(clippy::unwrap_used)]
             Url::parse("file:///tmp/delta").unwrap(),
             0,
             vec![],
@@ -679,15 +679,15 @@ mod tests {
 
         let ctx = Arc::new(TaskContext::default());
         let mut stream = exec.execute(0, ctx)?;
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let out = stream.try_next().await?.unwrap();
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let add = out
             .column(0)
             .as_any()
             .downcast_ref::<StructArray>()
             .unwrap();
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let path_col = add
             .column_by_name("path")
             .unwrap()

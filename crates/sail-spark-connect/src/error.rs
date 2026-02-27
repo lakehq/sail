@@ -209,24 +209,24 @@ where
 }
 
 #[derive(Debug, Clone)]
-#[allow(clippy::enum_variant_names)]
+#[expect(clippy::enum_variant_names)]
 pub(crate) enum SparkThrowable {
     ParseException(String),
     AnalysisException(String),
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     StreamingQueryException(String),
     QueryExecutionException(String),
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     NumberFormatException(String),
     IllegalArgumentException(String),
     ArithmeticException(String),
     UnsupportedOperationException(String),
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     ArrayIndexOutOfBoundsException(String),
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     DateTimeException(String),
     SparkRuntimeException(String),
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     SparkUpgradeException(String),
     PythonException(String),
 }

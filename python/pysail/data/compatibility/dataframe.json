@@ -12,13 +12,13 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "approxQuantile",
-    "status": "??? not on roadmap"
+    "status": "planned"
   },
   {
     "module": "pyspark.sql.DataFrame",
     "function": "cache",
     "status": "partially supported",
-    "info": "currently has no effect; but calling it will cause no error"
+    "note": "This currently has no effect, but calling it will cause no error."
   },
   {
     "module": "pyspark.sql.DataFrame",
@@ -35,8 +35,7 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "colRegex",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/473"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.DataFrame",
@@ -122,7 +121,7 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "dropDuplicatesWithinWatermark",
-    "status": "??? not on roadmap"
+    "status": "planned"
   },
   {
     "module": "pyspark.sql.DataFrame",
@@ -147,7 +146,7 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "exists",
-    "status": "??? not on roadmap"
+    "status": "planned"
   },
   {
     "module": "pyspark.sql.DataFrame",
@@ -172,19 +171,17 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "foreach",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/478"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.DataFrame",
     "function": "foreachPartition",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/479"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.DataFrame",
     "function": "freqItems",
-    "status": "??? not on roadmap"
+    "status": "planned"
   },
   {
     "module": "pyspark.sql.DataFrame",
@@ -194,7 +191,7 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "groupingSets",
-    "status": "??? not on roadmap"
+    "status": "planned"
   },
   {
     "module": "pyspark.sql.DataFrame",
@@ -231,12 +228,12 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "isLocal",
-    "status": "??? not on roadmap"
+    "status": "planned"
   },
   {
     "module": "pyspark.sql.DataFrame",
     "function": "isStreaming",
-    "status": "??? not on roadmap"
+    "status": "planned"
   },
   {
     "module": "pyspark.sql.DataFrame",
@@ -246,7 +243,7 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "lateralJoin",
-    "status": "??? not on roadmap"
+    "status": "planned"
   },
   {
     "module": "pyspark.sql.DataFrame",
@@ -277,7 +274,7 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "mergeInto",
-    "status": "??? not on roadmap"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.DataFrame",
@@ -287,7 +284,7 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "observe",
-    "status": "??? not on roadmap"
+    "status": "planned"
   },
   {
     "module": "pyspark.sql.DataFrame",
@@ -302,17 +299,17 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "pandas_api",
-    "status": "??? not on roadmap"
+    "status": "planned"
   },
   {
     "module": "pyspark.sql.DataFrame",
     "function": "persist",
-    "status": "??? not on roadmap"
+    "status": "planned"
   },
   {
     "module": "pyspark.sql.DataFrame",
     "function": "plot",
-    "status": "??? not on roadmap"
+    "status": "planned"
   },
   {
     "module": "pyspark.sql.DataFrame",
@@ -374,7 +371,7 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "scalar",
-    "status": "??? not on roadmap"
+    "status": "planned"
   },
   {
     "module": "pyspark.sql.DataFrame",
@@ -394,7 +391,7 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "semanticHash",
-    "status": "??? not on roadmap"
+    "status": "planned"
   },
   {
     "module": "pyspark.sql.DataFrame",
@@ -486,7 +483,7 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "transpose",
-    "status": "??? not on roadmap"
+    "status": "planned"
   },
   {
     "module": "pyspark.sql.DataFrame",
@@ -506,7 +503,7 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "unpersist",
-    "status": "??? not on roadmap"
+    "status": "planned"
   },
   {
     "module": "pyspark.sql.DataFrame",
@@ -546,7 +543,7 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "withWatermark",
-    "status": "??? not on roadmap"
+    "status": "planned"
   },
   {
     "module": "pyspark.sql.DataFrame",
@@ -556,7 +553,7 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "writeStream",
-    "status": "??? not on roadmap"
+    "status": "planned"
   },
   {
     "module": "pyspark.sql.DataFrame",

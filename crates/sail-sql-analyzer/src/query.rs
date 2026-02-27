@@ -454,10 +454,20 @@ fn from_ast_table_factor(table: TableFactor) -> SqlResult<spec::QueryPlan> {
             left: _,
             query,
             right: _,
+            sample,
             modifiers,
             alias,
         } => {
             let plan = from_ast_query(query)?;
+            let plan = if let Some(sample) = sample {
+                let sample = from_ast_table_sample(sample)?;
+                spec::QueryPlan::new(spec::QueryNode::TableSample {
+                    input: Box::new(plan),
+                    sample,
+                })
+            } else {
+                plan
+            };
             let plan = query_plan_with_table_modifiers(plan, modifiers)?;
             query_plan_with_table_alias(plan, alias)
         }

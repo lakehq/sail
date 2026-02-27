@@ -96,7 +96,7 @@ fn negated(expr: spec::Expr) -> spec::Expr {
     })
 }
 
-#[allow(clippy::type_complexity)]
+#[expect(clippy::type_complexity)]
 pub(crate) fn from_ast_function_arguments(
     args: impl IntoIterator<Item = FunctionArgument>,
 ) -> SqlResult<(Vec<spec::Expr>, Vec<(spec::Identifier, spec::Expr)>)> {
@@ -652,6 +652,12 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
             rename: true,
             is_try: false,
         }),
+        AtomExpr::TryCast(_, _, expr, _, data_type, _) => Ok(spec::Expr::Cast {
+            expr: Box::new(from_ast_expression(*expr)?),
+            cast_to_type: from_ast_data_type(data_type)?,
+            rename: true,
+            is_try: true,
+        }),
         AtomExpr::Extract(_, _, ident, _, expr, _) => {
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
                 function_name: spec::ObjectName::bare("extract"),
@@ -695,17 +701,17 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 TrimExpr::LeadingSpace(_, _, e) => ("ltrim", vec![from_ast_expression(e)?]),
                 TrimExpr::Leading(_, what, _, e) => (
                     "ltrim",
-                    vec![from_ast_expression(e)?, from_ast_expression(what)?],
+                    vec![from_ast_expression(what)?, from_ast_expression(e)?],
                 ),
                 TrimExpr::TrailingSpace(_, _, e) => ("rtrim", vec![from_ast_expression(e)?]),
                 TrimExpr::Trailing(_, what, _, e) => (
                     "rtrim",
-                    vec![from_ast_expression(e)?, from_ast_expression(what)?],
+                    vec![from_ast_expression(what)?, from_ast_expression(e)?],
                 ),
                 TrimExpr::BothSpace(_, _, e) => ("trim", vec![from_ast_expression(e)?]),
                 TrimExpr::Both(_, what, _, e) => (
                     "trim",
-                    vec![from_ast_expression(e)?, from_ast_expression(what)?],
+                    vec![from_ast_expression(what)?, from_ast_expression(e)?],
                 ),
             };
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
@@ -806,6 +812,9 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
             timestamp_type: spec::TimestampType::WithoutTimeZone,
         }),
         AtomExpr::DateLiteral(_, value) => Ok(spec::Expr::UnresolvedDate {
+            value: from_ast_string(value)?,
+        }),
+        AtomExpr::TimeLiteral(_, value) => Ok(spec::Expr::UnresolvedTime {
             value: from_ast_string(value)?,
         }),
         AtomExpr::Function(function) => {
