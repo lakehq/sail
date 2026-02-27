@@ -100,11 +100,6 @@ impl TaskAssigner {
         self.task_queue.push_back(region);
     }
 
-    /// Returns whether the given task attempt is still queued for assignment.
-    pub fn is_task_queued(&self, key: &TaskKey) -> bool {
-        self.task_queue.iter().any(|x| x.contains(key))
-    }
-
     pub fn exclude_task(&mut self, key: &TaskKey) {
         self.task_queue.retain(|x| !x.contains(key));
     }

@@ -312,9 +312,6 @@ impl DriverActor {
             .get_task_state(&key)
             .is_some_and(|x| matches!(x, TaskState::Created))
         {
-            if self.task_assigner.is_task_queued(&key) {
-                return ActorAction::Continue;
-            }
             let message = "task scheduling timeout".to_string();
             let cause = CommonErrorCause::Execution(message.clone());
             ctx.send(DriverEvent::UpdateTask {
