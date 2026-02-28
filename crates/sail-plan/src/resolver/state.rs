@@ -82,6 +82,9 @@ pub(super) struct PlanResolverState {
     /// Set when resolving a `WithParameters` query node so that IDENTIFIER expressions
     /// can substitute placeholders before constant-folding them.
     param_values: HashMap<String, ScalarValue>,
+    /// Positional parameter values available for IDENTIFIER clause evaluation.
+    /// Set alongside `param_values` when resolving a `WithParameters` query node.
+    positional_param_values: Vec<ScalarValue>,
 }
 
 impl Default for PlanResolverState {
@@ -101,6 +104,7 @@ impl PlanResolverState {
             subquery_references: HashMap::new(),
             config: PlanResolverStateConfig::default(),
             param_values: HashMap::new(),
+            positional_param_values: Vec::new(),
         }
     }
 
@@ -252,13 +256,55 @@ impl PlanResolverState {
         self.param_values.get(name)
     }
 
-    /// Replaces the current named parameter values with `values` and returns the old values.
-    /// The caller is responsible for restoring the previous values after use.
-    pub(crate) fn replace_param_values(
+    /// Returns the positional parameter value at the given 0-based index, if any.
+    pub fn get_positional_param_value(&self, index: usize) -> Option<&ScalarValue> {
+        self.positional_param_values.get(index)
+    }
+
+    /// Enters a scope where named and positional parameter values are set.
+    /// The previous parameter values are restored when the scope is dropped.
+    pub fn enter_param_values_scope(
         &mut self,
-        values: HashMap<String, ScalarValue>,
-    ) -> HashMap<String, ScalarValue> {
-        std::mem::replace(&mut self.param_values, values)
+        named: HashMap<String, ScalarValue>,
+        positional: Vec<ScalarValue>,
+    ) -> ParamValuesScope<'_> {
+        ParamValuesScope::new(self, named, positional)
+    }
+}
+
+/// Scope for parameter values used by IDENTIFIER clause evaluation.
+pub(crate) struct ParamValuesScope<'a> {
+    state: &'a mut PlanResolverState,
+    previous_param_values: HashMap<String, ScalarValue>,
+    previous_positional_param_values: Vec<ScalarValue>,
+}
+
+impl<'a> ParamValuesScope<'a> {
+    fn new(
+        state: &'a mut PlanResolverState,
+        named: HashMap<String, ScalarValue>,
+        positional: Vec<ScalarValue>,
+    ) -> Self {
+        let previous_param_values = std::mem::replace(&mut state.param_values, named);
+        let previous_positional_param_values =
+            std::mem::replace(&mut state.positional_param_values, positional);
+        Self {
+            state,
+            previous_param_values,
+            previous_positional_param_values,
+        }
+    }
+
+    pub(crate) fn state(&mut self) -> &mut PlanResolverState {
+        self.state
+    }
+}
+
+impl Drop for ParamValuesScope<'_> {
+    fn drop(&mut self) {
+        self.state.param_values = std::mem::take(&mut self.previous_param_values);
+        self.state.positional_param_values =
+            std::mem::take(&mut self.previous_positional_param_values);
     }
 }
 

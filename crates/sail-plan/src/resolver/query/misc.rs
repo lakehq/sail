@@ -58,7 +58,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let evaluator = LiteralEvaluator::new();
         let schema = Arc::new(DFSchema::empty());
-        // Evaluate the named arguments eagerly so that IDENTIFIER(:col) expressions
+        // Evaluate named arguments eagerly so that IDENTIFIER(:col) expressions
         // inside the query body can substitute their placeholder values at plan-resolution
         // time (before `with_param_values` is applied to the resolved plan).
         let named_params = {
@@ -68,40 +68,32 @@ impl PlanResolver<'_> {
                 let param = evaluator
                     .evaluate(&expr)
                     .map_err(|e| PlanError::invalid(e.to_string()))?;
-                // Strip leading ':' or '$' from the parameter name to normalize the key,
-                // mirroring how DataFusion's `get_placeholders_with_values` strips
-                // the first character from placeholder ids.
-                let key = if name.starts_with([':', '$']) {
-                    name[1..].to_string()
-                } else {
-                    name
-                };
-                params.insert(key, param);
+                params.insert(name, param);
             }
             params
         };
-        // Set param_values in state so that IDENTIFIER(:col) expressions inside the
-        // query body can substitute their placeholder values during plan resolution.
-        let previous_param_values = state.replace_param_values(named_params.clone());
-        let inner_result = self
-            .resolve_query_plan_with_hidden_fields(input, state)
-            .await;
-        // Always restore the previous param_values, even on error.
-        state.replace_param_values(previous_param_values);
-        let input = inner_result?;
-        let input = if !positional.is_empty() {
-            let params = {
-                let mut params = vec![];
-                for arg in positional {
-                    let expr = self.resolve_expression(arg, &schema, state).await?;
-                    let param = evaluator
-                        .evaluate(&expr)
-                        .map_err(|e| PlanError::invalid(e.to_string()))?;
-                    params.push(param);
-                }
-                params
-            };
-            input.with_param_values(ParamValues::from(params))?
+        // Evaluate positional arguments eagerly for the same reason.
+        let positional_params = {
+            let mut params = vec![];
+            for arg in positional {
+                let expr = self.resolve_expression(arg, &schema, state).await?;
+                let param = evaluator
+                    .evaluate(&expr)
+                    .map_err(|e| PlanError::invalid(e.to_string()))?;
+                params.push(param);
+            }
+            params
+        };
+        // Enter a scope that makes both named and positional parameter values
+        // available for IDENTIFIER clause evaluation inside the query body.
+        let mut scope =
+            state.enter_param_values_scope(named_params.clone(), positional_params.clone());
+        let input = self
+            .resolve_query_plan_with_hidden_fields(input, scope.state())
+            .await?;
+        drop(scope);
+        let input = if !positional_params.is_empty() {
+            input.with_param_values(ParamValues::from(positional_params))?
         } else {
             input
         };
