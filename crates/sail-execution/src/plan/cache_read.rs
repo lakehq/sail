@@ -16,7 +16,7 @@ use crate::local_cache_store::LocalCacheStore;
 
 /// Physical execution leaf node that reads cached RecordBatches from the worker-local cache.
 ///
-/// This node is a placeholder created during physical planning from an InMemoryRelationNode.
+/// This node is a placeholder created during physical planning from a CacheReadRelationNode.
 /// At execution time, the TaskRunner injects the worker's LocalCacheStore before execution.
 pub struct CacheReadExec {
     cache_id: CacheId,

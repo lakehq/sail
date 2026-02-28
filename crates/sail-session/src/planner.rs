@@ -25,7 +25,7 @@ use sail_delta_lake::logical::RewriteDeltaTableSource;
 use sail_execution::plan::CacheReadExec;
 use sail_logical_plan::file_delete::FileDeleteNode;
 use sail_logical_plan::file_write::FileWriteNode;
-use sail_logical_plan::in_memory_relation::InMemoryRelationNode;
+use sail_logical_plan::in_memory_relation::CacheReadRelationNode;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_logical_plan::merge::MergeIntoNode;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
@@ -95,7 +95,7 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
         session_state: &SessionState,
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
         let plan: Arc<dyn ExecutionPlan> = if let Some(node) =
-            node.as_any().downcast_ref::<InMemoryRelationNode>()
+            node.as_any().downcast_ref::<CacheReadRelationNode>()
         {
             Arc::new(CacheReadExec::new(
                 node.cache_id(),
@@ -342,6 +342,7 @@ fn plan_explicit_partitioning(
     }
 }
 
+/// Creates the query planner used to build Sail physical plans.
 pub fn new_query_planner() -> Arc<dyn QueryPlanner + Send + Sync> {
     Arc::new(ExtensionQueryPlanner {})
 }

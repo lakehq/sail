@@ -12,7 +12,7 @@ use sail_common::spec;
 use sail_common_datafusion::cache_manager::CacheManager;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
-use sail_logical_plan::in_memory_relation::InMemoryRelationNode;
+use sail_logical_plan::in_memory_relation::CacheReadRelationNode;
 use sail_logical_plan::precondition::WithPreconditionsNode;
 
 use crate::catalog::CatalogCommandNode;
@@ -100,10 +100,10 @@ pub async fn resolve_to_execution_plan(
     Ok((plan, info))
 }
 
-/// Replaces cached subtrees with InMemoryRelation nodes.
+/// Replaces cached subtrees with CacheReadRelation nodes.
 ///
 /// Walks the plan top-down (including subquery expressions) and substitutes any
-/// subtree matching a cached entry with an InMemoryRelationNode carrying the cache ID.
+/// subtree matching a cached entry with a CacheReadRelationNode carrying the cache ID.
 /// Equivalent to Spark's `CacheManager.useCachedData`:
 /// `spark/sql/core/src/main/scala/org/apache/spark/sql/execution/CacheManager.scala:496`
 fn use_cached_data(cache: &CacheManager, plan: LogicalPlan) -> Result<LogicalPlan> {
@@ -111,7 +111,7 @@ fn use_cached_data(cache: &CacheManager, plan: LogicalPlan) -> Result<LogicalPla
         let Some(cached) = cache.find_match(&node) else {
             return Ok(Transformed::no(node));
         };
-        let relation = InMemoryRelationNode::new(cached.plan.schema().clone(), cached.cache_id);
+        let relation = CacheReadRelationNode::new(cached.plan.schema().clone(), cached.cache_id);
         Ok(Transformed::yes(LogicalPlan::Extension(Extension {
             node: Arc::new(relation),
         })))
