@@ -88,10 +88,10 @@ impl PlanResolver<'_> {
         // available for IDENTIFIER clause evaluation inside the query body.
         let mut scope =
             state.enter_param_values_scope(named_params.clone(), positional_params.clone());
+        let state = scope.state();
         let input = self
-            .resolve_query_plan_with_hidden_fields(input, scope.state())
+            .resolve_query_plan_with_hidden_fields(input, state)
             .await?;
-        drop(scope);
         let input = if !positional_params.is_empty() {
             input.with_param_values(ParamValues::from(positional_params))?
         } else {

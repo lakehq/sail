@@ -116,6 +116,9 @@ impl PlanResolver<'_> {
             })?
             .data;
         let evaluator = LiteralEvaluator::new();
+        // Any placeholder that was not substituted above (e.g. because it had no
+        // matching parameter) will cause the evaluation to fail here, since the
+        // LiteralEvaluator cannot constant-fold an unresolved placeholder expression.
         let scalar = evaluator.evaluate(&expr).map_err(|e| {
             PlanError::invalid(format!("IDENTIFIER expression must be a constant: {e}"))
         })?;
