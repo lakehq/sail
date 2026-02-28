@@ -410,6 +410,9 @@ impl PlanFormatter for SparkPlanFormatter {
                 }
                 None => Ok("NULL".to_string()),
             },
+            ScalarValue::RunEndEncoded(_, _, _) => {
+                not_impl_err!("RunEndEncoded scalar value is not supported in SQL")
+            }
         }
     }
 

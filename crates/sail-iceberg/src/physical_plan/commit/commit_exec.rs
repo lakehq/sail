@@ -65,7 +65,7 @@ impl IcebergCommitExec {
             Partitioning::UnknownPartitioning(1),
             EmissionType::Final,
             Boundedness::Bounded,
-        )));
+        ));
         Self {
             input,
             table_url,

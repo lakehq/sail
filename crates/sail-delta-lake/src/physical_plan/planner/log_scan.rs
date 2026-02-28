@@ -103,6 +103,7 @@ fn to_partitioned_files(metas: Vec<ObjectMeta>) -> Result<Vec<PartitionedFile>> 
                 partition_values: vec![ScalarValue::Int64(Some(ver))],
                 range: None,
                 statistics: None,
+                ordering: None,
                 extensions: None,
                 metadata_size_hint: None,
             })

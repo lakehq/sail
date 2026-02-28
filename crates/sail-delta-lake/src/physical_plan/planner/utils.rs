@@ -419,7 +419,9 @@ pub async fn build_log_replay_pipeline_with_options(
 
     let replay: Arc<dyn ExecutionPlan> = if let Some(filter) = options.log_filter {
         let adapter_factory = Arc::new(DeltaPhysicalExprAdapterFactory {});
-        let adapter = adapter_factory.create(filter.table_schema, replay.schema());
+        let adapter = adapter_factory
+            .create(filter.table_schema, replay.schema())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let adapted = adapter
             .rewrite(filter.predicate)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;

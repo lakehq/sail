@@ -190,6 +190,7 @@ async fn finalize_merge(
             None,
             PartitionMode::CollectLeft,
             NullEquality::NullEqualsNothing,
+            false,
         )?);
 
         // Keep only the right side columns (original writer input schema) after join.
@@ -288,6 +289,7 @@ async fn finalize_merge(
             None,
             PartitionMode::CollectLeft,
             NullEquality::NullEqualsNothing,
+            false,
         )?);
 
         // Keep only the right side columns (metadata stream schema).

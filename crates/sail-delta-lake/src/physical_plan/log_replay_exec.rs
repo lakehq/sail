@@ -68,7 +68,7 @@ impl DeltaLogReplayExec {
             Partitioning::UnknownPartitioning(output_partitions),
             EmissionType::Final,
             Boundedness::Bounded,
-        )));
+        ));
         Self {
             input,
             table_url,
@@ -475,7 +475,7 @@ mod tests {
                 Partitioning::UnknownPartitioning(1),
                 EmissionType::Final,
                 Boundedness::Bounded,
-            )));
+            ));
             Self { batch, cache }
         }
     }

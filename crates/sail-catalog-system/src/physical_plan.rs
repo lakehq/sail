@@ -41,7 +41,7 @@ impl SystemTableExec {
             Partitioning::UnknownPartitioning(1),
             EmissionType::Final,
             Boundedness::Bounded,
-        )));
+        ));
         Ok(Self {
             table,
             projection,

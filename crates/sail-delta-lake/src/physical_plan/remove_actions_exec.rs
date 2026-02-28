@@ -53,7 +53,7 @@ impl DeltaRemoveActionsExec {
             Partitioning::UnknownPartitioning(1),
             EmissionType::Final,
             Boundedness::Bounded,
-        )));
+        ));
         Ok(Self {
             input,
             metrics: ExecutionPlanMetricsSet::new(),
