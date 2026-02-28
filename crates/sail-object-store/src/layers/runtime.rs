@@ -9,8 +9,8 @@ use futures::{Stream, StreamExt};
 use object_store::path::Path;
 use object_store::{
     CopyOptions, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload, PutResult,
-    RenameOptions, Result, UploadPart,
+    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions, Result,
+    UploadPart,
 };
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, Mutex};
@@ -134,7 +134,8 @@ impl ObjectStore for RuntimeAwareObjectStore {
         once(Err(object_store::Error::NotImplemented {
             operation: "delete_stream".to_string(),
             implementer: "RuntimeAwareObjectStore".to_string(),
-        })).boxed()
+        }))
+        .boxed()
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {

@@ -10,8 +10,7 @@ use log::debug;
 use object_store::path::Path;
 use object_store::{
     CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
-    ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions, Result,
-    UploadPart,
+    PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions, Result, UploadPart,
 };
 use sail_telemetry::common::SpanAttribute;
 use sail_telemetry::futures::TracingFutureExt;

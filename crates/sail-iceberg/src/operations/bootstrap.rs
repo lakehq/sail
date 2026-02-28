@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use datafusion_common::{DataFusionError, Result};
+use object_store::ObjectStoreExt;
 use url::Url;
 
 use crate::io::StoreContext;
@@ -31,8 +32,6 @@ use crate::spec::schema::Schema as IcebergSchema;
 use crate::spec::snapshots::{SnapshotBuilder, SnapshotReference, SnapshotRetention};
 use crate::spec::TableMetadata;
 use crate::utils::WritePathMode;
-
-use object_store::ObjectStoreExt;
 
 /// Strategy for persisting metadata during bootstrap
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

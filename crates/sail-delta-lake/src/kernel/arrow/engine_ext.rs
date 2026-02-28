@@ -123,7 +123,12 @@ impl ScanExt for Scan {
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(self
-            .scan_metadata_from(engine, existing_version, engine_iter.into_iter(), existing_predicate)?
+            .scan_metadata_from(
+                engine,
+                existing_version,
+                engine_iter.into_iter(),
+                existing_predicate,
+            )?
             .map_ok(kernel_to_arrow)
             .flatten())
     }
@@ -222,8 +227,8 @@ impl SnapshotExt for Snapshot {
         let parsed = parse_json(stats_data, stats_schema)?;
         let parsed57: crate::kernel::arrow::compat::RecordBatch57 =
             ArrowEngineData::try_from_engine_data(parsed)?.into();
-        let parsed58 = arrow57_to_arrow58(parsed57)
-            .map_err(|e| DeltaTableError::generic(e.to_string()))?;
+        let parsed58 =
+            arrow57_to_arrow58(parsed57).map_err(|e| DeltaTableError::generic(e.to_string()))?;
 
         let stats_array: Arc<StructArray> = Arc::new(parsed58.into());
         fields.push(Arc::new(Field::new(
@@ -668,7 +673,8 @@ fn kernel_to_arrow(metadata: ScanMetadata) -> DeltaResult<ScanMetadataArrow> {
         &batch57,
         &arrow_57::array::BooleanArray::from(selection),
     )?;
-    let scan_files = arrow57_to_arrow58(filtered57).map_err(|e| delta_kernel::Error::generic(e.to_string()))?;
+    let scan_files =
+        arrow57_to_arrow58(filtered57).map_err(|e| delta_kernel::Error::generic(e.to_string()))?;
     Ok(ScanMetadataArrow {
         scan_files,
         scan_file_transforms,
@@ -685,7 +691,8 @@ pub(crate) trait ExpressionEvaluatorExt {
 
 impl<T: ExpressionEvaluator + ?Sized> ExpressionEvaluatorExt for T {
     fn evaluate_arrow(&self, batch: RecordBatch) -> DeltaResult<RecordBatch> {
-        let batch57 = arrow58_to_arrow57(&batch).map_err(|e| delta_kernel::Error::generic(e.to_string()))?;
+        let batch57 =
+            arrow58_to_arrow57(&batch).map_err(|e| delta_kernel::Error::generic(e.to_string()))?;
         let engine_data = ArrowEngineData::new(batch57);
         let result57: crate::kernel::arrow::compat::RecordBatch57 =
             ArrowEngineData::try_from_engine_data(T::evaluate(self, &engine_data)?)?.into();

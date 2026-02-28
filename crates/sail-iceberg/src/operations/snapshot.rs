@@ -11,6 +11,7 @@
 // limitations under the License.
 
 use bytes::Bytes;
+use object_store::ObjectStoreExt;
 
 use super::{ActionCommit, Transaction};
 use crate::io::StoreContext;
@@ -22,8 +23,6 @@ use crate::spec::{
     MAIN_BRANCH,
 };
 use crate::utils::join_table_uri;
-
-use object_store::ObjectStoreExt;
 
 pub trait SnapshotProduceOperation: Send + Sync {
     fn operation(&self) -> &'static str;

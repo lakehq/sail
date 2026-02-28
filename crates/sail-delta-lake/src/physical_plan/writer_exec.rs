@@ -44,9 +44,6 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
-use delta_kernel::engine::arrow_conversion::{TryIntoArrow as _, TryIntoKernel as _};
-
-use crate::kernel::arrow::compat::{arrow58_schema_to_kernel_struct, kernel_struct_to_arrow58_schema};
 use delta_kernel::schema::StructType;
 use delta_kernel::table_features::ColumnMappingMode;
 use futures::stream::{once, StreamExt};
@@ -55,6 +52,9 @@ use serde_json::Value;
 use url::Url;
 
 use crate::conversion::DeltaTypeConverter;
+use crate::kernel::arrow::compat::{
+    arrow58_schema_to_kernel_struct, kernel_struct_to_arrow58_schema,
+};
 use crate::kernel::models::{contains_timestampntz, Action, Metadata, Protocol};
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
@@ -455,8 +455,9 @@ impl DeltaWriterExec {
             let mut annotated_schema_opt: Option<StructType> = None;
             if !table_exists {
                 // Build kernel schema for feature detection
-                let kernel_schema: StructType = arrow58_schema_to_kernel_struct(final_schema.as_ref())
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let kernel_schema: StructType =
+                    arrow58_schema_to_kernel_struct(final_schema.as_ref())
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let has_timestamp_ntz = contains_timestampntz(kernel_schema.fields());
 
                 if matches!(
@@ -849,8 +850,8 @@ impl DeltaWriterExec {
             Some(SchemaMode::Overwrite) => {
                 // Use input schema as-is
                 let candidate_kernel: StructType =
-                        arrow58_schema_to_kernel_struct(input_schema.as_ref())
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    arrow58_schema_to_kernel_struct(input_schema.as_ref())
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                 let snapshot = table.snapshot()?;
                 let current_metadata = snapshot.metadata();

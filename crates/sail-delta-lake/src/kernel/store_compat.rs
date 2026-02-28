@@ -12,8 +12,9 @@ use futures::{StreamExt, TryStreamExt};
 use object_store::{ObjectStore, ObjectStoreExt};
 use object_store_012::path::Path as Path012;
 use object_store_012::{
-    GetOptions as GetOptions012, GetResult as GetResult012, GetResultPayload as GetResultPayload012,
-    ListResult as ListResult012, MultipartUpload as MultipartUpload012, ObjectMeta as ObjectMeta012,
+    GetOptions as GetOptions012, GetResult as GetResult012,
+    GetResultPayload as GetResultPayload012, ListResult as ListResult012,
+    MultipartUpload as MultipartUpload012, ObjectMeta as ObjectMeta012,
     ObjectStore as ObjectStore012, PutMultipartOptions as PutMultipartOptions012,
     PutOptions as PutOptions012, PutPayload as PutPayload012, PutResult as PutResult012,
     Result as Result012,
@@ -128,7 +129,7 @@ impl ObjectStore012 for ObjectStoreCompat {
     }
 
     fn list(&self, prefix: Option<&Path012>) -> BoxStream<'static, Result012<ObjectMeta012>> {
-        let prefix013 = prefix.map(|p| path_from_012(p));
+        let prefix013 = prefix.map(path_from_012);
         self.inner
             .list(prefix013.as_ref())
             .map_ok(meta_from_013)
@@ -137,7 +138,7 @@ impl ObjectStore012 for ObjectStoreCompat {
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path012>) -> Result012<ListResult012> {
-        let prefix013 = prefix.map(|p| path_from_012(p));
+        let prefix013 = prefix.map(path_from_012);
         let result = self
             .inner
             .list_with_delimiter(prefix013.as_ref())

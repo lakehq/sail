@@ -30,14 +30,12 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
-use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use delta_kernel::schema::StructType;
 use futures::stream::{self, StreamExt};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
-
-use crate::kernel::arrow::compat::arrow58_schema_to_kernel_struct;
 use url::Url;
 
+use crate::kernel::arrow::compat::arrow58_schema_to_kernel_struct;
 use crate::kernel::models::{Action, Metadata, Protocol};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
 use crate::kernel::{DeltaOperation, SaveMode};
@@ -333,8 +331,9 @@ impl ExecutionPlan for DeltaCommitExec {
                 } else {
                     // Construct minimal protocol/metadata and insert them
                     let normalized_sink = normalize_delta_schema(&sink_schema);
-                    let delta_schema: StructType = arrow58_schema_to_kernel_struct(normalized_sink.as_ref())
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    let delta_schema: StructType =
+                        arrow58_schema_to_kernel_struct(normalized_sink.as_ref())
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                     let protocol_json = serde_json::json!({
                         "minReaderVersion": 1,

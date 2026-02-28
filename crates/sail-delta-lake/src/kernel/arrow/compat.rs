@@ -83,9 +83,7 @@ pub(crate) fn arrow58_schema_to_kernel_struct(
 }
 
 /// Convert a delta_kernel StructField to an arrow 58 Field.
-pub(crate) fn kernel_field_to_arrow58_field(
-    field: &StructField,
-) -> Result<Field, DeltaTableError> {
+pub(crate) fn kernel_field_to_arrow58_field(field: &StructField) -> Result<Field, DeltaTableError> {
     let field57: arrow_57::datatypes::Field = field.try_into_arrow().map_err(err)?;
     let schema57 = Schema57::new(vec![field57]);
     let schema58 = arrow57_schema_to_arrow58(&schema57)?;

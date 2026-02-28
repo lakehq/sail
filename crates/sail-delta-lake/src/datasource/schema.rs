@@ -23,10 +23,8 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef, SchemaRef as ArrowSchemaRef,
 };
-use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 
 use crate::kernel::arrow::compat::kernel_struct_to_arrow58_schema;
-
 use crate::kernel::snapshot::{EagerSnapshot, LogDataHandler, Snapshot};
 use crate::kernel::{DeltaResult, DeltaTableError};
 use crate::schema::arrow_schema_from_struct_type;

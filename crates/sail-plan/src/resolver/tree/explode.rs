@@ -156,11 +156,8 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
                     Ok(fields
                         .iter()
                         .map(|field| {
-                            Expr::Column(Column::from_name(format!(
-                                "{name}.{}",
-                                field.name()
-                            )))
-                            .alias(field.name().as_str())
+                            Expr::Column(Column::from_name(format!("{name}.{}", field.name())))
+                                .alias(field.name().as_str())
                         })
                         .collect::<Vec<_>>())
                 }

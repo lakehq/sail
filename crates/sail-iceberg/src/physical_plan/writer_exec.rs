@@ -27,6 +27,7 @@ use datafusion::physical_plan::{
 use datafusion_common::{internal_err, DataFusionError, Result};
 use futures::stream::once;
 use futures::StreamExt;
+use object_store::ObjectStoreExt;
 use parquet::file::properties::WriterProperties;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
@@ -45,8 +46,6 @@ use crate::spec::partition::{
 use crate::spec::schema::Schema as IcebergSchema;
 use crate::spec::{TableMetadata, TableRequirement};
 use crate::utils::get_object_store_from_context;
-
-use object_store::ObjectStoreExt;
 
 #[derive(Debug)]
 pub struct IcebergWriterExec {

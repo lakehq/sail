@@ -9,7 +9,7 @@ use futures::StreamExt;
 use object_store::path::Path;
 use object_store::{
     CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
-    ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions, Result,
+    PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions, Result,
 };
 use tokio::sync::OnceCell;
 use tonic::codegen::Bytes;
@@ -202,4 +202,3 @@ where
             .await
     }
 }
-

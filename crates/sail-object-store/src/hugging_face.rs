@@ -245,7 +245,10 @@ impl ObjectStore for HuggingFaceObjectStore {
         _payload: PutPayload,
         _opts: PutOptions,
     ) -> object_store::Result<PutResult> {
-        Err(object_store::Error::NotImplemented { operation: "unsupported".to_string(), implementer: "HuggingFaceObjectStore".to_string() })
+        Err(object_store::Error::NotImplemented {
+            operation: "unsupported".to_string(),
+            implementer: "HuggingFaceObjectStore".to_string(),
+        })
     }
 
     async fn put_multipart_opts(
@@ -253,7 +256,10 @@ impl ObjectStore for HuggingFaceObjectStore {
         _location: &Path,
         _opts: PutMultipartOptions,
     ) -> object_store::Result<Box<dyn MultipartUpload>> {
-        Err(object_store::Error::NotImplemented { operation: "unsupported".to_string(), implementer: "HuggingFaceObjectStore".to_string() })
+        Err(object_store::Error::NotImplemented {
+            operation: "unsupported".to_string(),
+            implementer: "HuggingFaceObjectStore".to_string(),
+        })
     }
 
     async fn get_opts(
@@ -277,7 +283,10 @@ impl ObjectStore for HuggingFaceObjectStore {
             || if_unmodified_since.is_some()
             || version.is_some()
         {
-            return Err(object_store::Error::NotImplemented { operation: "unsupported".to_string(), implementer: "HuggingFaceObjectStore".to_string() });
+            return Err(object_store::Error::NotImplemented {
+                operation: "unsupported".to_string(),
+                implementer: "HuggingFaceObjectStore".to_string(),
+            });
         }
         let path = HuggingFacePath::parse(location)?;
         let repo = self.api.repo(path.repo());
@@ -326,7 +335,10 @@ impl ObjectStore for HuggingFaceObjectStore {
         _locations: BoxStream<'static, object_store::Result<Path>>,
     ) -> BoxStream<'static, object_store::Result<Path>> {
         Box::pin(stream::once(async {
-            Err(object_store::Error::NotImplemented { operation: "delete_stream".to_string(), implementer: "HuggingFaceObjectStore".to_string() })
+            Err(object_store::Error::NotImplemented {
+                operation: "delete_stream".to_string(),
+                implementer: "HuggingFaceObjectStore".to_string(),
+            })
         }))
     }
 
@@ -353,10 +365,21 @@ impl ObjectStore for HuggingFaceObjectStore {
         &self,
         _prefix: Option<&Path>,
     ) -> object_store::Result<ListResult> {
-        Err(object_store::Error::NotImplemented { operation: "unsupported".to_string(), implementer: "HuggingFaceObjectStore".to_string() })
+        Err(object_store::Error::NotImplemented {
+            operation: "unsupported".to_string(),
+            implementer: "HuggingFaceObjectStore".to_string(),
+        })
     }
 
-    async fn copy_opts(&self, _from: &Path, _to: &Path, _options: object_store::CopyOptions) -> object_store::Result<()> {
-        Err(object_store::Error::NotImplemented { operation: "copy_opts".to_string(), implementer: "HuggingFaceObjectStore".to_string() })
+    async fn copy_opts(
+        &self,
+        _from: &Path,
+        _to: &Path,
+        _options: object_store::CopyOptions,
+    ) -> object_store::Result<()> {
+        Err(object_store::Error::NotImplemented {
+            operation: "copy_opts".to_string(),
+            implementer: "HuggingFaceObjectStore".to_string(),
+        })
     }
 }

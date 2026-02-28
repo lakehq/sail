@@ -32,14 +32,14 @@ use datafusion::arrow::compute::{cast_with_options, CastOptions};
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
 use datafusion::common::scalar::ScalarValue;
 use datafusion::common::Result as DataFusionResult;
-use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use delta_kernel::expressions::{Scalar, StructData};
 use delta_kernel::schema::{DataType, PrimitiveType, StructField};
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
-
-use crate::kernel::arrow::compat::{arrow58_datatype_to_kernel_datatype, arrow58_field_to_kernel_field};
 use serde_json::Value;
 
+use crate::kernel::arrow::compat::{
+    arrow58_datatype_to_kernel_datatype, arrow58_field_to_kernel_field,
+};
 use crate::kernel::{DeltaResult as DeltaResultLocal, DeltaTableError};
 
 pub const NULL_PARTITION_VALUE_DATA_PATH: &str = "__HIVE_DEFAULT_PARTITION__";
@@ -274,7 +274,9 @@ impl ScalarExt for Scalar {
             return None;
         }
         if arr.is_null(index) {
-            return Some(Self::Null(arrow58_datatype_to_kernel_datatype(arr.data_type()).ok()?));
+            return Some(Self::Null(
+                arrow58_datatype_to_kernel_datatype(arr.data_type()).ok()?,
+            ));
         }
 
         ScalarValue::try_from_array(arr, index)

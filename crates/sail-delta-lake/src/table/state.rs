@@ -24,15 +24,13 @@ use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 use chrono::Utc;
-use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
-
-use crate::kernel::arrow::compat::arrow58_schema_to_kernel_struct;
 use delta_kernel::expressions::column_expr_ref;
 use delta_kernel::schema::{ColumnMetadataKey, StructField};
 use delta_kernel::table_features::ColumnMappingMode;
 use delta_kernel::{EvaluationHandler, Expression};
 use futures::TryStreamExt;
 
+use crate::kernel::arrow::compat::arrow58_schema_to_kernel_struct;
 use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, SnapshotExt};
 use crate::kernel::models::{DataType, Remove};
 use crate::kernel::snapshot::EagerSnapshot;

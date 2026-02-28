@@ -35,15 +35,16 @@ use delta_kernel::{Engine, Error as KernelError, FileMeta, LogPath};
 use futures::TryStreamExt;
 use log::{debug, error};
 use object_store::path::Path;
-use object_store::{Error as ObjectStoreError, ObjectMeta, ObjectStore, ObjectStoreExt, PutMode, PutOptions};
+use object_store::{
+    Error as ObjectStoreError, ObjectMeta, ObjectStore, ObjectStoreExt, PutMode, PutOptions,
+};
 use serde_json::Deserializer as JsonDeserializer;
 use tokio::runtime::{Handle, RuntimeFlavor};
 use url::Url;
 use uuid::Uuid;
 
-use crate::kernel::store_compat::ObjectStoreCompat;
-
 use crate::kernel::models::Action;
+use crate::kernel::store_compat::ObjectStoreCompat;
 use crate::kernel::transaction::TransactionError;
 use crate::kernel::{DeltaResult, DeltaTableError};
 

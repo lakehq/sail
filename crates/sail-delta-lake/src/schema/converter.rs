@@ -16,7 +16,7 @@ use crate::kernel::{DeltaResult, DeltaTableError};
 
 pub fn logical_arrow_to_kernel(arrow: &ArrowSchema) -> DeltaResult<StructType> {
     use crate::kernel::arrow::compat::arrow58_schema_to_kernel_struct;
-    Ok(arrow58_schema_to_kernel_struct(arrow)?)
+    arrow58_schema_to_kernel_struct(arrow)
 }
 
 pub fn kernel_to_logical_arrow(schema: &StructType) -> ArrowSchema {
