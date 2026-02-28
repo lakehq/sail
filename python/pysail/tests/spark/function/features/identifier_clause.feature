@@ -31,6 +31,25 @@ Feature: IDENTIFIER clause
         | id |
         | 2  |
 
+    Scenario: IDENTIFIER with qualified column name in SELECT
+      When query
+        """
+        SELECT IDENTIFIER('t.id') FROM VALUES (1, 'a'), (2, 'b') AS t(id, name) ORDER BY id
+        """
+      Then query result ordered
+        | id |
+        | 1  |
+        | 2  |
+
+    Scenario: IDENTIFIER with qualified column name in WHERE
+      When query
+        """
+        SELECT id FROM VALUES (1, 'a'), (2, 'b') AS t(id, name) WHERE IDENTIFIER('t.id') > 1
+        """
+      Then query result
+        | id |
+        | 2  |
+
   Rule: IDENTIFIER in table context
 
     Scenario: IDENTIFIER as table name in FROM clause
