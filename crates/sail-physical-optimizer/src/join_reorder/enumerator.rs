@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use datafusion::common::stats::Precision;
 use datafusion::error::{DataFusionError, Result};
 
 use crate::join_reorder::cardinality_estimator::CardinalityEstimator;
@@ -17,6 +18,10 @@ pub struct PlanEnumerator {
     cost_model: CostModel,
     /// Counter for tracking the number of plans generated/evaluated
     emit_count: usize,
+    /// Relations considered "fact anchors" in skewed star/snowflake shapes.
+    anchor_relations: JoinSet,
+    /// Whether guarded anchor penalties should participate in DP costing.
+    enable_fact_anchor_heuristic: bool,
 }
 
 /// Threshold for maximum number of plans to generate before falling back to greedy algorithm
@@ -25,7 +30,126 @@ const EMIT_THRESHOLD: usize = 10000;
 /// Threshold for relation count above which heuristic pruning is applied
 const RELATION_THRESHOLD: usize = 10;
 
+/// Minimum relation count before enabling guarded fact-anchor penalties.
+const FACT_ANCHOR_MIN_RELATIONS: usize = 5;
+/// A relation is considered an anchor when base_cardinality >= max_base * threshold.
+const FACT_ANCHOR_RELATIVE_THRESHOLD: f64 = 0.25;
+/// Anchor relations should dominate this share of total base cardinality.
+const FACT_ANCHOR_MIN_SHARE: f64 = 0.55;
+/// Penalty applied to low-confidence joins that avoid all anchor relations.
+const FACT_ANCHOR_PENALTY_MULTIPLIER: f64 = 8.0;
+
 impl PlanEnumerator {
+    fn derive_anchor_relations(query_graph: &QueryGraph) -> (JoinSet, bool) {
+        let relation_count = query_graph.relation_count();
+        if relation_count == 0 {
+            return (JoinSet::new(), false);
+        }
+
+        let max_base = query_graph
+            .relations
+            .iter()
+            .map(|relation| {
+                if relation.base_cardinality.is_finite() && relation.base_cardinality > 0.0 {
+                    relation.base_cardinality
+                } else {
+                    0.0
+                }
+            })
+            .fold(0.0, f64::max);
+        if max_base <= 0.0 {
+            return (JoinSet::new(), false);
+        }
+
+        let threshold = max_base * FACT_ANCHOR_RELATIVE_THRESHOLD;
+        let mut anchor_bits = 0u64;
+        let mut anchor_total = 0.0;
+        let mut total = 0.0;
+        let mut anchor_count = 0usize;
+
+        for relation in &query_graph.relations {
+            let base = if relation.base_cardinality.is_finite() && relation.base_cardinality > 0.0 {
+                relation.base_cardinality
+            } else {
+                0.0
+            };
+            total += base;
+
+            if base >= threshold {
+                anchor_bits |= 1u64 << relation.relation_id;
+                anchor_total += base;
+                anchor_count += 1;
+            }
+        }
+
+        // Defensive fallback: always keep at least one anchor candidate.
+        if anchor_bits == 0 {
+            if let Some(relation) = query_graph
+                .relations
+                .iter()
+                .max_by(|left, right| left.base_cardinality.total_cmp(&right.base_cardinality))
+            {
+                anchor_bits |= 1u64 << relation.relation_id;
+                anchor_total = relation.base_cardinality.max(0.0);
+                anchor_count = 1;
+            }
+        }
+
+        let anchors = JoinSet::from_bits(anchor_bits);
+        let anchor_share = if total > 0.0 {
+            anchor_total / total
+        } else {
+            0.0
+        };
+        let max_allowed_anchor_count = (relation_count / 2).max(1);
+        let enabled = relation_count >= FACT_ANCHOR_MIN_RELATIONS
+            && anchor_count > 0
+            && anchor_count <= max_allowed_anchor_count
+            && anchor_share >= FACT_ANCHOR_MIN_SHARE;
+
+        (anchors, enabled)
+    }
+
+    fn relation_has_distinct_stat(&self, relation_id: usize, column_index: usize) -> bool {
+        self.query_graph
+            .get_relation(relation_id)
+            .and_then(|relation| relation.statistics.column_statistics.get(column_index))
+            .is_some_and(|stats| !matches!(stats.distinct_count, Precision::Absent))
+    }
+
+    /// Returns true when join-key NDV confidence is low for this edge.
+    ///
+    /// We only treat an edge as low confidence when at least one equi-key pair lacks
+    /// distinct-count stats on both sides.
+    fn edge_is_low_confidence(&self, edge_index: usize) -> bool {
+        let Some(edge) = self.query_graph.edges.get(edge_index) else {
+            return false;
+        };
+
+        if edge.equi_pairs.is_empty() {
+            return false;
+        }
+
+        edge.equi_pairs.iter().any(|(left, right)| {
+            !self.relation_has_distinct_stat(left.relation_id, left.column_index)
+                && !self.relation_has_distinct_stat(right.relation_id, right.column_index)
+        })
+    }
+
+    fn should_apply_fact_anchor_penalty(&self, parent: JoinSet, edge_indices: &[usize]) -> bool {
+        if !self.enable_fact_anchor_heuristic {
+            return false;
+        }
+        if !parent.is_disjoint(&self.anchor_relations) {
+            return false;
+        }
+
+        edge_indices
+            .iter()
+            .copied()
+            .any(|edge_index| self.edge_is_low_confidence(edge_index))
+    }
+
     /// Generate all non-empty subsets of the given neighbor list.
     fn generate_all_nonempty_subsets(&self, elems: &[usize]) -> Vec<Vec<usize>> {
         let n = elems.len();
@@ -47,6 +171,8 @@ impl PlanEnumerator {
     }
     /// Creates a new plan enumerator.
     pub fn new(query_graph: QueryGraph) -> Self {
+        let (anchor_relations, enable_fact_anchor_heuristic) =
+            Self::derive_anchor_relations(&query_graph);
         let cardinality_estimator = CardinalityEstimator::new(query_graph.clone());
         let cost_model = CostModel::new();
 
@@ -56,6 +182,8 @@ impl PlanEnumerator {
             cardinality_estimator,
             cost_model,
             emit_count: 0,
+            anchor_relations,
+            enable_fact_anchor_heuristic,
         }
     }
 
@@ -394,9 +522,12 @@ impl PlanEnumerator {
             right_plan.cardinality,
             edge_indices,
         );
-        let new_cost = self
+        let mut new_cost = self
             .cost_model
             .compute_cost(&left_plan, &right_plan, new_cardinality);
+        if self.should_apply_fact_anchor_penalty(parent, edge_indices) {
+            new_cost += new_cardinality * FACT_ANCHOR_PENALTY_MULTIPLIER;
+        }
 
         let new_plan = Arc::new(DPPlan::new_join(
             left,
@@ -592,6 +723,7 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::common::stats::Precision;
     use datafusion::common::Statistics;
     use datafusion::logical_expr::{JoinType, Operator};
     use datafusion::physical_expr::expressions::{BinaryExpr, Column};
@@ -668,6 +800,58 @@ mod tests {
         }
 
         Ok(graph)
+    }
+
+    fn create_graph_with_custom_distinct_stats(
+        cardinalities: &[f64],
+        distinct_stats: &[Option<usize>],
+    ) -> Result<QueryGraph> {
+        assert_eq!(cardinalities.len(), distinct_stats.len());
+
+        let mut graph = QueryGraph::new();
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+
+        for (relation_id, &rows) in cardinalities.iter().enumerate() {
+            let plan = Arc::new(EmptyExec::new(schema.clone()));
+            let mut stats = Statistics::new_unknown(&schema);
+            if let Some(distinct) = distinct_stats[relation_id] {
+                stats.column_statistics[0].distinct_count = Precision::Exact(distinct);
+            }
+
+            let relation = RelationNode::new(plan, relation_id, rows, rows, stats);
+            graph.add_relation(relation);
+        }
+
+        Ok(graph)
+    }
+
+    fn add_equi_join_edge(graph: &mut QueryGraph, left: usize, right: usize) -> Result<usize> {
+        let join_filter = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
+            Operator::Eq,
+            Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
+        )) as Arc<dyn PhysicalExpr>;
+
+        let edge = JoinEdge::new(
+            JoinSet::new_singleton(left)? | JoinSet::new_singleton(right)?,
+            join_filter,
+            JoinType::Inner,
+            vec![(
+                StableColumn {
+                    relation_id: left,
+                    column_index: 0,
+                    name: format!("R{}.C0", left),
+                },
+                StableColumn {
+                    relation_id: right,
+                    column_index: 0,
+                    name: format!("R{}.C0", right),
+                },
+            )],
+        );
+        let edge_index = graph.edges.len();
+        graph.add_edge(edge)?;
+        Ok(edge_index)
     }
 
     fn assert_strict_left_deep(plan: &Arc<DPPlan>, dp_table: &HashMap<JoinSet, Arc<DPPlan>>) {
@@ -795,6 +979,60 @@ mod tests {
         // anchor_set cardinality is 1, so prune keeps one neighbor.
         assert_eq!(neighbors.len(), 1);
         assert_eq!(neighbors[0], 10);
+        Ok(())
+    }
+
+    #[test]
+    fn test_fact_anchor_penalty_triggers_for_unanchored_low_confidence_join() -> Result<()> {
+        let cardinalities = [50_000_000.0, 1_920_800.0, 1_920_800.0, 20_000.0, 10_000.0];
+        let distinct_stats = [None, None, None, None, None];
+        let mut graph = create_graph_with_custom_distinct_stats(&cardinalities, &distinct_stats)?;
+
+        let edge_01 = add_equi_join_edge(&mut graph, 0, 1)?;
+        let _edge_02 = add_equi_join_edge(&mut graph, 0, 2)?;
+        let _edge_03 = add_equi_join_edge(&mut graph, 0, 3)?;
+        let _edge_04 = add_equi_join_edge(&mut graph, 0, 4)?;
+        let edge_12 = add_equi_join_edge(&mut graph, 1, 2)?;
+
+        let enumerator = PlanEnumerator::new(graph);
+        assert!(enumerator.enable_fact_anchor_heuristic);
+
+        let dim_parent = JoinSet::from_iter([1, 2])?;
+        assert!(enumerator.should_apply_fact_anchor_penalty(dim_parent, &[edge_12]));
+
+        let anchored_parent = JoinSet::from_iter([0, 1])?;
+        assert!(!enumerator.should_apply_fact_anchor_penalty(anchored_parent, &[edge_01]));
+        Ok(())
+    }
+
+    #[test]
+    fn test_fact_anchor_penalty_skips_when_one_side_has_distinct_stats() -> Result<()> {
+        let cardinalities = [50_000_000.0, 1_920_800.0, 1_920_800.0, 20_000.0, 10_000.0];
+        let distinct_stats = [None, Some(1000), None, None, None];
+        let mut graph = create_graph_with_custom_distinct_stats(&cardinalities, &distinct_stats)?;
+
+        let _edge_01 = add_equi_join_edge(&mut graph, 0, 1)?;
+        let _edge_02 = add_equi_join_edge(&mut graph, 0, 2)?;
+        let _edge_03 = add_equi_join_edge(&mut graph, 0, 3)?;
+        let _edge_04 = add_equi_join_edge(&mut graph, 0, 4)?;
+        let edge_12 = add_equi_join_edge(&mut graph, 1, 2)?;
+
+        let enumerator = PlanEnumerator::new(graph);
+        assert!(enumerator.enable_fact_anchor_heuristic);
+
+        let dim_parent = JoinSet::from_iter([1, 2])?;
+        assert!(!enumerator.should_apply_fact_anchor_penalty(dim_parent, &[edge_12]));
+        Ok(())
+    }
+
+    #[test]
+    fn test_fact_anchor_heuristic_disabled_when_no_clear_anchor_shape() -> Result<()> {
+        let cardinalities = [1_000.0, 950.0, 900.0, 850.0, 800.0];
+        let distinct_stats = [None, None, None, None, None];
+        let graph = create_graph_with_custom_distinct_stats(&cardinalities, &distinct_stats)?;
+
+        let enumerator = PlanEnumerator::new(graph);
+        assert!(!enumerator.enable_fact_anchor_heuristic);
         Ok(())
     }
 }
