@@ -30,6 +30,7 @@ tower = { workspace = true }
 prost = { workspace = true }
 datafusion = { workspace = true }
 datafusion-proto = { workspace = true }
+parquet = { workspace = true }
 datafusion-spark = { workspace = true }
 arrow-flight = { workspace = true }
 log = { workspace = true }

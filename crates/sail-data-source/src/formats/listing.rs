@@ -14,11 +14,14 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{internal_err, not_impl_err, plan_err, GetExt, Result};
 use datafusion_datasource::file_compression_type::FileCompressionType;
+use parquet::file::properties::WriterProperties;
 use sail_common_datafusion::datasource::{
     get_partition_columns_and_file_schema, SinkInfo, SourceInfo, TableFormat,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 
+use crate::formats::parquet::bucketed_sink::BucketedParquetSinkExec;
+use crate::formats::parquet::bucketing::{BucketingConfig, HASH_DATAFUSION};
 use crate::utils::split_parquet_compression_string;
 
 /// Trait for schema inference logic
@@ -116,7 +119,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             schema,
             constraints,
             partition_by,
-            bucket_by: _,
+            bucket_by,
             sort_order,
             options,
         } = info;
@@ -180,9 +183,30 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         // The schema must be set after the listing options, otherwise it will panic.
         let config = config.with_schema(schema);
         let config = crate::listing::rewrite_listing_partitions(config)?;
-        Ok(Arc::new(
-            ListingTable::try_new(config)?.with_constraints(constraints),
-        ))
+        let table = ListingTable::try_new(config)?.with_constraints(constraints);
+
+        // Log bucketing metadata if present (from catalog or schema)
+        if let Some(ref bucket_info) = bucket_by {
+            log::debug!(
+                "Reading bucketed table: columns={:?}, num_buckets={}",
+                bucket_info.columns,
+                bucket_info.num_buckets,
+            );
+        }
+        // Check if the schema contains embedded bucketing metadata
+        let table_schema = table.schema();
+        let schema_metadata = table_schema.metadata();
+        if let Some(bucket_cols) = schema_metadata.get("sail.bucket.columns") {
+            log::debug!(
+                "Detected bucketing metadata in schema: columns={}, num_buckets={}, hash={}, sort={}",
+                bucket_cols,
+                schema_metadata.get("sail.bucket.num_buckets").map(String::as_str).unwrap_or("?"),
+                schema_metadata.get("sail.bucket.hash").map(String::as_str).unwrap_or("?"),
+                schema_metadata.get("sail.bucket.sort_columns").map(String::as_str).unwrap_or("none"),
+            );
+        }
+
+        Ok(Arc::new(table))
     }
 
     async fn create_writer(
@@ -203,8 +227,46 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         if is_flow_event_schema(&input.schema()) {
             return plan_err!("cannot write streaming data to listing table");
         }
-        if bucket_by.is_some() {
-            return not_impl_err!("bucketing for writing listing table format");
+        if let Some(bucket_by) = bucket_by {
+            // TODO: use a type-level check instead of string comparison
+            if self.inner.name() != "parquet" {
+                return not_impl_err!("bucketing is only supported for parquet format");
+            }
+            // Build bucketing config from BucketBy metadata
+            let config = BucketingConfig {
+                columns: bucket_by.columns,
+                num_buckets: bucket_by.num_buckets,
+                sort_columns: sort_order
+                    .as_ref()
+                    .map(|req| {
+                        req.iter()
+                            .map(|r| {
+                                let name = r.expr.to_string();
+                                let ascending = r.options.is_none_or(|o| !o.descending);
+                                (name, ascending)
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                hash_function: HASH_DATAFUSION.to_string(),
+            };
+            let output_path = if path.ends_with(object_store::path::DELIMITER) {
+                path
+            } else {
+                format!("{path}{}", object_store::path::DELIMITER)
+            };
+            let writer_props = WriterProperties::builder()
+                .set_compression(parquet::basic::Compression::SNAPPY)
+                .build();
+            let file_schema = input.schema();
+            return BucketedParquetSinkExec::new(
+                input,
+                config,
+                output_path,
+                file_schema,
+                writer_props,
+            )
+            .map(|exec| Arc::new(exec) as Arc<dyn ExecutionPlan>);
         }
         // always write multi-file output
         let path = if path.ends_with(object_store::path::DELIMITER) {

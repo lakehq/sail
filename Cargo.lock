@@ -6076,6 +6076,7 @@ dependencies = [
 name = "sail-data-source"
 version = "0.5.1"
 dependencies = [
+ "ahash 0.8.12",
  "arrow",
  "arrow-pyarrow",
  "arrow-schema",
@@ -6093,6 +6094,7 @@ dependencies = [
  "log",
  "object_store",
  "once_cell",
+ "parquet",
  "percent-encoding",
  "prettyplease",
  "proc-macro2",
@@ -6161,6 +6163,7 @@ dependencies = [
  "k8s-openapi",
  "kube",
  "log",
+ "parquet",
  "prost",
  "prost-build",
  "rand 0.9.2",

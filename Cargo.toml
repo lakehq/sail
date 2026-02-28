@@ -2,6 +2,9 @@
 members = [
     "crates/*",
 ]
+exclude = [
+    "fuzz",
+]
 resolver = "2"
 
 [workspace.package]
@@ -86,6 +89,7 @@ opentelemetry-appender-log = "0.31.0"
 figment = { version = "0.10.19", features = ["toml", "env"] }
 kube = "2.0.1"
 k8s-openapi = { version = "0.26.1", features = ["latest"] }
+ahash = "0.8"
 twox-hash = "2.1.2"
 murmur3 = "0.5.2"
 aes = "0.8.4"
