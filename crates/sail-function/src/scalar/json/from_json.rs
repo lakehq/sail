@@ -202,6 +202,8 @@ fn string_array_to_json_array(
             struct_nulls[i] = true;
             for (field, builder) in schema_fields.iter().zip(field_builders.iter_mut()) {
                 let field_value = obj.get(field.name());
+                dbg!(&field, &builder);
+                dbg!(&field_value);
                 append_field_value(builder, field, field_value)?;
             }
         } else {
@@ -219,6 +221,7 @@ fn string_array_to_json_array(
     Ok(Arc::new(struct_array))
 }
 
+#[derive(Debug)]
 enum FieldBuilder {
     Int32(Int32Builder),
     Int64(Int64Builder),
@@ -233,11 +236,11 @@ enum FieldBuilder {
         null_buffer: Vec<bool>,
     },
     Map {
-        field_names: Option<MapFieldNames>,
-        key_builder: Box<FieldBuilder>,
-        key_field: Field,
-        value_builder: Box<FieldBuilder>,
-        value_field: Field,
+        field: Arc<Field>,
+        offsets: Vec<i32>,
+        entries: Box<FieldBuilder>, // should be struct
+        null_buffer: Vec<bool>,
+        ordered: bool,
     },
     List {
         field: Arc<Field>,
@@ -268,21 +271,18 @@ fn create_field_builders(fields: &Fields, capacity: usize) -> Result<Vec<FieldBu
 
                 })
             },
-            DataType::Map(struct_field, _ordered) => { // field is a struct
-                let mut f = match struct_field.data_type() {
-                    DataType::Struct(fields) => {
-                        create_field_builders(fields, 1)?
-                    },
-                    _ => unreachable!()
-                };
-
-                let key_builder = f.pop().unwrap();
-                let value_builder = f.pop().unwrap();
+            DataType::Map(struct_field, ordered) => { // field is a struct
+                let tmp_fields = Fields::from(vec![struct_field.clone()]);
+                let struct_builder = create_field_builders(&tmp_fields, capacity)?.pop().unwrap();
+                let mut offsets = Vec::with_capacity(capacity + 1);
+                offsets.push(0);
 
                 Ok(FieldBuilder::Map {
-                    field_names: None, // entries, keys, values
-                    key_builder: Box::new(key_builder),
-                    value_builder: Box::new(value_builder)
+                    field: struct_field.clone(),
+                    offsets: offsets,
+                    entries: Box::new(struct_builder),
+                    null_buffer: Vec::with_capacity(capacity),
+                    ordered: ordered.clone()
                 })
             }
             DataType::List(field) => {
@@ -328,12 +328,12 @@ fn append_field_value(
                     append_null_to_all_builders(nested_builders)
                 },
                 FieldBuilder::Map {
-                    key_builder,
-                    value_builder,
+                    entries,
+                    null_buffer,
                     ..
                 } => {
-                    append_null_to_all_builders(std::slice::from_mut(key_builder));
-                    append_null_to_all_builders(std::slice::from_mut(value_builder));
+                    null_buffer.push(false);
+                    append_null_to_all_builders(std::slice::from_mut(entries));
                 },
                 FieldBuilder::List {
 					offsets,
@@ -436,20 +436,13 @@ fn append_field_value(
         },
         (
             FieldBuilder::Map {
-				key_builder,
-                key_field,
-				value_builder,
-                value_field,
+                field,
+                entries: struct_builder,
                 ..
             },
-            DataType::Map(_field, _ordered),
+            DataType::Map(_, _),
         ) => {
-            if let Some(obj) = value.as_object() {
-                for (k, v) in obj.iter() {
-                    append_field_value(key_builder, key_field, Some(&Value::String(k.clone())));
-                    append_field_value(value_builder, value_field, Some(v));
-                }
-            }
+            append_field_value(struct_builder, field, Some(value))?;
         },
         (
             FieldBuilder::List {
@@ -499,12 +492,12 @@ fn append_null_to_all_builders(builders: &mut [FieldBuilder]) {
                 append_null_to_all_builders(nested_builder);
             },
             FieldBuilder::Map {
-                key_builder,
-                value_builder,
+                entries,
+                null_buffer,
                 ..
             } => {
-                append_null_to_all_builders(std::slice::from_mut(key_builder));
-                append_null_to_all_builders(std::slice::from_mut(value_builder));
+                null_buffer.push(false);
+                append_null_to_all_builders(std::slice::from_mut(entries));
             }
             FieldBuilder::List {
 				offsets,
@@ -536,21 +529,35 @@ fn finish_builder(builder: FieldBuilder) -> Result<ArrayRef> {
                 builders,
                 null_buffer
             } => {
+                dbg!("finishing struct");
                 let nested_arrays: Vec<ArrayRef> = builders
                     .into_iter()
                     .map(finish_builder)
                     .collect::<Result<Vec<_>, DataFusionError>>()?;
                 let null_buf = NullBuffer::from(null_buffer);
+                dbg!(&fields);
+                dbg!(&nested_arrays);
+                dbg!(&null_buf);
                 Arc::new(StructArray::new(fields, nested_arrays, Some(null_buf)))
             },
             FieldBuilder::Map {
-
+                field,
+                offsets,
+                entries,
+                null_buffer,
+                ordered
             } => {
+                dbg!("finishing map");
+                let struct_array = finish_builder(*entries)?
+                    .as_any()
+                    .downcast_ref::<StructArray>()
+                    .unwrap()
+                    .clone();
                 Arc::new(MapArray::new(
                     field,
-                    offsets,
-                    entries,
-                    nulls,
+                    OffsetBuffer::new(ScalarBuffer::from(offsets)),
+                    struct_array,
+                    Some(NullBuffer::from(null_buffer)),
                     ordered
                 ))
             }
@@ -615,6 +622,8 @@ fn get_schema_as_fields(schema_str: &str) -> Result<Fields> {
     let arrow_dtype = SailToArrayDataType.resolve_data_type(&sail_dtype)?;
     match arrow_dtype {
         DataType::Struct(fields) => Ok(fields),
+        DataType::Map(field, _ordered) => Ok(Fields::from(vec![field])),
+        DataType::List(field) => Ok(Fields::from(vec![field])),
         other => Err(DataFusionError::NotImplemented(format!("Not implemented {other:?}")))
     }
 }
@@ -946,7 +955,7 @@ mod test {
             "b": 2
         }"#;
         let strings = StringArray::from(vec![json_str, json_str]);
-        let schema = get_schema_as_fields("a int, b int").unwrap();
+        let schema = get_schema_as_fields("map<string, int>").unwrap();
         string_array_to_json_array(&strings, schema, None).unwrap();
     }
 }
