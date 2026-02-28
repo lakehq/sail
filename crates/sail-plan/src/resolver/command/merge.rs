@@ -883,6 +883,14 @@ fn merge_disambiguate_unqualified_plan_ids(
         },
         Expr::UnresolvedDate { .. } => expr,
         Expr::UnresolvedTimestamp { .. } => expr,
+        Expr::IdentifierClause { expr: inner } => Expr::IdentifierClause {
+            expr: Box::new(merge_disambiguate_unqualified_plan_ids(
+                *inner,
+                state,
+                target_schema,
+                source_schema,
+            )),
+        },
         Expr::Subquery {
             plan_id,
             subquery_type,

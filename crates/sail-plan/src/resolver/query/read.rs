@@ -134,6 +134,34 @@ impl PlanResolver<'_> {
         }
     }
 
+    pub(super) async fn resolve_query_read_dynamic_table(
+        &self,
+        table: spec::ReadDynamicTable,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let spec::ReadDynamicTable {
+            name,
+            sample,
+            options,
+        } = table;
+        let schema = Arc::new(DFSchema::empty());
+        let resolved = self.resolve_expression(name, &schema, state).await?;
+        let name_str = self.evaluate_identifier_expr(resolved, state)?;
+        let name = sail_sql_analyzer::expression::from_ast_object_name(
+            sail_sql_analyzer::parser::parse_object_name(&name_str)?,
+        )?;
+        self.resolve_query_read_named_table(
+            spec::ReadNamedTable {
+                name,
+                temporal: None,
+                sample,
+                options,
+            },
+            state,
+        )
+        .await
+    }
+
     /// Apply TABLESAMPLE clause to a LogicalPlan
     pub(super) async fn apply_table_sample(
         &self,

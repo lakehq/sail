@@ -960,6 +960,9 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
             plan_id: None,
             is_metadata_column: false,
         }),
+        AtomExpr::IdentifierClause(_, _, expr, _) => Ok(spec::Expr::IdentifierClause {
+            expr: Box::new(from_ast_expression(*expr)?),
+        }),
     }
 }
 
