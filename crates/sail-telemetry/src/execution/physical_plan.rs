@@ -116,7 +116,7 @@ impl ExecutionPlan for TracingExec {
         self.inner.schema()
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         self.inner.properties()
     }
 
@@ -199,11 +199,6 @@ impl ExecutionPlan for TracingExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         self.inner.metrics()
-    }
-
-    #[expect(deprecated)]
-    fn statistics(&self) -> Result<Statistics> {
-        self.inner.statistics()
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {

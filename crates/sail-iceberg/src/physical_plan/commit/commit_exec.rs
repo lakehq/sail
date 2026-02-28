@@ -50,7 +50,7 @@ const MAX_COMMIT_RETRIES: usize = 5;
 pub struct IcebergCommitExec {
     input: Arc<dyn ExecutionPlan>,
     table_url: Url,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl IcebergCommitExec {
@@ -60,12 +60,12 @@ impl IcebergCommitExec {
             DataType::UInt64,
             true,
         )]));
-        let cache = PlanProperties::new(
+        let cache = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(1),
             EmissionType::Final,
             Boundedness::Bounded,
-        );
+        )));
         Self {
             input,
             table_url,
@@ -209,7 +209,7 @@ impl ExecutionPlan for IcebergCommitExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 

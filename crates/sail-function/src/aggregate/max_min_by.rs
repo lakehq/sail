@@ -11,7 +11,7 @@ use datafusion::error::DataFusionError;
 use datafusion::functions_aggregate::first_last::last_value_udaf;
 use datafusion::logical_expr::expr::{AggregateFunction, Sort};
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion::logical_expr::simplify::SimplifyInfo;
+use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::logical_expr::utils::format_state_name;
 use datafusion::logical_expr::{function, Accumulator, AggregateUDFImpl, Signature, Volatility};
 use datafusion::prelude::Expr;
@@ -164,7 +164,7 @@ impl AggregateUDFImpl for MaxByFunction {
     }
 
     fn simplify(&self) -> Option<function::AggregateFunctionSimplification> {
-        let simplify = |mut aggr_func: AggregateFunction, _: &dyn SimplifyInfo| {
+        let simplify = |mut aggr_func: AggregateFunction, _: &SimplifyContext| {
             let mut order_by = aggr_func.params.order_by;
             let (second_arg, first_arg) = (
                 aggr_func.params.args.remove(1),
@@ -270,7 +270,7 @@ impl AggregateUDFImpl for MinByFunction {
     }
 
     fn simplify(&self) -> Option<function::AggregateFunctionSimplification> {
-        let simplify = |mut aggr_func: AggregateFunction, _: &dyn SimplifyInfo| {
+        let simplify = |mut aggr_func: AggregateFunction, _: &SimplifyContext| {
             let mut order_by = aggr_func.params.order_by;
             let (second_arg, first_arg) = (
                 aggr_func.params.args.remove(1),

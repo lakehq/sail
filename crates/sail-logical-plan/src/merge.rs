@@ -652,6 +652,7 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
             JoinType::LeftAnti,
             JoinConstraint::On,
             NullEquality::NullEqualsNothing,
+            false,
         )?;
         let join = Arc::new(LogicalPlan::Join(join));
 
@@ -706,6 +707,7 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
         JoinType::Full,
         JoinConstraint::On,
         NullEquality::NullEqualsNothing,
+        false,
     )?;
 
     let join = Arc::new(LogicalPlan::Join(join));

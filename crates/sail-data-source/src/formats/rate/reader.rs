@@ -86,7 +86,7 @@ pub struct RateSourceExec {
     original_schema: SchemaRef,
     projected_schema: SchemaRef,
     projection: Vec<usize>,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl RateSourceExec {
@@ -100,14 +100,14 @@ impl RateSourceExec {
         let time_zone = Self::infer_time_zone(&schema)?;
         let projected_schema = Arc::new(schema.project(&projection)?);
         let output_schema = Arc::new(to_flow_event_schema(&projected_schema));
-        let properties = PlanProperties::new(
+        let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(output_schema),
             Partitioning::UnknownPartitioning(options.num_partitions),
             EmissionType::Both,
             Boundedness::Unbounded {
                 requires_infinite_memory: false,
             },
-        );
+        ));
         Ok(Self {
             options,
             time_zone,
@@ -171,7 +171,7 @@ impl ExecutionPlan for RateSourceExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 
