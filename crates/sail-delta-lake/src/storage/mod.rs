@@ -35,11 +35,13 @@ use delta_kernel::{Engine, Error as KernelError, FileMeta, LogPath};
 use futures::TryStreamExt;
 use log::{debug, error};
 use object_store::path::Path;
-use object_store::{Error as ObjectStoreError, ObjectMeta, ObjectStore, PutMode, PutOptions};
+use object_store::{Error as ObjectStoreError, ObjectMeta, ObjectStore, ObjectStoreExt, PutMode, PutOptions};
 use serde_json::Deserializer as JsonDeserializer;
 use tokio::runtime::{Handle, RuntimeFlavor};
 use url::Url;
 use uuid::Uuid;
+
+use crate::kernel::store_compat::ObjectStoreCompat;
 
 use crate::kernel::models::Action;
 use crate::kernel::transaction::TransactionError;
@@ -341,20 +343,21 @@ async fn latest_version_from_listing(store: Arc<dyn ObjectStore>) -> DeltaResult
 }
 
 fn get_engine(store: Arc<dyn ObjectStore>) -> Arc<dyn Engine> {
+    let compat_store = ObjectStoreCompat::new(store);
     let handle = Handle::current();
     match handle.runtime_flavor() {
         RuntimeFlavor::MultiThread => Arc::new(DefaultEngine::new_with_executor(
-            store,
+            compat_store,
             Arc::new(TokioMultiThreadExecutor::new(handle)),
         )),
         RuntimeFlavor::CurrentThread => Arc::new(DefaultEngine::new_with_executor(
-            store,
+            compat_store,
             Arc::new(TokioBackgroundExecutor::new()),
         )),
         _ => {
             error!("unsupported runtime flavor, using background executor");
             Arc::new(DefaultEngine::new_with_executor(
-                store,
+                compat_store,
                 Arc::new(TokioBackgroundExecutor::new()),
             ))
         }

@@ -24,13 +24,10 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_schema::Fields;
-use datafusion::arrow::array::{Array, BooleanArray, MapArray, RecordBatch, StringArray, StructArray};
+use datafusion::arrow::array::{Array, MapArray, RecordBatch, StringArray, StructArray};
 use datafusion::arrow::datatypes::{
-    DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
+    DataType as ArrowDataType, Field, Fields, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
 };
-use delta_kernel::arrow::compute::filter_record_batch as filter_record_batch57;
-use delta_kernel::engine::arrow_conversion::TryIntoArrow;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::engine::parse_json;
 use delta_kernel::expressions::{ColumnName, Scalar, StructData};
@@ -48,7 +45,10 @@ use delta_kernel::{
 use itertools::Itertools;
 
 use crate::conversion::ScalarConverter;
-use crate::kernel::arrow::compat::{arrow57_to_arrow58, arrow58_to_arrow57};
+use crate::kernel::arrow::compat::{
+    arrow57_to_arrow58, arrow58_to_arrow57, kernel_field_to_arrow58_field,
+    kernel_struct_to_arrow58_schema,
+};
 use crate::kernel::snapshot::SCAN_ROW_ARROW_SCHEMA;
 use crate::kernel::{DeltaResult as DeltaResultLocal, DeltaTableError};
 
@@ -181,7 +181,7 @@ impl SnapshotExt for Snapshot {
         let mut fields = SCAN_ROW_ARROW_SCHEMA.fields().to_vec();
 
         let stats_schema = self.stats_schema()?;
-        let stats_schema: ArrowSchema = stats_schema.as_ref().try_into_arrow()?;
+        let stats_schema: ArrowSchema = kernel_struct_to_arrow58_schema(stats_schema.as_ref())?;
         fields.push(Arc::new(Field::new(
             "stats_parsed",
             ArrowDataType::Struct(stats_schema.fields().to_owned()),
@@ -189,7 +189,8 @@ impl SnapshotExt for Snapshot {
         )));
 
         if let Some(partition_schema) = self.partitions_schema()? {
-            let partition_schema: ArrowSchema = partition_schema.as_ref().try_into_arrow()?;
+            let partition_schema: ArrowSchema =
+                kernel_struct_to_arrow58_schema(partition_schema.as_ref())?;
             fields.push(Arc::new(Field::new(
                 "partitionValues_parsed",
                 ArrowDataType::Struct(partition_schema.fields().to_owned()),
@@ -214,12 +215,17 @@ impl SnapshotExt for Snapshot {
 
         let stats_schema = self.stats_schema()?;
         let stats_batch = batch.project(&[stats_idx])?;
-        let stats_data = Box::new(ArrowEngineData::new(stats_batch));
+        let stats_batch57 = arrow58_to_arrow57(&stats_batch)
+            .map_err(|e| DeltaTableError::generic(e.to_string()))?;
+        let stats_data = Box::new(ArrowEngineData::new(stats_batch57));
 
         let parsed = parse_json(stats_data, stats_schema)?;
-        let parsed: RecordBatch = ArrowEngineData::try_from_engine_data(parsed)?.into();
+        let parsed57: crate::kernel::arrow::compat::RecordBatch57 =
+            ArrowEngineData::try_from_engine_data(parsed)?.into();
+        let parsed58 = arrow57_to_arrow58(parsed57)
+            .map_err(|e| DeltaTableError::generic(e.to_string()))?;
 
-        let stats_array: Arc<StructArray> = Arc::new(parsed.into());
+        let stats_array: Arc<StructArray> = Arc::new(parsed58.into());
         fields.push(Arc::new(Field::new(
             "stats_parsed",
             stats_array.data_type().to_owned(),
@@ -315,7 +321,7 @@ fn parse_partition_values_array(
     let arrow_fields: Fields = Fields::from(
         partition_schema
             .fields()
-            .map(|f| f.try_into_arrow())
+            .map(kernel_field_to_arrow58_field)
             .collect::<Result<Vec<Field>, _>>()?,
     );
 
@@ -656,8 +662,13 @@ fn kernel_to_arrow(metadata: ScanMetadata) -> DeltaResult<ScanMetadataArrow> {
         .filter_map(|(i, v)| metadata.scan_files.selection_vector()[i].then_some(v))
         .collect();
     let (data, selection) = metadata.scan_files.into_parts();
-    let batch = ArrowEngineData::try_from_engine_data(data)?.into();
-    let scan_files = filter_record_batch(&batch, &BooleanArray::from(selection))?;
+    let batch57: crate::kernel::arrow::compat::RecordBatch57 =
+        ArrowEngineData::try_from_engine_data(data)?.into();
+    let filtered57 = delta_kernel::arrow::compute::filter_record_batch(
+        &batch57,
+        &arrow_57::array::BooleanArray::from(selection),
+    )?;
+    let scan_files = arrow57_to_arrow58(filtered57).map_err(|e| delta_kernel::Error::generic(e.to_string()))?;
     Ok(ScanMetadataArrow {
         scan_files,
         scan_file_transforms,
@@ -674,8 +685,11 @@ pub(crate) trait ExpressionEvaluatorExt {
 
 impl<T: ExpressionEvaluator + ?Sized> ExpressionEvaluatorExt for T {
     fn evaluate_arrow(&self, batch: RecordBatch) -> DeltaResult<RecordBatch> {
-        let engine_data = ArrowEngineData::new(batch);
-        Ok(ArrowEngineData::try_from_engine_data(T::evaluate(self, &engine_data)?)?.into())
+        let batch57 = arrow58_to_arrow57(&batch).map_err(|e| delta_kernel::Error::generic(e.to_string()))?;
+        let engine_data = ArrowEngineData::new(batch57);
+        let result57: crate::kernel::arrow::compat::RecordBatch57 =
+            ArrowEngineData::try_from_engine_data(T::evaluate(self, &engine_data)?)?.into();
+        arrow57_to_arrow58(result57).map_err(|e| delta_kernel::Error::generic(e.to_string()))
     }
 }
 

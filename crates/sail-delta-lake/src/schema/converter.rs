@@ -4,22 +4,23 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef,
 };
-use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use delta_kernel::schema::{
     ColumnMetadataKey, MetadataValue, StructField as KernelStructField, StructType,
 };
 use delta_kernel::table_features::ColumnMappingMode;
 
+use crate::kernel::arrow::compat::{
+    kernel_field_to_arrow58_field, kernel_struct_to_arrow58_schema,
+};
 use crate::kernel::{DeltaResult, DeltaTableError};
 
 pub fn logical_arrow_to_kernel(arrow: &ArrowSchema) -> DeltaResult<StructType> {
-    Ok(arrow.try_into_kernel()?)
+    use crate::kernel::arrow::compat::arrow58_schema_to_kernel_struct;
+    Ok(arrow58_schema_to_kernel_struct(arrow)?)
 }
 
 pub fn kernel_to_logical_arrow(schema: &StructType) -> ArrowSchema {
-    schema
-        .try_into_arrow()
-        .unwrap_or_else(|_| ArrowSchema::empty())
+    kernel_struct_to_arrow58_schema(schema).unwrap_or_else(|_| ArrowSchema::empty())
 }
 
 pub fn arrow_schema_from_struct_type(
@@ -50,9 +51,8 @@ pub fn arrow_schema_from_struct_type(
 
 pub fn get_physical_arrow_schema(logical: &StructType, mode: ColumnMappingMode) -> ArrowSchema {
     let physical_kernel = logical.make_physical(mode);
-    let physical_arrow: ArrowSchema = (&physical_kernel)
-        .try_into_arrow()
-        .unwrap_or_else(|_| ArrowSchema::empty());
+    let physical_arrow: ArrowSchema =
+        kernel_struct_to_arrow58_schema(&physical_kernel).unwrap_or_else(|_| ArrowSchema::empty());
     match mode {
         ColumnMappingMode::Name | ColumnMappingMode::Id => {
             enrich_arrow_with_parquet_field_ids(&physical_arrow, logical)
@@ -62,7 +62,7 @@ pub fn get_physical_arrow_schema(logical: &StructType, mode: ColumnMappingMode) 
 }
 
 fn field_from_struct_field(field: &KernelStructField) -> Result<Field, DeltaTableError> {
-    let arrow_field: Field = field.try_into_arrow()?;
+    let arrow_field: Field = kernel_field_to_arrow58_field(field)?;
     let field_type = arrow_field.data_type().clone();
     Ok(Field::new(
         field.name().to_string(),

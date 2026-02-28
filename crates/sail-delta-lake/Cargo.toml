@@ -39,6 +39,8 @@ arrow-schema = { workspace = true }
 async-trait = { workspace = true }
 educe = { workspace = true }
 object_store = { workspace = true }
+# object_store 0.12 is needed for delta_kernel compatibility
+object_store_012 = { package = "object_store", version = "0.12.5" }
 thiserror = { workspace = true }
 chrono = { workspace = true }
 serde_json = { workspace = true }

@@ -24,7 +24,9 @@ use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 use chrono::Utc;
-use delta_kernel::engine::arrow_conversion::TryIntoKernel;
+use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
+
+use crate::kernel::arrow::compat::arrow58_schema_to_kernel_struct;
 use delta_kernel::expressions::column_expr_ref;
 use delta_kernel::schema::{ColumnMetadataKey, StructField};
 use delta_kernel::table_features::ColumnMappingMode;
@@ -211,7 +213,7 @@ impl DeltaTableState {
         let table_schema = DataType::try_struct_type(fields)?;
 
         let input_schema = self.snapshot.files.schema();
-        let input_schema = Arc::new(input_schema.as_ref().try_into_kernel()?);
+        let input_schema = Arc::new(arrow58_schema_to_kernel_struct(input_schema.as_ref())?);
         let actions = self.snapshot.files.clone();
 
         let evaluator = ARROW_HANDLER.new_expression_evaluator(

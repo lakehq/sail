@@ -44,7 +44,9 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
-use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
+use delta_kernel::engine::arrow_conversion::{TryIntoArrow as _, TryIntoKernel as _};
+
+use crate::kernel::arrow::compat::{arrow58_schema_to_kernel_struct, kernel_struct_to_arrow58_schema};
 use delta_kernel::schema::StructType;
 use delta_kernel::table_features::ColumnMappingMode;
 use futures::stream::{once, StreamExt};
@@ -453,9 +455,7 @@ impl DeltaWriterExec {
             let mut annotated_schema_opt: Option<StructType> = None;
             if !table_exists {
                 // Build kernel schema for feature detection
-                let kernel_schema: StructType = final_schema
-                    .as_ref()
-                    .try_into_kernel()
+                let kernel_schema: StructType = arrow58_schema_to_kernel_struct(final_schema.as_ref())
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let has_timestamp_ntz = contains_timestampntz(kernel_schema.fields());
 
@@ -815,7 +815,10 @@ impl DeltaWriterExec {
         let table_schema = table_metadata
             .parse_schema()
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let table_arrow_schema = Arc::new((&table_schema).try_into_arrow()?);
+        let table_arrow_schema = Arc::new(
+            kernel_struct_to_arrow58_schema(&table_schema)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?,
+        );
 
         match schema_mode {
             Some(SchemaMode::Merge) => {
@@ -823,10 +826,9 @@ impl DeltaWriterExec {
                 let merged_schema = Self::merge_schemas(&table_arrow_schema, input_schema)?;
                 if merged_schema.fields() != table_arrow_schema.fields() {
                     // Schema has changed, create metadata action
-                    let candidate_kernel: StructType = merged_schema
-                        .as_ref()
-                        .try_into_kernel()
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    let candidate_kernel: StructType =
+                        arrow58_schema_to_kernel_struct(merged_schema.as_ref())
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                     let snapshot = table.snapshot()?;
                     let current_metadata = snapshot.metadata();
@@ -846,10 +848,9 @@ impl DeltaWriterExec {
             }
             Some(SchemaMode::Overwrite) => {
                 // Use input schema as-is
-                let candidate_kernel: StructType = input_schema
-                    .as_ref()
-                    .try_into_kernel()
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let candidate_kernel: StructType =
+                        arrow58_schema_to_kernel_struct(input_schema.as_ref())
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                 let snapshot = table.snapshot()?;
                 let current_metadata = snapshot.metadata();

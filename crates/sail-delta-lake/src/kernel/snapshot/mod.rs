@@ -28,7 +28,6 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::compute::concat_batches;
 use delta_kernel::actions::{Remove as KernelRemove, Sidecar};
-use delta_kernel::engine::arrow_conversion::TryIntoArrow;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::path::{LogPathFileType, ParsedLogPath};
 use delta_kernel::scan::scan_row_schema;
@@ -42,12 +41,13 @@ use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
 use object_store::path::Path;
-use object_store::ObjectStore;
+use object_store::{ObjectStore, ObjectStoreExt};
 use percent_encoding::percent_decode_str;
 use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
 use tokio::task::spawn_blocking;
 use url::Url;
 
+use crate::kernel::arrow::compat::{arrow57_to_arrow58, kernel_struct_to_arrow58_schema};
 use crate::kernel::arrow::engine_ext::{ScanExt, SnapshotExt};
 use crate::kernel::models::{
     Action, CommitInfo, DeletionVectorDescriptor, Metadata, Protocol, Remove, StorageType,
@@ -65,13 +65,10 @@ pub(crate) mod stream;
 
 pub(crate) static SCAN_ROW_ARROW_SCHEMA: LazyLock<arrow_schema::SchemaRef> = LazyLock::new(|| {
     Arc::new(
-        scan_row_schema()
-            .as_ref()
-            .try_into_arrow()
-            .unwrap_or_else(|_| {
-                // Fallback to an empty schema if conversion fails
-                arrow_schema::Schema::empty()
-            }),
+        kernel_struct_to_arrow58_schema(scan_row_schema().as_ref()).unwrap_or_else(|_| {
+            // Fallback to an empty schema if conversion fails
+            arrow_schema::Schema::empty()
+        }),
     )
 });
 
@@ -322,7 +319,8 @@ impl Snapshot {
             .map(move |meta| {
                 let store = store.clone();
                 async move {
-                    let commit_log_bytes = store.get(&meta.location).await?.bytes().await?;
+                    let get_result = store.get(&meta.location).await?;
+                    let commit_log_bytes = get_result.bytes().await?;
                     let reader = BufReader::new(Cursor::new(commit_log_bytes));
                     for line in reader.lines() {
                         let action: Action = serde_json::from_str(line?.as_str())?;
@@ -369,8 +367,9 @@ impl Snapshot {
 
         builder.spawn_blocking(move || {
             for res in remove_data {
-                let batch: RecordBatch =
+                let batch57: crate::kernel::arrow::compat::RecordBatch57 =
                     ArrowEngineData::try_from_engine_data(res?.actions)?.into();
+                let batch = arrow57_to_arrow58(batch57)?;
                 if tx.blocking_send(Ok(batch)).is_err() {
                     break;
                 }

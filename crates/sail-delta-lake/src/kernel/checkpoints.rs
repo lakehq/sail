@@ -21,8 +21,6 @@
 use std::sync::LazyLock;
 
 use chrono::{TimeZone, Utc};
-use datafusion::arrow::array::BooleanArray;
-use datafusion::arrow::compute::filter_record_batch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
@@ -81,9 +79,12 @@ fn parse_version(regex: &Regex, location: &Path) -> Option<i64> {
 fn to_rb(data: FilteredEngineData) -> DeltaResult<RecordBatch> {
     let (underlying_data, selection_vector) = data.into_parts();
     let engine_data = ArrowEngineData::try_from_engine_data(underlying_data)?;
-    let predicate = BooleanArray::from(selection_vector);
-    let batch = filter_record_batch(engine_data.record_batch(), &predicate)?;
-    Ok(batch)
+    let batch57 = delta_kernel::arrow::compute::filter_record_batch(
+        engine_data.record_batch(),
+        &arrow_57::array::BooleanArray::from(selection_vector),
+    )
+    .map_err(|e| DeltaTableError::generic(e.to_string()))?;
+    crate::kernel::arrow::compat::arrow57_to_arrow58(batch57)
 }
 
 struct CheckpointManager<'a> {

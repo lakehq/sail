@@ -36,6 +36,8 @@ use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use delta_kernel::expressions::{Scalar, StructData};
 use delta_kernel::schema::{DataType, PrimitiveType, StructField};
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
+
+use crate::kernel::arrow::compat::{arrow58_datatype_to_kernel_datatype, arrow58_field_to_kernel_field};
 use serde_json::Value;
 
 use crate::kernel::{DeltaResult as DeltaResultLocal, DeltaTableError};
@@ -272,7 +274,7 @@ impl ScalarExt for Scalar {
             return None;
         }
         if arr.is_null(index) {
-            return Some(Self::Null(arr.data_type().try_into_kernel().ok()?));
+            return Some(Self::Null(arrow58_datatype_to_kernel_datatype(arr.data_type()).ok()?));
         }
 
         ScalarValue::try_from_array(arr, index)
@@ -433,7 +435,7 @@ fn struct_data_from_array(struct_array: &array::StructArray) -> Option<StructDat
     let mut values = Vec::with_capacity(columns.len());
 
     for (field, column) in fields.iter().zip(columns.iter()) {
-        let kernel_field = field.as_ref().try_into_kernel().ok()?;
+        let kernel_field = arrow58_field_to_kernel_field(field.as_ref()).ok()?;
         let value = Scalar::from_array(column.as_ref(), 0)?;
         struct_fields.push(kernel_field);
         values.push(value);

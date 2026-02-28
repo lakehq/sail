@@ -20,6 +20,7 @@ pub(crate) mod checkpoints;
 mod config;
 mod error;
 mod operation;
+pub(crate) mod store_compat;
 mod table_properties;
 
 use std::sync::LazyLock;
