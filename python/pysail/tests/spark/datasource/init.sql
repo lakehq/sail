@@ -72,6 +72,20 @@ CREATE TABLE IF NOT EXISTS empty_table (
     name VARCHAR(100)
 );
 
+-- special_chars for SQL injection testing
+CREATE TABLE IF NOT EXISTS special_chars (
+    id          SERIAL PRIMARY KEY,
+    name        VARCHAR(200),
+    description TEXT
+);
+
+INSERT INTO special_chars (name, description) VALUES
+    ('Normal Name',    'Normal description'),
+    ('O''Reilly',      'Name with apostrophe'),
+    ('Quote"Test',     'Name with double quote'),
+    ('Tab	Test',       'Text with tab'),
+    ('Backslash\Test', 'Text with backslash');
+
 CREATE TABLE IF NOT EXISTS data_types_test (
     id            SERIAL PRIMARY KEY,
     col_smallint  SMALLINT,

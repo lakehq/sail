@@ -13,8 +13,8 @@ from testcontainers.postgres import PostgresContainer
 
 from pysail.tests.spark.utils import pyspark_version
 
-if pyspark_version() < (4,):
-    pytest.skip("Python data source requires Spark 4+", allow_module_level=True)
+if pyspark_version() < (4, 1):
+    pytest.skip("Python data source requires Spark 4.1+", allow_module_level=True)
 
 _PG_IMAGE = "postgres:16-alpine"
 _PG_USER = "testuser"
@@ -393,6 +393,21 @@ def test_sql_injection_filter_value(spark, jdbc_opts):
 
 
 # ---------------------------------------------------------------------------
+# special_chars table — reading rows with special characters
+# ---------------------------------------------------------------------------
+
+
+def test_special_chars_table(spark, jdbc_opts):
+    df = spark.read.format("jdbc").option("dbtable", "special_chars").options(**jdbc_opts).load()
+    rows = df.collect()
+    assert len(rows) == 5  # noqa: PLR2004
+    names = {r.name for r in rows}
+    assert "Normal Name" in names
+    assert "O'Reilly" in names
+    assert 'Quote"Test' in names
+
+
+# ---------------------------------------------------------------------------
 # lowerBound > upperBound raises ValueError
 # ---------------------------------------------------------------------------
 
@@ -561,7 +576,7 @@ def test_filter_to_sql_unit():
         LessThanOrEqual,
     )
 
-    from pysail.spark.datasource.jdbc.datasource import _filter_to_sql  # noqa: PLC0415
+    from pysail.spark.datasource.jdbc import _filter_to_sql  # noqa: PLC0415
 
     cases = [
         (EqualTo(("age",), 28), '"age" = 28'),
@@ -581,7 +596,7 @@ def test_filter_to_sql_unit():
 
 
 def test_jdbc_url_to_dsn_unit():
-    from pysail.spark.datasource.jdbc.datasource import _jdbc_url_to_dsn  # noqa: PLC0415
+    from pysail.spark.datasource.jdbc import _jdbc_url_to_dsn  # noqa: PLC0415
 
     assert _jdbc_url_to_dsn("jdbc:postgresql://localhost:5432/db", None, None) == "postgresql://localhost:5432/db"
     assert (
@@ -602,7 +617,7 @@ def test_jdbc_url_to_dsn_unit():
 def test_parse_custom_schema_unit():
     import pyarrow as pa  # noqa: PLC0415
 
-    from pysail.spark.datasource.jdbc.datasource import _parse_custom_schema  # noqa: PLC0415
+    from pysail.spark.datasource.jdbc import _parse_custom_schema  # noqa: PLC0415
 
     result = _parse_custom_schema("id BIGINT, name STRING, score DOUBLE, active BOOLEAN")
     assert result["id"] == pa.int64()
@@ -625,7 +640,7 @@ def test_lit_unit():
 
     from pyspark.sql.datasource import EqualTo  # noqa: PLC0415
 
-    from pysail.spark.datasource.jdbc.datasource import _filter_to_sql  # noqa: PLC0415
+    from pysail.spark.datasource.jdbc import _filter_to_sql  # noqa: PLC0415
 
     def lit(v):
         return _filter_to_sql(EqualTo(("x",), v)).split(" = ", 1)[1]
@@ -642,7 +657,7 @@ def test_lit_unit():
 
 
 def test_quote_identifier_unit():
-    from pysail.spark.datasource.jdbc.datasource import _quote_identifier  # noqa: PLC0415
+    from pysail.spark.datasource.jdbc import _quote_identifier  # noqa: PLC0415
 
     assert _quote_identifier("age") == '"age"'
     assert _quote_identifier("my col") == '"my col"'
