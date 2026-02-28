@@ -1,6 +1,5 @@
 -- Initialise test database for JDBC datasource tests.
 
--- users table (15 rows: 10 base + 1 null-age + 4 unicode)
 CREATE TABLE IF NOT EXISTS users (
     id        SERIAL PRIMARY KEY,
     name      VARCHAR(100) NOT NULL,
@@ -28,7 +27,6 @@ INSERT INTO users (name, email, age, active, score) VALUES
     ('محمد علي',      'mohamed@example.com', 35,   TRUE,  8.7),
     ('😀 Emoji User', 'emoji@example.com',   22,   TRUE,  9.9);
 
--- products table for type-variety testing
 CREATE TABLE IF NOT EXISTS products (
     id          SERIAL PRIMARY KEY,
     name        VARCHAR(200) NOT NULL,
@@ -46,13 +44,11 @@ INSERT INTO products (name, price, quantity, weight_kg, in_stock, listed_at) VAL
     ('Gadget Y',  29.99,  0,   0.8,  FALSE, '2024-03-11'),
     ('Doohickey', 5.49,   200, 0.1,  TRUE,  '2024-04-20');
 
--- large_table for partition testing (10 000 rows)
 CREATE TABLE IF NOT EXISTS large_table AS
 SELECT
     generate_series(1, 10000) AS id,
     md5(random()::text)       AS value;
 
--- orders table for JOIN testing
 CREATE TABLE IF NOT EXISTS orders (
     order_id   SERIAL PRIMARY KEY,
     user_id    INTEGER NOT NULL,
@@ -71,27 +67,11 @@ INSERT INTO orders (user_id, product_id, quantity, order_date) VALUES
     (6, 2, 4, '2024-01-13'),
     (7, 4, 2, '2024-01-17');
 
--- empty_table for edge-case testing
 CREATE TABLE IF NOT EXISTS empty_table (
     id   SERIAL PRIMARY KEY,
     name VARCHAR(100)
 );
 
--- special_chars for SQL injection testing
-CREATE TABLE IF NOT EXISTS special_chars (
-    id          SERIAL PRIMARY KEY,
-    name        VARCHAR(200),
-    description TEXT
-);
-
-INSERT INTO special_chars (name, description) VALUES
-    ('Normal Name',   'Normal description'),
-    ('O''Reilly',     'Name with apostrophe'),
-    ('Quote"Test',    'Name with double quote'),
-    ('Tab	Test',      'Text with tab'),
-    ('Backslash\Test','Text with backslash');
-
--- data_types_test for type coverage testing
 CREATE TABLE IF NOT EXISTS data_types_test (
     id            SERIAL PRIMARY KEY,
     col_smallint  SMALLINT,
@@ -120,10 +100,8 @@ INSERT INTO data_types_test VALUES (
     '2024-01-15 10:30:00'::TIMESTAMP
 );
 
--- row 2: all NULLs except id
 INSERT INTO data_types_test (id) VALUES (2);
 
--- schema_test for schema-qualified name tests
 CREATE SCHEMA IF NOT EXISTS analytics;
 CREATE TABLE IF NOT EXISTS analytics.events (
     event_id   SERIAL PRIMARY KEY,
@@ -136,14 +114,3 @@ INSERT INTO analytics.events (event_name, user_id) VALUES
     ('click',     2),
     ('purchase',  1),
     ('logout',    3);
-
--- test_schema for tableSchema / schema-isolation testing
-CREATE SCHEMA IF NOT EXISTS test_schema;
-CREATE TABLE IF NOT EXISTS test_schema.schema_table (
-    id    SERIAL PRIMARY KEY,
-    value TEXT
-);
-INSERT INTO test_schema.schema_table (value) VALUES
-    ('row_from_test_schema_1'),
-    ('row_from_test_schema_2'),
-    ('row_from_test_schema_3');
