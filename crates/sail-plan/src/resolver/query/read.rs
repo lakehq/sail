@@ -138,7 +138,9 @@ impl PlanResolver<'_> {
                 ))
             }
         };
-        let name = spec::ObjectName::bare(name_str);
+        let name = sail_sql_analyzer::expression::from_ast_object_name(
+            sail_sql_analyzer::parser::parse_object_name(&name_str)?,
+        )?;
         self.resolve_query_read_named_table(
             spec::ReadNamedTable {
                 name,

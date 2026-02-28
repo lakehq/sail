@@ -78,8 +78,10 @@ impl PlanResolver<'_> {
                 ))
             }
         };
-        let col = expr::Expr::Column(Column::new_unqualified(name.clone()));
-        Ok(NamedExpr::new(vec![name], col))
+        let object_name = sail_sql_analyzer::expression::from_ast_object_name(
+            sail_sql_analyzer::parser::parse_object_name(&name)?,
+        )?;
+        self.resolve_expression_attribute(object_name, None, false, schema, state)
     }
 
     pub(super) async fn resolve_expression_table(
