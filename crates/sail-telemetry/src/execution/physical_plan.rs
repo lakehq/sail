@@ -228,6 +228,10 @@ impl ExecutionPlan for TracingExec {
         Ok(None)
     }
 
+    fn with_preserve_order(&self, _preserve_order: bool) -> Option<Arc<dyn ExecutionPlan>> {
+        None
+    }
+
     fn gather_filters_for_pushdown(
         &self,
         _phase: FilterPushdownPhase,

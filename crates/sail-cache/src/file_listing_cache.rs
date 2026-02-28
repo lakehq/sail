@@ -4,15 +4,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use datafusion::common::{Result as DataFusionResult, TableReference};
-use datafusion::execution::cache::cache_manager::ListFilesCache;
+use datafusion::execution::cache::cache_manager::{CachedFileList, ListFilesCache};
 use datafusion::execution::cache::{CacheAccessor, ListFilesEntry, TableScopedPath};
 use log::debug;
 use moka::sync::Cache;
-use object_store::path::Path;
 use object_store::ObjectMeta;
 
 pub struct MokaFileListingCache {
-    objects: Cache<TableScopedPath, Arc<Vec<ObjectMeta>>>,
+    objects: Cache<TableScopedPath, CachedFileList>,
     ttl: Option<Duration>,
     max_entries: Option<u64>,
 }
@@ -58,63 +57,17 @@ fn meta_heap_bytes(object_meta: &ObjectMeta) -> usize {
     size
 }
 
-impl CacheAccessor<TableScopedPath, Arc<Vec<ObjectMeta>>> for MokaFileListingCache {
-    type Extra = Option<Path>;
-
-    fn get(&self, k: &TableScopedPath) -> Option<Arc<Vec<ObjectMeta>>> {
-        self.get_with_extra(k, &None)
+impl CacheAccessor<TableScopedPath, CachedFileList> for MokaFileListingCache {
+    fn get(&self, k: &TableScopedPath) -> Option<CachedFileList> {
+        self.objects.get(k)
     }
 
-    fn get_with_extra(
-        &self,
-        k: &TableScopedPath,
-        prefix: &Self::Extra,
-    ) -> Option<Arc<Vec<ObjectMeta>>> {
-        let objects = self.objects.get(k)?;
-
-        let Some(prefix) = prefix else {
-            return Some(objects);
-        };
-
-        // Build full prefix: table_base/prefix
-        let table_base = &k.path;
-        let mut parts: Vec<_> = table_base.parts().collect();
-        parts.extend(prefix.parts());
-        let full_prefix = Path::from_iter(parts);
-        let full_prefix_str = full_prefix.as_ref();
-
-        let filtered = objects
-            .iter()
-            .filter(|meta| meta.location.as_ref().starts_with(full_prefix_str))
-            .cloned()
-            .collect::<Vec<_>>();
-
-        if filtered.is_empty() {
-            None
-        } else {
-            Some(Arc::new(filtered))
-        }
-    }
-
-    fn put(
-        &self,
-        key: &TableScopedPath,
-        value: Arc<Vec<ObjectMeta>>,
-    ) -> Option<Arc<Vec<ObjectMeta>>> {
+    fn put(&self, key: &TableScopedPath, value: CachedFileList) -> Option<CachedFileList> {
         self.objects.insert(key.clone(), value);
         None
     }
 
-    fn put_with_extra(
-        &self,
-        key: &TableScopedPath,
-        value: Arc<Vec<ObjectMeta>>,
-        _e: &Self::Extra,
-    ) -> Option<Arc<Vec<ObjectMeta>>> {
-        self.put(key, value)
-    }
-
-    fn remove(&self, k: &TableScopedPath) -> Option<Arc<Vec<ObjectMeta>>> {
+    fn remove(&self, k: &TableScopedPath) -> Option<CachedFileList> {
         self.objects.remove(k)
     }
 
@@ -157,14 +110,14 @@ impl ListFilesCache for MokaFileListingCache {
     fn list_entries(&self) -> HashMap<TableScopedPath, ListFilesEntry> {
         self.objects
             .iter()
-            .map(|(table_scoped_path, metas)| {
-                let metas = Arc::clone(&metas);
+            .map(|(table_scoped_path, cached)| {
+                let metas = Arc::clone(&cached.files);
                 let size_bytes = (metas.capacity() * size_of::<ObjectMeta>())
                     + metas.iter().map(meta_heap_bytes).sum::<usize>();
                 (
                     (*table_scoped_path).clone(),
                     ListFilesEntry {
-                        metas,
+                        metas: cached.clone(),
                         size_bytes,
                         // moka handles expiration; we don't have per-entry expiration time
                         expires: None,
@@ -200,7 +153,7 @@ mod tests {
     #[test]
     fn test_file_listing_cache() {
         let meta = ObjectMeta {
-            location: Path::from("test"),
+            location: object_store::path::Path::from("test"),
             last_modified: DateTime::parse_from_rfc3339("2022-09-27T22:36:00+02:00")
                 .unwrap()
                 .into(),
@@ -216,9 +169,9 @@ mod tests {
         };
         assert!(cache.get(&key).is_none());
 
-        cache.put(&key, vec![meta.clone()].into());
+        cache.put(&key, CachedFileList::new(vec![meta.clone()]));
         assert_eq!(
-            cache.get(&key).unwrap().first().unwrap().clone(),
+            cache.get(&key).unwrap().files.first().unwrap().clone(),
             meta.clone()
         );
     }

@@ -559,6 +559,7 @@ mod tests {
             None, // projection
             PartitionMode::Auto,
             NullEquality::NullEqualsNothing,
+            false,
         )?);
 
         // Test that visit_inner_join correctly handles HashJoinExec
@@ -612,6 +613,7 @@ mod tests {
             None,
             PartitionMode::Auto,
             NullEquality::NullEqualsNothing,
+            false,
         )?);
 
         // Create second join: (table1 ⋈ table2) ⋈ table3
@@ -628,6 +630,7 @@ mod tests {
             None,
             PartitionMode::Auto,
             NullEquality::NullEqualsNothing,
+            false,
         )?);
 
         // Test that our enhanced visit_plan can find the joins directly
@@ -694,6 +697,7 @@ mod tests {
             projection,
             PartitionMode::Auto,
             NullEquality::NullEqualsNothing,
+            false,
         )?);
 
         let output_map = builder.visit_inner_join(&join_plan)?;

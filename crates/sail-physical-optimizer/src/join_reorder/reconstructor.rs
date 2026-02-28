@@ -213,7 +213,8 @@ impl<'a> PlanReconstructor<'a> {
             None,                // projection
             PartitionMode::Auto, // partition_mode
             NullEquality::NullEqualsNothing, // TODO: Skip the optimizer completely
-                                 // if NullEquality is something else in the input region.
+            // if NullEquality is something else in the input region.
+            false,
         )?);
 
         Ok((join_plan, join_output_map))

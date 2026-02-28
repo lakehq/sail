@@ -397,6 +397,7 @@ mod tests {
             None,
             PartitionMode::CollectLeft,
             NullEquality::NullEqualsNothing,
+            false,
         )?);
 
         MetricEmitterTester::new()
