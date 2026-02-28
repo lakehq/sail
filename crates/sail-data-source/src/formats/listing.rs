@@ -21,7 +21,8 @@ use sail_common_datafusion::datasource::{
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 
 use crate::formats::parquet::bucketed_sink::BucketedParquetSinkExec;
-use crate::formats::parquet::bucketing::{BucketingConfig, HASH_DATAFUSION};
+use crate::formats::parquet::bucketed_table::BucketedListingTable;
+use crate::formats::parquet::bucketing::{parse_schema_metadata, BucketingConfig, HASH_DATAFUSION};
 use crate::utils::split_parquet_compression_string;
 
 /// Trait for schema inference logic
@@ -185,25 +186,36 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         let config = crate::listing::rewrite_listing_partitions(config)?;
         let table = ListingTable::try_new(config)?.with_constraints(constraints);
 
-        // Log bucketing metadata if present (from catalog or schema)
-        if let Some(ref bucket_info) = bucket_by {
-            log::debug!(
-                "Reading bucketed table: columns={:?}, num_buckets={}",
-                bucket_info.columns,
-                bucket_info.num_buckets,
-            );
-        }
-        // Check if the schema contains embedded bucketing metadata
-        let table_schema = table.schema();
-        let schema_metadata = table_schema.metadata();
-        if let Some(bucket_cols) = schema_metadata.get("sail.bucket.columns") {
-            log::debug!(
-                "Detected bucketing metadata in schema: columns={}, num_buckets={}, hash={}, sort={}",
-                bucket_cols,
-                schema_metadata.get("sail.bucket.num_buckets").map(String::as_str).unwrap_or("?"),
-                schema_metadata.get("sail.bucket.hash").map(String::as_str).unwrap_or("?"),
-                schema_metadata.get("sail.bucket.sort_columns").map(String::as_str).unwrap_or("none"),
-            );
+        // Detect bucketing: prefer catalog metadata, fall back to schema metadata.
+        // TODO: use a type-level check instead of string comparison
+        if self.inner.name() == "parquet" {
+            // 1. Check catalog-level bucket_by (from CREATE TABLE ... CLUSTERED BY)
+            if let Some(ref bucket_info) = bucket_by {
+                log::debug!(
+                    "Wrapping bucketed table from catalog: columns={:?}, num_buckets={}",
+                    bucket_info.columns,
+                    bucket_info.num_buckets,
+                );
+                return Ok(Arc::new(BucketedListingTable::new(
+                    table,
+                    bucket_info.columns.clone(),
+                    bucket_info.num_buckets,
+                )));
+            }
+
+            // 2. Check schema-level metadata (embedded in Parquet files by Phase 1 writer)
+            if let Some(bucket_meta) = parse_schema_metadata(&table.schema()) {
+                log::debug!(
+                    "Wrapping bucketed table from schema metadata: columns={:?}, num_buckets={}",
+                    bucket_meta.columns,
+                    bucket_meta.num_buckets,
+                );
+                return Ok(Arc::new(BucketedListingTable::new(
+                    table,
+                    bucket_meta.columns,
+                    bucket_meta.num_buckets,
+                )));
+            }
         }
 
         Ok(Arc::new(table))

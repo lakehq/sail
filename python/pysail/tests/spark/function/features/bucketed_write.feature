@@ -109,3 +109,81 @@ Feature: Bucketed Parquet Writing
       Then query result
         | cnt |
         | 3   |
+
+  Rule: Bucketed join
+    @sail-only
+    Scenario: join two bucketed tables on bucket column
+      Given variable left_loc for temporary directory left_bucket
+      Given variable right_loc for temporary directory right_bucket
+      Given final statement
+        """
+        DROP TABLE IF EXISTS left_bucket
+        """
+      Given final statement
+        """
+        DROP TABLE IF EXISTS right_bucket
+        """
+      Given statement template
+        """
+        CREATE TABLE left_bucket USING parquet
+        LOCATION {{ left_loc.sql }}
+        CLUSTERED BY (id) INTO 4 BUCKETS
+        AS SELECT * FROM VALUES (1,'Alice'), (2,'Bob'), (3,'Carol'), (4,'Dave') AS t(id, name)
+        """
+      Given statement template
+        """
+        CREATE TABLE right_bucket USING parquet
+        LOCATION {{ right_loc.sql }}
+        CLUSTERED BY (id) INTO 4 BUCKETS
+        AS SELECT * FROM VALUES (1,100), (2,200), (3,300), (4,400) AS t(id, amount)
+        """
+      When query
+        """
+        SELECT l.name, r.amount
+        FROM left_bucket l JOIN right_bucket r ON l.id = r.id
+        ORDER BY l.name
+        """
+      Then query result ordered
+        | name  | amount |
+        | Alice | 100    |
+        | Bob   | 200    |
+        | Carol | 300    |
+        | Dave  | 400    |
+
+    @sail-only
+    Scenario: join bucketed tables with aggregation
+      Given variable left_loc for temporary directory left_bucket_agg
+      Given variable right_loc for temporary directory right_bucket_agg
+      Given final statement
+        """
+        DROP TABLE IF EXISTS left_bucket_agg
+        """
+      Given final statement
+        """
+        DROP TABLE IF EXISTS right_bucket_agg
+        """
+      Given statement template
+        """
+        CREATE TABLE left_bucket_agg USING parquet
+        LOCATION {{ left_loc.sql }}
+        CLUSTERED BY (key) INTO 4 BUCKETS
+        AS SELECT * FROM VALUES (1,10), (2,20), (1,30), (2,40) AS t(key, val)
+        """
+      Given statement template
+        """
+        CREATE TABLE right_bucket_agg USING parquet
+        LOCATION {{ right_loc.sql }}
+        CLUSTERED BY (key) INTO 4 BUCKETS
+        AS SELECT * FROM VALUES (1,100), (2,200) AS t(key, multiplier)
+        """
+      When query
+        """
+        SELECT l.key, sum(l.val * r.multiplier) as total
+        FROM left_bucket_agg l JOIN right_bucket_agg r ON l.key = r.key
+        GROUP BY l.key
+        ORDER BY l.key
+        """
+      Then query result ordered
+        | key | total |
+        | 1   | 4000  |
+        | 2   | 12000 |

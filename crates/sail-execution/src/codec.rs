@@ -76,6 +76,7 @@ use sail_common_datafusion::system::catalog::SystemTable;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_data_source::formats::binary::source::BinarySource;
 use sail_data_source::formats::console::ConsoleSinkExec;
+use sail_data_source::formats::parquet::bucketed_scan::BucketedParquetScanExec;
 use sail_data_source::formats::parquet::bucketed_sink::BucketedParquetSinkExec;
 use sail_data_source::formats::parquet::bucketing::BucketingConfig;
 use sail_data_source::formats::python::{
@@ -996,6 +997,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     writer_props,
                 )?))
             }
+            NodeKind::BucketedParquetScan(gen::BucketedParquetScanExecNode {
+                inner,
+                bucket_columns,
+                num_buckets,
+            }) => {
+                let inner = self.try_decode_plan(&inner, ctx)?;
+                Ok(Arc::new(BucketedParquetScanExec::new(
+                    inner,
+                    bucket_columns,
+                    num_buckets as usize,
+                )?))
+            }
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
         }
     }
@@ -1532,6 +1545,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 sort_columns,
                 file_schema,
                 writer_properties: compression_str.into_bytes(),
+            })
+        } else if let Some(bucketed_scan) = node.as_any().downcast_ref::<BucketedParquetScanExec>()
+        {
+            let inner = self.try_encode_plan(bucketed_scan.inner().clone())?;
+            NodeKind::BucketedParquetScan(gen::BucketedParquetScanExecNode {
+                inner,
+                bucket_columns: bucketed_scan.bucket_columns().to_vec(),
+                num_buckets: bucketed_scan.num_buckets() as u32,
             })
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");

@@ -52,6 +52,7 @@ message ExtendedPhysicalPlanNode {
     PythonDataSourceWriteExecNode python_data_source_write = 37;
     PythonDataSourceWriteCommitExecNode python_data_source_write_commit = 38;
     BucketedParquetSinkExecNode bucketed_parquet_sink = 39;
+    BucketedParquetScanExecNode bucketed_parquet_scan = 40;
   }
 }
 
@@ -594,6 +595,12 @@ message BucketedParquetSinkExecNode {
   repeated BucketSortColumn sort_columns = 6;
   bytes file_schema = 7;
   bytes writer_properties = 8;
+}
+
+message BucketedParquetScanExecNode {
+  bytes inner = 1;
+  repeated string bucket_columns = 2;
+  uint32 num_buckets = 3;
 }
 
 message DeltaLogReplayExecNode {
