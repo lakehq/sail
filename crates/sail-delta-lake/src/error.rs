@@ -104,19 +104,21 @@ impl From<DeltaError> for DataFusionError {
 
 impl From<object_store::path::Error> for DeltaError {
     fn from(err: object_store::path::Error) -> Self {
-        KernelError::ObjectStorePath(err).into()
+        DeltaError::generic(err.to_string())
     }
 }
 
 fn map_kernel_error_to_datafusion(err: KernelError) -> DataFusionError {
     match err {
-        KernelError::Arrow(err) => DataFusionError::ArrowError(Box::new(err), None),
+        // delta_kernel uses arrow 57 / object_store 0.12 / parquet 57, so we convert
+        // version-incompatible error types via `External` or string conversion.
+        KernelError::Arrow(err) => DataFusionError::External(Box::new(err)),
         KernelError::IOError(err) => DataFusionError::IoError(err),
-        KernelError::ObjectStore(err) => DataFusionError::ObjectStore(Box::new(err)),
+        KernelError::ObjectStore(err) => DataFusionError::External(Box::new(err)),
         KernelError::ObjectStorePath(source) => {
-            DataFusionError::ObjectStore(Box::new(ObjectStoreError::InvalidPath { source }))
+            DataFusionError::Execution(format!("Invalid path: {source}"))
         }
-        KernelError::Parquet(err) => DataFusionError::ParquetError(Box::new(err)),
+        KernelError::Parquet(err) => DataFusionError::External(Box::new(err)),
         KernelError::FileNotFound(path) => {
             DataFusionError::ObjectStore(Box::new(ObjectStoreError::NotFound {
                 path,

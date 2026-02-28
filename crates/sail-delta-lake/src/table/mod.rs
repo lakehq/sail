@@ -27,7 +27,7 @@ use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::Result;
 use delta_kernel::Error as KernelError;
-use object_store::ObjectStore;
+use object_store::{ObjectStore, ObjectStoreExt};
 pub use state::DeltaTableState;
 use url::Url;
 

@@ -30,6 +30,7 @@ use futures::future::BoxFuture;
 use log::*;
 use object_store::path::Path;
 use object_store::Error as ObjectStoreError;
+use object_store::ObjectStoreExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;

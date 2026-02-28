@@ -22,6 +22,9 @@ sail-data-source = { path = "../sail-data-source" }
 sail-physical-plan = { path = "../sail-physical-plan" }
 # Delta Lake
 delta_kernel = { workspace = true }
+# Arrow 57 is needed for compatibility with delta_kernel's internal Arrow types.
+# delta_kernel 0.18.2 uses arrow 57 internally; we use IPC to convert to/from workspace arrow 58.
+arrow_57 = { package = "arrow", version = "57", features = ["ipc"] }
 
 # DataFusion dependencies
 datafusion = { workspace = true }

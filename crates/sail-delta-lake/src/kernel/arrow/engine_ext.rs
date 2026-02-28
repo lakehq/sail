@@ -25,12 +25,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_schema::Fields;
-use datafusion::arrow::array::{Array, BooleanArray, MapArray, StringArray, StructArray};
+use datafusion::arrow::array::{Array, BooleanArray, MapArray, RecordBatch, StringArray, StructArray};
 use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
 };
-use delta_kernel::arrow::compute::filter_record_batch;
-use delta_kernel::arrow::record_batch::RecordBatch;
+use delta_kernel::arrow::compute::filter_record_batch as filter_record_batch57;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::engine::parse_json;
@@ -49,6 +48,7 @@ use delta_kernel::{
 use itertools::Itertools;
 
 use crate::conversion::ScalarConverter;
+use crate::kernel::arrow::compat::{arrow57_to_arrow58, arrow58_to_arrow57};
 use crate::kernel::snapshot::SCAN_ROW_ARROW_SCHEMA;
 use crate::kernel::{DeltaResult as DeltaResultLocal, DeltaTableError};
 
@@ -115,10 +115,15 @@ impl ScanExt for Scan {
         existing_data: Box<dyn Iterator<Item = RecordBatch>>,
         existing_predicate: Option<PredicateRef>,
     ) -> DeltaResult<impl Iterator<Item = DeltaResult<ScanMetadataArrow>>> {
-        let engine_iter =
-            existing_data.map(|batch| Box::new(ArrowEngineData::new(batch)) as Box<dyn EngineData>);
+        let engine_iter = existing_data
+            .map(|batch| {
+                arrow58_to_arrow57(&batch)
+                    .map_err(|e| delta_kernel::Error::generic(e.to_string()))
+                    .map(|b57| Box::new(ArrowEngineData::new(b57)) as Box<dyn EngineData>)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(self
-            .scan_metadata_from(engine, existing_version, engine_iter, existing_predicate)?
+            .scan_metadata_from(engine, existing_version, engine_iter.into_iter(), existing_predicate)?
             .map_ok(kernel_to_arrow)
             .flatten())
     }

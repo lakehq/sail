@@ -14,7 +14,7 @@ use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
 use futures::{stream, StreamExt, TryStreamExt};
 use object_store::path::{Path, DELIMITER};
-use object_store::{ObjectMeta, ObjectStore};
+use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 
 use super::context::PlannerContext;
 use crate::datasource::create_object_store_url;
