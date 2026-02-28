@@ -18,7 +18,7 @@ if pyspark_version() < (4, 1):
 
 _PG_IMAGE = "postgres:16-alpine"
 _PG_USER = "testuser"
-_PG_PASSWORD = "testpass"
+_PG_PASSWORD = "testpass"  # noqa: S105
 _PG_DB = "testdb"
 
 _INIT_SQL = (Path(__file__).parent / "init.sql").read_text(encoding="utf-8")
@@ -56,7 +56,7 @@ def jdbc_opts(jdbc_url):
 @pytest.fixture(scope="module", autouse=True)
 def register_jdbc(spark):
     """Register the JDBC data source with the Spark session."""
-    from pysail.spark.datasource.jdbc import JdbcDataSource  # noqa: PLC0415
+    from pysail.spark.datasource.jdbc import JdbcDataSource
 
     spark.dataSource.register(JdbcDataSource)
 
@@ -178,15 +178,10 @@ def test_push_down_predicate_false(spark, jdbc_opts):
 
 
 def test_dbtable_and_query_raises(spark, jdbc_opts):
-    raised = False
-    try:
-        (
-            spark.read.format("jdbc").option("dbtable", "users").option("query", "SELECT 1").options(**jdbc_opts).load()
-        ).collect()
-    except Exception as e:  # noqa: BLE001
-        if "mutually exclusive" in str(e).lower() or "dbtable" in str(e).lower():
-            raised = True
-    assert raised
+    with pytest.raises(Exception, match=r"mutually exclusive|dbtable"):
+        spark.read.format("jdbc").option("dbtable", "users").option("query", "SELECT 1").options(
+            **jdbc_opts
+        ).load().collect()
 
 
 # ---------------------------------------------------------------------------
@@ -195,17 +190,13 @@ def test_dbtable_and_query_raises(spark, jdbc_opts):
 
 
 def test_predicates_raises(spark, jdbc_url):
-    raised = False
-    try:
+    with pytest.raises(Exception):  # noqa: B017, PT011
         spark.read.jdbc(
             jdbc_url,
             "users",
             predicates=["id < 5", "id >= 5"],
             properties={"user": _PG_USER, "password": _PG_PASSWORD},
         ).collect()
-    except Exception:  # noqa: BLE001
-        raised = True
-    assert raised
 
 
 # ---------------------------------------------------------------------------
@@ -214,14 +205,8 @@ def test_predicates_raises(spark, jdbc_url):
 
 
 def test_error_nonexistent_table(spark, jdbc_opts):
-    raised = False
-    try:
-        (spark.read.format("jdbc").option("dbtable", "nonexistent_table_12345").options(**jdbc_opts).load()).collect()
-    except Exception as e:  # noqa: BLE001
-        msg = str(e).lower()
-        if "not found" in msg or "does not exist" in msg or "table" in msg or "error" in msg:
-            raised = True
-    assert raised
+    with pytest.raises(Exception):  # noqa: B017, PT011
+        spark.read.format("jdbc").option("dbtable", "nonexistent_table_12345").options(**jdbc_opts).load().collect()
 
 
 # ---------------------------------------------------------------------------
@@ -287,8 +272,8 @@ def test_data_types(spark, jdbc_opts):
     assert row.col_smallint == 100  # noqa: PLR2004
     assert row.col_integer == 10000  # noqa: PLR2004
     assert row.col_bigint == 1000000000  # noqa: PLR2004
-    assert abs(row.col_real - 3.14) < 0.01
-    assert abs(row.col_double - 2.718281828) < 0.0001
+    assert abs(row.col_real - 3.14) < 0.01  # noqa: PLR2004
+    assert abs(row.col_double - 2.718281828) < 0.0001  # noqa: PLR2004
     assert row.col_text == "Sample text"
     assert row.col_varchar == "Sample varchar"
     assert row.col_boolean is True
@@ -378,7 +363,7 @@ def test_partition_with_nulls(spark, jdbc_opts):
 
 
 def test_sql_injection_filter_value(spark, jdbc_opts):
-    from pyspark.sql.functions import col  # noqa: PLC0415
+    from pyspark.sql.functions import col
 
     orders_before = spark.read.format("jdbc").option("dbtable", "orders").options(**jdbc_opts).load().count()
     assert orders_before == 8  # noqa: PLR2004
@@ -413,22 +398,10 @@ def test_special_chars_table(spark, jdbc_opts):
 
 
 def test_lower_bound_gt_upper_bound(spark, jdbc_opts):
-    raised = False
-    try:
-        (
-            spark.read.format("jdbc")
-            .option("dbtable", "users")
-            .option("partitionColumn", "id")
-            .option("lowerBound", "100")
-            .option("upperBound", "10")
-            .option("numPartitions", "2")
-            .options(**jdbc_opts)
-            .load()
-        ).collect()
-    except Exception as e:  # noqa: BLE001
-        if "lowerbound" in str(e).lower():
-            raised = True
-    assert raised
+    with pytest.raises(Exception, match=r"lowerbound|lowerBound"):
+        spark.read.format("jdbc").option("dbtable", "users").option("partitionColumn", "id").option(
+            "lowerBound", "100"
+        ).option("upperBound", "10").option("numPartitions", "2").options(**jdbc_opts).load().collect()
 
 
 # ---------------------------------------------------------------------------
@@ -437,22 +410,10 @@ def test_lower_bound_gt_upper_bound(spark, jdbc_opts):
 
 
 def test_lower_bound_eq_upper_bound(spark, jdbc_opts):
-    raised = False
-    try:
-        (
-            spark.read.format("jdbc")
-            .option("dbtable", "users")
-            .option("partitionColumn", "id")
-            .option("lowerBound", "10")
-            .option("upperBound", "10")
-            .option("numPartitions", "2")
-            .options(**jdbc_opts)
-            .load()
-        ).collect()
-    except Exception as e:  # noqa: BLE001
-        if "lowerbound" in str(e).lower():
-            raised = True
-    assert raised
+    with pytest.raises(Exception, match=r"lowerbound|lowerBound"):
+        spark.read.format("jdbc").option("dbtable", "users").option("partitionColumn", "id").option(
+            "lowerBound", "10"
+        ).option("upperBound", "10").option("numPartitions", "2").options(**jdbc_opts).load().collect()
 
 
 # ---------------------------------------------------------------------------
@@ -461,22 +422,10 @@ def test_lower_bound_eq_upper_bound(spark, jdbc_opts):
 
 
 def test_non_integer_bounds(spark, jdbc_opts):
-    raised = False
-    try:
-        (
-            spark.read.format("jdbc")
-            .option("dbtable", "users")
-            .option("partitionColumn", "id")
-            .option("lowerBound", "1.5")
-            .option("upperBound", "10")
-            .option("numPartitions", "2")
-            .options(**jdbc_opts)
-            .load()
-        ).collect()
-    except Exception as e:  # noqa: BLE001
-        if "integer" in str(e).lower():
-            raised = True
-    assert raised
+    with pytest.raises(Exception, match="integer"):
+        spark.read.format("jdbc").option("dbtable", "users").option("partitionColumn", "id").option(
+            "lowerBound", "1.5"
+        ).option("upperBound", "10").option("numPartitions", "2").options(**jdbc_opts).load().collect()
 
 
 # ---------------------------------------------------------------------------
@@ -485,13 +434,8 @@ def test_non_integer_bounds(spark, jdbc_opts):
 
 
 def test_empty_dbtable(spark, jdbc_opts):
-    raised = False
-    try:
-        (spark.read.format("jdbc").option("dbtable", "").options(**jdbc_opts).load()).collect()
-    except Exception as e:  # noqa: BLE001
-        if "dbtable" in str(e).lower():
-            raised = True
-    assert raised
+    with pytest.raises(Exception, match="dbtable"):
+        spark.read.format("jdbc").option("dbtable", "").options(**jdbc_opts).load().collect()
 
 
 # ---------------------------------------------------------------------------
@@ -568,7 +512,7 @@ def test_custom_schema_case_insensitive(spark, jdbc_opts):
 
 
 def test_filter_to_sql_unit():
-    from pyspark.sql.datasource import (  # noqa: PLC0415
+    from pyspark.sql.datasource import (
         EqualTo,
         GreaterThan,
         GreaterThanOrEqual,
@@ -576,7 +520,7 @@ def test_filter_to_sql_unit():
         LessThanOrEqual,
     )
 
-    from pysail.spark.datasource.jdbc import _filter_to_sql  # noqa: PLC0415
+    from pysail.spark.datasource.jdbc import _filter_to_sql
 
     cases = [
         (EqualTo(("age",), 28), '"age" = 28'),
@@ -596,7 +540,7 @@ def test_filter_to_sql_unit():
 
 
 def test_jdbc_url_to_dsn_unit():
-    from pysail.spark.datasource.jdbc import _jdbc_url_to_dsn  # noqa: PLC0415
+    from pysail.spark.datasource.jdbc import _jdbc_url_to_dsn
 
     assert _jdbc_url_to_dsn("jdbc:postgresql://localhost:5432/db", None, None) == "postgresql://localhost:5432/db"
     assert (
@@ -615,9 +559,9 @@ def test_jdbc_url_to_dsn_unit():
 
 
 def test_parse_custom_schema_unit():
-    import pyarrow as pa  # noqa: PLC0415
+    import pyarrow as pa
 
-    from pysail.spark.datasource.jdbc import _parse_custom_schema  # noqa: PLC0415
+    from pysail.spark.datasource.jdbc import _parse_custom_schema
 
     result = _parse_custom_schema("id BIGINT, name STRING, score DOUBLE, active BOOLEAN")
     assert result["id"] == pa.int64()
@@ -636,11 +580,11 @@ def test_parse_custom_schema_unit():
 
 
 def test_lit_unit():
-    import datetime as dt  # noqa: PLC0415
+    import datetime as dt
 
-    from pyspark.sql.datasource import EqualTo  # noqa: PLC0415
+    from pyspark.sql.datasource import EqualTo
 
-    from pysail.spark.datasource.jdbc import _filter_to_sql  # noqa: PLC0415
+    from pysail.spark.datasource.jdbc import _filter_to_sql
 
     def lit(v):
         return _filter_to_sql(EqualTo(("x",), v)).split(" = ", 1)[1]
@@ -657,7 +601,7 @@ def test_lit_unit():
 
 
 def test_quote_identifier_unit():
-    from pysail.spark.datasource.jdbc import _quote_identifier  # noqa: PLC0415
+    from pysail.spark.datasource.jdbc import _quote_identifier
 
     assert _quote_identifier("age") == '"age"'
     assert _quote_identifier("my col") == '"my col"'
