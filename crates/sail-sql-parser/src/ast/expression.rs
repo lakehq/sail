@@ -224,6 +224,15 @@ pub enum AtomExpr {
         RightParenthesis,
     ),
     Function(#[parser(function = |(e, _, _), o| boxed(compose(e, o)))] Box<FunctionExpr>),
+    IdentifierFunction {
+        identifier: Identifier,
+        left_paren: LeftParenthesis,
+        #[parser(function = |(e, _, _), _| boxed(e))]
+        name_expr: Box<Expr>,
+        right_paren: RightParenthesis,
+        #[parser(function = |(e, _, _), o| compose(e, o))]
+        arguments: FunctionArgumentList,
+    },
     Wildcard(operator::Asterisk),
     StringLiteral(StringLiteral, Vec<StringLiteral>),
     NumberLiteral(NumberLiteral),

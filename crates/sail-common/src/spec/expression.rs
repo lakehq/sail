@@ -140,6 +140,13 @@ pub enum Expr {
     IdentifierClause {
         expr: Box<Expr>,
     },
+    DynamicFunction {
+        name_expr: Box<Expr>,
+        arguments: Vec<Expr>,
+        named_arguments: Vec<(Identifier, Expr)>,
+        is_distinct: bool,
+        ignore_nulls: Option<bool>,
+    },
 }
 
 /// An identifier with only one part.

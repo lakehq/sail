@@ -324,6 +324,24 @@ impl PlanResolver<'_> {
                 self.resolve_expression_identifier_clause(*expr, schema, state)
                     .await
             }
+            Expr::DynamicFunction {
+                name_expr,
+                arguments,
+                named_arguments,
+                is_distinct,
+                ignore_nulls,
+            } => {
+                self.resolve_expression_dynamic_function(
+                    *name_expr,
+                    arguments,
+                    named_arguments,
+                    is_distinct,
+                    ignore_nulls,
+                    schema,
+                    state,
+                )
+                .await
+            }
         }
     }
 

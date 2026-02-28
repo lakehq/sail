@@ -132,6 +132,44 @@ impl PlanResolver<'_> {
         }
     }
 
+    pub(super) async fn resolve_expression_dynamic_function(
+        &self,
+        name_expr: spec::Expr,
+        arguments: Vec<spec::Expr>,
+        named_arguments: Vec<(spec::Identifier, spec::Expr)>,
+        is_distinct: bool,
+        ignore_nulls: Option<bool>,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        // Resolve the name expression to get the function name
+        let resolved_name_expr = self.resolve_expression(name_expr, schema, state).await?;
+        let function_name_str = self.evaluate_identifier_expr(resolved_name_expr, state)?;
+
+        // Parse the function name as an ObjectName
+        let function_name = sail_sql_analyzer::expression::from_ast_object_name(
+            sail_sql_analyzer::parser::parse_object_name(&function_name_str)?,
+        )?;
+
+        // Now resolve as a regular function with the dynamically determined name
+        self.resolve_expression_function(
+            spec::UnresolvedFunction {
+                function_name,
+                arguments,
+                named_arguments,
+                is_distinct,
+                is_user_defined_function: false,
+                is_internal: None,
+                ignore_nulls,
+                filter: None,
+                order_by: None,
+            },
+            schema,
+            state,
+        )
+        .await
+    }
+
     pub(super) async fn resolve_expression_table(
         &self,
         expr: spec::Expr,

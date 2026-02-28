@@ -963,6 +963,42 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         AtomExpr::IdentifierClause(_, _, expr, _) => Ok(spec::Expr::IdentifierClause {
             expr: Box::new(from_ast_expression(*expr)?),
         }),
+        AtomExpr::IdentifierFunction {
+            identifier: _,
+            left_paren: _,
+            name_expr,
+            right_paren: _,
+            arguments,
+        } => {
+            // Handle IDENTIFIER(:func)(args) - dynamic function name resolution
+            let FunctionArgumentList {
+                left: _,
+                duplicate_treatment,
+                arguments: func_arguments,
+                null_treatment,
+                right: _,
+            } = arguments;
+            let (arguments, named_arguments) = func_arguments
+                .map(|x| from_ast_function_arguments(x.into_items()))
+                .transpose()?
+                .unwrap_or_default();
+            let is_distinct = match duplicate_treatment {
+                Some(DuplicateTreatment::All(_)) | None => false,
+                Some(DuplicateTreatment::Distinct(_)) => true,
+            };
+            let ignore_nulls = match null_treatment {
+                Some(NullTreatment::IgnoreNulls(_, _)) => Some(true),
+                Some(NullTreatment::RespectNulls(_, _)) => Some(false),
+                None => None,
+            };
+            Ok(spec::Expr::DynamicFunction {
+                name_expr: Box::new(from_ast_expression(*name_expr)?),
+                arguments,
+                named_arguments,
+                is_distinct,
+                ignore_nulls,
+            })
+        }
     }
 }
 

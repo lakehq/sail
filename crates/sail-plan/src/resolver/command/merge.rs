@@ -891,6 +891,37 @@ fn merge_disambiguate_unqualified_plan_ids(
                 source_schema,
             )),
         },
+        Expr::DynamicFunction {
+            name_expr,
+            arguments,
+            named_arguments,
+            is_distinct,
+            ignore_nulls,
+        } => Expr::DynamicFunction {
+            name_expr: Box::new(merge_disambiguate_unqualified_plan_ids(
+                *name_expr,
+                state,
+                target_schema,
+                source_schema,
+            )),
+            arguments: arguments
+                .into_iter()
+                .map(|e| {
+                    merge_disambiguate_unqualified_plan_ids(e, state, target_schema, source_schema)
+                })
+                .collect(),
+            named_arguments: named_arguments
+                .into_iter()
+                .map(|(name, e)| {
+                    (
+                        name,
+                        merge_disambiguate_unqualified_plan_ids(e, state, target_schema, source_schema),
+                    )
+                })
+                .collect(),
+            is_distinct,
+            ignore_nulls,
+        },
         Expr::Subquery {
             plan_id,
             subquery_type,

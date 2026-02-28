@@ -51,3 +51,22 @@ class TestIdentifierClauseWithVariables:
             args={"tab": "t_id_fold", "col": "id"},
         ).collect()
         assert result == [(1,), (2,)]
+
+    def test_identifier_variable_function_name(self, spark):
+        """Test IDENTIFIER clause for function names."""
+        spark.sql(
+            "CREATE OR REPLACE TEMPORARY VIEW t_id_func AS SELECT * FROM VALUES (-5, 3), (10, -2) AS t(x, y)"
+        )
+        result = spark.sql(
+            "SELECT IDENTIFIER(:func)(x) FROM t_id_func ORDER BY x",
+            args={"func": "abs"},
+        ).collect()
+        assert result == [(5,), (10,)]
+
+    def test_identifier_variable_function_name_with_multiple_args(self, spark):
+        """Test IDENTIFIER clause for function names with multiple arguments."""
+        result = spark.sql(
+            "SELECT IDENTIFIER(:func)(2, 3)",
+            args={"func": "power"},
+        ).collect()
+        assert result == [(8.0,)]
