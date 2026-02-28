@@ -1,8 +1,7 @@
 use std::iter::once;
 use std::str::FromStr;
 
-use chrono;
-use chrono::TimeDelta;
+use chrono::{self, TimeDelta};
 use lazy_static::lazy_static;
 use regex::Regex;
 use sail_common::spec;
