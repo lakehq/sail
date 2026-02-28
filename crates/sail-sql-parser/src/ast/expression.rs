@@ -217,13 +217,6 @@ pub enum AtomExpr {
         Option<(LeftParenthesis, RightParenthesis)>,
     ),
     CurrentDate(CurrentDate, Option<(LeftParenthesis, RightParenthesis)>),
-    IdentifierClause(
-        Identifier,
-        LeftParenthesis,
-        #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
-        RightParenthesis,
-    ),
-    Function(#[parser(function = |(e, _, _), o| boxed(compose(e, o)))] Box<FunctionExpr>),
     IdentifierFunction {
         identifier: Identifier,
         left_paren: LeftParenthesis,
@@ -233,6 +226,13 @@ pub enum AtomExpr {
         #[parser(function = |(e, _, _), o| compose(e, o))]
         arguments: FunctionArgumentList,
     },
+    IdentifierClause(
+        Identifier,
+        LeftParenthesis,
+        #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
+        RightParenthesis,
+    ),
+    Function(#[parser(function = |(e, _, _), o| boxed(compose(e, o)))] Box<FunctionExpr>),
     Wildcard(operator::Asterisk),
     StringLiteral(StringLiteral, Vec<StringLiteral>),
     NumberLiteral(NumberLiteral),
