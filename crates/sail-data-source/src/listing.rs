@@ -13,7 +13,7 @@ use datafusion_datasource::file_compression_type::FileCompressionType;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use log::debug;
-use object_store::{ObjectMeta, ObjectStore};
+use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 
 use crate::formats::listing::{ListingFormat, ListingTableFormat};
 

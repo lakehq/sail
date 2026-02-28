@@ -269,7 +269,7 @@ impl PythonDataSource {
 
                 // Convert to list
                 let partitions_list =
-                    partitions.downcast::<pyo3::types::PyList>().map_err(|e| {
+                    partitions.cast::<pyo3::types::PyList>().map_err(|e| {
                         ctx.wrap_error(format!("partitioning() must return a list: {}", e))
                     })?;
 
