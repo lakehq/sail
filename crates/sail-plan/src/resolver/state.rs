@@ -252,13 +252,13 @@ impl PlanResolverState {
         self.param_values.get(name)
     }
 
-    /// Enters a scope where the named parameter values are set.
-    /// The previous parameter values are restored when the scope is dropped.
-    pub fn enter_param_values_scope(
+    /// Replaces the current named parameter values with `values` and returns the old values.
+    /// The caller is responsible for restoring the previous values after use.
+    pub(crate) fn replace_param_values(
         &mut self,
         values: HashMap<String, ScalarValue>,
-    ) -> ParamValuesScope<'_> {
-        ParamValuesScope::new(self, values)
+    ) -> HashMap<String, ScalarValue> {
+        std::mem::replace(&mut self.param_values, values)
     }
 }
 
@@ -386,31 +386,5 @@ impl<'a> WithRelationsScope<'a> {
 impl Drop for WithRelationsScope<'_> {
     fn drop(&mut self) {
         self.state.subquery_references = std::mem::take(&mut self.previous_subquery_references);
-    }
-}
-
-/// Scope for named parameter values used by IDENTIFIER clause evaluation.
-pub(crate) struct ParamValuesScope<'a> {
-    state: &'a mut PlanResolverState,
-    previous_param_values: HashMap<String, ScalarValue>,
-}
-
-impl<'a> ParamValuesScope<'a> {
-    fn new(state: &'a mut PlanResolverState, values: HashMap<String, ScalarValue>) -> Self {
-        let previous_param_values = std::mem::replace(&mut state.param_values, values);
-        Self {
-            state,
-            previous_param_values,
-        }
-    }
-
-    pub(crate) fn state(&mut self) -> &mut PlanResolverState {
-        self.state
-    }
-}
-
-impl Drop for ParamValuesScope<'_> {
-    fn drop(&mut self) {
-        self.state.param_values = std::mem::take(&mut self.previous_param_values);
     }
 }

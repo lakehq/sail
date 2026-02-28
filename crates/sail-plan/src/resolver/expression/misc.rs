@@ -86,8 +86,13 @@ impl PlanResolver<'_> {
         let expr = expr
             .transform(|e| {
                 if let expr::Expr::Placeholder(expr::Placeholder { id, .. }) = &e {
-                    // Strip the leading ':' from the placeholder id to get the param name.
-                    let name = id.trim_start_matches(':');
+                    // Strip the leading prefix character (e.g. ':' or '$') from the
+                    // placeholder id to get the param name, mirroring DataFusion's own
+                    // `get_placeholders_with_values` which does `id[1..]`.
+                    if id.is_empty() {
+                        return Ok(Transformed::no(e));
+                    }
+                    let name = &id[1..];
                     if let Some(scalar) = state.get_param_value(name) {
                         return Ok(Transformed::yes(expr::Expr::Literal(scalar.clone(), None)));
                     }
