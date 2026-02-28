@@ -1,7 +1,7 @@
 use pyo3::pyclass;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
-#[pyclass(frozen)]
+#[pyclass(frozen, from_py_object)]
 pub struct PySparkUdfConfig {
     #[pyo3(get)]
     pub session_timezone: String,
