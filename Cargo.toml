@@ -167,7 +167,7 @@ parquet = { version = "58.0.0" }
 serde_arrow = { version = "0.14.0", features = ["arrow-58"] }
 # The `object_store` version must match the one used in DataFusion.
 object_store = { version = "0.13.1", features = ["aws", "gcp", "azure", "http"] }
-hdfs-native-object-store = "0.15.0"
+hdfs-native-object-store = "0.16.0"
 
 # Lakehouse
 delta_kernel = { version = "0.18.2", features = ["arrow-57", "default-engine-rustls", "internal-api"] }

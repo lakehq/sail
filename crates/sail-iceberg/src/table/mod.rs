@@ -26,6 +26,8 @@ use crate::options::TableIcebergOptions;
 use crate::spec::snapshots::MAIN_BRANCH;
 use crate::spec::{PartitionSpec, Schema, Snapshot, TableMetadata};
 
+use object_store::ObjectStoreExt;
+
 /// High-level representation of an Iceberg table backed by ObjectStore + metadata.
 pub struct Table {
     table_url: Url,

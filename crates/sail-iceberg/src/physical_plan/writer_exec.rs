@@ -46,6 +46,8 @@ use crate::spec::schema::Schema as IcebergSchema;
 use crate::spec::{TableMetadata, TableRequirement};
 use crate::utils::get_object_store_from_context;
 
+use object_store::ObjectStoreExt;
+
 #[derive(Debug)]
 pub struct IcebergWriterExec {
     input: Arc<dyn ExecutionPlan>,

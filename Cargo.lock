@@ -2864,9 +2864,9 @@ dependencies = [
 
 [[package]]
 name = "dns-lookup"
-version = "2.1.1"
+version = "3.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf5597a4b7fe5275fc9dcf88ce26326bc8e4cb87d0130f33752d4c5f717793cf"
+checksum = "6e39034cee21a2f5bbb66ba0e3689819c4bb5d00382a282006e802a7ffa6c41d"
 dependencies = [
  "cfg-if",
  "libc",
@@ -3448,9 +3448,9 @@ dependencies = [
 
 [[package]]
 name = "hdfs-native"
-version = "0.12.4"
+version = "0.13.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08603b51f970930b0025b92d3f6c0ba39a0a6d0dfb4b3f527af58768adc2f3b2"
+checksum = "f375a3aa0de14cdfd08a830b9fbef4d5dcf6375fc581b18546792ee4a73b274b"
 dependencies = [
  "aes",
  "base64 0.22.1",
@@ -3489,16 +3489,16 @@ dependencies = [
 
 [[package]]
 name = "hdfs-native-object-store"
-version = "0.15.0"
+version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d5495a763df493ea3883271e727914e83a0ce188a32e230ca820e3cb5e188d2"
+checksum = "c2a8fd74d01f5831e0a81581e252831c70572b7a9145b813fad99323460f2f69"
 dependencies = [
  "async-trait",
  "bytes",
  "chrono",
  "futures",
  "hdfs-native",
- "object_store 0.12.5",
+ "object_store 0.13.1",
  "thiserror",
  "tokio",
 ]
@@ -4266,9 +4266,9 @@ checksum = "bcc35a38544a891a5f7c865aca548a982ccb3b8650a5b06d0fd33a10283c56fc"
 
 [[package]]
 name = "libloading"
-version = "0.8.9"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
+checksum = "754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60"
 dependencies = [
  "cfg-if",
  "windows-link",

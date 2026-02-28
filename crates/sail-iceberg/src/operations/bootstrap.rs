@@ -32,6 +32,8 @@ use crate::spec::snapshots::{SnapshotBuilder, SnapshotReference, SnapshotRetenti
 use crate::spec::TableMetadata;
 use crate::utils::WritePathMode;
 
+use object_store::ObjectStoreExt;
+
 /// Strategy for persisting metadata during bootstrap
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PersistStrategy {

@@ -23,6 +23,8 @@ use crate::spec::{
 };
 use crate::utils::join_table_uri;
 
+use object_store::ObjectStoreExt;
+
 pub trait SnapshotProduceOperation: Send + Sync {
     fn operation(&self) -> &'static str;
 }

@@ -138,10 +138,10 @@ impl ObjectStore for LoggingObjectStore {
             .await
     }
 
-    fn delete_stream<'a>(
-        &'a self,
-        locations: BoxStream<'a, Result<Path>>,
-    ) -> BoxStream<'a, Result<Path>> {
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, Result<Path>>,
+    ) -> BoxStream<'static, Result<Path>> {
         debug!("delete_stream");
 
         let span = Span::enter_with_local_parent("ObjectStore::delete_stream")

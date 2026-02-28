@@ -125,14 +125,16 @@ impl ObjectStore for RuntimeAwareObjectStore {
             .await?
     }
 
-    fn delete_stream<'a>(
-        &'a self,
-        _locations: BoxStream<'a, Result<Path>>,
-    ) -> BoxStream<'a, Result<Path>> {
+    fn delete_stream(
+        &self,
+        _locations: BoxStream<'static, Result<Path>>,
+    ) -> BoxStream<'static, Result<Path>> {
         // FIXME: We cannot run `delete_stream` in a runtime-aware manner because
-        //  the input and output streams are expected to have the lifetime `'a`,
-        //  while tasks spawned by the runtime handle must be `'static`.
-        once(Err(object_store::Error::NotImplemented)).boxed()
+        //  tasks spawned by the runtime handle must be `'static`.
+        once(Err(object_store::Error::NotImplemented {
+            operation: "delete_stream".to_string(),
+            implementer: "RuntimeAwareObjectStore".to_string(),
+        })).boxed()
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {

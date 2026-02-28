@@ -44,7 +44,7 @@ use crate::spec::snapshots::MAIN_BRANCH;
 use crate::spec::{PartitionSpec, Schema as IcebergSchema, TableMetadata, TableRequirement};
 use crate::utils::get_object_store_from_context;
 
-const MAX_COMMIT_RETRIES: usize = 5;
+use object_store::ObjectStoreExt;const MAX_COMMIT_RETRIES: usize = 5;
 
 #[derive(Debug)]
 pub struct IcebergCommitExec {

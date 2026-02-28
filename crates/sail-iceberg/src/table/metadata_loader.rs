@@ -21,6 +21,7 @@ pub async fn find_latest_metadata_file(
 ) -> Result<String> {
     use futures::TryStreamExt;
     use object_store::path::Path as ObjectPath;
+    use object_store::ObjectStoreExt;
 
     log::trace!("Finding latest metadata file");
     let version_hint_path =
