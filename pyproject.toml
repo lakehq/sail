@@ -104,8 +104,8 @@ dependencies = [
     "PyYAML>=6.0,<7",
     "moto[glue]>=5,<6",
     "testcontainers>=4,<5",
+    "connectorx>=0.3,<1",
 ]
-path = ".venvs/default"
 
 [tool.hatch.envs.default.overrides]
 env.CI.installer = "uv"
@@ -153,6 +153,7 @@ dependencies = [
     "PyYAML>=6.0,<7",
     "moto[glue]>=5,<6",
     "testcontainers>=4,<5",
+    "connectorx>=0.3,<1",
 ]
 
 [[tool.hatch.envs.test.matrix]]
@@ -248,6 +249,7 @@ line-length = 120
 "python/pysail/docs/conf.py" = ["INP001"]
 "python/pysail/examples/**/*.py" = ["T201", "PLC0415"]
 "python/pysail/datasources/**/*.py" = ["PLC0415"]
+"python/pysail/spark/datasource/**/*.py" = ["PLC0415"]
 "python/pysail/tests/**/*.py" = ["S101", "PLC0415"]
 "python/pysail/tests/**/manual_*.py" = ["S106", "PLR2004"]
 "python/pysail/utils/pyspark_function_scanner.py" = ["N802"]

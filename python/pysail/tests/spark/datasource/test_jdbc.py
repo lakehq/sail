@@ -1,0 +1,763 @@
+"""Integration tests for the JDBC data source using testcontainers.
+
+A PostgreSQL container is started once per session and torn down at the end.
+All tests run against the container using the Sail Spark Connect server.
+"""
+
+from __future__ import annotations
+
+import pytest
+from testcontainers.postgres import PostgresContainer
+
+from pysail.tests.spark.utils import pyspark_version
+
+if pyspark_version() < (4,):
+    pytest.skip("Python data source requires Spark 4+", allow_module_level=True)
+
+_PG_IMAGE = "postgres:16-alpine"
+_PG_USER = "testuser"
+_PG_PASSWORD = "testpass"
+_PG_DB = "testdb"
+
+_INIT_SQL = """
+CREATE TABLE IF NOT EXISTS users (
+    id        SERIAL PRIMARY KEY,
+    name      VARCHAR(100) NOT NULL,
+    email     VARCHAR(200),
+    age       INTEGER,
+    active    BOOLEAN DEFAULT TRUE,
+    score     DOUBLE PRECISION,
+    created   TIMESTAMP DEFAULT NOW()
+);
+
+INSERT INTO users (name, email, age, active, score) VALUES
+    ('Alice',         'alice@example.com',   30,   TRUE,  9.5),
+    ('Bob',           'bob@example.com',     25,   TRUE,  7.2),
+    ('Charlie',       'charlie@example.com', 35,   FALSE, 8.8),
+    ('Diana',         'diana@example.com',   28,   TRUE,  9.1),
+    ('Eve',           'eve@example.com',     22,   TRUE,  6.7),
+    ('Frank',         'frank@example.com',   40,   FALSE, 5.0),
+    ('Grace',         'grace@example.com',   31,   TRUE,  8.3),
+    ('Hank',          'hank@example.com',    27,   TRUE,  7.9),
+    ('Ivy',           'ivy@example.com',     33,   TRUE,  9.0),
+    ('Jack',          'jack@example.com',    29,   FALSE, 4.5),
+    ('NULL Age User', 'null@example.com',    NULL, TRUE,  8.0),
+    ('张伟',           'zhang@example.com',   25,   TRUE,  9.2),
+    ('José García',   'jose@example.com',    30,   TRUE,  7.5),
+    ('محمد علي',      'mohamed@example.com', 35,   TRUE,  8.7),
+    ('😀 Emoji User', 'emoji@example.com',   22,   TRUE,  9.9);
+
+CREATE TABLE IF NOT EXISTS products (
+    id          SERIAL PRIMARY KEY,
+    name        VARCHAR(200) NOT NULL,
+    price       NUMERIC(10, 2),
+    quantity    SMALLINT,
+    weight_kg   REAL,
+    in_stock    BOOLEAN,
+    listed_at   DATE
+);
+
+INSERT INTO products (name, price, quantity, weight_kg, in_stock, listed_at) VALUES
+    ('Widget A',  9.99,   100, 0.5,  TRUE,  '2024-01-15'),
+    ('Widget B',  14.99,  50,  1.2,  TRUE,  '2024-02-01'),
+    ('Gadget X',  49.99,  25,  0.3,  TRUE,  '2024-03-10'),
+    ('Gadget Y',  29.99,  0,   0.8,  FALSE, '2024-03-11'),
+    ('Doohickey', 5.49,   200, 0.1,  TRUE,  '2024-04-20');
+
+CREATE TABLE IF NOT EXISTS large_table AS
+SELECT
+    generate_series(1, 10000) AS id,
+    md5(random()::text)       AS value;
+
+CREATE TABLE IF NOT EXISTS orders (
+    order_id   SERIAL PRIMARY KEY,
+    user_id    INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    quantity   INTEGER,
+    order_date DATE
+);
+
+INSERT INTO orders (user_id, product_id, quantity, order_date) VALUES
+    (1, 1, 2, '2024-01-10'),
+    (1, 3, 1, '2024-01-15'),
+    (2, 2, 3, '2024-01-12'),
+    (3, 1, 1, '2024-01-14'),
+    (4, 5, 2, '2024-01-16'),
+    (5, 3, 1, '2024-01-11'),
+    (6, 2, 4, '2024-01-13'),
+    (7, 4, 2, '2024-01-17');
+
+CREATE TABLE IF NOT EXISTS empty_table (
+    id   SERIAL PRIMARY KEY,
+    name VARCHAR(100)
+);
+
+CREATE TABLE IF NOT EXISTS data_types_test (
+    id            SERIAL PRIMARY KEY,
+    col_smallint  SMALLINT,
+    col_integer   INTEGER,
+    col_bigint    BIGINT,
+    col_real      REAL,
+    col_double    DOUBLE PRECISION,
+    col_text      TEXT,
+    col_varchar   VARCHAR(50),
+    col_boolean   BOOLEAN,
+    col_date      DATE,
+    col_timestamp TIMESTAMP
+);
+
+INSERT INTO data_types_test VALUES (
+    1,
+    100::SMALLINT,
+    10000::INTEGER,
+    1000000000::BIGINT,
+    3.14::REAL,
+    2.718281828::DOUBLE PRECISION,
+    'Sample text',
+    'Sample varchar',
+    TRUE,
+    '2024-01-15'::DATE,
+    '2024-01-15 10:30:00'::TIMESTAMP
+);
+
+INSERT INTO data_types_test (id) VALUES (2);
+
+CREATE SCHEMA IF NOT EXISTS analytics;
+CREATE TABLE IF NOT EXISTS analytics.events (
+    event_id   SERIAL PRIMARY KEY,
+    event_name VARCHAR(100),
+    user_id    INTEGER,
+    ts         TIMESTAMP DEFAULT NOW()
+);
+INSERT INTO analytics.events (event_name, user_id) VALUES
+    ('page_view', 1),
+    ('click',     2),
+    ('purchase',  1),
+    ('logout',    3);
+"""
+
+
+@pytest.fixture(scope="module")
+def pg_container():
+    """Start a PostgreSQL container and initialise the test schema."""
+    with PostgresContainer(
+        image=_PG_IMAGE,
+        username=_PG_USER,
+        password=_PG_PASSWORD,
+        dbname=_PG_DB,
+        driver=None,
+    ) as container:
+        result = container.exec(["psql", "-U", _PG_USER, "-d", _PG_DB, "-c", _INIT_SQL])
+        assert result.exit_code == 0, f"Failed to initialise DB: {result.output}"
+        yield container
+
+
+@pytest.fixture(scope="module")
+def jdbc_url(pg_container):
+    """Return the JDBC URL for the test PostgreSQL container."""
+    host = pg_container.get_container_host_ip()
+    port = pg_container.get_exposed_port(5432)
+    return f"jdbc:postgresql://{host}:{port}/{_PG_DB}"
+
+
+@pytest.fixture(scope="module")
+def jdbc_opts(jdbc_url):
+    """Return common JDBC options for the test PostgreSQL container."""
+    return {"url": jdbc_url, "user": _PG_USER, "password": _PG_PASSWORD}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def register_jdbc(spark):
+    """Register the JDBC data source with the Spark session."""
+    from pysail.spark.datasource.jdbc import JdbcDataSource  # noqa: PLC0415
+
+    spark.dataSource.register(JdbcDataSource)
+
+
+# ---------------------------------------------------------------------------
+# Basic format("jdbc") read
+# ---------------------------------------------------------------------------
+
+
+def test_basic_format_read(spark, jdbc_opts):
+    df = spark.read.format("jdbc").option("dbtable", "users").options(**jdbc_opts).load()
+    rows = df.collect()
+    assert len(rows) == 15  # noqa: PLR2004
+    col_names = {f.name for f in df.schema.fields}
+    assert "id" in col_names
+    assert "name" in col_names
+
+
+# ---------------------------------------------------------------------------
+# spark.read.jdbc() shorthand
+# ---------------------------------------------------------------------------
+
+
+def test_jdbc_shorthand(spark, jdbc_url):
+    df = spark.read.jdbc(jdbc_url, "users", properties={"user": _PG_USER, "password": _PG_PASSWORD})
+    rows = df.collect()
+    assert len(rows) == 15  # noqa: PLR2004
+
+
+# ---------------------------------------------------------------------------
+# query option with custom SQL
+# ---------------------------------------------------------------------------
+
+
+def test_query_option(spark, jdbc_opts):
+    df = (
+        spark.read.format("jdbc")
+        .option("query", "SELECT id, name FROM users WHERE active = TRUE")
+        .options(**jdbc_opts)
+        .load()
+    )
+    rows = df.collect()
+    assert len(rows) > 0
+    col_names = {f.name for f in df.schema.fields}
+    assert col_names == {"id", "name"}
+
+
+# ---------------------------------------------------------------------------
+# schema-qualified dbtable
+# ---------------------------------------------------------------------------
+
+
+def test_schema_qualified_dbtable(spark, jdbc_opts):
+    df = spark.read.format("jdbc").option("dbtable", "analytics.events").options(**jdbc_opts).load()
+    rows = df.collect()
+    assert len(rows) == 4  # noqa: PLR2004
+
+
+# ---------------------------------------------------------------------------
+# range-stride partitioned read
+# ---------------------------------------------------------------------------
+
+
+def test_partitioned_read(spark, jdbc_opts):
+    df_partitioned = (
+        spark.read.format("jdbc")
+        .option("dbtable", "large_table")
+        .option("partitionColumn", "id")
+        .option("lowerBound", "1")
+        .option("upperBound", "10000")
+        .option("numPartitions", "4")
+        .options(**jdbc_opts)
+        .load()
+    )
+    df_single = spark.read.format("jdbc").option("dbtable", "large_table").options(**jdbc_opts).load()
+    assert df_partitioned.count() == df_single.count()
+
+
+# ---------------------------------------------------------------------------
+# customSchema partial override
+# ---------------------------------------------------------------------------
+
+
+def test_custom_schema(spark, jdbc_opts):
+    df = (
+        spark.read.format("jdbc")
+        .option("dbtable", "products")
+        .option("customSchema", "price DOUBLE, quantity INTEGER")
+        .options(**jdbc_opts)
+        .load()
+    )
+    schema_map = {f.name: f.dataType.simpleString() for f in df.schema.fields}
+    assert "double" in schema_map.get("price", "")
+    assert "int" in schema_map.get("quantity", "")
+
+
+# ---------------------------------------------------------------------------
+# pushDownPredicate=false
+# ---------------------------------------------------------------------------
+
+
+def test_push_down_predicate_false(spark, jdbc_opts):
+    df = (
+        spark.read.format("jdbc")
+        .option("dbtable", "users")
+        .option("pushDownPredicate", "false")
+        .options(**jdbc_opts)
+        .load()
+        .filter("active = true")
+    )
+    rows = df.collect()
+    assert len(rows) > 0
+    assert all(r.active for r in rows)
+
+
+# ---------------------------------------------------------------------------
+# dbtable + query raises ValueError
+# ---------------------------------------------------------------------------
+
+
+def test_dbtable_and_query_raises(spark, jdbc_opts):
+    raised = False
+    try:
+        (
+            spark.read.format("jdbc").option("dbtable", "users").option("query", "SELECT 1").options(**jdbc_opts).load()
+        ).collect()
+    except Exception as e:  # noqa: BLE001
+        if "mutually exclusive" in str(e).lower() or "dbtable" in str(e).lower():
+            raised = True
+    assert raised
+
+
+# ---------------------------------------------------------------------------
+# predicates in spark.read.jdbc() raises error
+# ---------------------------------------------------------------------------
+
+
+def test_predicates_raises(spark, jdbc_url):
+    raised = False
+    try:
+        spark.read.jdbc(
+            jdbc_url,
+            "users",
+            predicates=["id < 5", "id >= 5"],
+            properties={"user": _PG_USER, "password": _PG_PASSWORD},
+        ).collect()
+    except Exception:  # noqa: BLE001
+        raised = True
+    assert raised
+
+
+# ---------------------------------------------------------------------------
+# Non-existent table raises error
+# ---------------------------------------------------------------------------
+
+
+def test_error_nonexistent_table(spark, jdbc_opts):
+    raised = False
+    try:
+        (spark.read.format("jdbc").option("dbtable", "nonexistent_table_12345").options(**jdbc_opts).load()).collect()
+    except Exception as e:  # noqa: BLE001
+        msg = str(e).lower()
+        if "not found" in msg or "does not exist" in msg or "table" in msg or "error" in msg:
+            raised = True
+    assert raised
+
+
+# ---------------------------------------------------------------------------
+# NULL value handling
+# ---------------------------------------------------------------------------
+
+
+def test_null_values_handling(spark, jdbc_opts):
+    df = spark.read.format("jdbc").option("dbtable", "users").options(**jdbc_opts).load()
+    null_ages = df.filter("age IS NULL").collect()
+    assert len(null_ages) >= 1
+
+    non_null = df.filter("age IS NOT NULL").collect()
+    assert len(non_null) == 14  # noqa: PLR2004
+
+    assert len(null_ages) + len(non_null) == 15  # noqa: PLR2004
+
+
+# ---------------------------------------------------------------------------
+# Empty table
+# ---------------------------------------------------------------------------
+
+
+def test_empty_table(spark, jdbc_opts):
+    df = spark.read.format("jdbc").option("dbtable", "empty_table").options(**jdbc_opts).load()
+    assert df.count() == 0
+    assert df.filter("id > 0").collect() == []
+
+
+# ---------------------------------------------------------------------------
+# Large dataset (10K rows)
+# ---------------------------------------------------------------------------
+
+
+def test_large_dataset(spark, jdbc_opts):
+    df = spark.read.format("jdbc").option("dbtable", "large_table").options(**jdbc_opts).load()
+    assert df.count() == 10000  # noqa: PLR2004
+    assert df.filter("id > 5000").count() == 5000  # noqa: PLR2004
+
+
+# ---------------------------------------------------------------------------
+# Unicode strings
+# ---------------------------------------------------------------------------
+
+
+def test_unicode_strings(spark, jdbc_opts):
+    df = spark.read.format("jdbc").option("dbtable", "users").options(**jdbc_opts).load()
+    assert len(df.filter("name = '张伟'").collect()) == 1
+    assert len(df.filter("name = 'José García'").collect()) == 1
+    assert len(df.filter("name = 'محمد علي'").collect()) == 1
+    assert len(df.filter("name LIKE '%😀%'").collect()) == 1
+
+
+# ---------------------------------------------------------------------------
+# Data types coverage
+# ---------------------------------------------------------------------------
+
+
+def test_data_types(spark, jdbc_opts):
+    df = spark.read.format("jdbc").option("dbtable", "data_types_test").options(**jdbc_opts).load()
+    row = df.filter("id = 1").collect()[0]
+
+    assert row.col_smallint == 100  # noqa: PLR2004
+    assert row.col_integer == 10000  # noqa: PLR2004
+    assert row.col_bigint == 1000000000  # noqa: PLR2004
+    assert abs(row.col_real - 3.14) < 0.01
+    assert abs(row.col_double - 2.718281828) < 0.0001
+    assert row.col_text == "Sample text"
+    assert row.col_varchar == "Sample varchar"
+    assert row.col_boolean is True
+
+    null_row = df.filter("id = 2").collect()[0]
+    assert null_row.col_integer is None
+
+
+# ---------------------------------------------------------------------------
+# JOIN operations
+# ---------------------------------------------------------------------------
+
+
+def test_join_operations(spark, jdbc_opts):
+    users = spark.read.format("jdbc").option("dbtable", "users").options(**jdbc_opts).load()
+    orders = spark.read.format("jdbc").option("dbtable", "orders").options(**jdbc_opts).load()
+    products = spark.read.format("jdbc").option("dbtable", "products").options(**jdbc_opts).load()
+
+    users.createOrReplaceTempView("jdbc_users")
+    orders.createOrReplaceTempView("jdbc_orders")
+    products.createOrReplaceTempView("jdbc_products")
+
+    result = spark.sql("""
+        SELECT u.name, o.order_id, o.quantity
+        FROM jdbc_users u
+        INNER JOIN jdbc_orders o ON u.id = o.user_id
+        WHERE u.age IS NOT NULL
+        ORDER BY u.name
+    """).collect()
+    assert len(result) > 0
+
+    result3 = spark.sql("""
+        SELECT u.name, p.name AS product_name, o.quantity
+        FROM jdbc_orders o
+        INNER JOIN jdbc_users u ON o.user_id = u.id
+        INNER JOIN jdbc_products p ON o.product_id = p.id
+        WHERE u.age IS NOT NULL
+        LIMIT 5
+    """).collect()
+    assert len(result3) > 0
+
+
+# ---------------------------------------------------------------------------
+# Complex filters (OR, IN, LIKE)
+# ---------------------------------------------------------------------------
+
+
+def test_complex_filters(spark, jdbc_opts):
+    df = spark.read.format("jdbc").option("dbtable", "users").options(**jdbc_opts).load()
+
+    result = df.filter("age = 30 OR age = 35").collect()
+    assert len(result) >= 2  # noqa: PLR2004
+
+    result = df.filter("age IN (25, 30, 35)").collect()
+    assert len(result) >= 3  # noqa: PLR2004
+
+    result = df.filter("email LIKE '%example.com'").collect()
+    assert len(result) > 10  # noqa: PLR2004
+
+    result = df.filter("NOT (age > 35)").collect()
+    assert len(result) > 0
+
+
+# ---------------------------------------------------------------------------
+# Partition with NULLs in non-partition column
+# ---------------------------------------------------------------------------
+
+
+def test_partition_with_nulls(spark, jdbc_opts):
+    df = (
+        spark.read.format("jdbc")
+        .option("dbtable", "users")
+        .option("partitionColumn", "id")
+        .option("lowerBound", "1")
+        .option("upperBound", "15")
+        .option("numPartitions", "3")
+        .options(**jdbc_opts)
+        .load()
+    )
+    assert df.count() == 15  # noqa: PLR2004
+    assert df.filter("age IS NULL").count() >= 1
+
+
+# ---------------------------------------------------------------------------
+# Filter value SQL injection protection
+# ---------------------------------------------------------------------------
+
+
+def test_sql_injection_filter_value(spark, jdbc_opts):
+    from pyspark.sql.functions import col  # noqa: PLC0415
+
+    orders_before = spark.read.format("jdbc").option("dbtable", "orders").options(**jdbc_opts).load().count()
+    assert orders_before == 8  # noqa: PLR2004
+
+    injection_payload = "'; DROP TABLE orders; --"
+    users_df = spark.read.format("jdbc").option("dbtable", "users").options(**jdbc_opts).load()
+    result = users_df.filter(col("name") == injection_payload).collect()
+    assert len(result) == 0
+
+    orders_after = spark.read.format("jdbc").option("dbtable", "orders").options(**jdbc_opts).load().count()
+    assert orders_after == 8  # noqa: PLR2004
+
+
+# ---------------------------------------------------------------------------
+# lowerBound > upperBound raises ValueError
+# ---------------------------------------------------------------------------
+
+
+def test_lower_bound_gt_upper_bound(spark, jdbc_opts):
+    raised = False
+    try:
+        (
+            spark.read.format("jdbc")
+            .option("dbtable", "users")
+            .option("partitionColumn", "id")
+            .option("lowerBound", "100")
+            .option("upperBound", "10")
+            .option("numPartitions", "2")
+            .options(**jdbc_opts)
+            .load()
+        ).collect()
+    except Exception as e:  # noqa: BLE001
+        if "lowerbound" in str(e).lower():
+            raised = True
+    assert raised
+
+
+# ---------------------------------------------------------------------------
+# lowerBound == upperBound raises ValueError
+# ---------------------------------------------------------------------------
+
+
+def test_lower_bound_eq_upper_bound(spark, jdbc_opts):
+    raised = False
+    try:
+        (
+            spark.read.format("jdbc")
+            .option("dbtable", "users")
+            .option("partitionColumn", "id")
+            .option("lowerBound", "10")
+            .option("upperBound", "10")
+            .option("numPartitions", "2")
+            .options(**jdbc_opts)
+            .load()
+        ).collect()
+    except Exception as e:  # noqa: BLE001
+        if "lowerbound" in str(e).lower():
+            raised = True
+    assert raised
+
+
+# ---------------------------------------------------------------------------
+# Non-integer lowerBound/upperBound raises ValueError
+# ---------------------------------------------------------------------------
+
+
+def test_non_integer_bounds(spark, jdbc_opts):
+    raised = False
+    try:
+        (
+            spark.read.format("jdbc")
+            .option("dbtable", "users")
+            .option("partitionColumn", "id")
+            .option("lowerBound", "1.5")
+            .option("upperBound", "10")
+            .option("numPartitions", "2")
+            .options(**jdbc_opts)
+            .load()
+        ).collect()
+    except Exception as e:  # noqa: BLE001
+        if "integer" in str(e).lower():
+            raised = True
+    assert raised
+
+
+# ---------------------------------------------------------------------------
+# Empty dbtable raises ValueError
+# ---------------------------------------------------------------------------
+
+
+def test_empty_dbtable(spark, jdbc_opts):
+    raised = False
+    try:
+        (spark.read.format("jdbc").option("dbtable", "").options(**jdbc_opts).load()).collect()
+    except Exception as e:  # noqa: BLE001
+        if "dbtable" in str(e).lower():
+            raised = True
+    assert raised
+
+
+# ---------------------------------------------------------------------------
+# Boolean filter pushdown
+# ---------------------------------------------------------------------------
+
+
+def test_boolean_filter_pushdown(spark, jdbc_opts):
+    df = spark.read.format("jdbc").option("dbtable", "users").options(**jdbc_opts).load().filter("active = true")
+    rows = df.collect()
+    assert len(rows) == 12  # noqa: PLR2004
+    assert all(r.active for r in rows)
+
+
+# ---------------------------------------------------------------------------
+# Rows outside [lowerBound, upperBound] are included
+# ---------------------------------------------------------------------------
+
+
+def test_rows_outside_bounds_included(spark, jdbc_opts):
+    df_partitioned = (
+        spark.read.format("jdbc")
+        .option("dbtable", "large_table")
+        .option("partitionColumn", "id")
+        .option("lowerBound", "1000")
+        .option("upperBound", "9000")
+        .option("numPartitions", "4")
+        .options(**jdbc_opts)
+        .load()
+    )
+    df_full = spark.read.format("jdbc").option("dbtable", "large_table").options(**jdbc_opts).load()
+    assert df_partitioned.count() == df_full.count()
+
+
+# ---------------------------------------------------------------------------
+# customSchema unknown column is silently ignored
+# ---------------------------------------------------------------------------
+
+
+def test_custom_schema_unknown_column(spark, jdbc_opts):
+    df = (
+        spark.read.format("jdbc")
+        .option("dbtable", "users")
+        .option("customSchema", "nonexistent_col BIGINT, age BIGINT")
+        .options(**jdbc_opts)
+        .load()
+    )
+    schema_map = {f.name: f.dataType.simpleString() for f in df.schema.fields}
+    assert "bigint" in schema_map.get("age", "")
+    assert "nonexistent_col" not in schema_map
+
+
+# ---------------------------------------------------------------------------
+# customSchema column name matching is case-insensitive
+# ---------------------------------------------------------------------------
+
+
+def test_custom_schema_case_insensitive(spark, jdbc_opts):
+    df = (
+        spark.read.format("jdbc")
+        .option("dbtable", "users")
+        .option("customSchema", "AGE BIGINT, NAME STRING")
+        .options(**jdbc_opts)
+        .load()
+    )
+    schema_map = {f.name: f.dataType.simpleString() for f in df.schema.fields}
+    assert "bigint" in schema_map.get("age", "")
+    assert "string" in schema_map.get("name", "") or "utf8" in schema_map.get("name", "")
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — no Spark or DB required
+# ---------------------------------------------------------------------------
+
+
+def test_filter_to_sql_unit():
+    from pyspark.sql.datasource import (  # noqa: PLC0415
+        EqualTo,
+        GreaterThan,
+        GreaterThanOrEqual,
+        LessThan,
+        LessThanOrEqual,
+    )
+
+    from pysail.spark.datasource.jdbc.datasource import _filter_to_sql  # noqa: PLC0415
+
+    cases = [
+        (EqualTo(("age",), 28), '"age" = 28'),
+        (GreaterThan(("score",), 9.0), '"score" > 9.0'),
+        (GreaterThanOrEqual(("id",), 1), '"id" >= 1'),
+        (LessThan(("age",), 40), '"age" < 40'),
+        (LessThanOrEqual(("age",), 35), '"age" <= 35'),
+        (EqualTo(("name",), "Alice"), "\"name\" = 'Alice'"),
+        (EqualTo(("name",), "O'Reilly"), "\"name\" = 'O''Reilly'"),
+        (EqualTo(("active",), True), '"active" = TRUE'),
+        (EqualTo(("active",), False), '"active" = FALSE'),
+    ]
+
+    for f, expected in cases:
+        result = _filter_to_sql(f)
+        assert result == expected, f"_filter_to_sql({f!r}) = {result!r}, expected {expected!r}"
+
+
+def test_jdbc_url_to_dsn_unit():
+    from pysail.spark.datasource.jdbc.datasource import _jdbc_url_to_dsn  # noqa: PLC0415
+
+    assert _jdbc_url_to_dsn("jdbc:postgresql://localhost:5432/db", None, None) == "postgresql://localhost:5432/db"
+    assert (
+        _jdbc_url_to_dsn("jdbc:postgresql://localhost:5432/db", "alice", None) == "postgresql://alice@localhost:5432/db"
+    )
+    assert (
+        _jdbc_url_to_dsn("jdbc:postgresql://localhost:5432/db", "alice", "secret")
+        == "postgresql://alice:secret@localhost:5432/db"
+    )
+
+    result = _jdbc_url_to_dsn("jdbc:postgresql://h:5432/db", "u", "p@ss/w0rd")
+    assert "p%40ss%2Fw0rd" in result
+
+    with pytest.raises(ValueError, match="Invalid JDBC URL"):
+        _jdbc_url_to_dsn("postgresql://localhost/db", None, None)
+
+
+def test_parse_custom_schema_unit():
+    import pyarrow as pa  # noqa: PLC0415
+
+    from pysail.spark.datasource.jdbc.datasource import _parse_custom_schema  # noqa: PLC0415
+
+    result = _parse_custom_schema("id BIGINT, name STRING, score DOUBLE, active BOOLEAN")
+    assert result["id"] == pa.int64()
+    assert result["name"] == pa.large_utf8()
+    assert result["score"] == pa.float64()
+    assert result["active"] == pa.bool_()
+
+    result = _parse_custom_schema("price DECIMAL(10,2)")
+    assert result["price"] == pa.decimal128(10, 2)
+
+    result = _parse_custom_schema("MyCol INTEGER")
+    assert "mycol" in result
+    assert result["mycol"] == pa.int32()
+
+    assert _parse_custom_schema("") == {}
+
+
+def test_lit_unit():
+    import datetime as dt  # noqa: PLC0415
+
+    from pyspark.sql.datasource import EqualTo  # noqa: PLC0415
+
+    from pysail.spark.datasource.jdbc.datasource import _filter_to_sql  # noqa: PLC0415
+
+    def lit(v):
+        return _filter_to_sql(EqualTo(("x",), v)).split(" = ", 1)[1]
+
+    assert lit(True) == "TRUE"
+    assert lit(False) == "FALSE"
+    assert lit(None) == "NULL"
+    assert lit(42) == "42"
+    assert lit(3.14) == "3.14"
+    assert lit("hello") == "'hello'"
+    assert lit("O'Reilly") == "'O''Reilly'"
+    assert lit(dt.date(2024, 1, 15)) == "'2024-01-15'"
+    assert lit(dt.datetime(2024, 1, 15, 10, 30)) == "'2024-01-15T10:30:00'"  # noqa: DTZ001
+
+
+def test_quote_identifier_unit():
+    from pysail.spark.datasource.jdbc.datasource import _quote_identifier  # noqa: PLC0415
+
+    assert _quote_identifier("age") == '"age"'
+    assert _quote_identifier("my col") == '"my col"'
+    assert _quote_identifier('col"name') == '"col""name"'
+    assert _quote_identifier("") == '""'
