@@ -21,12 +21,11 @@ _PG_USER = "testuser"
 _PG_PASSWORD = "testpass"  # noqa: S105
 _PG_DB = "testdb"
 
-_INIT_SQL = (Path(__file__).parent / "init.sql").read_text(encoding="utf-8")
-
 
 @pytest.fixture(scope="module")
 def pg_container():
     """Start a PostgreSQL container and initialise the test schema."""
+    init_sql = (Path(__file__).parent / "init.sql").read_text(encoding="utf-8")
     with PostgresContainer(
         image=_PG_IMAGE,
         username=_PG_USER,
@@ -34,7 +33,20 @@ def pg_container():
         dbname=_PG_DB,
         driver=None,
     ) as container:
-        result = container.exec(["psql", "-U", _PG_USER, "-d", _PG_DB, "-c", _INIT_SQL])
+        result = container.exec(
+            [
+                "psql",
+                "-v",
+                "ON_ERROR_STOP=1",
+                "--single-transaction",
+                "-U",
+                _PG_USER,
+                "-d",
+                _PG_DB,
+                "-c",
+                init_sql,
+            ]
+        )
         assert result.exit_code == 0, f"Failed to initialise DB: {result.output}"
         yield container
 
@@ -390,6 +402,8 @@ def test_special_chars_table(spark, jdbc_opts):
     assert "Normal Name" in names
     assert "O'Reilly" in names
     assert 'Quote"Test' in names
+    assert any("\t" in n for n in names)
+    assert any("\\" in n for n in names)
 
 
 # ---------------------------------------------------------------------------
