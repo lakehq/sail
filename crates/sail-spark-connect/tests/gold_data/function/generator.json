@@ -118,7 +118,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Optimizer rule 'push_down_leaf_projections' failed\ncaused by\nExecution error: Cannot access field at argument 1: type List(Struct(\"col1\": Int32, \"col2\": Utf8)) is not Struct, Map, or Null"
       }
     },
     {
@@ -176,7 +176,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Optimizer rule 'push_down_leaf_projections' failed\ncaused by\nExecution error: Cannot access field at argument 1: type List(Struct(\"col1\": Int32, \"col2\": Utf8)) is not Struct, Map, or Null"
       }
     },
     {
@@ -234,7 +234,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Optimizer rule 'push_down_leaf_projections' failed\ncaused by\nExecution error: Cannot access field at argument 1: type List(Struct(\"pos\": Int32, \"col\": Int32)) is not Struct, Map, or Null"
       }
     },
     {
@@ -292,7 +292,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Optimizer rule 'push_down_leaf_projections' failed\ncaused by\nExecution error: Cannot access field at argument 1: type List(Struct(\"pos\": Int32, \"col\": Int32)) is not Struct, Map, or Null"
       }
     },
     {
@@ -350,7 +350,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Optimizer rule 'push_down_leaf_projections' failed\ncaused by\nExecution error: Cannot access field at argument 1: type List(Struct(\"col0\": Int32, \"col1\": Int32)) is not Struct, Map, or Null"
       }
     }
   ]

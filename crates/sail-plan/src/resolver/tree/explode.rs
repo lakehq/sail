@@ -4,7 +4,6 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion::common::{Column, Result, UnnestOptions};
-use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion::logical_expr::builder::unnest_with_options;
 use datafusion::logical_expr::{Expr, ExprSchemable, LogicalPlan, Projection, ScalarUDF};
 use datafusion_common::{plan_err, ExprSchema};
@@ -94,45 +93,6 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
         };
 
         let name = self.state.register_field_name("");
-        let out = match (data_type, with_position, is_inline) {
-            (ExplodeDataType::List, false, false) => vec![ident(&name).alias("col")],
-            (ExplodeDataType::List, true, false) => {
-                vec![
-                    ident(&name).field("pos").alias("pos"),
-                    ident(&name).field("col").alias("col"),
-                ]
-            }
-            (ExplodeDataType::List, _, true) => match return_type {
-                DataType::Struct(fields) => Ok(fields
-                    .into_iter()
-                    .map(|field| {
-                        ident(&name)
-                            .field(field.name().as_str())
-                            .alias(field.name().as_str())
-                    })
-                    .collect::<Vec<_>>()),
-                wrong_type => plan_err!(
-                    "inline/inline_outer expects List<Struct> as argument, got {wrong_type:?}"
-                ),
-            }?,
-            (ExplodeDataType::Map, false, _) => {
-                vec![
-                    ident(&name).field(SAIL_MAP_KEY_FIELD_NAME).alias("key"),
-                    ident(&name).field(SAIL_MAP_VALUE_FIELD_NAME).alias("value"),
-                ]
-            }
-            (ExplodeDataType::Map, true, _) => vec![
-                ident(&name).field("pos").alias("pos"),
-                ident(&name)
-                    .field("col")
-                    .field(SAIL_MAP_KEY_FIELD_NAME)
-                    .alias("key"),
-                ident(&name)
-                    .field("col")
-                    .field(SAIL_MAP_VALUE_FIELD_NAME)
-                    .alias("value"),
-            ],
-        };
 
         let mut projections = self
             .plan
@@ -155,6 +115,118 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
                 recursions,
             },
         )?;
+
+        // For cases where the unnested element is a struct, we perform additional struct
+        // unnesting to expose individual fields as plain columns. This avoids using
+        // `get_field` expressions in the output, which the `push_down_leaf_projections`
+        // optimizer rule would incorrectly push through the `Unnest` node, causing type
+        // errors (the pre-unnest type is `List(Struct(...))`, not `Struct(...)`).
+        let out = match (data_type, with_position, is_inline) {
+            (ExplodeDataType::List, false, false) => vec![ident(&name).alias("col")],
+            (ExplodeDataType::List, true, false) => {
+                // After list unnesting: _name: Struct(pos, col)
+                // Struct-unnest to expose _name.pos and _name.col as plain columns.
+                let plan = mem::replace(&mut self.plan, empty_logical_plan());
+                self.plan = unnest_with_options(
+                    plan,
+                    vec![Column::from_name(&name)],
+                    UnnestOptions {
+                        preserve_nulls: false,
+                        recursions: vec![],
+                    },
+                )?;
+                vec![
+                    Expr::Column(Column::from_name(format!("{name}.pos"))).alias("pos"),
+                    Expr::Column(Column::from_name(format!("{name}.col"))).alias("col"),
+                ]
+            }
+            (ExplodeDataType::List, _, true) => match return_type {
+                DataType::Struct(fields) => {
+                    // After list unnesting: _name: Struct(col1, col2, ...)
+                    // Struct-unnest to expose _name.col1, _name.col2, ... as plain columns.
+                    let plan = mem::replace(&mut self.plan, empty_logical_plan());
+                    self.plan = unnest_with_options(
+                        plan,
+                        vec![Column::from_name(&name)],
+                        UnnestOptions {
+                            preserve_nulls: false,
+                            recursions: vec![],
+                        },
+                    )?;
+                    Ok(fields
+                        .iter()
+                        .map(|field| {
+                            Expr::Column(Column::from_name(format!(
+                                "{name}.{}",
+                                field.name()
+                            )))
+                            .alias(field.name().as_str())
+                        })
+                        .collect::<Vec<_>>())
+                }
+                wrong_type => plan_err!(
+                    "inline/inline_outer expects List<Struct> as argument, got {wrong_type:?}"
+                ),
+            }?,
+            (ExplodeDataType::Map, false, _) => {
+                // After list unnesting: _name: Struct(key, value)
+                // Struct-unnest to expose _name.key and _name.value as plain columns.
+                let plan = mem::replace(&mut self.plan, empty_logical_plan());
+                self.plan = unnest_with_options(
+                    plan,
+                    vec![Column::from_name(&name)],
+                    UnnestOptions {
+                        preserve_nulls: false,
+                        recursions: vec![],
+                    },
+                )?;
+                vec![
+                    Expr::Column(Column::from_name(format!(
+                        "{name}.{SAIL_MAP_KEY_FIELD_NAME}"
+                    )))
+                    .alias("key"),
+                    Expr::Column(Column::from_name(format!(
+                        "{name}.{SAIL_MAP_VALUE_FIELD_NAME}"
+                    )))
+                    .alias("value"),
+                ]
+            }
+            (ExplodeDataType::Map, true, _) => {
+                // After list unnesting: _name: Struct(pos, col) where col: Struct(key, value)
+                // First struct-unnest: expose _name.pos and _name.col as plain columns.
+                let plan = mem::replace(&mut self.plan, empty_logical_plan());
+                self.plan = unnest_with_options(
+                    plan,
+                    vec![Column::from_name(&name)],
+                    UnnestOptions {
+                        preserve_nulls: false,
+                        recursions: vec![],
+                    },
+                )?;
+                // Second struct-unnest: expose _name.col.key and _name.col.value as plain columns.
+                let col_name = format!("{name}.col");
+                let plan = mem::replace(&mut self.plan, empty_logical_plan());
+                self.plan = unnest_with_options(
+                    plan,
+                    vec![Column::from_name(&col_name)],
+                    UnnestOptions {
+                        preserve_nulls: false,
+                        recursions: vec![],
+                    },
+                )?;
+                vec![
+                    Expr::Column(Column::from_name(format!("{name}.pos"))).alias("pos"),
+                    Expr::Column(Column::from_name(format!(
+                        "{col_name}.{SAIL_MAP_KEY_FIELD_NAME}"
+                    )))
+                    .alias("key"),
+                    Expr::Column(Column::from_name(format!(
+                        "{col_name}.{SAIL_MAP_VALUE_FIELD_NAME}"
+                    )))
+                    .alias("value"),
+                ]
+            }
+        };
 
         let out = match out.one_or_more()? {
             Either::Left(node) => node,
