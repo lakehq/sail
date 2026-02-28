@@ -337,26 +337,34 @@ impl JobScheduler {
             match Self::build_task_region(job_id, job, region, resolve_cache_partition_worker) {
                 Ok(region) => actions.push(JobAction::ScheduleTaskRegion { region }),
                 Err(error) => {
-                    let keys = region
-                        .tasks
-                        .iter()
-                        .filter_map(|t| {
-                            Self::get_latest_task_attempt(job, t.stage, t.partition).map(
-                                |attempt| TaskKey {
-                                    job_id,
-                                    stage: t.stage,
-                                    partition: t.partition,
-                                    attempt,
-                                },
-                            )
-                        })
-                        .collect::<Vec<_>>();
-                    actions.push(JobAction::FailTasks { keys, error });
+                    actions.push(Self::build_fail_tasks_action(job_id, job, region, error))
                 }
             }
         }
 
         actions
+    }
+
+    /// Builds a fail-tasks action for the latest attempts in a region.
+    fn build_fail_tasks_action(
+        job_id: JobId,
+        job: &JobDescriptor,
+        region: &TaskRegionTopology,
+        error: CachePinError,
+    ) -> JobAction {
+        let keys = region
+            .tasks
+            .iter()
+            .filter_map(|t| {
+                Self::get_latest_task_attempt(job, t.stage, t.partition).map(|attempt| TaskKey {
+                    job_id,
+                    stage: t.stage,
+                    partition: t.partition,
+                    attempt,
+                })
+            })
+            .collect::<Vec<_>>();
+        JobAction::FailTasks { keys, error }
     }
 
     /// Builds a runnable task region from topology and job state.

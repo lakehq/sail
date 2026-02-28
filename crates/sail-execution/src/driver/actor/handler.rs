@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::mem;
 use std::sync::Arc;
 
@@ -18,7 +18,7 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use crate::driver::actor::DriverActor;
-use crate::driver::job_scheduler::{CachePinError, JobAction, TaskState};
+use crate::driver::job_scheduler::{JobAction, TaskState};
 use crate::driver::output::JobOutputItem;
 use crate::driver::{DriverEvent, TaskStatus};
 use crate::error::ExecutionResult;
@@ -29,42 +29,6 @@ use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
 use crate::task::scheduling::{TaskAssignment, TaskAssignmentGetter, TaskStreamAssignment};
 
 impl DriverActor {
-    /// Resolves the worker for a cache partition from the location map.
-    fn resolve_cache_partition_worker(
-        cache_partition_locations: &HashMap<(CacheId, usize), Vec<WorkerId>>,
-        cache_id: CacheId,
-        partition: usize,
-    ) -> Result<WorkerId, CachePinError> {
-        let workers = cache_partition_locations
-            .get(&(cache_id, partition))
-            .ok_or(CachePinError::MissingLocation {
-                cache_id,
-                partition,
-            })?;
-        match workers.as_slice() {
-            [] => Err(CachePinError::MissingLocation {
-                cache_id,
-                partition,
-            }),
-            [worker_id] => {
-                let driver_worker_id = WorkerId::from(0_u64);
-                if *worker_id == driver_worker_id {
-                    Err(CachePinError::DriverLocationForWorkerTask {
-                        cache_id,
-                        partition,
-                    })
-                } else {
-                    Ok(*worker_id)
-                }
-            }
-            _ => Err(CachePinError::MultipleLocations {
-                cache_id,
-                partition,
-                workers: workers.len(),
-            }),
-        }
-    }
-
     pub(super) fn handle_server_ready(
         &mut self,
         ctx: &mut ActorContext<Self>,
@@ -226,13 +190,8 @@ impl DriverActor {
         partition: usize,
         worker_id: WorkerId,
     ) -> ActorAction {
-        let entry = self
-            .cache_partition_locations
-            .entry((cache_id, partition))
-            .or_default();
-        if !entry.contains(&worker_id) {
-            entry.push(worker_id);
-        }
+        self.cache_partition_locations
+            .record(cache_id, partition, worker_id);
         ActorAction::Continue
     }
 
@@ -473,11 +432,7 @@ impl DriverActor {
         for action in self
             .job_scheduler
             .refresh_job(job_id, |cache_id, partition| {
-                Self::resolve_cache_partition_worker(
-                    &cache_partition_locations,
-                    cache_id,
-                    partition,
-                )
+                cache_partition_locations.resolve_worker(cache_id, partition)
             })
         {
             self.run_job_action(ctx, action);
