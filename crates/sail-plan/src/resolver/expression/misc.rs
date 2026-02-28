@@ -142,9 +142,9 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        // Resolve the name expression to get the function name
-        let resolved_name_expr = self.resolve_expression(name_expr, schema, state).await?;
-        let function_name_str = self.evaluate_identifier_expr(resolved_name_expr, state)?;
+        // Evaluate the name expression directly without resolving it as a column reference.
+        // We need to substitute placeholders first, then evaluate the expression to a string.
+        let function_name_str = self.evaluate_identifier_clause_expr(name_expr, state)?;
 
         // Parse the function name as an ObjectName
         let function_name = sail_sql_analyzer::expression::from_ast_object_name(
@@ -168,6 +168,84 @@ impl PlanResolver<'_> {
             state,
         )
         .await
+    }
+
+    /// Evaluates an IDENTIFIER clause expression to a string.
+    /// This is specifically for IDENTIFIER(:expr) where expr needs to be evaluated
+    /// without first resolving it as a column reference.
+    fn evaluate_identifier_clause_expr(
+        &self,
+        expr: spec::Expr,
+        state: &PlanResolverState,
+    ) -> PlanResult<String> {
+        // Convert the spec::Expr to a DataFusion expr for evaluation
+        // We need to do this manually since we can't use resolve_expression
+        // (which would try to resolve column references).
+        let df_expr = self.spec_expr_to_datafusion_expr_for_evaluation(expr, state)?;
+        self.evaluate_identifier_expr(df_expr, state)
+    }
+
+    /// Converts a spec::Expr to a DataFusion expr for the sole purpose of evaluation,
+    /// without resolving column references.
+    fn spec_expr_to_datafusion_expr_for_evaluation(
+        &self,
+        expr: spec::Expr,
+        state: &PlanResolverState,
+    ) -> PlanResult<expr::Expr> {
+        use datafusion_expr::lit;
+        match expr {
+            spec::Expr::Literal(literal) => {
+                // For string literals
+                match literal {
+                    spec::Literal::Utf8 { value } | spec::Literal::LargeUtf8 { value } | spec::Literal::Utf8View { value } => {
+                        match value {
+                            Some(s) => Ok(lit(s)),
+                            None => Ok(lit(datafusion_common::ScalarValue::Utf8(None))),
+                        }
+                    }
+                    _ => Err(PlanError::invalid(
+                        "IDENTIFIER expression must evaluate to a string literal",
+                    )),
+                }
+            }
+            spec::Expr::Placeholder(placeholder) => {
+                // Create a placeholder that will be substituted in evaluate_identifier_expr
+                Ok(expr::Expr::Placeholder(expr::Placeholder::new_with_field(
+                    placeholder,
+                    None,
+                )))
+            }
+            spec::Expr::CallFunction {
+                function_name,
+                arguments,
+            } => {
+                // Handle string concatenation (||)
+                if function_name.parts().len() == 1 && function_name.parts()[0].as_ref() == "||" {
+                    if arguments.len() == 2 {
+                        let left = self.spec_expr_to_datafusion_expr_for_evaluation(
+                            arguments[0].clone(),
+                            state,
+                        )?;
+                        let right = self.spec_expr_to_datafusion_expr_for_evaluation(
+                            arguments[1].clone(),
+                            state,
+                        )?;
+                        return Ok(expr::Expr::BinaryExpr(expr::BinaryExpr {
+                            left: Box::new(left),
+                            op: datafusion_expr::Operator::StringConcat,
+                            right: Box::new(right),
+                        }));
+                    }
+                }
+                Err(PlanError::invalid(format!(
+                    "IDENTIFIER expression contains unsupported function: {}",
+                    function_name.parts()[0].as_ref()
+                )))
+            }
+            _ => Err(PlanError::invalid(
+                "IDENTIFIER expression must be a literal, placeholder, or string concatenation",
+            )),
+        }
     }
 
     pub(super) async fn resolve_expression_table(
