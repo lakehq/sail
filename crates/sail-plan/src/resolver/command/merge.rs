@@ -915,7 +915,12 @@ fn merge_disambiguate_unqualified_plan_ids(
                 .map(|(name, e)| {
                     (
                         name,
-                        merge_disambiguate_unqualified_plan_ids(e, state, target_schema, source_schema),
+                        merge_disambiguate_unqualified_plan_ids(
+                            e,
+                            state,
+                            target_schema,
+                            source_schema,
+                        ),
                     )
                 })
                 .collect(),

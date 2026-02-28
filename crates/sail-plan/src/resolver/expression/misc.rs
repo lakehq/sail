@@ -190,19 +190,19 @@ impl PlanResolver<'_> {
     fn spec_expr_to_datafusion_expr_for_evaluation(
         &self,
         expr: spec::Expr,
-        state: &PlanResolverState,
+        _state: &PlanResolverState,
     ) -> PlanResult<expr::Expr> {
         use datafusion_expr::lit;
         match expr {
             spec::Expr::Literal(literal) => {
                 // For string literals
                 match literal {
-                    spec::Literal::Utf8 { value } | spec::Literal::LargeUtf8 { value } | spec::Literal::Utf8View { value } => {
-                        match value {
-                            Some(s) => Ok(lit(s)),
-                            None => Ok(lit(datafusion_common::ScalarValue::Utf8(None))),
-                        }
-                    }
+                    spec::Literal::Utf8 { value }
+                    | spec::Literal::LargeUtf8 { value }
+                    | spec::Literal::Utf8View { value } => match value {
+                        Some(s) => Ok(lit(s)),
+                        None => Ok(lit(datafusion_common::ScalarValue::Utf8(None))),
+                    },
                     _ => Err(PlanError::invalid(
                         "IDENTIFIER expression must evaluate to a string literal",
                     )),
@@ -220,22 +220,21 @@ impl PlanResolver<'_> {
                 arguments,
             } => {
                 // Handle string concatenation (||)
-                if function_name.parts().len() == 1 && function_name.parts()[0].as_ref() == "||" {
-                    if arguments.len() == 2 {
-                        let left = self.spec_expr_to_datafusion_expr_for_evaluation(
-                            arguments[0].clone(),
-                            state,
-                        )?;
-                        let right = self.spec_expr_to_datafusion_expr_for_evaluation(
-                            arguments[1].clone(),
-                            state,
-                        )?;
-                        return Ok(expr::Expr::BinaryExpr(expr::BinaryExpr {
-                            left: Box::new(left),
-                            op: datafusion_expr::Operator::StringConcat,
-                            right: Box::new(right),
-                        }));
-                    }
+                if function_name.parts().len() == 1
+                    && function_name.parts()[0].as_ref() == "||"
+                    && arguments.len() == 2
+                {
+                    let left =
+                        self.spec_expr_to_datafusion_expr_for_evaluation(arguments[0].clone(), _state)?;
+                    let right = self.spec_expr_to_datafusion_expr_for_evaluation(
+                        arguments[1].clone(),
+                        _state,
+                    )?;
+                    return Ok(expr::Expr::BinaryExpr(expr::BinaryExpr {
+                        left: Box::new(left),
+                        op: datafusion_expr::Operator::StringConcat,
+                        right: Box::new(right),
+                    }));
                 }
                 Err(PlanError::invalid(format!(
                     "IDENTIFIER expression contains unsupported function: {}",
