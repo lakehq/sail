@@ -52,6 +52,7 @@ impl TreeNodeRewriter for MonotonicIdRewriter<'_> {
 
         // `monotonically_increasing_id()` is nullary
         args.zero()?;
+        let original_expr = func.call(vec![]);
 
         let col = match &self.column_name {
             Some(c) => c.clone(),
@@ -67,7 +68,10 @@ impl TreeNodeRewriter for MonotonicIdRewriter<'_> {
                 col
             }
         };
+        let rewritten = ident(&col);
+        self.state
+            .register_expression_rewrite(original_expr, rewritten.clone());
 
-        Ok(Transformed::yes(ident(&col)))
+        Ok(Transformed::yes(rewritten))
     }
 }

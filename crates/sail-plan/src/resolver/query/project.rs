@@ -220,6 +220,7 @@ impl PlanResolver<'_> {
                 for plan_id in plan_ids {
                     state.register_plan_id_for_field(&field_id, plan_id)?;
                 }
+                state.register_expression_output_field(expr.clone(), field_id.clone());
                 if !metadata.is_empty() {
                     let metadata_map: HashMap<String, String> = metadata.into_iter().collect();
                     let field_metadata = Some(FieldMetadata::from(metadata_map));

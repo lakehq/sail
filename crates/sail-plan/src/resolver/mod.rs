@@ -8,6 +8,7 @@ mod command;
 mod constraint;
 mod data_type;
 mod expression;
+mod expression_mapping;
 mod function;
 mod literal;
 pub mod plan;
