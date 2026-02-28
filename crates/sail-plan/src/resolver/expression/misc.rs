@@ -64,24 +64,52 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let resolved = self.resolve_expression(expr, schema, state).await?;
-        let evaluator = LiteralEvaluator::new();
-        let scalar = evaluator.evaluate(&resolved).map_err(|e| {
-            PlanError::invalid(format!("IDENTIFIER expression must be a constant: {e}"))
-        })?;
-        let name = match scalar {
-            ScalarValue::Utf8(Some(s))
-            | ScalarValue::LargeUtf8(Some(s))
-            | ScalarValue::Utf8View(Some(s)) => s,
-            _ => {
-                return Err(PlanError::invalid(
-                    "IDENTIFIER expression must evaluate to a string",
-                ))
-            }
-        };
+        let name = self.evaluate_identifier_expr(resolved, state)?;
         let object_name = sail_sql_analyzer::expression::from_ast_object_name(
             sail_sql_analyzer::parser::parse_object_name(&name)?,
         )?;
         self.resolve_expression_attribute(object_name, None, false, schema, state)
+    }
+
+    /// Evaluates a resolved DataFusion expression as an identifier string.
+    ///
+    /// Named parameter placeholders (e.g. `:col`) are substituted from the
+    /// current parameter scope in `state` before constant-folding, which
+    /// allows expressions like `IDENTIFIER(:col)` or
+    /// `IDENTIFIER(:tab || '.' || :col)` to work inside parameterized SQL.
+    pub(in super::super) fn evaluate_identifier_expr(
+        &self,
+        expr: expr::Expr,
+        state: &PlanResolverState,
+    ) -> PlanResult<String> {
+        use datafusion_common::tree_node::{Transformed, TreeNode};
+        let expr = expr
+            .transform(|e| {
+                if let expr::Expr::Placeholder(expr::Placeholder { id, .. }) = &e {
+                    // Strip the leading ':' from the placeholder id to get the param name.
+                    let name = id.trim_start_matches(':');
+                    if let Some(scalar) = state.get_param_value(name) {
+                        return Ok(Transformed::yes(expr::Expr::Literal(scalar.clone(), None)));
+                    }
+                }
+                Ok(Transformed::no(e))
+            })
+            .map_err(|e| {
+                PlanError::invalid(format!("IDENTIFIER placeholder substitution failed: {e}"))
+            })?
+            .data;
+        let evaluator = LiteralEvaluator::new();
+        let scalar = evaluator.evaluate(&expr).map_err(|e| {
+            PlanError::invalid(format!("IDENTIFIER expression must be a constant: {e}"))
+        })?;
+        match scalar {
+            ScalarValue::Utf8(Some(s))
+            | ScalarValue::LargeUtf8(Some(s))
+            | ScalarValue::Utf8View(Some(s)) => Ok(s),
+            _ => Err(PlanError::invalid(
+                "IDENTIFIER expression must evaluate to a string",
+            )),
+        }
     }
 
     pub(super) async fn resolve_expression_table(

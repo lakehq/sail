@@ -58,9 +58,25 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let evaluator = LiteralEvaluator::new();
         let schema = Arc::new(DFSchema::empty());
+        // Evaluate the named arguments eagerly so that IDENTIFIER(:col) expressions
+        // inside the query body can substitute their placeholder values at plan-resolution
+        // time (before `with_param_values` is applied to the resolved plan).
+        let named_params = {
+            let mut params = HashMap::new();
+            for (name, arg) in named {
+                let expr = self.resolve_expression(arg, &schema, state).await?;
+                let param = evaluator
+                    .evaluate(&expr)
+                    .map_err(|e| PlanError::invalid(e.to_string()))?;
+                params.insert(name, param);
+            }
+            params
+        };
+        let mut scope = state.enter_param_values_scope(named_params.clone());
         let input = self
-            .resolve_query_plan_with_hidden_fields(input, state)
+            .resolve_query_plan_with_hidden_fields(input, scope.state())
             .await?;
+        drop(scope);
         let input = if !positional.is_empty() {
             let params = {
                 let mut params = vec![];
@@ -77,19 +93,8 @@ impl PlanResolver<'_> {
         } else {
             input
         };
-        if !named.is_empty() {
-            let params = {
-                let mut params = HashMap::new();
-                for (name, arg) in named {
-                    let expr = self.resolve_expression(arg, &schema, state).await?;
-                    let param = evaluator
-                        .evaluate(&expr)
-                        .map_err(|e| PlanError::invalid(e.to_string()))?;
-                    params.insert(name, param);
-                }
-                params
-            };
-            Ok(input.with_param_values(ParamValues::from(params))?)
+        if !named_params.is_empty() {
+            Ok(input.with_param_values(ParamValues::from(named_params))?)
         } else {
             Ok(input)
         }

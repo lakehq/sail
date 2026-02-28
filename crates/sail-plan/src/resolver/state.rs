@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion_common::arrow::datatypes::Field;
-use datafusion_common::{DFSchemaRef, TableReference};
+use datafusion_common::{DFSchemaRef, ScalarValue, TableReference};
 use datafusion_expr::LogicalPlan;
 use sail_common::spec;
 
@@ -78,6 +78,10 @@ pub(super) struct PlanResolverState {
     /// Unresolved subquery references from a WithRelations node, keyed by plan_id.
     subquery_references: HashMap<i64, spec::QueryPlan>,
     config: PlanResolverStateConfig,
+    /// Named parameter values available for IDENTIFIER clause evaluation.
+    /// Set when resolving a `WithParameters` query node so that IDENTIFIER expressions
+    /// can substitute placeholders before constant-folding them.
+    param_values: HashMap<String, ScalarValue>,
 }
 
 impl Default for PlanResolverState {
@@ -96,6 +100,7 @@ impl PlanResolverState {
             ctes: HashMap::new(),
             subquery_references: HashMap::new(),
             config: PlanResolverStateConfig::default(),
+            param_values: HashMap::new(),
         }
     }
 
@@ -241,6 +246,20 @@ impl PlanResolverState {
     pub fn config_mut(&mut self) -> &mut PlanResolverStateConfig {
         &mut self.config
     }
+
+    /// Returns the named parameter value for the given name, if any.
+    pub fn get_param_value(&self, name: &str) -> Option<&ScalarValue> {
+        self.param_values.get(name)
+    }
+
+    /// Enters a scope where the named parameter values are set.
+    /// The previous parameter values are restored when the scope is dropped.
+    pub fn enter_param_values_scope(
+        &mut self,
+        values: HashMap<String, ScalarValue>,
+    ) -> ParamValuesScope<'_> {
+        ParamValuesScope::new(self, values)
+    }
 }
 
 pub(crate) struct QueryScope<'a> {
@@ -367,5 +386,31 @@ impl<'a> WithRelationsScope<'a> {
 impl Drop for WithRelationsScope<'_> {
     fn drop(&mut self) {
         self.state.subquery_references = std::mem::take(&mut self.previous_subquery_references);
+    }
+}
+
+/// Scope for named parameter values used by IDENTIFIER clause evaluation.
+pub(crate) struct ParamValuesScope<'a> {
+    state: &'a mut PlanResolverState,
+    previous_param_values: HashMap<String, ScalarValue>,
+}
+
+impl<'a> ParamValuesScope<'a> {
+    fn new(state: &'a mut PlanResolverState, values: HashMap<String, ScalarValue>) -> Self {
+        let previous_param_values = std::mem::replace(&mut state.param_values, values);
+        Self {
+            state,
+            previous_param_values,
+        }
+    }
+
+    pub(crate) fn state(&mut self) -> &mut PlanResolverState {
+        self.state
+    }
+}
+
+impl Drop for ParamValuesScope<'_> {
+    fn drop(&mut self) {
+        self.state.param_values = std::mem::take(&mut self.previous_param_values);
     }
 }

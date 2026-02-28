@@ -1,5 +1,15 @@
 """Tests for IDENTIFIER clause with parameterized SQL (keyword arguments)."""
 
+import pytest
+
+from pysail.tests.spark.utils import pyspark_version
+
+# Named keyword arguments to spark.sql() were added in Spark 4.0.
+pytestmark = pytest.mark.skipif(
+    pyspark_version() < (4,),
+    reason="spark.sql() keyword arguments require Spark 4+",
+)
+
 
 class TestIdentifierClauseWithVariables:
     """Tests for IDENTIFIER clause where the identifier name is a named parameter."""
@@ -31,3 +41,14 @@ class TestIdentifierClauseWithVariables:
             tab="t_id_var_from",
         ).collect()
         assert result == [(10,), (20,)]
+
+    def test_identifier_variable_constant_folding(self, spark):
+        spark.sql(
+            "CREATE OR REPLACE TEMPORARY VIEW t_id_fold AS SELECT * FROM VALUES (1, 'a'), (2, 'b') AS t(id, name)"
+        )
+        result = spark.sql(
+            "SELECT IDENTIFIER(:tab || '.' || :col) FROM t_id_fold ORDER BY id",
+            tab="t_id_fold",
+            col="id",
+        ).collect()
+        assert result == [(1,), (2,)]

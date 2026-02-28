@@ -124,20 +124,7 @@ impl PlanResolver<'_> {
         } = table;
         let schema = Arc::new(DFSchema::empty());
         let resolved = self.resolve_expression(name, &schema, state).await?;
-        let evaluator = LiteralEvaluator::new();
-        let scalar = evaluator.evaluate(&resolved).map_err(|e| {
-            PlanError::invalid(format!("IDENTIFIER expression must be a constant: {e}"))
-        })?;
-        let name_str = match scalar {
-            ScalarValue::Utf8(Some(s))
-            | ScalarValue::LargeUtf8(Some(s))
-            | ScalarValue::Utf8View(Some(s)) => s,
-            _ => {
-                return Err(PlanError::invalid(
-                    "IDENTIFIER expression must evaluate to a string",
-                ))
-            }
-        };
+        let name_str = self.evaluate_identifier_expr(resolved, state)?;
         let name = sail_sql_analyzer::expression::from_ast_object_name(
             sail_sql_analyzer::parser::parse_object_name(&name_str)?,
         )?;
