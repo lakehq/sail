@@ -390,6 +390,7 @@ impl PlanResolver<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use datafusion::execution::SessionStateBuilder;
@@ -520,6 +521,110 @@ mod tests {
                 }),
                 metadata: Default::default(),
             },
+        );
+
+        Ok(())
+    }
+
+    fn assert_metadata_value(
+        metadata_map: &HashMap<String, String>,
+        key: &str,
+        expected_value: &str,
+    ) {
+        assert_eq!(
+            metadata_map.get(key),
+            Some(&expected_value.to_string()),
+            "Expected {} in metadata, got: {:?}",
+            key,
+            metadata_map
+        );
+    }
+
+    #[tokio::test]
+    async fn test_st_geomfromwkb_returns_geometry_metadata() -> PlanResult<()> {
+        let mut state = SessionStateBuilder::new().build();
+        state.config_mut().set_extension(Arc::new(PlanService::new(
+            Box::new(DefaultCatalogDisplay::<SparkCatalogObjectDisplay>::default()),
+            Box::new(SparkPlanFormatter),
+        )));
+        let ctx = SessionContext::new_with_state(state);
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+
+        let result = resolver
+            .resolve_named_expression(
+                spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                    function_name: spec::ObjectName::bare("st_geomfromwkb"),
+                    arguments: vec![spec::Expr::Literal(spec::Literal::Binary {
+                        value: Some(vec![
+                            1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 240, 255, 63, 0, 0, 0, 0, 0, 0, 64,
+                        ]),
+                    })],
+                    named_arguments: vec![],
+                    is_distinct: false,
+                    is_user_defined_function: false,
+                    is_internal: None,
+                    ignore_nulls: None,
+                    filter: None,
+                    order_by: None,
+                }),
+                &Arc::new(DFSchema::empty()),
+                &mut PlanResolverState::new(),
+            )
+            .await?;
+
+        let metadata: Vec<(String, String)> = result.metadata.iter().as_slice().to_vec();
+        let metadata_map: HashMap<_, _> = metadata.clone().into_iter().collect();
+
+        assert_metadata_value(&metadata_map, "ARROW:extension:name", "geoarrow.wkb");
+        assert_metadata_value(
+            &metadata_map,
+            "ARROW:extension:metadata",
+            r#"{"crs":"SRID:0"}"#,
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_st_geogfromwkb_returns_geography_metadata() -> PlanResult<()> {
+        let mut state = SessionStateBuilder::new().build();
+        state.config_mut().set_extension(Arc::new(PlanService::new(
+            Box::new(DefaultCatalogDisplay::<SparkCatalogObjectDisplay>::default()),
+            Box::new(SparkPlanFormatter),
+        )));
+        let ctx = SessionContext::new_with_state(state);
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+
+        let result = resolver
+            .resolve_named_expression(
+                spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                    function_name: spec::ObjectName::bare("st_geogfromwkb"),
+                    arguments: vec![spec::Expr::Literal(spec::Literal::Binary {
+                        value: Some(vec![
+                            1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 240, 255, 63, 0, 0, 0, 0, 0, 0, 64,
+                        ]),
+                    })],
+                    named_arguments: vec![],
+                    is_distinct: false,
+                    is_user_defined_function: false,
+                    is_internal: None,
+                    ignore_nulls: None,
+                    filter: None,
+                    order_by: None,
+                }),
+                &Arc::new(DFSchema::empty()),
+                &mut PlanResolverState::new(),
+            )
+            .await?;
+
+        let metadata: Vec<(String, String)> = result.metadata.iter().as_slice().to_vec();
+        let metadata_map: HashMap<_, _> = metadata.clone().into_iter().collect();
+
+        assert_metadata_value(&metadata_map, "ARROW:extension:name", "geoarrow.wkb");
+        assert_metadata_value(
+            &metadata_map,
+            "ARROW:extension:metadata",
+            r#"{"crs":"OGC:CRS84","edges":"spherical"}"#,
         );
 
         Ok(())
