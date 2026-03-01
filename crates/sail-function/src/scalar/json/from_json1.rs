@@ -9,11 +9,11 @@ use sail_common::spec::{
     SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME,
 };
 
-use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, plan_err};
+use datafusion_common::{DataFusionError, Result, ScalarValue, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion::arrow::{
     array::{
-        Array, ArrayBuilder, ArrayRef, Decimal32Builder, Float32Builder, Float64Builder, Int32Builder, Int64Builder, ListArray, ListBuilder, MapArray, MapBuilder, StringArray, StringBuilder, StructArray, StructBuilder, TimestampMicrosecondBuilder
+        Array, ArrayRef, Float32Builder, Float64Builder, Int32Builder, Int64Builder, ListArray, MapArray, StringArray, StringBuilder, StructArray , TimestampMicrosecondBuilder
     }, buffer::{
         NullBuffer, OffsetBuffer, ScalarBuffer
     }, datatypes::{
@@ -33,7 +33,6 @@ enum FieldBuilder {
     Int64(Int64Builder),
     Float32(Float32Builder),
     Float64(Float64Builder),
-    Decimal32(Decimal32Builder),
     String(StringBuilder),
     TimestampMicrosecondBuilder(TimestampMicrosecondBuilder),
     Struct {
@@ -48,7 +47,12 @@ enum FieldBuilder {
         nulls: Vec<bool>,
         ordered: bool
     },
-    List(ListBuilder<Box<dyn ArrayBuilder>>),
+    List {
+        field: Arc<Field>,
+        offsets: Vec<i32>,
+        values: Box<FieldBuilder>,
+        nulls: Vec<bool>,
+    },
 }
 
 #[derive(Debug, Default)]
@@ -338,6 +342,10 @@ fn create_builder(data_type: DataType, capacity: usize) -> Result<FieldBuilder> 
     match data_type {
         DataType::Utf8 => Ok(FieldBuilder::String(StringBuilder::with_capacity(capacity, capacity*16))),
         DataType::Int32 => Ok(FieldBuilder::Int32(Int32Builder::with_capacity(capacity))),
+        DataType::Int64 => Ok(FieldBuilder::Int64(Int64Builder::with_capacity(capacity))),
+        DataType::Float32 => Ok(FieldBuilder::Float32(Float32Builder::with_capacity(capacity))),
+        DataType::Float64 => Ok(FieldBuilder::Float64(Float64Builder::with_capacity(capacity))),
+        DataType::Timestamp(TimeUnit::Microsecond, _) => Ok(FieldBuilder::TimestampMicrosecondBuilder(TimestampMicrosecondBuilder::with_capacity(capacity))),
         DataType::Struct(fields) => {
             let nested_builders = fields
                 .iter()
@@ -360,7 +368,18 @@ fn create_builder(data_type: DataType, capacity: usize) -> Result<FieldBuilder> 
                 nulls: Vec::with_capacity(capacity),
                 ordered
             })
-        }
+        },
+        DataType::List(field) => {
+            let values = create_builder(field.data_type().clone(), capacity)?;
+            let mut offsets = Vec::with_capacity(capacity);
+            offsets.push(0);
+            Ok(FieldBuilder::List {
+                field,
+			    offsets,
+			    values: Box::new(values),
+			    nulls: Vec::with_capacity(capacity)
+            })
+        },
         other => Err(DataFusionError::NotImplemented(format!("Unimplemented builder for data type {other:?}")))
     }
 }
@@ -388,7 +407,11 @@ fn append_to_builder(
             FieldBuilder::Map { struct_builder, nulls, .. } => {
                 nulls.push(false);
                 append_to_builder(struct_builder, value, options)?;
-            }
+            },
+            FieldBuilder::List { values, nulls, .. } => {
+                nulls.push(false);
+                append_to_builder(values, value, options)?;
+            },
             _ => unimplemented!("Not yet")
         }
     }
@@ -438,6 +461,22 @@ fn append_to_builder(
             let curr_len = offsets.last().unwrap() + obj.len() as i32;
             offsets.push(curr_len);
         },
+        (
+            FieldBuilder::List {
+                offsets,
+                values,
+                nulls,
+                ..
+            },
+            Value::Array(arr)
+        ) => {
+            nulls.push(true);
+            for val in arr.iter() {
+                append_to_builder(values, val, options)?;
+            }
+            let curr_len = offsets.last().unwrap() + arr.len() as i32;
+            offsets.push(curr_len);
+        },
         _ => return plan_err!("nah dog")
     };
     Ok(())
@@ -446,7 +485,11 @@ fn append_to_builder(
 fn finish_builder(builder: FieldBuilder) -> Result<ArrayRef> {
     match builder {
         FieldBuilder::Int32(mut b) => Ok(Arc::new(b.finish())),
+        FieldBuilder::Int64(mut b) => Ok(Arc::new(b.finish())),
+        FieldBuilder::Float32(mut b) => Ok(Arc::new(b.finish())),
+        FieldBuilder::Float64(mut b) => Ok(Arc::new(b.finish())),
         FieldBuilder::String(mut b) => Ok(Arc::new(b.finish())),
+        FieldBuilder::TimestampMicrosecondBuilder(mut b) => Ok(Arc::new(b.finish())),
         FieldBuilder::Struct {
             fields,
             nested_builders,
@@ -466,8 +509,8 @@ fn finish_builder(builder: FieldBuilder) -> Result<ArrayRef> {
 			ordered
         } => {
             let deref_struct_builder = *struct_builder;
-            let struct_array_tmp = finish_builder(deref_struct_builder)?;
-            let struct_array = struct_array_tmp
+            let array_ref = finish_builder(deref_struct_builder)?;
+            let struct_array = array_ref
                 .as_any()
                 .downcast_ref::<StructArray>()
                 .unwrap();
@@ -477,6 +520,16 @@ fn finish_builder(builder: FieldBuilder) -> Result<ArrayRef> {
                 struct_array.clone(),
                 Some(NullBuffer::from(nulls)),
                 ordered
+            )))
+        },
+        FieldBuilder::List { field, offsets, values, nulls } => {
+            let deref_values = *values;
+            let array_ref = finish_builder(deref_values)?;
+            Ok(Arc::new(ListArray::new(
+                field,
+				OffsetBuffer::new(ScalarBuffer::from(offsets)),
+				array_ref,
+				Some(NullBuffer::from(nulls))
             )))
         },
         _ => plan_err!("Unsupported finish builder")
