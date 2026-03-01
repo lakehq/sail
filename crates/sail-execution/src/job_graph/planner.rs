@@ -65,6 +65,7 @@ impl JobGraph {
     }
 }
 
+/// Ensures GlobalLimitExec inputs are single-partition.
 fn ensure_single_input_partition_for_global_limit(
     plan: Arc<dyn ExecutionPlan>,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
@@ -94,6 +95,7 @@ fn ensure_single_input_partition_for_global_limit(
     Ok(result.data()?)
 }
 
+/// Rewrites certain collect-left hash joins into partitioned joins.
 fn ensure_partitioned_hash_join_if_build_side_emits_unmatched_rows(
     plan: Arc<dyn ExecutionPlan>,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
@@ -184,7 +186,7 @@ enum PartitionUsage {
     Shared,
 }
 
-/// Recursively splits an execution plan into stages at shuffle boundaries and adds them to the job graph.
+/// Splits a physical plan into stages and inserts stage input placeholders.
 fn build_job_graph(
     plan: Arc<dyn ExecutionPlan>,
     usage: PartitionUsage,
@@ -240,7 +242,16 @@ fn build_job_graph(
         PartitionUsage::Once => ShuffleConsumption::Single,
         PartitionUsage::Shared => ShuffleConsumption::Multiple,
     };
-    let plan = if let Some(repartition) = plan.as_any().downcast_ref::<RepartitionExec>() {
+    rewrite_stage_boundary(plan, graph, consumption)
+}
+
+/// Rewrites stage-boundary operators into stage-input placeholders.
+fn rewrite_stage_boundary(
+    plan: Arc<dyn ExecutionPlan>,
+    graph: &mut JobGraph,
+    consumption: ShuffleConsumption,
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    if let Some(repartition) = plan.as_any().downcast_ref::<RepartitionExec>() {
         if repartition.preserve_order() {
             // We haven't found a case when order-preserving repartition can be constructed,
             // so it's fine to return an error for now.
@@ -255,10 +266,10 @@ fn build_job_graph(
             Partitioning::UnknownPartitioning(n) => {
                 let n = *n;
                 let properties = properties.with_partitioning(Partitioning::RoundRobinBatch(n));
-                create_shuffle(child, graph, properties, consumption)?
+                create_shuffle(child, graph, properties, consumption)
             }
             Partitioning::RoundRobinBatch(_) | Partitioning::Hash(_, _) => {
-                create_shuffle(child, graph, properties, consumption)?
+                create_shuffle(child, graph, properties, consumption)
             }
         }
     } else if let Some(coalesce) = plan.as_any().downcast_ref::<CoalescePartitionsExec>() {
@@ -267,21 +278,21 @@ fn build_job_graph(
         let fetch = coalesce.fetch();
         let shuffled = create_shuffle(child, graph, properties, consumption)?;
         if let Some(f) = fetch {
-            Arc::new(GlobalLimitExec::new(shuffled, 0, Some(f))) as Arc<dyn ExecutionPlan>
+            Ok(Arc::new(GlobalLimitExec::new(shuffled, 0, Some(f))) as Arc<dyn ExecutionPlan>)
         } else {
-            shuffled
+            Ok(shuffled)
         }
     } else if plan.as_any().is::<SortPreservingMergeExec>() {
         let child = plan.children().one()?;
-        plan.clone()
-            .with_new_children(vec![create_merge_input(child, graph)?])?
+        Ok(plan
+            .clone()
+            .with_new_children(vec![create_merge_input(child, graph)?])?)
     } else if plan.as_any().is::<SystemTableExec>() {
         plan.children().zero()?;
-        create_driver_stage(&plan, graph)?
+        create_driver_stage(&plan, graph)
     } else {
-        plan
-    };
-    Ok(plan)
+        Ok(plan)
+    }
 }
 
 fn create_merge_input(
@@ -348,6 +359,7 @@ fn create_shuffle(
     )))
 }
 
+/// Reindexes StageInputExec placeholders and returns the stage input list.
 fn rewrite_inputs(
     plan: Arc<dyn ExecutionPlan>,
 ) -> ExecutionResult<(Arc<dyn ExecutionPlan>, Vec<StageInput>)> {

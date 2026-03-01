@@ -13,6 +13,7 @@ use datafusion_physical_expr::{create_physical_sort_exprs, Partitioning};
 use sail_catalog::manager::CatalogManager;
 use sail_catalog_system::logical_rewriter::RewriteSystemTableSource;
 use sail_catalog_system::planner::SystemTablePhysicalPlanner;
+use sail_common_datafusion::cache_manager::CacheManager;
 use sail_common_datafusion::catalog::TableKind;
 use sail_common_datafusion::datasource::{SourceInfo, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -23,9 +24,9 @@ use sail_common_datafusion::streaming::event::schema::{
 };
 use sail_delta_lake::logical::RewriteDeltaTableSource;
 use sail_execution::plan::CacheReadExec;
+use sail_logical_plan::cache_read_relation::CacheReadRelationNode;
 use sail_logical_plan::file_delete::FileDeleteNode;
 use sail_logical_plan::file_write::FileWriteNode;
-use sail_logical_plan::in_memory_relation::CacheReadRelationNode;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_logical_plan::merge::MergeIntoNode;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
@@ -97,10 +98,16 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
         let plan: Arc<dyn ExecutionPlan> = if let Some(node) =
             node.as_any().downcast_ref::<CacheReadRelationNode>()
         {
+            let num_partitions = session_state
+                .extension::<CacheManager>()
+                .ok()
+                .and_then(|cache| cache.find_by_id(node.cache_id()))
+                .and_then(|entry| entry.num_partitions)
+                .unwrap_or(1);
             Arc::new(CacheReadExec::new(
                 node.cache_id(),
                 UserDefinedLogicalNode::schema(node).inner().clone(),
-                1,
+                num_partitions,
             ))
         } else if let Some(node) = node.as_any().downcast_ref::<RangeNode>() {
             let schema = UserDefinedLogicalNode::schema(node).inner().clone();

@@ -37,6 +37,8 @@ pub struct CachedData {
     pub cache_id: CacheId,
     /// Whether the cached data has been materialized on worker nodes.
     pub materialized: bool,
+    /// Number of partitions produced when this cache entry was materialized.
+    pub num_partitions: Option<usize>,
 }
 
 /// Manages cached query results for a session.
@@ -71,6 +73,7 @@ impl CacheManager {
             plan,
             cache_id,
             materialized: false,
+            num_partitions: None,
         });
         cache_id
     }
@@ -87,11 +90,12 @@ impl CacheManager {
         entries.iter().find(|e| e.cache_id == cache_id).cloned()
     }
 
-    /// Marks a cache entry as materialized.
-    pub fn mark_materialized(&self, cache_id: CacheId) {
+    /// Marks a cache entry as materialized with the given partition count.
+    pub fn mark_materialized(&self, cache_id: CacheId, num_partitions: usize) {
         let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = entries.iter_mut().find(|e| e.cache_id == cache_id) {
             entry.materialized = true;
+            entry.num_partitions = Some(num_partitions);
         }
     }
 }

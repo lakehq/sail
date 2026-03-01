@@ -12,7 +12,7 @@ use sail_common::spec;
 use sail_common_datafusion::cache_manager::CacheManager;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
-use sail_logical_plan::in_memory_relation::CacheReadRelationNode;
+use sail_logical_plan::cache_read_relation::CacheReadRelationNode;
 use sail_logical_plan::precondition::WithPreconditionsNode;
 
 use crate::catalog::CatalogCommandNode;
