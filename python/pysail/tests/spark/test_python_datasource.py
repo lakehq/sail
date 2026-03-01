@@ -414,6 +414,38 @@ class TestPythonDataSource:
         rows = df.collect()
         assert len(rows) == 0
 
+    def test_default_single_partition(self, spark):
+        """Test that missing partitions() defaults to a single partition."""
+        import pyarrow as pa
+        from pyspark.sql.datasource import DataSource, DataSourceReader
+
+        class DefaultPartitionDataSource(DataSource):
+            """DataSource that relies on the default partitions()."""
+
+            @classmethod
+            def name(cls) -> str:
+                return "default_partition_test"
+
+            def schema(self):
+                return pa.schema([("id", pa.int32())])
+
+            def reader(self, schema):  # noqa: ARG002
+                return DefaultPartitionReader()
+
+        class DefaultPartitionReader(DataSourceReader):
+            def read(self, partition):
+                if partition is not None:
+                    msg = f"Expected default partition to be None, got {partition!r}"
+                    raise ValueError(msg)
+                batch = pa.RecordBatch.from_pydict({"id": [1, 2, 3]}, schema=pa.schema([("id", pa.int32())]))
+                yield batch
+
+        spark.dataSource.register(DefaultPartitionDataSource)
+        df = spark.read.format("default_partition_test").load()
+
+        rows = df.collect()
+        assert [row.id for row in rows] == [1, 2, 3]
+
     def test_schema_mismatch(self, spark):
         """Test that schema mismatch between declared and returned schema is handled."""
         import pyarrow as pa

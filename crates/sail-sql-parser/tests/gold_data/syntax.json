@@ -809,6 +809,22 @@
                   {
                     "sequence": [
                       {
+                        "nonTerminal": "Keyword(Identifier)"
+                      },
+                      {
+                        "nonTerminal": "Operator(LeftParenthesis)"
+                      },
+                      {
+                        "nonTerminal": "Box(Expression)"
+                      },
+                      {
+                        "nonTerminal": "Operator(RightParenthesis)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
                         "nonTerminal": "Box(FunctionExpr)"
                       }
                     ]
@@ -1151,6 +1167,12 @@
               }
             },
             {
+              "name": "Box(ColumnTypeDefinition)",
+              "node": {
+                "nonTerminal": "ColumnTypeDefinition"
+              }
+            },
+            {
               "name": "Box(DataType)",
               "node": {
                 "nonTerminal": "DataType"
@@ -1181,9 +1203,27 @@
               }
             },
             {
+              "name": "Box(QuerySelect)",
+              "node": {
+                "nonTerminal": "QuerySelect"
+              }
+            },
+            {
+              "name": "Box(QueryTerm)",
+              "node": {
+                "nonTerminal": "QueryTerm"
+              }
+            },
+            {
               "name": "Box(Statement)",
               "node": {
                 "nonTerminal": "Statement"
+              }
+            },
+            {
+              "name": "Box(TableSampleClause)",
+              "node": {
+                "nonTerminal": "TableSampleClause"
               }
             },
             {
@@ -1193,9 +1233,51 @@
               }
             },
             {
+              "name": "Box(TemporalClause)",
+              "node": {
+                "nonTerminal": "TemporalClause"
+              }
+            },
+            {
               "name": "Box(TrimExpr)",
               "node": {
                 "nonTerminal": "TrimExpr"
+              }
+            },
+            {
+              "name": "Box(Tuple(Keyword(On), Expression))",
+              "node": {
+                "nonTerminal": "Tuple(Keyword(On), Expression)"
+              }
+            },
+            {
+              "name": "Box(Tuple(Keyword(Options), PropertyList))",
+              "node": {
+                "nonTerminal": "Tuple(Keyword(Options), PropertyList)"
+              }
+            },
+            {
+              "name": "Box(Tuple(Keyword(Row), Keyword(Format), RowFormat))",
+              "node": {
+                "nonTerminal": "Tuple(Keyword(Row), Keyword(Format), RowFormat)"
+              }
+            },
+            {
+              "name": "Box(Tuple(Keyword(Stored), Keyword(As), FileFormat))",
+              "node": {
+                "nonTerminal": "Tuple(Keyword(Stored), Keyword(As), FileFormat)"
+              }
+            },
+            {
+              "name": "Box(Tuple(Keyword(Using), MergeSource))",
+              "node": {
+                "nonTerminal": "Tuple(Keyword(Using), MergeSource)"
+              }
+            },
+            {
+              "name": "Box(WindowFrame)",
+              "node": {
+                "nonTerminal": "WindowFrame"
               }
             },
             {
@@ -2433,6 +2515,19 @@
               }
             },
             {
+              "name": "Either(Keyword(Function), Keyword(Functions))",
+              "node": {
+                "choice": [
+                  {
+                    "nonTerminal": "Keyword(Function)"
+                  },
+                  {
+                    "nonTerminal": "Keyword(Functions)"
+                  }
+                ]
+              }
+            },
+            {
               "name": "Either(Keyword(Into), Keyword(Overwrite))",
               "node": {
                 "choice": [
@@ -3307,7 +3402,7 @@
                         "nonTerminal": "Tuple(Keyword(Using), Identifier)"
                       },
                       {
-                        "nonTerminal": "Option(Tuple(Keyword(Options), PropertyList))"
+                        "nonTerminal": "Option(Box(Tuple(Keyword(Options), PropertyList)))"
                       }
                     ]
                   },
@@ -3317,10 +3412,10 @@
                         "nonTerminal": "StringLiteral"
                       },
                       {
-                        "nonTerminal": "Option(Tuple(Keyword(Row), Keyword(Format), RowFormat))"
+                        "nonTerminal": "Option(Box(Tuple(Keyword(Row), Keyword(Format), RowFormat)))"
                       },
                       {
-                        "nonTerminal": "Option(Tuple(Keyword(Stored), Keyword(As), FileFormat))"
+                        "nonTerminal": "Option(Box(Tuple(Keyword(Stored), Keyword(As), FileFormat)))"
                       }
                     ]
                   }
@@ -4673,6 +4768,14 @@
               "node": {
                 "terminal": {
                   "keyword": "HOURS"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Identifier)",
+              "node": {
+                "terminal": {
+                  "keyword": "IDENTIFIER"
                 }
               }
             },
@@ -6129,7 +6232,7 @@
                   {
                     "sequence": [
                       {
-                        "nonTerminal": "Expression"
+                        "nonTerminal": "Box(Expression)"
                       }
                     ]
                   }
@@ -6798,6 +6901,54 @@
               }
             },
             {
+              "name": "Option(Box(TableSampleClause))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Box(TableSampleClause)"
+                }
+              }
+            },
+            {
+              "name": "Option(Box(TemporalClause))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Box(TemporalClause)"
+                }
+              }
+            },
+            {
+              "name": "Option(Box(Tuple(Keyword(Options), PropertyList)))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Box(Tuple(Keyword(Options), PropertyList))"
+                }
+              }
+            },
+            {
+              "name": "Option(Box(Tuple(Keyword(Row), Keyword(Format), RowFormat)))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Box(Tuple(Keyword(Row), Keyword(Format), RowFormat))"
+                }
+              }
+            },
+            {
+              "name": "Option(Box(Tuple(Keyword(Stored), Keyword(As), FileFormat)))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Box(Tuple(Keyword(Stored), Keyword(As), FileFormat))"
+                }
+              }
+            },
+            {
+              "name": "Option(Box(WindowFrame))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Box(WindowFrame)"
+                }
+              }
+            },
+            {
               "name": "Option(ColumnDefinitionList)",
               "node": {
                 "optional": {
@@ -7214,26 +7365,10 @@
               }
             },
             {
-              "name": "Option(TableSampleClause)",
-              "node": {
-                "optional": {
-                  "nonTerminal": "TableSampleClause"
-                }
-              }
-            },
-            {
               "name": "Option(TableSampleRepeatable)",
               "node": {
                 "optional": {
                   "nonTerminal": "TableSampleRepeatable"
-                }
-              }
-            },
-            {
-              "name": "Option(TemporalClause)",
-              "node": {
-                "optional": {
-                  "nonTerminal": "TemporalClause"
                 }
               }
             },
@@ -7366,26 +7501,10 @@
               }
             },
             {
-              "name": "Option(Tuple(Keyword(Row), Keyword(Format), RowFormat))",
-              "node": {
-                "optional": {
-                  "nonTerminal": "Tuple(Keyword(Row), Keyword(Format), RowFormat)"
-                }
-              }
-            },
-            {
               "name": "Option(Tuple(Keyword(Sorted), Keyword(By), SortColumnList))",
               "node": {
                 "optional": {
                   "nonTerminal": "Tuple(Keyword(Sorted), Keyword(By), SortColumnList)"
-                }
-              }
-            },
-            {
-              "name": "Option(Tuple(Keyword(Stored), Keyword(As), FileFormat))",
-              "node": {
-                "optional": {
-                  "nonTerminal": "Tuple(Keyword(Stored), Keyword(As), FileFormat)"
                 }
               }
             },
@@ -7550,14 +7669,6 @@
               }
             },
             {
-              "name": "Option(WindowFrame)",
-              "node": {
-                "optional": {
-                  "nonTerminal": "WindowFrame"
-                }
-              }
-            },
-            {
               "name": "Option(WithClause)",
               "node": {
                 "optional": {
@@ -7696,7 +7807,7 @@
                   {
                     "sequence": [
                       {
-                        "nonTerminal": "ColumnTypeDefinition"
+                        "nonTerminal": "Box(ColumnTypeDefinition)"
                       }
                     ]
                   },
@@ -7947,7 +8058,7 @@
                   {
                     "sequence": [
                       {
-                        "nonTerminal": "QueryTerm"
+                        "nonTerminal": "Box(QueryTerm)"
                       }
                     ]
                   },
@@ -8058,7 +8169,7 @@
                   {
                     "sequence": [
                       {
-                        "nonTerminal": "QuerySelect"
+                        "nonTerminal": "Box(QuerySelect)"
                       }
                     ]
                   },
@@ -9313,7 +9424,7 @@
                         "nonTerminal": "Option(Either(Keyword(Temp), Keyword(Temporary)))"
                       },
                       {
-                        "nonTerminal": "Keyword(Functions)"
+                        "nonTerminal": "Either(Keyword(Function), Keyword(Functions))"
                       },
                       {
                         "nonTerminal": "Option(Tuple(Keyword(If), Keyword(Exists)))"
@@ -9439,10 +9550,10 @@
                         "nonTerminal": "Option(AliasClause)"
                       },
                       {
-                        "nonTerminal": "Tuple(Keyword(Using), MergeSource)"
+                        "nonTerminal": "Box(Tuple(Keyword(Using), MergeSource))"
                       },
                       {
-                        "nonTerminal": "Tuple(Keyword(On), Expression)"
+                        "nonTerminal": "Box(Tuple(Keyword(On), Expression))"
                       },
                       {
                         "nonTerminal": "Vector(MergeMatchClause)"
@@ -9786,7 +9897,7 @@
                         "nonTerminal": "Operator(RightParenthesis)"
                       },
                       {
-                        "nonTerminal": "Option(TableSampleClause)"
+                        "nonTerminal": "Option(Box(TableSampleClause))"
                       },
                       {
                         "nonTerminal": "Vector(TableModifier)"
@@ -9818,6 +9929,28 @@
                   {
                     "sequence": [
                       {
+                        "nonTerminal": "Keyword(Identifier)"
+                      },
+                      {
+                        "nonTerminal": "Operator(LeftParenthesis)"
+                      },
+                      {
+                        "nonTerminal": "Expression"
+                      },
+                      {
+                        "nonTerminal": "Operator(RightParenthesis)"
+                      },
+                      {
+                        "nonTerminal": "Vector(TableModifier)"
+                      },
+                      {
+                        "nonTerminal": "Option(AliasClause)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
                         "nonTerminal": "TableFunction"
                       },
                       {
@@ -9831,10 +9964,10 @@
                         "nonTerminal": "ObjectName"
                       },
                       {
-                        "nonTerminal": "Option(TemporalClause)"
+                        "nonTerminal": "Option(Box(TemporalClause))"
                       },
                       {
-                        "nonTerminal": "Option(TableSampleClause)"
+                        "nonTerminal": "Option(Box(TableSampleClause))"
                       },
                       {
                         "nonTerminal": "Vector(TableModifier)"
@@ -11585,7 +11718,7 @@
                         "nonTerminal": "Vector(WindowModifier)"
                       },
                       {
-                        "nonTerminal": "Option(WindowFrame)"
+                        "nonTerminal": "Option(Box(WindowFrame))"
                       },
                       {
                         "nonTerminal": "Operator(RightParenthesis)"

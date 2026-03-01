@@ -163,7 +163,7 @@ impl PlanResolver<'_> {
             options: vec![],
         };
         let plan = spec::QueryPlan::new(spec::QueryNode::Read {
-            read_type: spec::ReadType::NamedTable(read),
+            read_type: spec::ReadType::NamedTable(Box::new(read)),
             is_streaming: false,
         });
         self.resolve_query_plan(plan, state).await
@@ -883,6 +883,14 @@ fn merge_disambiguate_unqualified_plan_ids(
         },
         Expr::UnresolvedDate { .. } => expr,
         Expr::UnresolvedTimestamp { .. } => expr,
+        Expr::IdentifierClause { expr: inner } => Expr::IdentifierClause {
+            expr: Box::new(merge_disambiguate_unqualified_plan_ids(
+                *inner,
+                state,
+                target_schema,
+                source_schema,
+            )),
+        },
         Expr::Subquery {
             plan_id,
             subquery_type,
