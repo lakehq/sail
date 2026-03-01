@@ -187,3 +187,27 @@ Feature: Bucketed Parquet Writing
         | key | total |
         | 1   | 4000  |
         | 2   | 12000 |
+
+  Rule: Colocated aggregation
+    Scenario: GROUP BY on bucket columns avoids repartition
+      Given variable location for temporary directory test_bucket_colocated
+      Given final statement
+        """
+        DROP TABLE IF EXISTS test_bucket_colocated
+        """
+      Given statement template
+        """
+        CREATE TABLE test_bucket_colocated USING parquet
+        LOCATION {{ location.sql }}
+        CLUSTERED BY (key) INTO 4 BUCKETS
+        AS SELECT * FROM VALUES (1,10), (2,20), (1,30), (2,40), (3,50) AS t(key, val)
+        """
+      When query
+        """
+        SELECT key, sum(val) as total FROM test_bucket_colocated GROUP BY key ORDER BY key
+        """
+      Then query result ordered
+        | key | total |
+        | 1   | 40    |
+        | 2   | 60    |
+        | 3   | 50    |
