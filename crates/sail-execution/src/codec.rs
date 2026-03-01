@@ -1011,12 +1011,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .map(|sc| (sc.name, sc.ascending))
                     .collect();
                 let target = if has_target_buckets {
-                    Some(
-                        target_buckets
-                            .into_iter()
-                            .map(|id| id as usize)
-                            .collect(),
-                    )
+                    Some(target_buckets.into_iter().map(|id| id as usize).collect())
                 } else {
                     None
                 };

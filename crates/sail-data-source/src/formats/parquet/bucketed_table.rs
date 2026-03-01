@@ -1,5 +1,5 @@
 use std::any::Any;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow::array::ArrayRef;
@@ -154,21 +154,27 @@ impl TableProvider for BucketedListingTable {
     }
 }
 
-/// Compute the bucket ID for a scalar value using the same hash as the writer.
+/// Compute the bucket ID for a combination of column values using the same
+/// hash as the writer (`ahash::RandomState::with_seeds(0,0,0,0)` + `create_hashes`).
 ///
-/// Uses `ahash::RandomState::with_seeds(0,0,0,0)` + `create_hashes`, matching
-/// the logic in `bucketed_sink.rs`.
-fn compute_bucket_id(value: &ScalarValue, num_buckets: usize) -> Option<usize> {
-    let array: ArrayRef = value.to_array_of_size(1).ok()?;
+/// Values must be in the same order as the bucket columns used during writing.
+fn compute_multi_bucket_id(values: &[&ScalarValue], num_buckets: usize) -> Option<usize> {
+    let arrays: Vec<ArrayRef> = values
+        .iter()
+        .map(|v| v.to_array_of_size(1).ok())
+        .collect::<Option<Vec<_>>>()?;
     let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
     let mut hashes = vec![0u64; 1];
-    create_hashes(&[array], &random_state, &mut hashes).ok()?;
+    create_hashes(&arrays, &random_state, &mut hashes).ok()?;
     Some((hashes[0] as usize) % num_buckets)
 }
 
 /// Analyze filter expressions to determine which bucket IDs need to be read.
 ///
-/// Currently handles single-column bucketing only (multi-column deferred).
+/// Supports single-column and multi-column bucketing.
+/// For multi-column, all bucket columns must be constrained in the filters;
+/// the cross-product of per-column values is hashed to find target buckets.
+///
 /// Supports:
 /// - `bucket_col = literal`
 /// - `bucket_col IN (v1, v2, ...)`
@@ -180,86 +186,139 @@ fn analyze_bucket_filters(
     bucket_columns: &[String],
     num_buckets: usize,
 ) -> Option<HashSet<usize>> {
-    // Only support single-column bucketing for now.
-    if bucket_columns.len() != 1 {
-        return None;
-    }
-    let bucket_col = &bucket_columns[0];
+    // For each top-level filter (implicitly ANDed), collect per-column value sets.
+    let per_filter: Vec<HashMap<String, HashSet<ScalarValue>>> = filters
+        .iter()
+        .map(|f| {
+            let mut m = HashMap::new();
+            collect_column_values(f, bucket_columns, &mut m);
+            m
+        })
+        .collect();
 
-    // Intersect results from all filters (they are implicitly ANDed).
-    let mut result: Option<HashSet<usize>> = None;
-    for filter in filters {
-        if let Some(buckets) = extract_bucket_ids(filter, bucket_col, num_buckets) {
-            result = Some(match result {
-                Some(existing) => existing.intersection(&buckets).copied().collect(),
-                None => buckets,
-            });
+    // For each bucket column, intersect value sets from filters that constrain it.
+    // (Top-level filters are ANDed, so same-column constraints must all hold.)
+    let mut column_values: HashMap<&str, HashSet<ScalarValue>> = HashMap::new();
+    for col in bucket_columns {
+        for filter_vals in &per_filter {
+            if let Some(vals) = filter_vals.get(col.as_str()) {
+                match column_values.get_mut(col.as_str()) {
+                    Some(existing) => {
+                        *existing = existing.intersection(vals).cloned().collect();
+                    }
+                    None => {
+                        column_values.insert(col.as_str(), vals.clone());
+                    }
+                }
+            }
         }
     }
-    result
+
+    // All bucket columns must have constrained values for pruning to work.
+    if bucket_columns
+        .iter()
+        .any(|col| !column_values.contains_key(col.as_str()))
+    {
+        return None;
+    }
+
+    // Contradictory filters on any column → no rows match → no buckets needed.
+    if bucket_columns
+        .iter()
+        .any(|col| column_values[col.as_str()].is_empty())
+    {
+        return Some(HashSet::new());
+    }
+
+    // Build cross-product of per-column values (in bucket_columns order) and
+    // hash each combination to find target bucket IDs.
+    let ordered_sets: Vec<Vec<&ScalarValue>> = bucket_columns
+        .iter()
+        .map(|col| column_values[col.as_str()].iter().collect())
+        .collect();
+
+    let mut bucket_ids = HashSet::new();
+    for combo in cross_product(&ordered_sets) {
+        if let Some(id) = compute_multi_bucket_id(&combo, num_buckets) {
+            bucket_ids.insert(id);
+        }
+    }
+
+    if bucket_ids.is_empty() {
+        None
+    } else {
+        Some(bucket_ids)
+    }
 }
 
-/// Extract target bucket IDs from a single expression.
-fn extract_bucket_ids(
+/// Collect possible literal values per bucket column from a filter expression.
+///
+/// For `AND`, collects from both sides (values for the same column will be
+/// intersected at the caller level across top-level filters).
+/// For `OR`, collects from both sides (over-approximation: may read extra
+/// buckets, but never misses data).
+fn collect_column_values(
     expr: &Expr,
-    bucket_col: &str,
-    num_buckets: usize,
-) -> Option<HashSet<usize>> {
+    bucket_columns: &[String],
+    values: &mut HashMap<String, HashSet<ScalarValue>>,
+) {
     match expr {
         // col = literal  or  literal = col
         Expr::BinaryExpr(binary) if binary.op == Operator::Eq => {
-            match (binary.left.as_ref(), binary.right.as_ref()) {
-                (Expr::Column(col), Expr::Literal(lit, _)) if col.name() == bucket_col => {
-                    let id = compute_bucket_id(lit, num_buckets)?;
-                    Some(HashSet::from([id]))
-                }
-                (Expr::Literal(lit, _), Expr::Column(col)) if col.name() == bucket_col => {
-                    let id = compute_bucket_id(lit, num_buckets)?;
-                    Some(HashSet::from([id]))
-                }
+            let pair = match (binary.left.as_ref(), binary.right.as_ref()) {
+                (Expr::Column(col), Expr::Literal(lit, _)) => Some((col.name(), lit)),
+                (Expr::Literal(lit, _), Expr::Column(col)) => Some((col.name(), lit)),
                 _ => None,
+            };
+            if let Some((col_name, lit)) = pair {
+                if bucket_columns.iter().any(|bc| bc == col_name) {
+                    values
+                        .entry(col_name.to_string())
+                        .or_default()
+                        .insert(lit.clone());
+                }
             }
         }
         // col IN (v1, v2, ...)
         Expr::InList(in_list) if !in_list.negated => {
             if let Expr::Column(col) = in_list.expr.as_ref() {
-                if col.name() == bucket_col {
-                    let mut buckets = HashSet::new();
+                if bucket_columns.iter().any(|bc| bc == col.name()) {
+                    let entry = values.entry(col.name().to_string()).or_default();
                     for item in &in_list.list {
                         if let Expr::Literal(lit, _) = item {
-                            if let Some(id) = compute_bucket_id(lit, num_buckets) {
-                                buckets.insert(id);
-                            }
+                            entry.insert(lit.clone());
                         }
                     }
-                    if buckets.is_empty() {
-                        return None;
-                    }
-                    return Some(buckets);
                 }
             }
-            None
         }
-        // AND: intersect both sides
+        // AND: collect from both sides
         Expr::BinaryExpr(binary) if binary.op == Operator::And => {
-            let left = extract_bucket_ids(&binary.left, bucket_col, num_buckets);
-            let right = extract_bucket_ids(&binary.right, bucket_col, num_buckets);
-            match (left, right) {
-                (Some(l), Some(r)) => Some(l.intersection(&r).copied().collect()),
-                (Some(s), None) | (None, Some(s)) => Some(s),
-                (None, None) => None,
-            }
+            collect_column_values(&binary.left, bucket_columns, values);
+            collect_column_values(&binary.right, bucket_columns, values);
         }
-        // OR: union both sides (only if both sides provide bucket info)
+        // OR: collect from both sides (over-approximation but correct)
         Expr::BinaryExpr(binary) if binary.op == Operator::Or => {
-            let left = extract_bucket_ids(&binary.left, bucket_col, num_buckets);
-            let right = extract_bucket_ids(&binary.right, bucket_col, num_buckets);
-            match (left, right) {
-                (Some(l), Some(r)) => Some(l.union(&r).copied().collect()),
-                // If one side is unknown, we can't prune at all.
-                _ => None,
+            collect_column_values(&binary.left, bucket_columns, values);
+            collect_column_values(&binary.right, bucket_columns, values);
+        }
+        _ => {}
+    }
+}
+
+/// Compute the Cartesian product of value sets.
+fn cross_product<'a>(sets: &[Vec<&'a ScalarValue>]) -> Vec<Vec<&'a ScalarValue>> {
+    let mut result = vec![vec![]];
+    for set in sets {
+        let mut new_result = Vec::with_capacity(result.len() * set.len());
+        for existing in &result {
+            for &value in set {
+                let mut combo = existing.clone();
+                combo.push(value);
+                new_result.push(combo);
             }
         }
-        _ => None,
+        result = new_result;
     }
+    result
 }

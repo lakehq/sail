@@ -258,3 +258,54 @@ Feature: Bucketed Parquet Writing
         | 1  | a    |
         | 3  | c    |
         | 5  | e    |
+
+    @sail-only
+    Scenario: WHERE on multiple bucket columns prunes correctly
+      Given variable location for temporary directory test_multi_prune
+      Given final statement
+        """
+        DROP TABLE IF EXISTS test_multi_prune
+        """
+      Given statement template
+        """
+        CREATE TABLE test_multi_prune USING parquet
+        LOCATION {{ location.sql }}
+        CLUSTERED BY (category, region) INTO 8 BUCKETS
+        AS SELECT * FROM VALUES
+          ('A','US',100), ('B','EU',200), ('A','EU',150), ('B','US',50)
+        AS t(category, region, amount)
+        """
+      When query
+        """
+        SELECT amount FROM test_multi_prune WHERE category = 'A' AND region = 'EU'
+        """
+      Then query result
+        | amount |
+        | 150    |
+
+    @sail-only
+    Scenario: WHERE IN on multiple bucket columns prunes correctly
+      Given variable location for temporary directory test_multi_prune_in
+      Given final statement
+        """
+        DROP TABLE IF EXISTS test_multi_prune_in
+        """
+      Given statement template
+        """
+        CREATE TABLE test_multi_prune_in USING parquet
+        LOCATION {{ location.sql }}
+        CLUSTERED BY (category, region) INTO 8 BUCKETS
+        AS SELECT * FROM VALUES
+          ('A','US',100), ('B','EU',200), ('A','EU',150), ('B','US',50)
+        AS t(category, region, amount)
+        """
+      When query
+        """
+        SELECT category, region, amount FROM test_multi_prune_in
+        WHERE category IN ('A', 'B') AND region = 'US'
+        ORDER BY category
+        """
+      Then query result ordered
+        | category | region | amount |
+        | A        | US     | 100    |
+        | B        | US     | 50     |

@@ -243,10 +243,7 @@ async fn write_bucketed(
 
     for (bucket_id, indices) in bucket_indices.iter().enumerate() {
         if indices.is_empty() {
-            bucket_batches.push((
-                bucket_id,
-                RecordBatch::new_empty(enriched_schema.clone()),
-            ));
+            bucket_batches.push((bucket_id, RecordBatch::new_empty(enriched_schema.clone())));
             continue;
         }
 
