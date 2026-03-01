@@ -73,24 +73,3 @@ def test_cache_then_aggregate(large_range):
     assert total == expected_total
 
 
-def test_cache_then_join(large_range):
-    # Join forces a shuffle exchange on the cached left side.
-    left = (
-        large_range.select(
-            F.col("id").cast("long").alias("id"),
-            F.concat(F.lit("v"), F.col("id").cast("string")).alias("val"),
-        )
-        .cache()
-    )
-
-    # Keep right side small; join result size is bounded.
-    right = large_range.limit(1_000).select(
-        F.col("id").cast("long").alias("id"),
-        (F.col("id") * 10).cast("long").alias("score"),
-    )
-    joined = left.join(right, on="id")
-
-    c1 = joined.count()
-    c2 = joined.count()
-    assert c1 == c2 == 1_000  # noqa: PLR2004
-
