@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
 
@@ -9,6 +10,7 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::{Partitioning, PhysicalExpr, PhysicalSortExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
@@ -26,6 +28,8 @@ pub struct BucketedParquetScanExec {
     bucket_columns: Vec<String>,
     num_buckets: usize,
     sort_columns: Vec<(String, bool)>,
+    /// When set, only these bucket IDs will be read; other partitions return empty streams.
+    target_buckets: Option<HashSet<usize>>,
     properties: PlanProperties,
 }
 
@@ -92,8 +96,16 @@ impl BucketedParquetScanExec {
             bucket_columns,
             num_buckets,
             sort_columns,
+            target_buckets: None,
             properties,
         })
+    }
+
+    /// Set the target bucket IDs for pruning. Only these partitions will be read;
+    /// other partitions return empty streams.
+    pub fn with_target_buckets(mut self, target_buckets: Option<HashSet<usize>>) -> Self {
+        self.target_buckets = target_buckets;
+        self
     }
 
     pub fn bucket_columns(&self) -> &[String] {
@@ -106,6 +118,10 @@ impl BucketedParquetScanExec {
 
     pub fn sort_columns(&self) -> &[(String, bool)] {
         &self.sort_columns
+    }
+
+    pub fn target_buckets(&self) -> Option<&HashSet<usize>> {
+        self.target_buckets.as_ref()
     }
 
     pub fn inner(&self) -> &Arc<dyn ExecutionPlan> {
@@ -135,6 +151,11 @@ impl DisplayAs for BucketedParquetScanExec {
                 .collect();
             write!(f, ", sort=[{}]", sort_str.join(", "))?;
         }
+        if let Some(ref targets) = self.target_buckets {
+            let mut ids: Vec<usize> = targets.iter().copied().collect();
+            ids.sort_unstable();
+            write!(f, ", target_buckets={ids:?}")?;
+        }
         Ok(())
     }
 }
@@ -162,12 +183,15 @@ impl ExecutionPlan for BucketedParquetScanExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let child = children.pop();
         match (child, children.is_empty()) {
-            (Some(new_inner), true) => Ok(Arc::new(Self::new(
-                new_inner,
-                self.bucket_columns.clone(),
-                self.num_buckets,
-                self.sort_columns.clone(),
-            )?)),
+            (Some(new_inner), true) => Ok(Arc::new(
+                Self::new(
+                    new_inner,
+                    self.bucket_columns.clone(),
+                    self.num_buckets,
+                    self.sort_columns.clone(),
+                )?
+                .with_target_buckets(self.target_buckets.clone()),
+            )),
             _ => plan_err!("BucketedParquetScanExec expects exactly one child"),
         }
     }
@@ -177,6 +201,15 @@ impl ExecutionPlan for BucketedParquetScanExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        // If target_buckets is set and this partition is not in it, return an empty stream.
+        if let Some(ref targets) = self.target_buckets {
+            if !targets.contains(&partition) {
+                return Ok(Box::pin(RecordBatchStreamAdapter::new(
+                    self.inner.schema(),
+                    futures::stream::empty(),
+                )));
+            }
+        }
         self.inner.execute(partition, context)
     }
 

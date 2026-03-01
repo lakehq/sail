@@ -1002,18 +1002,33 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 bucket_columns,
                 num_buckets,
                 sort_columns,
+                target_buckets,
+                has_target_buckets,
             }) => {
                 let inner = self.try_decode_plan(&inner, ctx)?;
                 let sort_columns = sort_columns
                     .into_iter()
                     .map(|sc| (sc.name, sc.ascending))
                     .collect();
-                Ok(Arc::new(BucketedParquetScanExec::new(
-                    inner,
-                    bucket_columns,
-                    num_buckets as usize,
-                    sort_columns,
-                )?))
+                let target = if has_target_buckets {
+                    Some(
+                        target_buckets
+                            .into_iter()
+                            .map(|id| id as usize)
+                            .collect(),
+                    )
+                } else {
+                    None
+                };
+                Ok(Arc::new(
+                    BucketedParquetScanExec::new(
+                        inner,
+                        bucket_columns,
+                        num_buckets as usize,
+                        sort_columns,
+                    )?
+                    .with_target_buckets(target),
+                ))
             }
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
         }
@@ -1568,6 +1583,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 bucket_columns: bucketed_scan.bucket_columns().to_vec(),
                 num_buckets: bucketed_scan.num_buckets() as u32,
                 sort_columns,
+                target_buckets: bucketed_scan
+                    .target_buckets()
+                    .map(|t| t.iter().map(|&id| id as u32).collect())
+                    .unwrap_or_default(),
+                has_target_buckets: bucketed_scan.target_buckets().is_some(),
             })
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");

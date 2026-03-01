@@ -602,6 +602,8 @@ message BucketedParquetScanExecNode {
   repeated string bucket_columns = 2;
   uint32 num_buckets = 3;
   repeated BucketSortColumn sort_columns = 4;
+  repeated uint32 target_buckets = 5;
+  bool has_target_buckets = 6;
 }
 
 message DeltaLogReplayExecNode {

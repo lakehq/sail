@@ -211,3 +211,50 @@ Feature: Bucketed Parquet Writing
         | 1   | 40    |
         | 2   | 60    |
         | 3   | 50    |
+
+  Rule: Bucket pruning
+    @sail-only
+    Scenario: WHERE on bucket column returns correct single row
+      Given variable location for temporary directory test_bucket_prune
+      Given final statement
+        """
+        DROP TABLE IF EXISTS test_bucket_prune
+        """
+      Given statement template
+        """
+        CREATE TABLE test_bucket_prune USING parquet
+        LOCATION {{ location.sql }}
+        CLUSTERED BY (id) INTO 4 BUCKETS
+        AS SELECT * FROM VALUES (1,'Alice'), (2,'Bob'), (3,'Carol'), (4,'Dave') AS t(id, name)
+        """
+      When query
+        """
+        SELECT name FROM test_bucket_prune WHERE id = 3
+        """
+      Then query result
+        | name  |
+        | Carol |
+
+    @sail-only
+    Scenario: WHERE IN on bucket column returns correct subset
+      Given variable location for temporary directory test_bucket_prune_in
+      Given final statement
+        """
+        DROP TABLE IF EXISTS test_bucket_prune_in
+        """
+      Given statement template
+        """
+        CREATE TABLE test_bucket_prune_in USING parquet
+        LOCATION {{ location.sql }}
+        CLUSTERED BY (id) INTO 8 BUCKETS
+        AS SELECT * FROM VALUES (1,'a'), (2,'b'), (3,'c'), (4,'d'), (5,'e') AS t(id, name)
+        """
+      When query
+        """
+        SELECT id, name FROM test_bucket_prune_in WHERE id IN (1, 3, 5) ORDER BY id
+        """
+      Then query result ordered
+        | id | name |
+        | 1  | a    |
+        | 3  | c    |
+        | 5  | e    |
