@@ -8,18 +8,18 @@ mod stage_input;
 use std::fmt::Display;
 use std::sync::Arc;
 
+pub use cache_read::CacheReadExec;
+pub(crate) use cache_write::CacheWriteExec;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::Result;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::cache_manager::CacheId;
 use sail_server::actor::{Actor, ActorHandle};
-
-use crate::local_cache_store::LocalCacheStore;
-pub use cache_read::CacheReadExec;
-pub(crate) use cache_write::CacheWriteExec;
 pub(crate) use shuffle_read::ShuffleReadExec;
 pub(crate) use shuffle_write::ShuffleWriteExec;
 pub(crate) use stage_input::StageInputExec;
+
+use crate::local_cache_store::LocalCacheStore;
 
 /// Reports cache partition materialization back to the runtime.
 pub(crate) trait CachePartitionReporter: Send + Sync {

@@ -1,5 +1,5 @@
-use sail_common_datafusion::error::CommonErrorCause;
 use sail_common_datafusion::cache_manager::CacheId;
+use sail_common_datafusion::error::CommonErrorCause;
 
 use crate::driver::event::TaskStatus;
 use crate::driver::gen;

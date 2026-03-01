@@ -210,4 +210,3 @@ class TestLocalClusterExecution:
         coalesced_sum = coalesced.agg(F.sum("value")).collect()[0][0]
         assert coalesced_count == 1000  # noqa: PLR2004
         assert coalesced_sum == original_sum
-

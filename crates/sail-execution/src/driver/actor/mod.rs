@@ -8,8 +8,7 @@ use sail_common_datafusion::cache_manager::CacheId;
 use sail_common_datafusion::session::job::JobRunnerHistory;
 use tokio::sync::oneshot;
 
-use crate::driver::job_scheduler::CachePinError;
-use crate::driver::job_scheduler::JobScheduler;
+use crate::driver::job_scheduler::{CachePinError, JobScheduler};
 use crate::driver::task_assigner::TaskAssigner;
 use crate::id::{TaskKey, WorkerId};
 use crate::rpc::ServerMonitor;

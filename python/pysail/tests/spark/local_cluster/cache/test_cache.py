@@ -1,5 +1,5 @@
-import pytest
 import pyspark.sql.functions as F  # noqa: N812
+import pytest
 
 from pysail.tests.spark.utils import is_jvm_spark
 
@@ -35,7 +35,8 @@ def test_cache_persists_data(spark):
 
 
 def test_cache_with_transformation(large_range):
-    cached = large_range.filter(F.col("id") >= 123).select(F.col("id").alias("n")).cache()
+    lower_bound = 123
+    cached = large_range.filter(F.col("id") >= lower_bound).select(F.col("id").alias("n")).cache()
 
     # Two actions to ensure reuse.
     result1 = cached.agg(
@@ -50,18 +51,15 @@ def test_cache_with_transformation(large_range):
     ).collect()[0]
 
     assert result1 == result2
-    assert result1["min"] == 123  # noqa: PLR2004
+    assert result1["min"] == lower_bound
 
 
 def test_cache_then_aggregate(large_range):
     # groupBy/agg forces a shuffle exchange after reading from cache.
-    cached = (
-        large_range.select(
-            (F.col("id") % F.lit(10)).cast("int").alias("group"),
-            F.col("id").cast("long").alias("n"),
-        )
-        .cache()
-    )
+    cached = large_range.select(
+        (F.col("id") % F.lit(10)).cast("int").alias("group"),
+        F.col("id").cast("long").alias("n"),
+    ).cache()
 
     agg = cached.groupBy("group").agg(F.sum("n").alias("sum_n"))
     # Keep results small (10 rows) while still exercising shuffle.
@@ -71,5 +69,3 @@ def test_cache_then_aggregate(large_range):
     total = agg.agg(F.sum("sum_n").alias("total")).collect()[0]["total"]
     expected_total = cached.agg(F.sum("n").alias("total")).collect()[0]["total"]
     assert total == expected_total
-
-
