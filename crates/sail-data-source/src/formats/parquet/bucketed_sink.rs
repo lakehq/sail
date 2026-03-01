@@ -217,7 +217,10 @@ async fn write_bucketed(
     let mut hashes = vec![0u64; num_rows];
     create_hashes(&bucket_arrays, &random_state, &mut hashes)?;
 
-    let mut bucket_indices: Vec<Vec<u32>> = vec![Vec::new(); num_buckets];
+    let avg_per_bucket = num_rows / num_buckets + 1;
+    let mut bucket_indices: Vec<Vec<u32>> = (0..num_buckets)
+        .map(|_| Vec::with_capacity(avg_per_bucket))
+        .collect();
     for (row, hash) in hashes.iter().enumerate() {
         let bucket = (*hash as usize) % num_buckets;
         bucket_indices[bucket].push(row as u32);
@@ -234,21 +237,16 @@ async fn write_bucketed(
         .ok_or_else(|| exec_datafusion_err!("empty output path: {output_path}"))?;
     let store = context.runtime_env().object_store(&glob_url)?;
 
-    // 7. Write each bucket
+    // 7. Build bucket batches (empty buckets get empty files to maintain 1:1 mapping)
+    let mut bucket_batches: Vec<(usize, RecordBatch)> = Vec::with_capacity(num_buckets);
     let mut total_written = 0u64;
+
     for (bucket_id, indices) in bucket_indices.iter().enumerate() {
         if indices.is_empty() {
-            // Write an empty file to maintain deterministic file set
-            write_bucket_file(
-                &store,
-                output_path,
+            bucket_batches.push((
                 bucket_id,
-                &RecordBatch::new_empty(enriched_schema.clone()),
-                config,
-                writer_props,
-                &enriched_schema,
-            )
-            .await?;
+                RecordBatch::new_empty(enriched_schema.clone()),
+            ));
             continue;
         }
 
@@ -268,18 +266,26 @@ async fn write_bucketed(
         }
 
         total_written += bucket_batch.num_rows() as u64;
-
-        write_bucket_file(
-            &store,
-            output_path,
-            bucket_id,
-            &bucket_batch,
-            config,
-            writer_props,
-            &enriched_schema,
-        )
-        .await?;
+        bucket_batches.push((bucket_id, bucket_batch));
     }
+
+    // 8. Write bucket files in parallel
+    let write_futures: Vec<_> = bucket_batches
+        .iter()
+        .map(|(bucket_id, batch)| {
+            write_bucket_file(
+                &store,
+                output_path,
+                *bucket_id,
+                batch,
+                config,
+                writer_props,
+                &enriched_schema,
+            )
+        })
+        .collect();
+
+    futures::future::try_join_all(write_futures).await?;
 
     Ok(total_written)
 }

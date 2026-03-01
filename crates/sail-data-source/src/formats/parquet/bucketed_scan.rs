@@ -214,6 +214,12 @@ impl ExecutionPlan for BucketedParquetScanExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        // If a specific partition is pruned, return empty statistics.
+        if let (Some(p), Some(ref targets)) = (partition, &self.target_buckets) {
+            if !targets.contains(&p) {
+                return Ok(Statistics::new_unknown(&self.inner.schema()));
+            }
+        }
         self.inner.partition_statistics(partition)
     }
 

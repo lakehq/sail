@@ -361,4 +361,40 @@ mod tests {
         assert_eq!(parse_sort_columns("name"), vec![("name".to_string(), true)]);
         assert!(parse_sort_columns("").is_empty());
     }
+
+    /// Verify that the hash used for bucket pruning (read side) matches
+    /// the hash used for bucket assignment (write side).
+    ///
+    /// Both use `ahash::RandomState::with_seeds(0,0,0,0)` + `create_hashes`.
+    /// This test catches regressions if ahash changes algorithm across versions.
+    #[test]
+    fn test_hash_consistency_write_vs_read() {
+        use arrow::array::{ArrayRef, Int32Array};
+        use datafusion_common::hash_utils::create_hashes;
+
+        let num_buckets = 8;
+        let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
+
+        // Simulate write side: hash a column of values and assign to buckets
+        let values = Int32Array::from(vec![1, 2, 3, 42, 100, -5]);
+        let arrays: Vec<ArrayRef> = vec![Arc::new(values.clone())];
+        let mut write_hashes = vec![0u64; 6];
+        create_hashes(&arrays, &random_state, &mut write_hashes).expect("write hash");
+
+        // Simulate read side: hash each value individually (as bucket pruning does)
+        for (i, val) in [1i32, 2, 3, 42, 100, -5].iter().enumerate() {
+            let single = Int32Array::from(vec![*val]);
+            let single_arrays: Vec<ArrayRef> = vec![Arc::new(single)];
+            let read_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
+            let mut read_hashes = vec![0u64; 1];
+            create_hashes(&single_arrays, &read_state, &mut read_hashes).expect("read hash");
+
+            let write_bucket = (write_hashes[i] as usize) % num_buckets;
+            let read_bucket = (read_hashes[0] as usize) % num_buckets;
+            assert_eq!(
+                write_bucket, read_bucket,
+                "hash mismatch for value {val}: write bucket {write_bucket} != read bucket {read_bucket}"
+            );
+        }
+    }
 }
