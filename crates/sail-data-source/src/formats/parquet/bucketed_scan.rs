@@ -3,12 +3,14 @@ use std::fmt;
 use std::sync::Arc;
 
 use arrow_schema::SchemaRef;
-use datafusion::common::{plan_err, Result};
+use datafusion::common::{plan_err, Result, Statistics};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::expressions::Column;
-use datafusion::physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
+use datafusion::physical_expr::{Partitioning, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
+use datafusion::physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+};
 
 /// Physical plan node that wraps an inner scan with Hash partitioning metadata.
 ///
@@ -30,17 +32,35 @@ impl BucketedParquetScanExec {
     ///
     /// Builds `Partitioning::Hash(column_exprs, num_buckets)` from the inner
     /// plan's output schema and the bucket column names.
+    ///
+    /// Returns an error if the inner plan's partition count does not match
+    /// `num_buckets`, or if any bucket column is missing from the schema.
     pub fn new(
         inner: Arc<dyn ExecutionPlan>,
         bucket_columns: Vec<String>,
         num_buckets: usize,
     ) -> Result<Self> {
+        if bucket_columns.is_empty() {
+            return plan_err!("BucketedParquetScanExec requires at least one bucket column");
+        }
+        if num_buckets == 0 {
+            return plan_err!("BucketedParquetScanExec requires num_buckets > 0");
+        }
+        let inner_partitions = inner.output_partitioning().partition_count();
+        if inner_partitions != num_buckets {
+            return plan_err!(
+                "BucketedParquetScanExec: inner plan has {inner_partitions} partitions \
+                 but expected {num_buckets} buckets"
+            );
+        }
+
         let schema = inner.schema();
         let hash_exprs = build_hash_exprs(&schema, &bucket_columns)?;
         let partitioning = Partitioning::Hash(hash_exprs, num_buckets);
 
+        let eq_properties = inner.equivalence_properties().clone();
         let properties = PlanProperties::new(
-            EquivalenceProperties::new(schema),
+            eq_properties,
             partitioning,
             EmissionType::Incremental,
             Boundedness::Bounded,
@@ -116,6 +136,14 @@ impl ExecutionPlan for BucketedParquetScanExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         self.inner.execute(partition, context)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        self.inner.partition_statistics(partition)
+    }
+
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false]
     }
 }
 

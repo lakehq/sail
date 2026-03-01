@@ -4,6 +4,7 @@ use std::sync::Arc;
 use arrow_schema::SchemaRef;
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
+use datafusion::common::Statistics;
 use datafusion::datasource::listing::ListingTable;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion::physical_plan::ExecutionPlan;
@@ -63,6 +64,14 @@ impl TableProvider for BucketedListingTable {
         self.inner.constraints()
     }
 
+    fn statistics(&self) -> Option<Statistics> {
+        self.inner.statistics()
+    }
+
+    fn get_table_definition(&self) -> Option<&str> {
+        self.inner.get_table_definition()
+    }
+
     fn supports_filters_pushdown(
         &self,
         filters: &[&Expr],
@@ -89,24 +98,35 @@ impl TableProvider for BucketedListingTable {
             .collect();
 
         // Only wrap if all bucket columns are present in the projection.
-        if surviving_columns.len() == self.bucket_columns.len() {
-            log::debug!(
-                "BucketedListingTable: wrapping scan with Hash partitioning, \
-                 columns=[{}], num_buckets={}",
-                surviving_columns.join(", "),
-                self.num_buckets,
-            );
-            Ok(Arc::new(BucketedParquetScanExec::new(
-                inner_plan,
-                surviving_columns,
-                self.num_buckets,
-            )?))
-        } else {
+        if surviving_columns.len() != self.bucket_columns.len() {
             log::debug!(
                 "BucketedListingTable: projection excludes bucket columns, \
                  falling back to inner scan"
             );
-            Ok(inner_plan)
+            return Ok(inner_plan);
+        }
+
+        match BucketedParquetScanExec::new(
+            inner_plan.clone(),
+            surviving_columns,
+            self.num_buckets,
+        ) {
+            Ok(bucketed) => {
+                log::debug!(
+                    "BucketedListingTable: wrapping scan with Hash partitioning, \
+                     columns=[{}], num_buckets={}",
+                    self.bucket_columns.join(", "),
+                    self.num_buckets,
+                );
+                Ok(Arc::new(bucketed))
+            }
+            Err(e) => {
+                log::warn!(
+                    "BucketedListingTable: cannot apply bucketed scan, \
+                     falling back to inner scan: {e}"
+                );
+                Ok(inner_plan)
+            }
         }
     }
 }

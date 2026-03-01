@@ -205,16 +205,31 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
 
             // 2. Check schema-level metadata (embedded in Parquet files by Phase 1 writer)
             if let Some(bucket_meta) = parse_schema_metadata(&table.schema()) {
-                log::debug!(
-                    "Wrapping bucketed table from schema metadata: columns={:?}, num_buckets={}",
-                    bucket_meta.columns,
-                    bucket_meta.num_buckets,
-                );
-                return Ok(Arc::new(BucketedListingTable::new(
-                    table,
-                    bucket_meta.columns,
-                    bucket_meta.num_buckets,
-                )));
+                if bucket_meta.hash_function != HASH_DATAFUSION {
+                    log::warn!(
+                        "Bucketed table uses unsupported hash function '{}', \
+                         skipping shuffle elimination",
+                        bucket_meta.hash_function,
+                    );
+                } else if bucket_meta.columns.is_empty() || bucket_meta.num_buckets == 0 {
+                    log::warn!(
+                        "Bucketed table has invalid metadata: columns={:?}, num_buckets={}, \
+                         skipping shuffle elimination",
+                        bucket_meta.columns,
+                        bucket_meta.num_buckets,
+                    );
+                } else {
+                    log::debug!(
+                        "Wrapping bucketed table from schema metadata: columns={:?}, num_buckets={}",
+                        bucket_meta.columns,
+                        bucket_meta.num_buckets,
+                    );
+                    return Ok(Arc::new(BucketedListingTable::new(
+                        table,
+                        bucket_meta.columns,
+                        bucket_meta.num_buckets,
+                    )));
+                }
             }
         }
 
