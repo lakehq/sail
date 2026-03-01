@@ -50,7 +50,6 @@ pub fn is_built_in_generator_function(name: &str) -> bool {
 
 pub use generator::get_outer_built_in_generator_functions;
 
-#[allow(deprecated)]
 /// This function is temporary and should ONLY be used for COUNT(*).
 /// [`Expr::Wildcard`]
 ///
@@ -61,7 +60,7 @@ pub use generator::get_outer_built_in_generator_functions;
 #[inline(always)]
 pub(super) fn transform_count_star_wildcard_expr(arguments: Vec<Expr>) -> Vec<Expr> {
     match arguments.as_slice() {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         [Expr::Wildcard {
             qualifier: None,
             options: _,

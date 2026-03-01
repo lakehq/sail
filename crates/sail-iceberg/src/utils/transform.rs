@@ -180,7 +180,7 @@ pub fn apply_transform(
 const UNIX_EPOCH_YEAR: i32 = 1970;
 
 pub fn days_to_year(days: i32) -> i32 {
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
     let date = epoch + chrono::Days::new(days as u64);
     date.year() - UNIX_EPOCH_YEAR
@@ -193,7 +193,7 @@ pub fn micros_to_year(micros: i64) -> i32 {
 }
 
 pub fn days_to_months(days: i32) -> i32 {
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
     let date = epoch + chrono::Days::new(days as u64);
     (date.year() - UNIX_EPOCH_YEAR) * 12 + (date.month0() as i32)
@@ -204,7 +204,7 @@ pub fn micros_to_months(micros: i64) -> i32 {
         Some(dt) => dt,
         None => return 0,
     };
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     let epoch = chrono::DateTime::from_timestamp_micros(0).unwrap();
     if date > epoch {
         (date.year() - UNIX_EPOCH_YEAR) * 12 + (date.month0() as i32)
@@ -216,7 +216,7 @@ pub fn micros_to_months(micros: i64) -> i32 {
 
 // ==== Helpers for bucket transform (Murmur3) ====
 #[inline]
-#[allow(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used)]
 fn hash_bytes(v: &[u8]) -> i32 {
     let mut rdr = v;
     murmur3::murmur3_32(&mut rdr, 0).unwrap() as i32

@@ -59,7 +59,7 @@ impl PlanResolver<'_> {
         Ok(NamedExpr::new(vec![name], func))
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(super) fn resolve_python_udf_expr(
         &self,
         function: PythonUdf,

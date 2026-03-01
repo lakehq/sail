@@ -189,7 +189,22 @@ impl PlanResolver<'_> {
             argument_display_names.iter().map(|x| x.as_str()).collect(),
             is_distinct,
         )?;
-        Ok(NamedExpr::new(vec![name], func))
+
+        // Extract metadata from UDF if it implements return_field_from_args
+        let metadata = if let expr::Expr::ScalarFunction(ScalarFunction {
+            func: udf, args, ..
+        }) = &func
+        {
+            extract_metadata_from_udf(udf, args)?
+        } else {
+            vec![]
+        };
+
+        if !metadata.is_empty() {
+            Ok(NamedExpr::new(vec![name], func).with_metadata(metadata))
+        } else {
+            Ok(NamedExpr::new(vec![name], func))
+        }
     }
 
     pub(super) async fn resolve_expression_call_function(
@@ -243,14 +258,13 @@ impl PlanResolver<'_> {
                 // Expand wildcard inside `struct(...)` only, to match Spark behavior:
                 // - struct(*) expands to all visible columns
                 // - struct(alias.*) expands to all visible columns from that qualifier
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 Expr::Wildcard { qualifier, options } => {
                     let plan = LogicalPlan::EmptyRelation(EmptyRelation {
                         produce_one_row: false,
                         schema: schema.clone(),
                     });
 
-                    #[allow(deprecated)]
                     let expanded = match qualifier {
                         Some(q) => expand_qualified_wildcard(&q, schema, Some(&options))?,
                         None => expand_wildcard(schema, &plan, Some(&options))?,
@@ -322,5 +336,60 @@ impl PlanResolver<'_> {
             }
         }
         arguments
+    }
+}
+
+/// Extract metadata from a UDF by calling return_field_from_args with real argument information
+fn extract_metadata_from_udf(
+    udf: &std::sync::Arc<datafusion_expr::ScalarUDF>,
+    args: &[expr::Expr],
+) -> PlanResult<Vec<(String, String)>> {
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::{DataType, Field};
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::{ExprSchemable, ReturnFieldArgs};
+
+    // Extract real field types from the resolved expressions
+    let empty_schema = datafusion_common::DFSchema::empty();
+    let arg_fields: Vec<Arc<Field>> = args
+        .iter()
+        .enumerate()
+        .map(|(i, arg)| {
+            let data_type = arg.get_type(&empty_schema).unwrap_or(DataType::Null);
+            Arc::new(Field::new(format!("arg_{}", i), data_type, true))
+        })
+        .collect();
+
+    // Extract literal scalar values from expressions
+    let mut scalar_values = Vec::new();
+
+    for arg in args {
+        if let expr::Expr::Literal(scalar_value, _) = arg {
+            scalar_values.push(scalar_value.clone());
+        } else {
+            scalar_values.push(ScalarValue::Null);
+        }
+    }
+
+    let scalar_refs: Vec<Option<&ScalarValue>> = scalar_values
+        .iter()
+        .map(|v| if v.is_null() { None } else { Some(v) })
+        .collect();
+
+    let return_field_args = ReturnFieldArgs {
+        arg_fields: &arg_fields,
+        scalar_arguments: &scalar_refs,
+    };
+
+    // Try to extract metadata, but don't fail if it doesn't work
+    if let Ok(field) = udf.return_field_from_args(return_field_args) {
+        Ok(field
+            .metadata()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect())
+    } else {
+        Ok(vec![])
     }
 }

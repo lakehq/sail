@@ -66,7 +66,7 @@ pub fn get_object_store_from_context(
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
 static DELTA_LOG_PATH: LazyLock<Path> = LazyLock::new(|| Path::from(DELTA_LOG_FOLDER));
-#[allow(clippy::expect_used)]
+#[expect(clippy::expect_used)]
 static DUMMY_TABLE_ROOT: LazyLock<Url> =
     LazyLock::new(|| Url::parse("memory:///").expect("memory URI must be valid"));
 

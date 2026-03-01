@@ -73,7 +73,7 @@ pub enum CommitConflictError {
 }
 
 /// A struct representing different attributes of current transaction needed for conflict detection.
-#[allow(unused)]
+#[expect(unused)]
 pub(crate) struct TransactionInfo<'a> {
     txn_id: String,
     /// appIds that have been seen by the transaction
