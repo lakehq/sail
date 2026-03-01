@@ -1001,12 +1001,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 inner,
                 bucket_columns,
                 num_buckets,
+                sort_columns,
             }) => {
                 let inner = self.try_decode_plan(&inner, ctx)?;
+                let sort_columns = sort_columns
+                    .into_iter()
+                    .map(|sc| (sc.name, sc.ascending))
+                    .collect();
                 Ok(Arc::new(BucketedParquetScanExec::new(
                     inner,
                     bucket_columns,
                     num_buckets as usize,
+                    sort_columns,
                 )?))
             }
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
@@ -1549,10 +1555,19 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(bucketed_scan) = node.as_any().downcast_ref::<BucketedParquetScanExec>()
         {
             let inner = self.try_encode_plan(bucketed_scan.inner().clone())?;
+            let sort_columns = bucketed_scan
+                .sort_columns()
+                .iter()
+                .map(|(name, ascending)| gen::BucketSortColumn {
+                    name: name.clone(),
+                    ascending: *ascending,
+                })
+                .collect();
             NodeKind::BucketedParquetScan(gen::BucketedParquetScanExecNode {
                 inner,
                 bucket_columns: bucketed_scan.bucket_columns().to_vec(),
                 num_buckets: bucketed_scan.num_buckets() as u32,
+                sort_columns,
             })
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");

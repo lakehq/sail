@@ -191,15 +191,20 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         if self.inner.name() == "parquet" {
             // 1. Check catalog-level bucket_by (from CREATE TABLE ... CLUSTERED BY)
             if let Some(ref bucket_info) = bucket_by {
+                let sort_columns = parse_schema_metadata(&table.schema())
+                    .map(|m| m.sort_columns)
+                    .unwrap_or_default();
                 log::debug!(
-                    "Wrapping bucketed table from catalog: columns={:?}, num_buckets={}",
+                    "Wrapping bucketed table from catalog: columns={:?}, num_buckets={}, sort_columns={:?}",
                     bucket_info.columns,
                     bucket_info.num_buckets,
+                    sort_columns,
                 );
                 return Ok(Arc::new(BucketedListingTable::new(
                     table,
                     bucket_info.columns.clone(),
                     bucket_info.num_buckets,
+                    sort_columns,
                 )));
             }
 
@@ -219,15 +224,18 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
                         bucket_meta.num_buckets,
                     );
                 } else {
+                    let sort_columns = bucket_meta.sort_columns.clone();
                     log::debug!(
-                        "Wrapping bucketed table from schema metadata: columns={:?}, num_buckets={}",
+                        "Wrapping bucketed table from schema metadata: columns={:?}, num_buckets={}, sort_columns={:?}",
                         bucket_meta.columns,
                         bucket_meta.num_buckets,
+                        sort_columns,
                     );
                     return Ok(Arc::new(BucketedListingTable::new(
                         table,
                         bucket_meta.columns,
                         bucket_meta.num_buckets,
+                        sort_columns,
                     )));
                 }
             }

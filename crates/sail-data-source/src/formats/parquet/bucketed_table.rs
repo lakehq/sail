@@ -26,14 +26,21 @@ pub struct BucketedListingTable {
     inner: ListingTable,
     bucket_columns: Vec<String>,
     num_buckets: usize,
+    sort_columns: Vec<(String, bool)>,
 }
 
 impl BucketedListingTable {
-    pub fn new(inner: ListingTable, bucket_columns: Vec<String>, num_buckets: usize) -> Self {
+    pub fn new(
+        inner: ListingTable,
+        bucket_columns: Vec<String>,
+        num_buckets: usize,
+        sort_columns: Vec<(String, bool)>,
+    ) -> Self {
         Self {
             inner,
             bucket_columns,
             num_buckets,
+            sort_columns,
         }
     }
 
@@ -110,6 +117,7 @@ impl TableProvider for BucketedListingTable {
             inner_plan.clone(),
             surviving_columns,
             self.num_buckets,
+            self.sort_columns.clone(),
         ) {
             Ok(bucketed) => {
                 log::debug!(

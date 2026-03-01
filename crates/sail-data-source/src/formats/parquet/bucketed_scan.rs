@@ -3,10 +3,11 @@ use std::fmt;
 use std::sync::Arc;
 
 use arrow_schema::SchemaRef;
+use datafusion::arrow::compute::SortOptions;
 use datafusion::common::{plan_err, Result, Statistics};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::expressions::Column;
-use datafusion::physical_expr::{Partitioning, PhysicalExpr};
+use datafusion::physical_expr::{Partitioning, PhysicalExpr, PhysicalSortExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
@@ -24,6 +25,7 @@ pub struct BucketedParquetScanExec {
     inner: Arc<dyn ExecutionPlan>,
     bucket_columns: Vec<String>,
     num_buckets: usize,
+    sort_columns: Vec<(String, bool)>,
     properties: PlanProperties,
 }
 
@@ -39,6 +41,7 @@ impl BucketedParquetScanExec {
         inner: Arc<dyn ExecutionPlan>,
         bucket_columns: Vec<String>,
         num_buckets: usize,
+        sort_columns: Vec<(String, bool)>,
     ) -> Result<Self> {
         if bucket_columns.is_empty() {
             return plan_err!("BucketedParquetScanExec requires at least one bucket column");
@@ -58,7 +61,25 @@ impl BucketedParquetScanExec {
         let hash_exprs = build_hash_exprs(&schema, &bucket_columns)?;
         let partitioning = Partitioning::Hash(hash_exprs, num_buckets);
 
-        let eq_properties = inner.equivalence_properties().clone();
+        let mut eq_properties = inner.equivalence_properties().clone();
+
+        // Declare sort orderings if buckets are pre-sorted.
+        if !sort_columns.is_empty() {
+            let sort_exprs: Vec<PhysicalSortExpr> = sort_columns
+                .iter()
+                .filter_map(|(name, ascending)| {
+                    schema.index_of(name).ok().map(|idx| PhysicalSortExpr {
+                        expr: Arc::new(Column::new(name, idx)),
+                        options: SortOptions {
+                            descending: !ascending,
+                            nulls_first: !ascending,
+                        },
+                    })
+                })
+                .collect();
+            eq_properties.add_orderings(vec![sort_exprs]);
+        }
+
         let properties = PlanProperties::new(
             eq_properties,
             partitioning,
@@ -70,6 +91,7 @@ impl BucketedParquetScanExec {
             inner,
             bucket_columns,
             num_buckets,
+            sort_columns,
             properties,
         })
     }
@@ -80,6 +102,10 @@ impl BucketedParquetScanExec {
 
     pub fn num_buckets(&self) -> usize {
         self.num_buckets
+    }
+
+    pub fn sort_columns(&self) -> &[(String, bool)] {
+        &self.sort_columns
     }
 
     pub fn inner(&self) -> &Arc<dyn ExecutionPlan> {
@@ -94,7 +120,22 @@ impl DisplayAs for BucketedParquetScanExec {
             "BucketedParquetScanExec: columns=[{}], num_buckets={}",
             self.bucket_columns.join(", "),
             self.num_buckets,
-        )
+        )?;
+        if !self.sort_columns.is_empty() {
+            let sort_str: Vec<String> = self
+                .sort_columns
+                .iter()
+                .map(|(name, asc)| {
+                    if *asc {
+                        format!("{name}:asc")
+                    } else {
+                        format!("{name}:desc")
+                    }
+                })
+                .collect();
+            write!(f, ", sort=[{}]", sort_str.join(", "))?;
+        }
+        Ok(())
     }
 }
 
@@ -125,6 +166,7 @@ impl ExecutionPlan for BucketedParquetScanExec {
                 new_inner,
                 self.bucket_columns.clone(),
                 self.num_buckets,
+                self.sort_columns.clone(),
             )?)),
             _ => plan_err!("BucketedParquetScanExec expects exactly one child"),
         }
