@@ -121,7 +121,7 @@ impl PlanResolver<'_> {
             // expand the wildcard to visible column references here in the resolver where we have
             // access to `state` for hidden-column filtering. This ensures hidden columns (e.g.,
             // join keys) are excluded from the distinct count.
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             let arguments = if is_distinct
                 && matches!(
                     arguments.as_slice(),
