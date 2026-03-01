@@ -75,9 +75,8 @@ impl TaskRunner {
 
     /// Deserializes and prepares a physical plan for execution on this node.
     ///
-    /// Decodes the plan from protobuf, rewrites parquet adapters, and wraps the plan
-    /// with the appropriate output node (ShuffleWriteExec for normal jobs).
-    /// If the plan's root is a CacheWriteExec, injects the worker's local cache store.
+    /// Decodes the plan from protobuf, rewrites parquet adapters, rewrites shuffle
+    /// nodes as needed, and executes the resulting plan on this worker.
     fn execute_plan<T: Actor>(
         &mut self,
         ctx: &mut ActorContext<T>,
