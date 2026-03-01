@@ -1,8 +1,6 @@
 use core::any::type_name;
-use std::fs::File;
 use std::sync::{Arc};
 
-use datafusion::arrow::array::MapFieldNames;
 use datafusion_expr::function::Hint;
 use sail_sql_analyzer::parser::parse_data_type;
 use sail_sql_analyzer::data_type::from_ast_data_type;
@@ -40,6 +38,102 @@ use chrono::NaiveDate;
 use std::collections::HashMap;
 
 use crate::functions_nested_utils::downcast_arg;
+
+#[derive(Debug, Default)]
+enum ModeOptions {
+    #[default]
+    PERMISSIVE,
+    FAILFAST,
+    DROPMALFORMED
+}
+
+// https://spark.apache.org/docs/latest/sql-data-sources-json.html#data-source-option
+#[derive(Debug)]
+struct SparkFromJsonOptions {
+    //time_zone: &'static str,
+    //primitive_as_string: bool,
+    //prefers_decimal: bool,
+    //allow_comments: bool,
+    //allow_unquoted_field_names: bool,
+    //allow_single_quotes: bool,
+    //allow_numeric_leading_zeros: bool,
+    //allow_backslash_escaping_any_character: bool,
+    mode: ModeOptions,
+    //column_name_of_corrupted_record: &'static str,
+    //date_format: &'static str,
+    //timestamp_format: &'static str,
+    //timestamp_ntz_format: &'static str,
+    //enable_date_time_parsing_fallback: bool,
+    //multi_line: bool,
+    //allow_unquoted_control_chars: bool,
+}
+
+impl TryFrom<String> for ModeOptions {
+    type Error = DataFusionError;
+
+    fn try_from(value: String) -> Result<Self, DataFusionError> {
+        match value.as_str() {
+            "PERMISSIVE" => Ok(ModeOptions::PERMISSIVE),
+            "FAILFAST" => Ok(ModeOptions::FAILFAST),
+            "DROPMALFORMED" => Ok(ModeOptions::DROPMALFORMED),
+            other => plan_err!("Invalid mode option: {other}")
+        }
+    }
+}
+
+impl SparkFromJsonOptions {
+    pub fn from_map(map_array: &MapArray) -> Result<Self> {
+        let mode = find_key_value(map_array, "mode")
+            .unwrap_or(Default::default());
+        Ok(Self {
+            mode: ModeOptions::try_from(mode)?,
+        })
+    }
+}
+
+impl Default for SparkFromJsonOptions {
+    fn default() -> Self {
+        Self {
+            mode: Default::default(),
+        }
+    }
+}
+
+/// Finds the index of a specified key in a `MapArray`.
+///
+/// This helper function locates the index of a given key within a `MapArray`,
+/// where the keys are stored in a "key" column. It is useful for quickly identifying
+/// the position of an option or setting within structured options data.
+fn find_key_index(options: &MapArray, search_key: &str) -> Option<usize> {
+    options
+        .entries()
+        .column_by_name(SAIL_MAP_KEY_FIELD_NAME)
+        .and_then(|x| x.as_any().downcast_ref::<StringArray>())
+        .and_then(|x| {
+            x.iter()
+                .enumerate()
+                .find(|(_, x)| x.as_ref().is_some_and(|x| *x == search_key))
+        })
+        .map(|(i, _)| i)
+}
+
+/// Retrieves the value associated with a specified key from a `MapArray`.
+///
+/// This function extracts the string value assigned to a given key within a `MapArray`,
+/// leveraging the index found by `find_key_index`. It searches for the key in the "key"
+/// column and returns the corresponding value from the "value" column if found.
+fn find_key_value(options: &MapArray, search_key: &str) -> Option<String> {
+    if let Some(index) = find_key_index(options, search_key) {
+        options
+            .entries()
+            .column_by_name(SAIL_MAP_VALUE_FIELD_NAME)
+            .and_then(|x| x.as_any().downcast_ref::<StringArray>())
+            .map(|values| values.value(index).to_string())
+    } else {
+        None
+    }
+}
+
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkFromJson {
@@ -183,7 +277,14 @@ fn from_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         schema_array.value(0)
     };
     let schema_fields = get_schema_as_fields(schema)?;
-    let d = get_schema_data_type(schema)?;
+    let _ = get_schema_data_type(schema)?;
+
+    let _options = if let Some(arr) = args.get(2) {
+        let x = downcast_arg!(arr, MapArray);
+        SparkFromJsonOptions::from_map(x)?
+    } else {
+        SparkFromJsonOptions::default()
+    };
 
     string_array_to_json_array(strings, schema_fields, None)
 }
@@ -202,8 +303,6 @@ fn string_array_to_json_array(
             struct_nulls[i] = true;
             for (field, builder) in schema_fields.iter().zip(field_builders.iter_mut()) {
                 let field_value = obj.get(field.name());
-                dbg!(&field, &builder);
-                dbg!(&field_value);
                 append_field_value(builder, field, field_value)?;
             }
         } else {
@@ -268,7 +367,6 @@ fn create_field_builders(fields: &Fields, capacity: usize) -> Result<Vec<FieldBu
                     fields: fields.clone(),
                     builders: builders,
                     null_buffer: Vec::with_capacity(capacity)
-
                 })
             },
             DataType::Map(struct_field, ordered) => { // field is a struct
