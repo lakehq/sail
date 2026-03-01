@@ -18,8 +18,11 @@
         rustStable = fenix.packages.${system}.stable.toolchain;
         rustNightly = fenix.packages.${system}.latest.toolchain;
 
-        py = pkgs.python313;
-        pyp = pkgs.python313Packages;
+        py = pkgs.python313.withPackages (ps: with ps; [
+          pip
+          setuptools
+          wheel
+        ]);
 
         protobuf3 = pkgs.protobuf_21;
 
@@ -57,6 +60,8 @@
               hatch
               uv
 
+              mold
+              sccache
             ])
             ++ [ protobuf3 ]
             ++ lib.optionals isLinux [
@@ -149,6 +154,10 @@
             ''
             + lib.optionalString isLinux ''
               export LD_LIBRARY_PATH=${py}/lib:${pkgs.stdenv.cc.cc.lib}/lib:''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+
+              # Use mold linker (faster) and sccache to cache compilations
+              export RUSTFLAGS="-C link-arg=-fuse-ld=mold"
+              export RUSTC_WRAPPER="${pkgs.sccache}/bin/sccache"
             '';
         };
       }
