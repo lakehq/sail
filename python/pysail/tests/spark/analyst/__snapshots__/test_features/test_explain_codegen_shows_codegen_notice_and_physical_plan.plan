@@ -27,6 +27,9 @@ SAME TEXT AS ABOVE
 logical_plan after expand_merge:
 SAME TEXT AS ABOVE
 
+logical_plan after rewrite_set_comparison:
+SAME TEXT AS ABOVE
+
 logical_plan after optimize_unions:
 SAME TEXT AS ABOVE
 
@@ -85,6 +88,9 @@ logical_plan after eliminate_group_by_constant:
 SAME TEXT AS ABOVE
 
 logical_plan after common_sub_expression_eliminate:
+SAME TEXT AS ABOVE
+
+logical_plan after extract_leaf_expressions:
 SAME TEXT AS ABOVE
 
 logical_plan after optimize_projections:
@@ -97,6 +103,9 @@ Projection: t.#2 AS #4, sum(t.#3) AS #5
 logical_plan after expand_merge:
 SAME TEXT AS ABOVE
 
+logical_plan after rewrite_set_comparison:
+SAME TEXT AS ABOVE
+
 logical_plan after optimize_unions:
 SAME TEXT AS ABOVE
 
@@ -155,6 +164,9 @@ logical_plan after eliminate_group_by_constant:
 SAME TEXT AS ABOVE
 
 logical_plan after common_sub_expression_eliminate:
+SAME TEXT AS ABOVE
+
+logical_plan after extract_leaf_expressions:
 SAME TEXT AS ABOVE
 
 logical_plan after optimize_projections:
@@ -232,9 +244,6 @@ physical_plan after OptimizeAggregateOrder:
 SAME TEXT AS ABOVE
 
 physical_plan after ProjectionPushdown:
-SAME TEXT AS ABOVE
-
-physical_plan after coalesce_batches:
 SAME TEXT AS ABOVE
 
 physical_plan after OutputRequirements:
