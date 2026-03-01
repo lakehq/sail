@@ -39,9 +39,22 @@ fn meta_from_013(m: object_store::ObjectMeta) -> ObjectMeta012 {
 }
 
 fn error_013_to_012(e: object_store::Error) -> object_store_012::Error {
-    object_store_012::Error::Generic {
-        store: "compat",
-        source: Box::new(e),
+    // Preserve semantically important variants so that callers (e.g. delta_kernel) can
+    // pattern-match on NotFound / AlreadyExists / etc. correctly.
+    match e {
+        object_store::Error::NotFound { path, source } => {
+            object_store_012::Error::NotFound { path, source }
+        }
+        object_store::Error::AlreadyExists { path, source } => {
+            object_store_012::Error::AlreadyExists { path, source }
+        }
+        object_store::Error::Precondition { path, source } => {
+            object_store_012::Error::Precondition { path, source }
+        }
+        other => object_store_012::Error::Generic {
+            store: "compat",
+            source: Box::new(other),
+        },
     }
 }
 
