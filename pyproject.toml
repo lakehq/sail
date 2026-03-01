@@ -1,6 +1,6 @@
 [project]
 name = "pysail"
-version = "0.5.0"
+version = "0.5.1"
 description = "Sail Python library"
 authors = [
     { name = "LakeSail", email = "hello@lakesail.com" },
@@ -49,9 +49,14 @@ test = [
     "PyYAML>=6.0,<7",
     "moto[glue]>=5,<6",
     "testcontainers>=4,<5",
+    "connectorx>=0.3,<1",
 ]
 mcp = [
     "mcp>=1.0.0,<2",
+]
+jdbc = [
+    "connectorx>=0.3,<1",
+    "pyarrow>=10.0,<20",
 ]
 
 [project.urls]
@@ -100,6 +105,7 @@ dependencies = [
     "PyYAML>=6.0,<7",
     "moto[glue]>=5,<6",
     "testcontainers>=4,<5",
+    "connectorx>=0.3,<1",
 ]
 path = ".venvs/default"
 
@@ -149,6 +155,7 @@ dependencies = [
     "PyYAML>=6.0,<7",
     "moto[glue]>=5,<6",
     "testcontainers>=4,<5",
+    "connectorx>=0.3,<1",
 ]
 
 [[tool.hatch.envs.test.matrix]]
@@ -240,7 +247,7 @@ packages = ["python/pysail"]
 line-length = 120
 
 [tool.ruff.lint.per-file-ignores]
-"crates/**/*.py" = ["INP001"]
+"crates/**/*.py" = ["INP001", "PLC0415"]
 "python/pysail/docs/conf.py" = ["INP001"]
 "python/pysail/examples/**/*.py" = ["T201", "PLC0415"]
 "python/pysail/tests/**/*.py" = ["S101", "PLC0415"]

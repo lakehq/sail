@@ -4,12 +4,17 @@ import os
 from typing import Any
 
 import pandas as pd
+import pyspark
 from pyspark.sql.types import DecimalType, DoubleType, FloatType, Row
 
 # This doctest option flag is used to annotate tests involving
 # extended Spark features supported by Sail.
 # The test will be skipped when running on JVM Spark.
 SAIL_ONLY = doctest.register_optionflag("SAIL_ONLY")
+
+
+def pyspark_version() -> tuple[int, ...]:
+    return tuple(int(x) for x in pyspark.__version__.split("."))
 
 
 def is_jvm_spark():
@@ -82,6 +87,13 @@ class AnyOf:
 def any_of(*values):
     """Wrapper around a value for comparison with any of the values in a list."""
     return AnyOf(*values)
+
+
+def escape_sql_identifier(s: str) -> str:
+    """Escapes a string for use as a SQL identifier enclosed in backticks.
+    Backtick characters in the raw string are replaced with two backticks.
+    """
+    return s.replace("`", "``")
 
 
 def escape_sql_string_literal(s: str) -> str:

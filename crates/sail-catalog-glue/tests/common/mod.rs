@@ -14,28 +14,11 @@
 
 use std::time::Duration;
 
-use arrow::datatypes::DataType;
-use sail_catalog::provider::{
-    CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions,
-    CreateViewColumnOptions, CreateViewOptions, Namespace,
-};
+use sail_catalog::provider::CreateDatabaseOptions;
 use sail_catalog_glue::{GlueCatalogConfig, GlueCatalogProvider};
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
-
-/// Helper to create a column with default options (nullable=true, no comment).
-#[allow(dead_code)]
-pub fn col(name: &str, data_type: DataType) -> CreateTableColumnOptions {
-    CreateTableColumnOptions {
-        name: name.to_string(),
-        data_type,
-        nullable: true,
-        comment: None,
-        default: None,
-        generated_always_as: None,
-    }
-}
 
 /// Helper to create database options with sensible defaults.
 pub fn simple_database_options() -> CreateDatabaseOptions {
@@ -43,52 +26,6 @@ pub fn simple_database_options() -> CreateDatabaseOptions {
         if_not_exists: false,
         comment: None,
         location: None,
-        properties: vec![],
-    }
-}
-
-/// Helper to create table options with sensible defaults (parquet format, no partitioning).
-#[allow(dead_code)]
-pub fn simple_table_options(columns: Vec<CreateTableColumnOptions>) -> CreateTableOptions {
-    CreateTableOptions {
-        columns,
-        comment: None,
-        constraints: vec![],
-        location: Some("s3://bucket/default".to_string()),
-        format: "parquet".to_string(),
-        partition_by: vec![],
-        sort_by: vec![],
-        bucket_by: None,
-        if_not_exists: false,
-        replace: false,
-        options: vec![],
-        properties: vec![],
-    }
-}
-
-/// Helper to create a view column with default options (nullable=true, no comment).
-#[allow(dead_code)]
-pub fn view_col(name: &str, data_type: DataType) -> CreateViewColumnOptions {
-    CreateViewColumnOptions {
-        name: name.to_string(),
-        data_type,
-        nullable: true,
-        comment: None,
-    }
-}
-
-/// Helper to create view options with sensible defaults.
-#[allow(dead_code)]
-pub fn simple_view_options(
-    definition: &str,
-    columns: Vec<CreateViewColumnOptions>,
-) -> CreateViewOptions {
-    CreateViewOptions {
-        columns,
-        definition: definition.to_string(),
-        if_not_exists: false,
-        replace: false,
-        comment: None,
         properties: vec![],
     }
 }
@@ -123,19 +60,4 @@ pub async fn setup_glue_catalog(
     let provider = GlueCatalogProvider::new(test_name.to_string(), config);
 
     (provider, moto)
-}
-
-/// Sets up a Glue catalog with a pre-created database for table tests.
-/// Returns the provider, container, and namespace.
-#[allow(dead_code)]
-pub async fn setup_with_database(
-    test_name: &str,
-) -> (GlueCatalogProvider, ContainerAsync<GenericImage>, Namespace) {
-    let (catalog, container) = setup_glue_catalog(test_name).await;
-    let namespace = Namespace::try_from(vec![format!("{test_name}_db")]).unwrap();
-    catalog
-        .create_database(&namespace, simple_database_options())
-        .await
-        .unwrap();
-    (catalog, container, namespace)
 }

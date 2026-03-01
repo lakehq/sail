@@ -47,7 +47,7 @@ impl KubernetesWorkerManager {
     }
 
     pub fn generate_name() -> String {
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         rand::rng()
             .sample_iter(Uniform::new(0, 36).unwrap())
             .take(10)
@@ -285,7 +285,7 @@ mod tests {
     use super::*;
 
     #[test]
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     fn test_label_merging_from_template() {
         // Test that labels from worker_pod_template are properly merged with default labels
 

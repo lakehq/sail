@@ -72,12 +72,14 @@ use prost::Message;
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::array::record_batch::{read_record_batches, write_record_batches};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
-use sail_common_datafusion::physical_expr::PhysicalExprWithSource;
 use sail_common_datafusion::system::catalog::SystemTable;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_data_source::formats::binary::source::BinarySource;
 use sail_data_source::formats::console::ConsoleSinkExec;
-use sail_data_source::formats::python::{InputPartition, PythonDataSourceExec};
+use sail_data_source::formats::python::{
+    InputPartition, PythonDataSourceExec, PythonDataSourceWriteCommitExec,
+    PythonDataSourceWriteExec,
+};
 use sail_data_source::formats::rate::{RateSourceExec, TableRateOptions};
 use sail_data_source::formats::socket::{SocketSourceExec, TableSocketOptions};
 use sail_data_source::formats::text::source::TextSource;
@@ -114,11 +116,15 @@ use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval
 use sail_function::scalar::datetime::spark_next_day::SparkNextDay;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
+use sail_function::scalar::datetime::spark_try_make_timestamp_ntz::SparkTryMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::timestamp_now::TimestampNow;
 use sail_function::scalar::drop_struct_field::DropStructField;
 use sail_function::scalar::explode::{explode_name_to_kind, Explode};
+use sail_function::scalar::geo::st_asbinary::StAsBinary;
+use sail_function::scalar::geo::st_geogfromwkb::StGeogFromWKB;
+use sail_function::scalar::geo::st_geomfromwkb::StGeomFromWKB;
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
 use sail_function::scalar::hash::spark_xxhash64::SparkXxhash64;
 use sail_function::scalar::json::SparkToJson;
@@ -169,6 +175,7 @@ use sail_logical_plan::range::Range;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
+use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
 use sail_physical_plan::show_string::ShowStringExec;
@@ -226,13 +233,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 step,
                 num_partitions,
                 schema,
+                projection,
             }) => {
                 let schema = self.try_decode_schema(&schema)?;
-                Ok(Arc::new(RangeExec::new(
+                let projection = self.try_decode_projection(&projection)?;
+                Ok(Arc::new(RangeExec::try_new(
                     Range { start, end, step },
                     num_partitions as usize,
                     Arc::new(schema),
-                )))
+                    projection,
+                )?))
             }
             NodeKind::ShowString(gen::ShowStringExecNode {
                 input,
@@ -836,6 +846,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 target_present_col,
                 source_present_col,
             )?)),
+            NodeKind::MonotonicId(gen::MonotonicIdExecNode {
+                input,
+                column_name,
+                schema,
+            }) => {
+                let schema = self.try_decode_schema(&schema)?;
+                Ok(Arc::new(MonotonicIdExec::try_new(
+                    self.try_decode_plan(&input, ctx)?,
+                    column_name,
+                    Arc::new(schema),
+                )?))
+            }
             NodeKind::IcebergWriter(gen::IcebergWriterExecNode {
                 input,
                 table_url,
@@ -897,20 +919,52 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     partitions,
                 )))
             }
+            NodeKind::PythonDataSourceWrite(gen::PythonDataSourceWriteExecNode {
+                pickled_writer,
+                schema,
+                is_arrow,
+                input,
+            }) => {
+                let schema = Arc::new(self.try_decode_schema(&schema)?);
+                let input = self.try_decode_plan(&input, ctx)?;
+                if schema.as_ref() != input.schema().as_ref() {
+                    return plan_err!(
+                        "PythonDataSourceWriteExec schema mismatch: encoded schema does not match input schema"
+                    );
+                }
+                Ok(Arc::new(PythonDataSourceWriteExec::new(
+                    input,
+                    pickled_writer,
+                    is_arrow,
+                )))
+            }
+            NodeKind::PythonDataSourceWriteCommit(gen::PythonDataSourceWriteCommitExecNode {
+                pickled_writer,
+                expected_partitions,
+                input,
+            }) => {
+                let input = self.try_decode_plan(&input, ctx)?;
+                Ok(Arc::new(PythonDataSourceWriteCommitExec::new(
+                    input,
+                    pickled_writer,
+                    expected_partitions as usize,
+                )))
+            }
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
         }
     }
 
     fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()> {
-        #[allow(deprecated)]
         let node_kind = if let Some(range) = node.as_any().downcast_ref::<RangeExec>() {
-            let schema = self.try_encode_schema(range.schema().as_ref())?;
+            let schema = self.try_encode_schema(range.original_schema().as_ref())?;
+            let projection = self.try_encode_projection(range.projection())?;
             NodeKind::Range(gen::RangeExecNode {
                 start: range.range().start,
                 end: range.range().end,
                 step: range.range().step,
                 num_partitions: range.num_partitions() as u64,
                 schema,
+                projection,
             })
         } else if let Some(show_string) = node.as_any().downcast_ref::<ShowStringExec>() {
             let schema = self.try_encode_schema(show_string.schema().as_ref())?;
@@ -1342,6 +1396,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 target_present_col: cardinality_check.target_present_col().to_string(),
                 source_present_col: cardinality_check.source_present_col().to_string(),
             })
+        } else if let Some(monotonic_id) = node.as_any().downcast_ref::<MonotonicIdExec>() {
+            let input = self.try_encode_plan(monotonic_id.input().clone())?;
+            let schema = self.try_encode_schema(monotonic_id.schema().as_ref())?;
+            NodeKind::MonotonicId(gen::MonotonicIdExecNode {
+                input,
+                column_name: monotonic_id.column_name().to_string(),
+                schema,
+            })
         } else if let Some(iceberg_writer_exec) = node.as_any().downcast_ref::<IcebergWriterExec>()
         {
             let input = self.try_encode_plan(iceberg_writer_exec.input().clone())?;
@@ -1377,6 +1439,27 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 pickled_reader: python_exec.pickled_reader().to_vec(),
                 schema,
                 partitions,
+            })
+        } else if let Some(python_write_exec) =
+            node.as_any().downcast_ref::<PythonDataSourceWriteExec>()
+        {
+            let schema = self.try_encode_schema(python_write_exec.input().schema().as_ref())?;
+            let input = self.try_encode_plan(python_write_exec.input().clone())?;
+            NodeKind::PythonDataSourceWrite(gen::PythonDataSourceWriteExecNode {
+                pickled_writer: python_write_exec.pickled_writer().to_vec(),
+                schema,
+                is_arrow: python_write_exec.is_arrow(),
+                input,
+            })
+        } else if let Some(python_commit_exec) = node
+            .as_any()
+            .downcast_ref::<PythonDataSourceWriteCommitExec>()
+        {
+            let input = self.try_encode_plan(python_commit_exec.input().clone())?;
+            NodeKind::PythonDataSourceWriteCommit(gen::PythonDataSourceWriteCommitExecNode {
+                pickled_writer: python_commit_exec.pickled_writer().to_vec(),
+                expected_partitions: python_commit_exec.expected_partitions() as u64,
+                input,
             })
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");
@@ -1506,6 +1589,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkDate(gen::SparkDateUdf { is_try }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkDate::new(is_try))));
             }
+            UdfKind::SparkFromCsv(gen::SparkFromCsvUdf { session_timezone }) => {
+                let udf = SparkFromCSV::new(Arc::from(session_timezone));
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
         };
         match name {
             "array_item_with_position" => {
@@ -1531,13 +1618,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "randstr" => Ok(Arc::new(ScalarUDF::from(Randstr::new()))),
             "format_number" => Ok(Arc::new(ScalarUDF::from(FormatNumber::new()))),
             "soundex" => Ok(Arc::new(ScalarUDF::from(Soundex::new()))),
+            "st_asbinary" => Ok(Arc::new(ScalarUDF::from(StAsBinary::new()))),
+            "st_geomfromwkb" => Ok(Arc::new(ScalarUDF::from(StGeomFromWKB::new()))),
+            "st_geogfromwkb" => Ok(Arc::new(ScalarUDF::from(StGeogFromWKB::new()))),
             "spark_array" | "spark_make_array" | "array" => {
                 Ok(Arc::new(ScalarUDF::from(SparkArray::new())))
             }
             "spark_concat" | "concat" | "array_concat" => {
                 Ok(Arc::new(ScalarUDF::from(SparkConcat::new())))
             }
-            "spark_from_csv" | "from_csv" => Ok(Arc::new(ScalarUDF::from(SparkFromCSV::new()))),
             "spark_to_number" | "to_number" => Ok(Arc::new(ScalarUDF::from(SparkToNumber::new()))),
             "spark_try_to_number" | "try_to_number" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryToNumber::new())))
@@ -1603,6 +1692,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "spark_make_timestamp_ntz" | "make_timestamp_ntz" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeTimestampNtz::new())))
+            }
+            "spark_try_make_timestamp_ntz" | "try_make_timestamp_ntz" => {
+                Ok(Arc::new(ScalarUDF::from(SparkTryMakeTimestampNtz::new())))
             }
             "spark_mask" | "mask" => Ok(Arc::new(ScalarUDF::from(SparkMask::new()))),
             "spark_concat_ws" | "concat_ws" => Ok(Arc::new(ScalarUDF::from(SparkConcatWs::new()))),
@@ -1672,6 +1764,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<Levenshtein>()
             || node_inner.is::<Randstr>()
             || node_inner.is::<Soundex>()
+            || node_inner.is::<StAsBinary>()
+            || node_inner.is::<StGeomFromWKB>()
+            || node_inner.is::<StGeogFromWKB>()
             || node_inner.is::<MakeValidUtf8>()
             || node_inner.is::<MapFromArrays>()
             || node_inner.is::<MapFromEntries>()
@@ -1712,6 +1807,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkMakeDtInterval>()
             || node_inner.is::<SparkMakeInterval>()
             || node_inner.is::<SparkMakeTimestampNtz>()
+            || node_inner.is::<SparkTryMakeTimestampNtz>()
             || node_inner.is::<SparkMakeYmInterval>()
             || node_inner.is::<SparkMask>()
             || node_inner.is::<SparkConcatWs>()
@@ -1830,6 +1926,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkDate>() {
             let is_try = func.is_try();
             UdfKind::SparkDate(gen::SparkDateUdf { is_try })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkFromCSV>() {
+            let session_timezone = func.session_timezone().to_string();
+            UdfKind::SparkFromCsv(gen::SparkFromCsvUdf { session_timezone })
         } else {
             return Ok(());
         };
@@ -2080,8 +2179,8 @@ impl RemoteExecutionCodec {
     fn try_decode_physical_sink_mode(
         &self,
         proto_mode: gen::PhysicalSinkMode,
-        schema: &Schema,
-        ctx: &TaskContext,
+        _schema: &Schema,
+        _ctx: &TaskContext,
     ) -> Result<PhysicalSinkMode> {
         let gen::PhysicalSinkMode { mode } = proto_mode;
         match mode {
@@ -2091,14 +2190,10 @@ impl RemoteExecutionCodec {
             Some(gen::physical_sink_mode::Mode::Overwrite(gen::OverwriteMode {})) => {
                 Ok(PhysicalSinkMode::Overwrite)
             }
-            Some(gen::physical_sink_mode::Mode::OverwriteIf(gen::OverwriteIfMode {
-                condition,
-                source,
-            })) => {
-                let expr = self.try_decode_message(&condition)?;
-                let expr = parse_physical_expr(&expr, ctx, schema, self)?;
+            Some(gen::physical_sink_mode::Mode::OverwriteIf(gen::OverwriteIfMode { source })) => {
                 Ok(PhysicalSinkMode::OverwriteIf {
-                    condition: PhysicalExprWithSource::new(expr, source),
+                    condition: None,
+                    source,
                 })
             }
             Some(gen::physical_sink_mode::Mode::ErrorIfExists(gen::ErrorIfExistsMode {})) => {
@@ -2123,12 +2218,8 @@ impl RemoteExecutionCodec {
             PhysicalSinkMode::Overwrite => {
                 gen::physical_sink_mode::Mode::Overwrite(gen::OverwriteMode {})
             }
-            PhysicalSinkMode::OverwriteIf {
-                condition: PhysicalExprWithSource { expr, source },
-            } => {
-                let expr = serialize_physical_expr(expr, self)?;
+            PhysicalSinkMode::OverwriteIf { source, .. } => {
                 gen::physical_sink_mode::Mode::OverwriteIf(gen::OverwriteIfMode {
-                    condition: self.try_encode_message(expr)?,
                     source: source.clone(),
                 })
             }

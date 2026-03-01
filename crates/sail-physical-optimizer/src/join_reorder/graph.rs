@@ -503,7 +503,7 @@ impl QueryGraph {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::physical_plan::empty::EmptyExec;

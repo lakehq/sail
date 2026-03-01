@@ -156,16 +156,21 @@ impl PythonDataSource {
                             .call_method0("schema")
                             .map_err(|e| ctx.wrap_py_error(e))?;
 
-                        // Schema should be a PyArrow Schema or DDL string
+                        // Schema should be a PyArrow Schema, PySpark DataType, or DDL string
                         // Try PyArrow Schema first
                         if let Ok(schema) = py_schema_to_rust(py, &schema_obj) {
+                            return Ok(schema);
+                        }
+
+                        // Try PySpark DataType (StructType)
+                        if let Some(schema) = self.try_pyspark_data_type_schema(py, &schema_obj, &ctx)? {
                             return Ok(schema);
                         }
 
                         // Try DDL string
                         let schema_str: String = schema_obj.extract().map_err(|e| {
                             PythonDataSourceError::SchemaError(format!(
-                                "[{}::schema] schema() must return PyArrow Schema or DDL string: {}",
+                                "[{}::schema] schema() must return PyArrow Schema, PySpark DataType, or DDL string: {}",
                                 self.name, e
                             ))
                         })?;
@@ -176,6 +181,72 @@ impl PythonDataSource {
                 })
                 .cloned()
         }
+    }
+
+    fn try_pyspark_data_type_schema(
+        &self,
+        py: Python<'_>,
+        schema_obj: &Bound<'_, PyAny>,
+        ctx: &PythonDataSourceContext,
+    ) -> Result<Option<SchemaRef>> {
+        let types_module = match py.import("pyspark.sql.types") {
+            Ok(module) => module,
+            Err(_) => return Ok(None),
+        };
+        let data_type_class = types_module
+            .getattr("DataType")
+            .map_err(|e| ctx.wrap_py_error(e))?;
+
+        let is_data_type = schema_obj
+            .is_instance(&data_type_class)
+            .map_err(|e| ctx.wrap_py_error(e))?;
+        if !is_data_type {
+            return Ok(None);
+        }
+
+        let pandas_types = py
+            .import("pyspark.sql.pandas.types")
+            .map_err(|e| ctx.wrap_py_error(e))?;
+        let to_arrow_type = pandas_types
+            .getattr("to_arrow_type")
+            .map_err(|e| ctx.wrap_py_error(e))?;
+        // TODO: pass options such as `prefers_large_types` as specified for the session
+        let arrow_type = to_arrow_type
+            .call1((schema_obj,))
+            .map_err(|e| ctx.wrap_py_error(e))?;
+
+        let pa_types = py
+            .import("pyarrow.types")
+            .map_err(|e| ctx.wrap_py_error(e))?;
+        let is_struct: bool = pa_types
+            .getattr("is_struct")
+            .map_err(|e| ctx.wrap_py_error(e))?
+            .call1((arrow_type.clone(),))
+            .map_err(|e| ctx.wrap_py_error(e))?
+            .extract()
+            .map_err(|e| ctx.wrap_py_error(e))?;
+
+        if !is_struct {
+            return Err(PythonDataSourceError::SchemaError(format!(
+                "[{}::schema] schema() DataType must be StructType to be used as a schema",
+                self.name
+            ))
+            .into());
+        }
+
+        let builtins = py.import("builtins").map_err(|e| ctx.wrap_py_error(e))?;
+        let list_fn = builtins.getattr("list").map_err(|e| ctx.wrap_py_error(e))?;
+        let fields_list = list_fn
+            .call1((arrow_type,))
+            .map_err(|e| ctx.wrap_py_error(e))?;
+        let pa = py.import("pyarrow").map_err(|e| ctx.wrap_py_error(e))?;
+        let pa_schema = pa
+            .getattr("schema")
+            .map_err(|e| ctx.wrap_py_error(e))?
+            .call1((fields_list,))
+            .map_err(|e| ctx.wrap_py_error(e))?;
+
+        Ok(Some(py_schema_to_rust(py, &pa_schema)?))
     }
 
     /// Get the number of partitions for parallel reading.
@@ -272,39 +343,34 @@ impl PythonDataSource {
     ///
     /// DDL format: "id INT, name STRING, age INT"
     fn parse_ddl_schema(ddl: &str) -> Result<SchemaRef> {
-        use arrow_schema::Field;
-        use datafusion::sql::sqlparser::ast::Statement;
-        use datafusion::sql::sqlparser::dialect::GenericDialect;
-        use datafusion::sql::sqlparser::parser::Parser;
+        use sail_common::spec;
+        use sail_sql_analyzer::data_type::from_ast_data_type;
+        use sail_sql_analyzer::parser as sail_parser;
 
-        // Wrap DDL in CREATE TABLE to parse
-        let sql = format!("CREATE TABLE t ({})", ddl);
-        let dialect = GenericDialect {};
-
-        let statements = Parser::parse_sql(&dialect, &sql).map_err(|e| {
-            PythonDataSourceError::SchemaError(format!("Failed to parse DDL schema: {}", e))
-        })?;
-
-        if statements.is_empty() {
-            return Err(PythonDataSourceError::SchemaError("Empty DDL schema".to_string()).into());
-        }
-
-        // Extract column definitions from CREATE TABLE statement
-        let columns = match &statements[0] {
-            Statement::CreateTable(create) => &create.columns,
-            _ => {
-                return Err(PythonDataSourceError::SchemaError(
-                    "Expected CREATE TABLE statement".to_string(),
-                )
-                .into())
-            }
+        let ddl = ddl.trim();
+        let type_str = if ddl
+            .get(..6)
+            .is_some_and(|p| p.eq_ignore_ascii_case("struct"))
+            && ddl.get(6..).is_some_and(|p| p.starts_with('<'))
+            && ddl.ends_with('>')
+        {
+            ddl.to_string()
+        } else {
+            format!("STRUCT<{ddl}>")
         };
 
-        // Convert each column to an Arrow Field
-        let fields: Vec<Field> = columns
-            .iter()
-            .map(sql_column_to_arrow_field)
-            .collect::<Result<Vec<_>>>()?;
+        let ast = sail_parser::parse_data_type(&type_str).map_err(|e| {
+            PythonDataSourceError::SchemaError(format!("Failed to parse DDL schema '{ddl}': {e}"))
+        })?;
+        let spec_dt = from_ast_data_type(ast).map_err(|e| {
+            PythonDataSourceError::SchemaError(format!("Failed to analyze DDL schema '{ddl}': {e}"))
+        })?;
+        let spec::DataType::Struct { fields } = spec_dt else {
+            return Err(PythonDataSourceError::SchemaError(format!(
+                "Expected STRUCT schema, got: {spec_dt:?}"
+            ))
+            .into());
+        };
 
         if fields.is_empty() {
             return Err(
@@ -312,81 +378,39 @@ impl PythonDataSource {
             );
         }
 
-        Ok(std::sync::Arc::new(arrow_schema::Schema::new(fields)))
+        let arrow_fields: Vec<arrow_schema::Field> = fields
+            .iter()
+            .map(|f| {
+                let dt = spec_data_type_to_arrow(&f.data_type)?;
+                Ok(arrow_schema::Field::new(f.name.clone(), dt, f.nullable))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(std::sync::Arc::new(arrow_schema::Schema::new(arrow_fields)))
     }
 }
 
-/// Convert SQL column definition to Arrow Field.
-fn sql_column_to_arrow_field(
-    col: &datafusion::sql::sqlparser::ast::ColumnDef,
-) -> Result<arrow_schema::Field> {
-    use arrow_schema::Field;
-
-    let name = col.name.value.clone();
-    let data_type = sql_type_to_arrow(&col.data_type)?;
-
-    // Check for NOT NULL constraint
-    let nullable = !col.options.iter().any(|opt| {
-        matches!(
-            opt.option,
-            datafusion::sql::sqlparser::ast::ColumnOption::NotNull
-        )
-    });
-
-    Ok(Field::new(name, data_type, nullable))
-}
-
-/// Convert SQL data type to Arrow DataType.
-fn sql_type_to_arrow(
-    sql_type: &datafusion::sql::sqlparser::ast::DataType,
-) -> Result<arrow_schema::DataType> {
+/// Convert a `spec::DataType` to an Arrow `DataType` for DDL schema parsing.
+fn spec_data_type_to_arrow(dt: &sail_common::spec::DataType) -> Result<arrow_schema::DataType> {
     use arrow_schema::{DataType, TimeUnit};
-    use datafusion::sql::sqlparser::ast::DataType as SqlDataType;
+    use sail_common::spec::DataType as SDT;
 
-    match sql_type {
-        // Integer types
-        SqlDataType::TinyInt(_) => Ok(DataType::Int8),
-        SqlDataType::SmallInt(_) => Ok(DataType::Int16),
-        SqlDataType::Int(_) | SqlDataType::Integer(_) => Ok(DataType::Int32),
-        SqlDataType::BigInt(_) => Ok(DataType::Int64),
-
-        // Floating point types
-        SqlDataType::Float(_) | SqlDataType::Real => Ok(DataType::Float32),
-        SqlDataType::Double(_) | SqlDataType::DoublePrecision => Ok(DataType::Float64),
-
-        // Boolean
-        SqlDataType::Boolean => Ok(DataType::Boolean),
-
-        // String types - Spark's STRING maps to Utf8
-        SqlDataType::Char(_)
-        | SqlDataType::Varchar(_)
-        | SqlDataType::Text
-        | SqlDataType::String(_) => Ok(DataType::Utf8),
-
-        // Binary
-        SqlDataType::Binary(_) | SqlDataType::Varbinary(_) | SqlDataType::Blob(_) => {
-            Ok(DataType::Binary)
-        }
-
-        // Date and time
-        SqlDataType::Date => Ok(DataType::Date32),
-        SqlDataType::Timestamp(_, _) => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
-
-        // Decimal (use default precision/scale if not specified)
-        SqlDataType::Decimal(info) | SqlDataType::Numeric(info) => {
-            use datafusion::sql::sqlparser::ast::ExactNumberInfo;
-            let (precision, scale) = match info {
-                ExactNumberInfo::PrecisionAndScale(p, s) => (*p as u8, *s as i8),
-                ExactNumberInfo::Precision(p) => (*p as u8, 0),
-                ExactNumberInfo::None => (38, 10), // Default Spark precision/scale
-            };
-            Ok(DataType::Decimal128(precision, scale))
-        }
-
-        // Unsupported types - fall through to error
+    match dt {
+        SDT::Null => Ok(DataType::Null),
+        SDT::Boolean => Ok(DataType::Boolean),
+        SDT::Int8 => Ok(DataType::Int8),
+        SDT::Int16 => Ok(DataType::Int16),
+        SDT::Int32 => Ok(DataType::Int32),
+        SDT::Int64 => Ok(DataType::Int64),
+        SDT::Float32 => Ok(DataType::Float32),
+        SDT::Float64 => Ok(DataType::Float64),
+        SDT::Binary | SDT::ConfiguredBinary => Ok(DataType::Binary),
+        SDT::Utf8 | SDT::ConfiguredUtf8 { .. } => Ok(DataType::Utf8),
+        SDT::Date32 => Ok(DataType::Date32),
+        SDT::Timestamp { .. } => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
+        SDT::Decimal128 { precision, scale } => Ok(DataType::Decimal128(*precision, *scale)),
         other => Err(PythonDataSourceError::SchemaError(format!(
-            "Unsupported SQL type in DDL schema: {:?}. Use PyArrow Schema for complex types.",
-            other
+            "Unsupported type in DDL schema: {other:?}. Use PyArrow Schema for complex types.",
         ))
         .into()),
     }

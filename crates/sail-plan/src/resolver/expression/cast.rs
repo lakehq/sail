@@ -2,7 +2,7 @@ use std::ops::{Div, Mul};
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
-use datafusion_common::DFSchemaRef;
+use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::{cast, expr, lit, try_cast, ExprSchemable, ScalarUDF};
 use sail_common::datetime::time_unit_to_multiplier;
 use sail_common::spec;
@@ -16,7 +16,7 @@ use sail_function::scalar::datetime::spark_interval::{
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 
-use crate::error::PlanResult;
+use crate::error::{PlanError, PlanResult};
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
@@ -31,6 +31,19 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        // Extract the DayTimeInterval field unit before resolving to Arrow type,
+        // since it determines the multiplier for numeric-to-interval casts.
+        // Spark uses the end field (or start field for single-field intervals)
+        // to interpret the numeric value: e.g. DayTimeIntervalType(DAY, DAY) treats
+        // the value as days, while DayTimeIntervalType(DAY, SECOND) treats it as seconds.
+        let day_time_interval_field = match &cast_to_type {
+            spec::DataType::Interval {
+                interval_unit: spec::IntervalUnit::DayTime,
+                start_field,
+                end_field,
+            } => end_field.or(*start_field),
+            _ => None,
+        };
         let cast_to_type = self.resolve_data_type(&cast_to_type, state)?;
         let NamedExpr { expr, name, .. } =
             self.resolve_named_expression(expr, schema, state).await?;
@@ -70,10 +83,11 @@ impl PlanResolver<'_> {
             (from, DataType::Timestamp(time_unit, _) | DataType::Duration(time_unit), _)
                 if from.is_numeric() =>
             {
-                cast(
-                    expr.mul(lit(time_unit_to_multiplier(&time_unit))),
-                    cast_to_type,
-                )
+                let multiplier = match (day_time_interval_field, &cast_to_type) {
+                    (Some(field), DataType::Duration(_)) => day_time_field_to_microseconds(field),
+                    _ => time_unit_to_multiplier(&time_unit),
+                };
+                cast(expr.mul(lit(multiplier)), cast_to_type)
             }
             (DataType::Timestamp(time_unit, _) | DataType::Duration(time_unit), to, _)
                 if to.is_numeric() =>
@@ -122,10 +136,28 @@ impl PlanResolver<'_> {
             (_, DataType::Utf8View, _) if override_string_cast => {
                 ScalarUDF::new_from_impl(SparkToUtf8View::new()).call(vec![expr])
             }
+            (DataType::Date32 | DataType::Date64, to, _)
+                if to.is_numeric() || matches!(to, DataType::Boolean) =>
+            {
+                if !is_try && self.config.ansi_mode {
+                    return Err(PlanError::invalid(format!("cannot cast date to {to}")));
+                }
+                lit(ScalarValue::try_from(&to)?)
+            }
             (_, to, true) => try_cast(expr, to),
             (_, to, _) => cast(expr, to),
         };
         Ok(NamedExpr::new(name, expr))
+    }
+}
+
+fn day_time_field_to_microseconds(field: spec::IntervalFieldType) -> i64 {
+    match field {
+        spec::IntervalFieldType::Day => 86_400_000_000,
+        spec::IntervalFieldType::Hour => 3_600_000_000,
+        spec::IntervalFieldType::Minute => 60_000_000,
+        // Second, or Year/Month (shouldn't appear for DayTime intervals)
+        _ => 1_000_000,
     }
 }
 
