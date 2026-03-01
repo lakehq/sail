@@ -6386,6 +6386,7 @@ dependencies = [
  "log",
  "object_store 0.12.5",
  "object_store 0.13.1",
+ "parquet 57.3.0",
  "parquet 58.0.0",
  "percent-encoding",
  "regex",

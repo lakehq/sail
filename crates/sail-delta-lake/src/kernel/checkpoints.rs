@@ -21,7 +21,6 @@
 use std::sync::LazyLock;
 
 use chrono::{TimeZone, Utc};
-use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::engine_data::FilteredEngineData;
@@ -31,8 +30,6 @@ use futures::{StreamExt, TryStreamExt};
 use log::{debug, error};
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt};
-use parquet::arrow::async_writer::ParquetObjectWriter;
-use parquet::arrow::AsyncArrowWriter;
 use regex::Regex;
 use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
 use tokio::sync::oneshot;
@@ -40,6 +37,7 @@ use tokio::task::spawn_blocking;
 use uuid::Uuid;
 
 use crate::kernel::snapshot::stream::RecordBatchReceiverStreamBuilder;
+use crate::kernel::store_compat::ObjectStoreCompat;
 use crate::kernel::{DeltaResult, DeltaTableError};
 use crate::storage::LogStore;
 
@@ -126,12 +124,14 @@ impl<'a> CheckpointManager<'a> {
         let cp_writer = snapshot.checkpoint()?;
         let cp_url = cp_writer.checkpoint_path()?;
         let cp_path = Path::from_url_path(cp_url.path())?;
+        let cp_path012 = object_store_012::path::Path::from(cp_path.as_ref());
 
         // Prepare checkpoint data iterator (sync) in the kernel engine.
         let engine = self.log_store.engine(Some(self.operation_id));
         let mut cp_data = cp_writer.checkpoint_data(engine.as_ref())?;
 
         // Pull the first batch (for schema), but keep the iterator for the producer thread.
+        // `to_rb` returns arrow 58 batches; we convert to arrow 57 before writing with parquet 57.
         let (first_batch, mut cp_data_after_first) = spawn_blocking(move || {
             let Some(first) = cp_data.next() else {
                 return Err(DeltaTableError::generic("No checkpoint data".to_string()));
@@ -141,17 +141,31 @@ impl<'a> CheckpointManager<'a> {
         .await
         .map_err(|e| DeltaTableError::generic(e.to_string()))??;
 
-        let checkpoint_schema: SchemaRef = first_batch.schema();
+        // Arrow 58 schema is used for schema normalization of streamed batches.
+        let checkpoint_schema58 = first_batch.schema();
+
+        // Convert first batch to arrow 57 for writing with parquet 57.
+        // We write using parquet 57 so that delta_kernel (which uses parquet 57 internally)
+        // can read the checkpoint back on subsequent operations.
+        let first_batch57 = crate::kernel::arrow::compat::arrow58_to_arrow57(&first_batch)?;
+        let checkpoint_schema57 = first_batch57.schema();
 
         // Start writer (consumer) immediately.
         let root_store = self.log_store.root_object_store(Some(self.operation_id));
-        let object_store_writer = ParquetObjectWriter::new(root_store.clone(), cp_path.clone());
-        let mut writer =
-            AsyncArrowWriter::try_new(object_store_writer, checkpoint_schema.clone(), None)
-                .map_err(DeltaTableError::generic_err)?;
+        let compat_store = ObjectStoreCompat::new(root_store.clone());
+        let object_store_writer = parquet_57::arrow::async_writer::ParquetObjectWriter::new(
+            compat_store,
+            cp_path012.clone(),
+        );
+        let mut writer = parquet_57::arrow::AsyncArrowWriter::try_new(
+            object_store_writer,
+            checkpoint_schema57.clone(),
+            None,
+        )
+        .map_err(DeltaTableError::generic_err)?;
 
         writer
-            .write(&first_batch)
+            .write(&first_batch57)
             .await
             .map_err(DeltaTableError::generic_err)?;
 
@@ -177,13 +191,16 @@ impl<'a> CheckpointManager<'a> {
         let mut batch_stream = rb_builder.build();
         while let Some(batch) = batch_stream.next().await {
             let batch = batch?;
-            let batch = if batch.schema() != checkpoint_schema {
-                cast_record_batch_relaxed_tz(&batch, &checkpoint_schema)?
+            // Normalize schema within arrow 58 domain.
+            let batch = if batch.schema() != checkpoint_schema58 {
+                cast_record_batch_relaxed_tz(&batch, &checkpoint_schema58)?
             } else {
                 batch
             };
+            // Convert to arrow 57 before writing with parquet 57.
+            let batch57 = crate::kernel::arrow::compat::arrow58_to_arrow57(&batch)?;
             writer
-                .write(&batch)
+                .write(&batch57)
                 .await
                 .map_err(DeltaTableError::generic_err)?;
         }

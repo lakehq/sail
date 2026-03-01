@@ -25,6 +25,9 @@ delta_kernel = { workspace = true }
 # Arrow 57 is needed for compatibility with delta_kernel's internal Arrow types.
 # delta_kernel 0.18.2 uses arrow 57 internally; we use IPC to convert to/from workspace arrow 58.
 arrow_57 = { package = "arrow", version = "57", features = ["ipc"] }
+# parquet 57 is needed so we write checkpoint files in the same format that delta_kernel (parquet 57)
+# can read back. Writing with the workspace parquet 58 produces files that parquet 57 cannot parse.
+parquet_57 = { package = "parquet", version = "57", features = ["async", "object_store"] }
 
 # DataFusion dependencies
 datafusion = { workspace = true }
