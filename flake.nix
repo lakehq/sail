@@ -80,7 +80,22 @@
               echo "   y ejecuta: sudo nixos-rebuild switch"
               echo ""
             fi
-           
+
+              # Auto-update fenix to latest nightly (once per day, like CI)
+              _fenix_date=$(python3 -c "import json,datetime;d=json.load(open('$PWD/flake.lock'));print(datetime.datetime.utcfromtimestamp(d['nodes']['fenix']['locked']['lastModified']).strftime('%Y-%m-%d'))" 2>/dev/null)
+              _today=$(date +%Y-%m-%d)
+              if [ "$_fenix_date" != "$_today" ]; then
+                echo -e "\033[1;33m⛵ Updating fenix toolchain ($_fenix_date → $_today)...\033[0m"
+                if nix flake update fenix 2>&1; then
+                  echo ""
+                  echo -e "\033[1;32m✓ fenix updated. Please restart the shell:\033[0m"
+                  echo -e "\033[1;36m  exit && nix develop\033[0m"
+                  echo ""
+                  return 0 2>/dev/null || exit 0
+                else
+                  echo -e "\033[1;31m⚠ Could not update fenix (no network?). Continuing with current toolchain.\033[0m"
+                fi
+              fi
 
               export RUST_BACKTRACE=1
               export JAVA_HOME=${pkgs.jdk17}/lib/openjdk
