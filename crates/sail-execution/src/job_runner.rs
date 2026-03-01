@@ -254,5 +254,5 @@ fn rewrite_cache_read_partitions(
         ));
         Ok(Transformed::yes(rewritten))
     });
-    Ok(result.data()?)
+    result.data()
 }

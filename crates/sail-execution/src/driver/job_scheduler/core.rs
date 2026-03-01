@@ -461,7 +461,7 @@ impl JobScheduler {
                         .graph
                         .stages()
                         .get(entry.key.stage)
-                        .ok_or_else(|| CachePinError::StageNotFound {
+                        .ok_or(CachePinError::StageNotFound {
                             job_id: entry.key.job_id,
                             stage: entry.key.stage,
                         })?

@@ -12,7 +12,7 @@ use datafusion_common::{internal_err, Result};
 /// Physical execution node for reading cached in-memory data.
 #[derive(Debug, Clone)]
 pub struct InMemoryRelationExec {
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     schema: SchemaRef,
     properties: PlanProperties,
 }

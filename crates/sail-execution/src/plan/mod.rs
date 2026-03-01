@@ -98,7 +98,6 @@ pub(crate) fn inject_cache_write_reporter(
     .map(|t| t.data)
 }
 
-#[allow(clippy::all)]
 pub(crate) mod gen {
     tonic::include_proto!("sail.plan");
 }
