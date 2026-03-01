@@ -14,55 +14,14 @@
         lib = pkgs.lib;
 
         isLinux = pkgs.stdenv.isLinux;
-        isDarwin = pkgs.stdenv.isDarwin;
 
         rustStable = fenix.packages.${system}.stable.toolchain;
         rustNightly = fenix.packages.${system}.latest.toolchain;
 
         py = pkgs.python313;
         pyp = pkgs.python313Packages;
-        py311 = pkgs.python311;
-
-        version = "0.5.0";
 
       in {
-        # ── Package ────────────────────────────────────────────────────
-        packages.default = pkgs.rustPlatform.buildRustPackage {
-          pname = "sail";
-          inherit version;
-          src = lib.cleanSource ./.;
-
-          cargoLock.lockFile = ./Cargo.lock;
-
-          # Only build the CLI binary
-          cargoBuildFlags = [ "-p" "sail-cli" ];
-          cargoTestFlags = [ "-p" "sail-cli" ];
-
-          nativeBuildInputs = [
-            pkgs.protobuf   # protoc – required by tonic-build / prost-build
-            pkgs.pkg-config
-          ];
-
-          buildInputs = [
-            py               # PyO3 links against libpython at build time
-          ];
-
-          # PyO3 configuration
-          env = {
-            PYO3_PYTHON = "${py}/bin/python";
-          };
-
-          # Some proto builds look for protoc via this env var
-          PROTOC = "${pkgs.protobuf}/bin/protoc";
-
-          meta = with lib; {
-            description = "Spark-compatible compute engine built on Apache Arrow and DataFusion";
-            homepage = "https://github.com/lakehq/sail";
-            license = licenses.asl20;
-            mainProgram = "sail";
-          };
-        };
-
         # ── Dev shell ─────────────────────────────────────────────────
         devShells.default = pkgs.mkShell {
           buildInputs =
@@ -105,9 +64,6 @@
               hatch
               uv
 
-              # Native deps
-              arrow-cpp
-              openssl
             ])
             ++ lib.optionals isLinux [
               pkgs.stdenv.cc.cc.lib
@@ -131,9 +87,9 @@
 
               export PYTHONPATH="$PWD/python"
 
-              # Accept `cargo +nightly ...` even without rustup (already on nightly via Nix)
+              # Accept `cargo +<toolchain> ...` even without rustup (toolchains managed by Nix)
               cargo() {
-                if [ "$1" = "+nightly" ]; then
+                if [[ "''${1:-}" == +* ]]; then
                   shift
                 fi
                 command cargo "$@"
@@ -184,8 +140,7 @@
               echo ""
             ''
             + lib.optionalString isLinux ''
-              export ARROW_LIB_DIR=${pkgs.arrow-cpp}/lib
-              export LD_LIBRARY_PATH=${py311}/lib:${py}/lib:${pkgs.stdenv.cc.cc.lib}/lib:${pkgs.arrow-cpp}/lib:${pkgs.openssl}/lib:$LD_LIBRARY_PATH
+              export LD_LIBRARY_PATH=${py}/lib:${pkgs.stdenv.cc.cc.lib}/lib:''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
             '';
         };
       }
