@@ -27,11 +27,11 @@ use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
 use chrono::DateTime;
-use delta_kernel::actions::{Metadata, Protocol};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
 
+use super::{Metadata, Protocol};
 use crate::kernel::statistics::Stats;
 use crate::kernel::{DeltaResult, DeltaTableError};
 

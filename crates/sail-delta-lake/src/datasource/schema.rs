@@ -23,7 +23,6 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef, SchemaRef as ArrowSchemaRef,
 };
-use delta_kernel::engine::arrow_conversion::TryIntoArrow;
 
 use crate::kernel::snapshot::{EagerSnapshot, LogDataHandler, Snapshot};
 use crate::kernel::{DeltaResult, DeltaTableError};
@@ -61,11 +60,11 @@ impl DataFusionMixins for EagerSnapshot {
 
 impl DataFusionMixins for DeltaTableState {
     fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        Ok(Arc::new(self.schema().try_into_arrow()?))
+        arrow_schema_from_struct_type(self.schema(), self.metadata().partition_columns(), true)
     }
 
     fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        self.arrow_schema()
+        arrow_schema_from_struct_type(self.schema(), self.metadata().partition_columns(), false)
     }
 }
 

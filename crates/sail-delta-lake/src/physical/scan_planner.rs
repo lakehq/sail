@@ -8,14 +8,13 @@ use datafusion::datasource::source::DataSourceExec;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::Expr;
 use datafusion::physical_plan::ExecutionPlan;
-use delta_kernel::table_features::ColumnMappingMode;
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
 
 use crate::datasource::scan::{build_file_scan_config, FileScanParams};
 use crate::datasource::{
     df_logical_schema, prune_files, simplify_expr, DataFusionMixins, DeltaScanConfig,
 };
-use crate::kernel::models::Add;
+use crate::kernel::models::{Add, ColumnMappingMode};
 use crate::schema::get_physical_schema;
 use crate::storage::LogStoreRef;
 use crate::table::DeltaTableState;

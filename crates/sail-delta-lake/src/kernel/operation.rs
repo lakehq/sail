@@ -19,11 +19,10 @@
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/protocol/mod.rs>
 use std::collections::HashMap;
 
-use delta_kernel::actions::Protocol;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::kernel::models::{CommitInfo, Metadata};
+use crate::kernel::models::{CommitInfo, Metadata, Protocol};
 use crate::kernel::{DeltaResult, DeltaTableError};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

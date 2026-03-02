@@ -22,12 +22,13 @@
 
 use std::collections::HashSet;
 
-use delta_kernel::table_properties::IsolationLevel;
-use delta_kernel::Error as KernelError;
 use thiserror::Error;
 
 use super::WriteSnapshot;
-use crate::kernel::models::{Action, Add, CommitInfo, Metadata, Protocol, Remove, Transaction};
+use crate::error::KernelError;
+use crate::kernel::models::{
+    Action, Add, CommitInfo, IsolationLevel, Metadata, Protocol, Remove, Transaction,
+};
 use crate::kernel::{DeltaOperation, DeltaResult, TablePropertiesExt};
 use crate::storage::{get_actions, LogStore};
 

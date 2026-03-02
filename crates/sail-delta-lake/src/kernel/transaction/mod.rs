@@ -24,8 +24,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::Utc;
-use delta_kernel::table_features::TableFeature;
-use delta_kernel::table_properties::TableProperties;
 use futures::future::BoxFuture;
 use log::*;
 use object_store::path::Path;
@@ -37,7 +35,9 @@ use uuid::Uuid;
 
 use crate::error::{DeltaError, KernelError};
 use crate::kernel::checkpoints::{cleanup_expired_logs_for, create_checkpoint_for};
-use crate::kernel::models::{Action, Add, Metadata, Protocol, Transaction};
+use crate::kernel::models::{
+    Action, Add, Metadata, Protocol, TableFeature, TableProperties, Transaction,
+};
 use crate::kernel::snapshot::EagerSnapshot;
 use crate::kernel::transaction::conflict_checker::{TransactionInfo, WinningCommitSummary};
 use crate::kernel::{DeltaOperation, DeltaResult, TablePropertiesExt};

@@ -1,9 +1,8 @@
 use datafusion::arrow::array::{ArrayRef, RecordBatch};
 use datafusion::arrow::row::{RowConverter, SortField};
-use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;
 
-use crate::kernel::models::ScalarExt;
+use crate::kernel::models::{Scalar, ScalarExt};
 use crate::kernel::DeltaTableError;
 
 /// A contiguous range of rows that share the same partition values.

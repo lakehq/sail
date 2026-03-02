@@ -26,12 +26,12 @@ use datafusion::arrow::datatypes::Schema;
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::Result;
-use delta_kernel::Error as KernelError;
 use object_store::ObjectStore;
 pub use state::DeltaTableState;
 use url::Url;
 
 use crate::datasource::{DeltaScanConfig, DeltaTableProvider};
+use crate::error::KernelError;
 use crate::kernel::{DeltaResult, DeltaTableConfig, DeltaTableError};
 use crate::logical::table_source::DeltaTableSource;
 use crate::options::TableDeltaOptions;

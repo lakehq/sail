@@ -20,7 +20,7 @@
 use std::num::NonZeroU64;
 use std::time::Duration;
 
-use delta_kernel::table_properties::{IsolationLevel, TableProperties};
+use crate::kernel::models::{IsolationLevel, TableProperties};
 
 /// Convenience helpers for accessing common table properties with sensible defaults.
 pub trait TablePropertiesExt {

@@ -24,7 +24,6 @@ use std::sync::Arc;
 use bytes::Bytes;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
-use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;
 use object_store::path::Path;
 use object_store::ObjectStore;
@@ -38,7 +37,7 @@ use uuid::Uuid;
 use super::async_utils::AsyncShareableBuffer;
 use super::partitioning::partition_ranges;
 use super::stats::create_add;
-use crate::kernel::models::{Add, ScalarExt};
+use crate::kernel::models::{Add, Scalar, ScalarExt};
 use crate::kernel::DeltaTableError;
 
 /// Trait for creating hive partition paths from partition values

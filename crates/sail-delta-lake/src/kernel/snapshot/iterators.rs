@@ -29,12 +29,12 @@ use datafusion::arrow::array::cast::AsArray;
 use datafusion::arrow::array::types::Int64Type;
 use datafusion::arrow::array::{Array, RecordBatch, StructArray};
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, Int32Type};
-use delta_kernel::expressions::{Scalar, StructData};
 use delta_kernel::scan::scan_row_schema;
-use delta_kernel::schema::DataType;
 use percent_encoding::percent_decode_str;
 
-use crate::kernel::models::{Add, DeletionVectorDescriptor, Remove, ScalarExt, StorageType};
+use crate::kernel::models::{
+    Add, DataType, DeletionVectorDescriptor, Remove, Scalar, ScalarExt, StorageType, StructData,
+};
 use crate::kernel::{DeltaResult, DeltaTableError};
 
 const FIELD_NAME_PATH: &str = "path";

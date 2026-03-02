@@ -19,13 +19,15 @@
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/kernel/snapshot/log_data.rs>
 
 use ::datafusion::arrow::array::{Array, RecordBatch, StringArray, StructArray};
-use delta_kernel::actions::Metadata;
 use delta_kernel::scan::scan_row_schema;
 use delta_kernel::table_configuration::TableConfiguration;
 use log::warn;
 
+use crate::kernel::models::{DataType, Metadata, PrimitiveType};
 use crate::kernel::snapshot::iterators::LogicalFileView;
-use crate::kernel::{DeltaResult, DeltaTableError};
+use crate::kernel::{
+    DeltaResult, DeltaTableError, EvaluationHandler, Expression, ExpressionEvaluator,
+};
 
 const COL_NUM_RECORDS: &str = "numRecords";
 const COL_MIN_VALUES: &str = "minValues";
@@ -91,9 +93,6 @@ mod datafusion {
     use ::datafusion::physical_optimizer::pruning::PruningStatistics;
     use ::datafusion::physical_plan::Accumulator;
     use arrow_schema::DataType as ArrowDataType;
-    use delta_kernel::expressions::Expression;
-    use delta_kernel::schema::{DataType, PrimitiveType};
-    use delta_kernel::{EvaluationHandler, ExpressionEvaluator};
 
     use super::*;
     use crate::kernel::arrow::engine_ext::ExpressionEvaluatorExt as _;

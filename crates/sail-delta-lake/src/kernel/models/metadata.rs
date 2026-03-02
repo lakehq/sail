@@ -19,10 +19,9 @@
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/actions.rs>
 use std::collections::HashMap;
 
-use delta_kernel::actions::Metadata;
 use serde_json::json;
 
-use super::StructType;
+use super::{Metadata, StructType};
 use crate::kernel::DeltaResult;
 
 /// Extension trait for working with `Metadata` until kernel exposes mutation APIs.
