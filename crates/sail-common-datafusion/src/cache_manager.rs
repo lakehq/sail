@@ -2,8 +2,8 @@ use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
-use datafusion_common::{internal_err, Result};
 use datafusion::logical_expr::LogicalPlan;
+use datafusion_common::{internal_err, Result};
 
 use crate::extension::SessionExtension;
 

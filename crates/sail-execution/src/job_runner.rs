@@ -87,9 +87,10 @@ impl JobRunner for LocalJobRunner {
         let mut num_partitions_by_cache_id = HashMap::with_capacity(cache_ids.len());
         for entry in cache.get_required_by_ids(&cache_ids)? {
             let num_partitions = if entry.materialized {
-                entry
-                    .num_partitions
-                    .expect("materialized cache entry must have partition count")
+                let Some(num_partitions) = entry.num_partitions else {
+                    unreachable!("materialized cache entry must have partition count")
+                };
+                num_partitions
             } else {
                 let num_partitions = self
                     .materialize_cache(ctx, entry.cache_id, &entry.plan)
@@ -205,9 +206,10 @@ impl JobRunner for ClusterJobRunner {
 
         for entry in cache.get_required_by_ids(&cache_ids)? {
             let num_partitions = if entry.materialized {
-                entry
-                    .num_partitions
-                    .expect("materialized cache entry must have partition count")
+                let Some(num_partitions) = entry.num_partitions else {
+                    unreachable!("materialized cache entry must have partition count")
+                };
+                num_partitions
             } else {
                 let num_partitions = self
                     .materialize_cache(ctx, entry.cache_id, &entry.plan)
