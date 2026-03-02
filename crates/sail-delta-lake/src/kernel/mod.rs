@@ -20,13 +20,9 @@ pub(crate) mod checkpoints;
 mod config;
 mod error;
 mod operation;
-mod table_properties;
 
 pub use config::DeltaTableConfig;
 pub use error::{DeltaResult, DeltaTableError};
-pub use models::{
-    ColumnName, DataSkippingNumIndexedCols, SchemaRef, SchemaTransform, TryIntoArrow, TryIntoKernel,
-};
+pub use models::{ColumnName, DataSkippingNumIndexedCols, SchemaRef};
 pub use operation::{DeltaOperation, MergePredicate, SaveMode};
-pub use table_properties::TablePropertiesExt;
 pub type PredicateRef = std::sync::Arc<()>;

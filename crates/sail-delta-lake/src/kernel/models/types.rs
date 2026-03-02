@@ -10,7 +10,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::iter::{DoubleEndedIterator, FusedIterator};
@@ -551,59 +550,7 @@ impl StructField {
     }
 
     pub fn make_physical(&self, column_mapping_mode: ColumnMappingMode) -> Self {
-        struct MakePhysical {
-            column_mapping_mode: ColumnMappingMode,
-        }
-
-        impl<'a> SchemaTransform<'a> for MakePhysical {
-            fn transform_struct_field(
-                &mut self,
-                field: &'a StructField,
-            ) -> Option<Cow<'a, StructField>> {
-                let field = self.recurse_into_struct_field(field)?;
-
-                let mut metadata = field.metadata().clone();
-                let physical_name_key = ColumnMetadataKey::ColumnMappingPhysicalName.as_ref();
-                let field_id_key = ColumnMetadataKey::ColumnMappingId.as_ref();
-                let parquet_field_id_key = ColumnMetadataKey::ParquetFieldId.as_ref();
-
-                match self.column_mapping_mode {
-                    ColumnMappingMode::Id => {
-                        if let Some(MetadataValue::Number(fid)) = metadata.get(field_id_key) {
-                            metadata.insert(
-                                parquet_field_id_key.to_string(),
-                                MetadataValue::Number(*fid),
-                            );
-                        }
-                    }
-                    ColumnMappingMode::Name => {
-                        metadata.remove(field_id_key);
-                        metadata.remove(parquet_field_id_key);
-                    }
-                    ColumnMappingMode::None => {
-                        metadata.remove(physical_name_key);
-                        metadata.remove(field_id_key);
-                        metadata.remove(parquet_field_id_key);
-                    }
-                }
-
-                let name = match self.column_mapping_mode {
-                    ColumnMappingMode::None => field.name().to_owned(),
-                    ColumnMappingMode::Id | ColumnMappingMode::Name => {
-                        field.physical_name(self.column_mapping_mode).to_owned()
-                    }
-                };
-
-                Some(Cow::Owned(field.with_name(name).with_metadata(metadata)))
-            }
-        }
-
-        MakePhysical {
-            column_mapping_mode,
-        }
-        .transform_struct_field(self)
-        .map(Cow::into_owned)
-        .unwrap_or_else(|| self.clone())
+        make_physical_field(self, column_mapping_mode)
     }
 }
 
@@ -614,6 +561,50 @@ impl Display for StructField {
             "{}: {} (is nullable: {})",
             self.name, self.data_type, self.nullable
         )
+    }
+}
+
+fn make_physical_field(field: &StructField, column_mapping_mode: ColumnMappingMode) -> StructField {
+    let data_type = match &field.data_type {
+        DataType::Struct(inner) => DataType::from(inner.make_physical(column_mapping_mode)),
+        other => other.clone(),
+    };
+
+    let mut metadata = field.metadata().clone();
+    let physical_name_key = ColumnMetadataKey::ColumnMappingPhysicalName.as_ref();
+    let field_id_key = ColumnMetadataKey::ColumnMappingId.as_ref();
+    let parquet_field_id_key = ColumnMetadataKey::ParquetFieldId.as_ref();
+
+    match column_mapping_mode {
+        ColumnMappingMode::Id => {
+            if let Some(MetadataValue::Number(fid)) = metadata.get(field_id_key) {
+                let fid = *fid;
+                metadata.insert(parquet_field_id_key.to_string(), MetadataValue::Number(fid));
+            }
+        }
+        ColumnMappingMode::Name => {
+            metadata.remove(field_id_key);
+            metadata.remove(parquet_field_id_key);
+        }
+        ColumnMappingMode::None => {
+            metadata.remove(physical_name_key);
+            metadata.remove(field_id_key);
+            metadata.remove(parquet_field_id_key);
+        }
+    }
+
+    let name = match column_mapping_mode {
+        ColumnMappingMode::None => field.name().to_owned(),
+        ColumnMappingMode::Id | ColumnMappingMode::Name => {
+            field.physical_name(column_mapping_mode).to_owned()
+        }
+    };
+
+    StructField {
+        name,
+        data_type,
+        nullable: field.nullable,
+        metadata,
     }
 }
 
@@ -952,149 +943,6 @@ impl From<SchemaRef> for DataType {
     }
 }
 
-pub trait SchemaTransform<'a> {
-    fn transform_primitive(&mut self, ptype: &'a PrimitiveType) -> Option<Cow<'a, PrimitiveType>> {
-        Some(Cow::Borrowed(ptype))
-    }
-
-    fn transform_struct(&mut self, stype: &'a StructType) -> Option<Cow<'a, StructType>> {
-        self.recurse_into_struct(stype)
-    }
-
-    fn transform_struct_field(&mut self, field: &'a StructField) -> Option<Cow<'a, StructField>> {
-        self.recurse_into_struct_field(field)
-    }
-
-    fn transform_array(&mut self, atype: &'a ArrayType) -> Option<Cow<'a, ArrayType>> {
-        self.recurse_into_array(atype)
-    }
-
-    fn transform_array_element(&mut self, etype: &'a DataType) -> Option<Cow<'a, DataType>> {
-        self.transform(etype)
-    }
-
-    fn transform_map(&mut self, mtype: &'a MapType) -> Option<Cow<'a, MapType>> {
-        self.recurse_into_map(mtype)
-    }
-
-    fn transform_map_key(&mut self, etype: &'a DataType) -> Option<Cow<'a, DataType>> {
-        self.transform(etype)
-    }
-
-    fn transform_map_value(&mut self, etype: &'a DataType) -> Option<Cow<'a, DataType>> {
-        self.transform(etype)
-    }
-
-    fn transform_variant(&mut self, stype: &'a StructType) -> Option<Cow<'a, StructType>> {
-        self.recurse_into_struct(stype)
-    }
-
-    fn transform(&mut self, data_type: &'a DataType) -> Option<Cow<'a, DataType>> {
-        let result = match data_type {
-            DataType::Primitive(ptype) => self
-                .transform_primitive(ptype)?
-                .map_owned_or_else(data_type, DataType::from),
-            DataType::Array(atype) => self
-                .transform_array(atype)?
-                .map_owned_or_else(data_type, DataType::from),
-            DataType::Struct(stype) => self
-                .transform_struct(stype)?
-                .map_owned_or_else(data_type, DataType::from),
-            DataType::Map(mtype) => self
-                .transform_map(mtype)?
-                .map_owned_or_else(data_type, DataType::from),
-            DataType::Variant(stype) => self
-                .transform_variant(stype)?
-                .map_owned_or_else(data_type, |s| DataType::Variant(Box::new(s))),
-        };
-        Some(result)
-    }
-
-    fn recurse_into_struct_field(
-        &mut self,
-        field: &'a StructField,
-    ) -> Option<Cow<'a, StructField>> {
-        let result = self.transform(&field.data_type)?;
-        let f = |new_data_type| StructField {
-            name: field.name.clone(),
-            data_type: new_data_type,
-            nullable: field.nullable,
-            metadata: field.metadata.clone(),
-        };
-        Some(result.map_owned_or_else(field, f))
-    }
-
-    fn recurse_into_struct(&mut self, stype: &'a StructType) -> Option<Cow<'a, StructType>> {
-        use Cow::*;
-        let mut num_borrowed = 0;
-        let fields: Vec<_> = stype
-            .fields()
-            .filter_map(|field| self.transform_struct_field(field))
-            .inspect(|field| {
-                if let Borrowed(_) = field {
-                    num_borrowed += 1;
-                }
-            })
-            .collect();
-
-        if fields.is_empty() {
-            None
-        } else if num_borrowed < stype.fields.len() {
-            Some(Owned(StructType::new_unchecked(
-                fields.into_iter().map(Cow::into_owned),
-            )))
-        } else {
-            Some(Borrowed(stype))
-        }
-    }
-
-    fn recurse_into_array(&mut self, atype: &'a ArrayType) -> Option<Cow<'a, ArrayType>> {
-        let result = self.transform_array_element(&atype.element_type)?;
-        let f = |element_type| ArrayType {
-            type_name: atype.type_name.clone(),
-            element_type,
-            contains_null: atype.contains_null,
-        };
-        Some(result.map_owned_or_else(atype, f))
-    }
-
-    fn recurse_into_map(&mut self, mtype: &'a MapType) -> Option<Cow<'a, MapType>> {
-        let key_type = self.transform_map_key(&mtype.key_type)?;
-        let value_type = self.transform_map_value(&mtype.value_type)?;
-        if matches!(key_type, Cow::Borrowed(_)) && matches!(value_type, Cow::Borrowed(_)) {
-            Some(Cow::Borrowed(mtype))
-        } else {
-            Some(Cow::Owned(MapType {
-                type_name: mtype.type_name.clone(),
-                key_type: key_type.into_owned(),
-                value_type: value_type.into_owned(),
-                value_contains_null: mtype.value_contains_null,
-            }))
-        }
-    }
-}
-
-trait CowExt<'a, B: ?Sized + ToOwned> {
-    fn map_owned_or_else<C: ToOwned<Owned = C>>(
-        self,
-        borrowed: &'a C,
-        map: impl FnOnce(B::Owned) -> C::Owned,
-    ) -> Cow<'a, C>;
-}
-
-impl<'a, B: ?Sized + ToOwned> CowExt<'a, B> for Cow<'a, B> {
-    fn map_owned_or_else<C: ToOwned<Owned = C>>(
-        self,
-        borrowed: &'a C,
-        map: impl FnOnce(B::Owned) -> C::Owned,
-    ) -> Cow<'a, C> {
-        match self {
-            Cow::Borrowed(_) => Cow::Borrowed(borrowed),
-            Cow::Owned(owned) => Cow::Owned(map(owned)),
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Format {
@@ -1171,6 +1019,52 @@ impl Metadata {
 
     pub fn partition_columns(&self) -> &Vec<String> {
         &self.partition_columns
+    }
+
+    pub fn with_table_id(self, table_id: String) -> Metadata {
+        Metadata {
+            id: table_id,
+            ..self
+        }
+    }
+
+    pub fn with_name(self, name: String) -> Metadata {
+        Metadata {
+            name: Some(name),
+            ..self
+        }
+    }
+
+    pub fn with_description(self, description: String) -> Metadata {
+        Metadata {
+            description: Some(description),
+            ..self
+        }
+    }
+
+    pub fn with_schema(self, schema: &StructType) -> DeltaResult<Metadata> {
+        Ok(Metadata {
+            schema_string: serde_json::to_string(schema)?,
+            ..self
+        })
+    }
+
+    pub fn add_config_key(self, key: String, value: String) -> Metadata {
+        let mut configuration = self.configuration;
+        configuration.insert(key, value);
+        Metadata {
+            configuration,
+            ..self
+        }
+    }
+
+    pub fn remove_config_key(self, key: &str) -> Metadata {
+        let mut configuration = self.configuration;
+        configuration.remove(key);
+        Metadata {
+            configuration,
+            ..self
+        }
     }
 }
 
@@ -1304,6 +1198,40 @@ where
         });
         props.unknown_properties = unparsed.map(|(k, v)| (k.into(), v.into())).collect();
         props
+    }
+}
+
+const DEFAULT_LOG_RETENTION_SECS: u64 = 30 * 24 * 60 * 60;
+const DEFAULT_DELETED_FILE_RETENTION_SECS: u64 = 7 * 24 * 60 * 60;
+const DEFAULT_CHECKPOINT_INTERVAL: NonZeroU64 =
+    NonZeroU64::new(100).expect("non-zero checkpoint interval");
+
+impl TableProperties {
+    pub fn append_only(&self) -> bool {
+        self.append_only.unwrap_or(false)
+    }
+
+    pub fn log_retention_duration(&self) -> Duration {
+        self.log_retention_duration
+            .unwrap_or(Duration::from_secs(DEFAULT_LOG_RETENTION_SECS))
+    }
+
+    pub fn enable_expired_log_cleanup(&self) -> bool {
+        self.enable_expired_log_cleanup.unwrap_or(true)
+    }
+
+    pub fn checkpoint_interval(&self) -> NonZeroU64 {
+        self.checkpoint_interval
+            .unwrap_or(DEFAULT_CHECKPOINT_INTERVAL)
+    }
+
+    pub fn deleted_file_retention_duration(&self) -> Duration {
+        self.deleted_file_retention_duration
+            .unwrap_or(Duration::from_secs(DEFAULT_DELETED_FILE_RETENTION_SECS))
+    }
+
+    pub fn isolation_level(&self) -> IsolationLevel {
+        self.isolation_level.unwrap_or_default()
     }
 }
 
@@ -1700,49 +1628,17 @@ impl PartialOrd for Scalar {
     }
 }
 
-pub trait TryIntoArrow<ArrowType> {
-    fn try_into_arrow(self) -> Result<ArrowType, ArrowError>;
-}
-
-pub trait TryFromArrow<ArrowType>: Sized {
-    fn try_from_arrow(t: ArrowType) -> Result<Self, ArrowError>;
-}
-
-pub trait TryIntoKernel<KernelType> {
-    fn try_into_kernel(self) -> Result<KernelType, ArrowError>;
-}
-
-pub trait TryFromKernel<KernelType>: Sized {
-    fn try_from_kernel(t: KernelType) -> Result<Self, ArrowError>;
-}
-
-impl<KernelType, ArrowType> TryIntoArrow<ArrowType> for KernelType
-where
-    ArrowType: TryFromKernel<KernelType>,
-{
-    fn try_into_arrow(self) -> Result<ArrowType, ArrowError> {
-        ArrowType::try_from_kernel(self)
-    }
-}
-
-impl<KernelType, ArrowType> TryIntoKernel<KernelType> for ArrowType
-where
-    KernelType: TryFromArrow<ArrowType>,
-{
-    fn try_into_kernel(self) -> Result<KernelType, ArrowError> {
-        KernelType::try_from_arrow(self)
-    }
-}
-
-impl TryFromKernel<&StructType> for ArrowSchema {
-    fn try_from_kernel(s: &StructType) -> Result<Self, ArrowError> {
-        let fields: Vec<ArrowField> = s.fields().map(|f| f.try_into_arrow()).try_collect()?;
+impl TryFrom<&StructType> for ArrowSchema {
+    type Error = ArrowError;
+    fn try_from(s: &StructType) -> Result<Self, ArrowError> {
+        let fields: Vec<ArrowField> = s.fields().map(ArrowField::try_from).try_collect()?;
         Ok(Self::new(fields))
     }
 }
 
-impl TryFromKernel<&StructField> for ArrowField {
-    fn try_from_kernel(f: &StructField) -> Result<Self, ArrowError> {
+impl TryFrom<&StructField> for ArrowField {
+    type Error = ArrowError;
+    fn try_from(f: &StructField) -> Result<Self, ArrowError> {
         let metadata = f
             .metadata()
             .iter()
@@ -1753,33 +1649,37 @@ impl TryFromKernel<&StructField> for ArrowField {
             .collect::<Result<HashMap<_, _>, serde_json::Error>>()
             .map_err(|err| ArrowError::JsonError(err.to_string()))?;
 
-        Ok(
-            ArrowField::new(f.name(), f.data_type().try_into_arrow()?, f.is_nullable())
-                .with_metadata(metadata),
+        Ok(ArrowField::new(
+            f.name(),
+            ArrowDataType::try_from(f.data_type())?,
+            f.is_nullable(),
         )
+        .with_metadata(metadata))
     }
 }
 
-impl TryFromKernel<&ArrayType> for ArrowField {
-    fn try_from_kernel(a: &ArrayType) -> Result<Self, ArrowError> {
+impl TryFrom<&ArrayType> for ArrowField {
+    type Error = ArrowError;
+    fn try_from(a: &ArrayType) -> Result<Self, ArrowError> {
         Ok(ArrowField::new(
             "element",
-            a.element_type().try_into_arrow()?,
+            ArrowDataType::try_from(a.element_type())?,
             a.contains_null(),
         ))
     }
 }
 
-impl TryFromKernel<&MapType> for ArrowField {
-    fn try_from_kernel(m: &MapType) -> Result<Self, ArrowError> {
+impl TryFrom<&MapType> for ArrowField {
+    type Error = ArrowError;
+    fn try_from(m: &MapType) -> Result<Self, ArrowError> {
         Ok(ArrowField::new(
             "key_value",
             ArrowDataType::Struct(
                 vec![
-                    ArrowField::new("key", m.key_type().try_into_arrow()?, false),
+                    ArrowField::new("key", ArrowDataType::try_from(m.key_type())?, false),
                     ArrowField::new(
                         "value",
-                        m.value_type().try_into_arrow()?,
+                        ArrowDataType::try_from(m.value_type())?,
                         m.value_contains_null(),
                     ),
                 ]
@@ -1790,8 +1690,9 @@ impl TryFromKernel<&MapType> for ArrowField {
     }
 }
 
-impl TryFromKernel<&DataType> for ArrowDataType {
-    fn try_from_kernel(t: &DataType) -> Result<Self, ArrowError> {
+impl TryFrom<&DataType> for ArrowDataType {
+    type Error = ArrowError;
+    fn try_from(t: &DataType) -> Result<Self, ArrowError> {
         match t {
             DataType::Primitive(p) => match p {
                 PrimitiveType::String => Ok(Self::Utf8),
@@ -1814,17 +1715,20 @@ impl TryFromKernel<&DataType> for ArrowDataType {
             },
             DataType::Struct(s) => Ok(Self::Struct(
                 s.fields()
-                    .map(TryIntoArrow::try_into_arrow)
+                    .map(ArrowField::try_from)
                     .collect::<Result<Vec<ArrowField>, ArrowError>>()?
                     .into(),
             )),
-            DataType::Array(a) => Ok(Self::List(Arc::new(a.as_ref().try_into_arrow()?))),
-            DataType::Map(m) => Ok(Self::Map(Arc::new(m.as_ref().try_into_arrow()?), false)),
+            DataType::Array(a) => Ok(Self::List(Arc::new(ArrowField::try_from(a.as_ref())?))),
+            DataType::Map(m) => Ok(Self::Map(
+                Arc::new(ArrowField::try_from(m.as_ref())?),
+                false,
+            )),
             DataType::Variant(s) => {
                 if *t == DataType::unshredded_variant() {
                     Ok(Self::Struct(
                         s.fields()
-                            .map(TryIntoArrow::try_into_arrow)
+                            .map(ArrowField::try_from)
                             .collect::<Result<Vec<ArrowField>, ArrowError>>()?
                             .into(),
                     ))
@@ -1839,29 +1743,32 @@ impl TryFromKernel<&DataType> for ArrowDataType {
     }
 }
 
-impl TryFromArrow<&ArrowSchema> for StructType {
-    fn try_from_arrow(arrow_schema: &ArrowSchema) -> Result<Self, ArrowError> {
+impl TryFrom<&ArrowSchema> for StructType {
+    type Error = ArrowError;
+    fn try_from(arrow_schema: &ArrowSchema) -> Result<Self, ArrowError> {
         StructType::try_from_results(
             arrow_schema
                 .fields()
                 .iter()
-                .map(|field| field.as_ref().try_into_kernel()),
+                .map(|field| StructField::try_from(field.as_ref())),
         )
         .map_err(|e| ArrowError::from_external_error(Box::new(e)))
     }
 }
 
-impl TryFromArrow<ArrowSchemaRef> for StructType {
-    fn try_from_arrow(arrow_schema: ArrowSchemaRef) -> Result<Self, ArrowError> {
-        arrow_schema.as_ref().try_into_kernel()
+impl TryFrom<ArrowSchemaRef> for StructType {
+    type Error = ArrowError;
+    fn try_from(arrow_schema: ArrowSchemaRef) -> Result<Self, ArrowError> {
+        StructType::try_from(arrow_schema.as_ref())
     }
 }
 
-impl TryFromArrow<&ArrowField> for StructField {
-    fn try_from_arrow(arrow_field: &ArrowField) -> Result<Self, ArrowError> {
+impl TryFrom<&ArrowField> for StructField {
+    type Error = ArrowError;
+    fn try_from(arrow_field: &ArrowField) -> Result<Self, ArrowError> {
         Ok(StructField::new(
             arrow_field.name().clone(),
-            DataType::try_from_arrow(arrow_field.data_type())?,
+            DataType::try_from(arrow_field.data_type())?,
             arrow_field.is_nullable(),
         )
         .with_metadata(
@@ -1886,8 +1793,9 @@ fn parse_metadata_value(v: &str) -> MetadataValue {
     }
 }
 
-impl TryFromArrow<&ArrowDataType> for DataType {
-    fn try_from_arrow(arrow_datatype: &ArrowDataType) -> Result<Self, ArrowError> {
+impl TryFrom<&ArrowDataType> for DataType {
+    type Error = ArrowError;
+    fn try_from(arrow_datatype: &ArrowDataType) -> Result<Self, ArrowError> {
         match arrow_datatype {
             ArrowDataType::Utf8 | ArrowDataType::LargeUtf8 | ArrowDataType::Utf8View => {
                 Ok(DataType::STRING)
@@ -1920,7 +1828,9 @@ impl TryFromArrow<&ArrowDataType> for DataType {
                 Ok(DataType::TIMESTAMP)
             }
             ArrowDataType::Struct(fields) => DataType::try_struct_type_from_results(
-                fields.iter().map(|field| field.as_ref().try_into_kernel()),
+                fields
+                    .iter()
+                    .map(|field| StructField::try_from(field.as_ref())),
             )
             .map_err(|e| ArrowError::from_external_error(Box::new(e))),
             ArrowDataType::List(field)
@@ -1928,14 +1838,14 @@ impl TryFromArrow<&ArrowDataType> for DataType {
             | ArrowDataType::LargeList(field)
             | ArrowDataType::LargeListView(field)
             | ArrowDataType::FixedSizeList(field, _) => Ok(ArrayType::new(
-                field.data_type().try_into_kernel()?,
+                DataType::try_from(field.data_type())?,
                 field.is_nullable(),
             )
             .into()),
             ArrowDataType::Map(field, _) => {
                 if let ArrowDataType::Struct(struct_fields) = field.data_type() {
-                    let key_type = DataType::try_from_arrow(struct_fields[0].data_type())?;
-                    let value_type = DataType::try_from_arrow(struct_fields[1].data_type())?;
+                    let key_type = DataType::try_from(struct_fields[0].data_type())?;
+                    let value_type = DataType::try_from(struct_fields[1].data_type())?;
                     Ok(MapType::new(key_type, value_type, struct_fields[1].is_nullable()).into())
                 } else {
                     Err(ArrowError::SchemaError(
@@ -1944,7 +1854,7 @@ impl TryFromArrow<&ArrowDataType> for DataType {
                 }
             }
             ArrowDataType::Dictionary(_, value_type) => {
-                Ok(value_type.as_ref().try_into_kernel()?)
+                Ok(DataType::try_from(value_type.as_ref())?)
             }
             unsupported => Err(ArrowError::SchemaError(format!(
                 "Invalid data type for Delta Lake: {unsupported}"

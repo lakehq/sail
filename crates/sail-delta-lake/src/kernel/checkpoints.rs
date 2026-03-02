@@ -906,7 +906,7 @@ pub(crate) async fn latest_replayable_version(log_store: &dyn LogStore) -> Delta
         })
         .max();
 
-    latest.ok_or(crate::error::KernelError::MissingVersion.into())
+    latest.ok_or(crate::error::DeltaError::MissingVersion)
 }
 
 /// Delete expired Delta log files up to a safe checkpoint boundary.

@@ -36,7 +36,7 @@ use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use serde_json::Value;
 
 use crate::kernel::models::{DataType, PrimitiveType, Scalar, StructData, StructField};
-use crate::kernel::{DeltaResult as DeltaResultLocal, DeltaTableError, TryIntoKernel as _};
+use crate::kernel::{DeltaResult as DeltaResultLocal, DeltaTableError};
 
 pub const NULL_PARTITION_VALUE_DATA_PATH: &str = "__HIVE_DEFAULT_PARTITION__";
 
@@ -270,7 +270,7 @@ impl ScalarExt for Scalar {
             return None;
         }
         if arr.is_null(index) {
-            return Some(Self::Null(arr.data_type().try_into_kernel().ok()?));
+            return Some(Self::Null(DataType::try_from(arr.data_type()).ok()?));
         }
 
         ScalarValue::try_from_array(arr, index)
@@ -431,7 +431,7 @@ fn struct_data_from_array(struct_array: &array::StructArray) -> Option<StructDat
     let mut values = Vec::with_capacity(columns.len());
 
     for (field, column) in fields.iter().zip(columns.iter()) {
-        let kernel_field = field.as_ref().try_into_kernel().ok()?;
+        let kernel_field = StructField::try_from(field.as_ref()).ok()?;
         let value = Scalar::from_array(column.as_ref(), 0)?;
         struct_fields.push(kernel_field);
         values.push(value);

@@ -41,9 +41,7 @@ use crate::kernel::models::{
 };
 use crate::kernel::snapshot::iterators::LogicalFileView;
 pub use crate::kernel::snapshot::log_data::LogDataHandler;
-use crate::kernel::{
-    DeltaResult, DeltaTableConfig, DeltaTableError, PredicateRef, SchemaRef, TryIntoArrow,
-};
+use crate::kernel::{DeltaResult, DeltaTableConfig, DeltaTableError, PredicateRef, SchemaRef};
 use crate::storage::LogStore;
 
 pub mod iterators;
@@ -99,7 +97,6 @@ impl SnapshotTableConfiguration {
 pub struct Snapshot {
     version: i64,
     config: DeltaTableConfig,
-    schema: SchemaRef,
     table_url: Url,
     table_configuration: SnapshotTableConfiguration,
     active_adds: Vec<Add>,
@@ -119,9 +116,7 @@ impl Snapshot {
             Some(v) => v,
             None => match latest_replayable_version(log_store).await {
                 Ok(v) => v,
-                Err(crate::error::DeltaError::Kernel(
-                    crate::error::KernelError::MissingVersion,
-                )) => {
+                Err(crate::error::DeltaError::MissingVersion) => {
                     return Err(DeltaTableError::invalid_table_location(
                         "No commit files found in _delta_log",
                     ))
@@ -131,16 +126,12 @@ impl Snapshot {
         };
         let replayed = load_replayed_table_state(target_version, log_store).await?;
         let schema = Arc::new(replayed.metadata.parse_schema()?);
-        let table_configuration = SnapshotTableConfiguration::new(
-            replayed.metadata,
-            replayed.protocol,
-            Arc::clone(&schema),
-        );
+        let table_configuration =
+            SnapshotTableConfiguration::new(replayed.metadata, replayed.protocol, schema);
 
         Ok(Self {
             version: replayed.version,
             config,
-            schema,
             table_url: log_store.config().location.clone(),
             table_configuration,
             active_adds: replayed.adds,
@@ -180,7 +171,7 @@ impl Snapshot {
 
     /// Get the table schema of the snapshot.
     pub fn schema(&self) -> &StructType {
-        self.schema.as_ref()
+        self.table_configuration.schema().as_ref()
     }
 
     /// Get the table metadata of the snapshot.
@@ -608,7 +599,7 @@ fn parse_scan_row_columns(raw: RecordBatch, snapshot: &Snapshot) -> DeltaResult<
     if let Some((stats_idx, _)) = raw.schema_ref().column_with_name("stats") {
         let stats_source = build_stats_source_schema(snapshot)?;
         let stats_schema = Arc::new(stats_schema(&stats_source, snapshot.table_properties())?);
-        let arrow_stats_schema = Arc::new(stats_schema.as_ref().try_into_arrow()?);
+        let arrow_stats_schema = Arc::new(ArrowSchema::try_from(stats_schema.as_ref())?);
         let stats_batch = raw.project(&[stats_idx])?;
         let stats_json = stats_batch
             .column(0)

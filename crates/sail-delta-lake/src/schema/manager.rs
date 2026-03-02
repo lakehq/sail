@@ -19,7 +19,7 @@ use super::mapping::{
     annotate_new_fields_for_column_mapping, annotate_schema_for_column_mapping,
     compute_max_column_id,
 };
-use crate::kernel::models::{ColumnMappingMode, Metadata, MetadataExt, Protocol, StructType};
+use crate::kernel::models::{ColumnMappingMode, Metadata, Protocol, StructType};
 use crate::kernel::DeltaResult;
 
 /// Annotate a kernel schema for column mapping (assign ids + physical names).
@@ -48,7 +48,7 @@ pub fn evolve_schema(
         let meta_with_max = meta_with_schema.add_config_key(
             "delta.columnMapping.maxColumnId".to_string(),
             last_id.to_string(),
-        )?;
+        );
         (annotated, meta_with_max)
     } else {
         let meta = metadata.clone().with_schema(candidate)?;

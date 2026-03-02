@@ -25,11 +25,11 @@ use std::collections::HashSet;
 use thiserror::Error;
 
 use super::WriteSnapshot;
-use crate::error::KernelError;
+use crate::error::DeltaError;
 use crate::kernel::models::{
     Action, Add, CommitInfo, IsolationLevel, Metadata, Protocol, Remove, Transaction,
 };
-use crate::kernel::{DeltaOperation, DeltaResult, TablePropertiesExt};
+use crate::kernel::{DeltaOperation, DeltaResult};
 use crate::storage::{get_actions, LogStore};
 
 /// Exceptions raised during commit conflict resolution.
@@ -208,7 +208,7 @@ impl WinningCommitSummary {
                     commit_info,
                 })
             }
-            None => Err(KernelError::MissingVersion.into()),
+            None => Err(DeltaError::MissingVersion),
         }
     }
 

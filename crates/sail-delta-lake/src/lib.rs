@@ -32,7 +32,7 @@ use sail_physical_plan::{register_format_type, FormatTag};
 pub use table::{create_delta_provider, create_delta_source};
 pub use table_format::DeltaTableFormat;
 
-pub use crate::error::{DeltaError, DeltaError as DeltaTableError, DeltaResult, KernelError};
+pub use crate::error::{DeltaError, DeltaError as DeltaTableError, DeltaResult};
 
 static INIT: Once = Once::new();
 

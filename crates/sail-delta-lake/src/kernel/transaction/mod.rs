@@ -33,14 +33,14 @@ use serde_json::Value;
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::error::{DeltaError, KernelError};
+use crate::error::DeltaError;
 use crate::kernel::checkpoints::{cleanup_expired_logs_for, create_checkpoint_for};
 use crate::kernel::models::{
     Action, Add, Metadata, Protocol, TableFeature, TableProperties, Transaction,
 };
 use crate::kernel::snapshot::EagerSnapshot;
 use crate::kernel::transaction::conflict_checker::{TransactionInfo, WinningCommitSummary};
-use crate::kernel::{DeltaOperation, DeltaResult, TablePropertiesExt};
+use crate::kernel::{DeltaOperation, DeltaResult};
 use crate::storage::{CommitOrBytes, LogStore, LogStoreRef, ObjectStoreRef};
 use crate::table::DeltaTableState;
 
@@ -724,7 +724,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                 let latest_version = match this.log_store.get_latest_version(snapshot_version).await
                 {
                     Ok(v) => Some(v),
-                    Err(DeltaError::Kernel(KernelError::MissingVersion)) => None,
+                    Err(DeltaError::MissingVersion) => None,
                     Err(err) => return Err(err),
                 };
 

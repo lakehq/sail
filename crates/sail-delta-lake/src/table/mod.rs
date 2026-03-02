@@ -31,7 +31,7 @@ pub use state::DeltaTableState;
 use url::Url;
 
 use crate::datasource::{DeltaScanConfig, DeltaTableProvider};
-use crate::error::KernelError;
+use crate::error::DeltaError;
 use crate::kernel::{DeltaResult, DeltaTableConfig, DeltaTableError};
 use crate::logical::table_source::DeltaTableSource;
 use crate::options::TableDeltaOptions;
@@ -309,7 +309,7 @@ async fn load_table_by_options(table: &mut DeltaTable, options: &TableDeltaOptio
         let target_version = find_version_for_timestamp(table, datetime)
             .await
             .map_err(|e| {
-                if matches!(e, DeltaTableError::Kernel(KernelError::MissingVersion)) {
+                if matches!(e, DeltaTableError::MissingVersion) {
                     DeltaTableError::generic(format!(
                         "No version of the Delta table exists at or before timestamp {}",
                         timestamp_str
@@ -362,7 +362,7 @@ async fn find_version_for_timestamp(
 
     if target_version == -1 {
         // If no version was found, it means the provided timestamp is before the first commit.
-        Err(KernelError::MissingVersion.into())
+        Err(DeltaError::MissingVersion)
     } else {
         Ok(target_version)
     }

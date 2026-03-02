@@ -11,21 +11,18 @@
 // limitations under the License.
 
 mod actions;
-mod metadata;
 mod types;
 
 pub use actions::{
     Action, Add, CommitInfo, DeletionVectorDescriptor, Remove, RemoveOptions, StorageType,
     Transaction,
 };
-pub use metadata::MetadataExt;
 #[allow(unused_imports)]
 pub use types::{
     ArrayData, ArrayType, ColumnMappingMode, ColumnMetadataKey, ColumnName,
     DataSkippingNumIndexedCols, DataType, DecimalData, DecimalType, IsolationLevel, MapData,
     MapType, Metadata, MetadataValue, PrimitiveType, Protocol, Scalar, Schema, SchemaRef,
-    SchemaTransform, StructData, StructField, StructType, TableFeature, TableProperties,
-    TryFromArrow, TryFromKernel, TryIntoArrow, TryIntoKernel,
+    StructData, StructField, StructType, TableFeature, TableProperties,
 };
 
 pub use super::statistics::{ColumnCountStat, ColumnValueStat, Stats};

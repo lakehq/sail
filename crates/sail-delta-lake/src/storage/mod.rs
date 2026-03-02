@@ -34,7 +34,7 @@ use serde_json::Deserializer as JsonDeserializer;
 use url::Url;
 use uuid::Uuid;
 
-use crate::error::KernelError;
+use crate::error::DeltaError;
 use crate::kernel::models::Action;
 use crate::kernel::transaction::TransactionError;
 use crate::kernel::{DeltaResult, DeltaTableError};
@@ -264,7 +264,7 @@ impl LogStore for DefaultLogStore {
         let latest = latest_version_from_listing(self.object_store(None)).await?;
         match latest {
             Some(version) if version >= start => Ok(version),
-            Some(_) | None => Err(KernelError::MissingVersion.into()),
+            Some(_) | None => Err(DeltaError::MissingVersion),
         }
     }
 

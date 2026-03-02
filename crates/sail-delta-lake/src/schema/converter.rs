@@ -8,16 +8,14 @@ use datafusion::arrow::datatypes::{
 use crate::kernel::models::{
     ColumnMappingMode, ColumnMetadataKey, DataType, MetadataValue, StructField, StructType,
 };
-use crate::kernel::{DeltaResult, DeltaTableError, TryIntoArrow, TryIntoKernel};
+use crate::kernel::{DeltaResult, DeltaTableError};
 
 pub fn logical_arrow_to_kernel(arrow: &ArrowSchema) -> DeltaResult<StructType> {
-    Ok(arrow.try_into_kernel()?)
+    Ok(StructType::try_from(arrow)?)
 }
 
 pub fn kernel_to_logical_arrow(schema: &StructType) -> ArrowSchema {
-    schema
-        .try_into_arrow()
-        .unwrap_or_else(|_| ArrowSchema::empty())
+    ArrowSchema::try_from(schema).unwrap_or_else(|_| ArrowSchema::empty())
 }
 
 pub fn arrow_schema_from_struct_type(
@@ -48,9 +46,8 @@ pub fn arrow_schema_from_struct_type(
 
 pub fn get_physical_arrow_schema(logical: &StructType, mode: ColumnMappingMode) -> ArrowSchema {
     let physical_kernel = logical.make_physical(mode);
-    let physical_arrow: ArrowSchema = (&physical_kernel)
-        .try_into_arrow()
-        .unwrap_or_else(|_| ArrowSchema::empty());
+    let physical_arrow: ArrowSchema =
+        ArrowSchema::try_from(&physical_kernel).unwrap_or_else(|_| ArrowSchema::empty());
     match mode {
         ColumnMappingMode::Name | ColumnMappingMode::Id => {
             enrich_arrow_with_parquet_field_ids(&physical_arrow, logical)
@@ -60,7 +57,7 @@ pub fn get_physical_arrow_schema(logical: &StructType, mode: ColumnMappingMode) 
 }
 
 fn field_from_struct_field(field: &StructField) -> Result<Field, DeltaTableError> {
-    let arrow_field: Field = field.try_into_arrow()?;
+    let arrow_field: Field = Field::try_from(field)?;
     let field_type = arrow_field.data_type().clone();
     Ok(Field::new(
         field.name().to_string(),

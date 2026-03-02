@@ -22,7 +22,7 @@ use crate::physical_plan::planner::{
     plan_delete, plan_merge, DeltaPhysicalPlanner, DeltaTableConfig, PlannerContext,
 };
 use crate::table::open_table_with_object_store;
-use crate::{create_delta_provider, create_delta_source, DeltaTableError, KernelError};
+use crate::{create_delta_provider, create_delta_source, DeltaTableError};
 
 /// Delta Lake implementation of [`TableFormat`].
 #[derive(Debug)]
@@ -116,8 +116,8 @@ impl TableFormat for DeltaTableFormat {
                 .await
             {
                 Ok(table) => Some(table),
-                Err(DeltaTableError::Kernel(KernelError::InvalidTableLocation(_)))
-                | Err(DeltaTableError::Kernel(KernelError::FileNotFound(_))) => None,
+                Err(DeltaTableError::InvalidTableLocation(_))
+                | Err(DeltaTableError::FileNotFound(_)) => None,
                 Err(err) => return Err(DataFusionError::External(Box::new(err))),
             };
         let table_exists = table.is_some();

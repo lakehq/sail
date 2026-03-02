@@ -16,20 +16,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::borrow::Cow;
 use std::collections::HashMap;
+use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, MapArray, RecordBatch, StringArray, StructArray};
+use datafusion::arrow::array::{
+    new_empty_array, Array, ArrayRef, MapArray, RecordBatch, StringArray, StructArray,
+};
 use datafusion::arrow::datatypes::{Field, Fields};
+use datafusion::common::scalar::ScalarValue;
 
 use crate::conversion::ScalarConverter;
 use crate::kernel::models::{
-    ArrayType, ColumnMappingMode, DataType, MapType, PrimitiveType, Scalar, Schema, StructField,
-    StructType, TableProperties,
+    ColumnMappingMode, DataType, PrimitiveType, Schema, StructField, StructType, TableProperties,
 };
 use crate::kernel::{
     ColumnName, DataSkippingNumIndexedCols, DeltaResult as DeltaResultLocal, DeltaTableError,
-    SchemaTransform, TryIntoArrow,
 };
 
 pub(crate) fn parse_partition_values_array(
@@ -41,7 +42,8 @@ pub(crate) fn parse_partition_values_array(
     let partitions = map_array_from_path(batch, path)?;
     let num_rows = partitions.len();
 
-    let mut collected: HashMap<String, Vec<Scalar>> = partition_schema
+    // Collect raw string values per physical column name
+    let mut raw_collected: HashMap<String, Vec<Option<String>>> = partition_schema
         .fields()
         .map(|f| {
             (
@@ -60,47 +62,67 @@ pub(crate) fn parse_partition_values_array(
         let raw_values = collect_partition_row(&partitions.value(row))?;
 
         for field in partition_schema.fields() {
+            if !matches!(field.data_type(), DataType::Primitive(_)) {
+                return Err(DeltaTableError::generic(
+                    "nested partitioning values are not supported",
+                ));
+            }
             let physical_name = field.physical_name(column_mapping_mode);
             let value = raw_values
                 .get(physical_name)
-                .or_else(|| raw_values.get(field.name()));
-            let scalar = match field.data_type() {
-                DataType::Primitive(primitive) => match value {
-                    Some(Some(raw)) => primitive.parse_scalar(raw)?,
-                    _ => Scalar::Null(field.data_type().clone()),
-                },
-                _ => {
-                    return Err(DeltaTableError::generic(
-                        "nested partitioning values are not supported",
-                    ))
-                }
-            };
-            collected
+                .or_else(|| raw_values.get(field.name()))
+                .and_then(|v| v.clone());
+            raw_collected
                 .get_mut(physical_name)
                 .ok_or_else(|| DeltaTableError::schema("partition field missing".to_string()))?
-                .push(scalar);
+                .push(value);
         }
     }
 
-    let columns = partition_schema
-        .fields()
-        .map(|field| {
-            let physical_name = field.physical_name(column_mapping_mode);
-            ScalarConverter::scalars_to_arrow_array(
-                field,
-                collected.get(physical_name).ok_or_else(|| {
-                    DeltaTableError::schema("partition field missing".to_string())
-                })?,
-            )
-        })
-        .collect::<DeltaResultLocal<Vec<_>>>()?;
-
+    // Build Arrow arrays directly from raw strings via ScalarConverter
     let arrow_fields: Fields = Fields::from(
         partition_schema
             .fields()
-            .map(|f| f.try_into_arrow())
+            .map(Field::try_from)
             .collect::<Result<Vec<Field>, _>>()?,
     );
+
+    let columns: Vec<ArrayRef> = partition_schema
+        .fields()
+        .zip(arrow_fields.iter())
+        .map(|(field, arrow_field)| {
+            let physical_name = field.physical_name(column_mapping_mode);
+            let raw_values = raw_collected
+                .get(physical_name)
+                .ok_or_else(|| DeltaTableError::schema("partition field missing".to_string()))?;
+            let arrow_dt = arrow_field.data_type();
+            let scalar_values: Vec<ScalarValue> = raw_values
+                .iter()
+                .map(|v| match v {
+                    Some(raw) => ScalarConverter::string_to_arrow_scalar_value(raw, arrow_dt)
+                        .map_err(|e| {
+                            DeltaTableError::generic(format!("partition value parse error: {e}"))
+                        }),
+                    None => ScalarValue::try_new_null(arrow_dt)
+                        .map_err(|e| DeltaTableError::generic(format!("null scalar error: {e}"))),
+                })
+                .collect::<DeltaResultLocal<Vec<_>>>()?;
+            let array = if scalar_values.is_empty() {
+                new_empty_array(arrow_dt)
+            } else {
+                ScalarValue::iter_to_array(scalar_values)
+                    .map_err(|e| DeltaTableError::generic(format!("scalar to array error: {e}")))?
+            };
+            // Cast to the exact arrow type in case of any timezone/precision mismatch
+            let array = if array.data_type() != arrow_dt {
+                datafusion::arrow::compute::cast(&array, arrow_dt)
+                    .map_err(|e| DeltaTableError::generic(format!("cast error: {e}")))?
+            } else {
+                array
+            };
+            Ok(Arc::new(array) as ArrayRef)
+        })
+        .collect::<DeltaResultLocal<Vec<_>>>()?;
 
     Ok(StructArray::try_new(arrow_fields, columns, None)?)
 }
@@ -170,21 +192,11 @@ pub(crate) fn stats_schema(
     let mut fields = Vec::with_capacity(4);
     fields.push(StructField::nullable("numRecords", DataType::LONG));
 
-    let mut base_transform = BaseStatsTransform::new(table_properties);
-    if let Some(base_schema) = base_transform.transform_struct(physical_file_schema) {
-        let base_schema = base_schema.into_owned();
-
-        let mut null_count_transform = NullCountStatsTransform;
-        if let Some(null_count_schema) = null_count_transform.transform_struct(&base_schema) {
-            fields.push(StructField::nullable(
-                "nullCount",
-                null_count_schema.into_owned(),
-            ));
-        };
-
-        let mut min_max_transform = MinMaxStatsTransform;
-        if let Some(min_max_schema) = min_max_transform.transform_struct(&base_schema) {
-            let min_max_schema = min_max_schema.into_owned();
+    if let Some(base_schema) = base_stats_schema(physical_file_schema, table_properties) {
+        if let Some(null_count_schema) = null_count_stats_schema(&base_schema) {
+            fields.push(StructField::nullable("nullCount", null_count_schema));
+        }
+        if let Some(min_max_schema) = min_max_stats_schema(&base_schema) {
             fields.push(StructField::nullable("minValues", min_max_schema.clone()));
             fields.push(StructField::nullable("maxValues", min_max_schema));
         }
@@ -192,135 +204,161 @@ pub(crate) fn stats_schema(
     Ok(StructType::try_new(fields)?)
 }
 
-pub(crate) struct NullCountStatsTransform;
-impl<'a> SchemaTransform<'a> for NullCountStatsTransform {
-    fn transform_primitive(&mut self, _ptype: &'a PrimitiveType) -> Option<Cow<'a, PrimitiveType>> {
-        Some(Cow::Owned(PrimitiveType::Long))
-    }
-
-    fn transform_struct_field(&mut self, field: &'a StructField) -> Option<Cow<'a, StructField>> {
-        if matches!(
-            &field.data_type,
-            DataType::Array(_) | DataType::Map(_) | DataType::Variant(_)
-        ) {
-            return Some(Cow::Owned(StructField {
+/// Transforms a schema for null-count statistics: all primitives become Long,
+/// Array/Map/Variant fields are flattened to a single Long field.
+fn null_count_stats_schema(schema: &StructType) -> Option<StructType> {
+    let fields: Vec<StructField> = schema
+        .fields()
+        .map(|field| {
+            let data_type = match &field.data_type {
+                DataType::Array(_) | DataType::Map(_) | DataType::Variant(_) => DataType::LONG,
+                DataType::Struct(inner) => {
+                    if let Some(inner_schema) = null_count_stats_schema(inner) {
+                        DataType::from(inner_schema)
+                    } else {
+                        return None;
+                    }
+                }
+                DataType::Primitive(_) => DataType::LONG,
+            };
+            Some(StructField {
                 name: field.name.clone(),
-                data_type: DataType::LONG,
+                data_type,
                 nullable: true,
                 metadata: Default::default(),
-            }));
-        }
+            })
+        })
+        .flatten()
+        .collect();
 
-        match self.transform(&field.data_type)? {
-            Cow::Borrowed(_) => Some(Cow::Borrowed(field)),
-            dt => Some(Cow::Owned(StructField {
-                name: field.name.clone(),
-                data_type: dt.into_owned(),
-                nullable: true,
-                metadata: Default::default(),
-            })),
-        }
+    if fields.is_empty() {
+        None
+    } else {
+        StructType::try_new(fields).ok()
     }
 }
 
-struct BaseStatsTransform {
-    n_columns: Option<DataSkippingNumIndexedCols>,
-    added_columns: u64,
-    column_names: Option<Vec<ColumnName>>,
-    path: Vec<String>,
-}
+/// Filters a schema to only include columns eligible for data skipping statistics,
+/// respecting the column count limit and explicit column name list from table properties.
+fn base_stats_schema(schema: &StructType, props: &TableProperties) -> Option<StructType> {
+    let column_names = props.data_skipping_stats_columns.clone();
+    let n_columns = if column_names.is_some() {
+        None
+    } else {
+        Some(
+            props
+                .data_skipping_num_indexed_cols
+                .unwrap_or(DataSkippingNumIndexedCols::NumColumns(32)),
+        )
+    };
 
-impl BaseStatsTransform {
-    fn new(props: &TableProperties) -> Self {
-        if let Some(columns_names) = &props.data_skipping_stats_columns {
-            Self {
-                n_columns: None,
-                added_columns: 0,
-                column_names: Some(columns_names.clone()),
-                path: Vec::new(),
-            }
-        } else {
-            Self {
-                n_columns: Some(
-                    props
-                        .data_skipping_num_indexed_cols
-                        .unwrap_or(DataSkippingNumIndexedCols::NumColumns(32)),
-                ),
-                added_columns: 0,
-                column_names: None,
-                path: Vec::new(),
-            }
-        }
+    let mut added_columns: u64 = 0;
+    let fields = base_stats_schema_fields(
+        schema,
+        &column_names,
+        &n_columns,
+        &mut added_columns,
+        &mut Vec::new(),
+    );
+
+    if fields.is_empty() {
+        None
+    } else {
+        StructType::try_new(fields).ok()
     }
 }
 
-impl<'a> SchemaTransform<'a> for BaseStatsTransform {
-    fn transform_struct_field(&mut self, field: &'a StructField) -> Option<Cow<'a, StructField>> {
-        if let Some(DataSkippingNumIndexedCols::NumColumns(n_cols)) = self.n_columns {
-            if self.added_columns >= n_cols {
-                return None;
+fn base_stats_schema_fields(
+    schema: &StructType,
+    column_names: &Option<Vec<ColumnName>>,
+    n_columns: &Option<DataSkippingNumIndexedCols>,
+    added_columns: &mut u64,
+    path: &mut Vec<String>,
+) -> Vec<StructField> {
+    let mut result = Vec::new();
+    for field in schema.fields() {
+        if let Some(DataSkippingNumIndexedCols::NumColumns(n_cols)) = n_columns {
+            if *added_columns >= *n_cols {
+                break;
             }
         }
 
-        self.path.push(field.name.clone());
+        path.push(field.name.clone());
         let data_type = field.data_type();
 
         let should_include = matches!(data_type, DataType::Struct(_))
-            || self
-                .column_names
+            || column_names
                 .as_ref()
-                .map(|ns| should_include_column(&ColumnName::new(&self.path), ns))
+                .map(|ns| should_include_column(&ColumnName::new(path.as_slice()), ns))
                 .unwrap_or(true);
+
         if !should_include {
-            self.path.pop();
-            return None;
+            path.pop();
+            continue;
         }
 
-        if !matches!(data_type, DataType::Struct(_)) {
-            self.added_columns += 1;
-        }
-
-        let field = match self.transform(&field.data_type)? {
-            Cow::Borrowed(_) if field.is_nullable() => Cow::Borrowed(field),
-            data_type => Cow::Owned(StructField {
+        let new_field = if let DataType::Struct(inner) = data_type {
+            let inner_fields =
+                base_stats_schema_fields(inner, column_names, n_columns, added_columns, path);
+            path.pop();
+            if inner_fields.is_empty() {
+                continue;
+            }
+            StructField {
                 name: field.name.clone(),
-                data_type: data_type.into_owned(),
+                data_type: DataType::from(StructType::new_unchecked(inner_fields)),
                 nullable: true,
                 metadata: Default::default(),
-            }),
+            }
+        } else {
+            *added_columns += 1;
+            path.pop();
+            StructField {
+                name: field.name.clone(),
+                data_type: data_type.clone(),
+                nullable: true,
+                metadata: Default::default(),
+            }
         };
 
-        self.path.pop();
-
-        if matches!(
-            field.data_type(),
-            DataType::Struct(dt) if dt.fields().count() == 0
-        ) {
-            None
-        } else {
-            Some(field)
-        }
+        result.push(new_field);
     }
+    result
 }
 
-struct MinMaxStatsTransform;
+/// Transforms a schema for min/max statistics: drops Array/Map/Variant fields,
+/// keeps only skipping-eligible primitive types.
+fn min_max_stats_schema(schema: &StructType) -> Option<StructType> {
+    let fields: Vec<StructField> = schema
+        .fields()
+        .filter_map(|field| {
+            let data_type = match &field.data_type {
+                DataType::Array(_) | DataType::Map(_) | DataType::Variant(_) => return None,
+                DataType::Struct(inner) => {
+                    let inner_schema = min_max_stats_schema(inner)?;
+                    DataType::from(inner_schema)
+                }
+                DataType::Primitive(p) => {
+                    if is_skipping_eligeble_datatype(p) {
+                        field.data_type.clone()
+                    } else {
+                        return None;
+                    }
+                }
+            };
+            Some(StructField {
+                name: field.name.clone(),
+                data_type,
+                nullable: field.nullable,
+                metadata: field.metadata.clone(),
+            })
+        })
+        .collect();
 
-impl<'a> SchemaTransform<'a> for MinMaxStatsTransform {
-    fn transform_array(&mut self, _: &'a ArrayType) -> Option<Cow<'a, ArrayType>> {
+    if fields.is_empty() {
         None
-    }
-    fn transform_map(&mut self, _: &'a MapType) -> Option<Cow<'a, MapType>> {
-        None
-    }
-    fn transform_variant(&mut self, _: &'a StructType) -> Option<Cow<'a, StructType>> {
-        None
-    }
-    fn transform_primitive(&mut self, ptype: &'a PrimitiveType) -> Option<Cow<'a, PrimitiveType>> {
-        if is_skipping_eligeble_datatype(ptype) {
-            Some(Cow::Borrowed(ptype))
-        } else {
-            None
-        }
+    } else {
+        StructType::try_new(fields).ok()
     }
 }
 

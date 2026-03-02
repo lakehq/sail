@@ -31,7 +31,7 @@ use futures::TryStreamExt;
 
 use crate::kernel::models::{ColumnMappingMode, ColumnMetadataKey, Remove};
 use crate::kernel::snapshot::EagerSnapshot;
-use crate::kernel::{DeltaResult, DeltaTableConfig, DeltaTableError, TablePropertiesExt};
+use crate::kernel::{DeltaResult, DeltaTableConfig, DeltaTableError};
 use crate::storage::LogStore;
 
 /// State snapshot currently held by the Delta Table instance.
