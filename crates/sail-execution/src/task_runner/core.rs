@@ -74,9 +74,6 @@ impl TaskRunner {
     }
 
     /// Deserializes and prepares a physical plan for execution on this node.
-    ///
-    /// Decodes the plan from protobuf, rewrites parquet adapters, rewrites shuffle
-    /// nodes as needed, and executes the resulting plan on this worker.
     fn execute_plan<T: Actor>(
         &mut self,
         ctx: &mut ActorContext<T>,
