@@ -11,7 +11,7 @@ use datafusion_proto::protobuf::PhysicalPlanNode;
 use indexmap::{IndexMap, IndexSet};
 use log::{debug, warn};
 use prost::Message;
-use sail_common_datafusion::cache_manager::CacheId;
+use sail_common::cache_id::CacheId;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::ActorContext;

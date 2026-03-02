@@ -1,18 +1,16 @@
 use std::sync::Arc;
 
 use async_recursion::async_recursion;
-use datafusion::common::tree_node::Transformed;
 use datafusion::dataframe::DataFrame;
 use datafusion::physical_plan::{displayable, ExecutionPlan};
 use datafusion::prelude::SessionContext;
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::Result;
 use datafusion_expr::{Extension, LogicalPlan};
+use sail_cache_manager::CacheManager;
 use sail_common::spec;
-use sail_common_datafusion::cache_manager::CacheManager;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
-use sail_logical_plan::cache_read_relation::CacheReadRelationNode;
 use sail_logical_plan::precondition::WithPreconditionsNode;
 
 use crate::catalog::CatalogCommandNode;
@@ -70,7 +68,7 @@ pub async fn resolve_to_execution_plan(
     info.push(plan.to_stringified(PlanType::InitialLogicalPlan));
 
     let plan = if let Ok(cache) = ctx.extension::<CacheManager>() {
-        use_cached_data(&cache, plan)?
+        cache.rewrite_plan_with_cache_reads(plan)?
     } else {
         plan
     };
@@ -98,23 +96,4 @@ pub async fn resolve_to_execution_plan(
         displayable(plan.as_ref()).indent(true).to_string(),
     ));
     Ok((plan, info))
-}
-
-/// Replaces cached subtrees with CacheReadRelation nodes.
-///
-/// Walks the plan top-down (including subquery expressions) and substitutes any
-/// subtree matching a cached entry with a CacheReadRelationNode carrying the cache ID.
-/// Equivalent to Spark's `CacheManager.useCachedData`:
-/// `spark/sql/core/src/main/scala/org/apache/spark/sql/execution/CacheManager.scala:496`
-fn use_cached_data(cache: &CacheManager, plan: LogicalPlan) -> Result<LogicalPlan> {
-    plan.transform_down_with_subqueries(|node| {
-        let Some(cached) = cache.find_match(&node) else {
-            return Ok(Transformed::no(node));
-        };
-        let relation = CacheReadRelationNode::new(cached.plan.schema().clone(), cached.cache_id);
-        Ok(Transformed::yes(LogicalPlan::Extension(Extension {
-            node: Arc::new(relation),
-        })))
-    })
-    .map(|t| t.data)
 }

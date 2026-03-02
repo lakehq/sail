@@ -10,7 +10,7 @@ use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
-use sail_common_datafusion::cache_manager::CacheId;
+use sail_common::cache_id::CacheId;
 
 use crate::local_cache_store::LocalCacheStore;
 

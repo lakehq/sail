@@ -2,7 +2,7 @@ use std::fmt::Formatter;
 
 use datafusion::common::{DFSchemaRef, Result};
 use datafusion::logical_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
-use sail_common_datafusion::cache_manager::CacheId;
+use sail_common::cache_id::CacheId;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 /// A leaf node representing cached in-memory data.

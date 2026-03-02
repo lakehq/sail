@@ -10,10 +10,10 @@ use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, Phy
 use datafusion_common::{internal_datafusion_err, internal_err, DFSchema, ToDFSchema};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
 use datafusion_physical_expr::{create_physical_sort_exprs, Partitioning};
+use sail_cache_manager::CacheManager;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog_system::logical_rewriter::RewriteSystemTableSource;
 use sail_catalog_system::planner::SystemTablePhysicalPlanner;
-use sail_common_datafusion::cache_manager::CacheManager;
 use sail_common_datafusion::catalog::TableKind;
 use sail_common_datafusion::datasource::{SourceInfo, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;

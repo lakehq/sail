@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use sail_common_datafusion::cache_manager::CacheId;
+use sail_common::cache_id::CacheId;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_telemetry::common::{SpanAssociation, SpanAttribute};
 use tokio::sync::oneshot;

@@ -13,7 +13,7 @@ pub(crate) use cache_write::CacheWriteExec;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::Result;
 use datafusion::physical_plan::ExecutionPlan;
-use sail_common_datafusion::cache_manager::CacheId;
+use sail_common::cache_id::CacheId;
 use sail_server::actor::{Actor, ActorHandle};
 pub(crate) use shuffle_read::ShuffleReadExec;
 pub(crate) use shuffle_write::ShuffleWriteExec;

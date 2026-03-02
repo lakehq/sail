@@ -1,5 +1,5 @@
 use log::debug;
-use sail_common_datafusion::cache_manager::CacheId;
+use sail_common::cache_id::CacheId;
 use sail_server::actor::ActorHandle;
 use tokio::sync::oneshot;
 use tonic::{Request, Response, Status};

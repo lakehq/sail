@@ -1,33 +1,13 @@
-use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
+use datafusion::common::tree_node::Transformed;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion_common::{internal_err, Result};
-
-use crate::extension::SessionExtension;
-
-/// Strongly typed identifier for a cached plan entry.
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
-pub struct CacheId(u64);
-
-impl From<u64> for CacheId {
-    fn from(value: u64) -> Self {
-        Self(value)
-    }
-}
-
-impl From<CacheId> for u64 {
-    fn from(value: CacheId) -> Self {
-        value.0
-    }
-}
-
-impl fmt::Display for CacheId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
+use datafusion_expr::Extension;
+use sail_common::cache_id::CacheId;
+use sail_common_datafusion::extension::SessionExtension;
+use sail_logical_plan::cache_read_relation::CacheReadRelationNode;
 
 /// A cached plan entry.
 #[derive(Clone)]
@@ -117,6 +97,21 @@ impl CacheManager {
             entry.materialized = true;
             entry.num_partitions = Some(num_partitions);
         }
+    }
+
+    /// Replaces cached subtrees with CacheReadRelation nodes.
+    pub fn rewrite_plan_with_cache_reads(&self, plan: LogicalPlan) -> Result<LogicalPlan> {
+        plan.transform_down_with_subqueries(|node| {
+            let Some(cached) = self.find_match(&node) else {
+                return Ok(Transformed::no(node));
+            };
+            let relation =
+                CacheReadRelationNode::new(cached.plan.schema().clone(), cached.cache_id);
+            Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                node: Arc::new(relation),
+            })))
+        })
+        .map(|t| t.data)
     }
 }
 

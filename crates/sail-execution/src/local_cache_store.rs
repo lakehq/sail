@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use datafusion::arrow::record_batch::RecordBatch;
-use sail_common_datafusion::cache_manager::CacheId;
+use sail_common::cache_id::CacheId;
 
 /// Worker-local store for cached RecordBatches that persist beyond job lifetime.
 pub struct LocalCacheStore {

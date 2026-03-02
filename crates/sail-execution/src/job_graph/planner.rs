@@ -15,7 +15,7 @@ use datafusion::physical_plan::{
     PlanProperties,
 };
 use sail_catalog_system::physical_plan::SystemTableExec;
-use sail_common_datafusion::cache_manager::CacheId;
+use sail_common::cache_id::CacheId;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{ExecutionError, ExecutionResult};

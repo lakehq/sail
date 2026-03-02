@@ -11,7 +11,7 @@ mod tests {
     use datafusion::execution::TaskContext;
     use datafusion::physical_plan::ExecutionPlan;
     use futures::StreamExt;
-    use sail_common_datafusion::cache_manager::CacheId;
+    use sail_common::cache_id::CacheId;
 
     use crate::local_cache_store::LocalCacheStore;
     use crate::plan::{CacheReadExec, CacheWriteExec};

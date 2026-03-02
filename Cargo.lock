@@ -5889,6 +5889,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "sail-cache-manager"
+version = "0.5.1"
+dependencies = [
+ "datafusion",
+ "datafusion-common",
+ "datafusion-expr",
+ "sail-common",
+ "sail-common-datafusion",
+ "sail-logical-plan",
+]
+
+[[package]]
 name = "sail-catalog"
 version = "0.5.1"
 dependencies = [
@@ -6165,6 +6177,7 @@ dependencies = [
  "prost-build",
  "rand 0.9.2",
  "readonly",
+ "sail-cache-manager",
  "sail-catalog-system",
  "sail-common",
  "sail-common-datafusion",
@@ -6369,6 +6382,7 @@ dependencies = [
  "rand 0.9.2",
  "regex",
  "ryu",
+ "sail-cache-manager",
  "sail-catalog",
  "sail-common",
  "sail-common-datafusion",
@@ -6467,6 +6481,7 @@ dependencies = [
  "log",
  "readonly",
  "sail-cache",
+ "sail-cache-manager",
  "sail-catalog",
  "sail-catalog-glue",
  "sail-catalog-iceberg",
@@ -6519,6 +6534,7 @@ dependencies = [
  "quote",
  "regex",
  "sail-cache",
+ "sail-cache-manager",
  "sail-common",
  "sail-common-datafusion",
  "sail-data-source",

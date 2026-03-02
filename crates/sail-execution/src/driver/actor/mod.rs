@@ -4,7 +4,7 @@ mod rpc;
 
 use std::collections::HashMap;
 
-use sail_common_datafusion::cache_manager::CacheId;
+use sail_common::cache_id::CacheId;
 use sail_common_datafusion::session::job::JobRunnerHistory;
 use tokio::sync::oneshot;
 
