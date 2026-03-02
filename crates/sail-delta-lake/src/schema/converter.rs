@@ -5,10 +5,10 @@ use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef,
 };
 
-use crate::kernel::{DeltaResult, DeltaTableError, TryIntoArrow, TryIntoKernel};
 use crate::kernel::models::{
     ColumnMappingMode, ColumnMetadataKey, DataType, MetadataValue, StructField, StructType,
 };
+use crate::kernel::{DeltaResult, DeltaTableError, TryIntoArrow, TryIntoKernel};
 
 pub fn logical_arrow_to_kernel(arrow: &ArrowSchema) -> DeltaResult<StructType> {
     Ok(arrow.try_into_kernel()?)

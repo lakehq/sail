@@ -46,9 +46,9 @@ use crate::kernel::snapshot::iterators::LogicalFileView;
 pub use crate::kernel::snapshot::log_data::LogDataHandler;
 use crate::kernel::snapshot::stream::{RecordBatchReceiverStreamBuilder, SendableRBStream};
 use crate::kernel::{
-    ArrowEngineData, DeltaResult, DeltaTableConfig, DeltaTableError, KernelRemove, KernelSnapshot,
-    LogPathFileType, ParsedLogPath, PredicateRef, SchemaRef, Sidecar, TableConfiguration,
-    ToDataType, TryIntoArrow, Version, scan_row_schema,
+    scan_row_schema, ArrowEngineData, DeltaResult, DeltaTableConfig, DeltaTableError, KernelRemove,
+    KernelSnapshot, PredicateRef, SchemaRef, Sidecar, TableConfiguration, ToDataType, TryIntoArrow,
+    Version,
 };
 use crate::storage::LogStore;
 
@@ -300,14 +300,11 @@ impl Snapshot {
             .try_collect::<Vec<_>>()
             .await?
         {
-            // safety: object store path are always valid urls paths.
-            let dummy_path = dummy_url
+            let location = dummy_url
                 .join(meta.location.as_ref())
                 .map_err(|e| DeltaTableError::generic(format!("Failed to join URL path: {}", e)))?;
-            if let Some(parsed_path) = ParsedLogPath::try_from(dummy_path)? {
-                if matches!(parsed_path.file_type, LogPathFileType::Commit) {
-                    commit_files.push(meta);
-                }
+            if parse_commit_version_from_path(location.path()).is_some() {
+                commit_files.push(meta);
             }
         }
         commit_files.sort_unstable_by(|a, b| b.location.cmp(&a.location));
@@ -397,6 +394,18 @@ impl Snapshot {
             .map_err(DeltaTableError::generic_err)??;
         Ok(version)
     }
+}
+
+fn parse_commit_version_from_path(path: &str) -> Option<i64> {
+    let filename = path.rsplit('/').next()?;
+    if filename.len() != 25 || !filename.ends_with(".json") {
+        return None;
+    }
+    let prefix = filename.get(0..20)?;
+    if !prefix.as_bytes().iter().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    prefix.parse::<i64>().ok()
 }
 
 fn empty_struct_type() -> StructType {

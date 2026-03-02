@@ -39,8 +39,8 @@ use crate::error::KernelError;
 use crate::kernel::models::Action;
 use crate::kernel::transaction::TransactionError;
 use crate::kernel::{
-    DeltaResult, DeltaTableError, Engine, FileMeta, KernelDefaultEngine as DefaultEngine, LogPath,
-    ParsedLogPath, TokioBackgroundExecutor, TokioMultiThreadExecutor,
+    DeltaResult, DeltaTableError, Engine, KernelDefaultEngine as DefaultEngine,
+    TokioBackgroundExecutor, TokioMultiThreadExecutor,
 };
 
 mod config;
@@ -64,9 +64,6 @@ pub fn get_object_store_from_context(
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
 static DELTA_LOG_PATH: LazyLock<Path> = LazyLock::new(|| Path::from(DELTA_LOG_FOLDER));
-#[expect(clippy::expect_used)]
-static DUMMY_TABLE_ROOT: LazyLock<Url> =
-    LazyLock::new(|| Url::parse("memory:///").expect("memory URI must be valid"));
 
 /// Holder for temporary commit paths or prepared bytes.
 #[derive(Clone)]
@@ -114,15 +111,15 @@ pub fn default_logstore(
 
 /// Extract version from an object store entry in the delta log.
 fn extract_version_from_meta(meta: &ObjectMeta) -> Option<i64> {
-    let location = DUMMY_TABLE_ROOT.join(meta.location.as_ref()).ok()?;
-    let file_meta = FileMeta {
-        location,
-        last_modified: meta.last_modified.timestamp_millis(),
-        size: meta.size,
-    };
-    let log_path = LogPath::try_new(file_meta).ok()?;
-    let parsed_path: ParsedLogPath = log_path.into();
-    i64::try_from(parsed_path.version).ok()
+    let filename = meta.location.as_ref().rsplit('/').next()?;
+    if filename.len() != 25 || !filename.ends_with(".json") {
+        return None;
+    }
+    let prefix = filename.get(0..20)?;
+    if !prefix.as_bytes().iter().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    prefix.parse::<i64>().ok()
 }
 
 /// Return the `_delta_log` commit URI for the given version.

@@ -28,25 +28,23 @@ pub use config::DeltaTableConfig;
 pub use delta_kernel::actions::{Remove as KernelRemove, Sidecar};
 pub use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 pub use delta_kernel::engine::arrow_data::ArrowEngineData;
-pub use delta_kernel::engine::default::DefaultEngine as KernelDefaultEngine;
+use delta_kernel::engine::arrow_expression::ArrowEvaluationHandler;
 pub use delta_kernel::engine::default::executor::tokio::{
     TokioBackgroundExecutor, TokioMultiThreadExecutor,
 };
+pub use delta_kernel::engine::default::DefaultEngine as KernelDefaultEngine;
 pub use delta_kernel::engine::parse_json;
-use delta_kernel::engine::arrow_expression::ArrowEvaluationHandler;
-pub use delta_kernel::engine_data::FilteredEngineData;
 pub use delta_kernel::expressions::ColumnName;
-pub use delta_kernel::path::{LogPathFileType, ParsedLogPath};
-pub use delta_kernel::scan::{Scan, ScanMetadata, scan_row_schema};
+pub use delta_kernel::scan::{scan_row_schema, Scan, ScanMetadata};
 pub use delta_kernel::schema::derive_macro_utils::ToDataType;
 pub use delta_kernel::schema::{SchemaRef, SchemaTransform};
 pub use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 pub use delta_kernel::table_configuration::TableConfiguration;
 pub use delta_kernel::table_properties::DataSkippingNumIndexedCols;
-pub use delta_kernel::{ExpressionRef, PredicateRef, Version};
-pub use delta_kernel::DeltaResult as KernelDeltaResult;
-pub use delta_kernel::{Engine, EvaluationHandler, Expression, ExpressionEvaluator, FileMeta, LogPath};
-pub use delta_kernel::EngineData;
+pub use delta_kernel::{
+    DeltaResult as KernelDeltaResult, Engine, EngineData, EvaluationHandler, Expression,
+    ExpressionEvaluator, ExpressionRef, PredicateRef, Version,
+};
 pub use error::{DeltaResult, DeltaTableError};
 pub use operation::{DeltaOperation, MergePredicate, SaveMode};
 pub use table_properties::TablePropertiesExt;

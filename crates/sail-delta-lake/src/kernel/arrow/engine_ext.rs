@@ -35,16 +35,16 @@ use itertools::Itertools;
 
 use crate::conversion::ScalarConverter;
 use crate::kernel::models::{
-    ArrayType, ColumnMappingMode, DataType, MapType, PrimitiveType, Scalar, StructData,
-    Schema, StructField, StructType, TableProperties,
+    ArrayType, ColumnMappingMode, DataType, MapType, PrimitiveType, Scalar, Schema, StructData,
+    StructField, StructType, TableProperties,
 };
 use crate::kernel::snapshot::SCAN_ROW_ARROW_SCHEMA;
 use crate::kernel::{
-    ArrowEngineData, ColumnName, DataSkippingNumIndexedCols, DeltaTableError, Engine, EngineData,
-    ExpressionEvaluator, ExpressionRef, KernelDeltaResult as DeltaResult, KernelSnapshot as Snapshot,
-    PredicateRef, Scan, ScanMetadata, SchemaRef, SchemaTransform, Version, parse_json, TryIntoArrow,
+    parse_json, ArrowEngineData, ColumnName, DataSkippingNumIndexedCols,
+    DeltaResult as DeltaResultLocal, DeltaTableError, Engine, EngineData, ExpressionEvaluator,
+    ExpressionRef, KernelDeltaResult as DeltaResult, KernelSnapshot as Snapshot, PredicateRef,
+    Scan, ScanMetadata, SchemaRef, SchemaTransform, TryIntoArrow, Version,
 };
-use crate::kernel::DeltaResult as DeltaResultLocal;
 
 /// [`ScanMetadata`] contains (1) a [`RecordBatch`] specifying data files to be scanned
 /// and (2) a vector of transforms (one transform per scan file) that must be applied to the data read

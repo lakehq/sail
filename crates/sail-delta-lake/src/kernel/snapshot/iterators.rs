@@ -33,7 +33,7 @@ use percent_encoding::percent_decode_str;
 use crate::kernel::models::{
     Add, DataType, DeletionVectorDescriptor, Remove, Scalar, ScalarExt, StorageType, StructData,
 };
-use crate::kernel::{DeltaResult, DeltaTableError, scan_row_schema};
+use crate::kernel::{scan_row_schema, DeltaResult, DeltaTableError};
 
 const FIELD_NAME_PATH: &str = "path";
 const FIELD_NAME_SIZE: &str = "size";

@@ -24,8 +24,8 @@ use log::warn;
 use crate::kernel::models::{DataType, Metadata, PrimitiveType};
 use crate::kernel::snapshot::iterators::LogicalFileView;
 use crate::kernel::{
-    DeltaResult, DeltaTableError, EvaluationHandler, Expression, ExpressionEvaluator,
-    TableConfiguration, scan_row_schema,
+    scan_row_schema, DeltaResult, DeltaTableError, EvaluationHandler, Expression,
+    ExpressionEvaluator, TableConfiguration,
 };
 
 const COL_NUM_RECORDS: &str = "numRecords";
