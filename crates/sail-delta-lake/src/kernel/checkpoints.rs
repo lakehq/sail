@@ -25,9 +25,6 @@ use datafusion::arrow::array::BooleanArray;
 use datafusion::arrow::compute::filter_record_batch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
-use delta_kernel::engine::arrow_data::ArrowEngineData;
-use delta_kernel::engine_data::FilteredEngineData;
-use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, error};
 use object_store::path::Path;
@@ -41,7 +38,7 @@ use tokio::task::spawn_blocking;
 use uuid::Uuid;
 
 use crate::kernel::snapshot::stream::RecordBatchReceiverStreamBuilder;
-use crate::kernel::{DeltaResult, DeltaTableError};
+use crate::kernel::{ArrowEngineData, DeltaResult, DeltaTableError, FilteredEngineData, KernelSnapshot};
 use crate::storage::LogStore;
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
@@ -83,6 +80,13 @@ fn to_rb(data: FilteredEngineData) -> DeltaResult<RecordBatch> {
     let predicate = BooleanArray::from(selection_vector);
     let batch = filter_record_batch(engine_data.record_batch(), &predicate)?;
     Ok(batch)
+}
+
+fn count_action_rows(batch: &RecordBatch, column_name: &str) -> i64 {
+    batch
+        .column_by_name(column_name)
+        .map(|col| (col.len().saturating_sub(col.null_count())) as i64)
+        .unwrap_or(0)
 }
 
 #[derive(Debug, Serialize)]
@@ -172,6 +176,7 @@ impl<'a> CheckpointManager<'a> {
             .await
             .map_err(DeltaTableError::generic_err)?;
         let mut checkpoint_row_count = first_batch.num_rows() as i64;
+        let mut checkpoint_add_count = count_action_rows(&first_batch, "add");
 
         // Stream remaining batches from a blocking producer thread to the async writer.
         let mut rb_builder = RecordBatchReceiverStreamBuilder::new(4);
@@ -197,6 +202,8 @@ impl<'a> CheckpointManager<'a> {
                 batch
             };
             checkpoint_row_count = checkpoint_row_count.saturating_add(batch.num_rows() as i64);
+            checkpoint_add_count =
+                checkpoint_add_count.saturating_add(count_action_rows(&batch, "add"));
             writer
                 .write(&batch)
                 .await
@@ -217,7 +224,7 @@ impl<'a> CheckpointManager<'a> {
             size: checkpoint_row_count,
             parts: None,
             size_in_bytes: Some(file_meta.size as i64),
-            num_of_add_files: None,
+            num_of_add_files: Some(checkpoint_add_count),
             checkpoint_schema: None,
             checksum: None,
             tags: None,
@@ -321,4 +328,33 @@ pub async fn cleanup_expired_logs_for(
 
     debug!("Deleted {} expired logs", deleted.len());
     Ok(deleted.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::array::{ArrayRef, StringArray};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::arrow::record_batch::RecordBatch;
+
+    use super::count_action_rows;
+
+    #[test]
+    fn count_action_rows_counts_non_null_values() {
+        let schema = Arc::new(Schema::new(vec![Field::new("add", DataType::Utf8, true)]));
+        let add = Arc::new(StringArray::from(vec![Some("a"), None, Some("b")])) as ArrayRef;
+        let batch = RecordBatch::try_new(schema, vec![add]).expect("batch should build");
+
+        assert_eq!(count_action_rows(&batch, "add"), 2);
+    }
+
+    #[test]
+    fn count_action_rows_returns_zero_for_missing_column() {
+        let schema = Arc::new(Schema::new(vec![Field::new("path", DataType::Utf8, true)]));
+        let path = Arc::new(StringArray::from(vec![Some("a")])) as ArrayRef;
+        let batch = RecordBatch::try_new(schema, vec![path]).expect("batch should build");
+
+        assert_eq!(count_action_rows(&batch, "add"), 0);
+    }
 }

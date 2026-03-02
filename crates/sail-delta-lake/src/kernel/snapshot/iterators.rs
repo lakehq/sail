@@ -23,19 +23,17 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::LazyLock;
 
-// TODO: Stop depending on delta-rs StorageType.
 use chrono::{DateTime, Utc};
 use datafusion::arrow::array::cast::AsArray;
 use datafusion::arrow::array::types::Int64Type;
 use datafusion::arrow::array::{Array, RecordBatch, StructArray};
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, Int32Type};
-use delta_kernel::scan::scan_row_schema;
 use percent_encoding::percent_decode_str;
 
 use crate::kernel::models::{
     Add, DataType, DeletionVectorDescriptor, Remove, Scalar, ScalarExt, StorageType, StructData,
 };
-use crate::kernel::{DeltaResult, DeltaTableError};
+use crate::kernel::{DeltaResult, DeltaTableError, scan_row_schema};
 
 const FIELD_NAME_PATH: &str = "path";
 const FIELD_NAME_SIZE: &str = "size";

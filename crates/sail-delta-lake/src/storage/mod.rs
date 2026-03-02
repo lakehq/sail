@@ -26,12 +26,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion::execution::context::TaskContext;
 use datafusion_common::{DataFusionError, Result as DataFusionResult};
-use delta_kernel::engine::default::executor::tokio::{
-    TokioBackgroundExecutor, TokioMultiThreadExecutor,
-};
-use delta_kernel::engine::default::DefaultEngine;
-use delta_kernel::path::ParsedLogPath;
-use delta_kernel::{Engine, Error as KernelError, FileMeta, LogPath};
 use futures::TryStreamExt;
 use log::{debug, error};
 use object_store::path::Path;
@@ -41,9 +35,13 @@ use tokio::runtime::{Handle, RuntimeFlavor};
 use url::Url;
 use uuid::Uuid;
 
+use crate::error::KernelError;
 use crate::kernel::models::Action;
 use crate::kernel::transaction::TransactionError;
-use crate::kernel::{DeltaResult, DeltaTableError};
+use crate::kernel::{
+    DeltaResult, DeltaTableError, Engine, FileMeta, KernelDefaultEngine as DefaultEngine, LogPath,
+    ParsedLogPath, TokioBackgroundExecutor, TokioMultiThreadExecutor,
+};
 
 mod config;
 

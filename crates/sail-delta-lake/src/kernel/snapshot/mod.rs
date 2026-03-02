@@ -27,17 +27,6 @@ use datafusion::arrow::array::{
     Array, BooleanArray, Int32Array, Int64Array, MapArray, RecordBatch, StringArray, StructArray,
 };
 use datafusion::arrow::compute::concat_batches;
-use delta_kernel::actions::{Remove as KernelRemove, Sidecar};
-use delta_kernel::engine::arrow_conversion::TryIntoArrow;
-use delta_kernel::engine::arrow_data::ArrowEngineData;
-use delta_kernel::path::{LogPathFileType, ParsedLogPath};
-use delta_kernel::scan::scan_row_schema;
-use delta_kernel::schema::derive_macro_utils::ToDataType;
-use delta_kernel::schema::{SchemaRef, StructField};
-use delta_kernel::snapshot::Snapshot as KernelSnapshot;
-use delta_kernel::table_configuration::TableConfiguration;
-use delta_kernel::table_properties::TableProperties;
-use delta_kernel::{PredicateRef, Version};
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
@@ -51,12 +40,16 @@ use url::Url;
 use crate::kernel::arrow::engine_ext::{ScanExt, SnapshotExt};
 use crate::kernel::models::{
     Action, CommitInfo, DeletionVectorDescriptor, Metadata, Protocol, Remove, StorageType,
-    StructType,
+    StructField, StructType, TableProperties,
 };
 use crate::kernel::snapshot::iterators::LogicalFileView;
 pub use crate::kernel::snapshot::log_data::LogDataHandler;
 use crate::kernel::snapshot::stream::{RecordBatchReceiverStreamBuilder, SendableRBStream};
-use crate::kernel::{DeltaResult, DeltaTableConfig, DeltaTableError};
+use crate::kernel::{
+    ArrowEngineData, DeltaResult, DeltaTableConfig, DeltaTableError, KernelRemove, KernelSnapshot,
+    LogPathFileType, ParsedLogPath, PredicateRef, SchemaRef, Sidecar, TableConfiguration,
+    ToDataType, TryIntoArrow, Version, scan_row_schema,
+};
 use crate::storage::LogStore;
 
 pub mod iterators;

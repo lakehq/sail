@@ -4,12 +4,11 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef,
 };
-use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 
+use crate::kernel::{DeltaResult, DeltaTableError, TryIntoArrow, TryIntoKernel};
 use crate::kernel::models::{
     ColumnMappingMode, ColumnMetadataKey, DataType, MetadataValue, StructField, StructType,
 };
-use crate::kernel::{DeltaResult, DeltaTableError};
 
 pub fn logical_arrow_to_kernel(arrow: &ArrowSchema) -> DeltaResult<StructType> {
     Ok(arrow.try_into_kernel()?)

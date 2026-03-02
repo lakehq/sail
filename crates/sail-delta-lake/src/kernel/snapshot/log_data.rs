@@ -19,14 +19,13 @@
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/kernel/snapshot/log_data.rs>
 
 use ::datafusion::arrow::array::{Array, RecordBatch, StringArray, StructArray};
-use delta_kernel::scan::scan_row_schema;
-use delta_kernel::table_configuration::TableConfiguration;
 use log::warn;
 
 use crate::kernel::models::{DataType, Metadata, PrimitiveType};
 use crate::kernel::snapshot::iterators::LogicalFileView;
 use crate::kernel::{
     DeltaResult, DeltaTableError, EvaluationHandler, Expression, ExpressionEvaluator,
+    TableConfiguration, scan_row_schema,
 };
 
 const COL_NUM_RECORDS: &str = "numRecords";

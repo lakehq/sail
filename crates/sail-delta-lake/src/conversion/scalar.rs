@@ -32,12 +32,11 @@ use datafusion::arrow::compute::{cast_with_options, CastOptions};
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
 use datafusion::common::scalar::ScalarValue;
 use datafusion::common::Result as DataFusionResult;
-use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use serde_json::Value;
 
 use crate::kernel::models::{DataType, PrimitiveType, Scalar, StructData, StructField};
-use crate::kernel::{DeltaResult as DeltaResultLocal, DeltaTableError};
+use crate::kernel::{DeltaResult as DeltaResultLocal, DeltaTableError, TryIntoKernel as _};
 
 pub const NULL_PARTITION_VALUE_DATA_PATH: &str = "__HIVE_DEFAULT_PARTITION__";
 

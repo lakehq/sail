@@ -26,31 +26,25 @@ use std::sync::Arc;
 
 use arrow_schema::Fields;
 use datafusion::arrow::array::{Array, BooleanArray, MapArray, StringArray, StructArray};
+use datafusion::arrow::compute::filter_record_batch;
 use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
 };
-use delta_kernel::arrow::compute::filter_record_batch;
-use delta_kernel::arrow::record_batch::RecordBatch;
-use delta_kernel::engine::arrow_conversion::TryIntoArrow;
-use delta_kernel::engine::arrow_data::ArrowEngineData;
-use delta_kernel::engine::parse_json;
-use delta_kernel::expressions::{ColumnName, Scalar, StructData};
-use delta_kernel::scan::{Scan, ScanMetadata};
-use delta_kernel::schema::{
-    ArrayType, DataType, MapType, PrimitiveType, Schema, SchemaRef, SchemaTransform, StructField,
-    StructType,
-};
-use delta_kernel::snapshot::Snapshot;
-use delta_kernel::table_features::ColumnMappingMode;
-use delta_kernel::table_properties::{DataSkippingNumIndexedCols, TableProperties};
-use delta_kernel::{
-    DeltaResult, Engine, EngineData, ExpressionEvaluator, ExpressionRef, PredicateRef, Version,
-};
+use datafusion::arrow::record_batch::RecordBatch;
 use itertools::Itertools;
 
 use crate::conversion::ScalarConverter;
+use crate::kernel::models::{
+    ArrayType, ColumnMappingMode, DataType, MapType, PrimitiveType, Scalar, StructData,
+    Schema, StructField, StructType, TableProperties,
+};
 use crate::kernel::snapshot::SCAN_ROW_ARROW_SCHEMA;
-use crate::kernel::{DeltaResult as DeltaResultLocal, DeltaTableError};
+use crate::kernel::{
+    ArrowEngineData, ColumnName, DataSkippingNumIndexedCols, DeltaTableError, Engine, EngineData,
+    ExpressionEvaluator, ExpressionRef, KernelDeltaResult as DeltaResult, KernelSnapshot as Snapshot,
+    PredicateRef, Scan, ScanMetadata, SchemaRef, SchemaTransform, Version, parse_json, TryIntoArrow,
+};
+use crate::kernel::DeltaResult as DeltaResultLocal;
 
 /// [`ScanMetadata`] contains (1) a [`RecordBatch`] specifying data files to be scanned
 /// and (2) a vector of transforms (one transform per scan file) that must be applied to the data read
