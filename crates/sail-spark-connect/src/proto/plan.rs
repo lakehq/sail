@@ -141,14 +141,14 @@ impl TryFrom<RelType> for RelationNode {
                             unparsed_identifier,
                             options,
                         } = x;
-                        spec::ReadType::NamedTable(spec::ReadNamedTable {
+                        spec::ReadType::NamedTable(Box::new(spec::ReadNamedTable {
                             name: from_ast_object_name(parse_object_name(
                                 unparsed_identifier.as_str(),
                             )?)?,
                             temporal: None,
                             sample: None,
                             options: options.into_iter().collect(),
-                        })
+                        }))
                     }
                     ReadType::DataSource(x) => {
                         let DataSource {
@@ -172,13 +172,13 @@ impl TryFrom<RelType> for RelationNode {
                             .into_iter()
                             .map(|x| Ok(from_ast_expression(parse_expression(x.as_str())?)?))
                             .collect::<SparkResult<Vec<_>>>()?;
-                        spec::ReadType::DataSource(spec::ReadDataSource {
+                        spec::ReadType::DataSource(Box::new(spec::ReadDataSource {
                             format,
                             schema,
                             options: options.into_iter().collect(),
                             paths,
                             predicates,
-                        })
+                        }))
                     }
                 };
                 Ok(RelationNode::Query(spec::QueryNode::Read {
