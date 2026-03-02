@@ -10,6 +10,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Planner-time Delta log segment resolution.
+//!
+//! We intentionally keep log segment discovery in planner/control-plane code. Runtime
+//! replay/scan stays distributed on workers, while file-list selection remains deterministic
+//! and cheap to memoize within one planning request.
+
 use datafusion::common::Result;
 use futures::TryStreamExt;
 use object_store::path::Path;
@@ -24,6 +30,16 @@ const LAST_CHECKPOINT_FILE: &str = "_last_checkpoint";
 pub struct LogSegmentFiles {
     pub checkpoint_files: Vec<String>,
     pub commit_files: Vec<String>,
+}
+
+/// Canonical planner-time selection options for Delta log segment inputs.
+///
+/// We intentionally keep log segment discovery/selection in planner code (control-plane)
+/// instead of adding a dedicated runtime exec node.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LogSegmentResolveOptions {
+    /// Optional inclusive commit JSON version range.
+    pub commit_version_range: Option<(i64, i64)>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,6 +89,18 @@ async fn read_last_checkpoint_version(ctx: &PlannerContext<'_>) -> Option<i64> {
 }
 
 pub async fn list_log_segment_files(
+    ctx: &PlannerContext<'_>,
+    max_version: i64,
+) -> Result<LogSegmentFiles> {
+    if let Some(files) = ctx.get_cached_log_segment_files(max_version) {
+        return Ok(files);
+    }
+    let files = list_log_segment_files_uncached(ctx, max_version).await?;
+    ctx.set_cached_log_segment_files(max_version, files.clone());
+    Ok(files)
+}
+
+async fn list_log_segment_files_uncached(
     ctx: &PlannerContext<'_>,
     max_version: i64,
 ) -> Result<LogSegmentFiles> {
@@ -144,4 +172,35 @@ pub async fn list_log_segment_files(
         checkpoint_files,
         commit_files,
     })
+}
+
+pub async fn resolve_log_segment_files(
+    ctx: &PlannerContext<'_>,
+    max_version: i64,
+    options: LogSegmentResolveOptions,
+) -> Result<LogSegmentFiles> {
+    let mut files = list_log_segment_files(ctx, max_version).await?;
+
+    // Avoid double-counting actions that are already materialized into the latest checkpoint:
+    // only replay commit JSONs strictly newer than that checkpoint version.
+    let latest_checkpoint_version = files
+        .checkpoint_files
+        .iter()
+        .filter_map(|f| parse_version_prefix(f))
+        .max();
+    if let Some(cp_ver) = latest_checkpoint_version {
+        files
+            .commit_files
+            .retain(|f| parse_commit_version(f).map(|v| v > cp_ver).unwrap_or(true));
+    }
+
+    if let Some((start, end)) = options.commit_version_range {
+        files.commit_files.retain(|f| {
+            parse_commit_version(f)
+                .map(|v| v >= start && v <= end)
+                .unwrap_or(false)
+        });
+    }
+
+    Ok(files)
 }

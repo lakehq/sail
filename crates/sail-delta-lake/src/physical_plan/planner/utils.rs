@@ -36,6 +36,7 @@ use url::Url;
 
 use super::context::PlannerContext;
 use super::log_scan::{build_delta_log_datasource_union_with_options, LogScanOptions};
+use super::log_segment::{resolve_log_segment_files, LogSegmentResolveOptions};
 use crate::datasource::{
     simplify_expr, COMMIT_TIMESTAMP_COLUMN, COMMIT_VERSION_COLUMN, PATH_COLUMN,
 };
@@ -171,16 +172,12 @@ pub async fn build_log_replay_pipeline(
     table_url: Url,
     version: i64,
     partition_columns: Vec<String>,
-    checkpoint_files: Vec<String>,
-    commit_files: Vec<String>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     build_log_replay_pipeline_with_options(
         ctx,
         table_url,
         version,
         partition_columns,
-        checkpoint_files,
-        commit_files,
         LogReplayOptions::default(),
     )
     .await
@@ -192,13 +189,21 @@ pub async fn build_log_replay_pipeline_with_options(
     table_url: Url,
     version: i64,
     partition_columns: Vec<String>,
-    checkpoint_files: Vec<String>,
-    commit_files: Vec<String>,
     options: LogReplayOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
+    let log_segment_files = resolve_log_segment_files(
+        ctx,
+        version,
+        LogSegmentResolveOptions {
+            commit_version_range: options.commit_version_range,
+        },
+    )
+    .await?;
+    let checkpoint_files = log_segment_files.checkpoint_files;
+    let commit_files = log_segment_files.commit_files;
+
     let log_scan_options = LogScanOptions {
         projection: Some(vec!["add".to_string(), "remove".to_string()]),
-        commit_version_range: options.commit_version_range,
         parquet_predicate: options.parquet_predicate,
     };
     let (raw_scan, checkpoint_files, commit_files) = build_delta_log_datasource_union_with_options(

@@ -27,7 +27,6 @@ use sail_common_datafusion::datasource::{
 use url::Url;
 
 use super::context::PlannerContext;
-use super::log_segment::list_log_segment_files;
 use super::utils::build_log_replay_pipeline;
 use crate::datasource::{DataFusionMixins, PATH_COLUMN};
 use crate::kernel::{DeltaOperation, MergePredicate};
@@ -59,10 +58,6 @@ pub async fn build_merge_plan(
         .arrow_schema()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let partition_columns = snapshot_state.metadata().partition_columns().clone();
-
-    let log_segment_files = list_log_segment_files(ctx, version).await?;
-    let checkpoint_files = log_segment_files.checkpoint_files;
-    let commit_files = log_segment_files.commit_files;
 
     let mut options = ctx.options().clone();
     if merge_info.with_schema_evolution {
@@ -109,8 +104,6 @@ pub async fn build_merge_plan(
         partition_columns,
         table_schema,
         merge_info.touched_file_plan.clone(),
-        checkpoint_files,
-        commit_files,
         merge_operation,
     )
     .await
@@ -126,8 +119,6 @@ async fn finalize_merge(
     partition_columns: Vec<String>,
     table_schema: datafusion::arrow::datatypes::SchemaRef,
     touched_file_plan: Option<Arc<dyn ExecutionPlan>>,
-    checkpoint_files: Vec<String>,
-    commit_files: Vec<String>,
     operation_override: Option<DeltaOperation>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let touched_plan_opt = touched_file_plan;
@@ -248,15 +239,9 @@ async fn finalize_merge(
     if let Some(touched_plan) = &touched_plan_opt {
         // Build a log-side stream of active Add rows using a visible log replay pipeline:
         // Union(DataSourceExec parquet/json) -> DeltaLogReplayExec -> ... -> DeltaDiscoveryExec.
-        let meta_scan: Arc<dyn ExecutionPlan> = build_log_replay_pipeline(
-            ctx,
-            table_url.clone(),
-            version,
-            partition_columns.clone(),
-            checkpoint_files,
-            commit_files,
-        )
-        .await?;
+        let meta_scan: Arc<dyn ExecutionPlan> =
+            build_log_replay_pipeline(ctx, table_url.clone(), version, partition_columns.clone())
+                .await?;
 
         // Restrict to touched file paths by joining touched_paths with the metadata stream.
         let touched_schema = touched_plan.schema();

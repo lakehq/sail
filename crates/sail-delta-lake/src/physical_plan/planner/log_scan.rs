@@ -28,8 +28,6 @@ pub struct LogScanOptions {
     ///
     /// When set, the scan will only read these columns plus any required partition columns.
     pub projection: Option<Vec<String>>,
-    /// Optional inclusive log version range for commit JSON files.
-    pub commit_version_range: Option<(i64, i64)>,
     /// Optional pushdown predicate for checkpoint parquet scans.
     pub parquet_predicate: Option<Arc<dyn PhysicalExpr>>,
 }
@@ -151,38 +149,8 @@ pub async fn build_delta_log_datasource_union_with_options(
         DataFusionError::External(Box::<dyn std::error::Error + Send + Sync>::from(e))
     })?;
 
-    // Avoid double-counting actions that are already materialized into the checkpoint:
-    // only scan commit JSONs strictly newer than the latest checkpoint version.
-    let latest_checkpoint_version = checkpoint_files
-        .iter()
-        .filter_map(|f| parse_log_version_prefix(f))
-        .max();
-    let commit_files = if let Some(cp_ver) = latest_checkpoint_version {
-        commit_files
-            .into_iter()
-            .filter(|f| {
-                parse_log_version_prefix(f)
-                    .map(|v| v > cp_ver)
-                    .unwrap_or(true)
-            })
-            .collect::<Vec<_>>()
-    } else {
-        commit_files
-    };
-    let commit_files = if let Some((start, end)) = options.commit_version_range {
-        commit_files
-            .into_iter()
-            .filter(|f| {
-                parse_log_version_prefix(f).map(|v| {
-                    let v = i64::try_from(v).unwrap_or(i64::MAX);
-                    v >= start && v <= end
-                }) == Some(true)
-            })
-            .collect::<Vec<_>>()
-    } else {
-        commit_files
-    };
-
+    // Commit/checkpoint lists are expected to be selected by the planner log-segment resolver.
+    // This builder only materializes datasource scans from those resolved filenames.
     let table_root_path = log_store.config().location.path();
     let (checkpoint_metas, commit_metas) = tokio::try_join!(
         head_many(&store, table_root_path, &checkpoint_files),

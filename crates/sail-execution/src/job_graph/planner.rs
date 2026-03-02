@@ -341,7 +341,13 @@ fn rewrite_inputs(
     Ok((result.data()?, inputs))
 }
 
-// TODO: support driver stage with inputs
+// TODO: support driver stage with inputs.
+//
+// This is the prerequisite for introducing generic driver-only physical nodes.
+// A complete solution should define:
+// 1) how upstream worker outputs are consumed by a driver stage (`InputMode` contract),
+// 2) retry/fault semantics when driver and worker stages are mixed, and
+// 3) scheduler/task-assignment invariants for driver placement with stage dependencies.
 fn create_driver_stage(
     plan: &Arc<dyn ExecutionPlan>,
     graph: &mut JobGraph,
