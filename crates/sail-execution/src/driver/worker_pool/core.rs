@@ -255,6 +255,7 @@ impl WorkerPool {
         }
     }
 
+    /// Dispatches a task to a specific worker by sending the task definition over gRPC.
     pub fn run_task(
         &mut self,
         ctx: &mut ActorContext<DriverActor>,
