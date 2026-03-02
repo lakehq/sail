@@ -108,6 +108,7 @@ itertools = "0.14.0"
 moka = { version = "0.12.13", features = ["sync"] }
 bytes = "1.11.1"
 indexmap = "2.13.0"
+slotmap = "1.1.1"
 pin-project-lite = "0.2.16"
 ordered-float = { version = "5.1.0", features = ["serde"] }
 apache-avro = { version = "0.21.0" }

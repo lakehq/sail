@@ -1,9 +1,8 @@
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
-use datafusion::common::{internal_datafusion_err, internal_err, Result};
+use datafusion::common::{exec_datafusion_err, internal_datafusion_err, internal_err, Result};
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::{execute_stream, ExecutionPlan, ExecutionPlanProperties};
@@ -85,24 +84,14 @@ impl JobRunner for LocalJobRunner {
 
         let cache_ids = collect_cache_node_ids(&plan);
         let cache = ctx.extension::<CacheManager>()?;
-        let mut num_partitions_by_cache_id = HashMap::with_capacity(cache_ids.len());
-        for entry in cache.get_required_by_ids(&cache_ids)? {
-            let num_partitions = if entry.materialized {
-                let Some(num_partitions) = entry.num_partitions else {
-                    unreachable!("materialized cache entry must have partition count")
-                };
-                num_partitions
-            } else {
-                let num_partitions = self
-                    .materialize_cache(ctx, entry.cache_id, &entry.plan)
-                    .await?;
-                cache.mark_materialized(entry.cache_id, num_partitions);
-                num_partitions
-            };
-            num_partitions_by_cache_id.insert(entry.cache_id, num_partitions);
+        for (cache_id, entry) in cache.get_required_by_ids(&cache_ids)? {
+            if !entry.materialized {
+                let num_partitions = self.materialize_cache(ctx, cache_id, &entry.plan).await?;
+                cache.mark_materialized(cache_id, num_partitions);
+            }
         }
 
-        plan = rewrite_cache_read_partitions(plan, &num_partitions_by_cache_id)?;
+        plan = rewrite_cache_read_partitions(plan, &cache)?;
         let plan = inject_local_cache_store(plan, self.cache_store.clone())?;
         let job_id = self.next_job_id.fetch_add(1, Ordering::Relaxed);
         let options = TracingExecOptions {
@@ -203,25 +192,15 @@ impl JobRunner for ClusterJobRunner {
     ) -> Result<SendableRecordBatchStream> {
         let cache_ids = collect_cache_node_ids(&plan);
         let cache = ctx.extension::<CacheManager>()?;
-        let mut num_partitions_by_cache_id = HashMap::with_capacity(cache_ids.len());
 
-        for entry in cache.get_required_by_ids(&cache_ids)? {
-            let num_partitions = if entry.materialized {
-                let Some(num_partitions) = entry.num_partitions else {
-                    unreachable!("materialized cache entry must have partition count")
-                };
-                num_partitions
-            } else {
-                let num_partitions = self
-                    .materialize_cache(ctx, entry.cache_id, &entry.plan)
-                    .await?;
-                cache.mark_materialized(entry.cache_id, num_partitions);
-                num_partitions
-            };
-            num_partitions_by_cache_id.insert(entry.cache_id, num_partitions);
+        for (cache_id, entry) in cache.get_required_by_ids(&cache_ids)? {
+            if !entry.materialized {
+                let num_partitions = self.materialize_cache(ctx, cache_id, &entry.plan).await?;
+                cache.mark_materialized(cache_id, num_partitions);
+            }
         }
 
-        plan = rewrite_cache_read_partitions(plan, &num_partitions_by_cache_id)?;
+        plan = rewrite_cache_read_partitions(plan, &cache)?;
         self.submit_job(ctx, plan).await
     }
 
@@ -253,18 +232,21 @@ fn collect_cache_node_ids(plan: &Arc<dyn ExecutionPlan>) -> Vec<CacheId> {
 /// Rewrites cache-read nodes to use materialized cache partition counts.
 fn rewrite_cache_read_partitions(
     plan: Arc<dyn ExecutionPlan>,
-    num_partitions_by_cache_id: &HashMap<CacheId, usize>,
+    cache: &CacheManager,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let result = plan.transform(|node| {
         let Some(cache_read) = node.as_any().downcast_ref::<CacheReadExec>() else {
             return Ok(Transformed::no(node));
         };
-        let num_partitions = num_partitions_by_cache_id[&cache_read.cache_id()];
-        let rewritten: Arc<dyn ExecutionPlan> = Arc::new(CacheReadExec::new(
-            cache_read.cache_id(),
-            node.schema(),
-            num_partitions,
-        ));
+        let cache_id = cache_read.cache_id();
+        let entry = cache
+            .find_by_id(cache_id)
+            .ok_or_else(|| internal_datafusion_err!("required cache entry must exist"))?;
+        let num_partitions = entry.num_partitions.ok_or_else(|| {
+            exec_datafusion_err!("cache entry must be materialized before rewrite")
+        })?;
+        let rewritten: Arc<dyn ExecutionPlan> =
+            Arc::new(CacheReadExec::new(cache_id, node.schema(), num_partitions));
         Ok(Transformed::yes(rewritten))
     });
     result.data()

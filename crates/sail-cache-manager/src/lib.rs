@@ -1,4 +1,3 @@
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use datafusion::common::tree_node::Transformed;
@@ -8,14 +7,13 @@ use datafusion_expr::Extension;
 use sail_common::cache_id::CacheId;
 use sail_common_datafusion::extension::SessionExtension;
 use sail_logical_plan::cache_read_relation::CacheReadRelationNode;
+use slotmap::SlotMap;
 
 /// A cached plan entry.
 #[derive(Clone)]
 pub struct CachedData {
     /// The resolved logical plan used as the cache key.
     pub plan: LogicalPlan,
-    /// Unique identifier for this cache entry.
-    pub cache_id: CacheId,
     /// Whether the cached data has been materialized on worker nodes.
     pub materialized: bool,
     /// Number of partitions produced when this cache entry was materialized.
@@ -24,8 +22,7 @@ pub struct CachedData {
 
 /// Manages cached query results for a session.
 pub struct CacheManager {
-    entries: Mutex<Vec<CachedData>>,
-    next_id: AtomicU64,
+    entries: Mutex<SlotMap<CacheId, CachedData>>,
 }
 
 impl SessionExtension for CacheManager {
@@ -38,48 +35,47 @@ impl CacheManager {
     /// Creates a new empty cache manager.
     pub fn new() -> Self {
         Self {
-            entries: Mutex::new(Vec::new()),
-            next_id: AtomicU64::new(1),
+            entries: Mutex::new(SlotMap::with_key()),
         }
     }
 
     /// Registers a plan for caching. Returns the assigned cache ID.
     pub fn cache_plan(&self, plan: LogicalPlan) -> CacheId {
         let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(existing) = entries.iter().find(|e| e.plan == plan) {
-            return existing.cache_id;
+        if let Some((cache_id, _)) = entries.iter().find(|(_, entry)| entry.plan == plan) {
+            return cache_id;
         }
-        let cache_id = CacheId::from(self.next_id.fetch_add(1, Ordering::Relaxed));
-        entries.push(CachedData {
+        entries.insert(CachedData {
             plan,
-            cache_id,
             materialized: false,
             num_partitions: None,
-        });
-        cache_id
+        })
     }
 
-    /// Returns a clone of the cached entry if the given plan matches.
-    pub fn find_match(&self, node: &LogicalPlan) -> Option<CachedData> {
+    /// Returns the cache ID and entry if the given plan matches.
+    pub fn find_match(&self, node: &LogicalPlan) -> Option<(CacheId, CachedData)> {
         let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-        entries.iter().find(|e| e.plan == *node).cloned()
+        entries
+            .iter()
+            .find(|(_, entry)| entry.plan == *node)
+            .map(|(cache_id, entry)| (cache_id, entry.clone()))
     }
 
     /// Returns a clone of the cached entry with the given cache ID.
     pub fn find_by_id(&self, cache_id: CacheId) -> Option<CachedData> {
         let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-        entries.iter().find(|e| e.cache_id == cache_id).cloned()
+        entries.get(cache_id).cloned()
     }
 
     /// Returns cache entries for all IDs, or errors with the missing IDs.
-    pub fn get_required_by_ids(&self, cache_ids: &[CacheId]) -> Result<Vec<CachedData>> {
+    pub fn get_required_by_ids(&self, cache_ids: &[CacheId]) -> Result<Vec<(CacheId, CachedData)>> {
         let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         let mut found = Vec::with_capacity(cache_ids.len());
         let mut missing = Vec::new();
 
         for &cache_id in cache_ids {
-            if let Some(entry) = entries.iter().find(|e| e.cache_id == cache_id) {
-                found.push(entry.clone());
+            if let Some(entry) = entries.get(cache_id) {
+                found.push((cache_id, entry.clone()));
             } else {
                 missing.push(cache_id);
             }
@@ -93,7 +89,7 @@ impl CacheManager {
     /// Marks a cache entry as materialized with the given partition count.
     pub fn mark_materialized(&self, cache_id: CacheId, num_partitions: usize) {
         let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(entry) = entries.iter_mut().find(|e| e.cache_id == cache_id) {
+        if let Some(entry) = entries.get_mut(cache_id) {
             entry.materialized = true;
             entry.num_partitions = Some(num_partitions);
         }
@@ -102,11 +98,10 @@ impl CacheManager {
     /// Replaces cached subtrees with CacheReadRelation nodes.
     pub fn rewrite_plan_with_cache_reads(&self, plan: LogicalPlan) -> Result<LogicalPlan> {
         plan.transform_down_with_subqueries(|node| {
-            let Some(cached) = self.find_match(&node) else {
+            let Some((cache_id, cached)) = self.find_match(&node) else {
                 return Ok(Transformed::no(node));
             };
-            let relation =
-                CacheReadRelationNode::new(cached.plan.schema().clone(), cached.cache_id);
+            let relation = CacheReadRelationNode::new(cached.plan.schema().clone(), cache_id);
             Ok(Transformed::yes(LogicalPlan::Extension(Extension {
                 node: Arc::new(relation),
             })))

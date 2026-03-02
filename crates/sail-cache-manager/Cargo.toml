@@ -14,3 +14,4 @@ sail-logical-plan = { path = "../sail-logical-plan" }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
+slotmap = { workspace = true }
