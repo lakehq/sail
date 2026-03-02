@@ -27,7 +27,7 @@ env SAIL_UPDATE_GOLD_DATA=1 cargo nextest run
 
 ## Documentation Development
 
-If you work on documentation, run the following command first to install the dependencies:
+If you are working on documentation, run the following command first to install the dependencies:
 
 ```bash
 pnpm install
@@ -43,3 +43,12 @@ pnpm install
 Before committing changes, make sure to format and lint the files, and ensure the documentation site builds without errors.
 
 You can skip API documentation generation if you are only working on files inside the `docs/` directory.
+
+## Contributing
+
+Please make sure the pull request title follows the Conventional Commits specification: `<type>[(<scope>)]: <description>`.
+1. Use `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, etc. for `<type>`.
+2. Do not add `<scope>`. The optional `<scope>` is only allowed for dependabot pull requests.
+3. `<description>` must start with a lowercase letter. You may use backticks to refer to code elements.
+   If `<description>` contains words that should start with an uppercase letter (e.g., "SQL"),
+   consider rephrasing it so that such words are not at the start.

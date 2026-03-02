@@ -186,7 +186,7 @@ enum PartitionUsage {
     Shared,
 }
 
-/// Splits a physical plan into stages and inserts stage input placeholders.
+/// Recursively splits an execution plan into stages at shuffle boundaries and adds them to the job graph.
 fn build_job_graph(
     plan: Arc<dyn ExecutionPlan>,
     usage: PartitionUsage,

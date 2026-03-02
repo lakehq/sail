@@ -137,6 +137,7 @@ jobs:
     needs:
       - setup
     strategy:
+      fail-fast: false
       matrix:
         platform:
           - runner: ubuntu-24.04-x64-8-core
@@ -242,6 +243,7 @@ jobs:
     env:
       RELEASE_VERSION: ${{ needs.setup.outputs.version }}
     strategy:
+      fail-fast: false
       matrix:
         platform:
           - runner: ubuntu-24.04-x64-8-core
@@ -302,6 +304,7 @@ jobs:
     env:
       RELEASE_VERSION: ${{ needs.setup.outputs.version }}
     strategy:
+      fail-fast: false
       matrix:
         platform:
           - runner: ubuntu-24.04

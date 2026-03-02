@@ -19,7 +19,7 @@ pip install pysail[jdbc]
 Register the datasource once per Spark session, then read using the standard PySpark API.
 
 ```python
-from pysail.datasources.jdbc import JdbcDataSource
+from pysail.spark.datasource.jdbc import JdbcDataSource
 
 spark.dataSource.register(JdbcDataSource)
 

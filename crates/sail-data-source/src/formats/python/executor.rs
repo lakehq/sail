@@ -322,9 +322,29 @@ impl PythonExecutor for InProcessExecutor {
                 }
 
                 // Now call partitions() on the same reader that has the filters
-                let partitions = reader
-                    .call_method0("partitions")
-                    .map_err(|e| ctx.wrap_py_error(e))?;
+                let partitions = match reader.call_method0("partitions") {
+                    Ok(partitions) => partitions,
+                    Err(err) => {
+                        if is_pyspark_not_implemented(py, &err) {
+                            log::debug!(
+                                "[{}::partitions] partitions() not implemented; using single default partition",
+                                ds_name
+                            );
+                            pyo3::types::PyList::new(py, [py.None()])
+                                .map_err(|e| {
+                                    ctx.wrap_error(format!(
+                                        "Failed to create default partitions list: {}",
+                                        e
+                                    ))
+                                })?
+                                .into_any()
+                        } else {
+                            return Err(datafusion_common::DataFusionError::External(Box::new(
+                                ctx.wrap_py_error(err),
+                            )));
+                        }
+                    }
+                };
 
                 // Convert Python partitions to Rust
                 let partitions_list =
@@ -830,6 +850,19 @@ fn pickle_object(py: pyo3::Python<'_>, obj: &pyo3::Bound<'_, pyo3::PyAny>) -> Re
         .extract::<Vec<u8>>()
         .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
     Ok(bytes)
+}
+
+fn is_pyspark_not_implemented(py: pyo3::Python<'_>, err: &pyo3::PyErr) -> bool {
+    let errors_module = match py.import("pyspark.errors") {
+        Ok(module) => module,
+        Err(_) => return false,
+    };
+    let not_impl = match errors_module.getattr("PySparkNotImplementedError") {
+        Ok(cls) => cls,
+        Err(_) => return false,
+    };
+
+    err.is_instance(py, &not_impl)
 }
 
 /// Re-export py_err from error module.
