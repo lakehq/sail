@@ -14,14 +14,16 @@ _March 2, 2026_
 - Added support for the JDBC data source ([#1379](https://github.com/lakehq/sail/pull/1379), [#1389](https://github.com/lakehq/sail/pull/1389), and [#1446](https://github.com/lakehq/sail/pull/1446)).
 - Added support for the `SELECT * FROM <format>.<path>` SQL query syntax ([#1439](https://github.com/lakehq/sail/pull/1439)).
 - Added support for the `IDENTIFIER` clause in SQL queries ([#1441](https://github.com/lakehq/sail/pull/1441)).
+- Added support for passing DataFrame as arguments to SQL queries in PySpark ([#1426](https://github.com/lakehq/sail/pull/1426)).
 - Improved Delta Lake integration ([#1352](https://github.com/lakehq/sail/pull/1352), [#1359](https://github.com/lakehq/sail/pull/1359), and [#1415](https://github.com/lakehq/sail/pull/1415)).
 - Improved the join reorder optimizer ([#1248](https://github.com/lakehq/sail/pull/1248)).
-- Added support for passing DataFrame as arguments to SQL queries in PySpark ([#1426](https://github.com/lakehq/sail/pull/1426)).
-- Added SQL parsing support for the `DROP FUNCTION` statement ([#1433](https://github.com/lakehq/sail/pull/1433)).
-- Improved ANSI mode division-by-zero handling in SQL queries ([#1304](https://github.com/lakehq/sail/pull/1304)).
-- Fixed an issue with the `range` table function in SQL queries ([#1423](https://github.com/lakehq/sail/pull/1423)).
-- Fixed an issue with struct field extraction in SQL queries ([#1386](https://github.com/lakehq/sail/pull/1386)).
-- Fixed issues with start and end fields in the interval data type ([#1388](https://github.com/lakehq/sail/pull/1388)).
+- Added support for the following SQL functions ([#1358](https://github.com/lakehq/sail/pull/1358) and [#1398](https://github.com/lakehq/sail/pull/1398)):
+  - `try_make_timestamp`
+  - `try_make_timestamp_ltz`
+  - `try_make_timestamp_ntz`
+  - `st_asbinary`
+  - `st_geomfromwkb`
+  - `st_geogfromwkb`
 - Improved the following SQL functions ([#1308](https://github.com/lakehq/sail/pull/1308), [#1358](https://github.com/lakehq/sail/pull/1358), [#1387](https://github.com/lakehq/sail/pull/1387), [#1390](https://github.com/lakehq/sail/pull/1390), [#1392](https://github.com/lakehq/sail/pull/1392), [#1393](https://github.com/lakehq/sail/pull/1393), and [#1408](https://github.com/lakehq/sail/pull/1408)):
   - `from_csv`
   - `trim`
@@ -35,13 +37,11 @@ _March 2, 2026_
   - `make_timestamp`
   - `make_timestamp_ltz`
   - `make_timestamp_ntz`
-- Added support for the following SQL functions ([#1358](https://github.com/lakehq/sail/pull/1358) and [#1398](https://github.com/lakehq/sail/pull/1398)):
-  - `try_make_timestamp`
-  - `try_make_timestamp_ltz`
-  - `try_make_timestamp_ntz`
-  - `st_asbinary`
-  - `st_geomfromwkb`
-  - `st_geogfromwkb`
+- Added SQL parsing support for the `DROP FUNCTION` statement ([#1433](https://github.com/lakehq/sail/pull/1433)).
+- Improved ANSI mode division-by-zero handling in SQL queries ([#1304](https://github.com/lakehq/sail/pull/1304)).
+- Fixed an issue with the `range` table function in SQL queries ([#1423](https://github.com/lakehq/sail/pull/1423)).
+- Fixed an issue with struct field extraction in SQL queries ([#1386](https://github.com/lakehq/sail/pull/1386)).
+- Fixed issues with start and end fields in the interval data type ([#1388](https://github.com/lakehq/sail/pull/1388)).
 
 ### Contributors
 
