@@ -12,6 +12,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::kernel::models::ColumnMappingMode;
+
 /// Options that control the behavior of Delta Lake tables.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct TableDeltaOptions {
@@ -36,4 +38,44 @@ pub enum ColumnMappingModeOption {
     None,
     Name,
     Id,
+}
+
+impl ColumnMappingModeOption {
+    pub fn parse(value: &str) -> Self {
+        match value.to_ascii_lowercase().as_str() {
+            "name" => Self::Name,
+            "id" => Self::Id,
+            _ => Self::None,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Name => "name",
+            Self::Id => "id",
+        }
+    }
+
+    pub const fn to_kernel(self) -> ColumnMappingMode {
+        match self {
+            Self::Name => ColumnMappingMode::Name,
+            Self::Id => ColumnMappingMode::Id,
+            Self::None => ColumnMappingMode::None,
+        }
+    }
+
+    pub const fn is_enabled(self) -> bool {
+        matches!(self, Self::Name | Self::Id)
+    }
+}
+
+impl From<ColumnMappingMode> for ColumnMappingModeOption {
+    fn from(value: ColumnMappingMode) -> Self {
+        match value {
+            ColumnMappingMode::Name => Self::Name,
+            ColumnMappingMode::Id => Self::Id,
+            ColumnMappingMode::None => Self::None,
+        }
+    }
 }

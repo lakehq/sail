@@ -37,7 +37,7 @@ use uuid::Uuid;
 
 use crate::error::{DeltaError, KernelError};
 use crate::kernel::checkpoints::{cleanup_expired_logs_for, create_checkpoint_for};
-use crate::kernel::models::{Action, Metadata, Protocol, Transaction};
+use crate::kernel::models::{Action, Add, Metadata, Protocol, Transaction};
 use crate::kernel::snapshot::EagerSnapshot;
 use crate::kernel::transaction::conflict_checker::{TransactionInfo, WinningCommitSummary};
 use crate::kernel::{DeltaOperation, DeltaResult, TablePropertiesExt};
@@ -296,8 +296,8 @@ pub trait TableReference: Send + Sync {
     #[expect(dead_code)]
     fn metadata(&self) -> &Metadata;
 
-    /// Try to cast this table reference to a `EagerSnapshot`
-    fn eager_snapshot(&self) -> &EagerSnapshot;
+    /// Build the write-transaction snapshot view used by OCC checks.
+    fn write_snapshot(&self) -> WriteSnapshot;
 }
 
 /// Narrow write-transaction view over table state.
@@ -314,9 +314,13 @@ impl WriteSnapshot {
         Self { inner }
     }
 
+    pub fn from_table_state(state: &DeltaTableState) -> Self {
+        Self::from_eager_snapshot(state.snapshot().clone())
+    }
+
     pub async fn try_new(log_store: &dyn LogStore, version: Option<i64>) -> DeltaResult<Self> {
-        let inner = EagerSnapshot::try_new(log_store, Default::default(), version).await?;
-        Ok(Self { inner })
+        let state = DeltaTableState::try_new(log_store, Default::default(), version).await?;
+        Ok(Self::from_table_state(&state))
     }
 
     pub fn version(&self) -> i64 {
@@ -331,8 +335,17 @@ impl WriteSnapshot {
         self.inner.metadata()
     }
 
-    pub fn log_data(&self) -> crate::kernel::snapshot::LogDataHandler<'_> {
-        self.inner.log_data()
+    pub fn table_properties(&self) -> &TableProperties {
+        self.inner.table_properties()
+    }
+
+    pub fn read_files(&self) -> Box<dyn Iterator<Item = Add>> {
+        Box::new(
+            self.inner
+                .log_data()
+                .into_iter()
+                .map(|file| file.add_action()),
+        )
     }
 
     pub async fn update(
@@ -361,8 +374,8 @@ impl TableReference for EagerSnapshot {
         self.table_properties()
     }
 
-    fn eager_snapshot(&self) -> &EagerSnapshot {
-        self
+    fn write_snapshot(&self) -> WriteSnapshot {
+        WriteSnapshot::from_eager_snapshot(self.clone())
     }
 }
 
@@ -379,8 +392,8 @@ impl TableReference for DeltaTableState {
         EagerSnapshot::metadata(self)
     }
 
-    fn eager_snapshot(&self) -> &EagerSnapshot {
-        self
+    fn write_snapshot(&self) -> WriteSnapshot {
+        WriteSnapshot::from_table_state(self)
     }
 }
 
@@ -703,9 +716,8 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
             };
             let total_retries = effective_max_retries + 1;
 
-            let mut read_snapshot: Option<WriteSnapshot> = this.table_data.map(|table_ref| {
-                WriteSnapshot::from_eager_snapshot(table_ref.eager_snapshot().clone())
-            });
+            let mut read_snapshot: Option<WriteSnapshot> =
+                this.table_data.map(|table_ref| table_ref.write_snapshot());
             let mut creation_actions_stripped = false;
             for attempt_number in 1..=total_retries {
                 let snapshot_version = read_snapshot.as_ref().map(|s| s.version()).unwrap_or(-1);
@@ -813,7 +825,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                                 )
                                 .await?;
                                 let transaction_info = TransactionInfo::try_new(
-                                    snapshot.log_data(),
+                                    snapshot,
                                     &local_actions,
                                     this.data.operation.read_whole_table(),
                                 )?;
@@ -909,7 +921,7 @@ impl PostCommit {
         // Always construct a state for the committed version so checkpoint + cleanup can run
         // even when `table_data` isn't available (e.g. planner didn't provide a snapshot).
         let mut state = if let Some(table) = &self.table_data {
-            let mut snapshot = table.eager_snapshot().clone();
+            let mut snapshot = table.write_snapshot().into_eager_snapshot();
             if self.version != snapshot.version() {
                 snapshot
                     .update(self.log_store.as_ref(), Some(self.version as u64))

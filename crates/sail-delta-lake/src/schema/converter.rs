@@ -5,11 +5,10 @@ use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef,
 };
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
-use delta_kernel::schema::{
-    ColumnMetadataKey, MetadataValue, StructField as KernelStructField, StructType,
-};
-use delta_kernel::table_features::ColumnMappingMode;
 
+use crate::kernel::models::{
+    ColumnMappingMode, ColumnMetadataKey, DataType, MetadataValue, StructField, StructType,
+};
 use crate::kernel::{DeltaResult, DeltaTableError};
 
 pub fn logical_arrow_to_kernel(arrow: &ArrowSchema) -> DeltaResult<StructType> {
@@ -61,7 +60,7 @@ pub fn get_physical_arrow_schema(logical: &StructType, mode: ColumnMappingMode) 
     }
 }
 
-fn field_from_struct_field(field: &KernelStructField) -> Result<Field, DeltaTableError> {
+fn field_from_struct_field(field: &StructField) -> Result<Field, DeltaTableError> {
     let arrow_field: Field = field.try_into_arrow()?;
     let field_type = arrow_field.data_type().clone();
     Ok(Field::new(
@@ -105,16 +104,14 @@ pub fn enrich_arrow_with_parquet_field_ids(
             out.insert(path.clone(), (id, f.name().clone()));
 
             match f.data_type() {
-                delta_kernel::schema::DataType::Struct(nst) => {
-                    build_path_map(nst.as_ref(), path, out)
-                }
-                delta_kernel::schema::DataType::Array(at) => {
-                    if let delta_kernel::schema::DataType::Struct(nst) = at.element_type() {
+                DataType::Struct(nst) => build_path_map(nst.as_ref(), path, out),
+                DataType::Array(at) => {
+                    if let DataType::Struct(nst) = at.element_type() {
                         build_path_map(nst.as_ref(), path, out)
                     }
                 }
-                delta_kernel::schema::DataType::Map(mt) => {
-                    if let delta_kernel::schema::DataType::Struct(nst) = mt.value_type() {
+                DataType::Map(mt) => {
+                    if let DataType::Struct(nst) = mt.value_type() {
                         build_path_map(nst.as_ref(), path, out)
                     }
                 }

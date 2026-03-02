@@ -34,12 +34,14 @@ use futures::stream::{self, StreamExt};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
-use crate::kernel::models::{Action, Metadata, Protocol};
+use crate::kernel::models::Action;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::physical_plan::action_schema::CommitMeta;
 use crate::physical_plan::{decode_actions_and_meta_from_batch, COL_ACTION};
-use crate::schema::{logical_arrow_to_kernel, normalize_delta_schema};
+use crate::schema::{
+    metadata_for_create_with_logical_arrow, normalize_delta_schema, protocol_for_create,
+};
 use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::{create_delta_table_with_object_store, open_table_with_object_store};
 
@@ -329,24 +331,14 @@ impl ExecutionPlan for DeltaCommitExec {
                 } else {
                     // Construct minimal protocol/metadata and insert them
                     let normalized_sink = normalize_delta_schema(&sink_schema);
-                    let delta_schema = logical_arrow_to_kernel(normalized_sink.as_ref())
+                    let protocol = protocol_for_create(false, false)
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-                    let protocol_json = serde_json::json!({
-                        "minReaderVersion": 1,
-                        "minWriterVersion": 2,
-                    });
-                    let protocol: Protocol = serde_json::from_value(protocol_json)
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                    let configuration: HashMap<String, String> = HashMap::new();
-                    let metadata = Metadata::try_new(
-                        None,
-                        None,
-                        delta_schema.clone(),
+                    let metadata = metadata_for_create_with_logical_arrow(
+                        normalized_sink.as_ref(),
                         partition_columns.to_vec(),
                         Utc::now().timestamp_millis(),
-                        configuration,
+                        HashMap::new(),
                     )
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
 

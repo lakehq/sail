@@ -18,7 +18,11 @@ pub use actions::{
     Transaction,
 };
 pub use delta_kernel::actions::{Metadata, Protocol};
-pub use delta_kernel::schema::{DataType, Schema, StructField, StructType};
+pub use delta_kernel::expressions::Scalar;
+pub use delta_kernel::schema::{
+    ArrayType, ColumnMetadataKey, DataType, MapType, MetadataValue, Schema, StructField, StructType,
+};
+pub use delta_kernel::table_features::ColumnMappingMode;
 pub use metadata::MetadataExt;
 
 pub use super::statistics::{ColumnCountStat, ColumnValueStat, Stats};

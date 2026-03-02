@@ -19,10 +19,9 @@
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/kernel/snapshot/log_data.rs>
 
 use ::datafusion::arrow::array::{Array, RecordBatch, StringArray, StructArray};
-use delta_kernel::actions::{Metadata, Protocol};
+use delta_kernel::actions::Metadata;
 use delta_kernel::scan::scan_row_schema;
 use delta_kernel::table_configuration::TableConfiguration;
-use delta_kernel::table_properties::TableProperties;
 use log::warn;
 
 use crate::kernel::snapshot::iterators::LogicalFileView;
@@ -51,14 +50,6 @@ impl<'a> LogDataHandler<'a> {
     #[expect(dead_code)]
     pub(crate) fn table_configuration(&self) -> &TableConfiguration {
         self.config
-    }
-
-    pub(crate) fn table_properties(&self) -> &TableProperties {
-        self.config.table_properties()
-    }
-
-    pub(crate) fn protocol(&self) -> &Protocol {
-        self.config.protocol()
     }
 
     #[expect(dead_code)]

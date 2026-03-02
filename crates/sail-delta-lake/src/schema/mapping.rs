@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 
-use delta_kernel::schema::{ArrayType, DataType, MapType, MetadataValue, StructField, StructType};
+use crate::kernel::models::{ArrayType, DataType, MapType, MetadataValue, StructField, StructType};
 
 /// Annotate a logical kernel schema with column mapping metadata (id + physicalName)
 /// using a sequential id assignment. Intended only for new table creation (name mode).

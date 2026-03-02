@@ -291,11 +291,7 @@ fn apply_delta_write_options(from: DeltaWriteOptions, to: &mut TableDeltaOptions
         to.write_batch_size = write_batch_size;
     }
     if let Some(column_mapping_mode) = from.column_mapping_mode {
-        match column_mapping_mode.to_ascii_lowercase().as_str() {
-            "name" => to.column_mapping_mode = ColumnMappingModeOption::Name,
-            "id" => to.column_mapping_mode = ColumnMappingModeOption::Id,
-            _ => to.column_mapping_mode = ColumnMappingModeOption::None,
-        }
+        to.column_mapping_mode = ColumnMappingModeOption::parse(&column_mapping_mode);
     }
     Ok(())
 }

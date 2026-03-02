@@ -44,21 +44,21 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
-use delta_kernel::table_features::ColumnMappingMode;
 use futures::stream::{once, StreamExt};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use serde_json::Value;
 use url::Url;
 
 use crate::conversion::DeltaTypeConverter;
-use crate::kernel::models::{contains_timestampntz, Action, Metadata, Protocol, StructType};
+use crate::kernel::models::{contains_timestampntz, Action, ColumnMappingMode, StructType};
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::options::{ColumnMappingModeOption, TableDeltaOptions};
 use crate::physical_plan::{delta_action_schema, encode_actions, CommitMeta, ExecAction};
 use crate::schema::{
     annotate_for_column_mapping, compute_max_column_id, evolve_schema, get_physical_schema,
-    kernel_to_logical_arrow, logical_arrow_to_kernel, normalize_delta_schema,
+    kernel_to_logical_arrow, metadata_for_create_with_struct_type, normalize_delta_schema,
+    protocol_for_create, struct_type_from_logical_arrow,
 };
 use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::open_table_with_object_store;
@@ -426,63 +426,37 @@ impl DeltaWriterExec {
 
             // Determine effective column mapping mode
             let effective_mode = if let Some(table) = &table {
-                let mode = table
-                    .snapshot()
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?
-                    .effective_column_mapping_mode();
-                match mode {
-                    ColumnMappingMode::Name => ColumnMappingModeOption::Name,
-                    ColumnMappingMode::Id => ColumnMappingModeOption::Id,
-                    _ => ColumnMappingModeOption::None,
-                }
+                ColumnMappingModeOption::from(
+                    table
+                        .snapshot()
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?
+                        .effective_column_mapping_mode(),
+                )
             } else {
                 options.column_mapping_mode
             };
 
             // Determine the kernel column mapping mode once for downstream conversions
-            let kernel_mode = match effective_mode {
-                ColumnMappingModeOption::Name => ColumnMappingMode::Name,
-                ColumnMappingModeOption::Id => ColumnMappingMode::Id,
-                ColumnMappingModeOption::None => ColumnMappingMode::None,
-            };
+            let kernel_mode = effective_mode.to_kernel();
 
             // If creating a new table and column mapping or timestampNtz features are required,
             // prepare initial protocol+metadata
             let mut annotated_schema_opt: Option<StructType> = None;
             if !table_exists {
                 // Build kernel schema for feature detection
-                let kernel_schema = logical_arrow_to_kernel(final_schema.as_ref())
+                let kernel_schema = struct_type_from_logical_arrow(final_schema.as_ref())
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let has_timestamp_ntz = contains_timestampntz(kernel_schema.fields());
 
-                if matches!(
-                    effective_mode,
-                    ColumnMappingModeOption::Name | ColumnMappingModeOption::Id
-                ) {
+                if effective_mode.is_enabled() {
                     let annotated_schema = annotate_for_column_mapping(&kernel_schema);
                     annotated_schema_opt = Some(annotated_schema.clone());
 
-                    let mut reader_features = vec!["columnMapping"];
-                    let mut writer_features = vec!["columnMapping"];
-                    if has_timestamp_ntz {
-                        reader_features.push("timestampNtz");
-                        writer_features.push("timestampNtz");
-                    }
-
-                    let protocol: Protocol = serde_json::from_value(serde_json::json!({
-                        "minReaderVersion": 3,
-                        "minWriterVersion": 7,
-                        "readerFeatures": reader_features,
-                        "writerFeatures": writer_features
-                    }))
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    let protocol = protocol_for_create(true, has_timestamp_ntz)
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                     let mut configuration = HashMap::new();
-                    let mode_str = match effective_mode {
-                        ColumnMappingModeOption::Name => "name",
-                        ColumnMappingModeOption::Id => "id",
-                        ColumnMappingModeOption::None => "none",
-                    };
+                    let mode_str = effective_mode.as_str();
                     configuration
                         .insert("delta.columnMapping.mode".to_string(), mode_str.to_string());
                     // Set maxColumnId for new tables
@@ -492,9 +466,7 @@ impl DeltaWriterExec {
                         max_id.to_string(),
                     );
 
-                    let metadata = Metadata::try_new(
-                        None,
-                        None,
+                    let metadata = metadata_for_create_with_struct_type(
                         annotated_schema.clone(),
                         partition_columns.clone(),
                         Utc::now().timestamp_millis(),
@@ -513,21 +485,14 @@ impl DeltaWriterExec {
                     operation = Some(DeltaOperation::Create {
                         mode: SaveMode::ErrorIfExists,
                         location: table_url.to_string(),
-                        protocol: Box::new(protocol),
-                        metadata: Box::new(metadata),
+                        protocol: Box::new(protocol.clone()),
+                        metadata: Box::new(metadata.clone()),
                     });
                 } else if has_timestamp_ntz {
-                    let protocol: Protocol = serde_json::from_value(serde_json::json!({
-                        "minReaderVersion": 3,
-                        "minWriterVersion": 7,
-                        "readerFeatures": ["timestampNtz"],
-                        "writerFeatures": ["timestampNtz"]
-                    }))
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    let protocol = protocol_for_create(false, true)
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-                    let metadata = Metadata::try_new(
-                        None,
-                        None,
+                    let metadata = metadata_for_create_with_struct_type(
                         kernel_schema,
                         partition_columns.clone(),
                         Utc::now().timestamp_millis(),
@@ -541,86 +506,85 @@ impl DeltaWriterExec {
                     operation = Some(DeltaOperation::Create {
                         mode: SaveMode::ErrorIfExists,
                         location: table_url.to_string(),
-                        protocol: Box::new(protocol),
-                        metadata: Box::new(metadata),
+                        protocol: Box::new(protocol.clone()),
+                        metadata: Box::new(metadata.clone()),
                     });
                 }
             }
 
             // Build physical writer schema (use physical names and set parquet field ids)
             // Prefer schema from pending Metadata action (schema evolution) if present
-            let (writer_schema, physical_partition_columns, logical_kernel_for_mapping) = if matches!(
-                effective_mode,
-                ColumnMappingModeOption::Name | ColumnMappingModeOption::Id
-            ) {
-                // Determine logical kernel schema (annotated for new tables; from snapshot for existing tables)
-                let logical_kernel: StructType = if let Some(meta_action_schema) = schema_actions
-                    .iter()
-                    .find_map(|a| match a {
-                        Action::Metadata(m) => Some(
-                            m.parse_schema()
-                                .map_err(|e| DataFusionError::External(Box::new(e))),
-                        ),
-                        _ => None,
-                    })
-                    .transpose()?
-                {
-                    meta_action_schema
-                } else if table_exists {
-                    let table = table.as_ref().ok_or_else(|| {
-                        DataFusionError::Internal(
-                            "table exists but was not loaded for column-mapped write planning"
-                                .to_string(),
-                        )
-                    })?;
-                    table
-                        .snapshot()
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?
-                        .snapshot()
-                        .schema()
-                        .clone()
-                } else {
-                    annotated_schema_opt.clone().ok_or_else(|| {
-                        DataFusionError::Plan(
-                            "Annotated schema should be present for new table with column mapping"
-                                .to_string(),
-                        )
-                    })?
-                };
-
-                // Build physical Arrow schema enriched with PARQUET:field_id
-                let enriched_arrow = get_physical_schema(&logical_kernel, kernel_mode);
-                let arc_schema = Arc::new(enriched_arrow);
-                let writer_field_names: Vec<String> = arc_schema
-                    .fields()
-                    .iter()
-                    .map(|f| f.name().clone())
-                    .collect();
-                log::trace!(
-                    "effective_mode: {:?}, writer_schema_fields: {:?}",
-                    effective_mode,
-                    &writer_field_names
-                );
-
-                // Resolve logical partition columns to their physical names so that the
-                // writer can locate them in the batch when column mapping is enabled.
-                let resolved_partitions = partition_columns
-                    .iter()
-                    .map(|logical_name| {
-                        let field = logical_kernel.field(logical_name).ok_or_else(|| {
-                            DataFusionError::Plan(format!(
-                                "Partition column '{}' not found in logical schema",
-                                logical_name
-                            ))
+            let (writer_schema, physical_partition_columns, logical_kernel_for_mapping) =
+                if effective_mode.is_enabled() {
+                    // Determine logical kernel schema (annotated for new tables; from snapshot for existing tables)
+                    let logical_kernel: StructType = if let Some(meta_action_schema) =
+                        schema_actions
+                            .iter()
+                            .find_map(|a| match a {
+                                Action::Metadata(m) => Some(
+                                    m.parse_schema()
+                                        .map_err(|e| DataFusionError::External(Box::new(e))),
+                                ),
+                                _ => None,
+                            })
+                            .transpose()?
+                    {
+                        meta_action_schema
+                    } else if table_exists {
+                        let table = table.as_ref().ok_or_else(|| {
+                            DataFusionError::Internal(
+                                "table exists but was not loaded for column-mapped write planning"
+                                    .to_string(),
+                            )
                         })?;
-                        Ok(field.physical_name(kernel_mode).to_string())
-                    })
-                    .collect::<Result<Vec<_>>>()?;
+                        table
+                            .snapshot()
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?
+                            .snapshot()
+                            .schema()
+                            .clone()
+                    } else {
+                        annotated_schema_opt.clone().ok_or_else(|| {
+                            DataFusionError::Plan(
+                                "Annotated schema should be present for new table with column mapping"
+                                    .to_string(),
+                            )
+                        })?
+                    };
 
-                (arc_schema, resolved_partitions, Some(logical_kernel))
-            } else {
-                (final_schema.clone(), partition_columns.clone(), None)
-            };
+                    // Build physical Arrow schema enriched with PARQUET:field_id
+                    let enriched_arrow = get_physical_schema(&logical_kernel, kernel_mode);
+                    let arc_schema = Arc::new(enriched_arrow);
+                    let writer_field_names: Vec<String> = arc_schema
+                        .fields()
+                        .iter()
+                        .map(|f| f.name().clone())
+                        .collect();
+                    log::trace!(
+                        "effective_mode: {:?}, writer_schema_fields: {:?}",
+                        effective_mode,
+                        &writer_field_names
+                    );
+
+                    // Resolve logical partition columns to their physical names so that the
+                    // writer can locate them in the batch when column mapping is enabled.
+                    let resolved_partitions = partition_columns
+                        .iter()
+                        .map(|logical_name| {
+                            let field = logical_kernel.field(logical_name).ok_or_else(|| {
+                                DataFusionError::Plan(format!(
+                                    "Partition column '{}' not found in logical schema",
+                                    logical_name
+                                ))
+                            })?;
+                            Ok(field.physical_name(kernel_mode).to_string())
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+
+                    (arc_schema, resolved_partitions, Some(logical_kernel))
+                } else {
+                    (final_schema.clone(), partition_columns.clone(), None)
+                };
 
             let writer_config = WriterConfig::new(
                 writer_schema.clone(),
@@ -819,7 +783,7 @@ impl DeltaWriterExec {
                 let merged_schema = Self::merge_schemas(&table_arrow_schema, input_schema)?;
                 if merged_schema.fields() != table_arrow_schema.fields() {
                     // Schema has changed, create metadata action
-                    let candidate_kernel = logical_arrow_to_kernel(merged_schema.as_ref())
+                    let candidate_kernel = struct_type_from_logical_arrow(merged_schema.as_ref())
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                     let snapshot = table.snapshot()?;
@@ -840,7 +804,7 @@ impl DeltaWriterExec {
             }
             Some(SchemaMode::Overwrite) => {
                 // Use input schema as-is
-                let candidate_kernel = logical_arrow_to_kernel(input_schema.as_ref())
+                let candidate_kernel = struct_type_from_logical_arrow(input_schema.as_ref())
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                 let snapshot = table.snapshot()?;

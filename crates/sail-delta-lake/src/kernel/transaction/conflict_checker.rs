@@ -26,8 +26,8 @@ use delta_kernel::table_properties::IsolationLevel;
 use delta_kernel::Error as KernelError;
 use thiserror::Error;
 
+use super::WriteSnapshot;
 use crate::kernel::models::{Action, Add, CommitInfo, Metadata, Protocol, Remove, Transaction};
-use crate::kernel::snapshot::LogDataHandler;
 use crate::kernel::{DeltaOperation, DeltaResult, TablePropertiesExt};
 use crate::storage::{get_actions, LogStore};
 
@@ -80,15 +80,15 @@ pub(crate) struct TransactionInfo<'a> {
     read_app_ids: HashSet<String>,
     /// delta log actions that the transaction wants to commit
     actions: &'a [Action],
-    /// read [`DeltaTableState`] used for the transaction
-    read_snapshot: LogDataHandler<'a>,
+    /// read snapshot used for the transaction
+    read_snapshot: &'a WriteSnapshot,
     /// Whether the transaction tainted the whole table
     read_whole_table: bool,
 }
 
 impl<'a> TransactionInfo<'a> {
     pub fn try_new(
-        read_snapshot: LogDataHandler<'a>,
+        read_snapshot: &'a WriteSnapshot,
         actions: &'a [Action],
         read_whole_table: bool,
     ) -> DeltaResult<Self> {
@@ -103,7 +103,7 @@ impl<'a> TransactionInfo<'a> {
     }
 
     pub fn new(
-        read_snapshot: LogDataHandler<'a>,
+        read_snapshot: &'a WriteSnapshot,
         actions: &'a [Action],
         read_whole_table: bool,
     ) -> Self {
@@ -149,7 +149,7 @@ impl<'a> TransactionInfo<'a> {
 
     /// Files read by the transaction
     pub fn read_files(&self) -> Result<impl Iterator<Item = Add> + '_, CommitConflictError> {
-        Ok(self.read_snapshot.iter().map(|f| f.add_action()))
+        Ok(self.read_snapshot.read_files())
     }
 
     /// Whether the whole table was read during the transaction

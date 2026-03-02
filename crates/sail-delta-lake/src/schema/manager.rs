@@ -10,16 +10,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use datafusion::arrow::datatypes::Schema as ArrowSchema;
-use delta_kernel::schema::StructType;
-use delta_kernel::table_features::ColumnMappingMode;
+use std::collections::HashMap;
 
-use super::converter::get_physical_arrow_schema;
+use datafusion::arrow::datatypes::Schema as ArrowSchema;
+
+use super::converter::{get_physical_arrow_schema, logical_arrow_to_kernel};
 use super::mapping::{
     annotate_new_fields_for_column_mapping, annotate_schema_for_column_mapping,
     compute_max_column_id,
 };
-use crate::kernel::models::{Metadata, MetadataExt};
+use crate::kernel::models::{ColumnMappingMode, Metadata, MetadataExt, Protocol, StructType};
 use crate::kernel::DeltaResult;
 
 /// Annotate a kernel schema for column mapping (assign ids + physical names).
@@ -61,4 +61,73 @@ pub fn evolve_schema(
 /// when column mapping Name/Id mode is active.
 pub fn get_physical_schema(logical: &StructType, mode: ColumnMappingMode) -> ArrowSchema {
     get_physical_arrow_schema(logical, mode)
+}
+
+/// Convert a logical Arrow schema into Delta kernel StructType through the schema adapter layer.
+pub fn struct_type_from_logical_arrow(schema: &ArrowSchema) -> DeltaResult<StructType> {
+    logical_arrow_to_kernel(schema)
+}
+
+/// Build Metadata for table creation from a logical Arrow schema.
+pub fn metadata_for_create_with_logical_arrow(
+    schema: &ArrowSchema,
+    partition_columns: Vec<String>,
+    created_time: i64,
+    configuration: HashMap<String, String>,
+) -> DeltaResult<Metadata> {
+    let logical_kernel = struct_type_from_logical_arrow(schema)?;
+    metadata_for_create_with_struct_type(
+        logical_kernel,
+        partition_columns,
+        created_time,
+        configuration,
+    )
+}
+
+/// Build Metadata for table creation from an existing kernel StructType.
+pub fn metadata_for_create_with_struct_type(
+    schema: StructType,
+    partition_columns: Vec<String>,
+    created_time: i64,
+    configuration: HashMap<String, String>,
+) -> DeltaResult<Metadata> {
+    Ok(Metadata::try_new(
+        None,
+        None,
+        schema,
+        partition_columns,
+        created_time,
+        configuration,
+    )?)
+}
+
+/// Build Protocol for a create/write path based on required table features.
+pub fn protocol_for_create(
+    enable_column_mapping: bool,
+    enable_timestamp_ntz: bool,
+) -> DeltaResult<Protocol> {
+    if !enable_column_mapping && !enable_timestamp_ntz {
+        return Ok(serde_json::from_value(serde_json::json!({
+            "minReaderVersion": 1,
+            "minWriterVersion": 2,
+        }))?);
+    }
+
+    let mut reader_features = Vec::new();
+    let mut writer_features = Vec::new();
+    if enable_column_mapping {
+        reader_features.push("columnMapping");
+        writer_features.push("columnMapping");
+    }
+    if enable_timestamp_ntz {
+        reader_features.push("timestampNtz");
+        writer_features.push("timestampNtz");
+    }
+
+    Ok(serde_json::from_value(serde_json::json!({
+        "minReaderVersion": 3,
+        "minWriterVersion": 7,
+        "readerFeatures": reader_features,
+        "writerFeatures": writer_features,
+    }))?)
 }
