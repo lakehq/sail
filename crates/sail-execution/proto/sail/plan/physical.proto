@@ -51,6 +51,8 @@ message ExtendedPhysicalPlanNode {
     MonotonicIdExecNode monotonic_id = 36;
     PythonDataSourceWriteExecNode python_data_source_write = 37;
     PythonDataSourceWriteCommitExecNode python_data_source_write_commit = 38;
+    CacheWriteExecNode cache_write = 39;
+    CacheReadExecNode cache_read = 40;
   }
 }
 
@@ -530,6 +532,17 @@ message MonotonicIdExecNode {
   bytes input = 1;
   string column_name = 2;
   bytes schema = 3;
+}
+
+message CacheWriteExecNode {
+  bytes input = 1;
+  uint64 cache_id = 2;
+}
+
+message CacheReadExecNode {
+  uint64 cache_id = 1;
+  bytes schema = 2;
+  uint64 num_partitions = 3;
 }
 
 message JoinOn {

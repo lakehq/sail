@@ -70,6 +70,7 @@ use datafusion_spark::function::url::url_decode::UrlDecode;
 use datafusion_spark::function::url::url_encode::UrlEncode;
 use prost::Message;
 use sail_catalog_system::physical_plan::SystemTableExec;
+use sail_common::cache_id::CacheId;
 use sail_common_datafusion::array::record_batch::{read_record_batches, write_record_batches};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::system::catalog::SystemTable;
@@ -202,7 +203,7 @@ use crate::plan::gen::{
     DeltaCastColumnExprNode, ExtendedAggregateUdf, ExtendedPhysicalExprNode,
     ExtendedPhysicalPlanNode, ExtendedScalarUdf, ExtendedStreamUdf,
 };
-use crate::plan::{gen, StageInputExec};
+use crate::plan::{gen, CacheReadExec, CacheWriteExec, StageInputExec};
 
 pub struct RemoteExecutionCodec;
 
@@ -858,6 +859,25 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     Arc::new(schema),
                 )?))
             }
+            NodeKind::CacheWrite(gen::CacheWriteExecNode { input, cache_id }) => {
+                let plan = self.try_decode_plan(&input, ctx)?;
+                Ok(Arc::new(CacheWriteExec::new_stub(
+                    plan,
+                    CacheId::from(cache_id),
+                )))
+            }
+            NodeKind::CacheRead(gen::CacheReadExecNode {
+                cache_id,
+                schema,
+                num_partitions,
+            }) => {
+                let schema = Arc::new(self.try_decode_schema(&schema)?);
+                Ok(Arc::new(CacheReadExec::new(
+                    CacheId::from(cache_id),
+                    schema,
+                    num_partitions as usize,
+                )))
+            }
             NodeKind::IcebergWriter(gen::IcebergWriterExecNode {
                 input,
                 table_url,
@@ -1403,6 +1423,22 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 column_name: monotonic_id.column_name().to_string(),
                 schema,
+            })
+        } else if let Some(cache_write) = node.as_any().downcast_ref::<CacheWriteExec>() {
+            let input = self.try_encode_plan(cache_write.children()[0].clone())?;
+            NodeKind::CacheWrite(gen::CacheWriteExecNode {
+                input,
+                cache_id: cache_write.cache_id().into(),
+            })
+        } else if let Some(cache_read) = node.as_any().downcast_ref::<CacheReadExec>() {
+            let schema = self.try_encode_schema(cache_read.schema().as_ref())?;
+            NodeKind::CacheRead(gen::CacheReadExecNode {
+                cache_id: cache_read.cache_id().into(),
+                schema,
+                num_partitions: cache_read
+                    .properties()
+                    .output_partitioning()
+                    .partition_count() as u64,
             })
         } else if let Some(iceberg_writer_exec) = node.as_any().downcast_ref::<IcebergWriterExec>()
         {

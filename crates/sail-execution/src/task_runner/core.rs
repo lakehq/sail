@@ -24,7 +24,12 @@ use crate::codec::RemoteExecutionCodec;
 use crate::driver::TaskStatus;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{TaskKey, TaskKeyDisplay};
-use crate::plan::{ShuffleReadExec, ShuffleWriteExec, StageInputExec};
+use crate::local_cache_store::LocalCacheStore;
+use crate::plan::{
+    inject_cache_write_reporter, inject_local_cache_store, ActorCachePartitionReporter,
+    CachePartitionReporter, CachePartitionReporterMessage, ShuffleReadExec, ShuffleWriteExec,
+    StageInputExec,
+};
 use crate::stream_accessor::{StreamAccessor, StreamAccessorMessage};
 use crate::task::definition::{TaskDefinition, TaskInput, TaskOutput};
 use crate::task_runner::monitor::TaskMonitor;
@@ -35,9 +40,15 @@ impl TaskRunner {
         Self {
             signals: HashMap::new(),
             codec: Box::new(RemoteExecutionCodec),
+            cache_store: Arc::new(LocalCacheStore::new()),
         }
     }
 
+    /// Executes a task by building and running its physical plan, then spawns a monitor to track completion.
+    ///
+    /// Deserializes the plan from the task definition, executes it, and spawns a
+    /// background monitor that polls the resulting stream and reports task status.
+    /// If plan execution fails, the task is immediately reported as failed.
     pub fn run_task<T: Actor>(
         &mut self,
         ctx: &mut ActorContext<T>,
@@ -45,7 +56,7 @@ impl TaskRunner {
         definition: TaskDefinition,
         context: Arc<TaskContext>,
     ) where
-        T::Message: TaskRunnerMessage + StreamAccessorMessage,
+        T::Message: TaskRunnerMessage + StreamAccessorMessage + CachePartitionReporterMessage,
     {
         let stream = match self.execute_plan(ctx, &key, definition, context) {
             Ok(x) => x,
@@ -82,11 +93,15 @@ impl TaskRunner {
         context: Arc<TaskContext>,
     ) -> ExecutionResult<SendableRecordBatchStream>
     where
-        T::Message: TaskRunnerMessage + StreamAccessorMessage,
+        T::Message: TaskRunnerMessage + StreamAccessorMessage + CachePartitionReporterMessage,
     {
         let plan = PhysicalPlanNode::decode(definition.plan.as_ref())?;
         let plan = plan.try_into_physical_plan(&context, self.codec.as_ref())?;
         let plan = self.rewrite_parquet_adapters(plan)?;
+        let plan = inject_local_cache_store(plan, self.cache_store.clone())?;
+        let reporter: Arc<dyn CachePartitionReporter> =
+            Arc::new(ActorCachePartitionReporter::new(ctx.handle().clone()));
+        let plan = inject_cache_write_reporter(plan, reporter)?;
         let plan = self.rewrite_shuffle(
             ctx,
             key,
@@ -132,14 +147,13 @@ impl TaskRunner {
         Ok(result.data()?)
     }
 
-    fn rewrite_shuffle<T: Actor>(
+    /// Replaces StageInputExec placeholders with ShuffleReadExec nodes.
+    fn rewrite_stage_inputs<T: Actor>(
         &mut self,
         ctx: &mut ActorContext<T>,
         key: &TaskKey,
         inputs: &[TaskInput],
-        output: &TaskOutput,
         plan: Arc<dyn ExecutionPlan>,
-        context: &TaskContext,
     ) -> ExecutionResult<Arc<dyn ExecutionPlan>>
     where
         T::Message: TaskRunnerMessage + StreamAccessorMessage,
@@ -166,7 +180,24 @@ impl TaskRunner {
                 Ok(Transformed::no(node))
             }
         });
-        let plan = result.data()?;
+        Ok(result.data()?)
+    }
+
+    /// Rewrites the plan for normal job execution by replacing stage inputs and wrapping with ShuffleWriteExec.
+    fn rewrite_shuffle<T: Actor>(
+        &mut self,
+        ctx: &mut ActorContext<T>,
+        key: &TaskKey,
+        inputs: &[TaskInput],
+        output: &TaskOutput,
+        plan: Arc<dyn ExecutionPlan>,
+        context: &TaskContext,
+    ) -> ExecutionResult<Arc<dyn ExecutionPlan>>
+    where
+        T::Message: TaskRunnerMessage + StreamAccessorMessage,
+    {
+        let plan = self.rewrite_stage_inputs(ctx, key, inputs, plan)?;
+        let handle = ctx.handle();
         let schema = plan.schema();
         let accessor = StreamAccessor::new(handle.clone());
         let mut locations = vec![vec![]; plan.output_partitioning().partition_count()];

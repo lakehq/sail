@@ -368,14 +368,11 @@ impl TryFrom<gen::TaskInputRemoteKeyList> for Vec<TaskInputKey> {
 
 impl From<TaskOutput> for gen::TaskOutput {
     fn from(value: TaskOutput) -> Self {
-        let TaskOutput {
-            distribution,
-            locator,
-        } = value;
-        gen::TaskOutput {
-            distribution: Some(distribution.into()),
-            locator: Some(locator.into()),
-        }
+        let kind = gen::task_output::Kind::Shuffle(gen::TaskShuffleOutput {
+            distribution: Some(value.distribution.into()),
+            locator: Some(value.locator.into()),
+        });
+        gen::TaskOutput { kind: Some(kind) }
     }
 }
 
@@ -383,26 +380,33 @@ impl TryFrom<gen::TaskOutput> for TaskOutput {
     type Error = ExecutionError;
 
     fn try_from(value: gen::TaskOutput) -> Result<Self, Self::Error> {
-        let distribution = match value.distribution {
-            Some(x) => x.try_into()?,
-            None => {
-                return Err(ExecutionError::InvalidArgument(
-                    "cannot decode empty task output distribution".to_string(),
-                ))
+        match value.kind {
+            Some(gen::task_output::Kind::Shuffle(shuffle)) => {
+                let distribution = match shuffle.distribution {
+                    Some(x) => x.try_into()?,
+                    None => {
+                        return Err(ExecutionError::InvalidArgument(
+                            "cannot decode empty task output distribution".to_string(),
+                        ))
+                    }
+                };
+                let locator = match shuffle.locator {
+                    Some(x) => x.try_into()?,
+                    None => {
+                        return Err(ExecutionError::InvalidArgument(
+                            "cannot decode empty task output locator".to_string(),
+                        ))
+                    }
+                };
+                Ok(TaskOutput {
+                    distribution,
+                    locator,
+                })
             }
-        };
-        let locator = match value.locator {
-            Some(x) => x.try_into()?,
-            None => {
-                return Err(ExecutionError::InvalidArgument(
-                    "cannot decode empty task output locator".to_string(),
-                ))
-            }
-        };
-        Ok(TaskOutput {
-            distribution,
-            locator,
-        })
+            None => Err(ExecutionError::InvalidArgument(
+                "cannot decode empty task output".to_string(),
+            )),
+        }
     }
 }
 

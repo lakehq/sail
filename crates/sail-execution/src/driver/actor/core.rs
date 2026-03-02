@@ -6,6 +6,7 @@ use fastrace::Span;
 use log::{error, info};
 use sail_server::actor::{Actor, ActorAction, ActorContext};
 
+use crate::driver::actor::CachePartitionLocations;
 use crate::driver::job_scheduler::{JobScheduler, JobSchedulerOptions};
 use crate::driver::task_assigner::{TaskAssigner, TaskAssignerOptions};
 use crate::driver::worker_pool::{WorkerPool, WorkerPoolOptions};
@@ -40,6 +41,7 @@ impl Actor for DriverActor {
             task_runner: TaskRunner::new(),
             stream_manager,
             task_sequences: HashMap::new(),
+            cache_partition_locations: CachePartitionLocations::default(),
             history: None,
         }
     }
@@ -89,6 +91,11 @@ impl Actor for DriverActor {
                 result,
             } => self.handle_execute_job(ctx, plan, context, result),
             DriverEvent::CleanUpJob { job_id } => self.handle_clean_up_job(ctx, job_id),
+            DriverEvent::CachePartitionStored {
+                cache_id,
+                partition,
+                worker_id,
+            } => self.handle_cache_partition_stored(ctx, cache_id, partition, worker_id),
             DriverEvent::UpdateTask {
                 key,
                 status,

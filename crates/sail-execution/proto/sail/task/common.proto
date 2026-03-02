@@ -68,6 +68,12 @@ message TaskInputRemoteKeyList {
 }
 
 message TaskOutput {
+  oneof kind {
+    TaskShuffleOutput shuffle = 1;
+  }
+}
+
+message TaskShuffleOutput {
   TaskOutputDistribution distribution = 1;
   TaskOutputLocator locator = 2;
 }

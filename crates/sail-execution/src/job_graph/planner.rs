@@ -15,13 +15,31 @@ use datafusion::physical_plan::{
     PlanProperties,
 };
 use sail_catalog_system::physical_plan::SystemTableExec;
+use sail_common::cache_id::CacheId;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::job_graph::{
     InputMode, JobGraph, OutputDistribution, OutputMode, Stage, StageInput, TaskPlacement,
 };
-use crate::plan::{ShuffleConsumption, StageInputExec};
+use crate::plan::{CacheReadExec, ShuffleConsumption, StageInputExec};
+
+/// Collects cache IDs read by [`CacheReadExec`] nodes in a physical plan.
+fn collect_cache_reads(plan: &Arc<dyn ExecutionPlan>) -> Vec<CacheId> {
+    let mut ids = std::collections::HashSet::<CacheId>::new();
+    let mut stack = vec![Arc::clone(plan)];
+    while let Some(node) = stack.pop() {
+        if let Some(read) = node.as_any().downcast_ref::<CacheReadExec>() {
+            ids.insert(read.cache_id());
+        }
+        for child in node.children() {
+            stack.push(Arc::clone(child));
+        }
+    }
+    let mut out = ids.into_iter().collect::<Vec<_>>();
+    out.sort_unstable();
+    out
+}
 
 impl JobGraph {
     pub fn try_new(plan: Arc<dyn ExecutionPlan>) -> ExecutionResult<Self> {
@@ -33,9 +51,11 @@ impl JobGraph {
         };
         let last = build_job_graph(plan, PartitionUsage::Once, &mut graph)?;
         let (last, inputs) = rewrite_inputs(last)?;
+        let cache_reads = collect_cache_reads(&last);
         graph.stages.push(Stage {
             inputs,
             plan: last,
+            cache_reads,
             group: String::new(),
             mode: OutputMode::Pipelined,
             distribution: OutputDistribution::RoundRobin { channels: 1 },
@@ -45,6 +65,7 @@ impl JobGraph {
     }
 }
 
+/// Ensures GlobalLimitExec inputs are single-partition.
 fn ensure_single_input_partition_for_global_limit(
     plan: Arc<dyn ExecutionPlan>,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
@@ -74,6 +95,7 @@ fn ensure_single_input_partition_for_global_limit(
     Ok(result.data()?)
 }
 
+/// Rewrites certain collect-left hash joins into partitioned joins.
 fn ensure_partitioned_hash_join_if_build_side_emits_unmatched_rows(
     plan: Arc<dyn ExecutionPlan>,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
@@ -220,7 +242,16 @@ fn build_job_graph(
         PartitionUsage::Once => ShuffleConsumption::Single,
         PartitionUsage::Shared => ShuffleConsumption::Multiple,
     };
-    let plan = if let Some(repartition) = plan.as_any().downcast_ref::<RepartitionExec>() {
+    rewrite_stage_boundary(plan, graph, consumption)
+}
+
+/// Rewrites stage-boundary operators into stage-input placeholders.
+fn rewrite_stage_boundary(
+    plan: Arc<dyn ExecutionPlan>,
+    graph: &mut JobGraph,
+    consumption: ShuffleConsumption,
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    if let Some(repartition) = plan.as_any().downcast_ref::<RepartitionExec>() {
         if repartition.preserve_order() {
             // We haven't found a case when order-preserving repartition can be constructed,
             // so it's fine to return an error for now.
@@ -235,10 +266,10 @@ fn build_job_graph(
             Partitioning::UnknownPartitioning(n) => {
                 let n = *n;
                 let properties = properties.with_partitioning(Partitioning::RoundRobinBatch(n));
-                create_shuffle(child, graph, properties, consumption)?
+                create_shuffle(child, graph, properties, consumption)
             }
             Partitioning::RoundRobinBatch(_) | Partitioning::Hash(_, _) => {
-                create_shuffle(child, graph, properties, consumption)?
+                create_shuffle(child, graph, properties, consumption)
             }
         }
     } else if let Some(coalesce) = plan.as_any().downcast_ref::<CoalescePartitionsExec>() {
@@ -247,21 +278,21 @@ fn build_job_graph(
         let fetch = coalesce.fetch();
         let shuffled = create_shuffle(child, graph, properties, consumption)?;
         if let Some(f) = fetch {
-            Arc::new(GlobalLimitExec::new(shuffled, 0, Some(f))) as Arc<dyn ExecutionPlan>
+            Ok(Arc::new(GlobalLimitExec::new(shuffled, 0, Some(f))) as Arc<dyn ExecutionPlan>)
         } else {
-            shuffled
+            Ok(shuffled)
         }
     } else if plan.as_any().is::<SortPreservingMergeExec>() {
         let child = plan.children().one()?;
-        plan.clone()
-            .with_new_children(vec![create_merge_input(child, graph)?])?
+        Ok(plan
+            .clone()
+            .with_new_children(vec![create_merge_input(child, graph)?])?)
     } else if plan.as_any().is::<SystemTableExec>() {
         plan.children().zero()?;
-        create_driver_stage(&plan, graph)?
+        create_driver_stage(&plan, graph)
     } else {
-        plan
-    };
-    Ok(plan)
+        Ok(plan)
+    }
 }
 
 fn create_merge_input(
@@ -270,9 +301,11 @@ fn create_merge_input(
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
     let properties = plan.properties().clone();
     let (plan, inputs) = rewrite_inputs(plan.clone())?;
+    let cache_reads = collect_cache_reads(&plan);
     let stage = Stage {
         inputs,
         plan,
+        cache_reads,
         group: String::new(),
         mode: OutputMode::Pipelined,
         distribution: OutputDistribution::RoundRobin { channels: 1 },
@@ -304,9 +337,11 @@ fn create_shuffle(
         Partitioning::Hash(keys, channels) => OutputDistribution::Hash { keys, channels },
     };
     let (plan, inputs) = rewrite_inputs(plan.clone())?;
+    let cache_reads = collect_cache_reads(&plan);
     let stage = Stage {
         inputs,
         plan,
+        cache_reads,
         group: String::new(),
         mode: OutputMode::Pipelined,
         distribution,
@@ -324,6 +359,7 @@ fn create_shuffle(
     )))
 }
 
+/// Reindexes StageInputExec placeholders and returns the stage input list.
 fn rewrite_inputs(
     plan: Arc<dyn ExecutionPlan>,
 ) -> ExecutionResult<(Arc<dyn ExecutionPlan>, Vec<StageInput>)> {
@@ -349,6 +385,7 @@ fn create_driver_stage(
     let stage = Stage {
         inputs: vec![],
         plan: plan.clone(),
+        cache_reads: collect_cache_reads(plan),
         group: String::new(),
         mode: OutputMode::Pipelined,
         distribution: OutputDistribution::RoundRobin { channels: 1 },

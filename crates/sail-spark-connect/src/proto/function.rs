@@ -12,7 +12,7 @@ mod tests {
     use sail_common::tests::test_gold_set;
     use sail_common_datafusion::extension::SessionExtensionAccessor;
     use sail_common_datafusion::session::job::JobService;
-    use sail_plan::resolve_and_execute_plan;
+    use sail_plan::resolve_to_execution_plan;
     use serde::{Deserialize, Serialize};
 
     use crate::error::{SparkError, SparkResult};
@@ -88,7 +88,7 @@ mod tests {
                     let spark = context.extension::<SparkSession>()?;
                     let service = context.extension::<JobService>()?;
                     let (plan, _) =
-                        resolve_and_execute_plan(&context, spark.plan_config()?, plan).await?;
+                        resolve_to_execution_plan(&context, spark.plan_config()?, plan).await?;
                     let stream = service.runner().execute(&context, plan).await?;
                     read_stream(stream).await
                 });

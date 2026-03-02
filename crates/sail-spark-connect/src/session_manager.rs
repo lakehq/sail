@@ -5,6 +5,7 @@ use datafusion::common::{internal_datafusion_err, Result};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::prelude::SessionConfig;
+use sail_cache_manager::CacheManager;
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
@@ -46,7 +47,8 @@ impl ServerSessionMutator for SparkSessionMutator {
         .map_err(|e| internal_datafusion_err!("{e}"))?;
         Ok(config
             .with_extension(Arc::new(plan_service))
-            .with_extension(Arc::new(spark)))
+            .with_extension(Arc::new(spark))
+            .with_extension(Arc::new(CacheManager::new())))
     }
 
     fn mutate_state(

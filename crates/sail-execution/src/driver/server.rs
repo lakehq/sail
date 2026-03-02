@@ -1,4 +1,5 @@
 use log::debug;
+use sail_common::cache_id::CacheId;
 use sail_server::actor::ActorHandle;
 use tokio::sync::oneshot;
 use tonic::{Request, Response, Status};
@@ -6,9 +7,10 @@ use tonic::{Request, Response, Status};
 use crate::driver::actor::DriverActor;
 use crate::driver::gen::driver_service_server::DriverService;
 use crate::driver::gen::{
-    RegisterWorkerRequest, RegisterWorkerResponse, ReportTaskStatusRequest,
-    ReportTaskStatusResponse, ReportWorkerHeartbeatRequest, ReportWorkerHeartbeatResponse,
-    ReportWorkerKnownPeersRequest, ReportWorkerKnownPeersResponse,
+    NotifyCachePartitionStoredRequest, NotifyCachePartitionStoredResponse, RegisterWorkerRequest,
+    RegisterWorkerResponse, ReportTaskStatusRequest, ReportTaskStatusResponse,
+    ReportWorkerHeartbeatRequest, ReportWorkerHeartbeatResponse, ReportWorkerKnownPeersRequest,
+    ReportWorkerKnownPeersResponse,
 };
 use crate::driver::{gen, DriverEvent};
 use crate::error::ExecutionError;
@@ -137,6 +139,26 @@ impl DriverService for DriverServer {
             .await
             .map_err(ExecutionError::from)?;
         let response = ReportTaskStatusResponse {};
+        debug!("{response:?}");
+        Ok(Response::new(response))
+    }
+
+    async fn notify_cache_partition_stored(
+        &self,
+        request: Request<NotifyCachePartitionStoredRequest>,
+    ) -> Result<Response<NotifyCachePartitionStoredResponse>, Status> {
+        let request = request.into_inner();
+        debug!("{request:?}");
+        let event = DriverEvent::CachePartitionStored {
+            cache_id: CacheId::from(request.cache_id),
+            partition: request.partition as usize,
+            worker_id: request.worker_id.into(),
+        };
+        self.handle
+            .send(event)
+            .await
+            .map_err(ExecutionError::from)?;
+        let response = NotifyCachePartitionStoredResponse {};
         debug!("{response:?}");
         Ok(Response::new(response))
     }

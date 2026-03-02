@@ -7,6 +7,7 @@ edition = { workspace = true }
 workspace = true
 
 [dependencies]
+sail-cache-manager = { path = "../sail-cache-manager" }
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-python-udf = { path = "../sail-python-udf" }

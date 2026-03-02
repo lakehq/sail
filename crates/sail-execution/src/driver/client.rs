@@ -1,11 +1,12 @@
+use sail_common::cache_id::CacheId;
 use sail_common_datafusion::error::CommonErrorCause;
 
 use crate::driver::event::TaskStatus;
 use crate::driver::gen;
 use crate::driver::gen::driver_service_client::DriverServiceClient;
 use crate::driver::gen::{
-    RegisterWorkerRequest, RegisterWorkerResponse, ReportTaskStatusRequest,
-    ReportTaskStatusResponse,
+    NotifyCachePartitionStoredRequest, NotifyCachePartitionStoredResponse, RegisterWorkerRequest,
+    RegisterWorkerResponse, ReportTaskStatusRequest, ReportTaskStatusResponse,
 };
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{TaskKey, WorkerId};
@@ -115,6 +116,28 @@ impl DriverClient {
         });
         let response = self.inner.get().await?.report_task_status(request).await?;
         let ReportTaskStatusResponse {} = response.into_inner();
+        Ok(())
+    }
+
+    /// Notifies the driver that a cache partition is stored on a worker.
+    pub async fn notify_cache_partition_stored(
+        &self,
+        worker_id: WorkerId,
+        cache_id: CacheId,
+        partition: usize,
+    ) -> ExecutionResult<()> {
+        let request = tonic::Request::new(NotifyCachePartitionStoredRequest {
+            cache_id: cache_id.into(),
+            partition: partition as u64,
+            worker_id: worker_id.into(),
+        });
+        let response = self
+            .inner
+            .get()
+            .await?
+            .notify_cache_partition_stored(request)
+            .await?;
+        let NotifyCachePartitionStoredResponse {} = response.into_inner();
         Ok(())
     }
 }

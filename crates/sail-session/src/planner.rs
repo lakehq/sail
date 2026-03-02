@@ -10,6 +10,7 @@ use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, Phy
 use datafusion_common::{internal_datafusion_err, internal_err, DFSchema, ToDFSchema};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
 use datafusion_physical_expr::{create_physical_sort_exprs, Partitioning};
+use sail_cache_manager::CacheManager;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog_system::logical_rewriter::RewriteSystemTableSource;
 use sail_catalog_system::planner::SystemTablePhysicalPlanner;
@@ -22,6 +23,8 @@ use sail_common_datafusion::streaming::event::schema::{
     to_flow_event_field_names, to_flow_event_projection,
 };
 use sail_delta_lake::logical::RewriteDeltaTableSource;
+use sail_execution::plan::CacheReadExec;
+use sail_logical_plan::cache_read_relation::CacheReadRelationNode;
 use sail_logical_plan::file_delete::FileDeleteNode;
 use sail_logical_plan::file_write::FileWriteNode;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
@@ -93,8 +96,20 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
         session_state: &SessionState,
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
         let plan: Arc<dyn ExecutionPlan> = if let Some(node) =
-            node.as_any().downcast_ref::<RangeNode>()
+            node.as_any().downcast_ref::<CacheReadRelationNode>()
         {
+            let num_partitions = session_state
+                .extension::<CacheManager>()
+                .ok()
+                .and_then(|cache| cache.find_by_id(node.cache_id()))
+                .and_then(|entry| entry.num_partitions)
+                .unwrap_or(1);
+            Arc::new(CacheReadExec::new(
+                node.cache_id(),
+                UserDefinedLogicalNode::schema(node).inner().clone(),
+                num_partitions,
+            ))
+        } else if let Some(node) = node.as_any().downcast_ref::<RangeNode>() {
             let schema = UserDefinedLogicalNode::schema(node).inner().clone();
             let projection = (0..schema.fields().len()).collect();
             Arc::new(RangeExec::try_new(
@@ -334,6 +349,7 @@ fn plan_explicit_partitioning(
     }
 }
 
+/// Creates the query planner used to build Sail physical plans.
 pub fn new_query_planner() -> Arc<dyn QueryPlanner + Send + Sync> {
     Arc::new(ExtensionQueryPlanner {})
 }
