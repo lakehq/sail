@@ -28,7 +28,6 @@ use datafusion::arrow::record_batch::RecordBatch;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::engine_data::FilteredEngineData;
 use delta_kernel::snapshot::Snapshot as KernelSnapshot;
-use delta_kernel::FileMeta;
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, error};
 use object_store::path::Path;
@@ -37,7 +36,7 @@ use parquet::arrow::async_writer::ParquetObjectWriter;
 use parquet::arrow::AsyncArrowWriter;
 use regex::Regex;
 use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
-use tokio::sync::oneshot;
+use serde::Serialize;
 use tokio::task::spawn_blocking;
 use uuid::Uuid;
 
@@ -84,6 +83,25 @@ fn to_rb(data: FilteredEngineData) -> DeltaResult<RecordBatch> {
     let predicate = BooleanArray::from(selection_vector);
     let batch = filter_record_batch(engine_data.record_batch(), &predicate)?;
     Ok(batch)
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LastCheckpointHint {
+    version: i64,
+    size: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parts: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    size_in_bytes: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    num_of_add_files: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    checkpoint_schema: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    checksum: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tags: Option<std::collections::HashMap<String, String>>,
 }
 
 struct CheckpointManager<'a> {
@@ -153,11 +171,11 @@ impl<'a> CheckpointManager<'a> {
             .write(&first_batch)
             .await
             .map_err(DeltaTableError::generic_err)?;
+        let mut checkpoint_row_count = first_batch.num_rows() as i64;
 
         // Stream remaining batches from a blocking producer thread to the async writer.
         let mut rb_builder = RecordBatchReceiverStreamBuilder::new(4);
         let tx = rb_builder.tx();
-        let (cp_data_done_tx, cp_data_done_rx) = oneshot::channel();
 
         rb_builder.spawn_blocking(move || {
             for next in cp_data_after_first.by_ref() {
@@ -167,9 +185,6 @@ impl<'a> CheckpointManager<'a> {
                     break; // consumer dropped
                 }
             }
-
-            // Return the exhausted iterator (it contains kernel-side stats used by finalize).
-            let _ = cp_data_done_tx.send(cp_data_after_first);
             Ok(())
         });
 
@@ -181,6 +196,7 @@ impl<'a> CheckpointManager<'a> {
             } else {
                 batch
             };
+            checkpoint_row_count = checkpoint_row_count.saturating_add(batch.num_rows() as i64);
             writer
                 .write(&batch)
                 .await
@@ -190,20 +206,26 @@ impl<'a> CheckpointManager<'a> {
         let _pq_meta = writer.close().await.map_err(DeltaTableError::generic_err)?;
 
         let file_meta = root_store.head(&cp_path).await?;
-        let file_meta = FileMeta {
-            location: cp_url,
-            size: file_meta.size,
-            last_modified: file_meta.last_modified.timestamp_millis(),
+        let cp_dir = cp_url
+            .path()
+            .rsplit_once('/')
+            .map(|(dir, _)| dir)
+            .unwrap_or(DELTA_LOG_FOLDER);
+        let last_checkpoint_path = Path::from(format!("{cp_dir}/_last_checkpoint"));
+        let hint = LastCheckpointHint {
+            version,
+            size: checkpoint_row_count,
+            parts: None,
+            size_in_bytes: Some(file_meta.size as i64),
+            num_of_add_files: None,
+            checkpoint_schema: None,
+            checksum: None,
+            tags: None,
         };
-
-        let cp_data_final = cp_data_done_rx
-            .await
-            .map_err(|_| DeltaTableError::generic("checkpoint producer dropped unexpectedly"))?;
-
-        let engine = self.log_store.engine(Some(self.operation_id));
-        spawn_blocking(move || cp_writer.finalize(engine.as_ref(), &file_meta, cp_data_final))
-            .await
-            .map_err(|e| DeltaTableError::generic(e.to_string()))??;
+        let hint_bytes = serde_json::to_vec(&hint).map_err(DeltaTableError::generic_err)?;
+        root_store
+            .put(&last_checkpoint_path, hint_bytes.into())
+            .await?;
 
         Ok(())
     }

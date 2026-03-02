@@ -44,8 +44,6 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
-use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
-use delta_kernel::schema::StructType;
 use delta_kernel::table_features::ColumnMappingMode;
 use futures::stream::{once, StreamExt};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
@@ -53,14 +51,14 @@ use serde_json::Value;
 use url::Url;
 
 use crate::conversion::DeltaTypeConverter;
-use crate::kernel::models::{contains_timestampntz, Action, Metadata, Protocol};
+use crate::kernel::models::{contains_timestampntz, Action, Metadata, Protocol, StructType};
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::options::{ColumnMappingModeOption, TableDeltaOptions};
 use crate::physical_plan::{delta_action_schema, encode_actions, CommitMeta, ExecAction};
 use crate::schema::{
     annotate_for_column_mapping, compute_max_column_id, evolve_schema, get_physical_schema,
-    normalize_delta_schema,
+    kernel_to_logical_arrow, logical_arrow_to_kernel, normalize_delta_schema,
 };
 use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::open_table_with_object_store;
@@ -453,9 +451,7 @@ impl DeltaWriterExec {
             let mut annotated_schema_opt: Option<StructType> = None;
             if !table_exists {
                 // Build kernel schema for feature detection
-                let kernel_schema: StructType = final_schema
-                    .as_ref()
-                    .try_into_kernel()
+                let kernel_schema = logical_arrow_to_kernel(final_schema.as_ref())
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let has_timestamp_ntz = contains_timestampntz(kernel_schema.fields());
 
@@ -815,7 +811,7 @@ impl DeltaWriterExec {
         let table_schema = table_metadata
             .parse_schema()
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let table_arrow_schema = Arc::new((&table_schema).try_into_arrow()?);
+        let table_arrow_schema = Arc::new(kernel_to_logical_arrow(&table_schema));
 
         match schema_mode {
             Some(SchemaMode::Merge) => {
@@ -823,9 +819,7 @@ impl DeltaWriterExec {
                 let merged_schema = Self::merge_schemas(&table_arrow_schema, input_schema)?;
                 if merged_schema.fields() != table_arrow_schema.fields() {
                     // Schema has changed, create metadata action
-                    let candidate_kernel: StructType = merged_schema
-                        .as_ref()
-                        .try_into_kernel()
+                    let candidate_kernel = logical_arrow_to_kernel(merged_schema.as_ref())
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                     let snapshot = table.snapshot()?;
@@ -846,9 +840,7 @@ impl DeltaWriterExec {
             }
             Some(SchemaMode::Overwrite) => {
                 // Use input schema as-is
-                let candidate_kernel: StructType = input_schema
-                    .as_ref()
-                    .try_into_kernel()
+                let candidate_kernel = logical_arrow_to_kernel(input_schema.as_ref())
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                 let snapshot = table.snapshot()?;

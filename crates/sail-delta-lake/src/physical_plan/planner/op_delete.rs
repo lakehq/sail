@@ -24,6 +24,7 @@ use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 
 use super::context::PlannerContext;
+use super::log_segment::list_log_segment_files;
 use super::utils::{build_log_replay_pipeline_with_options, LogReplayFilter, LogReplayOptions};
 use crate::datasource::schema::DataFusionMixins;
 use crate::datasource::PredicateProperties;
@@ -63,18 +64,9 @@ pub async fn build_delete_plan(
         .analyze_predicate(&physical_condition)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-    let kernel_snapshot = snapshot_state.snapshot().snapshot().inner.clone();
-    let log_segment = kernel_snapshot.log_segment();
-    let checkpoint_files = log_segment
-        .checkpoint_parts
-        .iter()
-        .map(|p| p.filename.clone())
-        .collect::<Vec<_>>();
-    let commit_files = log_segment
-        .ascending_commit_files
-        .iter()
-        .map(|p| p.filename.clone())
-        .collect::<Vec<_>>();
+    let log_segment_files = list_log_segment_files(ctx, version).await?;
+    let checkpoint_files = log_segment_files.checkpoint_files;
+    let commit_files = log_segment_files.commit_files;
 
     // Build a visible metadata pipeline over the Delta log.
     let mut log_replay_options = LogReplayOptions::default();

@@ -20,6 +20,7 @@ use sail_common_datafusion::logical_expr::ExprWithSource;
 
 pub mod context;
 mod log_scan;
+mod log_segment;
 pub mod utils;
 
 mod op_delete;

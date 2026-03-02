@@ -41,7 +41,7 @@ use crate::kernel::models::{Action, Metadata, Protocol, Transaction};
 use crate::kernel::snapshot::EagerSnapshot;
 use crate::kernel::transaction::conflict_checker::{TransactionInfo, WinningCommitSummary};
 use crate::kernel::{DeltaOperation, DeltaResult, TablePropertiesExt};
-use crate::storage::{CommitOrBytes, LogStoreRef, ObjectStoreRef};
+use crate::storage::{CommitOrBytes, LogStore, LogStoreRef, ObjectStoreRef};
 use crate::table::DeltaTableState;
 
 mod conflict_checker;
@@ -298,6 +298,54 @@ pub trait TableReference: Send + Sync {
 
     /// Try to cast this table reference to a `EagerSnapshot`
     fn eager_snapshot(&self) -> &EagerSnapshot;
+}
+
+/// Narrow write-transaction view over table state.
+///
+/// This type keeps commit/OCC logic independent from a concrete snapshot backend and
+/// allows replacing the snapshot source later without changing transaction control flow.
+#[derive(Debug, Clone)]
+pub struct WriteSnapshot {
+    inner: EagerSnapshot,
+}
+
+impl WriteSnapshot {
+    pub fn from_eager_snapshot(inner: EagerSnapshot) -> Self {
+        Self { inner }
+    }
+
+    pub async fn try_new(log_store: &dyn LogStore, version: Option<i64>) -> DeltaResult<Self> {
+        let inner = EagerSnapshot::try_new(log_store, Default::default(), version).await?;
+        Ok(Self { inner })
+    }
+
+    pub fn version(&self) -> i64 {
+        self.inner.version()
+    }
+
+    pub fn protocol(&self) -> &Protocol {
+        self.inner.protocol()
+    }
+
+    pub fn metadata(&self) -> &Metadata {
+        self.inner.metadata()
+    }
+
+    pub fn log_data(&self) -> crate::kernel::snapshot::LogDataHandler<'_> {
+        self.inner.log_data()
+    }
+
+    pub async fn update(
+        &mut self,
+        log_store: &dyn LogStore,
+        target_version: Option<u64>,
+    ) -> DeltaResult<()> {
+        self.inner.update(log_store, target_version).await
+    }
+
+    pub fn into_eager_snapshot(self) -> EagerSnapshot {
+        self.inner
+    }
 }
 
 impl TableReference for EagerSnapshot {
@@ -655,9 +703,9 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
             };
             let total_retries = effective_max_retries + 1;
 
-            let mut read_snapshot: Option<EagerSnapshot> = this
-                .table_data
-                .map(|table_ref| table_ref.eager_snapshot().clone());
+            let mut read_snapshot: Option<WriteSnapshot> = this.table_data.map(|table_ref| {
+                WriteSnapshot::from_eager_snapshot(table_ref.eager_snapshot().clone())
+            });
             let mut creation_actions_stripped = false;
             for attempt_number in 1..=total_retries {
                 let snapshot_version = read_snapshot.as_ref().map(|s| s.version()).unwrap_or(-1);
@@ -675,12 +723,9 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                         .map(|s| s.version() < latest_version)
                         .unwrap_or(true)
                     {
-                        let snapshot = EagerSnapshot::try_new(
-                            this.log_store.as_ref(),
-                            Default::default(),
-                            Some(latest_version),
-                        )
-                        .await?;
+                        let snapshot =
+                            WriteSnapshot::try_new(this.log_store.as_ref(), Some(latest_version))
+                                .await?;
 
                         read_snapshot = Some(snapshot);
                     }
@@ -814,8 +859,9 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                                 .map(|v| v.cleanup_expired_logs)
                                 .unwrap_or_default(),
                             log_store: this.log_store,
-                            table_data: read_snapshot
-                                .map(|snapshot| Box::new(snapshot) as Box<dyn TableReference>),
+                            table_data: read_snapshot.map(|snapshot| {
+                                Box::new(snapshot.into_eager_snapshot()) as Box<dyn TableReference>
+                            }),
                             custom_execute_handler: this.post_commit_hook_handler,
                             metrics: CommitMetrics {
                                 num_retries: attempt_number as u64 - 1,

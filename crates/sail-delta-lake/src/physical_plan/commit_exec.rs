@@ -30,8 +30,6 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
-use delta_kernel::engine::arrow_conversion::TryIntoKernel;
-use delta_kernel::schema::StructType;
 use futures::stream::{self, StreamExt};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
@@ -41,7 +39,7 @@ use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::physical_plan::action_schema::CommitMeta;
 use crate::physical_plan::{decode_actions_and_meta_from_batch, COL_ACTION};
-use crate::schema::normalize_delta_schema;
+use crate::schema::{logical_arrow_to_kernel, normalize_delta_schema};
 use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::{create_delta_table_with_object_store, open_table_with_object_store};
 
@@ -331,9 +329,7 @@ impl ExecutionPlan for DeltaCommitExec {
                 } else {
                     // Construct minimal protocol/metadata and insert them
                     let normalized_sink = normalize_delta_schema(&sink_schema);
-                    let delta_schema: StructType = normalized_sink
-                        .as_ref()
-                        .try_into_kernel()
+                    let delta_schema = logical_arrow_to_kernel(normalized_sink.as_ref())
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                     let protocol_json = serde_json::json!({

@@ -25,6 +25,7 @@ use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 
 use super::context::PlannerContext;
+use super::log_segment::list_log_segment_files;
 use super::utils::{
     align_schemas_for_union, build_log_replay_pipeline, build_log_replay_pipeline_with_options,
     build_standard_write_layers, LogReplayFilter, LogReplayOptions,
@@ -106,18 +107,9 @@ async fn build_full_overwrite_plan(
         let version = snapshot_state.version();
         let partition_columns = snapshot_state.metadata().partition_columns().clone();
 
-        let kernel_snapshot = snapshot_state.snapshot().snapshot().inner.clone();
-        let log_segment = kernel_snapshot.log_segment();
-        let checkpoint_files = log_segment
-            .checkpoint_parts
-            .iter()
-            .map(|p| p.filename.clone())
-            .collect::<Vec<_>>();
-        let commit_files = log_segment
-            .ascending_commit_files
-            .iter()
-            .map(|p| p.filename.clone())
-            .collect::<Vec<_>>();
+        let log_segment_files = list_log_segment_files(ctx, version).await?;
+        let checkpoint_files = log_segment_files.checkpoint_files;
+        let commit_files = log_segment_files.commit_files;
 
         let meta_scan: Arc<dyn ExecutionPlan> = build_log_replay_pipeline(
             ctx,
@@ -227,18 +219,9 @@ async fn build_overwrite_if_plan(
         .analyze_predicate(&physical_condition)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-    let kernel_snapshot = snapshot_state.snapshot().snapshot().inner.clone();
-    let log_segment = kernel_snapshot.log_segment();
-    let checkpoint_files = log_segment
-        .checkpoint_parts
-        .iter()
-        .map(|p| p.filename.clone())
-        .collect::<Vec<_>>();
-    let commit_files = log_segment
-        .ascending_commit_files
-        .iter()
-        .map(|p| p.filename.clone())
-        .collect::<Vec<_>>();
+    let log_segment_files = list_log_segment_files(ctx, version).await?;
+    let checkpoint_files = log_segment_files.checkpoint_files;
+    let commit_files = log_segment_files.commit_files;
 
     let mut log_replay_options = LogReplayOptions::default();
     if expr_props.partition_only {
@@ -297,23 +280,9 @@ async fn build_old_data_plan(
         .analyze_predicate(&condition)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-    let table = ctx.open_table().await?;
-    let snapshot_state = table
-        .snapshot()
-        .map_err(|e| DataFusionError::External(Box::new(e)))?
-        .clone();
-    let kernel_snapshot = snapshot_state.snapshot().snapshot().inner.clone();
-    let log_segment = kernel_snapshot.log_segment();
-    let checkpoint_files = log_segment
-        .checkpoint_parts
-        .iter()
-        .map(|p| p.filename.clone())
-        .collect::<Vec<_>>();
-    let commit_files = log_segment
-        .ascending_commit_files
-        .iter()
-        .map(|p| p.filename.clone())
-        .collect::<Vec<_>>();
+    let log_segment_files = list_log_segment_files(ctx, version).await?;
+    let checkpoint_files = log_segment_files.checkpoint_files;
+    let commit_files = log_segment_files.commit_files;
 
     let mut log_replay_options = LogReplayOptions::default();
     if expr_props.partition_only {
