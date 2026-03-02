@@ -16,7 +16,7 @@ use crate::worker::WorkerEvent;
 pub struct TaskRunner {
     signals: HashMap<TaskKey, oneshot::Sender<()>>,
     codec: Box<dyn PhysicalExtensionCodec>,
-    pub(crate) cache_store: Arc<LocalCacheStore>,
+    cache_store: Arc<LocalCacheStore>,
 }
 
 pub trait TaskRunnerMessage {
