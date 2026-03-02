@@ -21,6 +21,7 @@
 ...     def read(self, partition: InputPartition) -> Iterator[Tuple]:
 ...         yield ("Alice", 20)
 ...         yield ("Bob", 30)
+>>>
 >>> spark.dataSource.register(SimpleDataSource)
 >>> spark.read.format("simple").load().show()
 +-----+---+
