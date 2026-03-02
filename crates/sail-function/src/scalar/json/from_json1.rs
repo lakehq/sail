@@ -1,13 +1,10 @@
 use core::any::type_name;
 use std::sync::{Arc};
 
-use datafusion_expr::function::Hint;
+use chrono::NaiveDate;
+use datafusion_expr::{function::Hint};
 use sail_sql_analyzer::parser::parse_data_type;
 use sail_sql_analyzer::data_type::from_ast_data_type;
-
-use sail_common::spec::{
-    SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME,
-};
 
 use datafusion_common::{DataFusionError, Result, ScalarValue, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
@@ -17,17 +14,17 @@ use datafusion::arrow::{
     }, buffer::{
         NullBuffer, OffsetBuffer, ScalarBuffer
     }, datatypes::{
-        DataType, Field, FieldRef, Fields, TimeUnit
+        DataType, Field, FieldRef, Fields, TimeUnit, Schema
     }
 };
 use datafusion_functions::utils::make_scalar_function;
 
 use serde_json::Value;
 
-
 use crate::functions_nested_utils::downcast_arg;
 use super::SailToArrayDataType;
 
+#[derive(Debug)]
 enum FieldBuilder {
     Int32(Int32Builder),
     Int64(Int64Builder),
@@ -58,9 +55,21 @@ enum FieldBuilder {
 #[derive(Debug, Default)]
 enum ModeOptions {
     #[default]
-    PERMISSIVE,
-    FAILFAST,
-    DROPMALFORMED
+    Permissive,
+    FailFast,
+    DropMalformed
+}
+
+impl ModeOptions {
+    fn from_str(value: String) -> Result<Self, DataFusionError> {
+        dbg!(&value);
+        match value.as_str() {
+            "PERMISSIVE" => Ok(ModeOptions::Permissive),
+            "FAILFAST" => Ok(ModeOptions::FailFast),
+            "DROPMALFORMED" => Ok(ModeOptions::DropMalformed),
+            other => plan_err!("Invalid mode option: {other}")
+        }
+    }
 }
 
 // https://spark.apache.org/docs/latest/sql-data-sources-json.html#data-source-option
@@ -77,33 +86,49 @@ struct SparkFromJsonOptions {
     mode: ModeOptions,
     //column_name_of_corrupted_record: &'static str,
     //date_format: &'static str,
-    //timestamp_format: &'static str,
+    timestamp_format: String,
     //timestamp_ntz_format: &'static str,
     //enable_date_time_parsing_fallback: bool,
     //multi_line: bool,
     //allow_unquoted_control_chars: bool,
 }
 
-impl TryFrom<String> for ModeOptions {
-    type Error = DataFusionError;
-
-    fn try_from(value: String) -> Result<Self, DataFusionError> {
-        match value.as_str() {
-            "PERMISSIVE" => Ok(ModeOptions::PERMISSIVE),
-            "FAILFAST" => Ok(ModeOptions::FAILFAST),
-            "DROPMALFORMED" => Ok(ModeOptions::DROPMALFORMED),
-            other => plan_err!("Invalid mode option: {other}")
-        }
-    }
-}
-
 impl SparkFromJsonOptions {
-    pub fn from_map(map_array: &MapArray) -> Result<Self> {
-        let mode = find_key_value(map_array, "mode")
-            .unwrap_or(Default::default());
-        Ok(Self {
-            mode: ModeOptions::try_from(mode)?,
-        })
+    pub fn from_map(mut self, map_array: &MapArray) -> Result<Self> {
+        let inner_struct = map_array.value(0);
+        let keys = inner_struct
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("Should be string");
+        let values = inner_struct
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("Should be string");
+        for (key, value) in keys.iter().zip(values.iter()) {
+            let key = key.expect("SHould be string");
+            let value = value.expect("SHould be string");
+            match key {
+                "mode" => {
+                    self.mode = ModeOptions::from_str(value.to_string())?
+                },
+                "timestampFormat" => {
+                    self.timestamp_format = SparkFromJsonOptions::convert_format(value)
+                },
+                other => return plan_err!("Found unsupported option type when parsing options: {other}")
+            }
+        }
+        Ok(self)
+    }
+
+    fn convert_format(fmt: &str) -> String {
+        fmt.replace("yyyy", "%Y")
+            .replace("MM", "%m")
+            .replace("dd", "%d")
+            .replace("HH", "%H")
+            .replace("mm", "%M")
+            .replace("ss", "%S")
     }
 }
 
@@ -111,45 +136,10 @@ impl Default for SparkFromJsonOptions {
     fn default() -> Self {
         Self {
             mode: Default::default(),
+            timestamp_format: SparkFromJsonOptions::convert_format("yyyy-MM-dd'T'HH:mm:ss")
         }
     }
 }
-
-/// Finds the index of a specified key in a `MapArray`.
-///
-/// This helper function locates the index of a given key within a `MapArray`,
-/// where the keys are stored in a "key" column. It is useful for quickly identifying
-/// the position of an option or setting within structured options data.
-fn find_key_index(options: &MapArray, search_key: &str) -> Option<usize> {
-    options
-        .entries()
-        .column_by_name(SAIL_MAP_KEY_FIELD_NAME)
-        .and_then(|x| x.as_any().downcast_ref::<StringArray>())
-        .and_then(|x| {
-            x.iter()
-                .enumerate()
-                .find(|(_, x)| x.as_ref().is_some_and(|x| *x == search_key))
-        })
-        .map(|(i, _)| i)
-}
-
-/// Retrieves the value associated with a specified key from a `MapArray`.
-///
-/// This function extracts the string value assigned to a given key within a `MapArray`,
-/// leveraging the index found by `find_key_index`. It searches for the key in the "key"
-/// column and returns the corresponding value from the "value" column if found.
-fn find_key_value(options: &MapArray, search_key: &str) -> Option<String> {
-    if let Some(index) = find_key_index(options, search_key) {
-        options
-            .entries()
-            .column_by_name(SAIL_MAP_VALUE_FIELD_NAME)
-            .and_then(|x| x.as_any().downcast_ref::<StringArray>())
-            .map(|values| values.value(index).to_string())
-    } else {
-        None
-    }
-}
-
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkFromJson {
@@ -195,6 +185,7 @@ impl ScalarUDFImpl for SparkFromJson {
     }
 
     fn return_field_from_args(&self, args: datafusion_expr::ReturnFieldArgs) -> Result<FieldRef> {
+        dbg!(&args.arg_fields[1]);
         let schema_scalar_value = match args.scalar_arguments[1] {
             Some(value) => Ok(value),
             None => plan_err!("Function {} got a non-literal schema argument which is not allowed", self.name())
@@ -284,11 +275,13 @@ fn from_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     };
 
     let rows: &StringArray = downcast_arg!(&args[0], StringArray);
+    dbg!(args[1].clone());
     let schema = get_schema_data_type(args[1].clone())?;
+    dbg!(&schema);
 
     let options = if let Some(arr) = args.get(2) {
-        let x = downcast_arg!(arr, MapArray);
-        SparkFromJsonOptions::from_map(x)?
+        let map_array = downcast_arg!(arr, MapArray);
+        SparkFromJsonOptions::default().from_map(map_array)?
     } else {
         SparkFromJsonOptions::default()
     };
@@ -298,15 +291,15 @@ fn from_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 fn get_schema_data_type(schema_arg: ArrayRef) -> Result<DataType> {
     let as_any = schema_arg.as_any();
-    if let Some(arr) = as_any.downcast_ref::<StringArray>() {
-        let s = arr.value(0).to_string();
-        schema_str_to_data_type(s.as_str())
-    } else if let Some(arr) = as_any.downcast_ref::<StructArray>() {
+    if let Some(arr) = as_any.downcast_ref::<StructArray>() {
         Ok(arr.data_type().clone())
     } else if let Some(arr) = as_any.downcast_ref::<MapArray>() {
         Ok(arr.data_type().clone())
     } else if let Some(arr) = as_any.downcast_ref::<ListArray>() {
         Ok(arr.data_type().clone())
+    } else if let Some(arr) = as_any.downcast_ref::<StringArray>() {
+        let s = arr.value(0).to_string();
+        schema_str_to_data_type(s.as_str())
     } else {
         plan_err!("Unsupported schema field type")
     }
@@ -427,6 +420,23 @@ fn append_to_builder(
                 }
             }
         },
+        (FieldBuilder::Float64(b), Value::Number(num)) => {
+            if let Some(float) = num.as_f64() {
+                b.append_value(float);
+            } else {
+                b.append_null();
+            }
+        },
+        (FieldBuilder::TimestampMicrosecondBuilder(b), Value::String(string)) => {
+            // TODO: partly hardcoded for sail-spark-connect tests
+            let micro_seconds = NaiveDate::parse_from_str(string, &options.timestamp_format)
+                .unwrap()
+                .and_hms_opt(0, 0, 0)
+                .unwrap()
+                .and_utc()
+                .timestamp_micros();
+            b.append_value(micro_seconds);
+        },
         (FieldBuilder::String(b), Value::String(string)) => {
             b.append_value(string);
         },
@@ -477,7 +487,7 @@ fn append_to_builder(
             let curr_len = offsets.last().unwrap() + arr.len() as i32;
             offsets.push(curr_len);
         },
-        _ => return plan_err!("nah dog")
+        (other, other1) => return plan_err!("Unsupported conversion of value {other1:?} to type {other:?}")
     };
     Ok(())
 }
@@ -538,6 +548,8 @@ fn finish_builder(builder: FieldBuilder) -> Result<ArrayRef> {
 
 #[cfg(test)]
 mod test {
+    use datafusion::arrow::array::MapBuilder;
+
     use super::*;
 
     #[test]
@@ -549,8 +561,38 @@ mod test {
         let strings = StringArray::from(vec![json_str, json_str]);
         let schema_arg = Arc::new(StringArray::from(vec!["map<string, int>"]));
         let schema_dtype = get_schema_data_type(schema_arg).unwrap();
-        let x = parse_rows(&strings, schema_dtype, SparkFromJsonOptions::default()).unwrap();
+        let map_array = &make_map();
+        let opts = SparkFromJsonOptions::default().from_map(map_array).unwrap();
+        let x = parse_rows(&strings, schema_dtype, opts).unwrap();
         dbg!(x);
+    }
+
+    #[test]
+    fn test_map_options() {
+        let map_array = &make_map();
+        let opts = SparkFromJsonOptions::default().from_map(map_array).unwrap();
+        dbg!(opts);
+    }
+
+    fn make_map() -> MapArray {
+        let key_builder = StringBuilder::new();
+        let value_builder = StringBuilder::new();
+
+        let mut builder = MapBuilder::new(None, key_builder, value_builder);
+
+        // Add one map entry: { "timestampFormat": "" }
+        builder.keys().append_value("mode");
+        builder.values().append_value("FAILFAST");
+        builder.append(true).unwrap(); // true = this map entry is valid (not null)
+
+        builder.finish()
+    }
+
+    #[test]
+    fn test_fuck_shit() {
+        let j = r#"{"fields":[{"metadata":{},"name":"a","nullable":true,"type":"integer"}],"type":"struct"}"#;
+        let d = serde_json::from_str::<Schema>(j).unwrap();
+        dbg!(d);
     }
 }
 
