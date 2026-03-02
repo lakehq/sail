@@ -2,6 +2,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
+use datafusion_common::{internal_err, Result};
 use datafusion::logical_expr::LogicalPlan;
 
 use crate::extension::SessionExtension;
@@ -88,6 +89,25 @@ impl CacheManager {
     pub fn find_by_id(&self, cache_id: CacheId) -> Option<CachedData> {
         let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         entries.iter().find(|e| e.cache_id == cache_id).cloned()
+    }
+
+    /// Returns cache entries for all IDs, or errors with the missing IDs.
+    pub fn get_required_by_ids(&self, cache_ids: &[CacheId]) -> Result<Vec<CachedData>> {
+        let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        let mut found = Vec::with_capacity(cache_ids.len());
+        let mut missing = Vec::new();
+
+        for &cache_id in cache_ids {
+            if let Some(entry) = entries.iter().find(|e| e.cache_id == cache_id) {
+                found.push(entry.clone());
+            } else {
+                missing.push(cache_id);
+            }
+        }
+        if !missing.is_empty() {
+            return internal_err!("missing required cache id(s): {missing:?}");
+        }
+        Ok(found)
     }
 
     /// Marks a cache entry as materialized with the given partition count.

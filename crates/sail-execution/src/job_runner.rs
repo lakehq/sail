@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -83,16 +84,23 @@ impl JobRunner for LocalJobRunner {
 
         let cache_ids = collect_cache_node_ids(&plan);
         let cache = ctx.extension::<CacheManager>()?;
-        for cache_id in cache_ids {
-            if let Some(entry) = cache.find_by_id(cache_id) {
-                if !entry.materialized {
-                    let num_partitions = self.materialize_cache(ctx, cache_id, &entry.plan).await?;
-                    cache.mark_materialized(cache_id, num_partitions);
-                }
-            }
+        let mut num_partitions_by_cache_id = HashMap::with_capacity(cache_ids.len());
+        for entry in cache.get_required_by_ids(&cache_ids)? {
+            let num_partitions = if entry.materialized {
+                entry
+                    .num_partitions
+                    .expect("materialized cache entry must have partition count")
+            } else {
+                let num_partitions = self
+                    .materialize_cache(ctx, entry.cache_id, &entry.plan)
+                    .await?;
+                cache.mark_materialized(entry.cache_id, num_partitions);
+                num_partitions
+            };
+            num_partitions_by_cache_id.insert(entry.cache_id, num_partitions);
         }
 
-        plan = rewrite_cache_read_partitions(plan, cache.as_ref())?;
+        plan = rewrite_cache_read_partitions(plan, &num_partitions_by_cache_id)?;
         let plan = inject_local_cache_store(plan, self.cache_store.clone())?;
         let job_id = self.next_job_id.fetch_add(1, Ordering::Relaxed);
         let options = TracingExecOptions {
@@ -193,17 +201,24 @@ impl JobRunner for ClusterJobRunner {
     ) -> Result<SendableRecordBatchStream> {
         let cache_ids = collect_cache_node_ids(&plan);
         let cache = ctx.extension::<CacheManager>()?;
+        let mut num_partitions_by_cache_id = HashMap::with_capacity(cache_ids.len());
 
-        for cache_id in cache_ids {
-            if let Some(entry) = cache.find_by_id(cache_id) {
-                if !entry.materialized {
-                    let num_partitions = self.materialize_cache(ctx, cache_id, &entry.plan).await?;
-                    cache.mark_materialized(cache_id, num_partitions);
-                }
-            }
+        for entry in cache.get_required_by_ids(&cache_ids)? {
+            let num_partitions = if entry.materialized {
+                entry
+                    .num_partitions
+                    .expect("materialized cache entry must have partition count")
+            } else {
+                let num_partitions = self
+                    .materialize_cache(ctx, entry.cache_id, &entry.plan)
+                    .await?;
+                cache.mark_materialized(entry.cache_id, num_partitions);
+                num_partitions
+            };
+            num_partitions_by_cache_id.insert(entry.cache_id, num_partitions);
         }
 
-        plan = rewrite_cache_read_partitions(plan, cache.as_ref())?;
+        plan = rewrite_cache_read_partitions(plan, &num_partitions_by_cache_id)?;
         self.submit_job(ctx, plan).await
     }
 
@@ -235,18 +250,13 @@ fn collect_cache_node_ids(plan: &Arc<dyn ExecutionPlan>) -> Vec<CacheId> {
 /// Rewrites cache-read nodes to use materialized cache partition counts.
 fn rewrite_cache_read_partitions(
     plan: Arc<dyn ExecutionPlan>,
-    cache: &CacheManager,
+    num_partitions_by_cache_id: &HashMap<CacheId, usize>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let result = plan.transform(|node| {
         let Some(cache_read) = node.as_any().downcast_ref::<CacheReadExec>() else {
             return Ok(Transformed::no(node));
         };
-        let Some(entry) = cache.find_by_id(cache_read.cache_id()) else {
-            return Ok(Transformed::no(node));
-        };
-        let Some(num_partitions) = entry.num_partitions else {
-            return Ok(Transformed::no(node));
-        };
+        let num_partitions = num_partitions_by_cache_id[&cache_read.cache_id()];
         let rewritten: Arc<dyn ExecutionPlan> = Arc::new(CacheReadExec::new(
             cache_read.cache_id(),
             node.schema(),
