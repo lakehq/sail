@@ -6,9 +6,9 @@ rank: 3
 # Python Data Sources
 
 The Python data source allows you to extend the `SparkSession.read` and `DataFrame.write` APIs to support custom formats and external system integrations.
-It optionally supports Arrow for zero-copy data exchange between the Python process and the Sail execution engine. This gives you flexibility in data source implementations without incurring performance panalties.
+It optionally supports Arrow for zero-copy data exchange between the Python process and the Sail execution engine. This gives you flexibility in data source implementations without incurring performance penalties.
 
-You can define a Python class that inherit from the `pyspark.sql.datasource.DataSource` abstract class, and register it to the Spark session to create a custom data source that can be used in the standard PySpark API. The `DataSource` class provides methods for defining the name and schema of the data source, as well as methods for creating readers and writers.
+You can define a Python class that inherits from the `pyspark.sql.datasource.DataSource` abstract class, and register it to the Spark session to create a custom data source that can be used in the standard PySpark API. The `DataSource` class provides methods for defining the name and schema of the data source, as well as methods for creating readers and writers.
 
 Currently, Sail supports Python data sources for batch reading and writing.
 

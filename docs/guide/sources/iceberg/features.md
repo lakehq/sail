@@ -20,7 +20,7 @@ Here is a high-level overview of the features supported by Sail for Iceberg tabl
 
 Both non-partitioned and partitioned tables are supported for reading and writing.
 
-The write operations currently follows "copy-on-write" semantics.
+The write operations currently follow "copy-on-write" semantics.
 We plan to support delete files and deletion vectors, which would enable "merge-on-read" write operations in the future.
 
 ## Version-specific Features
