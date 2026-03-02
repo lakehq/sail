@@ -430,6 +430,17 @@ impl ReconciledCheckpointState {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct ReplayedTableState {
+    pub version: i64,
+    pub protocol: Protocol,
+    pub metadata: Metadata,
+    pub txns: HashMap<String, Transaction>,
+    pub adds: Vec<Add>,
+    pub removes: Vec<Remove>,
+    pub commit_timestamps: BTreeMap<i64, i64>,
+}
+
 fn encode_checkpoint_rows(rows: &Vec<CheckpointActionRow>) -> DeltaResult<RecordBatch> {
     use serde_arrow::schema::SchemaLike;
 
@@ -780,6 +791,122 @@ pub(crate) async fn create_checkpoint_for(
     CheckpointManager::new(log_store, operation_id)
         .create_checkpoint(version)
         .await
+}
+
+/// Load the reconciled table state at a specific version by replaying checkpoint + commits.
+pub(crate) async fn load_replayed_table_state(
+    version: i64,
+    log_store: &dyn LogStore,
+) -> DeltaResult<ReplayedTableState> {
+    if version < 0 {
+        return Err(DeltaTableError::generic(format!(
+            "Cannot load table state for negative version: {version}"
+        )));
+    }
+
+    let store = log_store.object_store(None);
+    let log_entries = store
+        .list(Some(&Path::from(DELTA_LOG_FOLDER)))
+        .try_collect::<Vec<_>>()
+        .await?;
+    let delta_log_pattern = delta_log_regex()?;
+    let checkpoint_pattern = checkpoint_regex()?;
+    let mut commit_entries: Vec<(i64, ObjectMeta)> = Vec::new();
+    let mut checkpoint_entries: Vec<(i64, ObjectMeta)> = Vec::new();
+    for meta in log_entries {
+        if let Some(v) = parse_version(delta_log_pattern, &meta.location) {
+            if v <= version {
+                commit_entries.push((v, meta));
+            }
+            continue;
+        }
+        if let Some(v) = parse_version(checkpoint_pattern, &meta.location) {
+            if v <= version {
+                checkpoint_entries.push((v, meta));
+            }
+        }
+    }
+    commit_entries.sort_by(|(av, _), (bv, _)| av.cmp(bv));
+    checkpoint_entries.sort_by(|(av, _), (bv, _)| av.cmp(bv));
+
+    let mut state = ReconciledCheckpointState::default();
+    let start_commit_version = if let Some((cp_ver, cp_meta)) = checkpoint_entries.pop() {
+        let rows = read_checkpoint_rows_from_parquet(store.clone(), cp_meta).await?;
+        for row in rows {
+            state.apply_checkpoint_row(row)?;
+        }
+        cp_ver.saturating_add(1)
+    } else {
+        0
+    };
+
+    replay_commit_actions(
+        &mut state,
+        store,
+        commit_entries.clone(),
+        start_commit_version,
+        version,
+    )
+    .await?;
+
+    let protocol = state
+        .protocol
+        .ok_or_else(|| DeltaTableError::generic("Cannot load table state without protocol"))?;
+    let metadata = state
+        .metadata
+        .ok_or_else(|| DeltaTableError::generic("Cannot load table state without metadata"))?;
+    let txns = state.txns;
+    let adds = state
+        .adds
+        .into_iter()
+        .collect::<BTreeMap<_, _>>()
+        .into_values()
+        .collect::<Vec<_>>();
+    let removes = state
+        .removes
+        .into_iter()
+        .collect::<BTreeMap<_, _>>()
+        .into_values()
+        .collect::<Vec<_>>();
+    let commit_timestamps = commit_entries
+        .into_iter()
+        .filter(|(v, _)| *v >= start_commit_version && *v <= version)
+        .map(|(v, meta)| (v, meta.last_modified.timestamp_millis()))
+        .collect::<BTreeMap<_, _>>();
+
+    Ok(ReplayedTableState {
+        version,
+        protocol,
+        metadata,
+        txns,
+        adds,
+        removes,
+        commit_timestamps,
+    })
+}
+
+/// Resolve the latest table version that can be replayed from `_delta_log`.
+///
+/// This includes both commit JSON files and checkpoint parquet files. We rely on this when
+/// loading snapshots because commit JSON files can be pruned while checkpoints are retained.
+pub(crate) async fn latest_replayable_version(log_store: &dyn LogStore) -> DeltaResult<i64> {
+    let store = log_store.object_store(None);
+    let log_entries = store
+        .list(Some(&Path::from(DELTA_LOG_FOLDER)))
+        .try_collect::<Vec<_>>()
+        .await?;
+    let delta_log_pattern = delta_log_regex()?;
+    let checkpoint_pattern = checkpoint_regex()?;
+
+    let latest = log_entries
+        .iter()
+        .filter_map(|meta| {
+            parse_version(delta_log_pattern, &meta.location)
+                .or_else(|| parse_version(checkpoint_pattern, &meta.location))
+        })
+        .max();
+
+    latest.ok_or(crate::error::KernelError::MissingVersion.into())
 }
 
 /// Delete expired Delta log files up to a safe checkpoint boundary.

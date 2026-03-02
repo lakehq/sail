@@ -23,9 +23,10 @@ use log::warn;
 
 use crate::kernel::models::{DataType, Metadata, PrimitiveType};
 use crate::kernel::snapshot::iterators::LogicalFileView;
+use crate::kernel::snapshot::SnapshotTableConfiguration;
 use crate::kernel::{
     scan_row_schema, DeltaResult, DeltaTableError, EvaluationHandler, Expression,
-    ExpressionEvaluator, TableConfiguration,
+    ExpressionEvaluator,
 };
 
 const COL_NUM_RECORDS: &str = "numRecords";
@@ -40,16 +41,16 @@ const COL_NULL_COUNT: &str = "nullCount";
 #[derive(Clone)]
 pub struct LogDataHandler<'a> {
     data: &'a RecordBatch,
-    config: &'a TableConfiguration,
+    config: &'a SnapshotTableConfiguration,
 }
 
 impl<'a> LogDataHandler<'a> {
-    pub(crate) fn new(data: &'a RecordBatch, config: &'a TableConfiguration) -> Self {
+    pub(crate) fn new(data: &'a RecordBatch, config: &'a SnapshotTableConfiguration) -> Self {
         Self { data, config }
     }
 
     #[expect(dead_code)]
-    pub(crate) fn table_configuration(&self) -> &TableConfiguration {
+    pub(crate) fn table_configuration(&self) -> &SnapshotTableConfiguration {
         self.config
     }
 
@@ -312,7 +313,7 @@ mod datafusion {
                 .config
                 .schema()
                 .fields()
-                .map(|f| self.column_stats(f.name()))
+                .map(|f: &crate::kernel::models::StructField| self.column_stats(f.name()))
                 .collect::<Option<Vec<_>>>()?;
             Some(Statistics {
                 num_rows,

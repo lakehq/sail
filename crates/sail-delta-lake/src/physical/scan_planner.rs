@@ -129,7 +129,7 @@ pub(crate) async fn plan_delta_scan(
     // Build physical file schema (non-partition columns)
     let table_partition_cols = snapshot.metadata().partition_columns();
     let kmode: ColumnMappingMode = snapshot.effective_column_mapping_mode();
-    let kschema_arc = snapshot.snapshot().table_configuration().schema();
+    let kschema_arc = snapshot.snapshot().schema();
     let physical_arrow: ArrowSchema = get_physical_schema(&kschema_arc, kmode);
     let physical_partition_cols: HashSet<String> = table_partition_cols
         .iter()

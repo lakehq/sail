@@ -26,7 +26,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use futures::TryStreamExt;
 
-use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, SnapshotExt};
+use crate::kernel::arrow::engine_ext::{stats_schema, ExpressionEvaluatorExt};
 use crate::kernel::models::{ColumnMappingMode, ColumnMetadataKey, DataType, Remove, StructField};
 use crate::kernel::snapshot::EagerSnapshot;
 use crate::kernel::{
@@ -169,7 +169,15 @@ impl DeltaTableState {
             StructField::not_null("modification_time", DataType::LONG),
         ];
 
-        let stats_schema = self.snapshot.snapshot().inner.stats_schema()?;
+        let partition_columns = self.snapshot.metadata().partition_columns();
+        let mode = self.effective_column_mapping_mode();
+        let physical_schema = crate::kernel::models::StructType::try_new(
+            self.schema()
+                .fields()
+                .filter(|field| !partition_columns.contains(field.name()))
+                .map(|field| field.make_physical(mode)),
+        )?;
+        let stats_schema = stats_schema(&physical_schema, self.table_properties())?;
         let num_records_field = stats_schema
             .field("numRecords")
             .ok_or_else(|| DeltaTableError::schema("numRecords field not found".to_string()))?
@@ -196,7 +204,17 @@ impl DeltaTableState {
             fields.push(max_values_field);
         }
 
-        if let Some(partition_schema) = self.snapshot.snapshot().inner.partitions_schema()? {
+        if !partition_columns.is_empty() {
+            let partition_fields = partition_columns
+                .iter()
+                .map(|col| {
+                    self.schema()
+                        .field(col)
+                        .cloned()
+                        .ok_or_else(|| DeltaTableError::missing_column(col))
+                })
+                .collect::<DeltaResult<Vec<_>>>()?;
+            let partition_schema = crate::kernel::models::StructType::try_new(partition_fields)?;
             fields.push(StructField::nullable(
                 "partition",
                 DataType::try_struct_type(partition_schema.fields().cloned())?,

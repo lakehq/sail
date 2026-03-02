@@ -21,7 +21,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::LazyLock;
 
 use chrono::{DateTime, Utc};
 use datafusion::arrow::array::cast::AsArray;
@@ -31,9 +30,9 @@ use datafusion::arrow::datatypes::{DataType as ArrowDataType, Int32Type};
 use percent_encoding::percent_decode_str;
 
 use crate::kernel::models::{
-    Add, DataType, DeletionVectorDescriptor, Remove, Scalar, ScalarExt, StorageType, StructData,
+    Add, DeletionVectorDescriptor, Remove, Scalar, ScalarExt, StorageType, StructData,
 };
-use crate::kernel::{scan_row_schema, DeltaResult, DeltaTableError};
+use crate::kernel::{DeltaResult, DeltaTableError};
 
 const FIELD_NAME_PATH: &str = "path";
 const FIELD_NAME_SIZE: &str = "size";
@@ -58,56 +57,6 @@ const DV_FIELD_SIZE_IN_BYTES: &str = "sizeInBytes";
 const DV_FIELD_CARDINALITY: &str = "cardinality";
 const DV_FIELD_OFFSET: &str = "offset";
 
-static FIELD_INDICES: LazyLock<HashMap<&'static str, usize>> = LazyLock::new(|| {
-    let schema = scan_row_schema();
-    let mut indices = HashMap::new();
-
-    if let Some(path_idx) = schema.index_of(FIELD_NAME_PATH) {
-        indices.insert(FIELD_NAME_PATH, path_idx);
-    }
-
-    if let Some(size_idx) = schema.index_of(FIELD_NAME_SIZE) {
-        indices.insert(FIELD_NAME_SIZE, size_idx);
-    }
-
-    if let Some(modification_time_idx) = schema.index_of(FIELD_NAME_MODIFICATION_TIME) {
-        indices.insert(FIELD_NAME_MODIFICATION_TIME, modification_time_idx);
-    }
-
-    if let Some(stats_idx) = schema.index_of(FIELD_NAME_STATS) {
-        indices.insert(FIELD_NAME_STATS, stats_idx);
-    }
-
-    indices
-});
-
-static DV_FIELD_INDICES: LazyLock<HashMap<&'static str, usize>> = LazyLock::new(|| {
-    let schema = scan_row_schema();
-    let mut indices = HashMap::new();
-
-    if let Some(dv_field) = schema.field(FIELD_NAME_DELETION_VECTOR) {
-        if let DataType::Struct(dv_type) = dv_field.data_type() {
-            if let Some(storage_type_idx) = dv_type.index_of(DV_FIELD_STORAGE_TYPE) {
-                indices.insert(DV_FIELD_STORAGE_TYPE, storage_type_idx);
-            }
-
-            if let Some(path_or_inline_dv_idx) = dv_type.index_of(DV_FIELD_PATH_OR_INLINE_DV) {
-                indices.insert(DV_FIELD_PATH_OR_INLINE_DV, path_or_inline_dv_idx);
-            }
-
-            if let Some(size_in_bytes_idx) = dv_type.index_of(DV_FIELD_SIZE_IN_BYTES) {
-                indices.insert(DV_FIELD_SIZE_IN_BYTES, size_in_bytes_idx);
-            }
-
-            if let Some(cardinality_idx) = dv_type.index_of(DV_FIELD_CARDINALITY) {
-                indices.insert(DV_FIELD_CARDINALITY, cardinality_idx);
-            }
-        }
-    }
-
-    indices
-});
-
 /// Provides semantic, typed access to file metadata from Delta log replay.
 ///
 /// This struct wraps a RecordBatch containing file data and provides zero-copy
@@ -128,36 +77,34 @@ impl LogicalFileView {
 
     /// Returns the file path with URL decoding applied.
     pub fn path(&self) -> Cow<'_, str> {
-        if let Some(&path_idx) = FIELD_INDICES.get(FIELD_NAME_PATH) {
-            if let Some(raw) = get_string_value(self.files.column(path_idx), self.index) {
-                return percent_decode_str(raw).decode_utf8_lossy();
-            }
+        if let Some(raw) = self
+            .files
+            .column_by_name(FIELD_NAME_PATH)
+            .and_then(|col| get_string_value(col.as_ref(), self.index))
+        {
+            return percent_decode_str(raw).decode_utf8_lossy();
         }
         Cow::Borrowed("")
     }
 
     /// Returns the file size in bytes.
     pub fn size(&self) -> i64 {
-        if let Some(&size_idx) = FIELD_INDICES.get(FIELD_NAME_SIZE) {
-            self.files
-                .column(size_idx)
-                .as_primitive::<Int64Type>()
-                .value(self.index)
-        } else {
-            0
-        }
+        self.files
+            .column_by_name(FIELD_NAME_SIZE)
+            .map(|c| c.as_primitive::<Int64Type>())
+            .filter(|c| c.is_valid(self.index))
+            .map(|c| c.value(self.index))
+            .unwrap_or(0)
     }
 
     /// Returns the file modification time in milliseconds since Unix epoch.
     pub fn modification_time(&self) -> i64 {
-        if let Some(&mod_time_idx) = FIELD_INDICES.get(FIELD_NAME_MODIFICATION_TIME) {
-            self.files
-                .column(mod_time_idx)
-                .as_primitive::<Int64Type>()
-                .value(self.index)
-        } else {
-            0
-        }
+        self.files
+            .column_by_name(FIELD_NAME_MODIFICATION_TIME)
+            .map(|c| c.as_primitive::<Int64Type>())
+            .filter(|c| c.is_valid(self.index))
+            .map(|c| c.value(self.index))
+            .unwrap_or(0)
     }
 
     /// Returns the file modification time as a UTC DateTime.
@@ -172,9 +119,9 @@ impl LogicalFileView {
 
     /// Returns the raw JSON statistics string for this file, if available.
     pub fn stats(&self) -> Option<&str> {
-        FIELD_INDICES
-            .get(FIELD_NAME_STATS)
-            .and_then(|&stats_idx| get_string_value(self.files.column(stats_idx), self.index))
+        self.files
+            .column_by_name(FIELD_NAME_STATS)
+            .and_then(|col| get_string_value(col.as_ref(), self.index))
     }
 
     /// Returns the parsed partition values as structured data.
@@ -266,16 +213,12 @@ impl LogicalFileView {
         dv_col
             .is_valid(self.index)
             .then(|| {
-                DV_FIELD_INDICES
-                    .get(DV_FIELD_STORAGE_TYPE)
-                    .and_then(|&storage_idx| {
-                        let storage_col = dv_col.column(storage_idx);
-                        storage_col
-                            .is_valid(self.index)
-                            .then_some(DeletionVectorView {
-                                data: dv_col,
-                                index: self.index,
-                            })
+                dv_col
+                    .column_by_name(DV_FIELD_STORAGE_TYPE)
+                    .filter(|storage_col| storage_col.is_valid(self.index))
+                    .map(|_| DeletionVectorView {
+                        data: dv_col,
+                        index: self.index,
                     })
             })
             .flatten()
@@ -388,43 +331,37 @@ impl DeletionVectorView<'_> {
 
     /// Returns the storage type of the deletion vector.
     fn storage_type(&self) -> &str {
-        DV_FIELD_INDICES
-            .get(DV_FIELD_STORAGE_TYPE)
-            .and_then(|&idx| get_string_value(self.data.column(idx), self.index))
+        self.data
+            .column_by_name(DV_FIELD_STORAGE_TYPE)
+            .and_then(|col| get_string_value(col.as_ref(), self.index))
             .unwrap_or("")
     }
 
     /// Returns the path or inline data for the deletion vector.
     fn path_or_inline_dv(&self) -> &str {
-        DV_FIELD_INDICES
-            .get(DV_FIELD_PATH_OR_INLINE_DV)
-            .and_then(|&idx| get_string_value(self.data.column(idx), self.index))
+        self.data
+            .column_by_name(DV_FIELD_PATH_OR_INLINE_DV)
+            .and_then(|col| get_string_value(col.as_ref(), self.index))
             .unwrap_or("")
     }
 
     /// Returns the size of the deletion vector in bytes.
     fn size_in_bytes(&self) -> i32 {
-        DV_FIELD_INDICES
-            .get(DV_FIELD_SIZE_IN_BYTES)
-            .map(|&idx| {
-                self.data
-                    .column(idx)
-                    .as_primitive::<Int32Type>()
-                    .value(self.index)
-            })
+        self.data
+            .column_by_name(DV_FIELD_SIZE_IN_BYTES)
+            .map(|c| c.as_primitive::<Int32Type>())
+            .filter(|c| c.is_valid(self.index))
+            .map(|c| c.value(self.index))
             .unwrap_or(0)
     }
 
     /// Returns the number of deleted rows represented by this deletion vector.
     fn cardinality(&self) -> i64 {
-        DV_FIELD_INDICES
-            .get(DV_FIELD_CARDINALITY)
-            .map(|&idx| {
-                self.data
-                    .column(idx)
-                    .as_primitive::<Int64Type>()
-                    .value(self.index)
-            })
+        self.data
+            .column_by_name(DV_FIELD_CARDINALITY)
+            .map(|c| c.as_primitive::<Int64Type>())
+            .filter(|c| c.is_valid(self.index))
+            .map(|c| c.value(self.index))
             .unwrap_or(0)
     }
 
