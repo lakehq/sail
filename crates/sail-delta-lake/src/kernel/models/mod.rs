@@ -12,20 +12,21 @@
 
 mod actions;
 mod metadata;
+mod types;
 
 pub use actions::{
     Action, Add, CommitInfo, DeletionVectorDescriptor, Remove, RemoveOptions, StorageType,
     Transaction,
 };
-pub use delta_kernel::actions::{Metadata, Protocol};
-pub use delta_kernel::expressions::{Scalar, StructData};
-pub use delta_kernel::schema::{
-    ArrayType, ColumnMetadataKey, DataType, MapType, MetadataValue, PrimitiveType, Schema,
-    StructField, StructType,
-};
-pub use delta_kernel::table_features::{ColumnMappingMode, TableFeature};
-pub use delta_kernel::table_properties::{IsolationLevel, TableProperties};
 pub use metadata::MetadataExt;
+#[allow(unused_imports)]
+pub use types::{
+    ArrayData, ArrayType, ColumnMappingMode, ColumnMetadataKey, ColumnName,
+    DataSkippingNumIndexedCols, DataType, DecimalData, DecimalType, IsolationLevel, MapData,
+    MapType, Metadata, MetadataValue, PrimitiveType, Protocol, Scalar, Schema, SchemaRef,
+    SchemaTransform, StructData, StructField, StructType, TableFeature, TableProperties,
+    TryFromArrow, TryFromKernel, TryIntoArrow, TryIntoKernel,
+};
 
 pub use super::statistics::{ColumnCountStat, ColumnValueStat, Stats};
 pub use crate::conversion::ScalarExt;

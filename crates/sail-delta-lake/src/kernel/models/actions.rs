@@ -31,7 +31,7 @@ use object_store::path::Path;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
 
-use super::{Metadata, Protocol};
+use super::{IsolationLevel, Metadata, Protocol};
 use crate::kernel::statistics::Stats;
 use crate::kernel::{DeltaResult, DeltaTableError};
 
@@ -293,40 +293,6 @@ pub struct Transaction {
     pub version: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_updated: Option<i64>,
-}
-
-/// The isolation level applied during a transaction.
-#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Default)]
-pub enum IsolationLevel {
-    #[default]
-    Serializable,
-    WriteSerializable,
-    SnapshotIsolation,
-}
-
-impl AsRef<str> for IsolationLevel {
-    fn as_ref(&self) -> &str {
-        match self {
-            Self::Serializable => "Serializable",
-            Self::WriteSerializable => "WriteSerializable",
-            Self::SnapshotIsolation => "SnapshotIsolation",
-        }
-    }
-}
-
-impl FromStr for IsolationLevel {
-    type Err = DeltaTableError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "serializable" => Ok(Self::Serializable),
-            "writeserializable" | "write_serializable" => Ok(Self::WriteSerializable),
-            "snapshotisolation" | "snapshot_isolation" => Ok(Self::SnapshotIsolation),
-            _ => Err(DeltaTableError::generic(format!(
-                "Invalid string for IsolationLevel: {s}"
-            ))),
-        }
-    }
 }
 
 /// Commit metadata action.

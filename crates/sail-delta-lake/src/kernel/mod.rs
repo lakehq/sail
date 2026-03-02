@@ -22,21 +22,11 @@ mod error;
 mod operation;
 mod table_properties;
 
-use std::sync::LazyLock;
-
 pub use config::DeltaTableConfig;
-pub use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
-pub use delta_kernel::engine::arrow_data::ArrowEngineData;
-use delta_kernel::engine::arrow_expression::ArrowEvaluationHandler;
-pub use delta_kernel::engine::parse_json;
-pub use delta_kernel::expressions::ColumnName;
-pub use delta_kernel::scan::scan_row_schema;
-pub use delta_kernel::schema::{SchemaRef, SchemaTransform};
-pub use delta_kernel::table_properties::DataSkippingNumIndexedCols;
-pub use delta_kernel::{EvaluationHandler, Expression, ExpressionEvaluator, PredicateRef};
 pub use error::{DeltaResult, DeltaTableError};
+pub use models::{
+    ColumnName, DataSkippingNumIndexedCols, SchemaRef, SchemaTransform, TryIntoArrow, TryIntoKernel,
+};
 pub use operation::{DeltaOperation, MergePredicate, SaveMode};
 pub use table_properties::TablePropertiesExt;
-
-pub(crate) static ARROW_HANDLER: LazyLock<ArrowEvaluationHandler> =
-    LazyLock::new(|| ArrowEvaluationHandler {});
+pub type PredicateRef = std::sync::Arc<()>;

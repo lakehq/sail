@@ -21,10 +21,11 @@ use std::io::{BufRead, BufReader, Cursor};
 use std::pin::Pin;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, StructArray};
+use datafusion::arrow::array::{Array, StringArray, StructArray};
 use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field, FieldRef, Schema as ArrowSchema,
 };
+use datafusion::arrow::json::ReaderBuilder as JsonReaderBuilder;
 use datafusion::arrow::record_batch::RecordBatch;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
@@ -41,8 +42,7 @@ use crate::kernel::models::{
 use crate::kernel::snapshot::iterators::LogicalFileView;
 pub use crate::kernel::snapshot::log_data::LogDataHandler;
 use crate::kernel::{
-    parse_json, ArrowEngineData, DeltaResult, DeltaTableConfig, DeltaTableError, PredicateRef,
-    SchemaRef,
+    DeltaResult, DeltaTableConfig, DeltaTableError, PredicateRef, SchemaRef, TryIntoArrow,
 };
 use crate::storage::LogStore;
 
@@ -608,10 +608,32 @@ fn parse_scan_row_columns(raw: RecordBatch, snapshot: &Snapshot) -> DeltaResult<
     if let Some((stats_idx, _)) = raw.schema_ref().column_with_name("stats") {
         let stats_source = build_stats_source_schema(snapshot)?;
         let stats_schema = Arc::new(stats_schema(&stats_source, snapshot.table_properties())?);
+        let arrow_stats_schema = Arc::new(stats_schema.as_ref().try_into_arrow()?);
         let stats_batch = raw.project(&[stats_idx])?;
-        let stats_data = Box::new(ArrowEngineData::new(stats_batch));
-        let parsed = parse_json(stats_data, stats_schema)?;
-        let parsed_batch: RecordBatch = ArrowEngineData::try_from_engine_data(parsed)?.into();
+        let stats_json = stats_batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| {
+                DeltaTableError::schema("expected Utf8 stats column when parsing stats".to_string())
+            })?;
+        let mut json_lines = String::new();
+        for value in stats_json.iter() {
+            if let Some(value) = value {
+                json_lines.push_str(value);
+            } else {
+                json_lines.push_str("{}");
+            }
+            json_lines.push('\n');
+        }
+        let mut reader = JsonReaderBuilder::new(Arc::clone(&arrow_stats_schema))
+            .with_batch_size(stats_batch.num_rows().max(1))
+            .build(Cursor::new(json_lines))
+            .map_err(DeltaTableError::generic_err)?;
+        let parsed_batch = match reader.next() {
+            Some(batch) => batch.map_err(DeltaTableError::generic_err)?,
+            None => RecordBatch::new_empty(arrow_stats_schema),
+        };
         let stats_array: Arc<StructArray> = Arc::new(parsed_batch.into());
         fields.push(Arc::new(Field::new(
             "stats_parsed",

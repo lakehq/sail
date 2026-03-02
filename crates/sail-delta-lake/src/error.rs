@@ -11,7 +11,6 @@
 // limitations under the License.
 
 use datafusion_common::{Column, DataFusionError, SchemaError};
-pub use delta_kernel::Error as KernelError;
 use object_store::Error as ObjectStoreError;
 use thiserror::Error;
 
@@ -19,6 +18,91 @@ use crate::kernel::transaction::TransactionError;
 
 /// Result type that is used throughout the Delta Lake integration.
 pub type DeltaResult<T> = Result<T, DeltaError>;
+
+/// Kernel-like error variants used by the Sail Delta implementation.
+#[derive(Debug, Error)]
+pub enum KernelError {
+    #[error("No table version found.")]
+    MissingVersion,
+
+    #[error("Invalid table location: {0}")]
+    InvalidTableLocation(String),
+
+    #[error("File not found: {0}")]
+    FileNotFound(String),
+
+    #[error("Missing column: {0}")]
+    MissingColumn(String),
+
+    #[error("{0}")]
+    Schema(String),
+
+    #[error("{0}")]
+    Generic(String),
+
+    #[error(transparent)]
+    External(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
+
+    #[error(transparent)]
+    Arrow(#[from] datafusion::arrow::error::ArrowError),
+
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+
+    #[error(transparent)]
+    ObjectStore(#[from] ObjectStoreError),
+
+    #[error(transparent)]
+    ObjectStorePath(#[from] object_store::path::Error),
+
+    #[error(transparent)]
+    Parquet(#[from] parquet::errors::ParquetError),
+
+    #[error(transparent)]
+    InvalidUrl(#[from] url::ParseError),
+
+    #[error("{0}")]
+    Unsupported(String),
+
+    #[error("{0}")]
+    InternalError(String),
+
+    #[error("No table metadata found in delta log.")]
+    MissingMetadata,
+
+    #[error("No protocol found in delta log.")]
+    MissingProtocol,
+
+    #[error("No table metadata or protocol found in delta log.")]
+    MissingMetadataAndProtocol,
+
+    #[error("Failed to parse value '{0}' as '{1}'")]
+    ParseError(String, String),
+}
+
+impl KernelError {
+    pub fn generic(msg: impl ToString) -> Self {
+        Self::Generic(msg.to_string())
+    }
+
+    pub fn generic_err(
+        source: impl Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
+    ) -> Self {
+        Self::External(source.into())
+    }
+
+    pub fn schema(msg: impl ToString) -> Self {
+        Self::Schema(msg.to_string())
+    }
+
+    pub fn invalid_table_location(location: impl ToString) -> Self {
+        Self::InvalidTableLocation(location.to_string())
+    }
+
+    pub fn missing_column(name: impl ToString) -> Self {
+        Self::MissingColumn(name.to_string())
+    }
+}
 
 /// Error type that bridges Delta Kernel and DataFusion failures.
 #[derive(Debug, Error)]
@@ -69,7 +153,7 @@ impl DeltaError {
 
     /// Convenience helper that mirrors [`KernelError::schema`].
     pub fn schema(msg: impl ToString) -> Self {
-        KernelError::Schema(msg.to_string()).with_backtrace().into()
+        KernelError::schema(msg).into()
     }
 
     /// Convenience helper that mirrors [`KernelError::invalid_table_location`].
@@ -111,7 +195,7 @@ impl From<object_store::path::Error> for DeltaError {
 fn map_kernel_error_to_datafusion(err: KernelError) -> DataFusionError {
     match err {
         KernelError::Arrow(err) => DataFusionError::ArrowError(Box::new(err), None),
-        KernelError::IOError(err) => DataFusionError::IoError(err),
+        KernelError::Io(err) => DataFusionError::IoError(err),
         KernelError::ObjectStore(err) => DataFusionError::ObjectStore(Box::new(err)),
         KernelError::ObjectStorePath(source) => {
             DataFusionError::ObjectStore(Box::new(ObjectStoreError::InvalidPath { source }))
@@ -143,21 +227,8 @@ fn map_kernel_error_to_datafusion(err: KernelError) -> DataFusionError {
             DataFusionError::Execution("No table version found.".to_string())
         }
         KernelError::Unsupported(msg) => DataFusionError::NotImplemented(msg),
-        KernelError::ChangeDataFeedUnsupported(version) => DataFusionError::NotImplemented(
-            format!("Change data feed unsupported at version {version}"),
-        ),
-        KernelError::ChangeDataFeedIncompatibleSchema(expected, actual) => {
-            DataFusionError::Execution(format!(
-                "Change data feed schema mismatch. Expected {expected}, got {actual}"
-            ))
-        }
-        KernelError::GenericError { source } => DataFusionError::External(source),
-        KernelError::MalformedJson(err) => DataFusionError::External(Box::new(err)),
-        KernelError::Reqwest(err) => DataFusionError::External(Box::new(err)),
-        KernelError::Utf8Error(err) => DataFusionError::Execution(err.to_string()),
-        KernelError::ParseIntError(err) => DataFusionError::Execution(err.to_string()),
-        KernelError::ParseIntervalError(err) => DataFusionError::Execution(err.to_string()),
-        KernelError::Backtraced { source, .. } => map_kernel_error_to_datafusion(*source),
+        KernelError::Generic(msg) | KernelError::Schema(msg) => DataFusionError::Execution(msg),
+        KernelError::External(source) => DataFusionError::External(source),
         KernelError::InternalError(msg) => DataFusionError::Internal(msg),
         KernelError::MissingMetadata => {
             DataFusionError::Execution("No table metadata found in delta log.".to_string())
@@ -171,6 +242,5 @@ fn map_kernel_error_to_datafusion(err: KernelError) -> DataFusionError {
         KernelError::ParseError(value, ty) => {
             DataFusionError::Execution(format!("Failed to parse value '{value}' as '{ty}'"))
         }
-        _ => DataFusionError::External(Box::new(err)),
     }
 }

@@ -24,16 +24,14 @@ use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 use chrono::Utc;
+use datafusion::arrow::array::{ArrayRef, StructArray};
+use datafusion::arrow::datatypes::{Field, FieldRef, Schema as ArrowSchema};
+use datafusion::arrow::record_batch::RecordBatch;
 use futures::TryStreamExt;
 
-use crate::kernel::arrow::engine_ext::{stats_schema, ExpressionEvaluatorExt};
-use crate::kernel::models::{ColumnMappingMode, ColumnMetadataKey, DataType, Remove, StructField};
+use crate::kernel::models::{ColumnMappingMode, ColumnMetadataKey, Remove};
 use crate::kernel::snapshot::EagerSnapshot;
-use crate::kernel::{
-    DeltaResult, DeltaTableConfig, DeltaTableError, EvaluationHandler, Expression,
-    TablePropertiesExt, ARROW_HANDLER,
-};
-use crate::schema::struct_type_from_logical_arrow;
+use crate::kernel::{DeltaResult, DeltaTableConfig, DeltaTableError, TablePropertiesExt};
 use crate::storage::LogStore;
 
 /// State snapshot currently held by the Delta Table instance.
@@ -154,94 +152,119 @@ impl DeltaTableState {
     ///   (if available).
     /// * `partition.{partition column name}` (matches column type): value of
     ///   partition the file corresponds to.
-    pub fn add_actions_table(
-        &self,
-        flatten: bool,
-    ) -> Result<datafusion::arrow::record_batch::RecordBatch, DeltaTableError> {
-        let mut expressions = vec![
-            Arc::new(Expression::column(["path"])),
-            Arc::new(Expression::column(["size"])),
-            Arc::new(Expression::column(["modificationTime"])),
-        ];
-        let mut fields = vec![
-            StructField::not_null("path", DataType::STRING),
-            StructField::not_null("size_bytes", DataType::LONG),
-            StructField::not_null("modification_time", DataType::LONG),
-        ];
+    pub fn add_actions_table(&self, flatten: bool) -> Result<RecordBatch, DeltaTableError> {
+        let actions = &self.snapshot.files;
+        let mut fields: Vec<FieldRef> = Vec::new();
+        let mut columns: Vec<ArrayRef> = Vec::new();
 
-        let partition_columns = self.snapshot.metadata().partition_columns();
-        let mode = self.effective_column_mapping_mode();
-        let physical_schema = crate::kernel::models::StructType::try_new(
-            self.schema()
-                .fields()
-                .filter(|field| !partition_columns.contains(field.name()))
-                .map(|field| field.make_physical(mode)),
+        push_renamed_column(actions, "path", "path", &mut fields, &mut columns)?;
+        push_renamed_column(actions, "size", "size_bytes", &mut fields, &mut columns)?;
+        push_renamed_column(
+            actions,
+            "modificationTime",
+            "modification_time",
+            &mut fields,
+            &mut columns,
         )?;
-        let stats_schema = stats_schema(&physical_schema, self.table_properties())?;
-        let num_records_field = stats_schema
-            .field("numRecords")
-            .ok_or_else(|| DeltaTableError::schema("numRecords field not found".to_string()))?
-            .with_name("num_records");
 
-        expressions.push(Arc::new(Expression::column(["stats_parsed", "numRecords"])));
-        fields.push(num_records_field);
+        if let Some(stats) = struct_column(actions, "stats_parsed") {
+            let (num_records, nullable) = required_struct_child(stats, "numRecords")?;
+            fields.push(Arc::new(Field::new(
+                "num_records",
+                num_records.data_type().clone(),
+                nullable,
+            )));
+            columns.push(num_records);
 
-        if let Some(null_count_field) = stats_schema.field("nullCount") {
-            let null_count_field = null_count_field.with_name("null_count");
-            expressions.push(Arc::new(Expression::column(["stats_parsed", "nullCount"])));
-            fields.push(null_count_field);
+            if let Some((null_count, nullable)) = optional_struct_child(stats, "nullCount") {
+                fields.push(Arc::new(Field::new(
+                    "null_count",
+                    null_count.data_type().clone(),
+                    nullable,
+                )));
+                columns.push(null_count);
+            }
+            if let Some((min_values, nullable)) = optional_struct_child(stats, "minValues") {
+                fields.push(Arc::new(Field::new(
+                    "min",
+                    min_values.data_type().clone(),
+                    nullable,
+                )));
+                columns.push(min_values);
+            }
+            if let Some((max_values, nullable)) = optional_struct_child(stats, "maxValues") {
+                fields.push(Arc::new(Field::new(
+                    "max",
+                    max_values.data_type().clone(),
+                    nullable,
+                )));
+                columns.push(max_values);
+            }
         }
 
-        if let Some(min_values_field) = stats_schema.field("minValues") {
-            let min_values_field = min_values_field.with_name("min");
-            expressions.push(Arc::new(Expression::column(["stats_parsed", "minValues"])));
-            fields.push(min_values_field);
-        }
-
-        if let Some(max_values_field) = stats_schema.field("maxValues") {
-            let max_values_field = max_values_field.with_name("max");
-            expressions.push(Arc::new(Expression::column(["stats_parsed", "maxValues"])));
-            fields.push(max_values_field);
-        }
-
-        if !partition_columns.is_empty() {
-            let partition_fields = partition_columns
-                .iter()
-                .map(|col| {
-                    self.schema()
-                        .field(col)
-                        .cloned()
-                        .ok_or_else(|| DeltaTableError::missing_column(col))
-                })
-                .collect::<DeltaResult<Vec<_>>>()?;
-            let partition_schema = crate::kernel::models::StructType::try_new(partition_fields)?;
-            fields.push(StructField::nullable(
+        if !self.snapshot.metadata().partition_columns().is_empty() {
+            push_renamed_column(
+                actions,
+                "partitionValues_parsed",
                 "partition",
-                DataType::try_struct_type(partition_schema.fields().cloned())?,
-            ));
-            expressions.push(Arc::new(Expression::column(["partitionValues_parsed"])));
+                &mut fields,
+                &mut columns,
+            )?;
         }
 
-        let expression = Expression::struct_from(expressions);
-        let table_schema = DataType::try_struct_type(fields)?;
-
-        let input_schema = self.snapshot.files.schema();
-        let input_schema = Arc::new(struct_type_from_logical_arrow(input_schema.as_ref())?);
-        let actions = self.snapshot.files.clone();
-
-        let evaluator = ARROW_HANDLER.new_expression_evaluator(
-            input_schema,
-            Arc::new(expression),
-            table_schema,
-        )?;
-        let result = evaluator.evaluate_arrow(actions)?;
-
+        let result = RecordBatch::try_new(Arc::new(ArrowSchema::new(fields)), columns)?;
         if flatten {
             Ok(result.normalize(".", None)?)
         } else {
             Ok(result)
         }
     }
+}
+
+fn push_renamed_column(
+    batch: &RecordBatch,
+    input_name: &str,
+    output_name: &str,
+    fields: &mut Vec<FieldRef>,
+    columns: &mut Vec<ArrayRef>,
+) -> DeltaResult<()> {
+    let schema = batch.schema();
+    let index = schema.index_of(input_name).map_err(|_| {
+        DeltaTableError::schema(format!("column {input_name} not found in add actions"))
+    })?;
+    let field = schema.field(index);
+    fields.push(Arc::new(Field::new(
+        output_name,
+        field.data_type().clone(),
+        field.is_nullable(),
+    )));
+    columns.push(batch.column(index).clone());
+    Ok(())
+}
+
+fn struct_column<'a>(batch: &'a RecordBatch, name: &str) -> Option<&'a StructArray> {
+    batch
+        .column_by_name(name)
+        .and_then(|array| array.as_any().downcast_ref::<StructArray>())
+}
+
+fn required_struct_child(
+    array: &StructArray,
+    name: &str,
+) -> Result<(ArrayRef, bool), DeltaTableError> {
+    optional_struct_child(array, name)
+        .ok_or_else(|| DeltaTableError::schema(format!("{name} field not found in struct column")))
+}
+
+fn optional_struct_child(array: &StructArray, name: &str) -> Option<(ArrayRef, bool)> {
+    let column = array.column_by_name(name)?.clone();
+    let nullable = array
+        .fields()
+        .iter()
+        .find(|f| f.name() == name)
+        .map(|f| f.is_nullable())
+        .unwrap_or(true);
+    Some((column, nullable))
 }
 
 impl Deref for DeltaTableState {

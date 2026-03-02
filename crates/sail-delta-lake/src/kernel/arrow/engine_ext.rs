@@ -28,8 +28,8 @@ use crate::kernel::models::{
     StructType, TableProperties,
 };
 use crate::kernel::{
-    ArrowEngineData, ColumnName, DataSkippingNumIndexedCols, DeltaResult as DeltaResultLocal,
-    DeltaResult, DeltaTableError, ExpressionEvaluator, SchemaTransform, TryIntoArrow,
+    ColumnName, DataSkippingNumIndexedCols, DeltaResult as DeltaResultLocal, DeltaTableError,
+    SchemaTransform, TryIntoArrow,
 };
 
 pub(crate) fn parse_partition_values_array(
@@ -166,7 +166,7 @@ fn collect_partition_row(value: &StructArray) -> DeltaResultLocal<HashMap<String
 pub(crate) fn stats_schema(
     physical_file_schema: &Schema,
     table_properties: &TableProperties,
-) -> DeltaResult<Schema> {
+) -> DeltaResultLocal<Schema> {
     let mut fields = Vec::with_capacity(4);
     fields.push(StructField::nullable("numRecords", DataType::LONG));
 
@@ -345,15 +345,4 @@ fn is_skipping_eligeble_datatype(data_type: &PrimitiveType) -> bool {
             | &PrimitiveType::String
             | PrimitiveType::Decimal(_)
     )
-}
-
-pub(crate) trait ExpressionEvaluatorExt {
-    fn evaluate_arrow(&self, batch: RecordBatch) -> DeltaResult<RecordBatch>;
-}
-
-impl<T: ExpressionEvaluator + ?Sized> ExpressionEvaluatorExt for T {
-    fn evaluate_arrow(&self, batch: RecordBatch) -> DeltaResult<RecordBatch> {
-        let engine_data = ArrowEngineData::new(batch);
-        Ok(ArrowEngineData::try_from_engine_data(T::evaluate(self, &engine_data)?)?.into())
-    }
 }

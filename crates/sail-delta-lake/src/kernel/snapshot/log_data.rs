@@ -24,10 +24,7 @@ use log::warn;
 use crate::kernel::models::{DataType, Metadata, PrimitiveType};
 use crate::kernel::snapshot::iterators::LogicalFileView;
 use crate::kernel::snapshot::SnapshotTableConfiguration;
-use crate::kernel::{
-    scan_row_schema, DeltaResult, DeltaTableError, EvaluationHandler, Expression,
-    ExpressionEvaluator,
-};
+use crate::kernel::{DeltaResult, DeltaTableError};
 
 const COL_NUM_RECORDS: &str = "numRecords";
 const COL_MIN_VALUES: &str = "minValues";
@@ -82,7 +79,7 @@ impl IntoIterator for LogDataHandler<'_> {
 
 mod datafusion {
     use std::collections::HashSet;
-    use std::sync::{Arc, LazyLock};
+    use std::sync::Arc;
 
     use ::datafusion::arrow::array::{ArrayRef, BooleanArray, Int64Array, UInt64Array};
     use ::datafusion::arrow::compute::sum;
@@ -95,8 +92,6 @@ mod datafusion {
     use arrow_schema::DataType as ArrowDataType;
 
     use super::*;
-    use crate::kernel::arrow::engine_ext::ExpressionEvaluatorExt as _;
-    use crate::kernel::ARROW_HANDLER;
 
     #[derive(Debug, Default, Clone)]
     enum AccumulatorType {
@@ -329,46 +324,40 @@ mod datafusion {
             if field.data_type() == &DataType::Primitive(PrimitiveType::Binary) {
                 return None;
             }
-            let expression = if self
+            if self
                 .config
                 .metadata()
                 .partition_columns()
                 .contains(&column.name)
             {
-                Expression::column(["partitionValues_parsed", &column.name])
-            } else {
-                Expression::column(["stats_parsed", stats_field, &column.name])
-            };
-            // `nullCount` is always a Long/Int64 count in stats (independent of column type).
-            let output_type = match stats_field {
-                COL_NULL_COUNT => DataType::Primitive(PrimitiveType::Long),
-                _ => field.data_type().clone(),
-            };
-            let evaluator = match ARROW_HANDLER.new_expression_evaluator(
-                scan_row_schema(),
-                Arc::new(expression),
-                output_type,
-            ) {
-                Ok(value) => value,
+                let partition_values =
+                    match batch_column::<StructArray>(self.data, "partitionValues_parsed") {
+                        Ok(values) => values,
+                        Err(err) => {
+                            warn!(
+                                "Failed to access partitionValues_parsed for column {}: {err}",
+                                column.name()
+                            );
+                            return None;
+                        }
+                    };
+                let path: Vec<&str> = column.name.split('.').collect();
+                return nested_struct_column(partition_values, &path);
+            }
+
+            let stats = match batch_column::<StructArray>(self.data, "stats_parsed") {
+                Ok(values) => values,
                 Err(err) => {
                     warn!(
-                        "Failed to construct stats evaluator for column {} (field {stats_field}): {err}",
+                        "Failed to access stats_parsed for column {}: {err}",
                         column.name()
                     );
                     return None;
                 }
             };
-            let batch = match evaluator.evaluate_arrow(self.data.clone()) {
-                Ok(batch) => batch,
-                Err(err) => {
-                    warn!(
-                        "Failed to evaluate stats expression for column {} (field {stats_field}): {err}",
-                        column.name()
-                    );
-                    return None;
-                }
-            };
-            batch.column_by_name("output").cloned()
+            let mut path = vec![stats_field];
+            path.extend(column.name.split('.'));
+            nested_struct_column(stats, &path)
         }
     }
 
@@ -413,6 +402,17 @@ mod datafusion {
             })?;
         }
         Ok(current)
+    }
+
+    fn nested_struct_column(array: &StructArray, path: &[&str]) -> Option<ArrayRef> {
+        let mut path_iter = path.iter();
+        let first = path_iter.next()?;
+        let mut current = array.column_by_name(first)?.clone();
+        for segment in path_iter {
+            let struct_array = current.as_any().downcast_ref::<StructArray>()?;
+            current = struct_array.column_by_name(segment)?.clone();
+        }
+        Some(current)
     }
 
     impl PruningStatistics for LogDataHandler<'_> {
@@ -469,24 +469,9 @@ mod datafusion {
         ///
         /// Note: the returned array must contain `num_containers()` rows
         fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
-            static ROW_COUNTS_EVAL: LazyLock<Option<Arc<dyn ExpressionEvaluator>>> =
-                LazyLock::new(|| {
-                    ARROW_HANDLER
-                        .new_expression_evaluator(
-                            scan_row_schema(),
-                            Arc::new(Expression::column(["stats_parsed", "numRecords"])),
-                            DataType::Primitive(PrimitiveType::Long),
-                        )
-                        .ok()
-                });
-
-            let evaluator = ROW_COUNTS_EVAL.as_ref()?;
-            let batch = evaluator.evaluate_arrow(self.data.clone()).ok()?;
-            ::datafusion::arrow::compute::cast(
-                batch.column_by_name("output")?,
-                &ArrowDataType::UInt64,
-            )
-            .ok()
+            let stats = batch_column::<StructArray>(self.data, "stats_parsed").ok()?;
+            let row_counts = nested_struct_column(stats, &["numRecords"])?;
+            ::datafusion::arrow::compute::cast(row_counts.as_ref(), &ArrowDataType::UInt64).ok()
         }
 
         // This function is optional but will optimize partition column pruning
