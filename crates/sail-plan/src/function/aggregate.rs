@@ -267,18 +267,19 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     // TODO: remove StructFunction call when count distinct from multiple arguments is implemented
     // https://github.com/apache/datafusion/blob/58ddf0d4390c770bc571f3ac2727c7de77aa25ab/datafusion/functions-aggregate/src/count.rs#L333
     let args = if distinct && (args.len() > 1) {
-        let struct_expr = ScalarUDF::from(StructFunction::new(
-            (0..args.len()).map(|i| format!("col{i}")).collect(),
-        ))
-        .call(args.clone());
         // In Spark, COUNT(DISTINCT col1, col2, ...) skips rows where ANY column is NULL.
         // Since we wrap multiple columns into a struct for DataFusion, a struct with NULL
         // fields is still a non-NULL value and would be counted. To match Spark semantics,
         // return NULL (instead of a struct with NULL fields) when any argument is NULL.
+        // Compute any_null first (borrowing args), then move args into .call() to avoid cloning.
         let any_null = args
             .iter()
             .map(|arg| arg.clone().is_null())
             .reduce(|a, b| a.or(b));
+        let struct_expr = ScalarUDF::from(StructFunction::new(
+            (0..args.len()).map(|i| format!("col{i}")).collect(),
+        ))
+        .call(args);
         // `any_null` is always `Some` here since `args.len() > 1` guarantees `reduce` succeeds.
         match any_null {
             Some(any_null) => vec![expr::Expr::Case(expr::Case {
