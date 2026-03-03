@@ -1,13 +1,13 @@
-use arrow_pyarrow::ToPyArrow;
-use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::arrow::datatypes::DataType;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::PyAnyMethods;
 use pyo3::types::PyModule;
-use pyo3::{intern, Bound, IntoPyObject, PyAny, PyResult, Python};
+use pyo3::{intern, Bound, IntoPyObject, PyAny, Python};
 use sail_common::spec;
 
 use crate::cereal::{
-    check_python_udf_version, get_pyspark_version, should_write_config, supports_kwargs,
+    check_python_udf_version, get_pyspark_version, input_types_to_schema_json, should_write_config,
+    supports_kwargs,
 };
 use crate::config::PySparkUdfConfig;
 use crate::error::{PyUdfError, PyUdfResult};
@@ -64,7 +64,7 @@ impl PySparkUdfPayload {
         }
 
         if pyspark_version.is_v4_1() && matches!(eval_type, spec::PySparkUdfType::ArrowBatched) {
-            let schema_json = Self::input_types_to_schema_json(input_types)?;
+            let schema_json = input_types_to_schema_json(input_types)?;
             data.extend((schema_json.len() as i32).to_be_bytes());
             data.extend(schema_json.as_bytes());
         }
@@ -99,27 +99,5 @@ impl PySparkUdfPayload {
         data.extend_from_slice(command);
 
         Ok(data)
-    }
-
-    fn input_types_to_schema_json(input_types: &[DataType]) -> PyUdfResult<String> {
-        // Field names are not used by PySpark (only f.dataType is extracted),
-        // so placeholder names are sufficient.
-        let fields: Vec<Field> = input_types
-            .iter()
-            .enumerate()
-            .map(|(i, dt)| Field::new(format!("_{i}"), dt.clone(), true))
-            .collect();
-        let schema = Schema::new(fields);
-        Python::attach(|py| -> PyResult<String> {
-            let pyarrow_schema = schema.to_pyarrow(py)?;
-            let pyspark_schema = PyModule::import(py, intern!(py, "pyspark.sql.pandas.types"))?
-                .getattr(intern!(py, "from_arrow_schema"))?
-                .call1((pyarrow_schema,))?;
-            pyspark_schema
-                .getattr(intern!(py, "json"))?
-                .call0()?
-                .extract()
-        })
-        .map_err(PyUdfError::from)
     }
 }

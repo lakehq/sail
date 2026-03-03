@@ -1,4 +1,8 @@
-use pyo3::Python;
+use arrow_pyarrow::ToPyArrow;
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use pyo3::prelude::PyAnyMethods;
+use pyo3::types::PyModule;
+use pyo3::{intern, PyResult, Python};
 use sail_common::spec;
 
 use crate::error::{PyUdfError, PyUdfResult};
@@ -23,9 +27,6 @@ impl PySparkVersion {
 }
 
 fn get_pyspark_version() -> PyUdfResult<PySparkVersion> {
-    use pyo3::prelude::PyAnyMethods;
-    use pyo3::types::PyModule;
-
     Python::attach(|py| {
         let module = PyModule::import(py, "pyspark")?;
         let version: String = module.getattr("__version__")?.extract()?;
@@ -96,4 +97,27 @@ fn should_write_config(eval_type: spec::PySparkUdfType) -> bool {
         | PySparkUdfType::GroupedMapPandasWithState
         | PySparkUdfType::ArrowTable => true,
     }
+}
+
+/// Converts input DataTypes to a PySpark StructType JSON string for the serialization protocol.
+/// Field names are not used by PySpark (only f.dataType is extracted),
+/// so placeholder names are sufficient.
+fn input_types_to_schema_json(input_types: &[DataType]) -> PyUdfResult<String> {
+    let fields: Vec<Field> = input_types
+        .iter()
+        .enumerate()
+        .map(|(i, dt)| Field::new(format!("_{i}"), dt.clone(), true))
+        .collect();
+    let schema = Schema::new(fields);
+    Python::attach(|py| -> PyResult<String> {
+        let pyarrow_schema = schema.to_pyarrow(py)?;
+        let pyspark_schema = PyModule::import(py, intern!(py, "pyspark.sql.pandas.types"))?
+            .getattr(intern!(py, "from_arrow_schema"))?
+            .call1((pyarrow_schema,))?;
+        pyspark_schema
+            .getattr(intern!(py, "json"))?
+            .call0()?
+            .extract()
+    })
+    .map_err(PyUdfError::from)
 }

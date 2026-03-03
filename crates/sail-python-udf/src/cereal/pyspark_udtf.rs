@@ -6,7 +6,9 @@ use pyo3::types::PyModule;
 use pyo3::{intern, Bound, IntoPyObject, PyAny, PyResult, Python};
 use sail_common::spec;
 
-use crate::cereal::{check_python_udf_version, get_pyspark_version, should_write_config};
+use crate::cereal::{
+    check_python_udf_version, get_pyspark_version, input_types_to_schema_json, should_write_config,
+};
 use crate::config::PySparkUdfConfig;
 use crate::error::{PyUdfError, PyUdfResult};
 
@@ -41,6 +43,7 @@ impl PySparkUdtfPayload {
         command: &[u8],
         eval_type: spec::PySparkUdfType,
         num_args: usize,
+        input_types: &[DataType],
         return_type: &DataType,
         config: &PySparkUdfConfig,
     ) -> PyUdfResult<Vec<u8>> {
@@ -59,6 +62,12 @@ impl PySparkUdtfPayload {
                 data.extend((value.len() as i32).to_be_bytes()); // length of the value
                 data.extend(value.as_bytes());
             }
+        }
+
+        if pyspark_version.is_v4_1() && matches!(eval_type, spec::PySparkUdfType::ArrowTable) {
+            let schema_json = input_types_to_schema_json(input_types)?;
+            data.extend((schema_json.len() as i32).to_be_bytes());
+            data.extend(schema_json.as_bytes());
         }
 
         let num_args: i32 = num_args
