@@ -4,7 +4,7 @@ import re
 import textwrap
 from typing import TYPE_CHECKING
 
-from pytest_bdd import then
+from pytest_bdd import parsers, then
 from syrupy.extensions.single_file import SingleFileSnapshotExtension
 
 if TYPE_CHECKING:
@@ -141,3 +141,17 @@ def query_plan_matches_snapshot(query, spark, snapshot: SnapshotAssertion):
     """Executes the SQL query and only asserts against the stored snapshot."""
     plan = _collect_plan(query, spark)
     assert snapshot(extension_class=PlanSnapshotExtension) == plan
+
+
+@then(parsers.parse("query plan contains {text}"))
+def query_plan_contains(text, query, spark):
+    """Executes EXPLAIN on the query and asserts the plan contains the given text."""
+    plan = _collect_plan(f"EXPLAIN {query}", spark)
+    assert text in plan, f"expected '{text}' in plan:\n{plan}"
+
+
+@then(parsers.parse("query plan does not contain {text}"))
+def query_plan_does_not_contain(text, query, spark):
+    """Executes EXPLAIN on the query and asserts the plan does NOT contain the given text."""
+    plan = _collect_plan(f"EXPLAIN {query}", spark)
+    assert text not in plan, f"unexpected '{text}' found in plan:\n{plan}"
