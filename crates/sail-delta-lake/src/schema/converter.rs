@@ -73,7 +73,7 @@ pub fn make_physical_arrow_schema(logical: &ArrowSchema, mode: ColumnMappingMode
 /// Get the physical name of an Arrow field under a given column mapping mode.
 ///
 /// This is the Arrow-native equivalent of `StructField::physical_name`.
-pub fn arrow_field_physical_name<'a>(field: &'a Field, mode: ColumnMappingMode) -> &'a str {
+pub fn arrow_field_physical_name(field: &Field, mode: ColumnMappingMode) -> &str {
     match mode {
         ColumnMappingMode::None => field.name().as_str(),
         ColumnMappingMode::Id | ColumnMappingMode::Name => field

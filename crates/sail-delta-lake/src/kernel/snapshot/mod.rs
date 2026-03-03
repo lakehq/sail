@@ -570,8 +570,7 @@ fn build_partition_schema(
         .iter()
         .map(|col| {
             schema
-                .field_with_name(col)
-                .map(|f| f.clone())
+                .field_with_name(col).cloned()
                 .map_err(|_| DeltaTableError::missing_column(col))
         })
         .collect::<DeltaResult<Vec<_>>>()?;

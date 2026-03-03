@@ -201,7 +201,7 @@ pub(crate) fn stats_schema(
             fields.push(StructField::nullable("maxValues", min_max_schema));
         }
     }
-    Ok(StructType::try_new(fields)?)
+    StructType::try_new(fields)
 }
 
 /// Transforms a schema for null-count statistics: all primitives become Long,
@@ -209,7 +209,7 @@ pub(crate) fn stats_schema(
 fn null_count_stats_schema(schema: &StructType) -> Option<StructType> {
     let fields: Vec<StructField> = schema
         .fields()
-        .map(|field| {
+        .filter_map(|field| {
             let data_type = match &field.data_type {
                 DataType::Array(_) | DataType::Map(_) | DataType::Variant(_) => DataType::LONG,
                 DataType::Struct(inner) => {
@@ -228,7 +228,6 @@ fn null_count_stats_schema(schema: &StructType) -> Option<StructType> {
                 metadata: Default::default(),
             })
         })
-        .flatten()
         .collect();
 
     if fields.is_empty() {

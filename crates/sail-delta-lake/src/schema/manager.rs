@@ -91,14 +91,14 @@ pub fn metadata_for_create_with_struct_type(
     created_time: i64,
     configuration: HashMap<String, String>,
 ) -> DeltaResult<Metadata> {
-    Ok(Metadata::try_new(
+    Metadata::try_new(
         None,
         None,
         schema,
         partition_columns,
         created_time,
         configuration,
-    )?)
+    )
 }
 
 /// Build Protocol for a create/write path based on required table features.
