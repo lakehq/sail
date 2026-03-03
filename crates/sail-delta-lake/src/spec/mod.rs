@@ -11,21 +11,27 @@
 // limitations under the License.
 
 pub mod actions;
+pub mod metadata;
 pub mod operation;
+pub mod properties;
+pub mod protocol;
+pub mod schema;
 pub mod statistics;
-pub mod types;
 
 pub use actions::{
     Action, Add, CommitInfo, DeletionVectorDescriptor, Remove, RemoveOptions, StorageType,
     Transaction,
 };
+pub use datafusion::arrow::datatypes::SchemaRef;
+pub use metadata::{Format, Metadata};
 pub use operation::{DeltaOperation, MergePredicate, SaveMode};
-pub use statistics::{ColumnCountStat, ColumnValueStat, Stats};
-pub use types::{
-    ArrayType, ColumnMappingMode, ColumnMetadataKey, ColumnName, DataSkippingNumIndexedCols,
-    DataType, DecimalType, IsolationLevel, MapType, Metadata, MetadataValue, PrimitiveType,
-    Protocol, Schema, SchemaRef, StructField, StructType, TableFeature, TableProperties,
+pub use properties::{DataSkippingNumIndexedCols, IsolationLevel, TableProperties};
+pub use protocol::{Protocol, TableFeature};
+pub use schema::{
+    ArrayType, ColumnMappingMode, ColumnMetadataKey, ColumnName, DataType, DecimalType, MapType,
+    MetadataValue, PrimitiveType, Schema, StructField, StructType,
 };
+pub use statistics::{ColumnCountStat, ColumnValueStat, Stats};
 
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/actions.rs>
 /// Checks if any field (including nested) in the provided iterator is a `timestampNtz`.

@@ -32,7 +32,7 @@ use serde_json::Value;
 
 use crate::physical_plan::{
     current_timestamp_millis, decode_adds_from_batch, delta_action_schema, encode_actions,
-    meta_adds, CommitMeta, ExecAction, COL_ACTION,
+    meta_adds, CommitMeta, PhysicalExecAction, COL_ACTION,
 };
 use crate::spec::{Add, Remove, RemoveOptions};
 
@@ -191,7 +191,7 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
                 Value::from(exec_start.elapsed().as_millis() as u64),
             );
 
-            let mut exec_actions: Vec<ExecAction> = Vec::new();
+            let mut exec_actions: Vec<PhysicalExecAction> = Vec::new();
 
             for remove in remove_actions {
                 exec_actions.push(remove.into());

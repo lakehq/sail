@@ -24,7 +24,7 @@ use serde_json::Value;
 
 use crate::error::{DeltaError as DeltaTableError, DeltaResult};
 use crate::spec::actions::CommitInfo;
-use crate::spec::types::{Metadata, Protocol};
+use crate::spec::{Metadata, Protocol};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]

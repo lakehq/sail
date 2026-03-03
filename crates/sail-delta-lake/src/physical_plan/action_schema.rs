@@ -75,7 +75,7 @@ pub struct CommitMetaAction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ExecAction {
+pub enum PhysicalExecAction {
     #[serde(rename = "add")]
     Add(AddAction),
     #[serde(rename = "remove")]
@@ -91,7 +91,7 @@ pub enum ExecAction {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ActionRow {
-    action: ExecAction,
+    action: PhysicalExecAction,
 }
 
 fn delta_action_tracing_options() -> std::result::Result<serde_arrow::schema::TracingOptions, String>
@@ -134,7 +134,7 @@ pub fn delta_action_schema() -> Result<SchemaRef> {
     Ok(Arc::clone(&*ACTION_SCHEMA))
 }
 
-pub fn encode_actions(actions: Vec<ExecAction>) -> Result<RecordBatch> {
+pub fn encode_actions(actions: Vec<PhysicalExecAction>) -> Result<RecordBatch> {
     if actions.is_empty() {
         return Ok(RecordBatch::new_empty(delta_action_schema()?));
     }
@@ -149,13 +149,13 @@ pub fn encode_actions(actions: Vec<ExecAction>) -> Result<RecordBatch> {
 }
 
 pub fn encode_add_actions(adds: Vec<Add>) -> Result<RecordBatch> {
-    let actions: Vec<ExecAction> = adds.into_iter().map(ExecAction::from).collect();
+    let actions: Vec<PhysicalExecAction> = adds.into_iter().map(PhysicalExecAction::from).collect();
     encode_actions(actions)
 }
 
-impl From<Add> for ExecAction {
+impl From<Add> for PhysicalExecAction {
     fn from(add: Add) -> Self {
-        ExecAction::Add(AddAction {
+        PhysicalExecAction::Add(AddAction {
             path: add.path,
             partition_values: add.partition_values.into_iter().collect(),
             size: add.size,
@@ -166,9 +166,9 @@ impl From<Add> for ExecAction {
     }
 }
 
-impl From<Remove> for ExecAction {
+impl From<Remove> for PhysicalExecAction {
     fn from(remove: Remove) -> Self {
-        ExecAction::Remove(RemoveAction {
+        PhysicalExecAction::Remove(RemoveAction {
             path: remove.path,
             data_change: remove.data_change,
             deletion_timestamp: remove.deletion_timestamp,
@@ -183,27 +183,27 @@ impl From<Remove> for ExecAction {
     }
 }
 
-impl TryFrom<Protocol> for ExecAction {
+impl TryFrom<Protocol> for PhysicalExecAction {
     type Error = DataFusionError;
 
     fn try_from(protocol: Protocol) -> Result<Self> {
         let protocol_json =
             serde_json::to_string(&protocol).map_err(|e| DataFusionError::External(Box::new(e)))?;
-        Ok(ExecAction::Protocol(protocol_json))
+        Ok(PhysicalExecAction::Protocol(protocol_json))
     }
 }
 
-impl TryFrom<Metadata> for ExecAction {
+impl TryFrom<Metadata> for PhysicalExecAction {
     type Error = DataFusionError;
 
     fn try_from(metadata: Metadata) -> Result<Self> {
         let metadata_json =
             serde_json::to_string(&metadata).map_err(|e| DataFusionError::External(Box::new(e)))?;
-        Ok(ExecAction::Metadata(metadata_json))
+        Ok(PhysicalExecAction::Metadata(metadata_json))
     }
 }
 
-impl TryFrom<CommitMeta> for ExecAction {
+impl TryFrom<CommitMeta> for PhysicalExecAction {
     type Error = DataFusionError;
 
     fn try_from(meta: CommitMeta) -> Result<Self> {
@@ -217,7 +217,7 @@ impl TryFrom<CommitMeta> for ExecAction {
         let operation_metrics_json = serde_json::to_string(&meta.operation_metrics)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-        Ok(ExecAction::CommitMeta(CommitMetaAction {
+        Ok(PhysicalExecAction::CommitMeta(CommitMetaAction {
             commit_row_count: meta.row_count,
             operation_json,
             operation_metrics_json,
@@ -247,7 +247,7 @@ pub fn decode_actions_and_meta_from_batch(
 
     for row in rows {
         match row.action {
-            ExecAction::Add(a) => {
+            PhysicalExecAction::Add(a) => {
                 out_actions.push(Action::Add(Add {
                     path: a.path,
                     partition_values: a.partition_values.into_iter().collect(),
@@ -264,7 +264,7 @@ pub fn decode_actions_and_meta_from_batch(
                     commit_timestamp: None,
                 }));
             }
-            ExecAction::Remove(r) => {
+            PhysicalExecAction::Remove(r) => {
                 out_actions.push(Action::Remove(Remove {
                     path: r.path,
                     data_change: r.data_change,
@@ -278,17 +278,17 @@ pub fn decode_actions_and_meta_from_batch(
                     default_row_commit_version: None,
                 }));
             }
-            ExecAction::Protocol(s) => {
+            PhysicalExecAction::Protocol(s) => {
                 let p: Protocol =
                     serde_json::from_str(&s).map_err(|e| DataFusionError::External(Box::new(e)))?;
                 out_actions.push(Action::Protocol(p));
             }
-            ExecAction::Metadata(s) => {
+            PhysicalExecAction::Metadata(s) => {
                 let m: Metadata =
                     serde_json::from_str(&s).map_err(|e| DataFusionError::External(Box::new(e)))?;
                 out_actions.push(Action::Metadata(m));
             }
-            ExecAction::CommitMeta(cm) => {
+            PhysicalExecAction::CommitMeta(cm) => {
                 let operation: Option<DeltaOperation> = cm
                     .operation_json
                     .as_deref()
@@ -332,7 +332,8 @@ mod tests {
             commit_timestamp: None,
         }];
 
-        let exec_actions: Vec<ExecAction> = adds.into_iter().map(|add| add.into()).collect();
+        let exec_actions: Vec<PhysicalExecAction> =
+            adds.into_iter().map(|add| add.into()).collect();
         let rb = encode_actions(exec_actions)?;
         assert_eq!(rb.schema(), delta_action_schema()?);
         assert_eq!(rb.num_rows(), 1);
@@ -375,7 +376,7 @@ mod tests {
             operation_metrics: HashMap::new(),
         };
 
-        let mut exec_actions: Vec<ExecAction> = Vec::new();
+        let mut exec_actions: Vec<PhysicalExecAction> = Vec::new();
         for add in adds {
             exec_actions.push(add.into());
         }

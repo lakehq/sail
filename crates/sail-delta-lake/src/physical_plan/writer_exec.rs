@@ -53,7 +53,7 @@ use crate::conversion::DeltaTypeConverter;
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::options::{ColumnMappingModeOption, TableDeltaOptions};
-use crate::physical_plan::{delta_action_schema, encode_actions, CommitMeta, ExecAction};
+use crate::physical_plan::{delta_action_schema, encode_actions, CommitMeta, PhysicalExecAction};
 use crate::schema::{
     annotate_for_column_mapping, compute_max_column_id, evolve_schema, get_physical_schema,
     metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_create,
@@ -696,7 +696,7 @@ impl DeltaWriterExec {
             // - schema evolution actions (metadata)
             // - Add actions (one row per file)
             // - CommitMeta row (row_count + operation + metrics)
-            let mut exec_actions: Vec<ExecAction> = Vec::new();
+            let mut exec_actions: Vec<PhysicalExecAction> = Vec::new();
 
             if partition == 0 {
                 for ia in &initial_actions {

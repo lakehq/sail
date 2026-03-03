@@ -11,6 +11,7 @@
 // limitations under the License.
 
 pub mod arrow;
+pub mod log_segment;
 pub mod snapshot;
 pub mod transaction;
 
@@ -22,5 +23,5 @@ pub use config::DeltaTableConfig;
 pub use error::{DeltaResult, DeltaTableError};
 
 pub use crate::spec::operation::{DeltaOperation, MergePredicate, SaveMode};
-pub use crate::spec::types::{ColumnName, DataSkippingNumIndexedCols, SchemaRef};
+pub use crate::spec::{ColumnName, DataSkippingNumIndexedCols, SchemaRef};
 pub type PredicateRef = std::sync::Arc<()>;

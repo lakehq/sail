@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{DeltaError as DeltaTableError, DeltaResult};
 use crate::spec::statistics::Stats;
-use crate::spec::types::{IsolationLevel, Metadata, Protocol};
+use crate::spec::{IsolationLevel, Metadata, Protocol};
 
 #[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum StorageType {

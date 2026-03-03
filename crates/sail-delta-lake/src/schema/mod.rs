@@ -10,6 +10,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod arrow_conversions;
 pub mod converter;
 pub mod manager;
 pub mod mapping;

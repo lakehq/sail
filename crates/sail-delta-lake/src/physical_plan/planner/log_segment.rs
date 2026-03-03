@@ -10,84 +10,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Planner-time Delta log segment resolution.
-//!
-//! We intentionally keep log segment discovery in planner/control-plane code. Runtime
-//! replay/scan stays distributed on workers, while file-list selection remains deterministic
-//! and cheap to memoize within one planning request.
-
 use datafusion::common::Result;
-use futures::TryStreamExt;
-use object_store::path::Path;
-use serde::Deserialize;
 
 use super::context::PlannerContext;
+pub use crate::kernel::log_segment::{
+    list_log_segment_files as kernel_list_log_segment_files,
+    resolve_log_segment_files as kernel_resolve_log_segment_files, LogSegmentFiles,
+    LogSegmentResolveOptions,
+};
 
-const DELTA_LOG_DIR: &str = "_delta_log";
-const LAST_CHECKPOINT_FILE: &str = "_last_checkpoint";
-
-#[derive(Debug, Clone, Default)]
-pub struct LogSegmentFiles {
-    pub checkpoint_files: Vec<String>,
-    pub commit_files: Vec<String>,
-}
-
-/// Canonical planner-time selection options for Delta log segment inputs.
-///
-/// We intentionally keep log segment discovery/selection in planner code (control-plane)
-/// instead of adding a dedicated runtime exec node.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct LogSegmentResolveOptions {
-    /// Optional inclusive commit JSON version range.
-    pub commit_version_range: Option<(i64, i64)>,
-}
-
-#[derive(Debug, Deserialize)]
-struct LastCheckpointHint {
-    version: i64,
-}
-
-fn parse_version_prefix(filename: &str) -> Option<i64> {
-    let prefix = filename.get(0..20)?;
-    if !prefix.as_bytes().iter().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    prefix.parse::<i64>().ok()
-}
-
-fn parse_commit_version(filename: &str) -> Option<i64> {
-    if filename.len() != 25 || !filename.ends_with(".json") {
-        return None;
-    }
-    parse_version_prefix(filename)
-}
-
-fn parse_checkpoint_version(filename: &str) -> Option<i64> {
-    if !filename.contains(".checkpoint") || !filename.ends_with(".parquet") {
-        return None;
-    }
-    parse_version_prefix(filename)
-}
-
-fn join_path(base: &str, suffix: &str) -> String {
-    if base.ends_with('/') {
-        format!("{base}{suffix}")
-    } else {
-        format!("{base}/{suffix}")
-    }
-}
-
-async fn read_last_checkpoint_version(ctx: &PlannerContext<'_>) -> Option<i64> {
-    let log_store = ctx.log_store().ok()?;
-    let store = log_store.object_store(None);
-    let table_root_path = log_store.config().location.path();
-    let log_root_path = join_path(table_root_path, DELTA_LOG_DIR);
-    let path = Path::from(join_path(&log_root_path, LAST_CHECKPOINT_FILE));
-    let bytes = store.get(&path).await.ok()?.bytes().await.ok()?;
-    let hint: LastCheckpointHint = serde_json::from_slice(&bytes).ok()?;
-    Some(hint.version)
-}
-
+/// List Delta log files up to `max_version`, using the planner-local cache when available.
 pub async fn list_log_segment_files(
     ctx: &PlannerContext<'_>,
     max_version: i64,
@@ -95,112 +27,32 @@ pub async fn list_log_segment_files(
     if let Some(files) = ctx.get_cached_log_segment_files(max_version) {
         return Ok(files);
     }
-    let files = list_log_segment_files_uncached(ctx, max_version).await?;
+    let log_store = ctx.log_store()?;
+    let files = kernel_list_log_segment_files(&log_store, max_version)
+        .await
+        .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
     ctx.set_cached_log_segment_files(max_version, files.clone());
     Ok(files)
 }
 
-async fn list_log_segment_files_uncached(
-    ctx: &PlannerContext<'_>,
-    max_version: i64,
-) -> Result<LogSegmentFiles> {
-    let log_store = ctx.log_store()?;
-    let store = log_store.object_store(None);
-    let table_root_path = log_store.config().location.path();
-    let log_root_path = join_path(table_root_path, DELTA_LOG_DIR);
-    let log_root = Path::from(log_root_path.clone());
-    let offset_version = read_last_checkpoint_version(ctx)
-        .await
-        .map(|v| v.min(max_version).saturating_sub(1))
-        .unwrap_or(0);
-    let offset = Path::from(format!("{log_root_path}/{offset_version:020}"));
-
-    // Prefer offset listing from `_last_checkpoint`, then fall back to full listing if unsupported.
-    let mut entries = match store
-        .list_with_offset(Some(&log_root), &offset)
-        .try_collect::<Vec<_>>()
-        .await
-    {
-        Ok(entries) => entries,
-        Err(_) => store.list(Some(&log_root)).try_collect::<Vec<_>>().await?,
-    };
-    if entries.is_empty() && offset_version > 0 {
-        entries = store.list(Some(&log_root)).try_collect::<Vec<_>>().await?;
-    }
-
-    let mut checkpoint_candidates: Vec<(i64, String)> = Vec::new();
-    let mut commit_candidates: Vec<(i64, String)> = Vec::new();
-
-    for meta in entries {
-        let filename = match meta.location.as_ref().rsplit('/').next() {
-            Some(name) => name,
-            None => continue,
-        };
-        if let Some(version) = parse_checkpoint_version(filename) {
-            if version <= max_version {
-                checkpoint_candidates.push((version, filename.to_string()));
-            }
-            continue;
-        }
-        if let Some(version) = parse_commit_version(filename) {
-            if version <= max_version {
-                commit_candidates.push((version, filename.to_string()));
-            }
-        }
-    }
-
-    let latest_checkpoint_version = checkpoint_candidates
-        .iter()
-        .map(|(version, _)| *version)
-        .max();
-    let mut checkpoint_files = match latest_checkpoint_version {
-        Some(version) => checkpoint_candidates
-            .into_iter()
-            .filter_map(|(file_version, filename)| (file_version == version).then_some(filename))
-            .collect::<Vec<_>>(),
-        None => Vec::new(),
-    };
-    checkpoint_files.sort();
-
-    commit_candidates.sort_by(|(av, af), (bv, bf)| av.cmp(bv).then_with(|| af.cmp(bf)));
-    let commit_files = commit_candidates
-        .into_iter()
-        .map(|(_, filename)| filename)
-        .collect::<Vec<_>>();
-
-    Ok(LogSegmentFiles {
-        checkpoint_files,
-        commit_files,
-    })
-}
-
+/// Resolve the minimal set of Delta log files needed to replay state up to `max_version`,
+/// using the planner-local cache for the initial listing and applying `options` on top.
 pub async fn resolve_log_segment_files(
     ctx: &PlannerContext<'_>,
     max_version: i64,
     options: LogSegmentResolveOptions,
 ) -> Result<LogSegmentFiles> {
-    let mut files = list_log_segment_files(ctx, max_version).await?;
+    // Obtain the full listing (possibly from cache), then apply resolve options.
+    let cached = list_log_segment_files(ctx, max_version).await?;
 
-    // Avoid double-counting actions that are already materialized into the latest checkpoint:
-    // only replay commit JSONs strictly newer than that checkpoint version.
-    let latest_checkpoint_version = files
-        .checkpoint_files
-        .iter()
-        .filter_map(|f| parse_version_prefix(f))
-        .max();
-    if let Some(cp_ver) = latest_checkpoint_version {
-        files
-            .commit_files
-            .retain(|f| parse_commit_version(f).map(|v| v > cp_ver).unwrap_or(true));
-    }
-
-    if let Some((start, end)) = options.commit_version_range {
-        files.commit_files.retain(|f| {
-            parse_commit_version(f)
-                .map(|v| v >= start && v <= end)
-                .unwrap_or(false)
-        });
-    }
-
-    Ok(files)
+    // Re-apply the resolve logic on the cached listing.
+    let log_store = ctx.log_store()?;
+    kernel_resolve_log_segment_files(&log_store, max_version, options)
+        .await
+        .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))
+        .map(|mut resolved| {
+            // Preserve checkpoint files from the cached listing to avoid a second store round-trip.
+            resolved.checkpoint_files = cached.checkpoint_files;
+            resolved
+        })
 }
