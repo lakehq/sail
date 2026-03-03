@@ -1159,7 +1159,7 @@ mod tests {
         let exec = Arc::new(DeltaLogReplayExec::new_hash(
             checkpoint_plan,
             commits_plan,
-            #[allow(clippy::unwrap_used)]
+            #[expect(clippy::unwrap_used)]
             Url::parse("file:///tmp/delta").unwrap(),
             0,
             vec![],
@@ -1169,15 +1169,15 @@ mod tests {
 
         let ctx = Arc::new(TaskContext::default());
         let mut stream = exec.execute(0, ctx)?;
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let out = stream.try_next().await?.unwrap();
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let add = out
             .column(0)
             .as_any()
             .downcast_ref::<StructArray>()
             .unwrap();
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let path_col = add
             .column_by_name("path")
             .unwrap()
@@ -1226,7 +1226,7 @@ mod tests {
         let exec = Arc::new(DeltaLogReplayExec::new_hash(
             checkpoint_plan,
             commits_plan,
-            #[allow(clippy::unwrap_used)]
+            #[expect(clippy::unwrap_used)]
             Url::parse("file:///tmp/delta").unwrap(),
             0,
             vec![],
@@ -1236,15 +1236,15 @@ mod tests {
 
         let ctx = Arc::new(TaskContext::default());
         let mut stream = exec.execute(0, ctx)?;
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let out = stream.try_next().await?.unwrap();
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let add = out
             .column(0)
             .as_any()
             .downcast_ref::<StructArray>()
             .unwrap();
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let path_col = add
             .column_by_name("path")
             .unwrap()
@@ -1307,7 +1307,7 @@ mod tests {
         let exec = Arc::new(DeltaLogReplayExec::new_hash(
             checkpoint_plan,
             commits_plan,
-            #[allow(clippy::unwrap_used)]
+            #[expect(clippy::unwrap_used)]
             Url::parse("file:///tmp/delta").unwrap(),
             0,
             vec![],
@@ -1317,17 +1317,17 @@ mod tests {
 
         let ctx = Arc::new(TaskContext::default());
         let mut stream = exec.execute(0, ctx)?;
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let out = stream.try_next().await?.unwrap();
         assert_eq!(out.num_rows(), 2);
 
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let add = out
             .column(0)
             .as_any()
             .downcast_ref::<StructArray>()
             .unwrap();
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let path_col = add
             .column_by_name("path")
             .unwrap()
@@ -1379,7 +1379,7 @@ mod tests {
         let exec = Arc::new(DeltaLogReplayExec::new_hash(
             checkpoint_plan,
             commits_plan,
-            #[allow(clippy::unwrap_used)]
+            #[expect(clippy::unwrap_used)]
             Url::parse("file:///tmp/delta").unwrap(),
             0,
             vec![],
@@ -1389,16 +1389,16 @@ mod tests {
 
         let ctx = Arc::new(TaskContext::default());
         let mut stream = exec.execute(0, ctx)?;
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let out = stream.try_next().await?.unwrap();
         assert_eq!(out.num_rows(), 1);
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let add = out
             .column(0)
             .as_any()
             .downcast_ref::<StructArray>()
             .unwrap();
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let path_col = add
             .column_by_name("path")
             .unwrap()
@@ -1410,7 +1410,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     async fn hash_replay_unordered_same_version_remove_then_add_add_wins() -> Result<()> {
         let add_fields: Fields = vec![Arc::new(Field::new("path", DataType::Utf8, true))].into();
         let schema = Arc::new(Schema::new(vec![
@@ -1470,7 +1470,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     async fn hash_replay_unordered_higher_version_overrides_lower() -> Result<()> {
         let add_fields: Fields = vec![Arc::new(Field::new("path", DataType::Utf8, true))].into();
         let schema = Arc::new(Schema::new(vec![
@@ -1517,7 +1517,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     async fn hash_replay_unordered_lower_version_cannot_override() -> Result<()> {
         let add_fields: Fields = vec![Arc::new(Field::new("path", DataType::Utf8, true))].into();
         let schema = Arc::new(Schema::new(vec![
@@ -1577,7 +1577,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     async fn hash_replay_required_input_ordering_is_none_for_hash_mode() -> Result<()> {
         let add_fields: Fields = vec![Arc::new(Field::new("path", DataType::Utf8, true))].into();
         let schema = Arc::new(Schema::new(vec![

@@ -306,7 +306,7 @@ pub async fn build_delta_log_datasource_scans_with_options(
     Ok((checkpoint_scan, commit_scan, checkpoint_files, commit_files))
 }
 
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub async fn build_delta_log_datasource_union_with_options(
     ctx: &PlannerContext<'_>,
     checkpoint_files: Vec<String>,

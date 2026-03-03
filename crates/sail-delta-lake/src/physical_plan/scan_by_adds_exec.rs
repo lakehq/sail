@@ -75,7 +75,7 @@ struct ScanByAddsStreamState {
 }
 
 impl ScanByAddsStreamState {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn new(
         input: SendableRecordBatchStream,
         context: Arc<TaskContext>,
@@ -325,7 +325,7 @@ pub struct DeltaScanByAddsExec {
 }
 
 impl DeltaScanByAddsExec {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         table_url: Url,
