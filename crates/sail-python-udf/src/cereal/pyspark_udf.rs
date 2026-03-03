@@ -102,6 +102,8 @@ impl PySparkUdfPayload {
     }
 
     fn input_types_to_schema_json(input_types: &[DataType]) -> PyUdfResult<String> {
+        // Field names are not used by PySpark (only f.dataType is extracted),
+        // so placeholder names are sufficient.
         let fields: Vec<Field> = input_types
             .iter()
             .enumerate()
