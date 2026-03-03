@@ -1,7 +1,6 @@
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::prelude::SessionContext;
-use datafusion_expr::ScalarUDF;
 use sail_common_datafusion::array::serde::ArrowSerializer;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
@@ -10,12 +9,13 @@ use serde::{Deserialize, Serialize};
 use crate::error::{CatalogError, CatalogResult};
 use crate::manager::CatalogManager;
 use crate::provider::{
-    CreateDatabaseOptions, CreateTableOptions, CreateTemporaryViewOptions, CreateViewOptions,
-    DropDatabaseOptions, DropTableOptions, DropTemporaryViewOptions, DropViewOptions,
+    CreateDatabaseOptions, CreateTableOptions, CreateTemporaryViewColumnOptions,
+    CreateTemporaryViewOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions,
+    DropTemporaryViewOptions, DropViewOptions,
 };
 use crate::utils::quote_namespace_if_needed;
 
-#[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum CatalogCommand {
     CurrentCatalog,
     SetCurrentCatalog {
@@ -87,7 +87,7 @@ pub enum CatalogCommand {
         is_temporary: bool,
     },
     RegisterFunction {
-        udf: ScalarUDF,
+        udf_id: u64,
     },
     RegisterTableFunction {
         name: String,
@@ -107,7 +107,12 @@ pub enum CatalogCommand {
     CreateTemporaryView {
         view: String,
         is_global: bool,
-        options: CreateTemporaryViewOptions,
+        plan_id: u64,
+        columns: Vec<CreateTemporaryViewColumnOptions>,
+        if_not_exists: bool,
+        replace: bool,
+        comment: Option<String>,
+        properties: Vec<(String, String)>,
     },
     CreateView {
         view: Vec<String>,
@@ -119,7 +124,7 @@ pub enum CatalogCommand {
     },
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub enum CatalogTableFunction {
     // We do not support any kind of table functions yet.
     // PySpark UDTF is registered as a scalar UDF.
@@ -386,7 +391,8 @@ impl CatalogCommand {
                     .await?;
                 display.bools().to_record_batch(vec![true])?
             }
-            CatalogCommand::RegisterFunction { udf } => {
+            CatalogCommand::RegisterFunction { udf_id } => {
+                let udf = manager.tracker.get_udf(udf_id)?;
                 manager.register_function(ctx, udf)?;
                 display.empty().to_record_batch(vec![])?
             }
@@ -413,8 +419,22 @@ impl CatalogCommand {
             CatalogCommand::CreateTemporaryView {
                 view,
                 is_global,
-                options,
+                plan_id,
+                columns,
+                if_not_exists,
+                replace,
+                comment,
+                properties,
             } => {
+                let input = manager.tracker.get_plan(plan_id)?;
+                let options = CreateTemporaryViewOptions {
+                    input,
+                    columns,
+                    if_not_exists,
+                    replace,
+                    comment,
+                    properties,
+                };
                 if is_global {
                     manager.create_global_temporary_view(&view, options).await?;
                 } else {

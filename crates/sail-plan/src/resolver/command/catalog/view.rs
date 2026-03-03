@@ -4,11 +4,13 @@ use arrow::datatypes::DataType;
 use datafusion_common::TableReference;
 use datafusion_expr::{LogicalPlan, SubqueryAlias};
 use sail_catalog::command::CatalogCommand;
+use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::{
-    CreateTemporaryViewColumnOptions, CreateTemporaryViewOptions, CreateViewColumnOptions,
-    CreateViewOptions, DropTemporaryViewOptions, DropViewOptions,
+    CreateTemporaryViewColumnOptions, CreateViewColumnOptions, CreateViewOptions,
+    DropTemporaryViewOptions, DropViewOptions,
 };
 use sail_common::spec;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 
 use crate::error::PlanResult;
@@ -96,17 +98,17 @@ impl PlanResolver<'_> {
             None => (Self::get_field_names(input.schema(), state)?, vec![]),
         };
         let input = rename_logical_plan(input, &fields)?;
+        let manager = self.ctx.extension::<CatalogManager>()?;
+        let plan_id = manager.tracker.track_plan(Arc::new(input))?;
         let command = CatalogCommand::CreateTemporaryView {
             view: view.into(),
             is_global,
-            options: CreateTemporaryViewOptions {
-                input: Arc::new(input),
-                columns,
-                if_not_exists,
-                replace,
-                comment,
-                properties,
-            },
+            plan_id,
+            columns,
+            if_not_exists,
+            replace,
+            comment,
+            properties,
         };
         self.resolve_catalog_command(command)
     }

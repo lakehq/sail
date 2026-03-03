@@ -11,13 +11,17 @@ pub mod catalog;
 pub mod database;
 pub mod function;
 pub mod table;
+pub mod tracker;
 pub mod view;
+
+use crate::manager::tracker::CatalogObjectTracker;
 
 /// A manager for all catalogs registered with the session.
 /// Each catalog has a name and a corresponding [`CatalogProvider`] instance.
 pub struct CatalogManager {
     state: Arc<Mutex<CatalogManagerState>>,
     pub(super) temporary_views: TemporaryViewManager,
+    pub tracker: CatalogObjectTracker,
 }
 
 pub(super) struct CatalogManagerState {
@@ -59,6 +63,7 @@ impl CatalogManager {
         Ok(CatalogManager {
             state: Arc::new(Mutex::new(state)),
             temporary_views: Default::default(),
+            tracker: Default::default(),
         })
     }
 
