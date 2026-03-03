@@ -507,6 +507,64 @@ class PySparkScalarPandasIterUdf:
         return _pandas_to_arrow_array(output, output_type, self._serializer)
 
 
+class PySparkScalarArrowUdf:
+    def __init__(
+        self,
+        udf: Callable[..., Any],
+        config,
+    ):
+        self._udf = udf
+        self._serializer = ArrowStreamPandasUDFSerializer(
+            timezone=config.session_timezone,
+            safecheck=config.arrow_convert_safely,
+            assign_cols_by_name=config.assign_columns_by_name,
+            df_for_struct=False,
+            struct_in_pandas="row",
+            ndarray_as_list=True,
+            arrow_cast=True,
+        )
+
+    def __call__(self, args: list[pa.Array], _num_rows: int) -> pa.Array:
+        inputs = tuple(args)
+        [(output, output_type)] = list(self._udf(None, (inputs,)))
+        if isinstance(output, (pa.Array, pa.ChunkedArray)):
+            if isinstance(output, pa.ChunkedArray):
+                output = output.combine_chunks()
+            if output.type != output_type:
+                output = output.cast(output_type)
+            return output
+        return _pandas_to_arrow_array(output, output_type, self._serializer)
+
+
+class PySparkScalarArrowIterUdf:
+    def __init__(
+        self,
+        udf: Callable[..., Any],
+        config,
+    ):
+        self._udf = udf
+        self._serializer = ArrowStreamPandasUDFSerializer(
+            timezone=config.session_timezone,
+            safecheck=config.arrow_convert_safely,
+            assign_cols_by_name=config.assign_columns_by_name,
+            df_for_struct=False,
+            struct_in_pandas="row",
+            ndarray_as_list=True,
+            arrow_cast=True,
+        )
+
+    def __call__(self, args: list[pa.Array], _num_rows: int) -> pa.Array:
+        inputs = tuple(args)
+        [(output, output_type)] = list(self._udf(None, [inputs]))
+        if isinstance(output, (pa.Array, pa.ChunkedArray)):
+            if isinstance(output, pa.ChunkedArray):
+                output = output.combine_chunks()
+            if output.type != output_type:
+                output = output.cast(output_type)
+            return output
+        return _pandas_to_arrow_array(output, output_type, self._serializer)
+
+
 class PySparkGroupAggUdf:
     def __init__(
         self,

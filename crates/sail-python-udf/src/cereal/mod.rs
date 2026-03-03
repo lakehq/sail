@@ -49,18 +49,31 @@ fn supports_kwargs(eval_type: spec::PySparkUdfType) -> bool {
         | PySparkUdfType::GroupedMapPandas
         | PySparkUdfType::GroupedMapArrow
         | PySparkUdfType::WindowAggPandas
+        | PySparkUdfType::WindowAggArrow
         | PySparkUdfType::MapPandasIter
         | PySparkUdfType::CogroupedMapPandas
         | PySparkUdfType::CogroupedMapArrow
         | PySparkUdfType::MapArrowIter
         | PySparkUdfType::GroupedMapPandasWithState
+        | PySparkUdfType::TransformWithStatePandas
+        | PySparkUdfType::TransformWithStatePandasInitState
+        | PySparkUdfType::TransformWithStatePythonRow
+        | PySparkUdfType::TransformWithStatePythonRowInitState
+        | PySparkUdfType::GroupedMapArrowIter
+        | PySparkUdfType::GroupedMapPandasIter
         | PySparkUdfType::Table
-        | PySparkUdfType::ArrowTable => false,
+        | PySparkUdfType::ArrowTable
+        | PySparkUdfType::ArrowUdtf => false,
         PySparkUdfType::Batched
         | PySparkUdfType::ArrowBatched
         | PySparkUdfType::ScalarPandas
         | PySparkUdfType::GroupedAggPandas
-        | PySparkUdfType::ScalarPandasIter => true,
+        | PySparkUdfType::GroupedAggPandasIter
+        | PySparkUdfType::ScalarPandasIter
+        | PySparkUdfType::ScalarArrow
+        | PySparkUdfType::ScalarArrowIter
+        | PySparkUdfType::GroupedAggArrow
+        | PySparkUdfType::GroupedAggArrowIter => true,
     }
 }
 
@@ -75,12 +88,25 @@ fn should_write_config(eval_type: spec::PySparkUdfType) -> bool {
         | PySparkUdfType::GroupedMapArrow
         | PySparkUdfType::GroupedAggPandas
         | PySparkUdfType::WindowAggPandas
+        | PySparkUdfType::WindowAggArrow
         | PySparkUdfType::ScalarPandasIter
         | PySparkUdfType::MapPandasIter
         | PySparkUdfType::CogroupedMapPandas
         | PySparkUdfType::CogroupedMapArrow
         | PySparkUdfType::MapArrowIter
         | PySparkUdfType::GroupedMapPandasWithState
-        | PySparkUdfType::ArrowTable => true,
+        | PySparkUdfType::TransformWithStatePandas
+        | PySparkUdfType::TransformWithStatePandasInitState
+        | PySparkUdfType::TransformWithStatePythonRow
+        | PySparkUdfType::TransformWithStatePythonRowInitState
+        | PySparkUdfType::GroupedMapArrowIter
+        | PySparkUdfType::GroupedMapPandasIter
+        | PySparkUdfType::GroupedAggPandasIter
+        | PySparkUdfType::ScalarArrow
+        | PySparkUdfType::ScalarArrowIter
+        | PySparkUdfType::GroupedAggArrow
+        | PySparkUdfType::GroupedAggArrowIter
+        | PySparkUdfType::ArrowTable
+        | PySparkUdfType::ArrowUdtf => true,
     }
 }

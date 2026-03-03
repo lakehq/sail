@@ -376,8 +376,21 @@ pub enum PySparkUdfType {
     GroupedMapPandasWithState = 208,
     GroupedMapArrow = 209,
     CogroupedMapArrow = 210,
+    TransformWithStatePandas = 211,
+    TransformWithStatePandasInitState = 212,
+    TransformWithStatePythonRow = 213,
+    TransformWithStatePythonRowInitState = 214,
+    GroupedMapArrowIter = 215,
+    GroupedMapPandasIter = 216,
+    GroupedAggPandasIter = 217,
+    ScalarArrow = 250,
+    ScalarArrowIter = 251,
+    GroupedAggArrow = 252,
+    WindowAggArrow = 253,
+    GroupedAggArrowIter = 254,
     Table = 300,
     ArrowTable = 301,
+    ArrowUdtf = 302,
 }
 
 impl PySparkUdfType {
@@ -386,7 +399,10 @@ impl PySparkUdfType {
     }
 
     pub fn is_table_function(&self) -> bool {
-        matches!(self, PySparkUdfType::Table | PySparkUdfType::ArrowTable)
+        matches!(
+            self,
+            PySparkUdfType::Table | PySparkUdfType::ArrowTable | PySparkUdfType::ArrowUdtf
+        )
     }
 }
 

@@ -22,6 +22,8 @@ pub enum PySparkUdfKind {
     ArrowBatch,
     ScalarPandas,
     ScalarPandasIter,
+    ScalarArrow,
+    ScalarArrowIter,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -101,6 +103,10 @@ impl PySparkUDF {
                 PySparkUdfKind::ScalarPandas => PySpark::scalar_pandas_udf(py, udf, &self.config)?,
                 PySparkUdfKind::ScalarPandasIter => {
                     PySpark::scalar_pandas_iter_udf(py, udf, &self.config)?
+                }
+                PySparkUdfKind::ScalarArrow => PySpark::scalar_arrow_udf(py, udf, &self.config)?,
+                PySparkUdfKind::ScalarArrowIter => {
+                    PySpark::scalar_arrow_iter_udf(py, udf, &self.config)?
                 }
             };
             Ok(udf.unbind())
