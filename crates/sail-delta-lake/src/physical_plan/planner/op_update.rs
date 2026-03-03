@@ -14,6 +14,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::common::{DataFusionError, Result, ToDFSchema};
+use datafusion::logical_expr::expr::Cast;
+use datafusion::logical_expr::Expr;
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::projection::ProjectionExec;
@@ -117,7 +119,7 @@ pub async fn build_update_plan(
         Some(table_schema.clone()),
         version,
         partition_columns.clone(),
-        partition_only,
+        false,
     )?);
 
     // Spread Add actions across partitions for parallel scanning
@@ -165,10 +167,15 @@ pub async fn build_update_plan(
         let assignment = assignment_map.get(&col_name.to_ascii_lowercase());
 
         if let Some(assign_expr) = assignment {
+            let casted_assign_expr = Expr::Cast(Cast::new(
+                Box::new(assign_expr.expr.clone()),
+                field.data_type().clone(),
+            ));
+
             // Compile the assignment expression against the table schema, then adapt to scan
             let physical_assign = ctx
                 .session()
-                .create_physical_expr(assign_expr.expr.clone(), &table_df_schema)?;
+                .create_physical_expr(casted_assign_expr, &table_df_schema)?;
             let adapted_assign = adapter
                 .rewrite(physical_assign)
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
