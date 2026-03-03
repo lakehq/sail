@@ -16,12 +16,10 @@ impl Actor for SessionManagerActor {
 
     fn new(options: Self::Options) -> Self {
         let factory = (options.factory)();
-        let config_options = options.options.clone();
         Self {
             options,
             factory,
             sessions: IndexMap::new(),
-            config_options,
         }
     }
 

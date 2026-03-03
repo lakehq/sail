@@ -12,6 +12,8 @@ pub struct SessionManagerOptions {
     pub runtime: RuntimeHandle,
     pub system: Arc<Mutex<ActorSystem>>,
     pub factory: Box<dyn Fn() -> Box<dyn SessionFactory<ServerSessionInfo>> + Send>,
+    /// The application configuration options as key-value pairs,
+    /// used to populate the `system.session.options` table.
     pub options: Vec<(String, String)>,
 }
 

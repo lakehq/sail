@@ -302,14 +302,15 @@ impl SessionManagerActor {
             }
             SessionManagerObserver::Options { key, fetch, result } => {
                 let rows = self
-                    .config_options
+                    .options
+                    .options
                     .iter()
                     .predicate_filter_map(
                         key,
-                        |item| &item.0,
-                        |item| OptionRow {
-                            key: item.0.clone(),
-                            value: item.1.clone(),
+                        |(key, _)| key,
+                        |(key, value)| OptionRow {
+                            key: key.clone(),
+                            value: value.clone(),
                         },
                     )
                     .fetch(fetch)

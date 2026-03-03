@@ -10,5 +10,4 @@ pub struct SessionManagerActor {
     options: super::options::SessionManagerOptions,
     factory: Box<dyn SessionFactory<ServerSessionInfo>>,
     sessions: IndexMap<String, ServerSession>,
-    config_options: Vec<(String, String)>,
 }

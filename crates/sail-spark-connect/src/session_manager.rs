@@ -90,9 +90,8 @@ pub fn create_spark_session_manager(
             create_spark_session_factory(config.clone(), runtime.clone(), system.clone())
         })
     };
-    let config_options = config.key_value_pairs().map_err(SparkError::from)?;
     let options = SessionManagerOptions::new(runtime.clone(), system, factory)
         .with_session_timeout(Duration::from_secs(config.spark.session_timeout_secs))
-        .with_options(config_options);
+        .with_options(config.raw().map_err(SparkError::from)?);
     Ok(SessionManager::try_new(options)?)
 }

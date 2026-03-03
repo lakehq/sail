@@ -231,13 +231,13 @@
       description: The table containing current application configuration options.
       columns:
         - name: key
-          description: The configuration key in dot notation.
+          description: The configuration key.
           rust_type: String
           sql_type: STRING
           arrow_type: crate::system::types::string()
           nullable: false
         - name: value
-          description: The configuration value as a string.
+          description: The configuration value as a string that can be interpreted as a TOML value.
           rust_type: String
           sql_type: STRING
           arrow_type: crate::system::types::string()
