@@ -26,6 +26,7 @@ pub struct CatalogManager {
 
 pub(super) struct CatalogManagerState {
     pub(super) catalogs: HashMap<Arc<str>, Arc<dyn CatalogProvider>>,
+    pub(super) functions: HashMap<Arc<str>, datafusion_expr::ScalarUDF>,
     pub(super) default_catalog: Arc<str>,
     pub(super) default_database: Namespace,
     pub(super) global_temporary_database: Namespace,
@@ -56,6 +57,7 @@ impl CatalogManager {
         // Even if the default database is valid now, it may be dropped externally later.
         let state = CatalogManagerState {
             catalogs,
+            functions: HashMap::new(),
             default_catalog: options.default_catalog.into(),
             default_database: options.default_database.try_into()?,
             global_temporary_database: options.global_temporary_database.try_into()?,

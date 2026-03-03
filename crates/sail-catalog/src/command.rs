@@ -1,6 +1,5 @@
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::prelude::SessionContext;
 use sail_common_datafusion::array::serde::ArrowSerializer;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
@@ -159,7 +158,7 @@ impl CatalogCommand {
         }
     }
 
-    pub fn schema(&self, ctx: &SessionContext) -> CatalogResult<SchemaRef> {
+    pub fn schema<C: SessionExtensionAccessor>(&self, ctx: &C) -> CatalogResult<SchemaRef> {
         let service = ctx.extension::<PlanService>()?;
         let display = service.catalog_display();
         let schema = match self {
@@ -200,9 +199,9 @@ impl CatalogCommand {
         Ok(schema)
     }
 
-    pub async fn execute(
+    pub async fn execute<C: SessionExtensionAccessor>(
         self,
-        ctx: &SessionContext,
+        ctx: &C,
         manager: &CatalogManager,
     ) -> CatalogResult<RecordBatch> {
         // TODO: make sure we return the same schema as Spark for each command
@@ -375,24 +374,23 @@ impl CatalogCommand {
             CatalogCommand::ListFunctions { .. } => {
                 return Err(CatalogError::NotSupported("list functions".to_string()));
             }
-            // TODO: `ctx` will not be needed if `CatalogManager` manages functions internally.
             CatalogCommand::DropFunction {
                 function,
                 if_exists,
                 is_temporary,
             } => {
                 manager
-                    .deregister_function(ctx, &function, if_exists, is_temporary)
+                    .deregister_function(&function, if_exists, is_temporary)
                     .await?;
                 display.bools().to_record_batch(vec![true])?
             }
             CatalogCommand::RegisterFunction { udf } => {
                 let udf = manager.get_tracked_function(udf)?;
-                manager.register_function(ctx, udf)?;
+                manager.register_function(udf)?;
                 display.empty().to_record_batch(vec![])?
             }
             CatalogCommand::RegisterTableFunction { name, udtf } => {
-                manager.register_table_function(ctx, name, udtf)?;
+                manager.register_table_function(name, udtf)?;
                 display.empty().to_record_batch(vec![])?
             }
             CatalogCommand::DropTemporaryView {
