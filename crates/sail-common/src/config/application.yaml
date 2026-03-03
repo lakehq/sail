@@ -784,6 +784,12 @@
   description: The interval in seconds for exporting metrics.
   experimental: true
 
+- key: telemetry.metrics_collection_interval_secs
+  type: number
+  default: "5"
+  description: The interval in seconds for collecting metrics from execution plans.
+  experimental: true
+
 - key: telemetry.logs_export_interval_secs
   type: number
   default: "1"

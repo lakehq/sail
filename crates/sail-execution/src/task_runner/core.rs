@@ -16,7 +16,7 @@ use sail_common_datafusion::error::CommonErrorCause;
 use sail_delta_lake::physical_plan::DeltaPhysicalExprAdapterFactory;
 use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::{Actor, ActorContext};
-use sail_telemetry::telemetry::global_metric_registry;
+use sail_telemetry::telemetry::{global_metric_registry, global_metrics_collection_interval};
 use sail_telemetry::{trace_execution_plan, TracingExecOptions};
 use tokio::sync::oneshot;
 
@@ -102,6 +102,7 @@ impl TaskRunner {
         );
         let options = TracingExecOptions {
             metric_registry: global_metric_registry(),
+            metrics_collection_interval: global_metrics_collection_interval(),
             job_id: Some(key.job_id.into()),
             stage: Some(key.stage),
             attempt: Some(key.attempt),

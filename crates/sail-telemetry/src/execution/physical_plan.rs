@@ -3,6 +3,7 @@ use std::fmt;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
@@ -37,6 +38,7 @@ use crate::metrics::{MetricAttribute, MetricRegistry};
 #[derive(Debug, Clone, Default)]
 pub struct TracingExecOptions {
     pub metric_registry: Option<Arc<MetricRegistry>>,
+    pub metrics_collection_interval: Option<Duration>,
     pub job_id: Option<u64>,
     pub stage: Option<usize>,
     pub attempt: Option<usize>,
@@ -178,12 +180,18 @@ impl ExecutionPlan for TracingExec {
         };
         let schema = stream.schema();
         if let Some(ref registry) = self.options.metric_registry {
+            let interval = self.options.metrics_collection_interval;
+            let last_emit = interval
+                .and_then(|d| Instant::now().checked_sub(d))
+                .unwrap_or_else(Instant::now);
             let stream = MetricEmitterStream {
                 inner: stream,
                 plan: self.inner.clone(),
                 emitter: self.build_metric_emitter(),
                 attributes: self.build_metric_attributes(),
                 registry: registry.clone(),
+                interval,
+                last_emit,
             };
             Ok(Box::pin(RecordBatchStreamAdapter::new(
                 schema,
@@ -307,6 +315,8 @@ pin_project! {
         emitter: Box<dyn MetricEmitter>,
         attributes: Vec<KeyValue>,
         registry: Arc<MetricRegistry>,
+        interval: Option<Duration>,
+        last_emit: Instant,
     }
 }
 
@@ -317,12 +327,20 @@ impl Stream for MetricEmitterStream {
         let this = self.project();
         let poll = this.inner.poll_next(cx);
         if poll.is_ready() {
-            if let Some(metrics) = this.plan.metrics() {
-                for metric in metrics.iter() {
-                    let _ = this
-                        .emitter
-                        .try_emit(metric, this.attributes, this.registry);
+            let is_done = matches!(poll, Poll::Ready(None));
+            let should_emit = is_done
+                || this
+                    .interval
+                    .is_none_or(|interval| this.last_emit.elapsed() >= interval);
+            if should_emit {
+                if let Some(metrics) = this.plan.metrics() {
+                    for metric in metrics.iter() {
+                        let _ = this
+                            .emitter
+                            .try_emit(metric, this.attributes, this.registry);
+                    }
                 }
+                *this.last_emit = Instant::now();
             }
         }
         poll

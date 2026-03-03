@@ -35,6 +35,7 @@ struct TelemetryState {
     meter_provider: Option<SdkMeterProvider>,
     meter: Option<Meter>,
     metric_registry: Option<Arc<MetricRegistry>>,
+    metrics_collection_interval: Option<Duration>,
     logger_provider: Option<SdkLoggerProvider>,
 }
 
@@ -132,6 +133,8 @@ fn init_metrics(
         let meter = global::meter_with_scope(get_instrumentation_scope());
         state.meter_provider = Some(provider);
         state.metric_registry = Some(Arc::new(MetricRegistry::new(&meter)));
+        state.metrics_collection_interval =
+            Some(Duration::from_secs(config.metrics_collection_interval_secs));
         state.meter = Some(meter);
     }
     Ok(())
@@ -224,6 +227,16 @@ pub fn global_metric_registry() -> Option<Arc<MetricRegistry>> {
         .ok()
         .and_then(|status| match &*status {
             TelemetryStatus::Initialized(state) => state.metric_registry.clone(),
+            _ => None,
+        })
+}
+
+pub fn global_metrics_collection_interval() -> Option<Duration> {
+    TELEMETRY_STATUS
+        .lock()
+        .ok()
+        .and_then(|status| match &*status {
+            TelemetryStatus::Initialized(state) => state.metrics_collection_interval,
             _ => None,
         })
 }

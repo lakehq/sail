@@ -8,7 +8,7 @@ use datafusion::prelude::SessionContext;
 use sail_common_datafusion::session::job::{JobRunner, JobRunnerHistory};
 use sail_common_datafusion::system::observable::{JobRunnerObserver, Observer, StateObservable};
 use sail_server::actor::{ActorHandle, ActorSystem};
-use sail_telemetry::telemetry::global_metric_registry;
+use sail_telemetry::telemetry::{global_metric_registry, global_metrics_collection_interval};
 use sail_telemetry::{trace_execution_plan, TracingExecOptions};
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::oneshot;
@@ -55,6 +55,7 @@ impl JobRunner for LocalJobRunner {
         let job_id = self.next_job_id.fetch_add(1, Ordering::Relaxed);
         let options = TracingExecOptions {
             metric_registry: global_metric_registry(),
+            metrics_collection_interval: global_metrics_collection_interval(),
             job_id: Some(job_id),
             stage: None,
             attempt: None,
