@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::sync::Arc;
+use std::time::Duration;
 
 use datafusion::common::{plan_err, DataFusionError, Result};
 use datafusion::execution::TaskContext;
@@ -9,7 +10,7 @@ use opentelemetry::metrics::MeterProvider;
 use opentelemetry_sdk::metrics::{InMemoryMetricExporter, SdkMeterProvider};
 
 use crate::execution::physical_plan::TracingExec;
-use crate::metrics::MetricRegistry;
+use crate::metrics::{MetricManager, MetricRegistry};
 use crate::TracingExecOptions;
 
 fn format_raw_metrics(plan: &dyn ExecutionPlan) -> String {
@@ -80,7 +81,10 @@ impl MetricEmitterTester {
         let Some(plan) = self.plan else {
             return plan_err!("missing execution plan");
         };
-        let options = TracingExecOptions::default().with_metric_registry(self.registry);
+        let options = TracingExecOptions::default().with_metrics(MetricManager {
+            registry: self.registry,
+            interval: Duration::ZERO,
+        });
         let plan = Arc::new(TracingExec::new(plan, options));
         let context = Arc::new(TaskContext::default());
         let _ = plan.execute(0, context)?.try_collect::<Vec<_>>().await?;

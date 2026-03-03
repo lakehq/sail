@@ -33,12 +33,11 @@ use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::common::{KeyValue, SpanAttribute};
 use crate::execution::metrics::MetricEmitter;
-use crate::metrics::{MetricAttribute, MetricRegistry};
+use crate::metrics::{MetricAttribute, MetricManager, MetricRegistry};
 
 #[derive(Debug, Clone, Default)]
 pub struct TracingExecOptions {
-    pub metric_registry: Option<Arc<MetricRegistry>>,
-    pub metrics_collection_interval: Option<Duration>,
+    pub metrics: Option<MetricManager>,
     pub job_id: Option<u64>,
     pub stage: Option<usize>,
     pub attempt: Option<usize>,
@@ -46,8 +45,8 @@ pub struct TracingExecOptions {
 }
 
 impl TracingExecOptions {
-    pub fn with_metric_registry(mut self, registry: Arc<MetricRegistry>) -> Self {
-        self.metric_registry = Some(registry);
+    pub fn with_metrics(mut self, manager: MetricManager) -> Self {
+        self.metrics = Some(manager);
         self
     }
 }
@@ -179,18 +178,17 @@ impl ExecutionPlan for TracingExec {
             self.inner.execute(partition, context)?
         };
         let schema = stream.schema();
-        if let Some(ref registry) = self.options.metric_registry {
-            let interval = self.options.metrics_collection_interval;
-            let last_emit = interval
-                .and_then(|d| Instant::now().checked_sub(d))
+        if let Some(ref manager) = self.options.metrics {
+            let last_emit = Instant::now()
+                .checked_sub(manager.interval)
                 .unwrap_or_else(Instant::now);
             let stream = MetricEmitterStream {
                 inner: stream,
                 plan: self.inner.clone(),
                 emitter: self.build_metric_emitter(),
                 attributes: self.build_metric_attributes(),
-                registry: registry.clone(),
-                interval,
+                registry: manager.registry.clone(),
+                interval: manager.interval,
                 last_emit,
             };
             Ok(Box::pin(RecordBatchStreamAdapter::new(
@@ -315,7 +313,7 @@ pin_project! {
         emitter: Box<dyn MetricEmitter>,
         attributes: Vec<KeyValue>,
         registry: Arc<MetricRegistry>,
-        interval: Option<Duration>,
+        interval: Duration,
         last_emit: Instant,
     }
 }
@@ -328,10 +326,7 @@ impl Stream for MetricEmitterStream {
         let poll = this.inner.poll_next(cx);
         if poll.is_ready() {
             let is_done = matches!(poll, Poll::Ready(None));
-            let should_emit = is_done
-                || this
-                    .interval
-                    .is_none_or(|interval| this.last_emit.elapsed() >= interval);
+            let should_emit = is_done || this.last_emit.elapsed() >= *this.interval;
             if should_emit {
                 if let Some(metrics) = this.plan.metrics() {
                     for metric in metrics.iter() {
