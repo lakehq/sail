@@ -25,6 +25,7 @@ pub type Schema = StructType;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Eq)]
 #[serde(untagged)]
+// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/schema/mod.rs#L42-L92>
 pub enum MetadataValue {
     Number(i64),
     String(String),
@@ -74,6 +75,7 @@ impl From<bool> for MetadataValue {
 }
 
 #[derive(Debug)]
+// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/schema/mod.rs#L95-L125>
 pub enum ColumnMetadataKey {
     ColumnMappingId,
     ColumnMappingPhysicalName,
@@ -108,6 +110,7 @@ impl AsRef<str> for ColumnMetadataKey {
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
+// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_features/column_mapping.rs#L15-L26>
 pub enum ColumnMappingMode {
     #[default]
     None,
@@ -141,6 +144,7 @@ impl TryFrom<&str> for ColumnMappingMode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/expressions/column_names.rs#L9-L134>
 pub struct ColumnName {
     path: Vec<String>,
 }
@@ -234,6 +238,7 @@ impl Deref for ColumnName {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
+// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/schema/mod.rs#L1231-L1262>
 pub struct DecimalType {
     precision: u8,
     scale: u8,
@@ -265,6 +270,7 @@ impl DecimalType {
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Eq)]
 #[serde(rename_all = "camelCase")]
+// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/schema/mod.rs#L1265-L1380>
 pub enum PrimitiveType {
     String,
     Long,
@@ -330,6 +336,7 @@ where
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Eq)]
 #[serde(rename_all = "camelCase")]
+// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/schema/mod.rs#L180-L536>
 pub struct StructField {
     pub name: std::string::String,
     #[serde(rename = "type")]
@@ -487,6 +494,7 @@ fn make_physical_field(field: &StructField, column_mapping_mode: ColumnMappingMo
 }
 
 #[derive(Debug, PartialEq, Clone, Eq)]
+// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/schema/mod.rs#L537-L1141>
 pub struct StructType {
     type_name: std::string::String,
     fields: IndexMap<std::string::String, StructField>,
@@ -587,6 +595,7 @@ impl<'de> Deserialize<'de> for StructType {
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Eq)]
 #[serde(rename_all = "camelCase")]
+// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/schema/mod.rs#L1145-L1173>
 pub struct ArrayType {
     #[serde(rename = "type")]
     pub type_name: std::string::String,
@@ -616,6 +625,7 @@ impl ArrayType {
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Eq)]
 #[serde(rename_all = "camelCase")]
+// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/schema/mod.rs#L1176-L1224>
 pub struct MapType {
     #[serde(rename = "type")]
     pub type_name: std::string::String,
@@ -686,6 +696,7 @@ where
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Eq)]
 #[serde(untagged, rename_all = "camelCase")]
+// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/schema/mod.rs#L1384-L1465>
 pub enum DataType {
     Primitive(PrimitiveType),
     Array(Box<ArrayType>),

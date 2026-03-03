@@ -21,6 +21,7 @@ use crate::error::{DeltaError as DeltaTableError, DeltaResult};
 use crate::spec::schema::{ColumnMappingMode, ColumnName};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties.rs#L183-L204>
 pub enum DataSkippingNumIndexedCols {
     AllColumns,
     NumColumns(u64),
@@ -44,6 +45,7 @@ impl TryFrom<&str> for DataSkippingNumIndexedCols {
 }
 
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Default)]
+// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties.rs#L206-L229>
 pub enum IsolationLevel {
     #[default]
     Serializable,
@@ -77,6 +79,7 @@ impl FromStr for IsolationLevel {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Default)]
+// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties.rs#L31-L180>
 pub struct TableProperties {
     pub append_only: Option<bool>,
     pub checkpoint_interval: Option<NonZeroU64>,
@@ -98,6 +101,7 @@ where
     K: AsRef<str> + Into<String>,
     V: AsRef<str> + Into<String>,
 {
+    // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties/deserialize.rs#L20-L35>
     fn from(unparsed: I) -> Self {
         let mut props = TableProperties::default();
         let unparsed = unparsed.into_iter().filter(|(k, v)| {
@@ -143,6 +147,7 @@ impl TableProperties {
 }
 
 fn try_parse_table_property(props: &mut TableProperties, key: &str, value: &str) -> Option<()> {
+    // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties/deserialize.rs#L37-L104>
     match key {
         "delta.appendOnly" => props.append_only = Some(parse_bool(value)?),
         "delta.checkpointInterval" => props.checkpoint_interval = Some(parse_positive_int(value)?),
@@ -177,6 +182,7 @@ fn try_parse_table_property(props: &mut TableProperties, key: &str, value: &str)
 }
 
 fn parse_positive_int(s: &str) -> Option<NonZeroU64> {
+    // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties/deserialize.rs#L106-L122>
     let n: i64 = s.parse().ok()?;
     if n <= 0 {
         return None;
@@ -185,6 +191,7 @@ fn parse_positive_int(s: &str) -> Option<NonZeroU64> {
 }
 
 fn parse_bool(s: &str) -> Option<bool> {
+    // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties/deserialize.rs#L124-L132>
     match s {
         "true" => Some(true),
         "false" => Some(false),
@@ -193,6 +200,7 @@ fn parse_bool(s: &str) -> Option<bool> {
 }
 
 fn parse_interval(s: &str) -> Option<Duration> {
+    // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties/deserialize.rs#L142-L146>
     const SECONDS_PER_MINUTE: u64 = 60;
     const SECONDS_PER_HOUR: u64 = 60 * SECONDS_PER_MINUTE;
     const SECONDS_PER_DAY: u64 = 24 * SECONDS_PER_HOUR;

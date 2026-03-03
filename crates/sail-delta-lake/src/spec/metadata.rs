@@ -20,6 +20,7 @@ use crate::spec::schema::StructType;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/actions/mod.rs#L185-L223>
 pub struct Format {
     provider: String,
     options: HashMap<String, String>,
@@ -36,6 +37,7 @@ impl Format {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/actions/mod.rs#L225-L372>
 pub struct Metadata {
     id: String,
     name: Option<String>,
@@ -48,6 +50,7 @@ pub struct Metadata {
 }
 
 impl Metadata {
+    // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/actions/mod.rs#L244-L285>
     pub fn try_new(
         name: Option<String>,
         description: Option<String>,
