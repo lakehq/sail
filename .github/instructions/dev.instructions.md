@@ -44,14 +44,14 @@ Before committing changes, make sure to format and lint the files, and ensure th
 
 You can skip API documentation generation if you are only working on files inside the `docs/` directory.
 
-### Test Style
+## Test Style
 
 - Prefer **BDD-style SQL integration tests** when behavior can be expressed in SQL.
 - Organize scenarios with `Given / When / Then`; assert user-visible results (result/schema/error), not internals.
 - Use unit tests mainly for logic that is hard to cover via SQL scenarios.
 - Reference locations:
   - `python/pysail/tests/spark/**/features/*.feature` (BDD scenario definitions)
-  - `python/pysail/tests/spark/**/test_features.py` (scenario loaders / test entrypoints)
+  - `python/pysail/tests/spark/**/test*_features.py` (scenario loaders / test entrypoints)
   - `python/pysail/tests/spark/steps/*` (shared Given/When/Then step implementations)
 
 ## Contributing
