@@ -265,7 +265,7 @@ class JdbcDataSource(DataSource):
 
     Register and use::
 
-        from pysail.datasources.jdbc import JdbcDataSource
+        from pysail.spark.datasource.jdbc import JdbcDataSource
 
         spark.dataSource.register(JdbcDataSource)
 

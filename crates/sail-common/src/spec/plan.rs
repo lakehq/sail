@@ -605,6 +605,7 @@ pub enum ReadType {
     NamedTable(Box<ReadNamedTable>),
     Udtf(Box<ReadUdtf>),
     DataSource(Box<ReadDataSource>),
+    DynamicTable(Box<ReadDynamicTable>),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -612,6 +613,14 @@ pub enum ReadType {
 pub struct ReadNamedTable {
     pub name: ObjectName,
     pub temporal: Option<TableTemporal>,
+    pub sample: Option<TableSample>,
+    pub options: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadDynamicTable {
+    pub name: Expr,
     pub sample: Option<TableSample>,
     pub options: Vec<(String, String)>,
 }

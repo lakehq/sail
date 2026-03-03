@@ -117,6 +117,32 @@ impl PlanResolver<'_> {
                 Some(x) => self.resolve_sort_orders(x, true, schema, state).await?,
                 None => vec![],
             };
+            // For DISTINCT aggregate functions with a wildcard argument (e.g., COUNT(DISTINCT *)),
+            // expand the wildcard to visible column references here in the resolver where we have
+            // access to `state` for hidden-column filtering. This ensures hidden columns (e.g.,
+            // join keys) are excluded from the distinct count.
+            #[expect(deprecated)]
+            let arguments = if is_distinct
+                && matches!(
+                    arguments.as_slice(),
+                    [expr::Expr::Wildcard {
+                        qualifier: None,
+                        options: _
+                    }]
+                ) {
+                schema
+                    .columns()
+                    .into_iter()
+                    .filter(|c| {
+                        state
+                            .get_field_info(&c.name)
+                            .is_ok_and(|info| !info.is_hidden())
+                    })
+                    .map(expr::Expr::Column)
+                    .collect()
+            } else {
+                arguments
+            };
             let input = AggFunctionInput {
                 arguments,
                 distinct: is_distinct,
@@ -137,13 +163,48 @@ impl PlanResolver<'_> {
             )));
         };
 
+        // When `COUNT(DISTINCT *)` is used, expand the wildcard display names
+        // to individual column names so the output header matches Spark JVM behavior
+        // (e.g., `count(DISTINCT a, b, c)` instead of `count(DISTINCT *)`).
+        let argument_display_names =
+            if is_distinct && argument_display_names.iter().any(|n| n == "*") {
+                schema
+                    .columns()
+                    .iter()
+                    .filter_map(|c| {
+                        let info = state.get_field_info(&c.name).ok()?;
+                        if info.is_hidden() {
+                            None
+                        } else {
+                            Some(info.name().to_string())
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                argument_display_names
+            };
         let service = self.ctx.extension::<PlanService>()?;
         let name = service.plan_formatter().function_to_string(
             &function_name,
             argument_display_names.iter().map(|x| x.as_str()).collect(),
             is_distinct,
         )?;
-        Ok(NamedExpr::new(vec![name], func))
+
+        // Extract metadata from UDF if it implements return_field_from_args
+        let metadata = if let expr::Expr::ScalarFunction(ScalarFunction {
+            func: udf, args, ..
+        }) = &func
+        {
+            extract_metadata_from_udf(udf, args)?
+        } else {
+            vec![]
+        };
+
+        if !metadata.is_empty() {
+            Ok(NamedExpr::new(vec![name], func).with_metadata(metadata))
+        } else {
+            Ok(NamedExpr::new(vec![name], func))
+        }
     }
 
     pub(super) async fn resolve_expression_call_function(
@@ -275,5 +336,60 @@ impl PlanResolver<'_> {
             }
         }
         arguments
+    }
+}
+
+/// Extract metadata from a UDF by calling return_field_from_args with real argument information
+fn extract_metadata_from_udf(
+    udf: &std::sync::Arc<datafusion_expr::ScalarUDF>,
+    args: &[expr::Expr],
+) -> PlanResult<Vec<(String, String)>> {
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::{DataType, Field};
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::{ExprSchemable, ReturnFieldArgs};
+
+    // Extract real field types from the resolved expressions
+    let empty_schema = datafusion_common::DFSchema::empty();
+    let arg_fields: Vec<Arc<Field>> = args
+        .iter()
+        .enumerate()
+        .map(|(i, arg)| {
+            let data_type = arg.get_type(&empty_schema).unwrap_or(DataType::Null);
+            Arc::new(Field::new(format!("arg_{}", i), data_type, true))
+        })
+        .collect();
+
+    // Extract literal scalar values from expressions
+    let mut scalar_values = Vec::new();
+
+    for arg in args {
+        if let expr::Expr::Literal(scalar_value, _) = arg {
+            scalar_values.push(scalar_value.clone());
+        } else {
+            scalar_values.push(ScalarValue::Null);
+        }
+    }
+
+    let scalar_refs: Vec<Option<&ScalarValue>> = scalar_values
+        .iter()
+        .map(|v| if v.is_null() { None } else { Some(v) })
+        .collect();
+
+    let return_field_args = ReturnFieldArgs {
+        arg_fields: &arg_fields,
+        scalar_arguments: &scalar_refs,
+    };
+
+    // Try to extract metadata, but don't fail if it doesn't work
+    if let Ok(field) = udf.return_field_from_args(return_field_args) {
+        Ok(field
+            .metadata()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect())
+    } else {
+        Ok(vec![])
     }
 }

@@ -71,6 +71,9 @@ impl PlanResolver<'_> {
                 spec::ReadType::DataSource(source) => {
                     self.resolve_query_read_data_source(*source, state).await?
                 }
+                spec::ReadType::DynamicTable(table) => {
+                    self.resolve_query_read_dynamic_table(*table, state).await?
+                }
             },
             QueryNode::Project { input, expressions } => {
                 self.resolve_query_project(input.map(|x| *x), expressions, state)
