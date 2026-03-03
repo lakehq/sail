@@ -444,7 +444,7 @@ fn encode_checkpoint_rows(rows: &Vec<CheckpointActionRow>) -> DeltaResult<Record
 
     let mut samples = rows.clone();
     samples.push(checkpoint_schema_probe_row()?);
-    let fields = Vec::<FieldRef>::from_samples(&samples, checkpoint_tracing_options())
+    let fields = Vec::<FieldRef>::from_samples(&samples, checkpoint_tracing_options()?)
         .map_err(DeltaTableError::generic_err)?;
     serde_arrow::to_record_batch(&fields, rows).map_err(DeltaTableError::generic_err)
 }
@@ -518,7 +518,7 @@ fn checkpoint_schema_probe_row() -> DeltaResult<CheckpointActionRow> {
     serde_json::from_value(value).map_err(DeltaTableError::generic_err)
 }
 
-fn checkpoint_tracing_options() -> serde_arrow::schema::TracingOptions {
+fn checkpoint_tracing_options() -> DeltaResult<serde_arrow::schema::TracingOptions> {
     fn map_utf8_utf8(field_name: &str, nullable: bool, value_nullable: bool) -> Field {
         let entry_struct = ArrowDataType::Struct(
             vec![
@@ -546,26 +546,26 @@ fn checkpoint_tracing_options() -> serde_arrow::schema::TracingOptions {
             "add.partitionValues",
             map_utf8_utf8("partitionValues", false, true),
         )
-        .expect("checkpoint tracing overwrite for add.partitionValues should be valid")
+        .map_err(DeltaTableError::generic_err)?
         .overwrite("add.tags", map_utf8_utf8("tags", true, true))
-        .expect("checkpoint tracing overwrite for add.tags should be valid")
+        .map_err(DeltaTableError::generic_err)?
         .overwrite(
             "remove.partitionValues",
             map_utf8_utf8("partitionValues", true, false),
         )
-        .expect("checkpoint tracing overwrite for remove.partitionValues should be valid")
+        .map_err(DeltaTableError::generic_err)?
         .overwrite("remove.tags", map_utf8_utf8("tags", true, false))
-        .expect("checkpoint tracing overwrite for remove.tags should be valid")
+        .map_err(DeltaTableError::generic_err)?
         .overwrite(
             "metaData.configuration",
             map_utf8_utf8("configuration", false, true),
         )
-        .expect("checkpoint tracing overwrite for metadata.configuration should be valid")
+        .map_err(DeltaTableError::generic_err)?
         .overwrite(
             "metaData.format.options",
             map_utf8_utf8("options", false, true),
         )
-        .expect("checkpoint tracing overwrite for metadata.format.options should be valid")
+        .map_err(DeltaTableError::generic_err)
 }
 
 fn find_union_path_in_type(dtype: &ArrowDataType, path: &str) -> Option<String> {
@@ -996,10 +996,11 @@ mod tests {
         decode_checkpoint_rows, encode_checkpoint_rows, CheckpointActionRow,
         ReconciledCheckpointState,
     };
+    use crate::error::DeltaResult;
     use crate::spec::{Action, Add, Remove};
 
     #[test]
-    fn checkpoint_row_roundtrip_preserves_add_path() {
+    fn checkpoint_row_roundtrip_preserves_add_path() -> DeltaResult<()> {
         let rows = vec![CheckpointActionRow {
             add: Some(
                 Add {
@@ -1021,11 +1022,17 @@ mod tests {
             ),
             ..Default::default()
         }];
-        let batch = encode_checkpoint_rows(&rows).expect("encode checkpoint rows");
-        let decoded = decode_checkpoint_rows(&batch).expect("decode checkpoint rows");
+        let batch = encode_checkpoint_rows(&rows)?;
+        let decoded = decode_checkpoint_rows(&batch)?;
         assert_eq!(decoded.len(), 1);
-        let add = decoded[0].add.as_ref().expect("add row present");
-        assert_eq!(add.path, "part-000.parquet");
+        assert_eq!(
+            decoded
+                .first()
+                .and_then(|row| row.add.as_ref())
+                .map(|add| add.path.as_str()),
+            Some("part-000.parquet")
+        );
+        Ok(())
     }
 
     #[test]

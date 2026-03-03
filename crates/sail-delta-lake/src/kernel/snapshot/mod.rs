@@ -518,7 +518,7 @@ fn snapshot_add_probe_row() -> SnapshotAddRow {
     }
 }
 
-fn snapshot_add_tracing_options() -> serde_arrow::schema::TracingOptions {
+fn snapshot_add_tracing_options() -> DeltaResult<serde_arrow::schema::TracingOptions> {
     fn map_utf8_utf8(field_name: &str, nullable: bool) -> Field {
         let entry_struct = ArrowDataType::Struct(
             vec![
@@ -543,9 +543,9 @@ fn snapshot_add_tracing_options() -> serde_arrow::schema::TracingOptions {
         .strings_as_large_utf8(false)
         .sequence_as_large_list(false)
         .overwrite("partitionValues", map_utf8_utf8("partitionValues", false))
-        .expect("snapshot tracing overwrite for partitionValues should be valid")
+        .map_err(DeltaTableError::generic_err)?
         .overwrite("tags", map_utf8_utf8("tags", true))
-        .expect("snapshot tracing overwrite for tags should be valid")
+        .map_err(DeltaTableError::generic_err)
 }
 
 fn encode_snapshot_add_rows(rows: &[SnapshotAddRow]) -> DeltaResult<RecordBatch> {
@@ -553,7 +553,7 @@ fn encode_snapshot_add_rows(rows: &[SnapshotAddRow]) -> DeltaResult<RecordBatch>
 
     let mut samples = rows.to_vec();
     samples.push(snapshot_add_probe_row());
-    let fields = Vec::<FieldRef>::from_samples(&samples, snapshot_add_tracing_options())
+    let fields = Vec::<FieldRef>::from_samples(&samples, snapshot_add_tracing_options()?)
         .map_err(DeltaTableError::generic_err)?;
     let owned_rows = rows.to_vec();
     serde_arrow::to_record_batch(&fields, &owned_rows).map_err(DeltaTableError::generic_err)
@@ -570,7 +570,8 @@ fn build_partition_schema(
         .iter()
         .map(|col| {
             schema
-                .field_with_name(col).cloned()
+                .field_with_name(col)
+                .cloned()
                 .map_err(|_| DeltaTableError::missing_column(col))
         })
         .collect::<DeltaResult<Vec<_>>>()?;
