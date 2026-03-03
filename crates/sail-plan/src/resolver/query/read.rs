@@ -6,7 +6,7 @@ use datafusion::datasource::{provider_as_source, source_as_provider, TableProvid
 use datafusion_common::{DFSchema, ScalarValue, TableReference};
 use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::{Expr, LogicalPlan, TableScan, TableSource, UNNAMED_TABLE};
-use rand::{rng, Rng};
+use rand::{rng, RngExt};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::TableKind;
