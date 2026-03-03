@@ -91,7 +91,7 @@ impl PlanResolver<'_> {
             } = e;
             // FIXME: wildcard options do not take into account opaque field IDs
             match expr {
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 Expr::Wildcard {
                     qualifier: None,
                     options,
@@ -100,7 +100,7 @@ impl PlanResolver<'_> {
                         projected.extend(to_named_expr(e, state)?)
                     }
                 }
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 Expr::Wildcard {
                     qualifier: Some(qualifier),
                     options,

@@ -15,7 +15,7 @@ use datafusion_expr::expr::AggregateFunctionParams;
 use datafusion_expr::{
     col, expr, lit, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder,
 };
-use rand::{rng, Rng};
+use rand::{rng, RngExt};
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_logical_plan::rand::{RandMode, RandNode};

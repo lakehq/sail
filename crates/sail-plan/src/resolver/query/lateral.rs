@@ -16,7 +16,7 @@ use crate::resolver::tree::rand::RandRewriter;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(super) async fn resolve_query_lateral_view(
         &self,
         input: Option<spec::QueryPlan>,

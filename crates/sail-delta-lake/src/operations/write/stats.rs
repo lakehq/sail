@@ -89,7 +89,6 @@ pub fn create_add(
         commit_timestamp: None,
     })
 }
-#[allow(dead_code)]
 /// Creates stats from parquet metadata already in memory
 pub fn stats_from_parquet_metadata(
     partition_values: &IndexMap<String, Scalar>,
@@ -590,7 +589,7 @@ fn apply_min_max_for_column(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+    #![expect(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
     use parquet::file::statistics::Statistics;
 

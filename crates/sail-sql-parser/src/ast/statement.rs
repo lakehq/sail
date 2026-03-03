@@ -30,7 +30,6 @@ use crate::token::TokenLabel;
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "(Statement, Query, Expr, DataType)", label = TokenLabel::Statement)]
-#[allow(clippy::large_enum_variant)]
 pub enum Statement {
     Query(#[parser(function = |(_, q, _, _), _| q)] Query),
     SetCatalog {
@@ -190,7 +189,7 @@ pub enum Statement {
     DropFunction {
         drop: Drop,
         temporary: Option<Either<Temp, Temporary>>,
-        function: Functions,
+        function: Either<Function, Functions>,
         if_exists: Option<(If, Exists)>,
         name: ObjectName,
     },
@@ -242,11 +241,10 @@ pub enum Statement {
         into: Into,
         target: ObjectName,
         alias: Option<AliasClause>,
-        // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
-        #[parser(function = |(_, q, _, _), o| unit(o).then(compose(q, o)))]
-        using: (Using, MergeSource),
-        #[parser(function = |(_, _, e, _), o| unit(o).then(e))]
-        on: (On, Expr),
+        #[parser(function = |(_, q, _, _), o| boxed(unit(o).then(compose(q, o))))]
+        using: Box<(Using, MergeSource)>,
+        #[parser(function = |(_, _, e, _), o| boxed(unit(o).then(e)))]
+        on: Box<(On, Expr)>,
         #[parser(function = |(_, _, e, _), o| compose(e, o))]
         r#match: Vec<MergeMatchClause>,
     },
@@ -454,10 +452,8 @@ pub struct ColumnTypeDefinition {
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "DataType")]
-#[allow(clippy::large_enum_variant)]
 pub enum PartitionColumn {
-    // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
-    Typed(#[parser(function = |d, o| compose(d, o))] ColumnTypeDefinition),
+    Typed(#[parser(function = |d, o| boxed(compose(d, o)))] Box<ColumnTypeDefinition>),
     Name(Ident),
 }
 
@@ -774,18 +770,20 @@ pub enum ColumnDropList {
     },
 }
 
-#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 pub enum InsertDirectoryDestination {
     Spark {
         path: Option<StringLiteral>,
         using: (Using, Ident),
-        options: Option<(Options, PropertyList)>,
+        #[parser(function = |(), o| boxed(unit(o)).or_not())]
+        options: Option<Box<(Options, PropertyList)>>,
     },
     Hive {
         path: StringLiteral,
-        row_format: Option<(Row, Format, RowFormat)>,
-        stored_as: Option<(Stored, As, FileFormat)>,
+        #[parser(function = |(), o| boxed(unit(o)).or_not())]
+        row_format: Option<Box<(Row, Format, RowFormat)>>,
+        #[parser(function = |(), o| boxed(unit(o)).or_not())]
+        stored_as: Option<Box<(Stored, As, FileFormat)>>,
     },
 }
 

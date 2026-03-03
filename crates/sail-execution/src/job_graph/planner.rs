@@ -164,6 +164,7 @@ enum PartitionUsage {
     Shared,
 }
 
+/// Recursively splits an execution plan into stages at shuffle boundaries and adds them to the job graph.
 fn build_job_graph(
     plan: Arc<dyn ExecutionPlan>,
     usage: PartitionUsage,

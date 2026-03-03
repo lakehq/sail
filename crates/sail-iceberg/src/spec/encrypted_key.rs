@@ -18,6 +18,5 @@
 // [CREDIT]: https://raw.githubusercontent.com/apache/iceberg-rust/dc349284a4204c1a56af47fb3177ace6f9e899a0/crates/iceberg/src/spec/encrypted_key.rs
 
 // Awareness stub for non-read path
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct EncryptedKey;

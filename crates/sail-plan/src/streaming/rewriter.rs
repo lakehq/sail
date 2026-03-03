@@ -94,27 +94,32 @@ impl TreeNodeRewriter for StreamingRewriter {
                 not_impl_err!("streaming repartition: {plan:?}")
             }
             LogicalPlan::TableScan(ref scan) => {
-                let provider = source_as_provider(&scan.source)?;
-                if let Some(source) = get_stream_source_opt(provider.as_ref()) {
-                    let NamedStreamSource { source, names } = source;
-                    let TableScan {
-                        table_name,
-                        source: _,
-                        projection,
-                        projected_schema: _,
-                        filters,
-                        fetch,
-                    } = scan;
-                    Ok(Transformed::yes(LogicalPlan::Extension(Extension {
-                        node: Arc::new(StreamSourceWrapperNode::try_new(
-                            table_name.clone(),
-                            source,
-                            names,
-                            projection.clone(),
-                            filters.clone(),
-                            *fetch,
-                        )?),
-                    })))
+                if let Ok(provider) = source_as_provider(&scan.source) {
+                    if let Some(source) = get_stream_source_opt(provider.as_ref()) {
+                        let NamedStreamSource { source, names } = source;
+                        let TableScan {
+                            table_name,
+                            source: _,
+                            projection,
+                            projected_schema: _,
+                            filters,
+                            fetch,
+                        } = scan;
+                        Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                            node: Arc::new(StreamSourceWrapperNode::try_new(
+                                table_name.clone(),
+                                source,
+                                names,
+                                projection.clone(),
+                                filters.clone(),
+                                *fetch,
+                            )?),
+                        })))
+                    } else {
+                        Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                            node: Arc::new(StreamSourceAdapterNode::try_new(Arc::new(plan))?),
+                        })))
+                    }
                 } else {
                     Ok(Transformed::yes(LogicalPlan::Extension(Extension {
                         node: Arc::new(StreamSourceAdapterNode::try_new(Arc::new(plan))?),

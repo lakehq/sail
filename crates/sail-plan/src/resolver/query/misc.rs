@@ -58,38 +58,47 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let evaluator = LiteralEvaluator::new();
         let schema = Arc::new(DFSchema::empty());
+        // Evaluate named arguments eagerly so that IDENTIFIER(:col) expressions
+        // inside the query body can substitute their placeholder values at plan-resolution
+        // time (before `with_param_values` is applied to the resolved plan).
+        let named_params = {
+            let mut params = HashMap::new();
+            for (name, arg) in named {
+                let expr = self.resolve_expression(arg, &schema, state).await?;
+                let param = evaluator
+                    .evaluate(&expr)
+                    .map_err(|e| PlanError::invalid(e.to_string()))?;
+                params.insert(name, param);
+            }
+            params
+        };
+        // Evaluate positional arguments eagerly for the same reason.
+        let positional_params = {
+            let mut params = vec![];
+            for arg in positional {
+                let expr = self.resolve_expression(arg, &schema, state).await?;
+                let param = evaluator
+                    .evaluate(&expr)
+                    .map_err(|e| PlanError::invalid(e.to_string()))?;
+                params.push(param);
+            }
+            params
+        };
+        // Enter a scope that makes both named and positional parameter values
+        // available for IDENTIFIER clause evaluation inside the query body.
+        let mut scope =
+            state.enter_param_values_scope(named_params.clone(), positional_params.clone());
+        let state = scope.state();
         let input = self
             .resolve_query_plan_with_hidden_fields(input, state)
             .await?;
-        let input = if !positional.is_empty() {
-            let params = {
-                let mut params = vec![];
-                for arg in positional {
-                    let expr = self.resolve_expression(arg, &schema, state).await?;
-                    let param = evaluator
-                        .evaluate(&expr)
-                        .map_err(|e| PlanError::invalid(e.to_string()))?;
-                    params.push(param);
-                }
-                params
-            };
-            input.with_param_values(ParamValues::from(params))?
+        let input = if !positional_params.is_empty() {
+            input.with_param_values(ParamValues::from(positional_params))?
         } else {
             input
         };
-        if !named.is_empty() {
-            let params = {
-                let mut params = HashMap::new();
-                for (name, arg) in named {
-                    let expr = self.resolve_expression(arg, &schema, state).await?;
-                    let param = evaluator
-                        .evaluate(&expr)
-                        .map_err(|e| PlanError::invalid(e.to_string()))?;
-                    params.insert(name, param);
-                }
-                params
-            };
-            Ok(input.with_param_values(ParamValues::from(params))?)
+        if !named_params.is_empty() {
+            Ok(input.with_param_values(ParamValues::from(named_params))?)
         } else {
             Ok(input)
         }

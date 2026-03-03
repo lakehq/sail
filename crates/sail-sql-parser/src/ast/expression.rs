@@ -12,8 +12,8 @@ use crate::ast::identifier::{Ident, ObjectName, Variable};
 use crate::ast::keywords::{
     All, And, Any, As, Asc, Between, Both, By, Case, Cast, Cube, Current, CurrentDate,
     CurrentTimestamp, CurrentUser, Date, Day, Days, Desc, Distinct, Div, Else, End, Escape, Exists,
-    Extract, False, Filter, First, Following, For, From, Group, Grouping, Hour, Hours, Ignore,
-    Ilike, In, Interval, Is, Last, Leading, Like, Microsecond, Microseconds, Millisecond,
+    Extract, False, Filter, First, Following, For, From, Group, Grouping, Hour, Hours, Identifier,
+    Ignore, Ilike, In, Interval, Is, Last, Leading, Like, Microsecond, Microseconds, Millisecond,
     Milliseconds, Minute, Minutes, Month, Months, Not, Null, Nulls, Or, Order, Over, Overlay,
     Placing, Position, Preceding, Range, Regexp, Respect, Rlike, Rollup, Row, Rows, Second,
     Seconds, Sets, Similar, Struct, Substr, Substring, Table, Then, Time, Timestamp, TimestampLtz,
@@ -217,6 +217,12 @@ pub enum AtomExpr {
         Option<(LeftParenthesis, RightParenthesis)>,
     ),
     CurrentDate(CurrentDate, Option<(LeftParenthesis, RightParenthesis)>),
+    IdentifierClause(
+        Identifier,
+        LeftParenthesis,
+        #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
+        RightParenthesis,
+    ),
     Function(#[parser(function = |(e, _, _), o| boxed(compose(e, o)))] Box<FunctionExpr>),
     Wildcard(operator::Asterisk),
     StringLiteral(StringLiteral, Vec<StringLiteral>),
@@ -432,21 +438,19 @@ pub struct OverClause {
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "Expr")]
-#[allow(clippy::large_enum_variant)]
 pub enum WindowSpec {
     Named(Ident),
     Unnamed {
         left: LeftParenthesis,
         #[parser(function = |e, o| compose(e, o))]
         modifiers: Vec<WindowModifier>,
-        // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
-        #[parser(function = |e, o| compose(e, o))]
-        window_frame: Option<WindowFrame>,
+        #[parser(function = |e, o| boxed(compose(e, o)).or_not())]
+        window_frame: Option<Box<WindowFrame>>,
         right: RightParenthesis,
     },
 }
 
-#[allow(clippy::enum_variant_names)]
+#[expect(clippy::enum_variant_names)]
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "Expr")]
 pub enum WindowModifier {

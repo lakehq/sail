@@ -5,7 +5,7 @@ use datafusion::arrow::array::Float64Array;
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
-use rand::{rng, Rng};
+use rand::{rng, RngExt};
 
 use super::xorshift::SparkXorShiftRandom;
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_types_exec_err};

@@ -171,7 +171,7 @@ impl Display for YearMonthIntervalField {
 }
 
 fn create_regex(regex: Result<regex::Regex, regex::Error>) -> regex::Regex {
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     regex.unwrap()
 }
 
@@ -691,7 +691,7 @@ fn from_spark_json_data_type(data_type: JsonDataType) -> SparkResult<sc::DataTyp
     Ok(out)
 }
 
-#[allow(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
