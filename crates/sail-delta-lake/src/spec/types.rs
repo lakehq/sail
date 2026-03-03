@@ -19,7 +19,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
     SchemaRef as ArrowSchemaRef, TimeUnit,
@@ -29,10 +28,11 @@ use indexmap::IndexMap;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
-use crate::kernel::{DeltaResult, DeltaTableError};
+use crate::error::{DeltaError as DeltaTableError, DeltaResult};
 
 pub type Schema = StructType;
-pub type SchemaRef = Arc<StructType>;
+/// Arrow-native schema reference, replacing the previous `Arc<StructType>`.
+pub type SchemaRef = ArrowSchemaRef;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Eq)]
 #[serde(untagged)]
@@ -303,124 +303,9 @@ impl PrimitiveType {
         Ok(Self::Decimal(DecimalType::try_new(precision, scale)?))
     }
 
-    pub fn parse_scalar(&self, raw: &str) -> DeltaResult<Scalar> {
-        use PrimitiveType::*;
-
-        if raw.is_empty() {
-            return Ok(Scalar::Null(self.data_type()));
-        }
-
-        match self {
-            String => Ok(Scalar::String(raw.to_string())),
-            Binary => Ok(Scalar::Binary(raw.as_bytes().to_vec())),
-            Byte => parse_str_as_scalar(raw, Scalar::Byte)
-                .ok_or_else(|| parse_error(raw, self.data_type())),
-            Short => parse_str_as_scalar(raw, Scalar::Short)
-                .ok_or_else(|| parse_error(raw, self.data_type())),
-            Integer => parse_str_as_scalar(raw, Scalar::Integer)
-                .ok_or_else(|| parse_error(raw, self.data_type())),
-            Long => parse_str_as_scalar(raw, Scalar::Long)
-                .ok_or_else(|| parse_error(raw, self.data_type())),
-            Float => parse_str_as_scalar(raw, Scalar::Float)
-                .ok_or_else(|| parse_error(raw, self.data_type())),
-            Double => parse_str_as_scalar(raw, Scalar::Double)
-                .ok_or_else(|| parse_error(raw, self.data_type())),
-            Boolean => {
-                if raw.eq_ignore_ascii_case("true") {
-                    Ok(Scalar::Boolean(true))
-                } else if raw.eq_ignore_ascii_case("false") {
-                    Ok(Scalar::Boolean(false))
-                } else {
-                    Err(parse_error(raw, self.data_type()))
-                }
-            }
-            Date => {
-                let date = NaiveDate::parse_from_str(raw, "%Y-%m-%d")
-                    .ok()
-                    .and_then(|d| d.and_hms_opt(0, 0, 0))
-                    .ok_or_else(|| parse_error(raw, self.data_type()))?;
-                let date = Utc.from_utc_datetime(&date);
-                let days = date.signed_duration_since(DateTime::UNIX_EPOCH).num_days() as i32;
-                Ok(Scalar::Date(days))
-            }
-            TimestampNtz | Timestamp => {
-                let mut parsed = NaiveDateTime::parse_from_str(raw, "%Y-%m-%d %H:%M:%S%.f");
-                if parsed.is_err() && matches!(self, Timestamp) {
-                    parsed = NaiveDateTime::parse_from_str(raw, "%+");
-                }
-                let ts = parsed.map_err(|_| parse_error(raw, self.data_type()))?;
-                let ts = Utc.from_utc_datetime(&ts);
-                let micros = ts
-                    .signed_duration_since(DateTime::UNIX_EPOCH)
-                    .num_microseconds()
-                    .ok_or_else(|| parse_error(raw, self.data_type()))?;
-                match self {
-                    Timestamp => Ok(Scalar::Timestamp(micros)),
-                    TimestampNtz => Ok(Scalar::TimestampNtz(micros)),
-                    _ => unreachable!(),
-                }
-            }
-            Decimal(dtype) => parse_decimal(raw, *dtype),
-        }
-    }
-
-    fn data_type(&self) -> DataType {
+    pub fn data_type(&self) -> DataType {
         DataType::Primitive(self.clone())
     }
-}
-
-fn parse_str_as_scalar<T: std::str::FromStr>(
-    raw: &str,
-    f: impl FnOnce(T) -> Scalar,
-) -> Option<Scalar> {
-    raw.parse().ok().map(f)
-}
-
-fn parse_error(raw: &str, data_type: DataType) -> DeltaTableError {
-    DeltaTableError::generic(format!("Failed to parse value '{raw}' as '{data_type}'"))
-}
-
-fn parse_decimal(raw: &str, dtype: DecimalType) -> DeltaResult<Scalar> {
-    let (base, exp): (&str, i128) = match raw.find(['e', 'E']) {
-        None => (raw, 0),
-        Some(pos) => {
-            let (base, exp) = raw.split_at(pos);
-            (
-                base,
-                exp[1..]
-                    .parse()
-                    .map_err(|_| parse_error(raw, PrimitiveType::Decimal(dtype).data_type()))?,
-            )
-        }
-    };
-    if base.is_empty() {
-        return Err(parse_error(raw, PrimitiveType::Decimal(dtype).data_type()));
-    }
-
-    let (int_part, frac_part, frac_digits) = match base.find('.') {
-        None => (base, None, 0),
-        Some(pos) if pos == base.len() - 1 => (&base[..pos], None, 0),
-        Some(pos) => {
-            let (int_part, frac_part) = (&base[..pos], &base[pos + 1..]);
-            (int_part, Some(frac_part), frac_part.len() as i128)
-        }
-    };
-
-    let scale: u8 = (frac_digits - exp)
-        .try_into()
-        .map_err(|_| parse_error(raw, PrimitiveType::Decimal(dtype).data_type()))?;
-    if scale != dtype.scale() {
-        return Err(parse_error(raw, PrimitiveType::Decimal(dtype).data_type()));
-    }
-    let int: i128 = match frac_part {
-        None => int_part
-            .parse()
-            .map_err(|_| parse_error(raw, PrimitiveType::Decimal(dtype).data_type()))?,
-        Some(frac_part) => format!("{int_part}{frac_part}")
-            .parse()
-            .map_err(|_| parse_error(raw, PrimitiveType::Decimal(dtype).data_type()))?,
-    };
-    Ok(Scalar::Decimal(DecimalData::try_new(int, dtype)?))
 }
 
 fn serialize_decimal<S: serde::Serializer>(
@@ -937,9 +822,12 @@ impl From<ArrayType> for DataType {
     }
 }
 
-impl From<SchemaRef> for DataType {
-    fn from(schema: SchemaRef) -> Self {
-        Arc::unwrap_or_clone(schema).into()
+impl TryFrom<SchemaRef> for DataType {
+    type Error = DeltaTableError;
+
+    fn try_from(schema: SchemaRef) -> Result<Self, Self::Error> {
+        let struct_type = StructType::try_from(schema)?;
+        Ok(DataType::Struct(Box::new(struct_type)))
     }
 }
 
@@ -1013,8 +901,16 @@ impl Metadata {
         &self.configuration
     }
 
+    /// Parse the schema string into a `StructType` (Delta JSON format).
     pub fn parse_schema(&self) -> DeltaResult<StructType> {
         Ok(serde_json::from_str(&self.schema_string)?)
+    }
+
+    /// Parse the schema string and convert to an Arrow `Schema`.
+    pub fn parse_schema_arrow(&self) -> DeltaResult<ArrowSchema> {
+        let struct_type: StructType = serde_json::from_str(&self.schema_string)?;
+        ArrowSchema::try_from(&struct_type)
+            .map_err(|e| DeltaTableError::generic(format!("Failed to convert schema: {e}")))
     }
 
     pub fn partition_columns(&self) -> &Vec<String> {
@@ -1310,321 +1206,6 @@ fn parse_interval(s: &str) -> Option<Duration> {
         "day" | "days" => Some(Duration::from_secs(number * SECONDS_PER_DAY)),
         "week" | "weeks" => Some(Duration::from_secs(number * SECONDS_PER_WEEK)),
         _ => None,
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct DecimalData {
-    bits: i128,
-    ty: DecimalType,
-}
-
-impl DecimalData {
-    pub fn try_new(bits: impl Into<i128>, ty: DecimalType) -> DeltaResult<Self> {
-        let bits = bits.into();
-        if ty.precision() < get_decimal_precision(bits) {
-            return Err(DeltaTableError::generic(format!(
-                "Decimal value {bits} exceeds precision {}",
-                ty.precision()
-            )));
-        }
-        Ok(Self { bits, ty })
-    }
-
-    pub fn bits(&self) -> i128 {
-        self.bits
-    }
-
-    pub fn ty(&self) -> &DecimalType {
-        &self.ty
-    }
-
-    pub fn precision(&self) -> u8 {
-        self.ty.precision()
-    }
-
-    pub fn scale(&self) -> u8 {
-        self.ty.scale()
-    }
-}
-
-fn get_decimal_precision(value: i128) -> u8 {
-    value.unsigned_abs().checked_ilog10().map_or(0, |p| p + 1) as u8
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct ArrayData {
-    tpe: ArrayType,
-    elements: Vec<Scalar>,
-}
-
-impl ArrayData {
-    pub fn try_new(
-        tpe: ArrayType,
-        elements: impl IntoIterator<Item = impl Into<Scalar>>,
-    ) -> DeltaResult<Self> {
-        let elements = elements
-            .into_iter()
-            .map(|v| {
-                let v = v.into();
-                if !tpe.contains_null() && v.is_null() {
-                    Err(DeltaTableError::schema(
-                        "Array element cannot be null for non-nullable array".to_string(),
-                    ))
-                } else if *tpe.element_type() != v.data_type() {
-                    Err(DeltaTableError::schema(format!(
-                        "Array scalar type mismatch: expected {}, got {}",
-                        tpe.element_type(),
-                        v.data_type()
-                    )))
-                } else {
-                    Ok(v)
-                }
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self { tpe, elements })
-    }
-
-    pub fn array_type(&self) -> &ArrayType {
-        &self.tpe
-    }
-
-    pub fn array_elements(&self) -> &[Scalar] {
-        &self.elements
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct MapData {
-    data_type: MapType,
-    pairs: Vec<(Scalar, Scalar)>,
-}
-
-impl MapData {
-    pub fn try_new(
-        data_type: MapType,
-        values: impl IntoIterator<Item = (impl Into<Scalar>, impl Into<Scalar>)>,
-    ) -> DeltaResult<Self> {
-        let key_type = data_type.key_type();
-        let val_type = data_type.value_type();
-        let pairs = values
-            .into_iter()
-            .map(|(key, val)| {
-                let (k, v) = (key.into(), val.into());
-                if k.data_type() != *key_type {
-                    Err(DeltaTableError::schema(format!(
-                        "Map scalar type mismatch: expected key type {}, got key type {}",
-                        key_type,
-                        k.data_type()
-                    )))
-                } else if k.is_null() {
-                    Err(DeltaTableError::schema(
-                        "Map key cannot be null".to_string(),
-                    ))
-                } else if v.data_type() != *val_type {
-                    Err(DeltaTableError::schema(format!(
-                        "Map scalar type mismatch: expected value type {}, got value type {}",
-                        val_type,
-                        v.data_type()
-                    )))
-                } else if v.is_null() && !data_type.value_contains_null {
-                    Err(DeltaTableError::schema(
-                        "Null map value disallowed if map value_contains_null is false".to_string(),
-                    ))
-                } else {
-                    Ok((k, v))
-                }
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self { data_type, pairs })
-    }
-
-    pub fn pairs(&self) -> &[(Scalar, Scalar)] {
-        &self.pairs
-    }
-
-    pub fn map_type(&self) -> &MapType {
-        &self.data_type
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct StructData {
-    fields: Vec<StructField>,
-    values: Vec<Scalar>,
-}
-
-impl StructData {
-    pub fn try_new(fields: Vec<StructField>, values: Vec<Scalar>) -> DeltaResult<Self> {
-        if fields.len() != values.len() {
-            return Err(DeltaTableError::generic(format!(
-                "Incorrect number of values for Struct fields, expected {} got {}",
-                fields.len(),
-                values.len()
-            )));
-        }
-
-        for (f, a) in fields.iter().zip(&values) {
-            if f.data_type() != &a.data_type() {
-                return Err(DeltaTableError::generic(format!(
-                    "Incorrect datatype for Struct field {:?}, expected {} got {}",
-                    f.name(),
-                    f.data_type(),
-                    a.data_type()
-                )));
-            }
-            if !f.is_nullable() && a.is_null() {
-                return Err(DeltaTableError::generic(format!(
-                    "Value for non-nullable field {:?} cannot be null",
-                    f.name()
-                )));
-            }
-        }
-
-        Ok(Self { fields, values })
-    }
-
-    pub fn fields(&self) -> &[StructField] {
-        &self.fields
-    }
-
-    pub fn values(&self) -> &[Scalar] {
-        &self.values
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum Scalar {
-    Integer(i32),
-    Long(i64),
-    Short(i16),
-    Byte(i8),
-    Float(f32),
-    Double(f64),
-    String(String),
-    Boolean(bool),
-    Timestamp(i64),
-    TimestampNtz(i64),
-    Date(i32),
-    Binary(Vec<u8>),
-    Decimal(DecimalData),
-    Null(DataType),
-    Struct(StructData),
-    Array(ArrayData),
-    Map(MapData),
-}
-
-impl Scalar {
-    pub fn data_type(&self) -> DataType {
-        match self {
-            Self::Integer(_) => DataType::INTEGER,
-            Self::Long(_) => DataType::LONG,
-            Self::Short(_) => DataType::SHORT,
-            Self::Byte(_) => DataType::BYTE,
-            Self::Float(_) => DataType::FLOAT,
-            Self::Double(_) => DataType::DOUBLE,
-            Self::String(_) => DataType::STRING,
-            Self::Boolean(_) => DataType::BOOLEAN,
-            Self::Timestamp(_) => DataType::TIMESTAMP,
-            Self::TimestampNtz(_) => DataType::TIMESTAMP_NTZ,
-            Self::Date(_) => DataType::DATE,
-            Self::Binary(_) => DataType::BINARY,
-            Self::Decimal(d) => DataType::from(*d.ty()),
-            Self::Null(data_type) => data_type.clone(),
-            Self::Struct(data) => DataType::struct_type_unchecked(data.fields.clone()),
-            Self::Array(data) => data.tpe.clone().into(),
-            Self::Map(data) => data.data_type.clone().into(),
-        }
-    }
-
-    pub fn is_null(&self) -> bool {
-        matches!(self, Self::Null(_))
-    }
-
-    pub fn decimal(bits: impl Into<i128>, precision: u8, scale: u8) -> DeltaResult<Self> {
-        let dtype = DecimalType::try_new(precision, scale)?;
-        let dval = DecimalData::try_new(bits, dtype)?;
-        Ok(Self::Decimal(dval))
-    }
-}
-
-impl Display for Scalar {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Integer(i) => write!(f, "{i}"),
-            Self::Long(i) => write!(f, "{i}"),
-            Self::Short(i) => write!(f, "{i}"),
-            Self::Byte(i) => write!(f, "{i}"),
-            Self::Float(v) => write!(f, "{v}"),
-            Self::Double(v) => write!(f, "{v}"),
-            Self::String(v) => write!(f, "'{v}'"),
-            Self::Boolean(v) => write!(f, "{v}"),
-            Self::Timestamp(v) | Self::TimestampNtz(v) => write!(f, "{v}"),
-            Self::Date(v) => write!(f, "{v}"),
-            Self::Binary(v) => write!(f, "{v:?}"),
-            Self::Decimal(v) => write!(f, "{}(p={},s={})", v.bits(), v.precision(), v.scale()),
-            Self::Null(_) => write!(f, "null"),
-            Self::Struct(data) => {
-                write!(f, "{{")?;
-                for (i, (value, field)) in data.values.iter().zip(data.fields.iter()).enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}: {value}", field.name)?;
-                }
-                write!(f, "}}")
-            }
-            Self::Array(data) => {
-                write!(f, "(")?;
-                for (i, value) in data.elements.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{value}")?;
-                }
-                write!(f, ")")
-            }
-            Self::Map(data) => {
-                write!(f, "{{")?;
-                for (i, (k, v)) in data.pairs.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{k}: {v}")?;
-                }
-                write!(f, "}}")
-            }
-        }
-    }
-}
-
-impl PartialEq for Scalar {
-    fn eq(&self, other: &Scalar) -> bool {
-        self.partial_cmp(other) == Some(std::cmp::Ordering::Equal)
-    }
-}
-
-impl PartialOrd for Scalar {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        use Scalar::*;
-        match (self, other) {
-            (Integer(a), Integer(b)) => a.partial_cmp(b),
-            (Long(a), Long(b)) => a.partial_cmp(b),
-            (Short(a), Short(b)) => a.partial_cmp(b),
-            (Byte(a), Byte(b)) => a.partial_cmp(b),
-            (Float(a), Float(b)) => a.partial_cmp(b),
-            (Double(a), Double(b)) => a.partial_cmp(b),
-            (String(a), String(b)) => a.partial_cmp(b),
-            (Boolean(a), Boolean(b)) => a.partial_cmp(b),
-            (Timestamp(a), Timestamp(b)) => a.partial_cmp(b),
-            (TimestampNtz(a), TimestampNtz(b)) => a.partial_cmp(b),
-            (Date(a), Date(b)) => a.partial_cmp(b),
-            (Binary(a), Binary(b)) => a.partial_cmp(b),
-            (Decimal(d1), Decimal(d2)) => (d1.ty() == d2.ty())
-                .then(|| d1.bits().partial_cmp(&d2.bits()))
-                .flatten(),
-            _ => None,
-        }
     }
 }
 

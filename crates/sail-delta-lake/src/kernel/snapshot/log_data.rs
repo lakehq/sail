@@ -21,10 +21,10 @@
 use ::datafusion::arrow::array::{Array, RecordBatch, StringArray, StructArray};
 use log::warn;
 
-use crate::kernel::models::{DataType, Metadata, PrimitiveType};
 use crate::kernel::snapshot::iterators::LogicalFileView;
 use crate::kernel::snapshot::SnapshotTableConfiguration;
 use crate::kernel::{DeltaResult, DeltaTableError};
+use crate::spec::Metadata;
 
 const COL_NUM_RECORDS: &str = "numRecords";
 const COL_MIN_VALUES: &str = "minValues";
@@ -308,7 +308,8 @@ mod datafusion {
                 .config
                 .schema()
                 .fields()
-                .map(|f: &crate::kernel::models::StructField| self.column_stats(f.name()))
+                .iter()
+                .map(|f| self.column_stats(f.name()))
                 .collect::<Option<Vec<_>>>()?;
             Some(Statistics {
                 num_rows,
@@ -319,9 +320,12 @@ mod datafusion {
 
         fn pick_stats(&self, column: &Column, stats_field: &'static str) -> Option<ArrayRef> {
             let schema = self.config.schema();
-            let field = schema.field(&column.name)?;
+            let field = schema.field_with_name(&column.name).ok()?;
             // See issue #1214. Binary type does not support natural order which is required for Datafusion to prune
-            if field.data_type() == &DataType::Primitive(PrimitiveType::Binary) {
+            if matches!(
+                field.data_type(),
+                ArrowDataType::Binary | ArrowDataType::LargeBinary | ArrowDataType::BinaryView
+            ) {
                 return None;
             }
             if self

@@ -10,23 +10,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod actions;
-mod types;
+pub mod actions;
+pub mod operation;
+pub mod statistics;
+pub mod types;
 
 pub use actions::{
     Action, Add, CommitInfo, DeletionVectorDescriptor, Remove, RemoveOptions, StorageType,
     Transaction,
 };
-#[allow(unused_imports)]
+pub use operation::{DeltaOperation, MergePredicate, SaveMode};
+pub use statistics::{ColumnCountStat, ColumnValueStat, Stats};
 pub use types::{
-    ArrayData, ArrayType, ColumnMappingMode, ColumnMetadataKey, ColumnName,
-    DataSkippingNumIndexedCols, DataType, DecimalData, DecimalType, IsolationLevel, MapData,
-    MapType, Metadata, MetadataValue, PrimitiveType, Protocol, Scalar, Schema, SchemaRef,
-    StructData, StructField, StructType, TableFeature, TableProperties,
+    ArrayType, ColumnMappingMode, ColumnMetadataKey, ColumnName, DataSkippingNumIndexedCols,
+    DataType, DecimalType, IsolationLevel, MapType, Metadata, MetadataValue, PrimitiveType,
+    Protocol, Schema, SchemaRef, StructField, StructType, TableFeature, TableProperties,
 };
-
-pub use super::statistics::{ColumnCountStat, ColumnValueStat, Stats};
-pub use crate::conversion::ScalarExt;
 
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/actions.rs>
 /// Checks if any field (including nested) in the provided iterator is a `timestampNtz`.
@@ -43,4 +42,27 @@ pub fn contains_timestampntz<'a>(mut fields: impl Iterator<Item = &'a StructFiel
     }
 
     fields.any(|field| has_timestamp(field.data_type()))
+}
+
+/// Checks if any field (including nested) in an Arrow schema contains a `timestamp_ntz` type.
+///
+/// In Arrow, `TimestampNtz` is represented as `Timestamp(Microsecond, None)` (no timezone).
+pub fn contains_timestampntz_arrow(schema: &datafusion::arrow::datatypes::Schema) -> bool {
+    fn has_timestamp_ntz(dt: &datafusion::arrow::datatypes::DataType) -> bool {
+        use datafusion::arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
+        match dt {
+            ArrowDataType::Timestamp(TimeUnit::Microsecond, None) => true,
+            ArrowDataType::Struct(fields) => {
+                fields.iter().any(|f| has_timestamp_ntz(f.data_type()))
+            }
+            ArrowDataType::List(elem)
+            | ArrowDataType::LargeList(elem)
+            | ArrowDataType::FixedSizeList(elem, _) => has_timestamp_ntz(elem.data_type()),
+            _ => false,
+        }
+    }
+    schema
+        .fields()
+        .iter()
+        .any(|f| has_timestamp_ntz(f.data_type()))
 }

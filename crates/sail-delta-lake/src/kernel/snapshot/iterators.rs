@@ -21,18 +21,19 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use datafusion::arrow::array::cast::AsArray;
 use datafusion::arrow::array::types::Int64Type;
 use datafusion::arrow::array::{Array, RecordBatch, StructArray};
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, Int32Type};
+use datafusion::common::scalar::ScalarValue;
 use percent_encoding::percent_decode_str;
 
-use crate::kernel::models::{
-    Add, DeletionVectorDescriptor, Remove, Scalar, ScalarExt, StorageType, StructData,
-};
+use crate::conversion::ScalarExt;
 use crate::kernel::{DeltaResult, DeltaTableError};
+use crate::spec::{Add, DeletionVectorDescriptor, Remove, StorageType};
 
 const FIELD_NAME_PATH: &str = "path";
 const FIELD_NAME_SIZE: &str = "size";
@@ -124,41 +125,43 @@ impl LogicalFileView {
             .and_then(|col| get_string_value(col.as_ref(), self.index))
     }
 
-    /// Returns the parsed partition values as structured data.
-    pub fn partition_values(&self) -> Option<StructData> {
+    /// Returns the parsed partition values as a `ScalarValue::Struct`, if available.
+    pub fn partition_values(&self) -> Option<ScalarValue> {
         self.files
             .column_by_name(FIELD_NAME_PARTITION_VALUES_PARSED)
             .and_then(|col| col.as_struct_opt())
             .and_then(|arr| {
                 arr.is_valid(self.index)
-                    .then(|| match Scalar::from_array(arr, self.index) {
-                        Some(Scalar::Struct(s)) => Some(s),
-                        _ => None,
-                    })
+                    .then(|| ScalarValue::try_from_array(arr, self.index).ok())
                     .flatten()
             })
     }
 
     /// Converts partition values to a map of column names to serialized values.
     fn partition_values_map(&self) -> HashMap<String, Option<String>> {
-        self.partition_values()
-            .map(|data| {
-                data.fields()
-                    .iter()
-                    .zip(data.values().iter())
-                    .map(|(k, v)| {
-                        (
-                            k.name().to_string(),
-                            if v.is_null() {
-                                None
-                            } else {
-                                Some(v.serialize().into_owned())
-                            },
-                        )
-                    })
-                    .collect()
+        let Some(pv) = self.partition_values() else {
+            return HashMap::new();
+        };
+        let ScalarValue::Struct(struct_array) = &pv else {
+            return HashMap::new();
+        };
+        let fields = struct_array.fields();
+        fields
+            .iter()
+            .enumerate()
+            .map(|(i, field)| {
+                let col = struct_array.column(i);
+                let sv = ScalarValue::try_from_array(col.as_ref(), 0).ok();
+                let serialized = sv.as_ref().and_then(|v| {
+                    if v.is_null() {
+                        None
+                    } else {
+                        Some(v.serialize().into_owned())
+                    }
+                });
+                (field.name().clone(), serialized)
             })
-            .unwrap_or_default()
+            .collect()
     }
 
     /// Returns the parsed statistics as a StructArray, if available.
@@ -176,28 +179,28 @@ impl LogicalFileView {
             .map(|a| a.value(self.index) as usize)
     }
 
-    /// Returns null counts for all columns in this file as structured data.
-    pub fn null_counts(&self) -> Option<Scalar> {
+    /// Returns null counts for all columns in this file as a `ScalarValue`.
+    pub fn null_counts(&self) -> Option<ScalarValue> {
         self.stats_parsed()
             .and_then(|stats| stats.column_by_name(STATS_FIELD_NULL_COUNT))
-            .and_then(|c| Scalar::from_array(c.as_ref(), self.index))
+            .and_then(|c| ScalarValue::try_from_array(c.as_ref(), self.index).ok())
     }
 
-    /// Returns minimum values for all columns with statics in this file as structured data.
-    pub fn min_values(&self) -> Option<Scalar> {
+    /// Returns minimum values for all columns with statistics in this file as a `ScalarValue`.
+    pub fn min_values(&self) -> Option<ScalarValue> {
         self.stats_parsed()
             .and_then(|stats| stats.column_by_name(STATS_FIELD_MIN_VALUES))
-            .and_then(|c| Scalar::from_array(c.as_ref(), self.index))
+            .and_then(|c| ScalarValue::try_from_array(c.as_ref(), self.index).ok())
     }
 
-    /// Returns maximum values for all columns in this file as structured data.
+    /// Returns maximum values for all columns in this file as a `ScalarValue`.
     ///
     /// For timestamp columns, values are rounded up to handle microsecond truncation
     /// in checkpoint statistics.
-    pub fn max_values(&self) -> Option<Scalar> {
+    pub fn max_values(&self) -> Option<ScalarValue> {
         self.stats_parsed()
             .and_then(|stats| stats.column_by_name(STATS_FIELD_MAX_VALUES))
-            .and_then(|c| Scalar::from_array(c.as_ref(), self.index))
+            .and_then(|c| ScalarValue::try_from_array(c.as_ref(), self.index).ok())
             .map(|s| round_ms_datetimes(s, &ceil_datetime))
     }
 
@@ -277,28 +280,30 @@ fn ceil_datetime(v: i64) -> i64 {
     }
 }
 
-/// Recursively applies a rounding function to timestamp values in scalar data.
-fn round_ms_datetimes<F>(value: Scalar, func: &F) -> Scalar
+/// Recursively applies a rounding function to timestamp values in a `ScalarValue`.
+fn round_ms_datetimes<F>(value: ScalarValue, func: &F) -> ScalarValue
 where
     F: Fn(i64) -> i64,
 {
     match value {
-        Scalar::Timestamp(v) => Scalar::Timestamp(func(v)),
-        Scalar::TimestampNtz(v) => Scalar::TimestampNtz(func(v)),
-        Scalar::Struct(ref struct_data) => {
-            let mut fields = Vec::new();
-            let mut scalars = Vec::new();
-
-            for (field, scalar_value) in
-                struct_data.fields().iter().zip(struct_data.values().iter())
-            {
-                fields.push(field.clone());
-                scalars.push(round_ms_datetimes(scalar_value.clone(), func));
-            }
-            match StructData::try_new(fields, scalars) {
-                Ok(data) => Scalar::Struct(data),
-                Err(_) => value, // Return original value if struct creation fails
-            }
+        ScalarValue::TimestampMicrosecond(Some(v), tz) => {
+            ScalarValue::TimestampMicrosecond(Some(func(v)), tz)
+        }
+        ScalarValue::Struct(struct_array) => {
+            let fields = struct_array.fields().clone();
+            let new_columns: Vec<Arc<dyn Array>> = fields
+                .iter()
+                .enumerate()
+                .map(|(i, _field)| {
+                    let col = struct_array.column(i);
+                    let sv =
+                        ScalarValue::try_from_array(col.as_ref(), 0).unwrap_or(ScalarValue::Null);
+                    let rounded = round_ms_datetimes(sv, func);
+                    rounded.to_array_of_size(1).unwrap_or_else(|_| col.clone())
+                })
+                .collect();
+            let new_struct = StructArray::new(fields, new_columns, None);
+            ScalarValue::Struct(Arc::new(new_struct))
         }
         other => other,
     }

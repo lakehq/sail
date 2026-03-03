@@ -26,11 +26,11 @@ use datafusion::arrow::datatypes::{Field, Fields};
 use datafusion::common::scalar::ScalarValue;
 
 use crate::conversion::ScalarConverter;
-use crate::kernel::models::{
-    ColumnMappingMode, DataType, PrimitiveType, Schema, StructField, StructType, TableProperties,
-};
 use crate::kernel::{
     ColumnName, DataSkippingNumIndexedCols, DeltaResult as DeltaResultLocal, DeltaTableError,
+};
+use crate::spec::{
+    ColumnMappingMode, DataType, PrimitiveType, Schema, StructField, StructType, TableProperties,
 };
 
 pub(crate) fn parse_partition_values_array(

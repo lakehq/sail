@@ -26,10 +26,10 @@ use thiserror::Error;
 
 use super::WriteSnapshot;
 use crate::error::DeltaError;
-use crate::kernel::models::{
+use crate::kernel::{DeltaOperation, DeltaResult};
+use crate::spec::{
     Action, Add, CommitInfo, IsolationLevel, Metadata, Protocol, Remove, Transaction,
 };
-use crate::kernel::{DeltaOperation, DeltaResult};
 use crate::storage::{get_actions, LogStore};
 
 /// Exceptions raised during commit conflict resolution.

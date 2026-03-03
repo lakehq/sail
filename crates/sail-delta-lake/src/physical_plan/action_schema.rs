@@ -7,8 +7,8 @@ use datafusion_common::{DataFusionError, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::kernel::models::{Action, Add, Metadata, Protocol, Remove};
 use crate::kernel::DeltaOperation;
+use crate::spec::{Action, Add, Metadata, Protocol, Remove};
 
 pub const COL_ACTION: &str = "action";
 const COL_PARTITION_VALUES: &str = "partition_values";

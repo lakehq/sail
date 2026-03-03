@@ -29,9 +29,9 @@ use datafusion::arrow::datatypes::{Field, FieldRef, Schema as ArrowSchema};
 use datafusion::arrow::record_batch::RecordBatch;
 use futures::TryStreamExt;
 
-use crate::kernel::models::{ColumnMappingMode, ColumnMetadataKey, Remove};
 use crate::kernel::snapshot::EagerSnapshot;
 use crate::kernel::{DeltaResult, DeltaTableConfig, DeltaTableError};
+use crate::spec::{ColumnMappingMode, ColumnMetadataKey, Remove};
 use crate::storage::LogStore;
 
 /// State snapshot currently held by the Delta Table instance.
@@ -99,8 +99,8 @@ impl DeltaTableState {
             .table_configuration()
             .column_mapping_mode();
         if matches!(explicit, ColumnMappingMode::None) {
-            let kschema = self.snapshot().snapshot().schema().clone();
-            let has_annotations = kschema.fields().any(|f| {
+            let schema = self.snapshot().snapshot().schema();
+            let has_annotations = schema.fields().iter().any(|f| {
                 f.metadata()
                     .contains_key(ColumnMetadataKey::ColumnMappingPhysicalName.as_ref())
                     && f.metadata()

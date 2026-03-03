@@ -11,18 +11,16 @@
 // limitations under the License.
 
 pub mod arrow;
-pub mod models;
 pub mod snapshot;
-pub mod statistics;
 pub mod transaction;
 
 pub(crate) mod checkpoints;
 mod config;
 mod error;
-mod operation;
 
 pub use config::DeltaTableConfig;
 pub use error::{DeltaResult, DeltaTableError};
-pub use models::{ColumnName, DataSkippingNumIndexedCols, SchemaRef};
-pub use operation::{DeltaOperation, MergePredicate, SaveMode};
+
+pub use crate::spec::operation::{DeltaOperation, MergePredicate, SaveMode};
+pub use crate::spec::types::{ColumnName, DataSkippingNumIndexedCols, SchemaRef};
 pub type PredicateRef = std::sync::Arc<()>;

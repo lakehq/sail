@@ -26,7 +26,7 @@ use datafusion::arrow::datatypes::{
 
 use crate::kernel::snapshot::{EagerSnapshot, LogDataHandler, Snapshot};
 use crate::kernel::{DeltaResult, DeltaTableError};
-use crate::schema::arrow_schema_from_struct_type;
+use crate::schema::arrow_schema_reorder_partitions;
 use crate::table::DeltaTableState;
 
 /// Convenience trait for calling common methods on snapshot hierarchies
@@ -50,21 +50,21 @@ impl DataFusionMixins for Snapshot {
 
 impl DataFusionMixins for EagerSnapshot {
     fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        arrow_schema_from_struct_type(self.schema(), self.metadata().partition_columns(), true)
+        arrow_schema_reorder_partitions(self.schema(), self.metadata().partition_columns(), true)
     }
 
     fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        arrow_schema_from_struct_type(self.schema(), self.metadata().partition_columns(), false)
+        arrow_schema_reorder_partitions(self.schema(), self.metadata().partition_columns(), false)
     }
 }
 
 impl DataFusionMixins for DeltaTableState {
     fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        arrow_schema_from_struct_type(self.schema(), self.metadata().partition_columns(), true)
+        arrow_schema_reorder_partitions(self.schema(), self.metadata().partition_columns(), true)
     }
 
     fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        arrow_schema_from_struct_type(self.schema(), self.metadata().partition_columns(), false)
+        arrow_schema_reorder_partitions(self.schema(), self.metadata().partition_columns(), false)
     }
 }
 
@@ -79,7 +79,7 @@ impl DataFusionMixins for LogDataHandler<'_> {
 }
 
 fn arrow_schema_impl(snapshot: &Snapshot, wrap_partitions: bool) -> DeltaResult<ArrowSchemaRef> {
-    arrow_schema_from_struct_type(
+    arrow_schema_reorder_partitions(
         snapshot.schema(),
         snapshot.metadata().partition_columns(),
         wrap_partitions,

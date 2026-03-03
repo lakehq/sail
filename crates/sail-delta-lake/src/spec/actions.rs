@@ -31,9 +31,9 @@ use object_store::path::Path;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
 
-use super::{IsolationLevel, Metadata, Protocol};
-use crate::kernel::statistics::Stats;
-use crate::kernel::{DeltaResult, DeltaTableError};
+use crate::error::{DeltaError as DeltaTableError, DeltaResult};
+use crate::spec::statistics::Stats;
+use crate::spec::types::{IsolationLevel, Metadata, Protocol};
 
 #[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum StorageType {

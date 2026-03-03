@@ -34,9 +34,9 @@ use datafusion::physical_plan::ExecutionPlan;
 use crate::datasource::{
     df_logical_schema, get_pushdown_filters, DeltaScanConfig, DeltaTableStateExt,
 };
-use crate::kernel::models::Add;
 use crate::kernel::DeltaResult;
 use crate::physical::scan_planner::plan_delta_scan;
+use crate::spec::Add;
 use crate::storage::LogStoreRef;
 use crate::table::DeltaTableState;
 

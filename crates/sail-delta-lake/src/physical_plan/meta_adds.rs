@@ -7,7 +7,7 @@ use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::{DataFusionError, Result};
 
 use crate::datasource::{COMMIT_TIMESTAMP_COLUMN, COMMIT_VERSION_COLUMN, PATH_COLUMN};
-use crate::kernel::models::Add;
+use crate::spec::Add;
 
 const COL_SIZE_BYTES: &str = "size_bytes";
 const COL_MODIFICATION_TIME: &str = "modification_time";

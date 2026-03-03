@@ -21,6 +21,7 @@ pub mod physical;
 pub mod physical_plan;
 pub mod planner;
 pub mod schema;
+pub mod spec;
 pub mod storage;
 pub mod table;
 pub mod table_format;

@@ -35,13 +35,13 @@ use url::Url;
 
 use crate::kernel::arrow::engine_ext::{parse_partition_values_array, stats_schema};
 use crate::kernel::checkpoints::{latest_replayable_version, load_replayed_table_state};
-use crate::kernel::models::{
-    Add, ColumnMappingMode, CommitInfo, Metadata, Protocol, Remove, StorageType, StructType,
-    TableProperties, Transaction,
-};
 use crate::kernel::snapshot::iterators::LogicalFileView;
 pub use crate::kernel::snapshot::log_data::LogDataHandler;
 use crate::kernel::{DeltaResult, DeltaTableConfig, DeltaTableError, PredicateRef, SchemaRef};
+use crate::spec::{
+    Add, ColumnMappingMode, CommitInfo, Metadata, Protocol, Remove, StorageType, TableProperties,
+    Transaction,
+};
 use crate::storage::LogStore;
 
 pub mod iterators;
@@ -125,7 +125,7 @@ impl Snapshot {
             },
         };
         let replayed = load_replayed_table_state(target_version, log_store).await?;
-        let schema = Arc::new(replayed.metadata.parse_schema()?);
+        let schema = Arc::new(replayed.metadata.parse_schema_arrow()?);
         let table_configuration =
             SnapshotTableConfiguration::new(replayed.metadata, replayed.protocol, schema);
 
@@ -170,7 +170,7 @@ impl Snapshot {
     }
 
     /// Get the table schema of the snapshot.
-    pub fn schema(&self) -> &StructType {
+    pub fn schema(&self) -> &ArrowSchema {
         self.table_configuration.schema().as_ref()
     }
 
@@ -282,9 +282,8 @@ impl Snapshot {
                     let commit_log_bytes = store.get(&meta.location).await?.bytes().await?;
                     let reader = BufReader::new(Cursor::new(commit_log_bytes));
                     for line in reader.lines() {
-                        let action: crate::kernel::models::Action =
-                            serde_json::from_str(line?.as_str())?;
-                        if let crate::kernel::models::Action::CommitInfo(commit_info) = action {
+                        let action: crate::spec::Action = serde_json::from_str(line?.as_str())?;
+                        if let crate::spec::Action::CommitInfo(commit_info) = action {
                             return Ok::<_, DeltaTableError>(Some(commit_info));
                         }
                     }
@@ -379,7 +378,7 @@ impl EagerSnapshot {
         self.snapshot.commit_timestamps.get(&version).copied()
     }
 
-    pub fn schema(&self) -> &StructType {
+    pub fn schema(&self) -> &ArrowSchema {
         self.snapshot.schema()
     }
 
@@ -561,9 +560,9 @@ fn encode_snapshot_add_rows(rows: &[SnapshotAddRow]) -> DeltaResult<RecordBatch>
 }
 
 fn build_partition_schema(
-    schema: &StructType,
+    schema: &ArrowSchema,
     partition_columns: &[String],
-) -> DeltaResult<Option<StructType>> {
+) -> DeltaResult<Option<ArrowSchema>> {
     if partition_columns.is_empty() {
         return Ok(None);
     }
@@ -571,24 +570,27 @@ fn build_partition_schema(
         .iter()
         .map(|col| {
             schema
-                .field(col)
-                .cloned()
-                .ok_or_else(|| DeltaTableError::missing_column(col))
+                .field_with_name(col)
+                .map(|f| f.clone())
+                .map_err(|_| DeltaTableError::missing_column(col))
         })
         .collect::<DeltaResult<Vec<_>>>()?;
-    Ok(Some(StructType::try_new(fields)?))
+    Ok(Some(ArrowSchema::new(fields)))
 }
 
-fn build_stats_source_schema(snapshot: &Snapshot) -> DeltaResult<StructType> {
+fn build_stats_source_schema(snapshot: &Snapshot) -> DeltaResult<ArrowSchema> {
+    use crate::schema::make_physical_arrow_schema;
     let partition_columns = snapshot.metadata().partition_columns();
     let mode = snapshot.table_configuration.column_mapping_mode();
-    Ok(StructType::try_new(
-        snapshot
-            .schema()
-            .fields()
-            .filter(|field| !partition_columns.contains(field.name()))
-            .map(|field| field.make_physical(mode)),
-    )?)
+    let non_partition_fields: Vec<Field> = snapshot
+        .schema()
+        .fields()
+        .iter()
+        .filter(|field| !partition_columns.contains(field.name()))
+        .map(|f| f.as_ref().clone())
+        .collect();
+    let logical_non_partition = ArrowSchema::new(non_partition_fields);
+    Ok(make_physical_arrow_schema(&logical_non_partition, mode))
 }
 
 fn parse_scan_row_columns(raw: RecordBatch, snapshot: &Snapshot) -> DeltaResult<RecordBatch> {
@@ -597,8 +599,12 @@ fn parse_scan_row_columns(raw: RecordBatch, snapshot: &Snapshot) -> DeltaResult<
     let mode = snapshot.table_configuration.column_mapping_mode();
 
     if let Some((stats_idx, _)) = raw.schema_ref().column_with_name("stats") {
-        let stats_source = build_stats_source_schema(snapshot)?;
-        let stats_schema = Arc::new(stats_schema(&stats_source, snapshot.table_properties())?);
+        let stats_source_arrow = build_stats_source_schema(snapshot)?;
+        let stats_source_kernel = crate::schema::logical_arrow_to_kernel(&stats_source_arrow)?;
+        let stats_schema = Arc::new(stats_schema(
+            &stats_source_kernel,
+            snapshot.table_properties(),
+        )?);
         let arrow_stats_schema = Arc::new(ArrowSchema::try_from(stats_schema.as_ref())?);
         let stats_batch = raw.project(&[stats_idx])?;
         let stats_json = stats_batch
@@ -634,9 +640,10 @@ fn parse_scan_row_columns(raw: RecordBatch, snapshot: &Snapshot) -> DeltaResult<
         columns.push(stats_array);
     }
 
-    if let Some(partition_schema) =
+    if let Some(partition_schema_arrow) =
         build_partition_schema(snapshot.schema(), snapshot.metadata().partition_columns())?
     {
+        let partition_schema = crate::schema::logical_arrow_to_kernel(&partition_schema_arrow)?;
         let partition_array =
             parse_partition_values_array(&raw, &partition_schema, "partitionValues", mode)?;
         fields.push(Arc::new(Field::new(

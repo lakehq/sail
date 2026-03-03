@@ -31,9 +31,9 @@ use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, DataFusionError};
 use futures::TryStreamExt;
 
-use crate::kernel::models::Add;
-use crate::kernel::statistics::{ColumnCountStat, ColumnValueStat, Stats};
 use crate::kernel::DeltaResult;
+use crate::spec::statistics::{ColumnCountStat, ColumnValueStat, Stats};
+use crate::spec::Add;
 use crate::storage::LogStoreRef;
 use crate::table::DeltaTableState;
 

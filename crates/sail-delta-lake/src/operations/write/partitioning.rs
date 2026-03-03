@@ -1,8 +1,9 @@
 use datafusion::arrow::array::{ArrayRef, RecordBatch};
 use datafusion::arrow::row::{RowConverter, SortField};
+use datafusion::common::scalar::ScalarValue;
 use indexmap::IndexMap;
 
-use crate::kernel::models::{Scalar, ScalarExt};
+use crate::conversion::ScalarExt;
 use crate::kernel::DeltaTableError;
 
 /// A contiguous range of rows that share the same partition values.
@@ -10,7 +11,7 @@ use crate::kernel::DeltaTableError;
 pub struct PartitionRange {
     pub start: usize,
     pub end: usize,
-    pub partition_values: IndexMap<String, Scalar>,
+    pub partition_values: IndexMap<String, ScalarValue>,
 }
 
 /// Detect contiguous partition ranges from an input batch.
@@ -110,7 +111,7 @@ fn push_partition_range(
         .iter()
         .map(|&idx| {
             let col = values.column(idx);
-            Scalar::from_array(&col.slice(start, 1), 0)
+            ScalarValue::from_array(col.as_ref(), start)
                 .ok_or_else(|| DeltaTableError::generic("failed to parse partition value"))
         })
         .collect::<Result<Vec<_>, _>>()?;

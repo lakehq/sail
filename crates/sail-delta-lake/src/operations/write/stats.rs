@@ -24,6 +24,7 @@ use std::ops::{AddAssign, Not};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use datafusion::common::scalar::ScalarValue;
 use indexmap::IndexMap;
 use log::warn;
 use parquet::basic::{LogicalType, TimeUnit, Type};
@@ -32,12 +33,13 @@ use parquet::file::statistics::Statistics;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
 
-use crate::kernel::models::{Add, ColumnCountStat, ColumnValueStat, Scalar, ScalarExt, Stats};
+use crate::conversion::ScalarExt;
 use crate::kernel::DeltaTableError;
+use crate::spec::{Add, ColumnCountStat, ColumnValueStat, Stats};
 
 /// Creates an [`Add`] log action struct with statistics.
 pub fn create_add(
-    partition_values: &IndexMap<String, Scalar>,
+    partition_values: &IndexMap<String, ScalarValue>,
     path: String,
     size: i64,
     file_metadata: &ParquetMetaData,
@@ -90,7 +92,7 @@ pub fn create_add(
 }
 /// Creates stats from parquet metadata already in memory
 pub fn stats_from_parquet_metadata(
-    partition_values: &IndexMap<String, Scalar>,
+    partition_values: &IndexMap<String, ScalarValue>,
     parquet_metadata: &ParquetMetaData,
     num_indexed_cols: i32,
     stats_columns: &Option<Vec<String>>,
@@ -110,7 +112,7 @@ pub fn stats_from_parquet_metadata(
 }
 
 fn stats_from_file_metadata(
-    partition_values: &IndexMap<String, Scalar>,
+    partition_values: &IndexMap<String, ScalarValue>,
     file_metadata: &ParquetMetaData,
     num_indexed_cols: i32,
     stats_columns: &Option<Vec<String>>,
@@ -129,7 +131,7 @@ fn stats_from_file_metadata(
 }
 
 fn stats_from_metadata(
-    partition_values: &IndexMap<String, Scalar>,
+    partition_values: &IndexMap<String, ScalarValue>,
     schema_descriptor: Arc<SchemaDescriptor>,
     row_group_metadata: Vec<RowGroupMetaData>,
     num_rows: i64,

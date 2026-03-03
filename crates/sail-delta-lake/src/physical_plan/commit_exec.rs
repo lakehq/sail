@@ -34,7 +34,6 @@ use futures::stream::{self, StreamExt};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
-use crate::kernel::models::Action;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::physical_plan::action_schema::CommitMeta;
@@ -42,6 +41,7 @@ use crate::physical_plan::{decode_actions_and_meta_from_batch, COL_ACTION};
 use crate::schema::{
     metadata_for_create_with_logical_arrow, normalize_delta_schema, protocol_for_create,
 };
+use crate::spec::Action;
 use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::{create_delta_table_with_object_store, open_table_with_object_store};
 

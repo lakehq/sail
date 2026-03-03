@@ -50,16 +50,16 @@ use serde_json::Value;
 use url::Url;
 
 use crate::conversion::DeltaTypeConverter;
-use crate::kernel::models::{contains_timestampntz, Action, ColumnMappingMode, StructType};
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::options::{ColumnMappingModeOption, TableDeltaOptions};
 use crate::physical_plan::{delta_action_schema, encode_actions, CommitMeta, ExecAction};
 use crate::schema::{
     annotate_for_column_mapping, compute_max_column_id, evolve_schema, get_physical_schema,
-    kernel_to_logical_arrow, metadata_for_create_with_struct_type, normalize_delta_schema,
-    protocol_for_create, struct_type_from_logical_arrow,
+    metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_create,
+    struct_type_from_logical_arrow,
 };
+use crate::spec::{contains_timestampntz_arrow, Action, ColumnMappingMode, StructType};
 use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::open_table_with_object_store;
 
@@ -444,9 +444,9 @@ impl DeltaWriterExec {
             let mut annotated_schema_opt: Option<StructType> = None;
             if !table_exists {
                 // Build kernel schema for feature detection
+                let has_timestamp_ntz = contains_timestampntz_arrow(final_schema.as_ref());
                 let kernel_schema = struct_type_from_logical_arrow(final_schema.as_ref())
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let has_timestamp_ntz = contains_timestampntz(kernel_schema.fields());
 
                 if effective_mode.is_enabled() {
                     let annotated_schema = annotate_for_column_mapping(&kernel_schema);
@@ -537,12 +537,14 @@ impl DeltaWriterExec {
                                     .to_string(),
                             )
                         })?;
-                        table
-                            .snapshot()
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?
-                            .snapshot()
-                            .schema()
-                            .clone()
+                        struct_type_from_logical_arrow(
+                            table
+                                .snapshot()
+                                .map_err(|e| DataFusionError::External(Box::new(e)))?
+                                .snapshot()
+                                .schema(),
+                        )
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?
                     } else {
                         annotated_schema_opt.clone().ok_or_else(|| {
                             DataFusionError::Plan(
@@ -772,10 +774,11 @@ impl DeltaWriterExec {
         schema_mode: Option<SchemaMode>,
     ) -> Result<(SchemaRef, Vec<Action>)> {
         let table_metadata = table.snapshot()?.metadata();
-        let table_schema = table_metadata
-            .parse_schema()
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let table_arrow_schema = Arc::new(kernel_to_logical_arrow(&table_schema));
+        let table_arrow_schema = Arc::new(
+            table_metadata
+                .parse_schema_arrow()
+                .map_err(|e| DataFusionError::External(Box::new(e)))?,
+        );
 
         match schema_mode {
             Some(SchemaMode::Merge) => {
@@ -788,7 +791,9 @@ impl DeltaWriterExec {
 
                     let snapshot = table.snapshot()?;
                     let current_metadata = snapshot.metadata();
-                    let current_kernel = snapshot.snapshot().schema().clone();
+                    let current_kernel =
+                        struct_type_from_logical_arrow(snapshot.snapshot().schema())
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
                     let kmode = snapshot.effective_column_mapping_mode();
 
                     // Delegate schema evolution to SchemaManager
@@ -809,7 +814,8 @@ impl DeltaWriterExec {
 
                 let snapshot = table.snapshot()?;
                 let current_metadata = snapshot.metadata();
-                let current_kernel = snapshot.snapshot().schema().clone();
+                let current_kernel = struct_type_from_logical_arrow(snapshot.snapshot().schema())
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let kmode = snapshot.effective_column_mapping_mode();
 
                 // Delegate schema overwrite to SchemaManager

@@ -12,7 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::kernel::models::ColumnMappingMode;
+use crate::spec::ColumnMappingMode;
 
 /// Options that control the behavior of Delta Lake tables.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]

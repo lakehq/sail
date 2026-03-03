@@ -35,10 +35,8 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::kernel::models::{
-    Action, Add, DeletionVectorDescriptor, Metadata, Protocol, Remove, Transaction,
-};
 use crate::kernel::{DeltaResult, DeltaTableError};
+use crate::spec::{Action, Add, DeletionVectorDescriptor, Metadata, Protocol, Remove, Transaction};
 use crate::storage::{get_actions, LogStore};
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
@@ -998,7 +996,7 @@ mod tests {
         decode_checkpoint_rows, encode_checkpoint_rows, CheckpointActionRow,
         ReconciledCheckpointState,
     };
-    use crate::kernel::models::{Action, Add, Remove};
+    use crate::spec::{Action, Add, Remove};
 
     #[test]
     fn checkpoint_row_roundtrip_preserves_add_path() {

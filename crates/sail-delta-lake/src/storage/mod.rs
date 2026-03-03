@@ -35,9 +35,9 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::error::DeltaError;
-use crate::kernel::models::Action;
 use crate::kernel::transaction::TransactionError;
 use crate::kernel::{DeltaResult, DeltaTableError};
+use crate::spec::Action;
 
 mod config;
 

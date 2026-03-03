@@ -57,7 +57,7 @@ struct ScanByAddsStreamState {
     // control
     partition_scan: Option<bool>,
     emitted_partition_empty: bool,
-    pending_adds: Vec<crate::kernel::models::Add>,
+    pending_adds: Vec<crate::spec::Add>,
     current_scan: Option<SendableRecordBatchStream>,
     input_done: bool,
 }
@@ -220,7 +220,7 @@ impl ScanByAddsStreamState {
     async fn decode_adds_from_meta_batch(
         &mut self,
         batch: &RecordBatch,
-    ) -> Result<Vec<crate::kernel::models::Add>> {
+    ) -> Result<Vec<crate::spec::Add>> {
         self.ensure_table().await?;
         let partition_columns = self
             .partition_columns

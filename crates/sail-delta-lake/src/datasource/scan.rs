@@ -39,8 +39,9 @@ use crate::datasource::{
     create_object_store_url, partitioned_file_from_action, DataFusionMixins, DeltaScanConfig,
     DeltaTableStateExt,
 };
-use crate::kernel::models::Add;
 use crate::physical_plan::DeltaPhysicalExprAdapterFactory;
+use crate::schema::arrow_field_physical_name;
+use crate::spec::Add;
 use crate::storage::LogStoreRef;
 use crate::table::DeltaTableState;
 
@@ -76,9 +77,9 @@ pub fn build_file_scan_config(
         .iter()
         .map(|logical| {
             let physical = kernel_schema
-                .field(logical)
-                .map(|f| f.physical_name(column_mapping_mode).to_string())
-                .unwrap_or_else(|| logical.clone());
+                .field_with_name(logical)
+                .map(|f| arrow_field_physical_name(f, column_mapping_mode).to_string())
+                .unwrap_or_else(|_| logical.clone());
             (logical.clone(), physical)
         })
         .collect();
@@ -86,9 +87,9 @@ pub fn build_file_scan_config(
     for field in complete_schema.fields() {
         let logical = field.name().clone();
         let physical = kernel_schema
-            .field(&logical)
-            .map(|f| f.physical_name(column_mapping_mode).to_string())
-            .unwrap_or_else(|| logical.clone());
+            .field_with_name(&logical)
+            .map(|f| arrow_field_physical_name(f, column_mapping_mode).to_string())
+            .unwrap_or_else(|_| logical.clone());
         physical_to_logical.entry(physical).or_insert(logical);
     }
 
@@ -336,7 +337,7 @@ fn stats_for_add(
 }
 
 fn lookup_value_stat<'a>(
-    map: &'a std::collections::HashMap<String, crate::kernel::statistics::ColumnValueStat>,
+    map: &'a std::collections::HashMap<String, crate::spec::statistics::ColumnValueStat>,
     name: &str,
 ) -> Option<&'a serde_json::Value> {
     let mut parts = name.split('.');
@@ -349,7 +350,7 @@ fn lookup_value_stat<'a>(
 }
 
 fn lookup_count_stat(
-    map: &std::collections::HashMap<String, crate::kernel::statistics::ColumnCountStat>,
+    map: &std::collections::HashMap<String, crate::spec::statistics::ColumnCountStat>,
     name: &str,
 ) -> Option<i64> {
     let mut parts = name.split('.');

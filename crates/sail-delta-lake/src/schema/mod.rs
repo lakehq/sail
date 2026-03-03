@@ -16,7 +16,8 @@ pub mod mapping;
 pub mod normalize;
 
 pub use converter::{
-    arrow_schema_from_struct_type, kernel_to_logical_arrow, logical_arrow_to_kernel,
+    arrow_field_physical_name, arrow_schema_from_struct_type, arrow_schema_reorder_partitions,
+    kernel_to_logical_arrow, logical_arrow_to_kernel, make_physical_arrow_schema,
 };
 pub use manager::{
     annotate_for_column_mapping, evolve_schema, get_physical_schema,

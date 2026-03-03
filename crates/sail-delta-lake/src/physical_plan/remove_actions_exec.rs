@@ -30,11 +30,11 @@ use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use futures::stream::{self, StreamExt};
 use serde_json::Value;
 
-use crate::kernel::models::{Add, Remove, RemoveOptions};
 use crate::physical_plan::{
     current_timestamp_millis, decode_adds_from_batch, delta_action_schema, encode_actions,
     meta_adds, CommitMeta, ExecAction, COL_ACTION,
 };
+use crate::spec::{Add, Remove, RemoveOptions};
 
 /// Physical execution node to convert Add actions (from FindFiles) into Remove actions
 #[derive(Debug)]

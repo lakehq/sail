@@ -14,8 +14,8 @@ use crate::datasource::scan::{build_file_scan_config, FileScanParams};
 use crate::datasource::{
     df_logical_schema, prune_files, simplify_expr, DataFusionMixins, DeltaScanConfig,
 };
-use crate::kernel::models::{Add, ColumnMappingMode};
-use crate::schema::get_physical_schema;
+use crate::schema::{arrow_field_physical_name, get_physical_schema, logical_arrow_to_kernel};
+use crate::spec::{Add, ColumnMappingMode};
 use crate::storage::LogStoreRef;
 use crate::table::DeltaTableState;
 
@@ -130,14 +130,15 @@ pub(crate) async fn plan_delta_scan(
     let table_partition_cols = snapshot.metadata().partition_columns();
     let kmode: ColumnMappingMode = snapshot.effective_column_mapping_mode();
     let kschema_arc = snapshot.snapshot().schema();
-    let physical_arrow: ArrowSchema = get_physical_schema(&kschema_arc, kmode);
+    let logical_kernel = logical_arrow_to_kernel(kschema_arc)?;
+    let physical_arrow: ArrowSchema = get_physical_schema(&logical_kernel, kmode);
     let physical_partition_cols: HashSet<String> = table_partition_cols
         .iter()
         .map(|col| {
             kschema_arc
-                .field(col)
-                .map(|f| f.physical_name(kmode).to_string())
-                .unwrap_or_else(|| col.clone())
+                .field_with_name(col)
+                .map(|f| arrow_field_physical_name(f, kmode).to_string())
+                .unwrap_or_else(|_| col.clone())
         })
         .collect();
 
