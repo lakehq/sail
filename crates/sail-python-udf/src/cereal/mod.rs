@@ -9,6 +9,17 @@ pub mod pyspark_udtf;
 enum PySparkVersion {
     V3,
     V4,
+    V4_1,
+}
+
+impl PySparkVersion {
+    fn is_v4(&self) -> bool {
+        matches!(self, Self::V4 | Self::V4_1)
+    }
+
+    fn is_v4_1(&self) -> bool {
+        matches!(self, Self::V4_1)
+    }
 }
 
 fn get_pyspark_version() -> PyUdfResult<PySparkVersion> {
@@ -20,8 +31,10 @@ fn get_pyspark_version() -> PyUdfResult<PySparkVersion> {
         let version: String = module.getattr("__version__")?.extract()?;
         if version.starts_with("3.") {
             Ok(PySparkVersion::V3)
-        } else if version.starts_with("4.") {
+        } else if version.starts_with("4.0.") {
             Ok(PySparkVersion::V4)
+        } else if version.starts_with("4.") {
+            Ok(PySparkVersion::V4_1)
         } else {
             Err(PyUdfError::invalid(format!(
                 "unsupported PySpark version: {version}"

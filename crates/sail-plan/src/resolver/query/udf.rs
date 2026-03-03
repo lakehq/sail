@@ -66,6 +66,7 @@ impl PlanResolver<'_> {
             function.eval_type,
             // MapPartitions UDF has the iterator as the only argument
             &[0],
+            &[],
             &self.config.pyspark_udf_config,
         )?;
         let kind = match function.eval_type {
@@ -208,6 +209,7 @@ impl PlanResolver<'_> {
             &function.command,
             function.eval_type,
             &offsets,
+            &input_types,
             &self.config.pyspark_udf_config,
         )?;
         let udaf = PySparkGroupMapUDF::new(
@@ -338,6 +340,7 @@ impl PlanResolver<'_> {
             &function.command,
             function.eval_type,
             &offsets,
+            &[],
             &self.config.pyspark_udf_config,
         )?;
         let udf = PySparkCoGroupMapUDF::try_new(
