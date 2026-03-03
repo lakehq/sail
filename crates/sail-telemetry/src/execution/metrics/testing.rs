@@ -83,7 +83,7 @@ impl MetricEmitterTester {
         };
         let options = TracingExecOptions::default().with_metrics(MetricManager {
             registry: self.registry,
-            interval: Duration::ZERO,
+            collection_interval: Duration::ZERO,
         });
         let plan = Arc::new(TracingExec::new(plan, options));
         let context = Arc::new(TaskContext::default());

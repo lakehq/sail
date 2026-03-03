@@ -180,7 +180,7 @@ impl ExecutionPlan for TracingExec {
         let schema = stream.schema();
         if let Some(ref manager) = self.options.metrics {
             let last_emit = Instant::now()
-                .checked_sub(manager.interval)
+                .checked_sub(manager.collection_interval)
                 .unwrap_or_else(Instant::now);
             let stream = MetricEmitterStream {
                 inner: stream,
@@ -188,7 +188,7 @@ impl ExecutionPlan for TracingExec {
                 emitter: self.build_metric_emitter(),
                 attributes: self.build_metric_attributes(),
                 registry: manager.registry.clone(),
-                interval: manager.interval,
+                interval: manager.collection_interval,
                 last_emit,
             };
             Ok(Box::pin(RecordBatchStreamAdapter::new(
@@ -326,6 +326,8 @@ impl Stream for MetricEmitterStream {
         let poll = this.inner.poll_next(cx);
         if poll.is_ready() {
             let is_done = matches!(poll, Poll::Ready(None));
+            // Note: metrics are not emitted regularly if a batch takes long to be produced,
+            // but this is acceptable for the purpose of execution metrics.
             let should_emit = is_done || this.last_emit.elapsed() >= *this.interval;
             if should_emit {
                 if let Some(metrics) = this.plan.metrics() {

@@ -133,7 +133,7 @@ fn init_metrics(
         state.meter_provider = Some(provider);
         state.metrics = Some(MetricManager {
             registry: Arc::new(MetricRegistry::new(&meter)),
-            interval: Duration::from_secs(config.metrics_collection_interval_secs),
+            collection_interval: Duration::from_secs(config.metrics_collection_interval_secs),
         });
         state.meter = Some(meter);
     }
