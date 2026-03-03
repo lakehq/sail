@@ -10,6 +10,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::common::{DataFusionError, Result, ToDFSchema};
@@ -146,6 +147,12 @@ pub async fn build_update_plan(
     let scan_schema = scan_exec.schema();
     let mut proj_exprs: Vec<(Arc<dyn datafusion_physical_expr::PhysicalExpr>, String)> = vec![];
 
+    // Build a case-insensitive lookup map for O(1) assignment access
+    let assignment_map: HashMap<String, &ExprWithSource> = assignments
+        .iter()
+        .map(|(name, expr)| (name.to_ascii_lowercase(), expr))
+        .collect();
+
     for field in table_schema.fields().iter() {
         let col_name = field.name();
         let scan_idx = scan_schema
@@ -155,11 +162,9 @@ pub async fn build_update_plan(
             Arc::new(Column::new(col_name, scan_idx));
 
         // Look for an assignment targeting this column (case-insensitive)
-        let assignment = assignments
-            .iter()
-            .find(|(name, _)| name.eq_ignore_ascii_case(col_name));
+        let assignment = assignment_map.get(&col_name.to_ascii_lowercase());
 
-        if let Some((_, assign_expr)) = assignment {
+        if let Some(assign_expr) = assignment {
             // Compile the assignment expression against the table schema, then adapt to scan
             let physical_assign = ctx
                 .session()
