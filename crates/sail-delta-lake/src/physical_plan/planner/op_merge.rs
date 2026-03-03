@@ -123,7 +123,7 @@ pub async fn build_merge_plan(
     .await
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 async fn finalize_merge(
     ctx: &PlannerContext<'_>,
     projected: Arc<dyn ExecutionPlan>,

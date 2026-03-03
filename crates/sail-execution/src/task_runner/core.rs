@@ -73,6 +73,7 @@ impl TaskRunner {
         }
     }
 
+    /// Deserializes and prepares a physical plan for execution on this node.
     fn execute_plan<T: Actor>(
         &mut self,
         ctx: &mut ActorContext<T>,

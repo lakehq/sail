@@ -23,21 +23,21 @@
 //! - `commit_exec`: Single-partition commit/abort execution plan
 pub mod arrow_utils;
 mod commit_exec;
+mod datasource;
 mod discovery;
 mod error;
 mod exec;
 mod executor;
 mod filter;
-#[allow(clippy::module_inception)]
-mod python_datasource;
-mod python_table_provider;
 mod stream;
 mod table_format;
+mod table_provider;
 mod write_exec;
 
 // Public exports - always available
 // Public exports - require python feature
 pub use commit_exec::PythonDataSourceWriteCommitExec;
+pub use datasource::PythonDataSource;
 pub use discovery::{
     discover_data_sources, validate_datasource_class, DataSourceEntry, PythonDataSourceRegistry,
     DATA_SOURCE_REGISTRY,
@@ -46,8 +46,7 @@ pub use error::PythonDataSourceError;
 pub use exec::PythonDataSourceExec;
 pub use executor::{InProcessExecutor, InputPartition, PythonExecutor};
 pub use filter::{exprs_to_python_filters, ColumnPath, FilterValue, PythonFilter};
-pub use python_datasource::PythonDataSource;
-pub use python_table_provider::PythonTableProvider;
 pub use stream::{PythonDataSourceStream, RowBatchCollector, DEFAULT_BATCH_SIZE};
 pub use table_format::PythonTableFormat;
+pub use table_provider::PythonTableProvider;
 pub use write_exec::PythonDataSourceWriteExec;

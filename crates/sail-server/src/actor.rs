@@ -18,7 +18,7 @@ pub trait Actor: Sized + Send + 'static {
     fn name() -> &'static str;
 
     fn new(options: Self::Options) -> Self;
-    #[allow(unused_variables)]
+    #[expect(unused_variables)]
     async fn start(&mut self, ctx: &mut ActorContext<Self>) {}
     /// Process one message and return the next action.
     /// This method should handle errors internally (e.g. by sending itself an error message
@@ -28,7 +28,7 @@ pub trait Actor: Sized + Send + 'static {
     /// If the actor needs to perform async operations, it should spawn tasks via
     /// [ActorContext::spawn].
     fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction;
-    #[allow(unused_variables)]
+    #[expect(unused_variables)]
     async fn stop(self, ctx: &mut ActorContext<Self>) {}
 }
 

@@ -22,7 +22,7 @@ impl CatalogManager {
         udtf: CatalogTableFunction,
     ) -> CatalogResult<()> {
         let _function: Arc<dyn TableFunctionImpl> = match udtf {};
-        #[allow(unreachable_code)]
+        #[expect(unreachable_code)]
         {
             _ctx.register_udtf(_name.as_str(), _function);
             Ok(())

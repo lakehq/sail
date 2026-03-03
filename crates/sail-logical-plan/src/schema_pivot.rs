@@ -21,7 +21,6 @@ pub struct SchemaPivotNode {
 }
 
 impl SchemaPivotNode {
-    #[allow(dead_code)]
     pub fn try_new(
         input: Arc<LogicalPlan>,
         names: Vec<String>,

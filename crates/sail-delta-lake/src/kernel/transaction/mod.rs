@@ -293,7 +293,7 @@ pub trait TableReference: Send + Sync {
     fn protocol(&self) -> &Protocol;
 
     /// Get the table metadata of the snapshot
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     fn metadata(&self) -> &Metadata;
 
     /// Try to cast this table reference to a `EagerSnapshot`
@@ -845,7 +845,7 @@ pub struct PostCommit {
     /// The winning version number of the commit
     pub version: i64,
     /// The data that was committed to the log store
-    #[allow(unused)]
+    #[expect(unused)]
     pub data: CommitData,
     create_checkpoint: bool,
     cleanup_expired_logs: Option<bool>,
@@ -979,7 +979,6 @@ impl PostCommit {
 }
 
 /// A commit that successfully completed
-#[allow(unused)]
 pub struct FinalizedCommit {
     /// The new table state after a commit
     pub snapshot: DeltaTableState,
@@ -990,13 +989,14 @@ pub struct FinalizedCommit {
     /// Metrics associated with the commit operation
     pub metrics: Metrics,
 }
-#[allow(unused)]
 impl FinalizedCommit {
     /// The new table state after a commit
+    #[expect(dead_code)]
     pub fn snapshot(&self) -> DeltaTableState {
         self.snapshot.clone()
     }
     /// Version of the finalized commit
+    #[expect(dead_code)]
     pub fn version(&self) -> i64 {
         self.version
     }

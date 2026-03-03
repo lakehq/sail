@@ -179,7 +179,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     fn test_csv_read_options_parsing() {
         use crate::options::{load_options, CsvReadOptions};
         // Test infer_schema option parsing

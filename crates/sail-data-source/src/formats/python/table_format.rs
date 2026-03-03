@@ -11,10 +11,10 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::Result;
 use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat, TableFormatRegistry};
 
+use super::datasource::PythonDataSource;
 use super::discovery::DATA_SOURCE_REGISTRY;
 use super::executor::InProcessExecutor;
-use super::python_datasource::PythonDataSource;
-use super::python_table_provider::PythonTableProvider;
+use super::table_provider::PythonTableProvider;
 
 /// TableFormat implementation for a Python data source.
 ///

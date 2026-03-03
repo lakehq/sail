@@ -197,7 +197,6 @@ impl Snapshot {
     }
 
     /// Get the table root of the snapshot
-    #[allow(dead_code)]
     pub(crate) fn table_root_path(&self) -> DeltaResult<Path> {
         Ok(Path::from_url_path(self.table_url.path())?)
     }
@@ -281,7 +280,7 @@ impl Snapshot {
     ///
     /// A stream of commit infos.
     // TODO: move outer error into stream.
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub(crate) async fn commit_infos(
         &self,
         log_store: &dyn LogStore,

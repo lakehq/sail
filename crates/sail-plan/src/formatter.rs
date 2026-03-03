@@ -606,6 +606,7 @@ impl PlanFormatter for SparkPlanFormatter {
             //   SELECT count(`*`) FROM VALUES 1 AS t(`*`)
             //   ```
             "count" => {
+                let name = name.to_lowercase();
                 let arguments = arguments.join(", ");
                 if is_distinct {
                     Ok(format!("{name}(DISTINCT {arguments})"))
