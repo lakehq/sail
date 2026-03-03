@@ -179,9 +179,6 @@ impl ExecutionPlan for TracingExec {
         };
         let schema = stream.schema();
         if let Some(ref manager) = self.options.metrics {
-            let last_emit = Instant::now()
-                .checked_sub(manager.collection_interval)
-                .unwrap_or_else(Instant::now);
             let stream = MetricEmitterStream {
                 inner: stream,
                 plan: self.inner.clone(),
@@ -189,7 +186,7 @@ impl ExecutionPlan for TracingExec {
                 attributes: self.build_metric_attributes(),
                 registry: manager.registry.clone(),
                 interval: manager.collection_interval,
-                last_emit,
+                last_emit: None,
             };
             Ok(Box::pin(RecordBatchStreamAdapter::new(
                 schema,
@@ -314,7 +311,7 @@ pin_project! {
         attributes: Vec<KeyValue>,
         registry: Arc<MetricRegistry>,
         interval: Duration,
-        last_emit: Instant,
+        last_emit: Option<Instant>,
     }
 }
 
@@ -328,7 +325,8 @@ impl Stream for MetricEmitterStream {
             let is_done = matches!(poll, Poll::Ready(None));
             // Note: metrics are not emitted regularly if a batch takes long to be produced,
             // but this is acceptable for the purpose of execution metrics.
-            let should_emit = is_done || this.last_emit.elapsed() >= *this.interval;
+            let should_emit =
+                is_done || this.last_emit.is_none_or(|t| t.elapsed() >= *this.interval);
             if should_emit {
                 if let Some(metrics) = this.plan.metrics() {
                     for metric in metrics.iter() {
@@ -337,7 +335,7 @@ impl Stream for MetricEmitterStream {
                             .try_emit(metric, this.attributes, this.registry);
                     }
                 }
-                *this.last_emit = Instant::now();
+                *this.last_emit = Some(Instant::now());
             }
         }
         poll
