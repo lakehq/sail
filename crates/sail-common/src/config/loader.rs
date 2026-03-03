@@ -34,18 +34,9 @@ struct ConfigItem {
     #[expect(unused)]
     #[serde(default)]
     experimental: bool,
+    #[expect(unused)]
     #[serde(default)]
     hidden: bool,
-}
-
-/// Returns the list of visible (non-hidden) configuration keys from the YAML definition.
-pub fn load_config_keys(yaml: &str) -> Result<Vec<String>, String> {
-    let items: Vec<ConfigItem> = serde_yaml::from_str(yaml).map_err(|e| e.to_string())?;
-    Ok(items
-        .into_iter()
-        .filter(|item| !item.hidden)
-        .map(|item| item.key)
-        .collect())
 }
 
 /// Deserialize a unit value and ignore the `serde(deny_unknown_fields)` attribute.

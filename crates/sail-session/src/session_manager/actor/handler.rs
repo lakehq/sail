@@ -8,7 +8,7 @@ use log::{info, warn};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::activity::ActivityTracker;
 use sail_common_datafusion::session::job::JobService;
-use sail_common_datafusion::system::catalog::SessionRow;
+use sail_common_datafusion::system::catalog::{OptionRow, SessionRow};
 use sail_common_datafusion::system::observable::{JobRunnerObserver, SessionManagerObserver};
 use sail_common_datafusion::system::predicate::PredicateExt;
 use sail_server::actor::{ActorAction, ActorContext};
@@ -299,6 +299,22 @@ impl SessionManagerActor {
                 ctx.spawn(async move {
                     let _ = result.send(task.fetch(fetch).collect().await);
                 });
+            }
+            SessionManagerObserver::Options { key, fetch, result } => {
+                let rows = self
+                    .config_options
+                    .iter()
+                    .predicate_filter_map(
+                        key,
+                        |item| &item.0,
+                        |item| OptionRow {
+                            key: item.0.clone(),
+                            value: item.1.clone(),
+                        },
+                    )
+                    .fetch(fetch)
+                    .collect::<Result<Vec<_>, _>>();
+                let _ = result.send(rows);
             }
         }
         ActorAction::Continue

@@ -2,11 +2,10 @@ use figment::providers::Env;
 use figment::value::{Dict, Empty, Map, Tag, Value};
 use figment::{Error, Figment, Metadata, Profile, Provider};
 use secrecy::SecretString;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::config::loader::{
-    deserialize_non_empty_string, deserialize_non_zero, deserialize_unknown_unit, load_config_keys,
-    ConfigDefinition,
+    deserialize_non_empty_string, deserialize_non_zero, deserialize_unknown_unit, ConfigDefinition,
 };
 use crate::error::{CommonError, CommonResult};
 
@@ -14,7 +13,7 @@ const APP_CONFIG: &str = include_str!("application.yaml");
 
 pub const SAIL_ENV_VAR_PREFIX: &str = "SAIL_";
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AppConfig {
     pub mode: ExecutionMode,
     pub runtime: RuntimeConfig,
@@ -31,7 +30,7 @@ pub struct AppConfig {
     /// This field ensures that environment variables with prefix `SAIL_INTERNAL_`
     /// can only be used for internal configuration.
     /// Such environment variables are ignored by application configuration.
-    #[serde(deserialize_with = "deserialize_unknown_unit")]
+    #[serde(deserialize_with = "deserialize_unknown_unit", skip_serializing)]
     pub internal: (),
 }
 
@@ -67,32 +66,26 @@ impl AppConfig {
 
     /// Returns the current application configuration as a list of `(key, value)` pairs.
     /// Keys use dot notation as defined in `application.yaml`.
-    /// Values are the merged result of defaults and environment variable overrides.
-    pub fn load_key_value_pairs() -> CommonResult<Vec<(String, String)>> {
-        let keys = load_config_keys(APP_CONFIG).map_err(CommonError::InvalidArgument)?;
-
-        let figment = Figment::from(ConfigDefinition::new(APP_CONFIG))
-            .merge(InternalConfigPlaceholder)
-            .merge(
-                Env::prefixed(SAIL_ENV_VAR_PREFIX).map(|p| p.as_str().replace("__", ".").into()),
-            );
-
-        let data = figment
-            .data()
-            .map_err(|e| CommonError::InvalidArgument(e.to_string()))?;
-        let dict = data.get(&Profile::Default).cloned().unwrap_or_default();
-
-        let mut pairs = Vec::with_capacity(keys.len());
-        for key in keys {
-            if let Some(value) = get_config_value(&dict, &key) {
-                pairs.push((key, config_value_to_string(value)));
+    /// The `AppConfig` instance is serialized to a TOML table and then recursively walked
+    /// to produce key-value pairs. Arrays are converted to their TOML string representation.
+    pub fn key_value_pairs(&self) -> CommonResult<Vec<(String, String)>> {
+        let value =
+            toml::Value::try_from(self).map_err(|e| CommonError::InvalidArgument(e.to_string()))?;
+        let table = match value {
+            toml::Value::Table(t) => t,
+            _ => {
+                return Err(CommonError::InvalidArgument(
+                    "expected a TOML table".to_string(),
+                ))
             }
-        }
+        };
+        let mut pairs = Vec::new();
+        walk_toml_table(&table, String::new(), &mut pairs);
         Ok(pairs)
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionMode {
     Local,
@@ -108,7 +101,7 @@ pub enum ExecutionMode {
     KubernetesCluster,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeConfig {
     pub stack_size: usize,
@@ -117,30 +110,30 @@ pub struct RuntimeConfig {
     pub temporary_files: TemporaryFilesConfig,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(from = "memory_pool::MemoryPool")]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(from = "memory_pool::MemoryPool", into = "memory_pool::MemoryPool")]
 pub enum MemoryPoolConfig {
     Unbounded,
     Greedy(GreedyMemoryPoolConfig),
     Fair(FairMemoryPoolConfig),
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GreedyMemoryPoolConfig {
     pub max_size: usize,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct FairMemoryPoolConfig {
     pub max_size: usize,
 }
 
 mod memory_pool {
-    use serde::Deserialize;
+    use serde::{Deserialize, Serialize};
 
-    #[derive(Debug, Clone, Deserialize)]
+    #[derive(Debug, Clone, Deserialize, Serialize)]
     #[serde(rename_all = "snake_case")]
     pub enum Type {
         Unbounded,
@@ -148,12 +141,12 @@ mod memory_pool {
         Fair,
     }
 
-    #[derive(Debug, Clone, Deserialize)]
+    #[derive(Debug, Clone, Deserialize, Serialize)]
     #[serde(deny_unknown_fields)]
     pub struct MemoryPool {
-        r#type: Type,
-        greedy: super::GreedyMemoryPoolConfig,
-        fair: super::FairMemoryPoolConfig,
+        pub r#type: Type,
+        pub greedy: super::GreedyMemoryPoolConfig,
+        pub fair: super::FairMemoryPoolConfig,
     }
 
     impl From<MemoryPool> for super::MemoryPoolConfig {
@@ -165,16 +158,38 @@ mod memory_pool {
             }
         }
     }
+
+    impl From<super::MemoryPoolConfig> for MemoryPool {
+        fn from(value: super::MemoryPoolConfig) -> Self {
+            match value {
+                super::MemoryPoolConfig::Unbounded => MemoryPool {
+                    r#type: Type::Unbounded,
+                    greedy: super::GreedyMemoryPoolConfig { max_size: 0 },
+                    fair: super::FairMemoryPoolConfig { max_size: 0 },
+                },
+                super::MemoryPoolConfig::Greedy(g) => MemoryPool {
+                    r#type: Type::Greedy,
+                    greedy: g,
+                    fair: super::FairMemoryPoolConfig { max_size: 0 },
+                },
+                super::MemoryPoolConfig::Fair(f) => MemoryPool {
+                    r#type: Type::Fair,
+                    greedy: super::GreedyMemoryPoolConfig { max_size: 0 },
+                    fair: f,
+                },
+            }
+        }
+    }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TemporaryFilesConfig {
     pub paths: Vec<String>,
     pub max_size: usize,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClusterConfig {
     pub enable_tls: bool,
@@ -182,6 +197,7 @@ pub struct ClusterConfig {
     pub driver_listen_port: u16,
     pub driver_external_host: String,
     pub driver_external_port: u16,
+    #[serde(skip_serializing)]
     pub worker_id: u64,
     pub worker_listen_host: String,
     pub worker_listen_port: u16,
@@ -201,21 +217,24 @@ pub struct ClusterConfig {
     pub rpc_retry_strategy: RetryStrategy,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(from = "retry_strategy::RetryStrategy")]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(
+    from = "retry_strategy::RetryStrategy",
+    into = "retry_strategy::RetryStrategy"
+)]
 pub enum RetryStrategy {
     Fixed(FixedRetryStrategy),
     ExponentialBackoff(ExponentialBackoffRetryStrategy),
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct FixedRetryStrategy {
     pub max_count: usize,
     pub delay_secs: u64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExponentialBackoffRetryStrategy {
     pub max_count: usize,
@@ -225,9 +244,9 @@ pub struct ExponentialBackoffRetryStrategy {
 }
 
 mod retry_strategy {
-    use serde::Deserialize;
+    use serde::{Deserialize, Serialize};
 
-    #[derive(Debug, Clone, Deserialize)]
+    #[derive(Debug, Clone, Deserialize, Serialize)]
     #[serde(rename_all = "snake_case")]
     pub enum Type {
         Fixed,
@@ -235,12 +254,12 @@ mod retry_strategy {
         ExponentialBackoff,
     }
 
-    #[derive(Debug, Clone, Deserialize)]
+    #[derive(Debug, Clone, Deserialize, Serialize)]
     #[serde(deny_unknown_fields)]
     pub struct RetryStrategy {
-        r#type: Type,
-        fixed: super::FixedRetryStrategy,
-        exponential_backoff: super::ExponentialBackoffRetryStrategy,
+        pub r#type: Type,
+        pub fixed: super::FixedRetryStrategy,
+        pub exponential_backoff: super::ExponentialBackoffRetryStrategy,
     }
 
     impl From<RetryStrategy> for super::RetryStrategy {
@@ -253,9 +272,34 @@ mod retry_strategy {
             }
         }
     }
+
+    impl From<super::RetryStrategy> for RetryStrategy {
+        fn from(value: super::RetryStrategy) -> Self {
+            match value {
+                super::RetryStrategy::Fixed(f) => RetryStrategy {
+                    r#type: Type::Fixed,
+                    fixed: f,
+                    exponential_backoff: super::ExponentialBackoffRetryStrategy {
+                        max_count: 0,
+                        initial_delay_secs: 0,
+                        max_delay_secs: 0,
+                        factor: 0,
+                    },
+                },
+                super::RetryStrategy::ExponentialBackoff(e) => RetryStrategy {
+                    r#type: Type::ExponentialBackoff,
+                    fixed: super::FixedRetryStrategy {
+                        max_count: 0,
+                        delay_secs: 0,
+                    },
+                    exponential_backoff: e,
+                },
+            }
+        }
+    }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExecutionConfig {
     pub batch_size: usize,
@@ -265,17 +309,23 @@ pub struct ExecutionConfig {
     pub file_listing_cache: FileListingCacheConfig,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct FileListingCacheConfig {
     pub r#type: CacheType,
-    #[serde(deserialize_with = "deserialize_non_zero")]
+    #[serde(
+        deserialize_with = "deserialize_non_zero",
+        serialize_with = "serialize_zero_for_none_u64"
+    )]
     pub ttl: Option<u64>,
-    #[serde(deserialize_with = "deserialize_non_zero")]
+    #[serde(
+        deserialize_with = "deserialize_non_zero",
+        serialize_with = "serialize_zero_for_none_u64"
+    )]
     pub max_entries: Option<u64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct KubernetesConfig {
     pub image: String,
@@ -287,13 +337,16 @@ pub struct KubernetesConfig {
     pub worker_pod_template: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ParquetConfig {
     pub enable_page_index: bool,
     pub pruning: bool,
     pub skip_metadata: bool,
-    #[serde(deserialize_with = "deserialize_non_zero")]
+    #[serde(
+        deserialize_with = "deserialize_non_zero",
+        serialize_with = "serialize_zero_for_none_usize"
+    )]
     pub metadata_size_hint: Option<usize>,
     pub pushdown_filters: bool,
     pub reorder_filters: bool,
@@ -309,12 +362,21 @@ pub struct ParquetConfig {
     pub dictionary_page_size_limit: usize,
     pub statistics_enabled: String,
     pub max_row_group_size: usize,
-    #[serde(deserialize_with = "deserialize_non_zero")]
+    #[serde(
+        deserialize_with = "deserialize_non_zero",
+        serialize_with = "serialize_zero_for_none_usize"
+    )]
     pub column_index_truncate_length: Option<usize>,
-    #[serde(deserialize_with = "deserialize_non_zero")]
+    #[serde(
+        deserialize_with = "deserialize_non_zero",
+        serialize_with = "serialize_zero_for_none_usize"
+    )]
     pub statistics_truncate_length: Option<usize>,
     pub data_page_row_count_limit: usize,
-    #[serde(deserialize_with = "deserialize_non_empty_string")]
+    #[serde(
+        deserialize_with = "deserialize_non_empty_string",
+        serialize_with = "serialize_empty_for_none_string"
+    )]
     pub encoding: Option<String>,
     pub bloom_filter_on_read: bool,
     pub bloom_filter_on_write: bool,
@@ -327,27 +389,39 @@ pub struct ParquetConfig {
     pub file_metadata_cache: FileMetadataCacheConfig,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct FileStatisticsCacheConfig {
     pub r#type: CacheType,
-    #[serde(deserialize_with = "deserialize_non_zero")]
+    #[serde(
+        deserialize_with = "deserialize_non_zero",
+        serialize_with = "serialize_zero_for_none_u64"
+    )]
     pub ttl: Option<u64>,
-    #[serde(deserialize_with = "deserialize_non_zero")]
+    #[serde(
+        deserialize_with = "deserialize_non_zero",
+        serialize_with = "serialize_zero_for_none_u64"
+    )]
     pub max_entries: Option<u64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct FileMetadataCacheConfig {
     pub r#type: CacheType,
-    #[serde(deserialize_with = "deserialize_non_zero")]
+    #[serde(
+        deserialize_with = "deserialize_non_zero",
+        serialize_with = "serialize_zero_for_none_u64"
+    )]
     pub ttl: Option<u64>,
-    #[serde(deserialize_with = "deserialize_non_zero")]
+    #[serde(
+        deserialize_with = "deserialize_non_zero",
+        serialize_with = "serialize_zero_for_none_u64"
+    )]
     pub size_limit: Option<u64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CacheType {
     None,
@@ -355,29 +429,33 @@ pub enum CacheType {
     Session,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CatalogConfig {
-    #[serde(deserialize_with = "deserialize_non_empty_string")]
+    #[serde(
+        deserialize_with = "deserialize_non_empty_string",
+        serialize_with = "serialize_empty_for_none_string"
+    )]
     pub default_catalog: Option<String>,
     pub default_database: Vec<String>,
     pub global_temporary_database: Vec<String>,
     pub list: Vec<CatalogType>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct OptimizerConfig {
     pub enable_join_reorder: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CatalogType {
     Memory {
         name: String,
         initial_database: Vec<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         initial_database_comment: Option<String>,
     },
     #[serde(alias = "iceberg-rest")]
@@ -386,38 +464,60 @@ pub enum CatalogType {
         //  https://iceberg.apache.org/docs/nightly/spark-configuration/#catalog-configuration
         name: String,
         uri: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
         warehouse: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         prefix: Option<String>,
+        #[serde(
+            skip_serializing_if = "Option::is_none",
+            serialize_with = "serialize_optional_secret"
+        )]
         oauth_access_token: Option<SecretString>,
+        #[serde(
+            skip_serializing_if = "Option::is_none",
+            serialize_with = "serialize_optional_secret"
+        )]
         bearer_access_token: Option<SecretString>,
     },
     Unity {
         name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
         uri: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         default_catalog: Option<String>,
+        #[serde(
+            skip_serializing_if = "Option::is_none",
+            serialize_with = "serialize_optional_secret"
+        )]
         token: Option<SecretString>,
     },
     #[serde(alias = "onelake")]
     OneLake {
         name: String,
         url: String,
+        #[serde(
+            skip_serializing_if = "Option::is_none",
+            serialize_with = "serialize_optional_secret"
+        )]
         bearer_token: Option<SecretString>,
     },
     Glue {
         name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
         region: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         endpoint_url: Option<String>,
     },
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SparkConfig {
     pub session_timeout_secs: u64,
     pub execution_heartbeat_interval_secs: u64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PythonConfig {
     pub data_source_write_channel_capacity: usize,
@@ -425,7 +525,7 @@ pub struct PythonConfig {
     pub data_source_slow_read_warn_ms: u64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TelemetryConfig {
     pub export_traces: bool,
@@ -441,7 +541,7 @@ pub struct TelemetryConfig {
     pub logs_export_batch_size: u64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OtlpProtocol {
     Grpc,
@@ -475,96 +575,53 @@ impl ClusterConfigEnv {
     }
 }
 
-/// Navigates a nested [`Dict`] using a dot-separated key path
-/// and returns a reference to the leaf value, if found.
-fn get_config_value<'a>(dict: &'a Dict, key: &str) -> Option<&'a Value> {
-    let (head, tail) = match key.split_once('.') {
-        Some((h, t)) => (h, Some(t)),
-        None => (key, None),
-    };
-    let value = dict.get(head)?;
-    match tail {
-        Some(tail) => {
-            if let Value::Dict(_, nested) = value {
-                get_config_value(nested, tail)
-            } else {
-                None
-            }
-        }
-        None => Some(value),
-    }
-}
-
-/// Converts a Figment [`Value`] to its string representation.
-/// Strings are returned as-is; complex types use a JSON-like format.
-fn config_value_to_string(value: &Value) -> String {
-    match value {
-        Value::String(_, s) => s.clone(),
-        Value::Char(_, c) => c.to_string(),
-        Value::Bool(_, b) => b.to_string(),
-        Value::Num(_, n) => num_to_string(n),
-        Value::Empty(_, _) => String::new(),
-        Value::Array(_, arr) => {
-            let items: Vec<String> = arr.iter().map(config_value_to_json).collect();
-            format!("[{}]", items.join(","))
-        }
-        Value::Dict(_, dict) => {
-            let items: Vec<String> = dict
-                .iter()
-                .map(|(k, v)| format!("\"{}\":{}", k, config_value_to_json(v)))
-                .collect();
-            format!("{{{}}}", items.join(","))
+/// Recursively walks a TOML table, emitting `(dot.notation.key, value_string)` pairs
+/// for every primitive (string, integer, float, boolean) and array leaf value.
+fn walk_toml_table(table: &toml::Table, prefix: String, pairs: &mut Vec<(String, String)>) {
+    for (key, value) in table {
+        let full_key = if prefix.is_empty() {
+            key.clone()
+        } else {
+            format!("{prefix}.{key}")
+        };
+        match value {
+            toml::Value::Table(t) => walk_toml_table(t, full_key, pairs),
+            toml::Value::Array(_) => pairs.push((full_key, value.to_string())),
+            toml::Value::String(s) => pairs.push((full_key, s.clone())),
+            toml::Value::Integer(i) => pairs.push((full_key, i.to_string())),
+            toml::Value::Float(f) => pairs.push((full_key, f.to_string())),
+            toml::Value::Boolean(b) => pairs.push((full_key, b.to_string())),
+            toml::Value::Datetime(d) => pairs.push((full_key, d.to_string())),
         }
     }
 }
 
-/// Converts a Figment [`Value`] to a JSON-formatted string,
-/// quoting string values as required by JSON syntax.
-fn config_value_to_json(value: &Value) -> String {
-    match value {
-        Value::String(_, s) => {
-            let escaped = s
-                .replace('\\', "\\\\")
-                .replace('"', "\\\"")
-                .replace('\n', "\\n")
-                .replace('\r', "\\r")
-                .replace('\t', "\\t");
-            format!("\"{escaped}\"")
-        }
-        Value::Char(_, c) => format!("\"{c}\""),
-        Value::Bool(_, b) => b.to_string(),
-        Value::Num(_, n) => num_to_string(n),
-        Value::Empty(_, _) => "null".to_string(),
-        Value::Array(_, arr) => {
-            let items: Vec<String> = arr.iter().map(config_value_to_json).collect();
-            format!("[{}]", items.join(","))
-        }
-        Value::Dict(_, dict) => {
-            let items: Vec<String> = dict
-                .iter()
-                .map(|(k, v)| format!("\"{}\":{}", k, config_value_to_json(v)))
-                .collect();
-            format!("{{{}}}", items.join(","))
-        }
-    }
+fn serialize_zero_for_none_usize<S>(v: &Option<usize>, s: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    s.serialize_u64(v.unwrap_or(0) as u64)
 }
 
-fn num_to_string(n: &figment::value::Num) -> String {
-    use figment::value::Num;
-    match n {
-        Num::U8(v) => v.to_string(),
-        Num::U16(v) => v.to_string(),
-        Num::U32(v) => v.to_string(),
-        Num::U64(v) => v.to_string(),
-        Num::U128(v) => v.to_string(),
-        Num::USize(v) => v.to_string(),
-        Num::I8(v) => v.to_string(),
-        Num::I16(v) => v.to_string(),
-        Num::I32(v) => v.to_string(),
-        Num::I64(v) => v.to_string(),
-        Num::I128(v) => v.to_string(),
-        Num::ISize(v) => v.to_string(),
-        Num::F32(v) => v.to_string(),
-        Num::F64(v) => v.to_string(),
-    }
+fn serialize_zero_for_none_u64<S>(v: &Option<u64>, s: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    s.serialize_u64(v.unwrap_or(0))
+}
+
+fn serialize_empty_for_none_string<S>(v: &Option<String>, s: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    s.serialize_str(v.as_deref().unwrap_or(""))
+}
+
+fn serialize_optional_secret<S>(v: &Option<SecretString>, s: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    // Only called when Some (combined with skip_serializing_if = "Option::is_none")
+    let _ = v;
+    s.serialize_str("[REDACTED]")
 }

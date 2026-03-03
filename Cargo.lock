@@ -6086,6 +6086,7 @@ dependencies = [
  "serde_yaml",
  "thiserror",
  "tokio",
+ "toml",
 ]
 
 [[package]]
