@@ -93,9 +93,9 @@ pub struct CreateViewColumnOptions {
     pub comment: Option<String>,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd)]
-pub struct CreateTemporaryViewOptions {
-    pub input: Arc<LogicalPlan>,
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+pub struct CreateTemporaryViewOptions<I = Arc<LogicalPlan>> {
+    pub input: I,
     pub columns: Vec<CreateTemporaryViewColumnOptions>,
     pub if_not_exists: bool,
     pub replace: bool,

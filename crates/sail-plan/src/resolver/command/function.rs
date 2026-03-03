@@ -39,10 +39,8 @@ impl PlanResolver<'_> {
         );
 
         let manager = self.ctx.extension::<CatalogManager>()?;
-        let udf_id = manager
-            .tracker
-            .track_udf(datafusion_expr::ScalarUDF::from(udf))?;
-        let command = CatalogCommand::RegisterFunction { udf_id };
+        let udf = manager.track_function(datafusion_expr::ScalarUDF::from(udf))?;
+        let command = CatalogCommand::RegisterFunction { udf };
         self.resolve_catalog_command(command)
     }
 
@@ -74,10 +72,8 @@ impl PlanResolver<'_> {
         // PySpark UDTF is registered as a scalar UDF since it will be used as a stream UDF
         // in the `MapPartitions` plan.
         let manager = self.ctx.extension::<CatalogManager>()?;
-        let udf_id = manager
-            .tracker
-            .track_udf(datafusion_expr::ScalarUDF::from(udtf))?;
-        let command = CatalogCommand::RegisterFunction { udf_id };
+        let udf = manager.track_function(datafusion_expr::ScalarUDF::from(udtf))?;
+        let command = CatalogCommand::RegisterFunction { udf };
         self.resolve_catalog_command(command)
     }
 }

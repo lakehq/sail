@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use datafusion_expr::{LogicalPlan, ScalarUDF};
 use sail_common_datafusion::extension::SessionExtension;
 
 use crate::error::{CatalogError, CatalogResult};
+use crate::manager::tracker::{CatalogFunctionId, CatalogLogicalPlanId, CatalogObjectTracker};
 use crate::provider::{CatalogProvider, Namespace};
 use crate::temp_view::TemporaryViewManager;
 
@@ -14,14 +16,12 @@ pub mod table;
 pub mod tracker;
 pub mod view;
 
-use crate::manager::tracker::CatalogObjectTracker;
-
 /// A manager for all catalogs registered with the session.
 /// Each catalog has a name and a corresponding [`CatalogProvider`] instance.
 pub struct CatalogManager {
     state: Arc<Mutex<CatalogManagerState>>,
     pub(super) temporary_views: TemporaryViewManager,
-    pub tracker: CatalogObjectTracker,
+    pub(super) tracker: CatalogObjectTracker,
 }
 
 pub(super) struct CatalogManagerState {
@@ -107,6 +107,28 @@ impl CatalogManager {
         let state = self.state()?;
         let (catalog, database, table) = state.resolve_object_reference(object)?;
         Ok((state.get_catalog(&catalog)?, database, table))
+    }
+
+    pub fn track_function(&self, udf: ScalarUDF) -> CatalogResult<CatalogFunctionId> {
+        self.tracker.track_function(udf)
+    }
+
+    pub fn get_tracked_function(&self, id: CatalogFunctionId) -> CatalogResult<ScalarUDF> {
+        self.tracker.get_tracked_function(id)
+    }
+
+    pub fn track_logical_plan(
+        &self,
+        plan: Arc<LogicalPlan>,
+    ) -> CatalogResult<CatalogLogicalPlanId> {
+        self.tracker.track_logical_plan(plan)
+    }
+
+    pub fn get_tracked_logical_plan(
+        &self,
+        id: CatalogLogicalPlanId,
+    ) -> CatalogResult<Arc<LogicalPlan>> {
+        self.tracker.get_tracked_logical_plan(id)
     }
 }
 

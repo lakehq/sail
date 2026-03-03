@@ -7,11 +7,11 @@ use sail_common_datafusion::session::plan::PlanService;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{CatalogError, CatalogResult};
+use crate::manager::tracker::{CatalogFunctionId, CatalogLogicalPlanId};
 use crate::manager::CatalogManager;
 use crate::provider::{
-    CreateDatabaseOptions, CreateTableOptions, CreateTemporaryViewColumnOptions,
-    CreateTemporaryViewOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions,
-    DropTemporaryViewOptions, DropViewOptions,
+    CreateDatabaseOptions, CreateTableOptions, CreateTemporaryViewOptions, CreateViewOptions,
+    DropDatabaseOptions, DropTableOptions, DropTemporaryViewOptions, DropViewOptions,
 };
 use crate::utils::quote_namespace_if_needed;
 
@@ -87,7 +87,7 @@ pub enum CatalogCommand {
         is_temporary: bool,
     },
     RegisterFunction {
-        udf_id: u64,
+        udf: CatalogFunctionId,
     },
     RegisterTableFunction {
         name: String,
@@ -107,12 +107,7 @@ pub enum CatalogCommand {
     CreateTemporaryView {
         view: String,
         is_global: bool,
-        plan_id: u64,
-        columns: Vec<CreateTemporaryViewColumnOptions>,
-        if_not_exists: bool,
-        replace: bool,
-        comment: Option<String>,
-        properties: Vec<(String, String)>,
+        options: CreateTemporaryViewOptions<CatalogLogicalPlanId>,
     },
     CreateView {
         view: Vec<String>,
@@ -391,8 +386,8 @@ impl CatalogCommand {
                     .await?;
                 display.bools().to_record_batch(vec![true])?
             }
-            CatalogCommand::RegisterFunction { udf_id } => {
-                let udf = manager.tracker.get_udf(udf_id)?;
+            CatalogCommand::RegisterFunction { udf } => {
+                let udf = manager.get_tracked_function(udf)?;
                 manager.register_function(ctx, udf)?;
                 display.empty().to_record_batch(vec![])?
             }
@@ -419,21 +414,16 @@ impl CatalogCommand {
             CatalogCommand::CreateTemporaryView {
                 view,
                 is_global,
-                plan_id,
-                columns,
-                if_not_exists,
-                replace,
-                comment,
-                properties,
+                options,
             } => {
-                let input = manager.tracker.get_plan(plan_id)?;
+                let input = manager.get_tracked_logical_plan(options.input)?;
                 let options = CreateTemporaryViewOptions {
                     input,
-                    columns,
-                    if_not_exists,
-                    replace,
-                    comment,
-                    properties,
+                    columns: options.columns,
+                    if_not_exists: options.if_not_exists,
+                    replace: options.replace,
+                    comment: options.comment,
+                    properties: options.properties,
                 };
                 if is_global {
                     manager.create_global_temporary_view(&view, options).await?;
