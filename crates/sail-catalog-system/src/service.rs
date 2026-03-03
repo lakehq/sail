@@ -6,7 +6,7 @@ use datafusion::common::{internal_datafusion_err, Result};
 use datafusion::physical_expr::PhysicalExpr;
 use sail_common_datafusion::array::serde::ArrowSerializer;
 use sail_common_datafusion::extension::SessionExtension;
-use sail_common_datafusion::system::catalog::SystemTable;
+use sail_common_datafusion::system::catalog::{OptionRow, SystemTable};
 use sail_common_datafusion::system::observable::{SessionManagerObserver, StateObservable};
 use sail_common_datafusion::system::predicate::Predicates;
 use serde::{Deserialize, Serialize};
@@ -16,11 +16,18 @@ use crate::predicate::PredicateExtractor;
 
 pub struct SystemTableService {
     system_manager: Box<dyn StateObservable<SessionManagerObserver>>,
+    options: Vec<(String, String)>,
 }
 
 impl SystemTableService {
-    pub fn new(system_manager: Box<dyn StateObservable<SessionManagerObserver>>) -> Self {
-        Self { system_manager }
+    pub fn new(
+        system_manager: Box<dyn StateObservable<SessionManagerObserver>>,
+        options: Vec<(String, String)>,
+    ) -> Self {
+        Self {
+            system_manager,
+            options,
+        }
     }
 
     pub async fn read(
@@ -90,6 +97,26 @@ impl SystemTableService {
                     schema,
                 )
                 .await?
+            }
+            SystemTable::Options => {
+                let key_pred = filters
+                    .extract("key")?
+                    .unwrap_or_else(Predicates::always_true);
+                filters.finalize()?;
+                let rows = self
+                    .options
+                    .iter()
+                    .filter_map(|(k, v)| match key_pred(k) {
+                        Ok(true) => Some(Ok(OptionRow {
+                            key: k.clone(),
+                            value: v.clone(),
+                        })),
+                        Ok(false) => None,
+                        Err(e) => Some(Err(e)),
+                    })
+                    .take(fetch)
+                    .collect::<Result<Vec<_>>>()?;
+                ArrowSerializer::build_record_batch_with_schema(&rows, schema)?
             }
             SystemTable::Sessions => {
                 let session_id = filters

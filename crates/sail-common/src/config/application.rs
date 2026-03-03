@@ -5,7 +5,8 @@ use secrecy::SecretString;
 use serde::Deserialize;
 
 use crate::config::loader::{
-    deserialize_non_empty_string, deserialize_non_zero, deserialize_unknown_unit, ConfigDefinition,
+    deserialize_non_empty_string, deserialize_non_zero, deserialize_unknown_unit, load_config_keys,
+    ConfigDefinition,
 };
 use crate::error::{CommonError, CommonResult};
 
@@ -62,6 +63,32 @@ impl AppConfig {
             .merge(Env::prefixed(SAIL_ENV_VAR_PREFIX).map(|p| p.as_str().replace("__", ".").into()))
             .extract()
             .map_err(|e| CommonError::InvalidArgument(e.to_string()))
+    }
+
+    /// Returns the current application configuration as a list of `(key, value)` pairs.
+    /// Keys use dot notation as defined in `application.yaml`.
+    /// Values are the merged result of defaults and environment variable overrides.
+    pub fn load_key_value_pairs() -> CommonResult<Vec<(String, String)>> {
+        let keys = load_config_keys(APP_CONFIG).map_err(CommonError::InvalidArgument)?;
+
+        let figment = Figment::from(ConfigDefinition::new(APP_CONFIG))
+            .merge(InternalConfigPlaceholder)
+            .merge(
+                Env::prefixed(SAIL_ENV_VAR_PREFIX).map(|p| p.as_str().replace("__", ".").into()),
+            );
+
+        let data = figment
+            .data()
+            .map_err(|e| CommonError::InvalidArgument(e.to_string()))?;
+        let dict = data.get(&Profile::Default).cloned().unwrap_or_default();
+
+        let mut pairs = Vec::with_capacity(keys.len());
+        for key in keys {
+            if let Some(value) = get_config_value(&dict, &key) {
+                pairs.push((key, config_value_to_string(value)));
+            }
+        }
+        Ok(pairs)
     }
 }
 
@@ -445,5 +472,99 @@ impl ClusterConfigEnv {
         TASK_STREAM_BUFFER,
         TASK_STREAM_CREATION_TIMEOUT_SECS,
         RPC_RETRY_STRATEGY,
+    }
+}
+
+/// Navigates a nested [`Dict`] using a dot-separated key path
+/// and returns a reference to the leaf value, if found.
+fn get_config_value<'a>(dict: &'a Dict, key: &str) -> Option<&'a Value> {
+    let (head, tail) = match key.split_once('.') {
+        Some((h, t)) => (h, Some(t)),
+        None => (key, None),
+    };
+    let value = dict.get(head)?;
+    match tail {
+        Some(tail) => {
+            if let Value::Dict(_, nested) = value {
+                get_config_value(nested, tail)
+            } else {
+                None
+            }
+        }
+        None => Some(value),
+    }
+}
+
+/// Converts a Figment [`Value`] to its string representation.
+/// Strings are returned as-is; complex types use a JSON-like format.
+fn config_value_to_string(value: &Value) -> String {
+    match value {
+        Value::String(_, s) => s.clone(),
+        Value::Char(_, c) => c.to_string(),
+        Value::Bool(_, b) => b.to_string(),
+        Value::Num(_, n) => num_to_string(n),
+        Value::Empty(_, _) => String::new(),
+        Value::Array(_, arr) => {
+            let items: Vec<String> = arr.iter().map(config_value_to_json).collect();
+            format!("[{}]", items.join(","))
+        }
+        Value::Dict(_, dict) => {
+            let items: Vec<String> = dict
+                .iter()
+                .map(|(k, v)| format!("\"{}\":{}", k, config_value_to_json(v)))
+                .collect();
+            format!("{{{}}}", items.join(","))
+        }
+    }
+}
+
+/// Converts a Figment [`Value`] to a JSON-formatted string,
+/// quoting string values as required by JSON syntax.
+fn config_value_to_json(value: &Value) -> String {
+    match value {
+        Value::String(_, s) => {
+            let escaped = s
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n")
+                .replace('\r', "\\r")
+                .replace('\t', "\\t");
+            format!("\"{escaped}\"")
+        }
+        Value::Char(_, c) => format!("\"{c}\""),
+        Value::Bool(_, b) => b.to_string(),
+        Value::Num(_, n) => num_to_string(n),
+        Value::Empty(_, _) => "null".to_string(),
+        Value::Array(_, arr) => {
+            let items: Vec<String> = arr.iter().map(config_value_to_json).collect();
+            format!("[{}]", items.join(","))
+        }
+        Value::Dict(_, dict) => {
+            let items: Vec<String> = dict
+                .iter()
+                .map(|(k, v)| format!("\"{}\":{}", k, config_value_to_json(v)))
+                .collect();
+            format!("{{{}}}", items.join(","))
+        }
+    }
+}
+
+fn num_to_string(n: &figment::value::Num) -> String {
+    use figment::value::Num;
+    match n {
+        Num::U8(v) => v.to_string(),
+        Num::U16(v) => v.to_string(),
+        Num::U32(v) => v.to_string(),
+        Num::U64(v) => v.to_string(),
+        Num::U128(v) => v.to_string(),
+        Num::USize(v) => v.to_string(),
+        Num::I8(v) => v.to_string(),
+        Num::I16(v) => v.to_string(),
+        Num::I32(v) => v.to_string(),
+        Num::I64(v) => v.to_string(),
+        Num::I128(v) => v.to_string(),
+        Num::ISize(v) => v.to_string(),
+        Num::F32(v) => v.to_string(),
+        Num::F64(v) => v.to_string(),
     }
 }

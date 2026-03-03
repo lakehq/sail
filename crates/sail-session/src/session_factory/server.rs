@@ -189,9 +189,12 @@ impl ServerSessionFactory {
     }
 
     fn create_system_table_service(&self, info: &ServerSessionInfo) -> Result<SystemTableService> {
-        Ok(SystemTableService::new(Box::new(
-            SessionManagerHandle::new(info.session_manager.clone()),
-        )))
+        let options =
+            AppConfig::load_key_value_pairs().map_err(|e| internal_datafusion_err!("{e}"))?;
+        Ok(SystemTableService::new(
+            Box::new(SessionManagerHandle::new(info.session_manager.clone())),
+            options,
+        ))
     }
 
     fn apply_execution_config(&mut self, config: &mut SessionConfig) {
