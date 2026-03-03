@@ -712,6 +712,8 @@ class PySparkArrowTableUdf:
         self._passthrough_columns = passthrough_columns
         self._output_schema = output_schema
         self._output_type = pa.struct([output_schema.field(i) for i in range(len(output_schema.names))])
+        # PySpark 4.1+ requires input_types and int_to_decimal_coercion_enabled args.
+        # Use try/except for compatibility with PySpark 4.0 which does not accept them.
         try:
             self._serializer = ArrowStreamPandasUDTFSerializer(
                 timezone=config.session_timezone,
