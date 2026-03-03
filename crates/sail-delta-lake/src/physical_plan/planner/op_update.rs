@@ -12,16 +12,207 @@
 
 use std::sync::Arc;
 
-use datafusion::common::{DataFusionError, Result};
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::common::{DataFusionError, Result, ToDFSchema};
+use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_plan::repartition::RepartitionExec;
+use datafusion::physical_plan::union::UnionExec;
+use datafusion::physical_plan::{ExecutionPlan, Partitioning};
+use datafusion_physical_expr::expressions::Column;
+use sail_common_datafusion::datasource::PhysicalSinkMode;
+use sail_common_datafusion::logical_expr::ExprWithSource;
 
 use super::context::PlannerContext;
+use super::utils::{build_log_replay_pipeline_with_options, LogReplayFilter, LogReplayOptions};
+use crate::datasource::schema::DataFusionMixins;
+use crate::datasource::PredicateProperties;
+use crate::kernel::DeltaOperation;
+use crate::physical_plan::{
+    DeltaCommitExec, DeltaDiscoveryExec, DeltaRemoveActionsExec, DeltaScanByAddsExec,
+    DeltaWriterExec,
+};
 
 pub async fn build_update_plan(
-    _ctx: &PlannerContext<'_>,
-    _input: Arc<dyn ExecutionPlan>,
+    ctx: &PlannerContext<'_>,
+    condition: Option<ExprWithSource>,
+    assignments: Vec<(String, ExprWithSource)>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    Err(DataFusionError::NotImplemented(
-        "UPDATE planner not implemented".to_string(),
-    ))
+    let table = ctx.open_table().await?;
+    let snapshot_state = table
+        .snapshot()
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let version = snapshot_state.version();
+
+    let table_schema = snapshot_state
+        .snapshot()
+        .arrow_schema()
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let partition_columns = snapshot_state.metadata().partition_columns().clone();
+    let table_df_schema = table_schema
+        .clone()
+        .to_dfschema()
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+    // Compile the condition (if any) to a physical expression
+    let physical_condition = condition
+        .as_ref()
+        .map(|c| {
+            ctx.session()
+                .create_physical_expr(c.expr.clone(), &table_df_schema)
+        })
+        .transpose()?;
+
+    // Determine if we can use partition-only filtering to skip unaffected files
+    let mut partition_only = false;
+    if let Some(phys_cond) = &physical_condition {
+        let mut expr_props = PredicateProperties::new(partition_columns.clone());
+        expr_props
+            .analyze_predicate(phys_cond)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        partition_only = expr_props.partition_only;
+    }
+
+    let kernel_snapshot = snapshot_state.snapshot().snapshot().inner.clone();
+    let log_segment = kernel_snapshot.log_segment();
+    let checkpoint_files = log_segment
+        .checkpoint_parts
+        .iter()
+        .map(|p| p.filename.clone())
+        .collect::<Vec<_>>();
+    let commit_files = log_segment
+        .ascending_commit_files
+        .iter()
+        .map(|p| p.filename.clone())
+        .collect::<Vec<_>>();
+
+    // Build a metadata pipeline over the Delta log; apply partition filter when possible
+    let mut log_replay_options = LogReplayOptions::default();
+    if partition_only {
+        if let Some(phys_cond) = &physical_condition {
+            log_replay_options.log_filter = Some(LogReplayFilter {
+                predicate: phys_cond.clone(),
+                table_schema: table_schema.clone(),
+            });
+        }
+    }
+
+    let meta_scan: Arc<dyn ExecutionPlan> = build_log_replay_pipeline_with_options(
+        ctx,
+        ctx.table_url().clone(),
+        version,
+        partition_columns.clone(),
+        checkpoint_files,
+        commit_files,
+        log_replay_options,
+    )
+    .await?;
+
+    // DeltaDiscoveryExec wraps the metadata pipeline and exposes Add actions
+    let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
+        meta_scan,
+        ctx.table_url().clone(),
+        physical_condition.clone(),
+        Some(table_schema.clone()),
+        version,
+        partition_columns.clone(),
+        partition_only,
+    )?);
+
+    // Spread Add actions across partitions for parallel scanning
+    let target_partitions = ctx.session().config().target_partitions().max(1);
+    let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+        find_files_exec,
+        Partitioning::RoundRobinBatch(target_partitions),
+    )?);
+
+    let scan_exec = Arc::new(DeltaScanByAddsExec::new(
+        Arc::clone(&find_files_exec),
+        ctx.table_url().clone(),
+        table_schema.clone(),
+    ));
+
+    // Adapt physical expression column indices to the scan schema
+    let adapter_factory = Arc::new(crate::physical_plan::DeltaPhysicalExprAdapterFactory {});
+    let adapter = adapter_factory.create(table_schema.clone(), scan_exec.schema());
+
+    let adapted_condition = physical_condition
+        .map(|c| adapter.rewrite(c))
+        .transpose()
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+    // Build the UPDATE projection: for each table column, apply the assignment (if any)
+    // using CASE WHEN condition THEN new_value ELSE original_value when a condition is present.
+    let scan_schema = scan_exec.schema();
+    let mut proj_exprs: Vec<(Arc<dyn datafusion_physical_expr::PhysicalExpr>, String)> = vec![];
+
+    for field in table_schema.fields().iter() {
+        let col_name = field.name();
+        let scan_idx = scan_schema
+            .index_of(col_name)
+            .map_err(|e| DataFusionError::Plan(format!("{e}")))?;
+        let original_col: Arc<dyn datafusion_physical_expr::PhysicalExpr> =
+            Arc::new(Column::new(col_name, scan_idx));
+
+        // Look for an assignment targeting this column (case-insensitive)
+        let assignment = assignments
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(col_name));
+
+        if let Some((_, assign_expr)) = assignment {
+            // Compile the assignment expression against the table schema, then adapt to scan
+            let physical_assign = ctx
+                .session()
+                .create_physical_expr(assign_expr.expr.clone(), &table_df_schema)?;
+            let adapted_assign = adapter
+                .rewrite(physical_assign)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+            if let Some(cond) = &adapted_condition {
+                // CASE WHEN condition THEN new_value ELSE original_value END
+                let case_expr: Arc<dyn datafusion_physical_expr::PhysicalExpr> =
+                    Arc::new(datafusion_physical_expr::expressions::CaseExpr::try_new(
+                        None,
+                        vec![(cond.clone(), adapted_assign)],
+                        Some(original_col),
+                    )?);
+                proj_exprs.push((case_expr, col_name.clone()));
+            } else {
+                // No condition: apply assignment unconditionally to all rows
+                proj_exprs.push((adapted_assign, col_name.clone()));
+            }
+        } else {
+            // No assignment for this column: keep the original value
+            proj_exprs.push((original_col, col_name.clone()));
+        }
+    }
+
+    let projection_exec = Arc::new(ProjectionExec::try_new(proj_exprs, scan_exec)?);
+
+    let operation_override = Some(DeltaOperation::Update {
+        predicate: condition.as_ref().and_then(|c| c.source.clone()),
+    });
+
+    let writer_exec = Arc::new(DeltaWriterExec::new(
+        projection_exec,
+        ctx.table_url().clone(),
+        ctx.options().clone(),
+        partition_columns.clone(),
+        PhysicalSinkMode::Append,
+        ctx.table_exists(),
+        table_schema.clone(),
+        operation_override,
+    )?);
+
+    let remove_exec = Arc::new(DeltaRemoveActionsExec::new(find_files_exec)?);
+    let union_exec = UnionExec::try_new(vec![writer_exec, remove_exec])?;
+
+    Ok(Arc::new(DeltaCommitExec::new(
+        Arc::new(CoalescePartitionsExec::new(union_exec)),
+        ctx.table_url().clone(),
+        partition_columns,
+        ctx.table_exists(),
+        table_schema,
+        PhysicalSinkMode::Append,
+    )))
 }

@@ -87,6 +87,18 @@ pub struct DeleteInfo {
     pub options: Vec<HashMap<String, String>>,
 }
 
+/// Information required to create a data updater.
+#[derive(Debug, Clone)]
+pub struct UpdateInfo {
+    pub path: String,
+    pub condition: Option<ExprWithSource>,
+    /// Column assignments for the UPDATE operation: (column_name, new_value_expr).
+    pub assignments: Vec<(String, ExprWithSource)>,
+    /// The sets of options for the data update.
+    /// A later set of options can override earlier ones.
+    pub options: Vec<HashMap<String, String>>,
+}
+
 #[derive(Debug, Clone)]
 pub struct MergeTargetInfo {
     pub table_name: Vec<String>,
@@ -176,6 +188,19 @@ pub trait TableFormat: Send + Sync {
         let _ = (ctx, info);
         not_impl_err!(
             "DELETE operation is not yet implemented for {} format",
+            self.name()
+        )
+    }
+
+    /// Creates a `ExecutionPlan` for update.
+    async fn create_updater(
+        &self,
+        ctx: &dyn Session,
+        info: UpdateInfo,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let _ = (ctx, info);
+        not_impl_err!(
+            "UPDATE operation is not yet implemented for {} format",
             self.name()
         )
     }
