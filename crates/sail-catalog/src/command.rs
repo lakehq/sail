@@ -1,13 +1,13 @@
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::prelude::SessionContext;
-use datafusion_expr::ScalarUDF;
 use sail_common_datafusion::array::serde::ArrowSerializer;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{CatalogError, CatalogResult};
+use crate::manager::tracker::{CatalogFunctionId, CatalogLogicalPlanId};
 use crate::manager::CatalogManager;
 use crate::provider::{
     CreateDatabaseOptions, CreateTableOptions, CreateTemporaryViewOptions, CreateViewOptions,
@@ -15,7 +15,7 @@ use crate::provider::{
 };
 use crate::utils::quote_namespace_if_needed;
 
-#[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum CatalogCommand {
     CurrentCatalog,
     SetCurrentCatalog {
@@ -87,7 +87,7 @@ pub enum CatalogCommand {
         is_temporary: bool,
     },
     RegisterFunction {
-        udf: ScalarUDF,
+        udf: CatalogFunctionId,
     },
     RegisterTableFunction {
         name: String,
@@ -107,7 +107,7 @@ pub enum CatalogCommand {
     CreateTemporaryView {
         view: String,
         is_global: bool,
-        options: CreateTemporaryViewOptions,
+        options: CreateTemporaryViewOptions<CatalogLogicalPlanId>,
     },
     CreateView {
         view: Vec<String>,
@@ -119,7 +119,7 @@ pub enum CatalogCommand {
     },
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub enum CatalogTableFunction {
     // We do not support any kind of table functions yet.
     // PySpark UDTF is registered as a scalar UDF.
@@ -387,6 +387,7 @@ impl CatalogCommand {
                 display.bools().to_record_batch(vec![true])?
             }
             CatalogCommand::RegisterFunction { udf } => {
+                let udf = manager.get_tracked_function(udf)?;
                 manager.register_function(ctx, udf)?;
                 display.empty().to_record_batch(vec![])?
             }
@@ -415,6 +416,15 @@ impl CatalogCommand {
                 is_global,
                 options,
             } => {
+                let input = manager.get_tracked_logical_plan(options.input)?;
+                let options = CreateTemporaryViewOptions {
+                    input,
+                    columns: options.columns,
+                    if_not_exists: options.if_not_exists,
+                    replace: options.replace,
+                    comment: options.comment,
+                    properties: options.properties,
+                };
                 if is_global {
                     manager.create_global_temporary_view(&view, options).await?;
                 } else {
