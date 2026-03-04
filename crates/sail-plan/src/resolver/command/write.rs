@@ -441,39 +441,49 @@ impl PlanResolver<'_> {
                 // Discover the schema from the table format so that write operations
                 // (INSERT INTO) can validate the input schema correctly.
                 if columns.is_empty() {
-                    if let Ok(registry) = self.ctx.extension::<TableFormatRegistry>() {
-                        if let Ok(table_format) = registry.get(&format) {
-                            let info = SourceInfo {
-                                paths: location.iter().cloned().collect(),
-                                schema: None,
-                                constraints: Default::default(),
-                                partition_by: vec![],
-                                bucket_by: None,
-                                sort_order: vec![],
-                                options: vec![options.iter().cloned().collect()],
-                            };
-                            if let Ok(provider) =
-                                table_format.create_provider(&self.ctx.state(), info).await
-                            {
-                                columns = provider
-                                    .schema()
-                                    .fields()
-                                    .iter()
-                                    .map(|f| TableColumnStatus {
-                                        name: f.name().clone(),
-                                        data_type: f.data_type().clone(),
-                                        nullable: f.is_nullable(),
-                                        comment: None,
-                                        default: None,
-                                        generated_always_as: None,
-                                        is_partition: false,
-                                        is_bucket: false,
-                                        is_cluster: false,
-                                    })
-                                    .collect();
-                            }
-                        }
-                    }
+                    let registry = self.ctx.extension::<TableFormatRegistry>().map_err(|e| {
+                        PlanError::invalid(format!(
+                            "failed to access table format registry for table `{table:?}`: {e}",
+                        ))
+                    })?;
+                    let table_format = registry.get(&format).map_err(|e| {
+                        PlanError::invalid(format!(
+                            "failed to resolve table format `{format}` for table `{table:?}`: {e}",
+                        ))
+                    })?;
+                    let info = SourceInfo {
+                        paths: location.iter().cloned().collect(),
+                        schema: None,
+                        constraints: Default::default(),
+                        partition_by: vec![],
+                        bucket_by: None,
+                        sort_order: vec![],
+                        options: vec![options.iter().cloned().collect()],
+                    };
+                    let provider = table_format
+                        .create_provider(&self.ctx.state(), info)
+                        .await
+                        .map_err(|e| {
+                            PlanError::invalid(format!(
+                                "failed to infer schema for table `{table:?}` from format `{format}`: {e}",
+                            ))
+                        })?;
+                    columns = provider
+                        .schema()
+                        .fields()
+                        .iter()
+                        .map(|f| TableColumnStatus {
+                            name: f.name().clone(),
+                            data_type: f.data_type().clone(),
+                            nullable: f.is_nullable(),
+                            comment: None,
+                            default: None,
+                            generated_always_as: None,
+                            is_partition: false,
+                            is_bucket: false,
+                            is_cluster: false,
+                        })
+                        .collect();
                 }
                 Ok(Some(TableInfo {
                     columns,
