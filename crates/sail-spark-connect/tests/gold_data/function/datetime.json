@@ -1888,7 +1888,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Internal error: Expect TypeSignatureClass::Native(LogicalType(Native(Int32), Int32)) but received NativeType::Decimal(5, 3), DataType: Decimal128(5, 3).\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues No function matches the given name and argument types 'make_time(Int32, Int32, Decimal128(5, 3))'. You might need to add explicit type casts.\n\tCandidate functions:\n\tmake_time(Coercion(TypeSignatureClass::Native(LogicalType(Native(Int32), Int32)), implicit_coercion=ImplicitCoercion([Integer, Native(LogicalType(Native(String), String))], default_type=Int32), Coercion(TypeSignatureClass::Native(LogicalType(Native(Int32), Int32)), implicit_coercion=ImplicitCoercion([Integer, Native(LogicalType(Native(String), String))], default_type=Int32), Coercion(TypeSignatureClass::Native(LogicalType(Native(Int32), Int32)), implicit_coercion=ImplicitCoercion([Integer, Native(LogicalType(Native(String), String))], default_type=Int32))"
+        "success": "ok"
       }
     },
     {
@@ -2592,7 +2592,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: time_diff"
+        "success": "ok"
       }
     },
     {
@@ -2614,7 +2614,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: time_diff"
+        "success": "ok"
       }
     },
     {
@@ -2636,7 +2636,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: time_diff"
+        "success": "ok"
       }
     },
     {
@@ -2658,7 +2658,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: time_trunc"
+        "success": "ok"
       }
     },
     {
@@ -2680,7 +2680,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: time_trunc"
+        "success": "ok"
       }
     },
     {
