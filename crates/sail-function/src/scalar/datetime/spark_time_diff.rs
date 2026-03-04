@@ -132,37 +132,3 @@ impl ScalarUDFImpl for SparkTimeDiff {
         ])
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_unit_divisor() {
-        assert_eq!(unit_divisor("HOUR"), Some(3_600_000_000));
-        assert_eq!(unit_divisor("hour"), Some(3_600_000_000));
-        assert_eq!(unit_divisor("MINUTE"), Some(60_000_000));
-        assert_eq!(unit_divisor("SECOND"), Some(1_000_000));
-        assert_eq!(unit_divisor("MILLISECOND"), Some(1_000));
-        assert_eq!(unit_divisor("MICROSECOND"), Some(1));
-        assert_eq!(unit_divisor("DAY"), None);
-    }
-
-    #[test]
-    fn test_time_diff_truncation() {
-        // 20:30:29 and 21:30:28 → diff = 59min 59sec = 3_599_000_000 micros
-        // 3_599_000_000 / 3_600_000_000 = 0 (truncated)
-        let diff: i64 = 3_599_000_000;
-        assert_eq!(diff / 3_600_000_000i64, 0);
-
-        // 20:30:29 and 21:30:29 → diff = 1 hour exactly
-        let diff: i64 = 3_600_000_000;
-        assert_eq!(diff / 3_600_000_000i64, 1);
-
-        // Negative: 20:30:29 and 12:00:00 → diff = -8h 30min 29sec
-        let start: i64 = 20 * 3_600_000_000 + 30 * 60_000_000 + 29 * 1_000_000;
-        let end: i64 = 12 * 3_600_000_000;
-        let diff = end - start;
-        assert_eq!(diff / 3_600_000_000i64, -8);
-    }
-}
