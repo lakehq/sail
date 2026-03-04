@@ -12,7 +12,7 @@ use sail_common::spec;
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableSort, TableColumnStatus, TableKind,
 };
-use sail_common_datafusion::datasource::{BucketBy, SinkMode};
+use sail_common_datafusion::datasource::{BucketBy, SinkMode, SourceInfo, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
@@ -425,7 +425,7 @@ impl PlanResolver<'_> {
         };
         match status.kind {
             TableKind::Table {
-                columns,
+                mut columns,
                 comment: _,
                 constraints: _,
                 location,
@@ -435,16 +435,57 @@ impl PlanResolver<'_> {
                 bucket_by,
                 options,
                 properties,
-            } => Ok(Some(TableInfo {
-                columns,
-                location,
-                format,
-                partition_by,
-                sort_by,
-                bucket_by,
-                options,
-                properties,
-            })),
+            } => {
+                // When a table is created without column definitions
+                // (e.g. `CREATE TABLE t USING fmt`), the catalog stores an empty column list.
+                // Discover the schema from the table format so that write operations
+                // (INSERT INTO) can validate the input schema correctly.
+                if columns.is_empty() {
+                    if let Ok(registry) = self.ctx.extension::<TableFormatRegistry>() {
+                        if let Ok(table_format) = registry.get(&format) {
+                            let info = SourceInfo {
+                                paths: location.iter().cloned().collect(),
+                                schema: None,
+                                constraints: Default::default(),
+                                partition_by: vec![],
+                                bucket_by: None,
+                                sort_order: vec![],
+                                options: vec![options.iter().cloned().collect()],
+                            };
+                            if let Ok(provider) =
+                                table_format.create_provider(&self.ctx.state(), info).await
+                            {
+                                columns = provider
+                                    .schema()
+                                    .fields()
+                                    .iter()
+                                    .map(|f| TableColumnStatus {
+                                        name: f.name().clone(),
+                                        data_type: f.data_type().clone(),
+                                        nullable: f.is_nullable(),
+                                        comment: None,
+                                        default: None,
+                                        generated_always_as: None,
+                                        is_partition: false,
+                                        is_bucket: false,
+                                        is_cluster: false,
+                                    })
+                                    .collect();
+                            }
+                        }
+                    }
+                }
+                Ok(Some(TableInfo {
+                    columns,
+                    location,
+                    format,
+                    partition_by,
+                    sort_by,
+                    bucket_by,
+                    options,
+                    properties,
+                }))
+            }
             _ => Ok(None),
         }
     }
