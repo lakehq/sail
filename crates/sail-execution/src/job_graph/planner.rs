@@ -202,10 +202,12 @@ fn build_job_graph(
             build_job_graph(left.clone(), PartitionUsage::Shared, graph)?,
             build_job_graph(right.clone(), usage, graph)?,
         ]
-    } else if plan.as_any().is::<RepartitionExec>() || plan.as_any().is::<CoalescePartitionsExec>()
+    } else if plan.as_any().is::<RepartitionExec>()
+        || plan.as_any().is::<CoalescePartitionsExec>()
+        || plan.as_any().is::<SortPreservingMergeExec>()
     {
         let child = plan.children().one()?;
-        // At the shuffle boundary, we only expect to use the child partition once
+        // At the stage boundary, we only expect to use the child partition once
         // since the shuffle writer can materialize the data for multiple consumption.
         vec![build_job_graph(child.clone(), PartitionUsage::Once, graph)?]
     } else {
