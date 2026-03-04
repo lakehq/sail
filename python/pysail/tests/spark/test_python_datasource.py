@@ -1465,16 +1465,18 @@ def test_sql_create_table_and_select(spark):
             return table_name
 
         def schema(self) -> StructType:
-            return StructType([
-                StructField("name", StringType()),
-                StructField("age", IntegerType()),
-            ])
+            return StructType(
+                [
+                    StructField("name", StringType()),
+                    StructField("age", IntegerType()),
+                ]
+            )
 
-        def reader(self, schema: StructType) -> DataSourceReader:
+        def reader(self, schema: StructType) -> DataSourceReader:  # noqa: ARG002
             return SQLSimpleReader()
 
     class SQLSimpleReader(DataSourceReader):
-        def read(self, partition: InputPartition) -> Iterator[tuple]:
+        def read(self, partition: InputPartition) -> Iterator[tuple]:  # noqa: ARG002
             yield ("Alice", 20)
             yield ("Bob", 30)
 
@@ -1482,7 +1484,7 @@ def test_sql_create_table_and_select(spark):
     spark.sql(f"CREATE TABLE {table_name} USING {table_name}")
 
     try:
-        rows = spark.sql(f"SELECT * FROM {table_name}").collect()
+        rows = spark.sql(f"SELECT * FROM {table_name}").collect()  # noqa: S608
         assert len(rows) == 2  # noqa: PLR2004
         names = sorted(row.name for row in rows)
         ages = sorted(row.age for row in rows)
@@ -1504,16 +1506,18 @@ def test_sql_create_table_and_select_with_filter(spark):
             return table_name
 
         def schema(self) -> StructType:
-            return StructType([
-                StructField("name", StringType()),
-                StructField("age", IntegerType()),
-            ])
+            return StructType(
+                [
+                    StructField("name", StringType()),
+                    StructField("age", IntegerType()),
+                ]
+            )
 
-        def reader(self, schema: StructType) -> DataSourceReader:
+        def reader(self, schema: StructType) -> DataSourceReader:  # noqa: ARG002
             return SQLFilterReader()
 
     class SQLFilterReader(DataSourceReader):
-        def read(self, partition: InputPartition) -> Iterator[tuple]:
+        def read(self, partition: InputPartition) -> Iterator[tuple]:  # noqa: ARG002
             yield ("Alice", 20)
             yield ("Bob", 30)
             yield ("Charlie", 25)
@@ -1522,7 +1526,7 @@ def test_sql_create_table_and_select_with_filter(spark):
     spark.sql(f"CREATE TABLE {table_name} USING {table_name}")
 
     try:
-        rows = spark.sql(f"SELECT name FROM {table_name} WHERE age > 22").collect()
+        rows = spark.sql(f"SELECT name FROM {table_name} WHERE age > 22").collect()  # noqa: S608
         names = sorted(row.name for row in rows)
         assert names == ["Bob", "Charlie"]
     finally:
@@ -1539,12 +1543,14 @@ def test_sql_create_table_arrow_datasource(spark):
             return table_name
 
         def schema(self):
-            return pa.schema([
-                ("id", pa.int32()),
-                ("value", pa.string()),
-            ])
+            return pa.schema(
+                [
+                    ("id", pa.int32()),
+                    ("value", pa.string()),
+                ]
+            )
 
-        def reader(self, schema) -> DataSourceReader:
+        def reader(self, schema) -> DataSourceReader:  # noqa: ARG002
             return SQLArrowReader()
 
     class SQLArrowReader(DataSourceReader):
@@ -1562,7 +1568,7 @@ def test_sql_create_table_arrow_datasource(spark):
     spark.sql(f"CREATE TABLE {table_name} USING {table_name}")
 
     try:
-        rows = spark.sql(f"SELECT * FROM {table_name} ORDER BY id").collect()
+        rows = spark.sql(f"SELECT * FROM {table_name} ORDER BY id").collect()  # noqa: S608
         assert len(rows) == 3  # noqa: PLR2004
         assert [(r.id, r.value) for r in rows] == [(1, "a"), (2, "b"), (3, "c")]
     finally:
@@ -1597,7 +1603,7 @@ def test_sql_insert_into_python_datasource(spark):
         def schema(self):
             return pa.schema([("id", pa.int32()), ("value", pa.string())])
 
-        def reader(self, schema) -> DataSourceReader:
+        def reader(self, schema) -> DataSourceReader:  # noqa: ARG002
             return SQLInsertReader()
 
         def writer(self, schema, overwrite):
@@ -1619,12 +1625,12 @@ def test_sql_insert_into_python_datasource(spark):
 
     try:
         # Read should work
-        rows = spark.sql(f"SELECT * FROM {table_name}").collect()
+        rows = spark.sql(f"SELECT * FROM {table_name}").collect()  # noqa: S608
         assert len(rows) == 1
         assert rows[0].value == "existing"
 
         # INSERT INTO should trigger the writer
-        spark.sql(f"INSERT INTO {table_name} VALUES (2, 'new'), (3, 'another')")
+        spark.sql(f"INSERT INTO {table_name} VALUES (2, 'new'), (3, 'another')")  # noqa: S608
         assert SQLInsertWriter._commit_messages is not None  # noqa: SLF001
         assert len(SQLInsertWriter._commit_messages) > 0  # noqa: SLF001
     finally:
