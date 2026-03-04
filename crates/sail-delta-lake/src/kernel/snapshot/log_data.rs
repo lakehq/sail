@@ -304,8 +304,23 @@ mod datafusion {
         }
 
         pub(crate) fn column_stats(&self, name: impl AsRef<str>) -> Option<ColumnStatistics> {
+            let name_ref = name.as_ref();
+
+            // Partition columns have their values in `partitionValues_parsed`, not in
+            // `stats_parsed.minValues/maxValues`.  Compute min/max directly from the
+            // partition values array so that `AggregateStatistics` can resolve
+            // `SELECT MIN/MAX(partition_col)` from metadata without a full scan.
+            if self
+                .config
+                .metadata()
+                .partition_columns()
+                .contains(&name_ref.to_string())
+            {
+                return self.partition_column_stats(name_ref);
+            }
+
             FileStatsAccessor::try_new(self.data)
-                .map(|a| a.column_stats(name.as_ref()))
+                .map(|a| a.column_stats(name_ref))
                 .into_iter()
                 .collect::<Result<Vec<_>, _>>()
                 .ok()?
@@ -314,6 +329,80 @@ mod datafusion {
                     (None, stats) => Some(stats.clone()),
                     (Some(acc), stats) => Some(acc.add(stats)),
                 })
+        }
+
+        /// Compute column statistics for a partition column by reading its values
+        /// from `partitionValues_parsed` and aggregating with Min/Max accumulators.
+        fn partition_column_stats(&self, name: &str) -> Option<ColumnStatistics> {
+            let column = Column::from_name(name);
+
+            // Get the partition values array (one entry per file)
+            let values = self.pick_stats(&column, COL_MIN_VALUES)?;
+            let array_ref = values.as_ref();
+
+            if array_ref.is_empty() {
+                return Some(ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    min_value: Precision::Absent,
+                    max_value: Precision::Absent,
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Absent,
+                });
+            }
+
+            let min_value = if array_ref.data_type().is_primitive() {
+                MinAccumulator::try_new(array_ref.data_type())
+                    .ok()
+                    .and_then(|mut acc| {
+                        acc.update_batch(std::slice::from_ref(&values)).ok()?;
+                        let val = acc.evaluate().ok()?;
+                        if val.is_null() {
+                            None
+                        } else {
+                            Some(Precision::Exact(val))
+                        }
+                    })
+                    .unwrap_or(Precision::Absent)
+            } else {
+                Precision::Absent
+            };
+
+            let max_value = if array_ref.data_type().is_primitive() {
+                MaxAccumulator::try_new(array_ref.data_type())
+                    .ok()
+                    .and_then(|mut acc| {
+                        acc.update_batch(std::slice::from_ref(&values)).ok()?;
+                        let val = acc.evaluate().ok()?;
+                        if val.is_null() {
+                            None
+                        } else {
+                            Some(Precision::Exact(val))
+                        }
+                    })
+                    .unwrap_or(Precision::Absent)
+            } else {
+                Precision::Absent
+            };
+
+            // Count nulls: each null partition value means ALL rows in that file have
+            // NULL for this column.  We cannot know the exact row-level null count
+            // without reading per-file row counts, so report Absent for null_count
+            // when there are any nulls, and Exact(0) when there are none.
+            let null_count = if array_ref.null_count() == 0 {
+                Precision::Exact(0)
+            } else {
+                Precision::Absent
+            };
+
+            Some(ColumnStatistics {
+                null_count,
+                min_value,
+                max_value,
+                sum_value: Precision::Absent,
+                distinct_count: Precision::Absent,
+                byte_size: Precision::Absent,
+            })
         }
 
         pub(crate) fn statistics(&self) -> Option<Statistics> {

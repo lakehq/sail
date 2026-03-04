@@ -102,7 +102,7 @@ pub fn build_file_scan_config(
         let mut part =
             partitioned_file_from_action(action, &partition_columns_mapped, &complete_schema)?;
         if let Some(stats) = stats_for_add(action, &file_schema, &physical_to_logical)? {
-            part.statistics = Some(stats);
+            part = part.with_statistics(stats);
         }
 
         // Add file column if configured

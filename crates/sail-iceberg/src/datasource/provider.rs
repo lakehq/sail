@@ -252,6 +252,7 @@ impl IcebergTableProvider {
         data_files: Vec<DataFile>,
         delete_index: &std::collections::HashMap<String, IcebergDeleteAttachment>,
     ) -> Result<Vec<PartitionedFile>> {
+        let partition_col_map = self.identity_partition_column_map();
         let mut partitioned_files = Vec::new();
 
         for data_file in data_files {
@@ -291,14 +292,17 @@ impl IcebergTableProvider {
                 .get(&key)
                 .map(|att| Arc::new(att.clone()) as Arc<dyn Any + Send + Sync>);
 
-            let partitioned_file = PartitionedFile {
+            let file_stats =
+                self.create_file_statistics(&data_file, &partition_col_map);
+            let mut partitioned_file = PartitionedFile {
                 object_meta,
                 partition_values,
                 range: None,
-                statistics: Some(Arc::new(self.create_file_statistics(&data_file))),
+                statistics: None,
                 extensions,
                 metadata_size_hint: None,
             };
+            partitioned_file = partitioned_file.with_statistics(Arc::new(file_stats));
 
             partitioned_files.push(partitioned_file);
         }
@@ -321,11 +325,14 @@ impl IcebergTableProvider {
         file_groups.into_values().map(FileGroup::from).collect()
     }
 
-    /// Aggregate table-level statistics from a list of Iceberg data files
+    /// Aggregate table-level statistics from a list of Iceberg data files.
+    /// For Identity partition columns, min/max are derived from partition values.
     fn aggregate_statistics(&self, data_files: &[DataFile]) -> Statistics {
         if data_files.is_empty() {
             return Statistics::new_unknown(&self.arrow_schema);
         }
+
+        let partition_col_map = self.identity_partition_column_map();
 
         let mut total_rows: usize = 0;
         let mut total_bytes: usize = 0;
@@ -345,6 +352,30 @@ impl IcebergTableProvider {
             total_bytes = total_bytes.saturating_add(df.file_size_in_bytes() as usize);
 
             for (col_idx, field_id) in field_ids.iter().enumerate() {
+                // For Identity partition columns, read from partition values
+                if let Some(&part_idx) = partition_col_map.get(&col_idx) {
+                    if let Some(Some(Literal::Primitive(prim))) = df.partition().get(part_idx) {
+                        let sv = primitive_to_scalar_default(prim);
+                        min_scalars[col_idx] = match (&min_scalars[col_idx], &sv) {
+                            (None, s) => Some(s.clone()),
+                            (Some(existing), s) => Some(if s < existing {
+                                s.clone()
+                            } else {
+                                existing.clone()
+                            }),
+                        };
+                        max_scalars[col_idx] = match (&max_scalars[col_idx], &sv) {
+                            (None, s) => Some(s.clone()),
+                            (Some(existing), s) => Some(if s > existing {
+                                s.clone()
+                            } else {
+                                existing.clone()
+                            }),
+                        };
+                    }
+                    continue;
+                }
+
                 // null counts
                 if let Some(c) = df.null_value_counts().get(field_id) {
                     null_counts[col_idx] = null_counts[col_idx].saturating_add(*c as usize);
@@ -402,8 +433,14 @@ impl IcebergTableProvider {
         }
     }
 
-    /// Create file statistics from Iceberg data file metadata
-    fn create_file_statistics(&self, data_file: &DataFile) -> Statistics {
+    /// Create file statistics from Iceberg data file metadata.
+    /// For Identity partition columns, stats are derived from partition values
+    /// (since they don't appear in `lower_bounds`/`upper_bounds`).
+    fn create_file_statistics(
+        &self,
+        data_file: &DataFile,
+        partition_col_map: &HashMap<usize, usize>,
+    ) -> Statistics {
         let num_rows = Precision::Exact(data_file.record_count() as usize);
         let total_byte_size = Precision::Exact(data_file.file_size_in_bytes() as usize);
 
@@ -414,6 +451,25 @@ impl IcebergTableProvider {
             .iter()
             .enumerate()
             .map(|(i, _field)| {
+                // For Identity partition columns, use the partition value directly
+                // (each file has a single partition value, so min == max).
+                if let Some(&part_idx) = partition_col_map.get(&i) {
+                    return match data_file.partition().get(part_idx) {
+                        Some(Some(Literal::Primitive(prim))) => {
+                            let sv = primitive_to_scalar_default(prim);
+                            ColumnStatistics {
+                                null_count: Precision::Exact(0),
+                                min_value: Precision::Exact(sv.clone()),
+                                max_value: Precision::Exact(sv),
+                                distinct_count: Precision::Absent,
+                                sum_value: Precision::Absent,
+                                byte_size: Precision::Absent,
+                            }
+                        }
+                        _ => ColumnStatistics::new_unknown(),
+                    };
+                }
+
                 let field_id = self
                     .schema
                     .fields()
@@ -733,6 +789,26 @@ impl IcebergTableProvider {
             }
         }
         names.contains(col_name)
+    }
+
+    /// Returns a map: schema column index → partition spec field index.
+    /// Only includes Identity-transform partition columns, since non-Identity
+    /// transforms (Day, Bucket, Truncate) produce derived values that don't
+    /// represent the actual column min/max.
+    fn identity_partition_column_map(&self) -> HashMap<usize, usize> {
+        let mut map = HashMap::new();
+        for spec in &self.partition_specs {
+            for (part_idx, pf) in spec.fields().iter().enumerate() {
+                if matches!(pf.transform, crate::spec::transform::Transform::Identity) {
+                    if let Some(field) = self.schema.field_by_id(pf.source_id) {
+                        if let Ok(col_idx) = self.arrow_schema.index_of(&field.name) {
+                            map.insert(col_idx, part_idx);
+                        }
+                    }
+                }
+            }
+        }
+        map
     }
 
     fn rebuild_logical_schema_for_filters(
