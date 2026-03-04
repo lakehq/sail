@@ -6418,6 +6418,7 @@ dependencies = [
  "regex",
  "ryu",
  "sail-catalog",
+ "sail-catalog-memory",
  "sail-common",
  "sail-common-datafusion",
  "sail-function",
