@@ -1,0 +1,4 @@
+== Physical Plan ==
+ProjectionExec: expr=[#3@0 as min_year, #4@1 as max_year]
+  ProjectionExec: expr=[2023 as #3, 2025 as #4]
+    PlaceholderRowExec
