@@ -46,10 +46,11 @@ use crate::io::{
 };
 use crate::spec::manifest::DataContentType;
 use crate::spec::types::values::Literal;
+use crate::spec::types::{PrimitiveType, Type};
 use crate::spec::{
     DataFile, ManifestContentType, ManifestList, ManifestStatus, PartitionSpec, Schema, Snapshot,
 };
-use crate::utils::conversions::primitive_to_scalar_default;
+use crate::utils::conversions::{primitive_literal_to_scalar, primitive_to_scalar_default};
 use crate::utils::get_object_store_from_session;
 
 #[derive(Debug, Clone)]
@@ -253,6 +254,11 @@ impl IcebergTableProvider {
         delete_index: &std::collections::HashMap<String, IcebergDeleteAttachment>,
     ) -> Result<Vec<PartitionedFile>> {
         let partition_col_map = self.identity_partition_column_map();
+        // Build reverse map: partition field index → PrimitiveType (identity transforms only)
+        let partition_type_map: HashMap<usize, &PrimitiveType> = partition_col_map
+            .values()
+            .map(|(part_idx, prim_type)| (*part_idx, prim_type))
+            .collect();
         let mut partitioned_files = Vec::new();
 
         for data_file in data_files {
@@ -270,12 +276,16 @@ impl IcebergTableProvider {
                 version: None,
             };
 
-            // Convert partition values to ScalarValues
+            // Convert partition values to ScalarValues using type from partition spec
             let partition_values = data_file
                 .partition()
                 .iter()
-                .map(|literal_opt| match literal_opt {
-                    Some(Literal::Primitive(prim)) => primitive_to_scalar_default(prim),
+                .enumerate()
+                .map(|(idx, literal_opt)| match literal_opt {
+                    Some(Literal::Primitive(prim)) => match partition_type_map.get(&idx) {
+                        Some(pt) => primitive_literal_to_scalar(prim, pt),
+                        None => primitive_to_scalar_default(prim),
+                    },
                     Some(other) => {
                         log::warn!(
                             "Unexpected non-primitive partition literal {:?}, treating as NULL",
@@ -292,8 +302,7 @@ impl IcebergTableProvider {
                 .get(&key)
                 .map(|att| Arc::new(att.clone()) as Arc<dyn Any + Send + Sync>);
 
-            let file_stats =
-                self.create_file_statistics(&data_file, &partition_col_map);
+            let file_stats = self.create_file_statistics(&data_file, &partition_col_map);
             let mut partitioned_file = PartitionedFile {
                 object_meta,
                 partition_values,
@@ -353,9 +362,9 @@ impl IcebergTableProvider {
 
             for (col_idx, field_id) in field_ids.iter().enumerate() {
                 // For Identity partition columns, read from partition values
-                if let Some(&part_idx) = partition_col_map.get(&col_idx) {
-                    if let Some(Some(Literal::Primitive(prim))) = df.partition().get(part_idx) {
-                        let sv = primitive_to_scalar_default(prim);
+                if let Some((part_idx, prim_type)) = partition_col_map.get(&col_idx) {
+                    if let Some(Some(Literal::Primitive(prim))) = df.partition().get(*part_idx) {
+                        let sv = primitive_literal_to_scalar(prim, prim_type);
                         min_scalars[col_idx] = match (&min_scalars[col_idx], &sv) {
                             (None, s) => Some(s.clone()),
                             (Some(existing), s) => Some(if s < existing {
@@ -383,7 +392,7 @@ impl IcebergTableProvider {
 
                 // min
                 if let Some(d) = df.lower_bounds().get(field_id) {
-                    let sv = primitive_to_scalar_default(&d.literal);
+                    let sv = primitive_literal_to_scalar(&d.literal, &d.r#type);
                     min_scalars[col_idx] = match (&min_scalars[col_idx], &sv) {
                         (None, s) => Some(s.clone()),
                         (Some(existing), s) => Some(if s < existing {
@@ -396,7 +405,7 @@ impl IcebergTableProvider {
 
                 // max
                 if let Some(d) = df.upper_bounds().get(field_id) {
-                    let sv = primitive_to_scalar_default(&d.literal);
+                    let sv = primitive_literal_to_scalar(&d.literal, &d.r#type);
                     max_scalars[col_idx] = match (&max_scalars[col_idx], &sv) {
                         (None, s) => Some(s.clone()),
                         (Some(existing), s) => Some(if s > existing {
@@ -439,7 +448,7 @@ impl IcebergTableProvider {
     fn create_file_statistics(
         &self,
         data_file: &DataFile,
-        partition_col_map: &HashMap<usize, usize>,
+        partition_col_map: &HashMap<usize, (usize, PrimitiveType)>,
     ) -> Statistics {
         let num_rows = Precision::Exact(data_file.record_count() as usize);
         let total_byte_size = Precision::Exact(data_file.file_size_in_bytes() as usize);
@@ -453,10 +462,10 @@ impl IcebergTableProvider {
             .map(|(i, _field)| {
                 // For Identity partition columns, use the partition value directly
                 // (each file has a single partition value, so min == max).
-                if let Some(&part_idx) = partition_col_map.get(&i) {
-                    return match data_file.partition().get(part_idx) {
+                if let Some((part_idx, prim_type)) = partition_col_map.get(&i) {
+                    return match data_file.partition().get(*part_idx) {
                         Some(Some(Literal::Primitive(prim))) => {
-                            let sv = primitive_to_scalar_default(prim);
+                            let sv = primitive_literal_to_scalar(prim, prim_type);
                             ColumnStatistics {
                                 null_count: Precision::Exact(0),
                                 min_value: Precision::Exact(sv.clone()),
@@ -488,14 +497,14 @@ impl IcebergTableProvider {
                 let min_value = data_file
                     .lower_bounds()
                     .get(&field_id)
-                    .map(|datum| primitive_to_scalar_default(&datum.literal))
+                    .map(|datum| primitive_literal_to_scalar(&datum.literal, &datum.r#type))
                     .map(Precision::Exact)
                     .unwrap_or(Precision::Absent);
 
                 let max_value = data_file
                     .upper_bounds()
                     .get(&field_id)
-                    .map(|datum| primitive_to_scalar_default(&datum.literal))
+                    .map(|datum| primitive_literal_to_scalar(&datum.literal, &datum.r#type))
                     .map(Precision::Exact)
                     .unwrap_or(Precision::Absent);
 
@@ -791,18 +800,20 @@ impl IcebergTableProvider {
         names.contains(col_name)
     }
 
-    /// Returns a map: schema column index → partition spec field index.
+    /// Returns a map: schema column index → (partition spec field index, PrimitiveType).
     /// Only includes Identity-transform partition columns, since non-Identity
     /// transforms (Day, Bucket, Truncate) produce derived values that don't
     /// represent the actual column min/max.
-    fn identity_partition_column_map(&self) -> HashMap<usize, usize> {
+    fn identity_partition_column_map(&self) -> HashMap<usize, (usize, PrimitiveType)> {
         let mut map = HashMap::new();
         for spec in &self.partition_specs {
             for (part_idx, pf) in spec.fields().iter().enumerate() {
                 if matches!(pf.transform, crate::spec::transform::Transform::Identity) {
                     if let Some(field) = self.schema.field_by_id(pf.source_id) {
                         if let Ok(col_idx) = self.arrow_schema.index_of(&field.name) {
-                            map.insert(col_idx, part_idx);
+                            if let Type::Primitive(prim_type) = field.field_type.as_ref() {
+                                map.insert(col_idx, (part_idx, prim_type.clone()));
+                            }
                         }
                     }
                 }

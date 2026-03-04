@@ -49,7 +49,10 @@ pub fn to_scalar(literal: &Literal, iceberg_type: &Type) -> Result<ScalarValue> 
 }
 
 /// Convert a PrimitiveLiteral with type context to the correct ScalarValue.
-fn primitive_literal_to_scalar(prim: &PrimitiveLiteral, prim_type: &PrimitiveType) -> ScalarValue {
+pub fn primitive_literal_to_scalar(
+    prim: &PrimitiveLiteral,
+    prim_type: &PrimitiveType,
+) -> ScalarValue {
     use PrimitiveLiteral as PL;
     use ScalarValue as SV;
 
