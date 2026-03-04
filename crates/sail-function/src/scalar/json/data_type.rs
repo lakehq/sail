@@ -1,0 +1,102 @@
+
+
+use monostate::MustBe;
+use sail_common::spec;
+use sail_sql_analyzer::data_type::from_ast_data_type;
+use sail_sql_analyzer::parser::parse_data_type;
+
+// from spark connect data_type
+//use crate::error::{ProtoFieldExt, SparkError, SparkResult};
+//use crate::proto::data_type_json::parse_spark_json_data_type;
+//use crate::spark::connect::{data_type as sdt, DataType};
+
+// my additions
+use datafusion_common::{DataFusionError, Result};
+use serde::{Deserialize, Serialize};
+
+/// Parse a Spark data type string of various forms.
+/// Reference: org.apache.spark.sql.connect.planner.SparkConnectPlanner#parseDatatypeString
+pub(crate) fn parse_spark_data_type(schema: &str) -> Result<spec::DataType> {
+    if let Ok(dt) = parse_data_type(schema).and_then(from_ast_data_type) {
+        Ok(dt)
+    } else if let Ok(dt) =
+        parse_data_type(format!("struct<{schema}>").as_str()).and_then(from_ast_data_type)
+    {
+        match dt {
+            spec::DataType::Struct { fields } if fields.is_empty() => {
+                Err(DataFusionError::Plan("empty data type".to_string()))
+            }
+            // The SQL parser supports both `struct<name: type, ...>` and `struct<name type, ...>` syntax.
+            // Therefore, by wrapping the input with `struct<...>`, we do not need separate logic
+            // to parse table schema input (`name type, ...`).
+            _ => Ok(dt),
+        }
+    } else {
+        parse_spark_json_data_type(schema)
+    }
+}
+
+fn parse_spark_json_data_type(schema: &str) -> Result<spec::DataType> {
+    let json_type: JsonDataType = serde_json::from_str(schema).map_err(|e| DataFusionError::Plan(e.to_string()))?;
+    dbg!(&json_type);
+    from_spark_json_data_type(json_type)
+}
+
+fn from_spark_json_data_type(data_type: JsonDataType) -> Result<spec::DataType> {
+    Ok(match data_type {
+        JsonDataType::String => spec::DataType::Utf8,
+        JsonDataType::Integer => spec::DataType::Int32,
+        JsonDataType::Struct { r#type: _, fields } => spec::DataType::Struct {
+            fields: fields
+                .into_iter()
+                .map(|field| {
+                    Ok(spec::Field {
+                        name: field.name,
+                        data_type: from_spark_json_data_type(field.r#type)?,
+                        nullable: field.nullable,
+                        metadata: field
+                            .metadata
+                            .map(|m| serde_json::to_string(&m))
+                            .transpose()
+                            .map_err(|e| DataFusionError::Plan(e.to_string()))?
+                            .map(|s| vec![("metadata".to_string(), s)])
+                            .unwrap_or_default(),
+                    })
+                })
+                .collect::<Result<_>>()?,
+        },
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JsonDataType {
+    Integer,
+    String,
+    #[serde(untagged, rename_all = "camelCase")]
+    Struct {
+        r#type: MustBe!("struct"),
+        fields: Vec<JsonStructField>
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct JsonStructField {
+    pub name: String,
+    pub nullable: bool,
+    pub r#type: JsonDataType,
+    pub metadata: Option<serde_json::Value>,
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_parse_json() {
+        let j = r#"{"fields":[{"metadata":{},"name":"a","nullable":true,"type":"integer"}],"type":"struct"}"#;
+        let d = parse_spark_json_data_type(j).unwrap();
+        dbg!(d);
+    }
+}

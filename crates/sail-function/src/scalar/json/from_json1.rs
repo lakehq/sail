@@ -3,8 +3,6 @@ use std::sync::{Arc};
 
 use chrono::NaiveDate;
 use datafusion_expr::{function::Hint};
-use sail_sql_analyzer::parser::parse_data_type;
-use sail_sql_analyzer::data_type::from_ast_data_type;
 
 use datafusion_common::{DataFusionError, Result, ScalarValue, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
@@ -14,7 +12,7 @@ use datafusion::arrow::{
     }, buffer::{
         NullBuffer, OffsetBuffer, ScalarBuffer
     }, datatypes::{
-        DataType, Field, FieldRef, Fields, TimeUnit, Schema
+        DataType, Field, FieldRef, Fields, TimeUnit
     }
 };
 use datafusion_functions::utils::make_scalar_function;
@@ -23,6 +21,7 @@ use serde_json::Value;
 
 use crate::functions_nested_utils::downcast_arg;
 use super::SailToArrayDataType;
+use super::data_type::parse_spark_data_type;
 
 #[derive(Debug)]
 enum FieldBuilder {
@@ -306,14 +305,7 @@ fn get_schema_data_type(schema_arg: ArrayRef) -> Result<DataType> {
 }
 
 fn schema_str_to_data_type(string: &str) -> Result<DataType> {
-    let ast_type = if let Ok(schema_struct) = parse_data_type(string) {
-        schema_struct
-    } else {
-        parse_data_type(format!("struct<{string}>").as_str())
-            .map_err(|_| DataFusionError::Plan(format!("Schema string invalid so couldn't be parsed: {string}")))?
-    };
-    let sail_dtype = from_ast_data_type(ast_type.clone())
-        .map_err(|_| DataFusionError::Plan("Could not convert struct to sail type".to_string()))?;
+    let sail_dtype = parse_spark_data_type(string)?;
     let arrow_dtype = SailToArrayDataType.resolve_data_type(&sail_dtype)?;
     match arrow_dtype {
         DataType::Struct(_) | DataType::Map(_, _) | DataType::List(_) => Ok(arrow_dtype),
