@@ -40,7 +40,7 @@ pub struct CatalogManagerOptions {
 }
 
 impl CatalogManager {
-    pub fn new(options: CatalogManagerOptions) -> CatalogResult<Self> {
+    pub fn try_new(options: CatalogManagerOptions) -> CatalogResult<Self> {
         let catalogs = options
             .catalogs
             .into_iter()
