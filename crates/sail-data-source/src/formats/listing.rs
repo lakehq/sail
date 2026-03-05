@@ -137,8 +137,15 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             });
 
         let config = ctx.config();
+        // For bucketed tables, target_partitions must equal num_buckets so that
+        // ListingTable produces exactly one file group per bucket.  Without this,
+        // DataFusion groups files into CPU-count partitions, which breaks the 1:1
+        // bucket-to-partition mapping required by BucketedParquetScanExec.
+        let target_partitions = bucket_by
+            .as_ref()
+            .map_or_else(|| config.target_partitions(), |b| b.num_buckets);
         let mut listing_options = ListingOptions::new(file_format)
-            .with_target_partitions(config.target_partitions())
+            .with_target_partitions(target_partitions)
             .with_collect_stat(config.collect_statistics());
 
         let (schema, partition_by) = match schema {
