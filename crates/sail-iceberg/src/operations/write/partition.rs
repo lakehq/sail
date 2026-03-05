@@ -88,7 +88,6 @@ pub fn build_partition_dir(
     Ok(segs.join("/"))
 }
 
-#[allow(dead_code)]
 pub fn compute_partition_values(
     batch: &RecordBatch,
     spec: &PartitionSpec,

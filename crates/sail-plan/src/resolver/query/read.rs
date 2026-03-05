@@ -2,11 +2,10 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Schema};
-use datafusion::datasource::{provider_as_source, TableProvider};
+use datafusion::datasource::{provider_as_source, source_as_provider, TableProvider};
 use datafusion_common::{DFSchema, ScalarValue, TableReference};
-use datafusion_expr::registry::FunctionRegistry;
-use datafusion_expr::{Expr, LogicalPlan, TableScan, UNNAMED_TABLE};
-use rand::{rng, Rng};
+use datafusion_expr::{Expr, LogicalPlan, TableScan, TableSource, UNNAMED_TABLE};
+use rand::{rng, RngExt};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::TableKind;
@@ -38,6 +37,28 @@ impl PlanResolver<'_> {
         } = table;
         if temporal.is_some() {
             return Err(PlanError::todo("read table AS OF clause"));
+        }
+
+        // Check if the name is in the form `<format>.<path>` where `<format>` is a
+        // registered table format. In that case, treat it as a direct data source read.
+        if let [format, path] = name.parts() {
+            let format = format.as_ref().to_ascii_lowercase();
+            let registry = self.ctx.extension::<TableFormatRegistry>()?;
+            if registry.get(&format).is_ok() {
+                let source = spec::ReadDataSource {
+                    format: Some(format),
+                    schema: None,
+                    options,
+                    paths: vec![path.as_ref().to_string()],
+                    predicates: vec![],
+                };
+                let plan = self.resolve_query_read_data_source(source, state).await?;
+                return if let Some(table_sample) = sample {
+                    self.apply_table_sample(plan, table_sample, state).await
+                } else {
+                    Ok(plan)
+                };
+            }
         }
 
         let table_reference = self.resolve_table_reference(&name)?;
@@ -85,12 +106,12 @@ impl PlanResolver<'_> {
                     ],
                 };
                 let registry = self.ctx.extension::<TableFormatRegistry>()?;
-                let table_provider = registry
+                let table_source = registry
                     .get(&format)?
-                    .create_provider(&self.ctx.state(), info)
+                    .create_source(&self.ctx.state(), info)
                     .await?;
-                self.resolve_table_provider_with_rename(
-                    table_provider,
+                self.resolve_table_source_with_rename(
+                    table_source,
                     table_reference,
                     None,
                     vec![],
@@ -110,6 +131,34 @@ impl PlanResolver<'_> {
         } else {
             Ok(plan)
         }
+    }
+
+    pub(super) async fn resolve_query_read_dynamic_table(
+        &self,
+        table: spec::ReadDynamicTable,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let spec::ReadDynamicTable {
+            name,
+            sample,
+            options,
+        } = table;
+        let schema = Arc::new(DFSchema::empty());
+        let resolved = self.resolve_expression(name, &schema, state).await?;
+        let name_str = self.evaluate_identifier_expr(resolved, state)?;
+        let name = sail_sql_analyzer::expression::from_ast_object_name(
+            sail_sql_analyzer::parser::parse_object_name(&name_str)?,
+        )?;
+        self.resolve_query_read_named_table(
+            spec::ReadNamedTable {
+                name,
+                temporal: None,
+                sample,
+                options,
+            },
+            state,
+        )
+        .await
     }
 
     /// Apply TABLESAMPLE clause to a LogicalPlan
@@ -223,7 +272,8 @@ impl PlanResolver<'_> {
             });
             self.resolve_query_project(None, vec![expr], state).await
         } else {
-            let udf = self.ctx.udf(&canonical_function_name).ok();
+            let catalog_manager = self.ctx.extension::<CatalogManager>()?;
+            let udf = catalog_manager.get_function(&canonical_function_name)?;
             if let Some(f) = udf
                 .as_ref()
                 .and_then(|x| x.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>())
@@ -313,12 +363,12 @@ impl PlanResolver<'_> {
             options: vec![options.into_iter().collect()],
         };
         let registry = self.ctx.extension::<TableFormatRegistry>()?;
-        let table_provider = registry
+        let table_source = registry
             .get(&format)?
-            .create_provider(&self.ctx.state(), info)
+            .create_source(&self.ctx.state(), info)
             .await?;
-        self.resolve_table_provider_with_rename(
-            table_provider,
+        self.resolve_table_source_with_rename(
+            table_source,
             UNNAMED_TABLE,
             None,
             vec![],
@@ -336,23 +386,49 @@ impl PlanResolver<'_> {
         fetch: Option<usize>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let schema = table_provider.schema();
+        self.resolve_table_source_with_rename(
+            provider_as_source(table_provider),
+            table_reference,
+            projection,
+            filters,
+            fetch,
+            state,
+        )
+    }
+
+    pub(super) fn resolve_table_source_with_rename(
+        &self,
+        table_source: Arc<dyn TableSource>,
+        table_reference: impl Into<TableReference>,
+        projection: Option<Vec<usize>>,
+        filters: Vec<datafusion_expr::expr::Expr>,
+        fetch: Option<usize>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let schema = table_source.schema();
 
         let has_duplicates = {
             let mut seen = HashSet::new();
             schema.fields().iter().any(|f| !seen.insert(f.name()))
         };
 
-        let table_provider = if has_duplicates {
+        let table_source: Arc<dyn TableSource> = if has_duplicates {
+            // Preserve existing behavior by wrapping the underlying TableProvider with renaming,
+            // but only if this TableSource is DataFusion's DefaultTableSource.
+            let provider = source_as_provider(&table_source).map_err(|e| {
+                PlanError::unsupported(format!(
+                    "duplicate column names require DefaultTableSource-backed TableProvider: {e}"
+                ))
+            })?;
             let names = state.register_fields(schema.fields());
-            Arc::new(RenameTableProvider::try_new(table_provider, names)?)
+            provider_as_source(Arc::new(RenameTableProvider::try_new(provider, names)?))
         } else {
-            table_provider
+            table_source
         };
 
         let table_scan = LogicalPlan::TableScan(TableScan::try_new(
             table_reference,
-            provider_as_source(table_provider),
+            table_source,
             projection,
             filters,
             fetch,

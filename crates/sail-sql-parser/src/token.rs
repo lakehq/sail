@@ -138,7 +138,7 @@ impl<'a> From<TokenLabel> for RichPattern<'a, Token<'a>> {
 
 /// A style of SQL string literal.
 #[derive(Debug, Clone, PartialEq)]
-#[allow(clippy::enum_variant_names)]
+#[expect(clippy::enum_variant_names)]
 pub enum StringStyle {
     /// A string literal surrounded by one single quote on each side
     /// with an optional prefix (e.g., `'hello'` or `N'hello'`).

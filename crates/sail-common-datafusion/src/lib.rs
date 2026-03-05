@@ -8,7 +8,6 @@ pub mod formatter;
 pub mod literal;
 pub mod logical_expr;
 pub mod logical_rewriter;
-pub mod physical_expr;
 pub mod rename;
 pub mod session;
 pub mod streaming;

@@ -1,18 +1,20 @@
-use std::cmp::Ordering;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
 use datafusion_common::{DFSchema, DFSchemaRef, Result, TableReference};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
+use educe::Educe;
 use sail_common_datafusion::rename::schema::rename_schema;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_common_datafusion::utils::items::ItemTaker;
 
-#[allow(clippy::derived_hash_with_manual_eq)]
-#[derive(Clone, Debug, Eq, Hash)]
+#[expect(clippy::derived_hash_with_manual_eq)]
+#[derive(Clone, Debug, Eq, Hash, Educe)]
+#[educe(PartialOrd)]
 pub struct MapPartitionsNode {
     input: Arc<LogicalPlan>,
     udf: Arc<dyn StreamUDF>,
+    #[educe(PartialOrd(ignore))]
     schema: DFSchemaRef,
 }
 
@@ -46,27 +48,6 @@ impl PartialEq for MapPartitionsNode {
         self.input == other.input
             && self.udf.as_ref() == other.udf.as_ref()
             && self.schema == other.schema
-    }
-}
-
-#[derive(PartialEq, PartialOrd)]
-struct MapPartitionsNodeOrd<'a> {
-    input: &'a Arc<LogicalPlan>,
-    udf: &'a Arc<dyn StreamUDF>,
-}
-
-impl<'a> From<&'a MapPartitionsNode> for MapPartitionsNodeOrd<'a> {
-    fn from(node: &'a MapPartitionsNode) -> Self {
-        Self {
-            input: &node.input,
-            udf: &node.udf,
-        }
-    }
-}
-
-impl PartialOrd for MapPartitionsNode {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        MapPartitionsNodeOrd::from(self).partial_cmp(&other.into())
     }
 }
 

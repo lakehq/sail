@@ -3,13 +3,14 @@ from __future__ import annotations
 import doctest
 import os
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import pytest
 from _pytest.doctest import DoctestItem
 from pyspark.sql import SparkSession
 
-from pysail.tests.spark.utils import SAIL_ONLY, is_jvm_spark
+from pysail.tests.spark.utils import SAIL_ONLY, is_jvm_spark, pyspark_version
 
 
 def pytest_configure(config):
@@ -29,6 +30,7 @@ def pytest_configure(config):
 
 if TYPE_CHECKING:
     import pyspark.sql.connect.session
+    from _pytest.mark import MarkDecorator
 
 
 @pytest.fixture(scope="session")
@@ -153,7 +155,32 @@ def local_timezone(request):
     time.tzset()
 
 
+@dataclass
+class DoctestMarker:
+    keywords: list[str]
+    markers: list[str | MarkDecorator]
+
+
+DOCTEST_MARKERS = [
+    DoctestMarker(
+        keywords=["test_python_datasource_read.txt"],
+        markers=[pytest.mark.skipif(pyspark_version() < (4,), reason="Python data source requires Spark 4+")],
+    ),
+    DoctestMarker(
+        keywords=["test_python_datasource_read_arrow.txt"],
+        markers=[pytest.mark.skipif(pyspark_version() < (4,), reason="Python data source requires Spark 4+")],
+    ),
+]
+
+
 def pytest_collection_modifyitems(session, config, items):  # noqa: ARG001
+    for item in items:
+        if isinstance(item, DoctestItem):
+            for test in DOCTEST_MARKERS:
+                if all(k in item.keywords for k in test.keywords):
+                    for marker in test.markers:
+                        item.add_marker(marker)
+
     if is_jvm_spark():
         skip_sail_only = pytest.mark.skip(reason="Sail-only feature, not supported by Spark")
         for item in items:
