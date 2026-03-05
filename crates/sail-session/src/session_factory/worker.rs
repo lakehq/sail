@@ -24,6 +24,9 @@ impl WorkerSessionFactory {
 impl SessionFactory<()> for WorkerSessionFactory {
     fn create(&mut self, _info: ()) -> Result<SessionContext> {
         let runtime = self.runtime_env.create(Ok)?;
+        // We still add default features for the worker session
+        // since we need built-in functions to be available for the codec
+        // when decoding the execution plan.
         let config = SessionConfig::default().with_extension(Arc::new(DeltaTableCache::default()));
         let state = SessionStateBuilder::new()
             .with_config(config)

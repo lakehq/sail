@@ -6,7 +6,9 @@ use datafusion::common::parquet_config::DFParquetWriterVersion;
 use datafusion::common::{internal_datafusion_err, Result};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::{SessionState, SessionStateBuilder};
+use datafusion::functions_aggregate::first_last::first_value_udaf;
 use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion_expr::registry::FunctionRegistry;
 use sail_catalog_system::service::SystemTableService;
 use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
@@ -19,9 +21,6 @@ use sail_execution::worker_manager::{
     KubernetesWorkerManager, KubernetesWorkerManagerOptions, LocalWorkerManager,
 };
 use sail_physical_optimizer::{get_physical_optimizers, PhysicalOptimizerOptions};
-use sail_plan::function::{
-    BUILT_IN_GENERATOR_FUNCTIONS, BUILT_IN_SCALAR_FUNCTIONS, BUILT_IN_TABLE_FUNCTIONS,
-};
 use sail_server::actor::{ActorHandle, ActorSystem};
 
 use crate::catalog::create_catalog_manager;
@@ -88,18 +87,17 @@ impl SessionFactory<ServerSessionInfo> for ServerSessionFactory {
         let state = self.create_session_state(&info)?;
         let context = SessionContext::new_with_state(state);
 
-        // TODO: This is a temp workaround to deregister all built-in functions that we define.
-        //   We should deregister all context.udfs() once we have better coverage of functions.
-        //   handler.rs needs to do this
-        for (&name, _function) in BUILT_IN_SCALAR_FUNCTIONS.iter() {
-            context.deregister_udf(name);
-        }
-        for (&name, _function) in BUILT_IN_GENERATOR_FUNCTIONS.iter() {
-            context.deregister_udf(name);
-        }
-        for (&name, _function) in BUILT_IN_TABLE_FUNCTIONS.iter() {
-            context.deregister_udtf(name);
-        }
+        // Register the `first_value` UDAF since the `replace_distinct_aggregate` optimizer rule
+        // assumes that this UDAF is available in the function registry.
+        // This is a hidden assumption made by the optimizer rule.
+        // We have to do so because we do not add default features (including built-in functions)
+        // to the session state.
+        //
+        // See also: https://github.com/apache/datafusion/issues/10703
+        context
+            .state_ref()
+            .write()
+            .register_udaf(first_value_udaf())?;
 
         Ok(context)
     }
@@ -132,10 +130,11 @@ impl ServerSessionFactory {
         let runtime = self
             .runtime_env
             .create(|builder| self.mutator.mutate_runtime_env(builder, info))?;
+        // We do not add default features to the session state,
+        // since we manage table formats and functions ourselves.
         let builder = SessionStateBuilder::new()
             .with_config(config)
             .with_runtime_env(runtime)
-            .with_default_features()
             .with_analyzer_rules(default_analyzer_rules())
             .with_optimizer_rules(default_optimizer_rules())
             .with_physical_optimizer_rules(get_physical_optimizers(PhysicalOptimizerOptions {

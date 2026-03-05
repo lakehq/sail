@@ -4,7 +4,6 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::datasource::{provider_as_source, source_as_provider, TableProvider};
 use datafusion_common::{DFSchema, ScalarValue, TableReference};
-use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::{Expr, LogicalPlan, TableScan, TableSource, UNNAMED_TABLE};
 use rand::{rng, RngExt};
 use sail_catalog::manager::CatalogManager;
@@ -273,7 +272,8 @@ impl PlanResolver<'_> {
             });
             self.resolve_query_project(None, vec![expr], state).await
         } else {
-            let udf = self.ctx.udf(&canonical_function_name).ok();
+            let catalog_manager = self.ctx.extension::<CatalogManager>()?;
+            let udf = catalog_manager.get_function(&canonical_function_name)?;
             if let Some(f) = udf
                 .as_ref()
                 .and_then(|x| x.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>())

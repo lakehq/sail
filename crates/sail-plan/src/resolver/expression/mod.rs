@@ -398,6 +398,9 @@ mod tests {
     use datafusion_common::{DFSchema, ScalarValue};
     use datafusion_expr::expr::{Alias, Expr};
     use datafusion_expr::{BinaryExpr, Operator};
+    use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
+    use sail_catalog::provider::CatalogProvider;
+    use sail_catalog_memory::MemoryCatalogProvider;
     use sail_common::spec;
     use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
     use sail_common_datafusion::session::plan::PlanService;
@@ -410,14 +413,33 @@ mod tests {
     use crate::resolver::state::PlanResolverState;
     use crate::resolver::PlanResolver;
 
-    #[tokio::test]
-    async fn test_resolve_expression_with_name() -> PlanResult<()> {
+    fn create_session() -> PlanResult<SessionContext> {
         let mut state = SessionStateBuilder::new().build();
-        state.config_mut().set_extension(Arc::new(PlanService::new(
+        let catalog_manager = CatalogManager::try_new(CatalogManagerOptions {
+            catalogs: HashMap::from([(
+                "sail".to_string(),
+                Arc::new(MemoryCatalogProvider::new(
+                    "sail".to_string(),
+                    vec![Arc::from("default")].try_into()?,
+                    None,
+                )) as Arc<dyn CatalogProvider>,
+            )]),
+            default_catalog: "sail".to_string(),
+            default_database: vec!["default".to_string()],
+            global_temporary_database: vec!["global_temp".to_string()],
+        })?;
+        let plan_service = PlanService::new(
             Box::new(DefaultCatalogDisplay::<SparkCatalogObjectDisplay>::default()),
             Box::new(SparkPlanFormatter),
-        )));
-        let ctx = SessionContext::new_with_state(state);
+        );
+        state.config_mut().set_extension(Arc::new(catalog_manager));
+        state.config_mut().set_extension(Arc::new(plan_service));
+        Ok(SessionContext::new_with_state(state))
+    }
+
+    #[tokio::test]
+    async fn test_resolve_expression_with_name() -> PlanResult<()> {
+        let ctx = create_session()?;
         let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
 
         async fn resolve(resolver: &PlanResolver<'_>, expr: spec::Expr) -> PlanResult<NamedExpr> {
@@ -542,12 +564,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_st_geomfromwkb_returns_geometry_metadata() -> PlanResult<()> {
-        let mut state = SessionStateBuilder::new().build();
-        state.config_mut().set_extension(Arc::new(PlanService::new(
-            Box::new(DefaultCatalogDisplay::<SparkCatalogObjectDisplay>::default()),
-            Box::new(SparkPlanFormatter),
-        )));
-        let ctx = SessionContext::new_with_state(state);
+        let ctx = create_session()?;
         let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
 
         let result = resolver
@@ -587,12 +604,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_st_geogfromwkb_returns_geography_metadata() -> PlanResult<()> {
-        let mut state = SessionStateBuilder::new().build();
-        state.config_mut().set_extension(Arc::new(PlanService::new(
-            Box::new(DefaultCatalogDisplay::<SparkCatalogObjectDisplay>::default()),
-            Box::new(SparkPlanFormatter),
-        )));
-        let ctx = SessionContext::new_with_state(state);
+        let ctx = create_session()?;
         let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
 
         let result = resolver

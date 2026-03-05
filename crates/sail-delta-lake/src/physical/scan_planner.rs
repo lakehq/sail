@@ -192,7 +192,7 @@ pub(crate) async fn plan_delta_scan(
 
     // Prepare pushdown filter for Parquet.
     let pushdown_filter = if !parquet_pushdown_filters.is_empty() {
-        let df_schema = logical_schema.clone().to_dfschema()?;
+        let df_schema = full_logical_schema.clone().to_dfschema()?;
         let pushdown_expr = conjunction(parquet_pushdown_filters);
         pushdown_expr
             .map(|expr| {

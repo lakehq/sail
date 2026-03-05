@@ -12,7 +12,7 @@ homepage = "https://lakesail.com"
 license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/lakehq/sail"
-rust-version = "1.88.0"
+rust-version = "1.91.0"
 
 [workspace.lints.clippy]
 allow_attributes = "deny"
@@ -119,6 +119,7 @@ progenitor-client = "0.11.2"
 secrecy = { version = "0.10.3", features = ["serde"] }
 tempfile = "3.26.0"
 readonly = "0.2.13"
+toml = "0.8"
 
 ######
 # The versions of the following dependencies are managed manually.
