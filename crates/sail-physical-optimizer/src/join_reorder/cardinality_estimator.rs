@@ -102,7 +102,17 @@ impl CardinalityEstimator {
     fn populate_column_statistics(&mut self) {
         for relation in &self.graph.relations {
             let relation_id = relation.relation_id;
-            let row_count = relation.initial_cardinality;
+            // Prefer statistics.num_rows as denominator for null fraction,
+            // since null_count comes from the same statistics source.
+            let row_count = match relation.statistics.num_rows {
+                datafusion::common::stats::Precision::Exact(n)
+                | datafusion::common::stats::Precision::Inexact(n)
+                    if n > 0 =>
+                {
+                    n as f64
+                }
+                _ => relation.initial_cardinality,
+            };
             let schema = relation.plan.schema();
             let column_stats = &relation.statistics.column_statistics;
             for (column_index, stats) in column_stats.iter().enumerate() {
@@ -323,7 +333,7 @@ impl CardinalityEstimator {
             null_adjustment *= self.null_adjustment_for_edge(edge);
         }
 
-        (numerator / denominator * null_adjustment).max(1.0)
+        numerator / denominator * null_adjustment
     }
 
     /// Get all edges that are completely contained within the given join_set.
@@ -452,7 +462,7 @@ impl CardinalityEstimator {
             }
         }
 
-        (left_card * right_card * selectivity * null_adjustment).max(1.0)
+        left_card * right_card * selectivity * null_adjustment
     }
 
     /// Helper function to determine if an edge contains non-equi filter conditions.
@@ -1245,7 +1255,7 @@ mod tests {
         let card = estimator.estimate_join_cardinality(1000.0, 1000.0, &[0]);
 
         // null_adjustment = (1 - 1.0) * (1 - 0.0) = 0.0
-        // card = max(... * 0.0, 1.0) = 1.0
-        assert!((card - 1.0).abs() < 0.01, "expected 1.0, got {card}");
+        // card = ... * 0.0 = 0.0
+        assert!(card.abs() < 0.01, "expected 0.0, got {card}");
     }
 }
