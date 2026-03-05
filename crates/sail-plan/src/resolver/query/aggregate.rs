@@ -14,25 +14,19 @@ use crate::resolver::tree::window::WindowRewriter;
 use crate::resolver::PlanResolver;
 
 /// Returns the name of a volatile (non-deterministic) scalar expression found
-/// outside an aggregate function, or None if no such expression exists.
-/// Mirrors Spark's CheckAnalysis rule that blocks non-deterministic expressions
-/// in aggregate projections.
-fn find_volatile_non_aggregate(expr: &Expr) -> Option<String> {
+/// in an aggregate context. Catches two Spark CheckAnalysis violations:
+/// 1. Volatile scalar UDF used directly in aggregate projections (outside any aggregate fn)
+/// 2. Volatile scalar UDF nested inside aggregate function arguments
+fn find_volatile_in_aggregate_context(expr: &Expr) -> Option<String> {
     let mut found_name: Option<String> = None;
-    // Walk the expression tree; skip inside aggregate functions
     let _ = expr.apply(|e| {
-        match e {
-            // Aggregate functions control their own evaluation — don't descend
-            Expr::AggregateFunction(_) => Ok(TreeNodeRecursion::Jump),
-            // Volatile scalar UDF outside an aggregate → violation
-            Expr::ScalarFunction(f)
-                if f.func.signature().volatility == Volatility::Volatile =>
-            {
+        if let Expr::ScalarFunction(f) = e {
+            if f.func.signature().volatility == Volatility::Volatile {
                 found_name = Some(f.func.name().to_string());
-                Ok(TreeNodeRecursion::Stop)
+                return Ok(TreeNodeRecursion::Stop);
             }
-            _ => Ok(TreeNodeRecursion::Continue),
         }
+        Ok(TreeNodeRecursion::Continue)
     });
     found_name
 }
@@ -59,11 +53,11 @@ impl PlanResolver<'_> {
             .resolve_named_expressions(projections, schema, state)
             .await?;
 
-        // Spark's CheckAnalysis: reject non-deterministic expressions in aggregate projections
+        // Spark CheckAnalysis: reject non-deterministic expressions in aggregate context
         for proj in &projections {
-            if let Some(name) = find_volatile_non_aggregate(&proj.expr) {
-                return Err(PlanError::invalid(format!(
-                    "nondeterministic expression {name} should not appear in the arguments of an aggregate function",
+            if let Some(name) = find_volatile_in_aggregate_context(&proj.expr) {
+                return Err(PlanError::AnalysisError(format!(
+                    "Non-deterministic expression {name} should not appear in the arguments of an aggregate function",
                 )));
             }
         }
