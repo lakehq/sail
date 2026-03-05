@@ -1,8 +1,8 @@
 use datafusion_common::DFSchemaRef;
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::utils::{expand_qualified_wildcard, expand_wildcard};
 use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan};
+use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
@@ -46,7 +46,8 @@ impl PlanResolver<'_> {
             return Err(PlanError::todo("named function arguments"));
         }
         let canonical_function_name = function_name.to_ascii_lowercase();
-        if let Ok(udf) = self.ctx.udf(&canonical_function_name) {
+        let catalog_manager = self.ctx.extension::<CatalogManager>()?;
+        if let Some(udf) = catalog_manager.get_function(&canonical_function_name)? {
             if udf.inner().as_any().is::<PySparkUnresolvedUDF>() {
                 state.config_mut().arrow_allow_large_var_types = true;
             }
@@ -67,7 +68,7 @@ impl PlanResolver<'_> {
 
         // FIXME: `is_user_defined_function` is always false,
         //   so we need to check UDFs before built-in functions.
-        let func = if let Ok(udf) = self.ctx.udf(&canonical_function_name) {
+        let func = if let Some(udf) = catalog_manager.get_function(&canonical_function_name)? {
             if ignore_nulls.is_some() || filter.is_some() || order_by.is_some() {
                 return Err(PlanError::invalid("invalid scalar function clause"));
             }
@@ -90,7 +91,7 @@ impl PlanResolver<'_> {
                 )?
             } else {
                 expr::Expr::ScalarFunction(ScalarFunction {
-                    func: udf,
+                    func: std::sync::Arc::new(udf),
                     args: arguments,
                 })
             }

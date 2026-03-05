@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use datafusion_expr::{LogicalPlan, ScalarUDF};
 use sail_common_datafusion::extension::SessionExtension;
 
 use crate::error::{CatalogError, CatalogResult};
+use crate::manager::tracker::{CatalogFunctionId, CatalogLogicalPlanId, CatalogObjectTracker};
 use crate::provider::{CatalogProvider, Namespace};
 use crate::temp_view::TemporaryViewManager;
 
@@ -11,6 +13,7 @@ pub mod catalog;
 pub mod database;
 pub mod function;
 pub mod table;
+pub mod tracker;
 pub mod view;
 
 /// A manager for all catalogs registered with the session.
@@ -18,10 +21,12 @@ pub mod view;
 pub struct CatalogManager {
     state: Arc<Mutex<CatalogManagerState>>,
     pub(super) temporary_views: TemporaryViewManager,
+    pub(super) tracker: CatalogObjectTracker,
 }
 
 pub(super) struct CatalogManagerState {
     pub(super) catalogs: HashMap<Arc<str>, Arc<dyn CatalogProvider>>,
+    pub(super) functions: HashMap<Arc<str>, datafusion_expr::ScalarUDF>,
     pub(super) default_catalog: Arc<str>,
     pub(super) default_database: Namespace,
     pub(super) global_temporary_database: Namespace,
@@ -35,7 +40,7 @@ pub struct CatalogManagerOptions {
 }
 
 impl CatalogManager {
-    pub fn new(options: CatalogManagerOptions) -> CatalogResult<Self> {
+    pub fn try_new(options: CatalogManagerOptions) -> CatalogResult<Self> {
         let catalogs = options
             .catalogs
             .into_iter()
@@ -52,6 +57,7 @@ impl CatalogManager {
         // Even if the default database is valid now, it may be dropped externally later.
         let state = CatalogManagerState {
             catalogs,
+            functions: HashMap::new(),
             default_catalog: options.default_catalog.into(),
             default_database: options.default_database.try_into()?,
             global_temporary_database: options.global_temporary_database.try_into()?,
@@ -59,6 +65,7 @@ impl CatalogManager {
         Ok(CatalogManager {
             state: Arc::new(Mutex::new(state)),
             temporary_views: Default::default(),
+            tracker: Default::default(),
         })
     }
 
@@ -102,6 +109,28 @@ impl CatalogManager {
         let state = self.state()?;
         let (catalog, database, table) = state.resolve_object_reference(object)?;
         Ok((state.get_catalog(&catalog)?, database, table))
+    }
+
+    pub fn track_function(&self, udf: ScalarUDF) -> CatalogResult<CatalogFunctionId> {
+        self.tracker.track_function(udf)
+    }
+
+    pub fn get_tracked_function(&self, id: CatalogFunctionId) -> CatalogResult<ScalarUDF> {
+        self.tracker.get_tracked_function(id)
+    }
+
+    pub fn track_logical_plan(
+        &self,
+        plan: Arc<LogicalPlan>,
+    ) -> CatalogResult<CatalogLogicalPlanId> {
+        self.tracker.track_logical_plan(plan)
+    }
+
+    pub fn get_tracked_logical_plan(
+        &self,
+        id: CatalogLogicalPlanId,
+    ) -> CatalogResult<Arc<LogicalPlan>> {
+        self.tracker.get_tracked_logical_plan(id)
     }
 }
 
