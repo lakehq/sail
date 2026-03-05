@@ -51,37 +51,45 @@ async fn convert_spark_integer_types(
     }
 
     // Track which Int64 columns can safely be downcast to Int32.
-    // Default to true (downcast) — if sampling fails (e.g. compressed files), we fall back
-    // to Int32 which matches the common case for small CSV datasets.
-    let mut fits_in_int32 = vec![true; schema.fields().len()];
+    // Default to false (keep Int64) — only downcast when sampling successfully verifies
+    // that all observed values fit in Int32.  This is conservative: if sampling fails
+    // (compressed files, object-store errors, CSV parse errors) we keep the wider type.
+    let mut fits_in_int32 = vec![false; schema.fields().len()];
 
-    // Sample the first file to check actual values.
-    // If the file is compressed or unreadable as raw CSV, skip the check and use Int32.
-    if let Ok(result) = store.get(&files[0].location).await {
-        if let Ok(data) = result.bytes().await {
-            let cursor = Cursor::new(data);
-            let mut reader_builder = arrow::csv::ReaderBuilder::new(Arc::new(schema.clone()))
-                .with_delimiter(csv_options.delimiter)
-                .with_quote(csv_options.quote);
-            if let Some(true) = csv_options.has_header {
-                reader_builder = reader_builder.with_header(true);
+    // Read only a bounded prefix of the first file to avoid pulling large objects into memory.
+    const MAX_SAMPLE_BYTES: u64 = 1024 * 1024; // 1 MiB
+    let sample_end = std::cmp::min(files[0].size as u64, MAX_SAMPLE_BYTES);
+    if let Ok(data) = store.get_range(&files[0].location, 0..sample_end).await {
+        let cursor = Cursor::new(data);
+        let mut reader_builder = arrow::csv::ReaderBuilder::new(Arc::new(schema.clone()))
+            .with_delimiter(csv_options.delimiter)
+            .with_quote(csv_options.quote);
+        if let Some(true) = csv_options.has_header {
+            reader_builder = reader_builder.with_header(true);
+        }
+        if let Some(escape) = csv_options.escape {
+            reader_builder = reader_builder.with_escape(escape);
+        }
+        if let Some(comment) = csv_options.comment {
+            reader_builder = reader_builder.with_comment(comment);
+        }
+        if let Some(ref null_regex) = csv_options.null_regex {
+            if let Ok(re) = regex::Regex::new(null_regex) {
+                reader_builder = reader_builder.with_null_regex(re);
             }
-            if let Some(escape) = csv_options.escape {
-                reader_builder = reader_builder.with_escape(escape);
-            }
-            let batch_size = csv_options.schema_infer_max_rec.unwrap_or(1000);
-            reader_builder = reader_builder.with_batch_size(batch_size);
-            if let Ok(mut reader) = reader_builder.build(cursor) {
-                if let Some(Ok(batch)) = reader.next() {
-                    for &col_idx in &int64_cols {
-                        let array = batch.column(col_idx).as_primitive::<Int64Type>();
-                        for val in array.iter().flatten() {
-                            if val < i64::from(i32::MIN) || val > i64::from(i32::MAX) {
-                                fits_in_int32[col_idx] = false;
-                                break;
-                            }
-                        }
-                    }
+        }
+        let batch_size = csv_options.schema_infer_max_rec.unwrap_or(1000);
+        reader_builder = reader_builder.with_batch_size(batch_size);
+        if let Ok(mut reader) = reader_builder.build(cursor) {
+            if let Some(Ok(batch)) = reader.next() {
+                // Sampling succeeded — mark columns that fit as downcastable.
+                for &col_idx in &int64_cols {
+                    let array = batch.column(col_idx).as_primitive::<Int64Type>();
+                    let all_fit = array
+                        .iter()
+                        .flatten()
+                        .all(|val| val >= i64::from(i32::MIN) && val <= i64::from(i32::MAX));
+                    fits_in_int32[col_idx] = all_fit;
                 }
             }
         }
@@ -313,6 +321,36 @@ mod tests {
         // small values fit in Int32
         assert_eq!(converted.fields()[0].data_type(), &DataType::Int32);
         // large values don't fit in Int32, stay as Int64
+        assert_eq!(converted.fields()[1].data_type(), &DataType::Int64);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::unwrap_used)]
+    async fn test_convert_spark_integer_types_fallback_on_read_failure() {
+        use object_store::memory::InMemory;
+
+        // Empty store — no file exists, so sampling will fail.
+        let store: Arc<dyn object_store::ObjectStore> = Arc::new(InMemory::new());
+        let meta = object_store::ObjectMeta {
+            location: object_store::path::Path::from("missing.csv"),
+            last_modified: chrono::Utc::now(),
+            size: 100,
+            e_tag: None,
+            version: None,
+        };
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Int64, true),
+        ]);
+        let csv_options = CsvOptions {
+            has_header: Some(true),
+            ..Default::default()
+        };
+        let converted = convert_spark_integer_types(&schema, &store, &[meta], &csv_options)
+            .await
+            .unwrap();
+        // Conservative fallback: keep Int64 when sampling fails
+        assert_eq!(converted.fields()[0].data_type(), &DataType::Int64);
         assert_eq!(converted.fields()[1].data_type(), &DataType::Int64);
     }
 
