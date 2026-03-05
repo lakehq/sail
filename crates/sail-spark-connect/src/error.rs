@@ -90,6 +90,7 @@ impl From<SqlError> for SparkError {
             SqlError::InternalError(message) => SparkError::InternalError(message),
             SqlError::SqlParserError(e) => SparkError::InvalidArgument(e.to_string()),
             SqlError::NotImplemented(message) => SparkError::NotImplemented(message),
+            SqlError::AnalysisError(message) => SparkError::AnalysisError(message),
         }
     }
 }

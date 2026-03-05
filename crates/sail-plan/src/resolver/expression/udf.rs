@@ -53,6 +53,36 @@ impl PlanResolver<'_> {
             }
         }
 
+        // Validate named arguments before building the payload:
+        // 1. No duplicate kwarg names → DUPLICATE_ROUTINE_PARAMETER_ASSIGNMENT.DOUBLE_NAMED_ARGUMENT_REFERENCE
+        // 2. No positional argument after a named argument → UNEXPECTED_POSITIONAL_ARGUMENT
+        {
+            let mut seen_kwarg_names = std::collections::HashSet::new();
+            let mut seen_named = false;
+            for kwarg in &kwarg_names {
+                match kwarg {
+                    Some(name) => {
+                        if !seen_kwarg_names.insert(name.as_str()) {
+                            return Err(PlanError::AnalysisError(format!(
+                                "[DUPLICATE_ROUTINE_PARAMETER_ASSIGNMENT.DOUBLE_NAMED_ARGUMENT_REFERENCE] \
+                                 Duplicate named argument: '{name}' is assigned more than once."
+                            )));
+                        }
+                        seen_named = true;
+                    }
+                    None => {
+                        if seen_named {
+                            return Err(PlanError::AnalysisError(
+                                "[UNEXPECTED_POSITIONAL_ARGUMENT] \
+                                 Positional argument follows a named (keyword) argument."
+                                    .to_string(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
         let (argument_display_names, arguments) = self
             .resolve_expressions_and_names(positional_args, schema, state)
             .await?;

@@ -21,6 +21,8 @@ pub enum SqlError {
     NotSupported(String),
     #[error("internal error: {0}")]
     InternalError(String),
+    #[error("analysis error: {0}")]
+    AnalysisError(String),
 }
 
 impl SqlError {
@@ -38,6 +40,10 @@ impl SqlError {
 
     pub fn invalid(message: impl Into<String>) -> Self {
         SqlError::InvalidArgument(message.into())
+    }
+
+    pub fn analysis(message: impl Into<String>) -> Self {
+        SqlError::AnalysisError(message.into())
     }
 
     pub fn parser<T, S>(errors: Vec<Rich<'_, T, S>>) -> Self

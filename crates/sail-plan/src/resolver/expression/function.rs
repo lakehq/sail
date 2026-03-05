@@ -50,6 +50,22 @@ impl PlanResolver<'_> {
             arguments.push(value);
         }
 
+        // Validate named arguments: reject duplicate kwarg names early so we surface
+        // a proper AnalysisException instead of letting it crash in the Python worker.
+        {
+            let mut seen_kwarg_names = std::collections::HashSet::new();
+            for kwarg in &kwarg_names {
+                if let Some(name) = kwarg {
+                    if !seen_kwarg_names.insert(name.as_str()) {
+                        return Err(PlanError::AnalysisError(format!(
+                            "[DUPLICATE_ROUTINE_PARAMETER_ASSIGNMENT.DOUBLE_NAMED_ARGUMENT_REFERENCE] \
+                             Duplicate named argument: '{name}' is assigned more than once."
+                        )));
+                    }
+                }
+            }
+        }
+
         let canonical_function_name = function_name.to_ascii_lowercase();
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
         if let Some(udf) = catalog_manager.get_function(&canonical_function_name)? {
