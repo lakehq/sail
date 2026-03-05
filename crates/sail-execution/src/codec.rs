@@ -1553,8 +1553,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 })
                 .collect();
             let col_path = parquet::schema::types::ColumnPath::new(vec![]);
-            let compression_str =
-                format!("{:?}", bucketed_sink.writer_props().compression(&col_path));
+            let compression_str = match bucketed_sink.writer_props().compression(&col_path) {
+                parquet::basic::Compression::UNCOMPRESSED => "UNCOMPRESSED",
+                parquet::basic::Compression::SNAPPY => "SNAPPY",
+                parquet::basic::Compression::GZIP(_) => "GZIP",
+                parquet::basic::Compression::LZ4 => "LZ4",
+                parquet::basic::Compression::LZ4_RAW => "LZ4_RAW",
+                parquet::basic::Compression::ZSTD(_) => "ZSTD",
+                parquet::basic::Compression::BROTLI(_) => "BROTLI",
+                _ => "SNAPPY",
+            };
             NodeKind::BucketedParquetSink(gen::BucketedParquetSinkExecNode {
                 input,
                 output_path: bucketed_sink.output_path().to_string(),
@@ -1563,7 +1571,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 hash_function: config.hash_function.clone(),
                 sort_columns,
                 file_schema,
-                writer_properties: compression_str.into_bytes(),
+                writer_properties: compression_str.as_bytes().to_vec(),
             })
         } else if let Some(bucketed_scan) = node.as_any().downcast_ref::<BucketedParquetScanExec>()
         {

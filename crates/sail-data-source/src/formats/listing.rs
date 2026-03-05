@@ -141,9 +141,16 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         // ListingTable produces exactly one file group per bucket.  Without this,
         // DataFusion groups files into CPU-count partitions, which breaks the 1:1
         // bucket-to-partition mapping required by BucketedParquetScanExec.
-        let target_partitions = bucket_by
-            .as_ref()
-            .map_or_else(|| config.target_partitions(), |b| b.num_buckets);
+        let target_partitions = match bucket_by.as_ref() {
+            Some(b) if b.num_buckets > 0 => b.num_buckets,
+            Some(b) => {
+                return plan_err!(
+                    "num_buckets must be greater than 0, got {}",
+                    b.num_buckets
+                );
+            }
+            None => config.target_partitions(),
+        };
         let mut listing_options = ListingOptions::new(file_format)
             .with_target_partitions(target_partitions)
             .with_collect_stat(config.collect_statistics());
@@ -171,6 +178,22 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
                 (schema, partition_by)
             }
         };
+
+        // If no catalog-level bucketing but schema metadata has bucketing info,
+        // adjust target_partitions to match num_buckets before creating the ListingTable.
+        // Without this, the ListingTable groups files into CPU-count partitions,
+        // and BucketedParquetScanExec::new fails the partition count check.
+        if bucket_by.is_none() && self.inner.name() == "parquet" {
+            if let Some(bucket_meta) = parse_schema_metadata(&schema) {
+                if bucket_meta.hash_function == HASH_DATAFUSION
+                    && !bucket_meta.columns.is_empty()
+                    && bucket_meta.num_buckets > 0
+                {
+                    listing_options =
+                        listing_options.with_target_partitions(bucket_meta.num_buckets);
+                }
+            }
+        }
 
         let listing_options = listing_options
             .with_file_sort_order(vec![sort_order])
@@ -297,8 +320,28 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             } else {
                 format!("{path}{}", object_store::path::DELIMITER)
             };
+            let merged = crate::options::merge_options(options);
+            let compression = merged
+                .get("compression")
+                .map(|v| v.to_ascii_lowercase())
+                .unwrap_or_default();
+            let parquet_compression = match compression.as_str() {
+                "uncompressed" | "none" => parquet::basic::Compression::UNCOMPRESSED,
+                "gzip" | "gz" => {
+                    parquet::basic::Compression::GZIP(parquet::basic::GzipLevel::default())
+                }
+                "lz4" => parquet::basic::Compression::LZ4,
+                "lz4_raw" => parquet::basic::Compression::LZ4_RAW,
+                "zstd" => {
+                    parquet::basic::Compression::ZSTD(parquet::basic::ZstdLevel::default())
+                }
+                "brotli" | "br" => {
+                    parquet::basic::Compression::BROTLI(parquet::basic::BrotliLevel::default())
+                }
+                _ => parquet::basic::Compression::SNAPPY,
+            };
             let writer_props = WriterProperties::builder()
-                .set_compression(parquet::basic::Compression::SNAPPY)
+                .set_compression(parquet_compression)
                 .build();
             let file_schema = input.schema();
             return BucketedParquetSinkExec::new(

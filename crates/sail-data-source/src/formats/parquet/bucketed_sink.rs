@@ -10,13 +10,17 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
+use datafusion::physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+};
 use datafusion_common::hash_utils::create_hashes;
 use futures::StreamExt;
 use log::info;
 use object_store::path::Path;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
+
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 
 use super::bucketing::{
     bucket_file_name, create_bucketed_writer_properties, inject_schema_metadata,
@@ -49,8 +53,18 @@ impl BucketedParquetSinkExec {
         file_schema: SchemaRef,
         writer_props: WriterProperties,
     ) -> Result<Self> {
+        if config.num_buckets == 0 {
+            return plan_err!("BucketedParquetSinkExec requires num_buckets > 0");
+        }
         // Validate bucket columns exist in schema
         resolve_bucket_column_indices(&file_schema, &config.columns)?;
+
+        // Coalesce multi-partition inputs so we read all data from partition 0.
+        let input = if input.output_partitioning().partition_count() > 1 {
+            Arc::new(CoalescePartitionsExec::new(input))
+        } else {
+            input
+        };
 
         let properties = PlanProperties::new(
             EquivalenceProperties::new(Arc::new(arrow_schema::Schema::empty())),
@@ -229,13 +243,15 @@ async fn write_bucketed(
     // 5. Inject schema metadata
     let enriched_schema = inject_schema_metadata(file_schema, config);
 
-    // 6. Get object store
+    // 6. Get object store and derive the store-relative base path from the URL
     let glob_urls = crate::url::GlobUrl::parse(output_path)?;
     let glob_url = glob_urls
         .into_iter()
         .next()
         .ok_or_else(|| exec_datafusion_err!("empty output path: {output_path}"))?;
     let store = context.runtime_env().object_store(&glob_url)?;
+    let base_path = Path::from_url_path(glob_url.base.path())
+        .map_err(|e| exec_datafusion_err!("invalid output path '{output_path}': {e}"))?;
 
     // 7. Build bucket batches (empty buckets get empty files to maintain 1:1 mapping)
     let mut bucket_batches: Vec<(usize, RecordBatch)> = Vec::with_capacity(num_buckets);
@@ -272,7 +288,7 @@ async fn write_bucketed(
         .map(|(bucket_id, batch)| {
             write_bucket_file(
                 &store,
-                output_path,
+                &base_path,
                 *bucket_id,
                 batch,
                 config,
@@ -319,7 +335,7 @@ fn sort_batch(batch: &RecordBatch, sort_columns: &[(String, bool)]) -> Result<Re
 /// Write a single bucket's data to a Parquet file.
 async fn write_bucket_file(
     store: &Arc<dyn object_store::ObjectStore>,
-    output_path: &str,
+    base_path: &Path,
     bucket_id: usize,
     batch: &RecordBatch,
     config: &BucketingConfig,
@@ -329,10 +345,7 @@ async fn write_bucket_file(
     let row_count = batch.num_rows() as u64;
     let props = create_bucketed_writer_properties(base_props, config, bucket_id, row_count);
     let file_name = bucket_file_name(bucket_id);
-
-    // Build object_store path
-    let base = Path::from(output_path.trim_start_matches('/'));
-    let file_path = base.child(file_name);
+    let file_path = base_path.child(file_name);
 
     // Write to in-memory buffer, then put to object store
     let mut buf = Vec::new();
