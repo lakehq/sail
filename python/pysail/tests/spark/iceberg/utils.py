@@ -22,8 +22,8 @@ def create_sql_catalog(tmp_path: Path):
     catalog = load_catalog(
         "test_catalog",
         type="sql",
-        uri=f"sqlite:///{tmp_path}/pyiceberg_catalog.db",
-        warehouse=f"file://{warehouse_path}",
+        uri=f"sqlite:///{tmp_path.as_posix()}/pyiceberg_catalog.db",
+        warehouse=warehouse_path.as_uri(),
     )
     try:  # noqa: SIM105
         catalog.create_namespace("default")

@@ -83,10 +83,9 @@ def _sanitize_iceberg_metadata(metadata: dict) -> dict:
         if isinstance(location, str):
             # `location` is a temp directory in tests (pytest run ids etc.), so only keep the table
             # directory name to make snapshots stable across runs.
-            m = re.match(r"file://(?:[^/]+)?(/.*)", location)
+            m = re.match(r"file://.*/([^/]+)/?$", location)
             if m:
-                path = m.group(1).rstrip("/")
-                table_dir = path.split("/")[-1] if path else ""
+                table_dir = m.group(1)
                 sanitized["location"] = f"file://<root>/{table_dir}/"
             else:
                 sanitized["location"] = "file://<root>/"
@@ -193,8 +192,8 @@ def _sanitize_iceberg_snapshot(snapshot: dict) -> dict:
             )
             # Also sanitize full paths
             sanitized["manifest-list"] = re.sub(
-                r"file://(?:[^/]+)?(/.*)/metadata/",
-                r"file://<root>/metadata/",
+                r"file://.*/metadata/",
+                "file://<root>/metadata/",
                 sanitized["manifest-list"],
             )
             sanitized["manifest-list"] = _normalize_pytest_tmp_path(sanitized["manifest-list"])

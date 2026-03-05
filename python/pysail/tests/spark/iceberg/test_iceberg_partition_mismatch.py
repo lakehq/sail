@@ -1,7 +1,6 @@
 """Test partition column mismatch validation for Iceberg tables"""
 
 import json
-from pathlib import Path
 
 import pytest
 from pyspark.sql.types import Row
@@ -13,7 +12,8 @@ class TestIcebergPartitionMismatch:
 
     def test_append_with_different_partition_columns_raises_error(self, spark, tmp_path):
         """Test that appending with different partition columns raises an error"""
-        iceberg_path = f"file://{tmp_path}/partitioned_table"
+        table_dir = tmp_path / "partitioned_table"
+        iceberg_path = table_dir.as_uri()
 
         # Create initial partitioned table with partition column 'category'
         initial_data = [
@@ -37,7 +37,8 @@ class TestIcebergPartitionMismatch:
 
     def test_append_with_multiple_different_partition_columns_raises_error(self, spark, tmp_path):
         """Test that appending with different multi-column partitioning raises an error"""
-        iceberg_path = f"file://{tmp_path}/multi_partitioned_table"
+        table_dir = tmp_path / "multi_partitioned_table"
+        iceberg_path = table_dir.as_uri()
 
         # Create initial table partitioned by 'year' and 'month'
         initial_data = [
@@ -61,7 +62,8 @@ class TestIcebergPartitionMismatch:
 
     def test_append_with_reordered_partition_columns_raises_error(self, spark, tmp_path):
         """Test that appending with the same columns but different order is rejected"""
-        iceberg_path = f"file://{tmp_path}/reordered_partition_table"
+        table_dir = tmp_path / "reordered_partition_table"
+        iceberg_path = table_dir.as_uri()
 
         initial_data = [
             Row(id=1, year=2023, month=1, value=10),
@@ -81,7 +83,8 @@ class TestIcebergPartitionMismatch:
 
     def test_append_with_same_partition_columns_succeeds(self, spark, tmp_path):
         """Test that appending with same partition columns succeeds"""
-        iceberg_path = f"file://{tmp_path}/consistent_partitioned_table"
+        table_dir = tmp_path / "consistent_partitioned_table"
+        iceberg_path = table_dir.as_uri()
 
         # Create initial partitioned table
         initial_data = [
@@ -106,7 +109,8 @@ class TestIcebergPartitionMismatch:
 
     def test_append_without_specifying_partition_columns_inherits_partitioning(self, spark, tmp_path):
         """Appending without partition spec should inherit existing partitioning"""
-        iceberg_path = f"file://{tmp_path}/auto_partitioned_table"
+        table_dir = tmp_path / "auto_partitioned_table"
+        iceberg_path = table_dir.as_uri()
 
         # Create initial partitioned table
         initial_data = [
@@ -130,7 +134,6 @@ class TestIcebergPartitionMismatch:
         assert result_count == 4, f"Expected 4 rows, got {result_count}"  # noqa: PLR2004
 
         # Verify table metadata still reflects the original partition spec
-        table_dir = Path(iceberg_path.replace("file://", ""))
         metadata_files = sorted(table_dir.joinpath("metadata").glob("*.metadata.json"))
         latest_meta = json.loads(metadata_files[-1].read_text())
         default_spec_id = latest_meta["default-spec-id"]
@@ -140,7 +143,8 @@ class TestIcebergPartitionMismatch:
 
     def test_overwrite_with_different_partition_without_schema_overwrite_raises_error(self, spark, tmp_path):
         """Test that overwriting with different partition columns without overwriteSchema raises error"""
-        iceberg_path = f"file://{tmp_path}/overwrite_partition_table"
+        table_dir = tmp_path / "overwrite_partition_table"
+        iceberg_path = table_dir.as_uri()
 
         # Create initial partitioned table
         initial_data = [
@@ -162,7 +166,8 @@ class TestIcebergPartitionMismatch:
 
     def test_overwrite_with_different_partition_and_schema_overwrite_succeeds(self, spark, tmp_path):
         """Test that overwriting with different partition columns with overwriteSchema=true succeeds"""
-        iceberg_path = f"file://{tmp_path}/schema_overwrite_table"
+        table_dir = tmp_path / "schema_overwrite_table"
+        iceberg_path = table_dir.as_uri()
 
         # Create initial partitioned table
         initial_data = [
@@ -194,7 +199,6 @@ class TestIcebergPartitionMismatch:
         assert "category" in columns, "Column 'category' should still exist in data"
 
         # Verify table metadata reflects the new partition spec
-        table_dir = Path(iceberg_path.replace("file://", ""))
         metadata_files = sorted(table_dir.joinpath("metadata").glob("*.metadata.json"))
         latest_meta = metadata_files[-1]
         meta = json.loads(latest_meta.read_text())
@@ -205,7 +209,8 @@ class TestIcebergPartitionMismatch:
 
     def test_append_to_unpartitioned_table_with_partitioning_raises_error(self, spark, tmp_path):
         """Test that appending with partitioning to an unpartitioned table raises error"""
-        iceberg_path = f"file://{tmp_path}/unpartitioned_table"
+        table_dir = tmp_path / "unpartitioned_table"
+        iceberg_path = table_dir.as_uri()
 
         # Create initial unpartitioned table
         initial_data = [
@@ -227,7 +232,8 @@ class TestIcebergPartitionMismatch:
 
     def test_create_partition_with_unknown_column_raises_error(self, spark, tmp_path):
         """Test that creating a table with a non-existent partition column raises an error"""
-        iceberg_path = f"file://{tmp_path}/unknown_partition_column_table"
+        table_dir = tmp_path / "unknown_partition_column_table"
+        iceberg_path = table_dir.as_uri()
 
         data = [
             Row(id=1, category="A", value=100),

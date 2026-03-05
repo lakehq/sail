@@ -1,4 +1,5 @@
 import tempfile
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -13,11 +14,16 @@ def sql_catalog() -> "Catalog":
     """Create a SQL catalog for Iceberg tests using a temporary directory."""
 
     with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
         catalog = SqlCatalog(
             "test_catalog",
-            uri=f"sqlite:///{tmpdir}/pyiceberg_catalog.db",
-            warehouse=f"file://{tmpdir}/warehouse",
+            uri=f"sqlite:///{tmp_path.as_posix()}/pyiceberg_catalog.db",
+            warehouse=tmp_path.joinpath("warehouse").as_uri(),
         )
         # Create default namespace
         catalog.create_namespace("default")
         yield catalog
+
+        # Release SQLite file handle before TemporaryDirectory cleanup on Windows.
+        if hasattr(catalog, "engine"):
+            catalog.engine.dispose()

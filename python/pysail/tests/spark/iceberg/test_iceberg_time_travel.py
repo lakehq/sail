@@ -48,7 +48,7 @@ def test_iceberg_time_travel_by_snapshot_id(spark, tmp_path):
 def test_iceberg_time_travel_by_timestamp(spark, tmp_path):
     table_path = tmp_path / "tt_by_timestamp"
     table_path.mkdir(parents=True, exist_ok=True)
-    table_location = f"file://{table_path}"
+    table_location = table_path.as_uri()
 
     try:
         # Write snapshot 0: single row
