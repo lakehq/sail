@@ -73,7 +73,9 @@ fn infer_json_schema_type(json_string: &str) -> Result<String> {
 
 fn value_to_str(value: &Value) -> Result<String> {
     match value {
-        Value::Number(_) => Ok("STRING".to_string()),
+        Value::String(_) => Ok("STRING".to_string()),
+        Value::Number(_) => Ok("BIGINT".to_string()),
+        Value::Bool(_) => Ok("BOOL".to_string()),
         Value::Object(map) => {
             let mut inner = Vec::new();
             for (k, v) in map.iter() {
@@ -83,6 +85,10 @@ fn value_to_str(value: &Value) -> Result<String> {
             }
             let inner_str = inner.join(", ");
             Ok(format!("STRUCT<{}>", inner_str))
+        },
+        Value::Array(arr) => {
+            let nested_val = value_to_str(&arr[0])?;
+            Ok(format!("ARRAY<{nested_val}>"))
         },
         other => exec_err!("Unsupported parsing of json type {other}")
     }
@@ -94,7 +100,7 @@ mod test {
 
     #[test]
     fn test_tmp() {
-        let s = r#"{"a": "string"}"#;
+        let s = r#"{"a": "string", "b": [1]}"#;
         let o = infer_json_schema_type(s);
         dbg!(o);
     }
