@@ -63,6 +63,11 @@ pub enum Expr {
         function_name: ObjectName,
         arguments: Vec<Expr>,
     },
+    /// A named argument expression (e.g., `func(key=value)` in Python UDF kwargs)
+    NamedArgument {
+        key: String,
+        value: Box<Expr>,
+    },
     // extensions
     Placeholder(String),
     Rollup(Vec<Expr>),

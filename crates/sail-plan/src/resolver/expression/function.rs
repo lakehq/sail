@@ -84,6 +84,7 @@ impl PlanResolver<'_> {
                     &function_name,
                     arguments,
                     &argument_display_names,
+                    &[], // registered UDFs called by name don't use kwargs
                     schema,
                     f.deterministic(),
                     is_distinct,

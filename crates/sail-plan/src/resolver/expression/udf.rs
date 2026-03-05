@@ -36,8 +36,25 @@ impl PlanResolver<'_> {
             function,
         } = function;
         let function_name: String = function_name.into();
+
+        // Separate positional args from named (keyword) args before resolution
+        let mut positional_args = Vec::new();
+        let mut kwarg_names: Vec<Option<String>> = Vec::new();
+        for arg in arguments {
+            match arg {
+                spec::Expr::NamedArgument { key, value } => {
+                    positional_args.push(*value);
+                    kwarg_names.push(Some(key));
+                }
+                other => {
+                    positional_args.push(other);
+                    kwarg_names.push(None);
+                }
+            }
+        }
+
         let (argument_display_names, arguments) = self
-            .resolve_expressions_and_names(arguments, schema, state)
+            .resolve_expressions_and_names(positional_args, schema, state)
             .await?;
         let function = self.resolve_python_udf(function, state)?;
         let func = self.resolve_python_udf_expr(
@@ -45,6 +62,7 @@ impl PlanResolver<'_> {
             &function_name,
             arguments,
             &argument_display_names,
+            &kwarg_names,
             schema,
             deterministic,
             is_distinct,
@@ -66,6 +84,8 @@ impl PlanResolver<'_> {
         name: &str,
         arguments: Vec<Expr>,
         argument_display_names: &[String],
+        // Per-argument kwarg name: None for positional, Some(key) for keyword
+        kwarg_names: &[Option<String>],
         schema: &DFSchemaRef,
         deterministic: bool,
         distinct: bool,
@@ -87,6 +107,7 @@ impl PlanResolver<'_> {
             &function.command,
             function.eval_type,
             &((0..arguments.len()).collect::<Vec<_>>()),
+            kwarg_names,
             &self.config.pyspark_udf_config,
         )?;
 

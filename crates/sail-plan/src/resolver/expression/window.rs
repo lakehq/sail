@@ -133,6 +133,7 @@ impl PlanResolver<'_> {
                     &function.command,
                     function.eval_type,
                     &((0..arguments.len()).collect::<Vec<_>>()),
+                    &[], // window UDFs don't use kwargs
                     &self.config.pyspark_udf_config,
                 )?;
                 let function = match function.eval_type {
