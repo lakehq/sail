@@ -1,7 +1,7 @@
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion_common::ScalarValue;
 use datafusion_expr::utils::{expr_as_column_expr, find_aggregate_exprs};
-use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, Volatility};
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 
@@ -12,6 +12,30 @@ use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
 use crate::resolver::tree::window::WindowRewriter;
 use crate::resolver::PlanResolver;
+
+/// Returns the name of a volatile (non-deterministic) scalar expression found
+/// outside an aggregate function, or None if no such expression exists.
+/// Mirrors Spark's CheckAnalysis rule that blocks non-deterministic expressions
+/// in aggregate projections.
+fn find_volatile_non_aggregate(expr: &Expr) -> Option<String> {
+    let mut found_name: Option<String> = None;
+    // Walk the expression tree; skip inside aggregate functions
+    let _ = expr.apply(|e| {
+        match e {
+            // Aggregate functions control their own evaluation — don't descend
+            Expr::AggregateFunction(_) => Ok(TreeNodeRecursion::Jump),
+            // Volatile scalar UDF outside an aggregate → violation
+            Expr::ScalarFunction(f)
+                if f.func.signature().volatility == Volatility::Volatile =>
+            {
+                found_name = Some(f.func.name().to_string());
+                Ok(TreeNodeRecursion::Stop)
+            }
+            _ => Ok(TreeNodeRecursion::Continue),
+        }
+    });
+    found_name
+}
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_aggregate(
@@ -34,6 +58,15 @@ impl PlanResolver<'_> {
         let projections = self
             .resolve_named_expressions(projections, schema, state)
             .await?;
+
+        // Spark's CheckAnalysis: reject non-deterministic expressions in aggregate projections
+        for proj in &projections {
+            if let Some(name) = find_volatile_non_aggregate(&proj.expr) {
+                return Err(PlanError::invalid(format!(
+                    "nondeterministic expression {name} should not appear in the arguments of an aggregate function",
+                )));
+            }
+        }
 
         let grouping = {
             let mut scope = state.enter_aggregate_scope(AggregateState::Grouping {
