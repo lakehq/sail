@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING
 import pytest
 from pyiceberg.catalog.sql import SqlCatalog
 
+from pysail.tests.spark.iceberg.utils import pyiceberg_local_location
+
 if TYPE_CHECKING:
     from pyiceberg.catalog import Catalog
 
@@ -18,7 +20,7 @@ def sql_catalog() -> "Catalog":
         catalog = SqlCatalog(
             "test_catalog",
             uri=f"sqlite:///{tmp_path.as_posix()}/pyiceberg_catalog.db",
-            warehouse=tmp_path.joinpath("warehouse").as_uri(),
+            warehouse=pyiceberg_local_location(tmp_path.joinpath("warehouse")),
         )
         # Create default namespace
         catalog.create_namespace("default")

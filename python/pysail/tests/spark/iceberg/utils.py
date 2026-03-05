@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -12,6 +13,16 @@ except ImportError:
 PYICEBERG_REQUIRED_MSG = "PyIceberg is required for this operation"
 
 
+def pyiceberg_local_location(path: Path) -> str:
+    """Return a local location string that PyIceberg can use across platforms."""
+    resolved = path.resolve()
+    if os.name == "nt":
+        # PyIceberg parses file URIs into '/C:/...' on Windows, which pyarrow rejects.
+        # Use an absolute local path instead.
+        return str(resolved)
+    return resolved.as_uri()
+
+
 def create_sql_catalog(tmp_path: Path):
     if not HAS_PYICEBERG:
         msg = "PyIceberg is required for create_sql_catalog"
@@ -23,7 +34,7 @@ def create_sql_catalog(tmp_path: Path):
         "test_catalog",
         type="sql",
         uri=f"sqlite:///{tmp_path.as_posix()}/pyiceberg_catalog.db",
-        warehouse=warehouse_path.as_uri(),
+        warehouse=pyiceberg_local_location(warehouse_path),
     )
     try:  # noqa: SIM105
         catalog.create_namespace("default")
