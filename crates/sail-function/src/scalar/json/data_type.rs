@@ -1,4 +1,7 @@
-
+// Similar to https://github.com/lakehq/sail/blob/f64ccb2233473282f9d3ae2c95e2b90848a6f249/crates/sail-spark-connect/src/proto/data_type.rs
+// but copied to avoid circular imports
+// Also `parse_spark_json_data_type` was rewritten cast directly to sail data types
+// instead of types defined in the proto files
 
 use monostate::MustBe;
 use sail_common::spec;
