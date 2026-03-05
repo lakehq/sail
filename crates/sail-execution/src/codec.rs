@@ -1968,6 +1968,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 output_type,
                 config,
                 kind,
+                actual_arg_count,
             })) => {
                 let input_types = input_types
                     .iter()
@@ -1978,8 +1979,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     Some(config) => self.try_decode_pyspark_udf_config(config)?,
                     None => return plan_err!("missing config for PySparkGroupAggUDF"),
                 };
-                // Decode kind; default to Pandas for backward compatibility
                 let kind = self.try_decode_pyspark_group_agg_kind(kind)?;
+                let actual_arg_count = actual_arg_count
+                    .map(|c| c as usize)
+                    .unwrap_or(input_types.len()); // backward compat: all inputs are real
                 let udaf = PySparkGroupAggregateUDF::new(
                     kind,
                     name,
@@ -1989,6 +1992,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     input_types,
                     output_type,
                     Arc::new(config),
+                    actual_arg_count,
                 );
                 Ok(Arc::new(AggregateUDF::from(udaf)))
             }
@@ -2073,6 +2077,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 output_type,
                 config: Some(config),
                 kind,
+                actual_arg_count: Some(func.actual_arg_count() as u64),
             })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<PySparkGroupMapUDF>() {
             let input_types = func

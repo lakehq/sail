@@ -178,6 +178,10 @@ message PySparkGroupAggUdaf {
   bytes output_type = 6;
   PySparkUdfConfig config = 7;
   PySparkGroupAggKind kind = 8;
+  // Number of arguments the Python function actually accepts.
+  // Absent for backward compatibility: if not set, defaults to input_types.len().
+  // When a dummy Int64 argument has been injected (0-arg UDF), this is 0.
+  optional uint64 actual_arg_count = 9;
 }
 
 message PySparkGroupMapUdaf {

@@ -217,6 +217,21 @@ impl PlanResolver<'_> {
                 }))
             }
             PySparkUdfType::GroupedAggPandas => {
+                // DataFusion requires at least one input to an aggregate function.
+                // For 0-arg UDFs inject a dummy Int64 literal; the accumulator will
+                // strip it before calling Python.
+                let actual_arg_count = arguments.len();
+                let (arguments, input_types) = if arguments.is_empty() {
+                    (
+                        vec![Expr::Literal(
+                            datafusion_common::ScalarValue::Int64(Some(0)),
+                            None,
+                        )],
+                        vec![arrow::datatypes::DataType::Int64],
+                    )
+                } else {
+                    (arguments, input_types)
+                };
                 let udaf = PySparkGroupAggregateUDF::new(
                     PySparkGroupAggKind::Pandas, // Pandas path: Arrow → Pandas → user func → Arrow
                     get_udf_name(name, &payload),
@@ -226,6 +241,7 @@ impl PlanResolver<'_> {
                     input_types,
                     function.output_type,
                     self.config.pyspark_udf_config.clone(),
+                    actual_arg_count,
                 );
                 Ok(Expr::AggregateFunction(expr::AggregateFunction {
                     func: Arc::new(AggregateUDF::from(udaf)),
@@ -272,6 +288,21 @@ impl PlanResolver<'_> {
             }
             // Arrow-native grouped aggregate UDF (252): user func receives pa.Arrays, returns scalar
             PySparkUdfType::GroupedAggArrow => {
+                // DataFusion requires at least one input to an aggregate function.
+                // For 0-arg UDFs inject a dummy Int64 literal; the accumulator will
+                // strip it before calling Python.
+                let actual_arg_count = arguments.len();
+                let (arguments, input_types) = if arguments.is_empty() {
+                    (
+                        vec![Expr::Literal(
+                            datafusion_common::ScalarValue::Int64(Some(0)),
+                            None,
+                        )],
+                        vec![arrow::datatypes::DataType::Int64],
+                    )
+                } else {
+                    (arguments, input_types)
+                };
                 let udaf = PySparkGroupAggregateUDF::new(
                     PySparkGroupAggKind::Arrow, // Arrow path: no Pandas conversion
                     get_udf_name(name, &payload),
@@ -281,6 +312,7 @@ impl PlanResolver<'_> {
                     input_types,
                     function.output_type,
                     self.config.pyspark_udf_config.clone(),
+                    actual_arg_count,
                 );
                 Ok(Expr::AggregateFunction(expr::AggregateFunction {
                     func: Arc::new(AggregateUDF::from(udaf)),

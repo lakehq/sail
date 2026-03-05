@@ -37,6 +37,10 @@ pub struct PySparkGroupAggregateUDF {
     input_types: Vec<DataType>,
     output_type: DataType,
     config: Arc<PySparkUdfConfig>,
+    /// Number of arguments the Python function actually accepts. When a dummy
+    /// argument has been injected (0-arg UDF), this is 0 while `input_types`
+    /// contains the dummy Int64 type.
+    actual_arg_count: usize,
     udf: LazyPyObject,
 }
 
@@ -50,6 +54,7 @@ impl PySparkGroupAggregateUDF {
         input_types: Vec<DataType>,
         output_type: DataType,
         config: Arc<PySparkUdfConfig>,
+        actual_arg_count: usize,
     ) -> Self {
         let signature = Signature::exact(
             input_types.clone(),
@@ -68,12 +73,17 @@ impl PySparkGroupAggregateUDF {
             input_types,
             output_type,
             config,
+            actual_arg_count,
             udf: LazyPyObject::new(),
         }
     }
 
     pub fn kind(&self) -> PySparkGroupAggKind {
         self.kind
+    }
+
+    pub fn actual_arg_count(&self) -> usize {
+        self.actual_arg_count
     }
 
     pub fn payload(&self) -> &[u8] {
@@ -151,6 +161,7 @@ impl AggregateUDFImpl for PySparkGroupAggregateUDF {
             self.input_types.clone(),
             self.output_type.clone(),
             aggregator,
+            self.actual_arg_count,
         )))
     }
 
