@@ -173,6 +173,8 @@ use sail_iceberg::physical_plan::{IcebergCommitExec, IcebergWriterExec};
 use sail_iceberg::TableIcebergOptions;
 use sail_logical_plan::range::Range;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
+use sail_physical_plan::barrier::BarrierExec;
+use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
@@ -950,6 +952,29 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     expected_partitions as usize,
                 )))
             }
+            NodeKind::CatalogCommand(gen::CatalogCommandExecNode { schema, command }) => {
+                let schema = Arc::new(self.try_decode_schema(&schema)?);
+                let command: sail_catalog::command::CatalogCommand = serde_json::from_str(&command)
+                    .map_err(|e| plan_datafusion_err!("failed to decode CatalogCommand: {e}"))?;
+                Ok(Arc::new(CatalogCommandExec::new(command, schema)))
+            }
+            NodeKind::Barrier(gen::BarrierExecNode { inputs }) => {
+                if inputs.len() < 2 {
+                    return plan_err!(
+                        "BarrierExec requires at least 2 inputs but got {}",
+                        inputs.len()
+                    );
+                }
+                let mut decoded: Vec<Arc<dyn ExecutionPlan>> = inputs
+                    .into_iter()
+                    .map(|i| self.try_decode_plan(&i, ctx))
+                    .collect::<Result<_>>()?;
+                let plan = decoded
+                    .pop()
+                    .unwrap_or_else(|| unreachable!("decoded is non-empty"));
+                let preconditions = decoded;
+                Ok(Arc::new(BarrierExec::try_new(preconditions, plan)?))
+            }
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
         }
     }
@@ -1461,6 +1486,20 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 expected_partitions: python_commit_exec.expected_partitions() as u64,
                 input,
             })
+        } else if let Some(catalog_command_exec) =
+            node.as_any().downcast_ref::<CatalogCommandExec>()
+        {
+            let schema = self.try_encode_schema(catalog_command_exec.schema().as_ref())?;
+            let command = serde_json::to_string(catalog_command_exec.command())
+                .map_err(|e| plan_datafusion_err!("failed to encode CatalogCommand: {e}"))?;
+            NodeKind::CatalogCommand(gen::CatalogCommandExecNode { schema, command })
+        } else if let Some(barrier_exec) = node.as_any().downcast_ref::<BarrierExec>() {
+            let inputs = barrier_exec
+                .children()
+                .into_iter()
+                .map(|child| self.try_encode_plan(child.clone()))
+                .collect::<Result<_>>()?;
+            NodeKind::Barrier(gen::BarrierExecNode { inputs })
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");
         };

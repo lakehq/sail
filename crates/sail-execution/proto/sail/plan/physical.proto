@@ -51,6 +51,8 @@ message ExtendedPhysicalPlanNode {
     MonotonicIdExecNode monotonic_id = 36;
     PythonDataSourceWriteExecNode python_data_source_write = 37;
     PythonDataSourceWriteCommitExecNode python_data_source_write_commit = 38;
+    CatalogCommandExecNode catalog_command = 39;
+    BarrierExecNode barrier = 40;
   }
 }
 
@@ -620,4 +622,17 @@ message PythonDataSourceWriteCommitExecNode {
   uint64 expected_partitions = 2;
   // Input plan that yields per-partition write results.
   bytes input = 3;
+}
+
+message CatalogCommandExecNode {
+  // Arrow IPC-serialized schema for the command output.
+  bytes schema = 1;
+  // JSON-encoded CatalogCommand.
+  string command = 2;
+}
+
+message BarrierExecNode {
+  // All children: first n-1 are preconditions, the last one is the main plan.
+  // Each element is a DataFusion PhysicalPlanNode encoded as bytes.
+  repeated bytes inputs = 1;
 }
