@@ -58,7 +58,7 @@ async fn convert_spark_integer_types(
 
     // Read only a bounded prefix of the first file to avoid pulling large objects into memory.
     const MAX_SAMPLE_BYTES: u64 = 1024 * 1024; // 1 MiB
-    let sample_end = std::cmp::min(files[0].size as u64, MAX_SAMPLE_BYTES);
+    let sample_end = std::cmp::min(files[0].size, MAX_SAMPLE_BYTES);
     if let Ok(data) = store.get_range(&files[0].location, 0..sample_end).await {
         let cursor = Cursor::new(data);
         let mut reader_builder = arrow::csv::ReaderBuilder::new(Arc::new(schema.clone()))
@@ -267,7 +267,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     async fn test_convert_spark_integer_types_small_values() {
         use object_store::memory::InMemory;
         use object_store::path::Path;
@@ -297,7 +297,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     async fn test_convert_spark_integer_types_large_values() {
         use object_store::memory::InMemory;
         use object_store::path::Path;
@@ -325,7 +325,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     async fn test_convert_spark_integer_types_fallback_on_read_failure() {
         use object_store::memory::InMemory;
 
