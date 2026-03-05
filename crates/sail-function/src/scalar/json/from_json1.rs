@@ -479,6 +479,21 @@ fn append_to_builder(
             let curr_len = offsets.last().unwrap() + arr.len() as i32;
             offsets.push(curr_len);
         },
+        // it's valid to cast structs into a struct array
+        (
+            FieldBuilder::List {
+                offsets,
+                values: nested_builder,
+                nulls,
+                ..
+            },
+            Value::Object(obj),
+        ) => {
+            nulls.push(true);
+            append_to_builder(nested_builder, value, options)?;
+            let curr_len = offsets.last().unwrap() + obj.len() as i32;
+            offsets.push(curr_len);
+        },
         (other, other1) => return plan_err!("Unsupported conversion of value {other1:?} to type {other:?}")
     };
     Ok(())
@@ -535,56 +550,6 @@ fn finish_builder(builder: FieldBuilder) -> Result<ArrayRef> {
             )))
         },
         _ => plan_err!("Unsupported finish builder")
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use datafusion::arrow::array::MapBuilder;
-
-    use super::*;
-
-    #[test]
-    fn test_tmp1() {
-        let json_str = r#"{
-            "a": 1,
-            "b": 2
-        }"#;
-        let strings = StringArray::from(vec![json_str, json_str]);
-        let schema_arg = Arc::new(StringArray::from(vec!["map<string, int>"]));
-        let schema_dtype = get_schema_data_type(schema_arg).unwrap();
-        let map_array = &make_map();
-        let opts = SparkFromJsonOptions::default().from_map(map_array).unwrap();
-        let x = parse_rows(&strings, schema_dtype, opts).unwrap();
-        dbg!(x);
-    }
-
-    #[test]
-    fn test_map_options() {
-        let map_array = &make_map();
-        let opts = SparkFromJsonOptions::default().from_map(map_array).unwrap();
-        dbg!(opts);
-    }
-
-    fn make_map() -> MapArray {
-        let key_builder = StringBuilder::new();
-        let value_builder = StringBuilder::new();
-
-        let mut builder = MapBuilder::new(None, key_builder, value_builder);
-
-        // Add one map entry: { "timestampFormat": "" }
-        builder.keys().append_value("mode");
-        builder.values().append_value("FAILFAST");
-        builder.append(true).unwrap(); // true = this map entry is valid (not null)
-
-        builder.finish()
-    }
-
-    #[test]
-    fn test_fuck_shit() {
-        let j = r#"{"fields":[{"metadata":{},"name":"a","nullable":true,"type":"integer"}],"type":"struct"}"#;
-        let d = serde_json::from_str::<Schema>(j).unwrap();
-        dbg!(d);
     }
 }
 

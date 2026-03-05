@@ -5,12 +5,6 @@ use sail_common::spec;
 use sail_sql_analyzer::data_type::from_ast_data_type;
 use sail_sql_analyzer::parser::parse_data_type;
 
-// from spark connect data_type
-//use crate::error::{ProtoFieldExt, SparkError, SparkResult};
-//use crate::proto::data_type_json::parse_spark_json_data_type;
-//use crate::spark::connect::{data_type as sdt, DataType};
-
-// my additions
 use datafusion_common::{DataFusionError, Result};
 use serde::{Deserialize, Serialize};
 
@@ -65,6 +59,14 @@ fn from_spark_json_data_type(data_type: JsonDataType) -> Result<spec::DataType> 
                 })
                 .collect::<Result<_>>()?,
         },
+        JsonDataType::Array {
+            element_type,
+            contains_null,
+            ..
+        } => spec::DataType::List {
+            data_type: Box::new(from_spark_json_data_type(*element_type)?),
+            nullable: contains_null
+        }
     })
 }
 
@@ -77,7 +79,13 @@ pub enum JsonDataType {
     Struct {
         r#type: MustBe!("struct"),
         fields: Vec<JsonStructField>
-    }
+    },
+    #[serde(untagged, rename_all = "camelCase")]
+    Array {
+        r#type: MustBe!("array"),
+        element_type: Box<JsonDataType>,
+        contains_null: bool
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -87,16 +95,4 @@ pub struct JsonStructField {
     pub nullable: bool,
     pub r#type: JsonDataType,
     pub metadata: Option<serde_json::Value>,
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn test_parse_json() {
-        let j = r#"{"fields":[{"metadata":{},"name":"a","nullable":true,"type":"integer"}],"type":"struct"}"#;
-        let d = parse_spark_json_data_type(j).unwrap();
-        dbg!(d);
-    }
 }
