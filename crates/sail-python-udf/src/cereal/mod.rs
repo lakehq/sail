@@ -54,7 +54,6 @@ fn supports_kwargs(eval_type: spec::PySparkUdfType) -> bool {
         | PySparkUdfType::CogroupedMapArrow
         | PySparkUdfType::MapArrowIter
         | PySparkUdfType::GroupedMapPandasWithState
-        | PySparkUdfType::ScalarArrowIter
         | PySparkUdfType::Table
         | PySparkUdfType::ArrowTable => false,
         PySparkUdfType::Batched
@@ -62,8 +61,10 @@ fn supports_kwargs(eval_type: spec::PySparkUdfType) -> bool {
         | PySparkUdfType::ScalarPandas
         | PySparkUdfType::GroupedAggPandas
         | PySparkUdfType::ScalarPandasIter
-        // Arrow scalar/agg UDFs support kwargs (iter variant does not)
+        // Arrow scalar/agg UDFs use the kwargs protocol even if they don't support named args.
+        // PySpark's read_single_udf always reads the kwargs flag byte for these types.
         | PySparkUdfType::ScalarArrow
+        | PySparkUdfType::ScalarArrowIter
         | PySparkUdfType::GroupedAggArrow => true,
     }
 }
