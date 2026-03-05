@@ -32,6 +32,8 @@ chrono = { workspace = true }
 pyo3 = { workspace = true }
 arrow = { workspace = true }
 arrow-schema = { workspace = true }
+ahash = { workspace = true }
+parquet = { workspace = true }
 arrow-pyarrow = { workspace = true }
 dashmap = { workspace = true }
 once_cell = { workspace = true }

@@ -12,6 +12,10 @@ use crate::formats::parquet::options::{
     resolve_parquet_read_options, resolve_parquet_write_options,
 };
 
+pub mod bucketed_scan;
+pub mod bucketed_sink;
+pub mod bucketed_table;
+pub mod bucketing;
 mod options;
 
 pub type ParquetTableFormat = ListingTableFormat<ParquetListingFormat>;

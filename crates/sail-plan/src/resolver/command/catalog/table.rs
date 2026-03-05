@@ -126,16 +126,8 @@ impl PlanResolver<'_> {
             ));
         }
 
-        if !sort_by.is_empty() {
-            return Err(PlanError::todo(
-                "SORT_BY in CREATE TABLE AS SELECT statement",
-            ));
-        }
-        if bucket_by.is_some() {
-            return Err(PlanError::todo(
-                "BUCKET_BY in CREATE TABLE AS SELECT statement",
-            ));
-        }
+        // sort_by and bucket_by are supported for Parquet format
+        // (handled in BucketedParquetSinkExec)
         if comment.is_some() {
             return Err(PlanError::todo(
                 "COMMENT in CREATE TABLE AS SELECT statement",
@@ -189,6 +181,8 @@ impl PlanResolver<'_> {
             .with_mode(write_mode)
             .with_format(format)
             .with_partition_by(partition_by)
+            .with_sort_by(sort_by)
+            .with_bucket_by(bucket_by)
             .with_options(write_options);
 
         self.resolve_write_with_builder(input, builder, state).await

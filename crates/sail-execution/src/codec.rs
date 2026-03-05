@@ -76,6 +76,9 @@ use sail_common_datafusion::system::catalog::SystemTable;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_data_source::formats::binary::source::BinarySource;
 use sail_data_source::formats::console::ConsoleSinkExec;
+use sail_data_source::formats::parquet::bucketed_scan::BucketedParquetScanExec;
+use sail_data_source::formats::parquet::bucketed_sink::BucketedParquetSinkExec;
+use sail_data_source::formats::parquet::bucketing::BucketingConfig;
 use sail_data_source::formats::python::{
     InputPartition, PythonDataSourceExec, PythonDataSourceWriteCommitExec,
     PythonDataSourceWriteExec,
@@ -950,6 +953,81 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     expected_partitions as usize,
                 )))
             }
+            NodeKind::BucketedParquetSink(gen::BucketedParquetSinkExecNode {
+                input,
+                output_path,
+                bucket_columns,
+                num_buckets,
+                hash_function,
+                sort_columns,
+                file_schema,
+                writer_properties,
+            }) => {
+                let input = self.try_decode_plan(&input, ctx)?;
+                let file_schema = Arc::new(self.try_decode_schema(&file_schema)?);
+                let sort_columns = sort_columns
+                    .into_iter()
+                    .map(|sc| (sc.name, sc.ascending))
+                    .collect();
+                let config = BucketingConfig {
+                    columns: bucket_columns,
+                    num_buckets: num_buckets as usize,
+                    hash_function,
+                    sort_columns,
+                };
+                let compression_str =
+                    String::from_utf8(writer_properties).unwrap_or_else(|_| "SNAPPY".to_string());
+                let compression = match compression_str.as_str() {
+                    "UNCOMPRESSED" => parquet::basic::Compression::UNCOMPRESSED,
+                    "GZIP" => {
+                        parquet::basic::Compression::GZIP(parquet::basic::GzipLevel::default())
+                    }
+                    "LZ4" => parquet::basic::Compression::LZ4,
+                    "ZSTD" => {
+                        parquet::basic::Compression::ZSTD(parquet::basic::ZstdLevel::default())
+                    }
+                    "LZ4_RAW" => parquet::basic::Compression::LZ4_RAW,
+                    _ => parquet::basic::Compression::SNAPPY,
+                };
+                let writer_props = parquet::file::properties::WriterProperties::builder()
+                    .set_compression(compression)
+                    .build();
+                Ok(Arc::new(BucketedParquetSinkExec::new(
+                    input,
+                    config,
+                    output_path,
+                    file_schema,
+                    writer_props,
+                )?))
+            }
+            NodeKind::BucketedParquetScan(gen::BucketedParquetScanExecNode {
+                inner,
+                bucket_columns,
+                num_buckets,
+                sort_columns,
+                target_buckets,
+                has_target_buckets,
+            }) => {
+                let inner = self.try_decode_plan(&inner, ctx)?;
+                let sort_columns = sort_columns
+                    .into_iter()
+                    .map(|sc| (sc.name, sc.ascending))
+                    .collect();
+                let target = if has_target_buckets {
+                    Some(target_buckets.into_iter().map(|id| id as usize).collect())
+                } else {
+                    None
+                };
+                Ok(Arc::new(
+                    BucketedParquetScanExec::new(
+                        inner,
+                        bucket_columns,
+                        num_buckets as usize,
+                        sort_columns,
+                    )?
+                    .with_target_buckets(target),
+                ))
+            }
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
         }
     }
@@ -1460,6 +1538,54 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 pickled_writer: python_commit_exec.pickled_writer().to_vec(),
                 expected_partitions: python_commit_exec.expected_partitions() as u64,
                 input,
+            })
+        } else if let Some(bucketed_sink) = node.as_any().downcast_ref::<BucketedParquetSinkExec>()
+        {
+            let input = self.try_encode_plan(bucketed_sink.children()[0].clone())?;
+            let file_schema = self.try_encode_schema(bucketed_sink.file_schema().as_ref())?;
+            let config = bucketed_sink.config();
+            let sort_columns = config
+                .sort_columns
+                .iter()
+                .map(|(name, ascending)| gen::BucketSortColumn {
+                    name: name.clone(),
+                    ascending: *ascending,
+                })
+                .collect();
+            let col_path = parquet::schema::types::ColumnPath::new(vec![]);
+            let compression_str =
+                format!("{:?}", bucketed_sink.writer_props().compression(&col_path));
+            NodeKind::BucketedParquetSink(gen::BucketedParquetSinkExecNode {
+                input,
+                output_path: bucketed_sink.output_path().to_string(),
+                bucket_columns: config.columns.clone(),
+                num_buckets: config.num_buckets as u32,
+                hash_function: config.hash_function.clone(),
+                sort_columns,
+                file_schema,
+                writer_properties: compression_str.into_bytes(),
+            })
+        } else if let Some(bucketed_scan) = node.as_any().downcast_ref::<BucketedParquetScanExec>()
+        {
+            let inner = self.try_encode_plan(bucketed_scan.inner().clone())?;
+            let sort_columns = bucketed_scan
+                .sort_columns()
+                .iter()
+                .map(|(name, ascending)| gen::BucketSortColumn {
+                    name: name.clone(),
+                    ascending: *ascending,
+                })
+                .collect();
+            NodeKind::BucketedParquetScan(gen::BucketedParquetScanExecNode {
+                inner,
+                bucket_columns: bucketed_scan.bucket_columns().to_vec(),
+                num_buckets: bucketed_scan.num_buckets() as u32,
+                sort_columns,
+                target_buckets: bucketed_scan
+                    .target_buckets()
+                    .map(|t| t.iter().map(|&id| id as u32).collect())
+                    .unwrap_or_default(),
+                has_target_buckets: bucketed_scan.target_buckets().is_some(),
             })
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");

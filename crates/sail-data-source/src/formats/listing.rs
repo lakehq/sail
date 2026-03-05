@@ -14,11 +14,15 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{internal_err, not_impl_err, plan_err, GetExt, Result};
 use datafusion_datasource::file_compression_type::FileCompressionType;
+use parquet::file::properties::WriterProperties;
 use sail_common_datafusion::datasource::{
     get_partition_columns_and_file_schema, SinkInfo, SourceInfo, TableFormat,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 
+use crate::formats::parquet::bucketed_sink::BucketedParquetSinkExec;
+use crate::formats::parquet::bucketed_table::BucketedListingTable;
+use crate::formats::parquet::bucketing::{parse_schema_metadata, BucketingConfig, HASH_DATAFUSION};
 use crate::utils::split_parquet_compression_string;
 
 /// Trait for schema inference logic
@@ -116,7 +120,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             schema,
             constraints,
             partition_by,
-            bucket_by: _,
+            bucket_by,
             sort_order,
             options,
         } = info;
@@ -133,8 +137,15 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             });
 
         let config = ctx.config();
+        // For bucketed tables, target_partitions must equal num_buckets so that
+        // ListingTable produces exactly one file group per bucket.  Without this,
+        // DataFusion groups files into CPU-count partitions, which breaks the 1:1
+        // bucket-to-partition mapping required by BucketedParquetScanExec.
+        let target_partitions = bucket_by
+            .as_ref()
+            .map_or_else(|| config.target_partitions(), |b| b.num_buckets);
         let mut listing_options = ListingOptions::new(file_format)
-            .with_target_partitions(config.target_partitions())
+            .with_target_partitions(target_partitions)
             .with_collect_stat(config.collect_statistics());
 
         let (schema, partition_by) = match schema {
@@ -180,9 +191,64 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         // The schema must be set after the listing options, otherwise it will panic.
         let config = config.with_schema(schema);
         let config = crate::listing::rewrite_listing_partitions(config)?;
-        Ok(Arc::new(
-            ListingTable::try_new(config)?.with_constraints(constraints),
-        ))
+        let table = ListingTable::try_new(config)?.with_constraints(constraints);
+
+        // Detect bucketing: prefer catalog metadata, fall back to schema metadata.
+        // TODO: use a type-level check instead of string comparison
+        if self.inner.name() == "parquet" {
+            // 1. Check catalog-level bucket_by (from CREATE TABLE ... CLUSTERED BY)
+            if let Some(ref bucket_info) = bucket_by {
+                let sort_columns = parse_schema_metadata(&table.schema())
+                    .map(|m| m.sort_columns)
+                    .unwrap_or_default();
+                log::debug!(
+                    "Wrapping bucketed table from catalog: columns={:?}, num_buckets={}, sort_columns={:?}",
+                    bucket_info.columns,
+                    bucket_info.num_buckets,
+                    sort_columns,
+                );
+                return Ok(Arc::new(BucketedListingTable::new(
+                    table,
+                    bucket_info.columns.clone(),
+                    bucket_info.num_buckets,
+                    sort_columns,
+                )));
+            }
+
+            // 2. Check schema-level metadata (embedded in Parquet files by Phase 1 writer)
+            if let Some(bucket_meta) = parse_schema_metadata(&table.schema()) {
+                if bucket_meta.hash_function != HASH_DATAFUSION {
+                    log::warn!(
+                        "Bucketed table uses unsupported hash function '{}', \
+                         skipping shuffle elimination",
+                        bucket_meta.hash_function,
+                    );
+                } else if bucket_meta.columns.is_empty() || bucket_meta.num_buckets == 0 {
+                    log::warn!(
+                        "Bucketed table has invalid metadata: columns={:?}, num_buckets={}, \
+                         skipping shuffle elimination",
+                        bucket_meta.columns,
+                        bucket_meta.num_buckets,
+                    );
+                } else {
+                    let sort_columns = bucket_meta.sort_columns.clone();
+                    log::debug!(
+                        "Wrapping bucketed table from schema metadata: columns={:?}, num_buckets={}, sort_columns={:?}",
+                        bucket_meta.columns,
+                        bucket_meta.num_buckets,
+                        sort_columns,
+                    );
+                    return Ok(Arc::new(BucketedListingTable::new(
+                        table,
+                        bucket_meta.columns,
+                        bucket_meta.num_buckets,
+                        sort_columns,
+                    )));
+                }
+            }
+        }
+
+        Ok(Arc::new(table))
     }
 
     async fn create_writer(
@@ -203,8 +269,46 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         if is_flow_event_schema(&input.schema()) {
             return plan_err!("cannot write streaming data to listing table");
         }
-        if bucket_by.is_some() {
-            return not_impl_err!("bucketing for writing listing table format");
+        if let Some(bucket_by) = bucket_by {
+            // TODO: use a type-level check instead of string comparison
+            if self.inner.name() != "parquet" {
+                return not_impl_err!("bucketing is only supported for parquet format");
+            }
+            // Build bucketing config from BucketBy metadata
+            let config = BucketingConfig {
+                columns: bucket_by.columns,
+                num_buckets: bucket_by.num_buckets,
+                sort_columns: sort_order
+                    .as_ref()
+                    .map(|req| {
+                        req.iter()
+                            .map(|r| {
+                                let name = r.expr.to_string();
+                                let ascending = r.options.is_none_or(|o| !o.descending);
+                                (name, ascending)
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                hash_function: HASH_DATAFUSION.to_string(),
+            };
+            let output_path = if path.ends_with(object_store::path::DELIMITER) {
+                path
+            } else {
+                format!("{path}{}", object_store::path::DELIMITER)
+            };
+            let writer_props = WriterProperties::builder()
+                .set_compression(parquet::basic::Compression::SNAPPY)
+                .build();
+            let file_schema = input.schema();
+            return BucketedParquetSinkExec::new(
+                input,
+                config,
+                output_path,
+                file_schema,
+                writer_props,
+            )
+            .map(|exec| Arc::new(exec) as Arc<dyn ExecutionPlan>);
         }
         // always write multi-file output
         let path = if path.ends_with(object_store::path::DELIMITER) {
