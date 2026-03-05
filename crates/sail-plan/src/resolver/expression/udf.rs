@@ -9,7 +9,7 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;
-use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
+use sail_python_udf::udf::pyspark_udaf::{PySparkGroupAggKind, PySparkGroupAggregateUDF};
 use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
 
 use crate::error::{PlanError, PlanResult};
@@ -167,6 +167,62 @@ impl PlanResolver<'_> {
             }
             PySparkUdfType::GroupedAggPandas => {
                 let udaf = PySparkGroupAggregateUDF::new(
+                    PySparkGroupAggKind::Pandas, // Pandas path: Arrow → Pandas → user func → Arrow
+                    get_udf_name(name, &payload),
+                    payload,
+                    deterministic,
+                    argument_display_names.to_vec(),
+                    input_types,
+                    function.output_type,
+                    self.config.pyspark_udf_config.clone(),
+                );
+                Ok(Expr::AggregateFunction(expr::AggregateFunction {
+                    func: Arc::new(AggregateUDF::from(udaf)),
+                    params: AggregateFunctionParams {
+                        args: arguments,
+                        distinct,
+                        filter: None,
+                        order_by: vec![],
+                        null_treatment: None,
+                    },
+                }))
+            }
+            // Arrow-native scalar UDF (250): user func receives/returns pyarrow.Array directly
+            PySparkUdfType::ScalarArrow => {
+                let udf = PySparkUDF::new(
+                    PySparkUdfKind::ScalarArrow,
+                    get_udf_name(name, &payload),
+                    payload,
+                    deterministic,
+                    input_types,
+                    function.output_type,
+                    self.config.pyspark_udf_config.clone(),
+                );
+                Ok(Expr::ScalarFunction(expr::ScalarFunction {
+                    func: Arc::new(ScalarUDF::from(udf)),
+                    args: arguments,
+                }))
+            }
+            // Arrow-native scalar iterator UDF (251): user func is Iterator[pa.Array] → Iterator[pa.Array]
+            PySparkUdfType::ScalarArrowIter => {
+                let udf = PySparkUDF::new(
+                    PySparkUdfKind::ScalarArrowIter,
+                    get_udf_name(name, &payload),
+                    payload,
+                    deterministic,
+                    input_types,
+                    function.output_type,
+                    self.config.pyspark_udf_config.clone(),
+                );
+                Ok(Expr::ScalarFunction(expr::ScalarFunction {
+                    func: Arc::new(ScalarUDF::from(udf)),
+                    args: arguments,
+                }))
+            }
+            // Arrow-native grouped aggregate UDF (252): user func receives pa.Arrays, returns scalar
+            PySparkUdfType::GroupedAggArrow => {
+                let udaf = PySparkGroupAggregateUDF::new(
+                    PySparkGroupAggKind::Arrow, // Arrow path: no Pandas conversion
                     get_udf_name(name, &payload),
                     payload,
                     deterministic,

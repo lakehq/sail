@@ -54,13 +54,17 @@ fn supports_kwargs(eval_type: spec::PySparkUdfType) -> bool {
         | PySparkUdfType::CogroupedMapArrow
         | PySparkUdfType::MapArrowIter
         | PySparkUdfType::GroupedMapPandasWithState
+        | PySparkUdfType::ScalarArrowIter
         | PySparkUdfType::Table
         | PySparkUdfType::ArrowTable => false,
         PySparkUdfType::Batched
         | PySparkUdfType::ArrowBatched
         | PySparkUdfType::ScalarPandas
         | PySparkUdfType::GroupedAggPandas
-        | PySparkUdfType::ScalarPandasIter => true,
+        | PySparkUdfType::ScalarPandasIter
+        // Arrow scalar/agg UDFs support kwargs (iter variant does not)
+        | PySparkUdfType::ScalarArrow
+        | PySparkUdfType::GroupedAggArrow => true,
     }
 }
 
@@ -81,6 +85,10 @@ fn should_write_config(eval_type: spec::PySparkUdfType) -> bool {
         | PySparkUdfType::CogroupedMapArrow
         | PySparkUdfType::MapArrowIter
         | PySparkUdfType::GroupedMapPandasWithState
-        | PySparkUdfType::ArrowTable => true,
+        | PySparkUdfType::ArrowTable
+        // Arrow-native UDFs need config for timezone, arrow batch size, etc.
+        | PySparkUdfType::ScalarArrow
+        | PySparkUdfType::ScalarArrowIter
+        | PySparkUdfType::GroupedAggArrow => true,
     }
 }

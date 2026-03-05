@@ -376,6 +376,10 @@ pub enum PySparkUdfType {
     GroupedMapPandasWithState = 208,
     GroupedMapArrow = 209,
     CogroupedMapArrow = 210,
+    // Spark 4.0 Arrow-native UDF types (Arrow-in, Arrow-out — no Pandas conversion)
+    ScalarArrow = 250,
+    ScalarArrowIter = 251,
+    GroupedAggArrow = 252,
     Table = 300,
     ArrowTable = 301,
 }

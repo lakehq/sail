@@ -13,7 +13,7 @@ use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;
-use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
+use sail_python_udf::udf::pyspark_udaf::{PySparkGroupAggKind, PySparkGroupAggregateUDF};
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{get_null_treatment, FunctionContextInput, WinFunctionInput};
@@ -138,6 +138,7 @@ impl PlanResolver<'_> {
                 let function = match function.eval_type {
                     spec::PySparkUdfType::GroupedAggPandas => {
                         let udaf = PySparkGroupAggregateUDF::new(
+                            PySparkGroupAggKind::Pandas, // Pandas window aggregate path
                             get_udf_name(&function_name, &payload),
                             payload,
                             deterministic,

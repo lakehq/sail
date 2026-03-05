@@ -188,7 +188,7 @@ use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;
 use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
 use sail_python_udf::udf::pyspark_group_map_udf::PySparkGroupMapUDF;
 use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterKind, PySparkMapIterUDF};
-use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
+use sail_python_udf::udf::pyspark_udaf::{PySparkGroupAggKind, PySparkGroupAggregateUDF};
 use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
 use sail_python_udf::udf::pyspark_udtf::{PySparkUDTF, PySparkUdtfKind};
 use url::Url;
@@ -1967,6 +1967,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input_types,
                 output_type,
                 config,
+                kind,
             })) => {
                 let input_types = input_types
                     .iter()
@@ -1977,7 +1978,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     Some(config) => self.try_decode_pyspark_udf_config(config)?,
                     None => return plan_err!("missing config for PySparkGroupAggUDF"),
                 };
+                // Decode kind; default to Pandas for backward compatibility
+                let kind = self.try_decode_pyspark_group_agg_kind(kind)?;
                 let udaf = PySparkGroupAggregateUDF::new(
+                    kind,
                     name,
                     payload,
                     deterministic,
@@ -2059,6 +2063,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 .collect::<Result<Vec<_>>>()?;
             let output_type = self.try_encode_data_type(func.output_type())?;
             let config = self.try_encode_pyspark_udf_config(func.config())?;
+            let kind = self.try_encode_pyspark_group_agg_kind(func.kind())?;
             UdafKind::PySparkGroupAgg(gen::PySparkGroupAggUdaf {
                 name: func.name().to_string(),
                 payload: func.payload().to_vec(),
@@ -2067,6 +2072,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input_types,
                 output_type,
                 config: Some(config),
+                kind,
             })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<PySparkGroupMapUDF>() {
             let input_types = func
@@ -2680,6 +2686,9 @@ impl RemoteExecutionCodec {
             gen::PySparkUdfKind::ArrowBatch => PySparkUdfKind::ArrowBatch,
             gen::PySparkUdfKind::ScalarPandas => PySparkUdfKind::ScalarPandas,
             gen::PySparkUdfKind::ScalarPandasIter => PySparkUdfKind::ScalarPandasIter,
+            // Spark 4.0 Arrow-native scalar UDF kinds
+            gen::PySparkUdfKind::ScalarArrow => PySparkUdfKind::ScalarArrow,
+            gen::PySparkUdfKind::ScalarArrowIter => PySparkUdfKind::ScalarArrowIter,
         };
         Ok(kind)
     }
@@ -2690,6 +2699,27 @@ impl RemoteExecutionCodec {
             PySparkUdfKind::ArrowBatch => gen::PySparkUdfKind::ArrowBatch,
             PySparkUdfKind::ScalarPandas => gen::PySparkUdfKind::ScalarPandas,
             PySparkUdfKind::ScalarPandasIter => gen::PySparkUdfKind::ScalarPandasIter,
+            PySparkUdfKind::ScalarArrow => gen::PySparkUdfKind::ScalarArrow,
+            PySparkUdfKind::ScalarArrowIter => gen::PySparkUdfKind::ScalarArrowIter,
+        };
+        Ok(kind as i32)
+    }
+
+    // Decode/encode grouped aggregate UDF kind (Pandas vs Arrow)
+    fn try_decode_pyspark_group_agg_kind(&self, kind: i32) -> Result<PySparkGroupAggKind> {
+        let kind = gen::PySparkGroupAggKind::try_from(kind)
+            .map_err(|e| plan_datafusion_err!("failed to decode pyspark group agg kind: {e}"))?;
+        let kind = match kind {
+            gen::PySparkGroupAggKind::Pandas => PySparkGroupAggKind::Pandas,
+            gen::PySparkGroupAggKind::Arrow => PySparkGroupAggKind::Arrow,
+        };
+        Ok(kind)
+    }
+
+    fn try_encode_pyspark_group_agg_kind(&self, kind: PySparkGroupAggKind) -> Result<i32> {
+        let kind = match kind {
+            PySparkGroupAggKind::Pandas => gen::PySparkGroupAggKind::Pandas,
+            PySparkGroupAggKind::Arrow => gen::PySparkGroupAggKind::Arrow,
         };
         Ok(kind as i32)
     }
