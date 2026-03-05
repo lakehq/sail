@@ -48,7 +48,7 @@ pub fn build_partition_dir(
     if spec.fields.is_empty() {
         return Ok(String::new());
     }
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
     let mut segs = Vec::new();
     for (i, f) in spec.fields.iter().enumerate() {
@@ -131,7 +131,7 @@ pub fn build_partition_dir(
                 let dt = chrono::DateTime::from_timestamp(secs, 0)
                     .map(|dt| dt.naive_utc())
                     .unwrap_or_else(|| {
-                        #[allow(clippy::unwrap_used)]
+                        #[expect(clippy::unwrap_used)]
                         NaiveDateTime::new(epoch, chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap())
                     });
                 format!(

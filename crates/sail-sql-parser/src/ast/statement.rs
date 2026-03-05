@@ -452,7 +452,6 @@ pub struct ColumnTypeDefinition {
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "(Expr, Query, DataType)")]
-#[allow(clippy::large_enum_variant)]
 pub enum PartitionByItem {
     /// Hive-style typed partition column definition: `col_name <data_type>`
     ColumnDefinition(#[parser(function = |(_, _, d), o| compose(d, o))] ColumnTypeDefinition),

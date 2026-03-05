@@ -10,14 +10,13 @@ use sail_sql_parser::ast::query::{IdentList, WhereClause};
 use sail_sql_parser::ast::statement::{
     AlterTableOperation, AlterViewOperation, AnalyzeTableModifier, AsQueryClause, Assignment,
     AssignmentList, ColumnAlteration, ColumnAlterationList, ColumnAlterationOption,
-    ColumnDefinition, ColumnDefinitionList, ColumnDefinitionOption, ColumnPosition,
-    CommentValue, CreateDatabaseClause, CreateTableClause, CreateViewClause,
-    DeleteTableAlias, DescribeItem, ExplainFormat, FileFormat, InsertDirectoryDestination,
-    MergeMatchClause, MergeMatchedAction, MergeNotMatchedBySourceAction,
-    MergeNotMatchedByTargetAction, MergeSource, PartitionByItem, PartitionByList, PartitionClause,
-    PartitionValue, PartitionValueList, PropertyKey, PropertyKeyValue, PropertyList, PropertyValue,
-    RowFormat, RowFormatDelimitedClause, SetClause, SortColumn, SortColumnList, Statement,
-    UpdateTableAlias, ViewColumn,
+    ColumnDefinition, ColumnDefinitionList, ColumnDefinitionOption, ColumnPosition, CommentValue,
+    CreateDatabaseClause, CreateTableClause, CreateViewClause, DeleteTableAlias, DescribeItem,
+    ExplainFormat, FileFormat, InsertDirectoryDestination, MergeMatchClause, MergeMatchedAction,
+    MergeNotMatchedBySourceAction, MergeNotMatchedByTargetAction, MergeSource, PartitionByItem,
+    PartitionByList, PartitionClause, PartitionValue, PartitionValueList, PropertyKey,
+    PropertyKeyValue, PropertyList, PropertyValue, RowFormat, RowFormatDelimitedClause, SetClause,
+    SortColumn, SortColumnList, Statement, UpdateTableAlias, ViewColumn,
 };
 use sail_sql_parser::tree::TreeText;
 

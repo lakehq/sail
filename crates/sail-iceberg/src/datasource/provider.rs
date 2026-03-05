@@ -73,7 +73,7 @@ pub struct IcebergTableProvider {
     /// All partition specs referenced by the table
     partition_specs: Vec<PartitionSpec>,
     /// Default partition spec id (for schema ordering / partition metadata)
-    #[allow(unused)]
+    #[expect(unused)]
     default_spec_id: i32,
     /// Arrow schema for DataFusion
     arrow_schema: Arc<ArrowSchema>,
