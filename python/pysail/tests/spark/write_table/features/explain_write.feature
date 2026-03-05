@@ -3,7 +3,7 @@ Feature: EXPLAIN statement for write operations
   @sail-only
   Scenario: EXPLAIN CREATE TABLE AS SELECT shows physical plan with catalog command
     Given variable location for temporary directory explain_ctas
-    When query
+    When query template
       """
       EXPLAIN CREATE TABLE explain_ctas_table
       USING PARQUET
@@ -11,7 +11,7 @@ Feature: EXPLAIN statement for write operations
       AS SELECT * FROM VALUES (1, 'Alice'), (2, 'Bob') AS t(id, name)
       """
     Then query plan matches snapshot
-    Given final statement
+    Given final statement template
       """
       DROP TABLE IF EXISTS explain_ctas_table
       """
@@ -26,7 +26,7 @@ Feature: EXPLAIN statement for write operations
       LOCATION {{ location.sql }}
       AS SELECT * FROM VALUES (1, 'Alice') AS t(id, name)
       """
-    When query
+    When query template
       """
       EXPLAIN INSERT INTO explain_insert_table
       SELECT * FROM VALUES (2, 'Bob') AS t(id, name)

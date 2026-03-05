@@ -973,7 +973,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .pop()
                     .unwrap_or_else(|| unreachable!("decoded is non-empty"));
                 let preconditions = decoded;
-                Ok(Arc::new(BarrierExec::try_new(preconditions, plan)?))
+                Ok(Arc::new(BarrierExec::new(preconditions, plan)))
             }
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
         }

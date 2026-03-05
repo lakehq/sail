@@ -314,7 +314,7 @@ Ensure expand_merge is enabled; MERGE is currently only supported for Delta tabl
             let [plan] = plan else {
                 return internal_err!("BarrierExec requires at least one physical input");
             };
-            Arc::new(BarrierExec::try_new(preconditions.to_vec(), plan.clone())?)
+            Arc::new(BarrierExec::new(preconditions.to_vec(), plan.clone()))
         } else {
             return internal_err!("unsupported logical extension node: {:?}", node);
         };

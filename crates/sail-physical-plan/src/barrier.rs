@@ -13,19 +13,19 @@ use futures::{StreamExt, TryStreamExt};
 
 /// A physical plan node that enforces a barrier between preconditions and a main plan.
 ///
-/// This node has `n` children (`n >= 1`), where the first `n - 1` children are preconditions
-/// and the last child is the main (actual) plan. All children are expected to have the same
-/// number of output partitions.
+/// This node has `n` children (`n >= 1`), where the first `n - 1` children (possibly none)
+/// are preconditions and the last child is the actual plan.
 ///
 /// When `execute(partition, context)` is called, it exhausts partition `p` of each precondition
-/// child sequentially before executing and returning partition `p` of the main plan. This
+/// child sequentially before executing and returning partition `p` of the actual plan. This
 /// guarantees that the side effects of the preconditions (e.g. catalog commands) are complete
-/// before the main plan starts producing output.
+/// before the actual plan starts producing output.
 ///
-/// **Partition matching**: All children must have the same number of partitions. When
-/// `CatalogCommandExec` (which produces a single partition) is a precondition and the main plan
-/// has more partitions, the physical optimizer will inject a `RepartitionExec` on top of the
-/// `CatalogCommandExec` so that the partition counts match.
+/// **Partition matching**: All children must have the same number of output partitions.
+/// The `EnforceBarrierPartitioning` physical optimizer rule (which runs at the end of the
+/// optimizer pipeline) ensures that any precondition whose partition count differs from the
+/// actual plan is wrapped with a `RepartitionExec` (round-robin) or `CoalescePartitionsExec`
+/// to bring all children to a common partition count.
 ///
 /// **Distributed execution note**: In distributed processing, `BarrierExec` does not prevent
 /// tasks in dependent stages from being _scheduled_. The barrier is only meaningful within a
@@ -33,29 +33,13 @@ use futures::{StreamExt, TryStreamExt};
 /// only starts after preconditions for the corresponding partition have been exhausted.
 #[derive(Debug, Clone)]
 pub struct BarrierExec {
-    /// All children: first `n - 1` are preconditions, last is the main plan.
+    /// All children: first `n - 1` are preconditions, last is the actual plan.
     children: Vec<Arc<dyn ExecutionPlan>>,
     properties: PlanProperties,
 }
 
 impl BarrierExec {
-    pub fn try_new(
-        preconditions: Vec<Arc<dyn ExecutionPlan>>,
-        plan: Arc<dyn ExecutionPlan>,
-    ) -> Result<Self> {
-        if preconditions.is_empty() {
-            return internal_err!("BarrierExec requires at least one precondition");
-        }
-        let num_partitions = plan.output_partitioning().partition_count();
-        for (i, pre) in preconditions.iter().enumerate() {
-            let pre_partitions = pre.output_partitioning().partition_count();
-            if pre_partitions != num_partitions {
-                return internal_err!(
-                    "BarrierExec precondition {i} has {pre_partitions} partitions \
-                     but main plan has {num_partitions} partitions"
-                );
-            }
-        }
+    pub fn new(preconditions: Vec<Arc<dyn ExecutionPlan>>, plan: Arc<dyn ExecutionPlan>) -> Self {
         let properties = PlanProperties::new(
             EquivalenceProperties::new(plan.schema()),
             plan.output_partitioning().clone(),
@@ -64,21 +48,20 @@ impl BarrierExec {
         );
         let mut children = preconditions;
         children.push(plan);
-        Ok(Self {
+        Self {
             children,
             properties,
-        })
+        }
     }
 
-    fn preconditions(&self) -> &[Arc<dyn ExecutionPlan>] {
+    pub fn preconditions(&self) -> &[Arc<dyn ExecutionPlan>] {
         &self.children[..self.children.len() - 1]
     }
 
-    fn plan(&self) -> &Arc<dyn ExecutionPlan> {
-        // Safety: children always has at least one element (enforced in try_new)
+    pub fn plan(&self) -> &Arc<dyn ExecutionPlan> {
         self.children
             .last()
-            .unwrap_or_else(|| unreachable!("BarrierExec must have children"))
+            .unwrap_or_else(|| unreachable!("BarrierExec must have at least one child"))
     }
 }
 
@@ -101,6 +84,12 @@ impl ExecutionPlan for BarrierExec {
         &self.properties
     }
 
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        // Never repartition children based on input partitioning heuristics;
+        // partition alignment is handled explicitly by `EnforceBarrierPartitioning`.
+        vec![false; self.children.len()]
+    }
+
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         self.children.iter().collect()
     }
@@ -109,16 +98,14 @@ impl ExecutionPlan for BarrierExec {
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if children.len() < 2 {
-            return internal_err!(
-                "BarrierExec requires at least 2 children (one precondition and the main plan)"
-            );
+        if children.is_empty() {
+            return internal_err!("BarrierExec requires at least 1 child (the actual plan)");
         }
         let plan = children
             .pop()
             .unwrap_or_else(|| unreachable!("children is non-empty"));
         let preconditions = children;
-        Ok(Arc::new(Self::try_new(preconditions, plan)?))
+        Ok(Arc::new(Self::new(preconditions, plan)))
     }
 
     fn execute(
@@ -134,7 +121,7 @@ impl ExecutionPlan for BarrierExec {
                 num_partitions
             );
         }
-        // Collect precondition streams to exhaust before running the main plan.
+        // Collect precondition streams to exhaust before running the actual plan.
         let precondition_streams: Vec<SendableRecordBatchStream> = self
             .preconditions()
             .iter()
@@ -142,8 +129,8 @@ impl ExecutionPlan for BarrierExec {
             .collect::<Result<_>>()?;
         let main_plan = self.plan().clone();
         let schema = self.schema();
-        // Exhaust each precondition stream sequentially, then run the main plan.
-        // We use a once-stream that resolves to the main plan stream, then flatten.
+        // Exhaust each precondition stream sequentially, then run the actual plan.
+        // We use a once-stream that resolves to the actual plan stream, then flatten.
         let outer = futures::stream::once(async move {
             for mut stream in precondition_streams {
                 while let Some(batch) = stream.next().await {
