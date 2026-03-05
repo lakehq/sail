@@ -57,7 +57,7 @@ impl Default for TableDeltaOptions {
     }
 }
 
-fn default_delta_log_replay_hash_threshold() -> usize {
+pub fn default_delta_log_replay_hash_threshold() -> usize {
     100
 }
 

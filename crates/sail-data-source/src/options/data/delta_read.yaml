@@ -189,7 +189,6 @@
 - key: metadata_as_data_read
   aliases:
     - metadataAsDataRead
-    - serverlessRead
   description: |
     Enable the metadata-as-data read path: avoid eagerly loading file metadata on the driver;
     use log replay and discovery in the physical plan instead. When false (default), use the

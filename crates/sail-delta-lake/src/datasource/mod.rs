@@ -30,7 +30,7 @@ use url::Url;
 
 use crate::kernel::snapshot::LogDataHandler;
 use crate::kernel::{DeltaResult, DeltaTableError};
-use crate::options::DeltaLogReplayStrategyOption;
+use crate::options::{default_delta_log_replay_hash_threshold, DeltaLogReplayStrategyOption};
 use crate::table::DeltaTableState;
 pub const PATH_COLUMN: &str = "__sail_file_path";
 pub const COMMIT_VERSION_COLUMN: &str = "_commit_version";
@@ -277,8 +277,4 @@ pub struct DeltaScanConfig {
     /// Threshold for `Auto` replay strategy.
     #[serde(default = "default_delta_log_replay_hash_threshold")]
     pub delta_log_replay_hash_threshold: usize,
-}
-
-fn default_delta_log_replay_hash_threshold() -> usize {
-    100
 }
