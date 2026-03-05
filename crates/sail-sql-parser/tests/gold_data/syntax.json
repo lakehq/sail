@@ -1167,12 +1167,6 @@
               }
             },
             {
-              "name": "Box(ColumnTypeDefinition)",
-              "node": {
-                "nonTerminal": "ColumnTypeDefinition"
-              }
-            },
-            {
               "name": "Box(DataType)",
               "node": {
                 "nonTerminal": "DataType"
@@ -7794,7 +7788,7 @@
                   {
                     "sequence": [
                       {
-                        "nonTerminal": "Box(ColumnTypeDefinition)"
+                        "nonTerminal": "ColumnTypeDefinition"
                       }
                     ]
                   },
