@@ -4,7 +4,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
@@ -21,6 +21,44 @@ use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 
 use crate::utils::split_parquet_compression_string;
 
+/// Trait for schema inference logic
+#[async_trait::async_trait]
+pub trait SchemaInfer: Debug + Send + Sync + 'static {
+    /// Get schema based on options. Each implementation can handle its own
+    /// special cases like inferSchema=false.
+    async fn get_schema(
+        &self,
+        ctx: &dyn Session,
+        store: &Arc<dyn object_store::ObjectStore>,
+        files: &[object_store::ObjectMeta],
+        list_options: &ListingOptions,
+        options: &[HashMap<String, String>],
+    ) -> Result<Schema>;
+}
+
+/// Default schema inferrer that uses DataFusion's built-in inference
+#[derive(Debug)]
+pub struct DefaultSchemaInfer;
+
+#[async_trait::async_trait]
+impl SchemaInfer for DefaultSchemaInfer {
+    async fn get_schema(
+        &self,
+        ctx: &dyn Session,
+        store: &Arc<dyn object_store::ObjectStore>,
+        files: &[object_store::ObjectMeta],
+        list_options: &ListingOptions,
+        _options: &[HashMap<String, String>],
+    ) -> Result<Schema> {
+        Ok(list_options
+            .format
+            .infer_schema(ctx, store, files)
+            .await?
+            .as_ref()
+            .clone())
+    }
+}
+
 // TODO: support global configuration to ignore file extension (by setting it to empty)
 /// A trait for defining the specifics of a listing table format.
 pub trait ListingFormat: Debug + Send + Sync + 'static {
@@ -36,6 +74,9 @@ pub trait ListingFormat: Debug + Send + Sync + 'static {
         ctx: &dyn Session,
         options: Vec<HashMap<String, String>>,
     ) -> Result<(Arc<dyn FileFormat>, Option<String>)>;
+
+    /// Get the schema inferrer for this format
+    fn schema_inferrer(&self) -> Arc<dyn SchemaInfer>;
 }
 
 #[derive(Debug)]

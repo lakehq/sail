@@ -1,4 +1,4 @@
-use datafusion::physical_plan::metrics::MetricValue;
+use datafusion::physical_plan::metrics::{Label, MetricValue};
 use datafusion::physical_plan::Metric;
 
 use crate::common::KeyValue;
@@ -23,7 +23,10 @@ impl MetricEmitter for DefaultMetricEmitter {
                     .execution_output_row_count
                     .recorder(count)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
             }
             MetricValue::ElapsedCompute(time) => {
@@ -31,7 +34,10 @@ impl MetricEmitter for DefaultMetricEmitter {
                     .execution_elapsed_compute_time
                     .recorder(time)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
             }
             MetricValue::SpillCount(count) => {
@@ -39,7 +45,10 @@ impl MetricEmitter for DefaultMetricEmitter {
                     .execution_spill_count
                     .recorder(count)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
             }
             MetricValue::SpilledBytes(count) => {
@@ -47,7 +56,10 @@ impl MetricEmitter for DefaultMetricEmitter {
                     .execution_spill_size
                     .recorder(count)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
             }
             MetricValue::OutputBytes(count) => {
@@ -55,7 +67,10 @@ impl MetricEmitter for DefaultMetricEmitter {
                     .execution_output_size
                     .recorder(count)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
             }
             MetricValue::SpilledRows(count) => {
@@ -63,7 +78,10 @@ impl MetricEmitter for DefaultMetricEmitter {
                     .execution_spill_row_count
                     .recorder(count)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
             }
             MetricValue::CurrentMemoryUsage(gauge) => {
@@ -71,15 +89,30 @@ impl MetricEmitter for DefaultMetricEmitter {
                     .execution_memory_used
                     .recorder(gauge)
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
+                    .emit();
+            }
+            MetricValue::OutputBatches(count) => {
+                registry
+                    .execution_output_batch_count
+                    .recorder(count)
+                    .with_attributes(attributes)
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
             }
             MetricValue::Count { .. }
             | MetricValue::Gauge { .. }
             | MetricValue::Time { .. }
-            | MetricValue::PruningMetrics { .. }
             | MetricValue::Ratio { .. }
+            | MetricValue::PruningMetrics { .. }
             | MetricValue::Custom { .. } => {
+                // These metric types are not yet handled by any emitter.
                 #[cfg(debug_assertions)]
                 registry.execution_unknown_metric_count.adder(1u64).emit();
             }
@@ -93,31 +126,38 @@ impl MetricEmitter for DefaultMetricEmitter {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
+#[derive(Default)]
+pub struct LabelExtractor {
+    extractors: Vec<(&'static str, &'static str)>,
+}
 
-    use datafusion::arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::common::Result;
-    use datafusion::physical_expr::expressions::Column;
-    use datafusion::physical_plan::empty::EmptyExec;
-    use datafusion::physical_plan::projection::ProjectionExec;
-    use datafusion::physical_plan::PhysicalExpr;
+impl LabelExtractor {
+    pub fn new() -> Self {
+        Self::default()
+    }
 
-    use crate::execution::metrics::testing::MetricEmitterTester;
+    pub fn with_extractor(mut self, from: &'static str, to: &'static str) -> Self {
+        self.extractors.push((from, to));
+        self
+    }
 
-    #[tokio::test]
-    async fn test_projection_metrics() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, true)]));
-        let plan = Arc::new(EmptyExec::new(schema));
-        let plan = Arc::new(ProjectionExec::try_new(
-            vec![(
-                Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
-                "b".to_string(),
-            )],
-            plan,
-        )?);
-
-        MetricEmitterTester::new().with_plan(plan).run().await
+    pub fn extract(&self, labels: &[Label], registry: &MetricRegistry) -> Vec<KeyValue> {
+        #[cfg(not(debug_assertions))]
+        let _ = registry;
+        let mut attributes = vec![];
+        'outer: for label in labels {
+            for (from, to) in &self.extractors {
+                if label.name() == *from {
+                    attributes.push((*to, label.value().to_string().into()));
+                    continue 'outer;
+                }
+            }
+            #[cfg(debug_assertions)]
+            registry
+                .execution_unknown_metric_label_count
+                .adder(1u64)
+                .emit();
+        }
+        attributes
     }
 }

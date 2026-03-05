@@ -6,6 +6,7 @@ use sail_python_udf::error::PyUdfError;
 use sail_sql_analyzer::error::SqlError;
 use thiserror::Error;
 
+/// Result type for plan operations.
 pub type PlanResult<T> = Result<T, PlanError>;
 
 pub trait IntoPlanResult<T> {

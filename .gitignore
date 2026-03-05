@@ -5,6 +5,9 @@ target/
 # The Cargo target directory may be a symlink in CI
 /target
 
+# Local Cargo configuration (machine-specific settings)
+.cargo/
+
 # We commit Cargo.lock to keep track of the exact versions of dependencies
 # More information here https://doc.rust-lang.org/cargo/guide/cargo-toml-vs-cargo-lock.html
 
@@ -25,6 +28,7 @@ out/
 /opt/
 
 # Editor directories and files
+.cursor/
 .idea/
 .vscode/*
 *.iml
@@ -94,4 +98,9 @@ docs/.vitepress/.temp
 # LLVM coverage files
 *.profraw
 
+# Claude Code settings
+.claude/
+.worktrees/
+
 CLAUDE.md
+AGENTS.md

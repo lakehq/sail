@@ -15,7 +15,7 @@ output_path="${project_path}/crates/sail-spark-connect/tests/gold_data"
 
 source "${project_path}/scripts/shell-tools/git-patch.sh"
 
-apply_git_patch "${project_path}"/opt/spark "v4.1.0" "${scripts_path}/spark-4.1.0.patch"
+apply_git_patch "${project_path}"/opt/spark "v4.1.1" "${scripts_path}/spark-4.1.1.patch"
 
 cd "${project_path}"/opt/spark
 

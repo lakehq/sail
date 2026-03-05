@@ -36,7 +36,7 @@ If you have installed Sail via `pip` in a Python virtual environment, the path i
 Please note that you must install the PySail library with MCP dependencies.
 
 ```bash-vue
-pip install "pysail[mcp]=={{ libVersion }}" "pyspark-client==4.1.0"
+pip install "pysail[mcp]=={{ libVersion }}" "pyspark-client==4.1.1"
 ```
 
 ::: info

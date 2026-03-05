@@ -14,6 +14,8 @@ from pyspark.sql.types import (
     StructType,
 )
 
+from pysail.tests.spark.utils import escape_sql_identifier
+
 
 def safe_sort_key(row):
     return tuple((v is not None, v) for v in row)
@@ -211,6 +213,88 @@ class TestCsvDataSource:
         assert read_df.count() == expected_row_count
         assert read_df.columns == ["col1", "col2"]
         assert read_df.collect()[0].col2 == expected_col2_value
+
+    def test_csv_read_truncated_rows(self, spark, tmp_path):
+        path = tmp_path / "csv_read_truncated_rows"
+        path.mkdir()
+        data_path = path / "data.csv"
+        with open(data_path, "w") as f:
+            f.write("col1,col2\n")
+            f.write("x,10\n")
+            f.write("y\n")
+
+        df = spark.read.option("header", "true").csv(str(path))
+        with pytest.raises(Exception, match="unequal"):
+            df.collect()
+
+        df = spark.read.option("header", "true").option("allowTruncatedRows", "true").csv(str(path))
+        assert sorted(df.collect()) == [Row(col1="x", col2=10), Row(col1="y", col2=None)]
+
+    def test_csv_infer_schema_false(self, spark, tmp_path):
+        # Test that inferSchema=false treats all columns as strings, even with invalid dates.
+        path = tmp_path / "csv_infer_schema_false"
+        path.mkdir()
+        data_path = path / "data.csv"
+        with open(data_path, "w") as f:
+            f.write("id,name,birthday\n")
+            f.write("1,Alice,2025-01-01\n")
+            f.write("2,Bob,1999-99-99\n")  # Invalid date
+            f.write("3,Carol,1999-01-01\n")
+
+        # With inferSchema=false, should read all columns as strings
+        df = spark.read.option("header", "true").option("inferSchema", "false").csv(str(path))
+
+        # Check schema - all columns should be strings
+        schema = df.schema
+        assert schema.fields[0].dataType == StringType()
+        assert schema.fields[1].dataType == StringType()
+        assert schema.fields[2].dataType == StringType()
+
+        # Should be able to collect all rows without error
+        rows = df.collect()
+        expected_len = 3
+        assert len(rows) == expected_len
+        assert rows[0].id == "1"
+        assert rows[0].name == "Alice"
+        assert rows[0].birthday == "2025-01-01"
+        assert rows[1].birthday == "1999-99-99"  # Invalid date should be preserved as string
+        assert rows[2].birthday == "1999-01-01"
+
+    def test_csv_infer_schema_false_no_header(self, spark, tmp_path):
+        # Test that inferSchema=false works with no header (column names should be _c0, _c1, etc.)
+        path = tmp_path / "csv_infer_schema_false_no_header"
+        path.mkdir()
+        data_path = path / "data.csv"
+        with open(data_path, "w") as f:
+            # No header line, just data
+            f.write("1,Alice,2025-01-01\n")
+            f.write("2,Bob,1999-99-99\n")  # Invalid date
+            f.write("3,Carol,1999-01-01\n")
+
+        # With inferSchema=false and no header, should read all columns as strings
+        df = spark.read.option("header", "false").option("inferSchema", "false").csv(str(path))
+
+        # Check schema - all columns should be strings
+        schema = df.schema
+        assert schema.fields[0].dataType == StringType()
+        assert schema.fields[1].dataType == StringType()
+        assert schema.fields[2].dataType == StringType()
+
+        # Check column names - should be _c0, _c1, _c2 (renamed from default CSV column names)
+        assert schema.fields[0].name == "_c0"
+        assert schema.fields[1].name == "_c1"
+        assert schema.fields[2].name == "_c2"
+
+        # Should be able to collect all rows without error
+        rows = df.collect()
+        expected_len = 3
+        # ruff: noqa: SLF001
+        assert len(rows) == expected_len
+        assert rows[0]._c0 == "1"
+        assert rows[0]._c1 == "Alice"
+        assert rows[0]._c2 == "2025-01-01"
+        assert rows[1]._c2 == "1999-99-99"  # Invalid date should be preserved as string
+        assert rows[2]._c2 == "1999-01-01"
 
 
 class TestJsonDataSource:
@@ -459,3 +543,30 @@ class TestBinaryDataSource:
         large_count = large_files.count()
         expected_large = sum(1 for _, content in files.values() if len(content) > min_file_size)
         assert large_count == expected_large
+
+
+class TestFormatPathSqlSyntax:
+    """Tests for the `SELECT * FROM <format>.<path>` SQL syntax."""
+
+    def test_csv_format_path(self, spark, tmp_path):
+        csv_file = tmp_path / "data.csv"
+        # No header row: CSV options cannot be specified with this syntax,
+        # so column names cannot be asserted.
+        csv_file.write_text("1,Alice\n2,Bob\n")
+        df = spark.sql(f"SELECT * FROM csv.`{escape_sql_identifier(str(csv_file))}`")  # noqa: S608
+        assert df.count() == 2  # noqa: PLR2004
+
+    def test_parquet_format_path(self, spark, sample_df, tmp_path):
+        path = str(tmp_path / "data.parquet")
+        sample_df.write.parquet(path, mode="overwrite")
+        df = spark.sql(f"SELECT * FROM parquet.`{escape_sql_identifier(path)}`")  # noqa: S608
+        assert df.count() == sample_df.count()
+        assert sorted(df.collect(), key=safe_sort_key) == sorted(sample_df.collect(), key=safe_sort_key)
+
+    def test_json_format_path(self, spark, tmp_path):
+        json_file = tmp_path / "data.json"
+        json_file.write_text('{"id": 1, "value": "a"}\n{"id": 2, "value": "b"}\n')
+        df = spark.sql(f"SELECT * FROM json.`{escape_sql_identifier(str(json_file))}`")  # noqa: S608
+        assert df.count() == 2  # noqa: PLR2004
+        assert "id" in df.columns
+        assert "value" in df.columns

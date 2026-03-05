@@ -6,7 +6,7 @@ use datafusion::datasource::file_format::arrow::ArrowFormat;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_datasource::file_format::FileFormat;
 
-use crate::formats::listing::{ListingFormat, ListingTableFormat};
+use crate::formats::listing::{DefaultSchemaInfer, ListingFormat, ListingTableFormat, SchemaInfer};
 
 pub type ArrowTableFormat = ListingTableFormat<ArrowListingFormat>;
 
@@ -33,5 +33,9 @@ impl ListingFormat for ArrowListingFormat {
         _options: Vec<HashMap<String, String>>,
     ) -> datafusion_common::Result<(Arc<dyn FileFormat>, Option<String>)> {
         Ok((Arc::new(ArrowFormat), None))
+    }
+
+    fn schema_inferrer(&self) -> Arc<dyn SchemaInfer> {
+        Arc::new(DefaultSchemaInfer)
     }
 }

@@ -85,9 +85,10 @@ pub fn create_add(
         base_row_id: None,
         default_row_commit_version: None,
         clustering_provider: None,
+        commit_version: None,
+        commit_timestamp: None,
     })
 }
-#[allow(dead_code)]
 /// Creates stats from parquet metadata already in memory
 pub fn stats_from_parquet_metadata(
     partition_values: &IndexMap<String, Scalar>,
@@ -261,8 +262,9 @@ impl StatsScalar {
         match (stats, logical_type) {
             (Statistics::Boolean(v), _) => Ok(Self::Boolean(get_stat!(v))),
             (Statistics::Int32(v), Some(LogicalType::Date)) => {
-                #[allow(clippy::unwrap_used)]
-                let epoch_start = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+                #[expect(clippy::expect_used)]
+                let epoch_start = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+                    .expect("Creating date from constant should never fail");
                 let date = epoch_start + chrono::Duration::days(get_stat!(v) as i64);
                 Ok(Self::Date(date))
             }
@@ -413,8 +415,8 @@ impl From<StatsScalar> for serde_json::Value {
                     .into_iter()
                     .flat_map(std::ascii::escape_default)
                     .collect::<Vec<u8>>();
-                #[allow(clippy::unwrap_used)]
-                let escaped_string = String::from_utf8(escaped_bytes).unwrap();
+                // escape_default always produces valid ASCII so we can use from_utf8_lossy here
+                let escaped_string = String::from_utf8_lossy(escaped_bytes.as_slice()).into_owned();
                 serde_json::Value::from(escaped_string)
             }
             StatsScalar::Uuid(v) => serde_json::Value::from(v.hyphenated().to_string()),
@@ -587,7 +589,7 @@ fn apply_min_max_for_column(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+    #![expect(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
     use parquet::file::statistics::Statistics;
 

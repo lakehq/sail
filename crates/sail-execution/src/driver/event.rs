@@ -3,16 +3,21 @@ use std::fmt;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use datafusion::execution::SendableRecordBatchStream;
+use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::error::CommonErrorCause;
+use sail_common_datafusion::session::job::JobRunnerHistory;
+use sail_common_datafusion::system::observable::JobRunnerObserver;
 use sail_telemetry::common::{SpanAssociation, SpanAttribute};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use crate::driver::gen;
 use crate::error::ExecutionResult;
-use crate::id::{JobId, TaskInstance, WorkerId};
+use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
+use crate::stream::reader::TaskStreamSource;
+use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
 
 pub enum DriverEvent {
     ServerReady {
@@ -47,13 +52,14 @@ pub enum DriverEvent {
     },
     ExecuteJob {
         plan: Arc<dyn ExecutionPlan>,
+        context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     },
     CleanUpJob {
         job_id: JobId,
     },
     UpdateTask {
-        instance: TaskInstance,
+        key: TaskKey,
         status: TaskStatus,
         message: Option<String>,
         cause: Option<CommonErrorCause>,
@@ -62,9 +68,45 @@ pub enum DriverEvent {
         sequence: Option<u64>,
     },
     ProbePendingTask {
-        instance: TaskInstance,
+        key: TaskKey,
     },
-    Shutdown,
+    ProbePendingLocalStream {
+        key: TaskStreamKey,
+    },
+    CreateLocalStream {
+        key: TaskStreamKey,
+        storage: LocalStreamStorage,
+        schema: SchemaRef,
+        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
+    },
+    CreateRemoteStream {
+        uri: String,
+        key: TaskStreamKey,
+        schema: SchemaRef,
+        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
+    },
+    FetchDriverStream {
+        key: TaskStreamKey,
+        result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
+    },
+    FetchWorkerStream {
+        worker_id: WorkerId,
+        key: TaskStreamKey,
+        schema: SchemaRef,
+        result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
+    },
+    FetchRemoteStream {
+        uri: String,
+        key: TaskStreamKey,
+        schema: SchemaRef,
+        result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
+    },
+    ObserveState {
+        observer: JobRunnerObserver,
+    },
+    Shutdown {
+        history: Option<oneshot::Sender<JobRunnerHistory>>,
+    },
 }
 
 /// The observed task status that drives the task state transition.
@@ -108,6 +150,7 @@ impl From<TaskStatus> for gen::TaskStatus {
         }
     }
 }
+
 impl SpanAssociation for DriverEvent {
     fn name(&self) -> Cow<'static, str> {
         let name = match self {
@@ -122,7 +165,14 @@ impl SpanAssociation for DriverEvent {
             DriverEvent::CleanUpJob { .. } => "CleanUpJob",
             DriverEvent::UpdateTask { .. } => "UpdateTask",
             DriverEvent::ProbePendingTask { .. } => "ProbePendingTask",
-            DriverEvent::Shutdown => "Shutdown",
+            DriverEvent::ProbePendingLocalStream { .. } => "ProbePendingLocalStream",
+            DriverEvent::CreateLocalStream { .. } => "CreateLocalStream",
+            DriverEvent::CreateRemoteStream { .. } => "CreateRemoteStream",
+            DriverEvent::FetchDriverStream { .. } => "FetchDriverStream",
+            DriverEvent::FetchWorkerStream { .. } => "FetchWorkerStream",
+            DriverEvent::FetchRemoteStream { .. } => "FetchRemoteStream",
+            DriverEvent::ObserveState { .. } => "ObserveState",
+            DriverEvent::Shutdown { .. } => "Shutdown",
         };
         name.into()
     }
@@ -159,15 +209,20 @@ impl SpanAssociation for DriverEvent {
             } => {
                 p.push((SpanAttribute::CLUSTER_WORKER_ID, worker_id.to_string()));
             }
-            DriverEvent::ExecuteJob { plan: _, result: _ } => {}
+            DriverEvent::ExecuteJob {
+                plan: _,
+                context: _,
+                result: _,
+            } => {}
             DriverEvent::CleanUpJob { job_id } => {
-                p.push((SpanAttribute::CLUSTER_JOB_ID, job_id.to_string()));
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
             }
             DriverEvent::UpdateTask {
-                instance:
-                    TaskInstance {
+                key:
+                    TaskKey {
                         job_id,
-                        task_id,
+                        stage,
+                        partition,
                         attempt,
                     },
                 status,
@@ -175,33 +230,153 @@ impl SpanAssociation for DriverEvent {
                 cause,
                 sequence: _,
             } => {
-                p.push((SpanAttribute::CLUSTER_JOB_ID, job_id.to_string()));
-                p.push((SpanAttribute::CLUSTER_TASK_ID, task_id.to_string()));
-                p.push((SpanAttribute::CLUSTER_TASK_ATTEMPT, attempt.to_string()));
-                p.push((SpanAttribute::CLUSTER_TASK_STATUS, status.to_string()));
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
+                p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
+                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
+                p.push((SpanAttribute::EXECUTION_TASK_STATUS, status.to_string()));
                 if let Some(message) = message {
-                    p.push((SpanAttribute::CLUSTER_TASK_MESSAGE, message.clone()));
+                    p.push((SpanAttribute::EXECUTION_TASK_MESSAGE, message.clone()));
                 }
                 if let Some(cause) = cause {
                     p.push((
-                        SpanAttribute::CLUSTER_TASK_ERROR_CAUSE,
+                        SpanAttribute::EXECUTION_TASK_ERROR_CAUSE,
                         format!("{cause:?}"),
                     ));
                 }
             }
             DriverEvent::ProbePendingTask {
-                instance:
-                    TaskInstance {
+                key:
+                    TaskKey {
                         job_id,
-                        task_id,
+                        stage,
+                        partition,
                         attempt,
                     },
             } => {
-                p.push((SpanAttribute::CLUSTER_JOB_ID, job_id.to_string()));
-                p.push((SpanAttribute::CLUSTER_TASK_ID, task_id.to_string()));
-                p.push((SpanAttribute::CLUSTER_TASK_ATTEMPT, attempt.to_string()));
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
+                p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
+                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
             }
-            DriverEvent::Shutdown => {}
+            DriverEvent::ProbePendingLocalStream {
+                key:
+                    TaskStreamKey {
+                        job_id,
+                        stage,
+                        partition,
+                        attempt,
+                        channel,
+                    },
+            } => {
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
+                p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
+                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
+                p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
+            }
+            DriverEvent::CreateLocalStream {
+                key:
+                    TaskStreamKey {
+                        job_id,
+                        stage,
+                        partition,
+                        attempt,
+                        channel,
+                    },
+                storage,
+                schema: _,
+                result: _,
+            } => {
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
+                p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
+                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
+                p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
+                p.push((
+                    SpanAttribute::EXECUTION_STREAM_LOCAL_STORAGE,
+                    storage.to_string(),
+                ));
+            }
+            DriverEvent::CreateRemoteStream {
+                uri,
+                key:
+                    TaskStreamKey {
+                        job_id,
+                        stage,
+                        partition,
+                        attempt,
+                        channel,
+                    },
+                schema: _,
+                result: _,
+            } => {
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
+                p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
+                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
+                p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
+                p.push((SpanAttribute::EXECUTION_STREAM_REMOTE_URI, uri.clone()));
+            }
+            DriverEvent::FetchDriverStream {
+                key:
+                    TaskStreamKey {
+                        job_id,
+                        stage,
+                        partition,
+                        attempt,
+                        channel,
+                    },
+                result: _,
+            } => {
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
+                p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
+                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
+                p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
+            }
+            DriverEvent::FetchWorkerStream {
+                worker_id,
+                key:
+                    TaskStreamKey {
+                        job_id,
+                        stage,
+                        partition,
+                        attempt,
+                        channel,
+                    },
+                schema: _,
+                result: _,
+            } => {
+                p.push((SpanAttribute::CLUSTER_WORKER_ID, worker_id.to_string()));
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
+                p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
+                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
+                p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
+            }
+            DriverEvent::FetchRemoteStream {
+                uri,
+                key:
+                    TaskStreamKey {
+                        job_id,
+                        stage,
+                        partition,
+                        attempt,
+                        channel,
+                    },
+                schema: _,
+                result: _,
+            } => {
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
+                p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
+                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
+                p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
+                p.push((SpanAttribute::EXECUTION_STREAM_REMOTE_URI, uri.clone()));
+            }
+            DriverEvent::ObserveState { observer: _ } => {}
+            DriverEvent::Shutdown { .. } => {}
         }
         p.into_iter().map(|(k, v)| (k.into(), v.into()))
     }

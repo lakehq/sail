@@ -11,7 +11,7 @@ use sail_sql_parser::ast::statement::{
     AlterTableOperation, AlterViewOperation, AnalyzeTableModifier, AsQueryClause, Assignment,
     AssignmentList, ColumnAlteration, ColumnAlterationList, ColumnAlterationOption,
     ColumnDefinition, ColumnDefinitionList, ColumnDefinitionOption, ColumnPosition,
-    ColumnTypeDefinition, CommentValue, CreateDatabaseClause, CreateTableClause, CreateViewClause,
+    CommentValue, CreateDatabaseClause, CreateTableClause, CreateViewClause,
     DeleteTableAlias, DescribeItem, ExplainFormat, FileFormat, InsertDirectoryDestination,
     MergeMatchClause, MergeMatchedAction, MergeNotMatchedBySourceAction,
     MergeNotMatchedByTargetAction, MergeSource, PartitionByItem, PartitionByList, PartitionClause,
@@ -44,6 +44,16 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             };
             let node = spec::CommandNode::SetCurrentCatalog {
                 catalog: name.into(),
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::UseCatalog {
+            r#use: _,
+            catalog: _,
+            name,
+        } => {
+            let node = spec::CommandNode::SetCurrentCatalog {
+                catalog: name.value.into(),
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
@@ -118,6 +128,17 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 .map(|(_, pattern)| from_ast_string(pattern))
                 .transpose()?;
             let node = spec::CommandNode::ListDatabases { qualifier, pattern };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::ShowCatalogs {
+            show: _,
+            catalogs: _,
+            like,
+        } => {
+            let pattern = like
+                .map(|(_, pattern)| from_ast_string(pattern))
+                .transpose()?;
+            let node = spec::CommandNode::ListCatalogs { pattern };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
         Statement::CreateTable {
@@ -456,7 +477,10 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                     options,
                 } => {
                     let options = options
-                        .map(|(_, x)| from_ast_property_list(x))
+                        .map(|o| {
+                            let (_, x) = *o;
+                            from_ast_property_list(x)
+                        })
                         .transpose()?
                         .unwrap_or_default();
                     (
@@ -475,10 +499,16 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 } => {
                     let path = from_ast_string(path)?;
                     let file_format = stored_as
-                        .map(|(_, _, x)| from_ast_file_format(x))
+                        .map(|s| {
+                            let (_, _, x) = *s;
+                            from_ast_file_format(x)
+                        })
                         .transpose()?;
                     let row_format = row_format
-                        .map(|(_, _, x)| from_ast_row_format(x))
+                        .map(|r| {
+                            let (_, _, x) = *r;
+                            from_ast_row_format(x)
+                        })
                         .transpose()?;
                     (Some(path), file_format, row_format, vec![])
                 }
@@ -562,10 +592,12 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             into: _,
             target,
             alias: target_alias,
-            using: (_, source),
-            on: (_, on_expr),
+            using,
+            on,
             r#match,
         } => {
+            let (_, source) = *using;
+            let (_, on_expr) = *on;
             if target_alias
                 .as_ref()
                 .is_some_and(|alias| alias.columns.is_some())
@@ -1122,7 +1154,7 @@ fn from_ast_table_definition(
         .into_iter()
         .flatten()
         .map(|x| match x {
-            PartitionByItem::ColumnDefinition(ColumnTypeDefinition { name, .. }) => name.value,
+            PartitionByItem::ColumnDefinition(column) => column.name.value,
             PartitionByItem::Expression(expr) => expr.text().trim().to_string(),
         })
         .map(Into::into)

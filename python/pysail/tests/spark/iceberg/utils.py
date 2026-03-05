@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import Optional
 
 import pandas as pd
 
@@ -33,14 +32,13 @@ def create_sql_catalog(tmp_path: Path):
     return catalog
 
 
-def pyiceberg_to_pandas(table, sort_by=None, dtypes_like: Optional[pd.Series] = None):  # noqa: FA100
+def pyiceberg_to_pandas(table, sort_by=None, dtypes_like: pd.Series | None = None):
     if not HAS_PYICEBERG:
         msg = "PyIceberg is required for pyiceberg_to_pandas"
         raise ImportError(msg)
-
     df = table.scan().to_arrow().to_pandas()
     if sort_by is not None:
-        if isinstance(sort_by, (list, tuple)):
+        if isinstance(sort_by, list | tuple):
             df = df.sort_values(list(sort_by)).reset_index(drop=True)
         else:
             df = df.sort_values(sort_by).reset_index(drop=True)

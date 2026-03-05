@@ -1,0 +1,26 @@
+>>> spark.sql("SELECT json_array_length('[1,2,3]') AS arr_len, typeof(json_array_length('[1,2,3]')) AS type").show(truncate=False)
++-------+----+
+|arr_len|type|
++-------+----+
+|3      |int |
++-------+----+
+
+>>> spark.sql("SELECT json_array_length('[]') AS arr_len, typeof(json_array_length('[]')) AS type").show(truncate=False)
++-------+----+
+|arr_len|type|
++-------+----+
+|0      |int |
++-------+----+
+
+>>> spark.sql("""SELECT
+...   json_array_length(CAST(NULL AS STRING)) AS null_json,
+...   json_array_length('not a json') AS invalid_json,
+...   json_array_length('1') AS scalar_json
+... """).show(truncate=False)
++---------+------------+-----------+
+|null_json|invalid_json|scalar_json|
++---------+------------+-----------+
+|NULL     |NULL        |NULL       |
++---------+------------+-----------+
+<BLANKLINE>
+

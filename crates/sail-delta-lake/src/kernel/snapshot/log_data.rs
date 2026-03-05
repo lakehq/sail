@@ -48,22 +48,20 @@ impl<'a> LogDataHandler<'a> {
         Self { data, config }
     }
 
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub(crate) fn table_configuration(&self) -> &TableConfiguration {
         self.config
     }
 
-    #[allow(dead_code)]
     pub(crate) fn table_properties(&self) -> &TableProperties {
         self.config.table_properties()
     }
 
-    #[allow(dead_code)]
     pub(crate) fn protocol(&self) -> &Protocol {
         self.config.protocol()
     }
 
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub(crate) fn metadata(&self) -> &Metadata {
         self.config.metadata()
     }
@@ -266,6 +264,7 @@ mod datafusion {
                 min_value,
                 sum_value: Precision::Absent,
                 distinct_count: Precision::Absent,
+                byte_size: Precision::Absent,
             })
         }
     }
@@ -282,6 +281,7 @@ mod datafusion {
                 min_value: self.min_value.min(&other.min_value),
                 sum_value: Precision::Absent,
                 distinct_count: self.distinct_count.add(&other.distinct_count),
+                byte_size: self.byte_size.add(&other.byte_size),
             }
         }
     }

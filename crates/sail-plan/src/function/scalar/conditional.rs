@@ -87,7 +87,7 @@ fn nullifzero(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let arg = arguments.one()?;
 
     // Get the data type of the input argument
-    let (data_type, _) = arg.data_type_and_nullable(function_context.schema)?;
+    let data_type = arg.to_field(function_context.schema)?.1.data_type().clone();
 
     // Create a zero literal with the same type as the input
     let zero_literal = lit(create_zero_literal(&data_type));
@@ -105,7 +105,7 @@ fn zeroifnull(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let arg = arguments.one()?;
 
     // Get the data type of the input argument
-    let (data_type, _) = arg.data_type_and_nullable(function_context.schema)?;
+    let data_type = arg.to_field(function_context.schema)?.1.data_type().clone();
 
     // Create a zero literal with the same type as the input
     let zero_literal = lit(create_zero_literal(&data_type));

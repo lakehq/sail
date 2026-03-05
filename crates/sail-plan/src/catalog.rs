@@ -1,4 +1,3 @@
-use std::cmp::Ordering;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
@@ -9,43 +8,25 @@ use datafusion::logical_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use datafusion::prelude::SessionContext;
 use datafusion_common::{exec_datafusion_err, internal_datafusion_err, DFSchema};
 use datafusion_expr::{TableScan, UNNAMED_TABLE};
+use educe::Educe;
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::utils::quote_names_if_needed;
 use sail_common_datafusion::catalog::display::CatalogObjectDisplay;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::session::PlanFormatter;
+use sail_common_datafusion::session::plan::PlanFormatter;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::formatter::SparkPlanFormatter;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
+#[educe(PartialOrd)]
 pub(crate) struct CatalogCommandNode {
     name: String,
+    #[educe(PartialOrd(ignore))]
     schema: DFSchemaRef,
     command: CatalogCommand,
-}
-
-#[derive(PartialEq, PartialOrd)]
-struct CatalogCommandNodeOrd<'a> {
-    name: &'a String,
-    command: &'a CatalogCommand,
-}
-
-impl<'a> From<&'a CatalogCommandNode> for CatalogCommandNodeOrd<'a> {
-    fn from(node: &'a CatalogCommandNode) -> Self {
-        Self {
-            name: &node.name,
-            command: &node.command,
-        }
-    }
-}
-
-impl PartialOrd for CatalogCommandNode {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        CatalogCommandNodeOrd::from(self).partial_cmp(&other.into())
-    }
 }
 
 impl CatalogCommandNode {
@@ -114,11 +95,13 @@ mod display {
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct SparkCatalog {
+        #[serde(rename = "catalog")]
         pub name: String,
         pub description: Option<String>,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
     pub struct SparkDatabase {
         pub name: String,
         pub catalog: Option<String>,
@@ -127,7 +110,9 @@ mod display {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
     pub struct SparkTable {
+        #[serde(rename = "tableName")]
         pub name: String,
         pub catalog: Option<String>,
         pub namespace: Vec<String>,
@@ -137,6 +122,7 @@ mod display {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
     pub struct SparkTableColumn {
         pub name: String,
         pub description: Option<String>,
@@ -148,6 +134,7 @@ mod display {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
     pub struct SparkFunction {
         pub name: String,
         pub catalog: Option<String>,
@@ -197,8 +184,8 @@ impl CatalogObjectDisplay for SparkCatalogObjectDisplay {
         };
         Self::Table {
             name: status.name,
-            catalog: status.kind.catalog(),
-            namespace: status.kind.database(),
+            catalog: status.catalog,
+            namespace: status.database,
             description: status.kind.comment(),
             table_type: table_type.to_string(),
             is_temporary,

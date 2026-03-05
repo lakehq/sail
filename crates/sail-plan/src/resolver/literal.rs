@@ -235,7 +235,7 @@ impl PlanResolver<'_> {
                     .collect::<PlanResult<Vec<_>>>()?
                     .into_iter()
                     .unzip();
-                let union_fields = adt::UnionFields::new(type_ids, fields);
+                let union_fields = adt::UnionFields::try_new(type_ids, fields)?;
                 let union_mode = match union_mode {
                     spec::UnionMode::Sparse => adt::UnionMode::Sparse,
                     spec::UnionMode::Dense => adt::UnionMode::Dense,

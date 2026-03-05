@@ -29,7 +29,7 @@ on:
 jobs:
   setup:
     name: Setup
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       platforms: ${{ steps.define-platforms.outputs.result }}
     steps:
@@ -58,8 +58,8 @@ jobs:
   build:
     name: Build
     runs-on: ${{ matrix.platform.runner }}
-    continue-on-error: true
     strategy:
+      fail-fast: false
       matrix:
         platform: ${{ fromJSON(needs.setup.outputs.platforms) }}
     needs:

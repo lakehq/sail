@@ -31,13 +31,14 @@ cargo +nightly fmt && \
 :::
 
 ::: warning
-On Windows you need to use the LLVM linker and not MSVC to successfully compile. You can do this by first installing llvm:
+
+On Windows, you need to use the LLVM linker rather than MSVC to successfully build the project. You can do this by first installing LLVM:
 
 ```bash
 scoop install llvm
 ```
 
-then creating a `.cargo/config.toml` file with:
+Then create the file `.cargo/config.toml` with the following content:
 
 ```toml
 [target.'cfg(all(windows, target_env = "msvc"))']

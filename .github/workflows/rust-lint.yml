@@ -14,8 +14,8 @@ on:
       - "rustfmt.toml"
 
 jobs:
-  rust-lint:
-    name: Rust Lint
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,6 +24,7 @@ jobs:
         with:
           cache-key: rust-lint
           install-testing-tools: false
+          install-nightly-toolchain: true
 
       - name: Run Format Check
         run: cargo +nightly fmt -- --check

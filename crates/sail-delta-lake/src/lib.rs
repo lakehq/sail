@@ -14,8 +14,10 @@ pub mod conversion;
 pub mod datasource;
 pub mod error;
 mod kernel;
+pub mod logical;
 pub mod operations;
 pub mod options;
+pub mod physical;
 pub mod physical_plan;
 pub mod planner;
 pub mod schema;
@@ -23,7 +25,24 @@ pub mod storage;
 pub mod table;
 pub mod table_format;
 
-pub use table::create_delta_provider;
+use std::sync::Once;
+
+pub use logical::DeltaTableSource;
+use sail_physical_plan::{register_format_type, FormatTag};
+pub use table::{create_delta_provider, create_delta_source};
 pub use table_format::DeltaTableFormat;
 
 pub use crate::error::{DeltaError, DeltaError as DeltaTableError, DeltaResult, KernelError};
+
+static INIT: Once = Once::new();
+
+pub fn init_delta_types() {
+    INIT.call_once(|| {
+        let _ = register_format_type::<physical_plan::DeltaCommitExec>(FormatTag::Delta);
+        let _ = register_format_type::<physical_plan::DeltaWriterExec>(FormatTag::Delta);
+        let _ = register_format_type::<physical_plan::DeltaDiscoveryExec>(FormatTag::Delta);
+        let _ = register_format_type::<physical_plan::DeltaScanByAddsExec>(FormatTag::Delta);
+        let _ = register_format_type::<physical_plan::DeltaRemoveActionsExec>(FormatTag::Delta);
+        let _ = register_format_type::<physical_plan::DeltaLogReplayExec>(FormatTag::Delta);
+    });
+}

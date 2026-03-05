@@ -1,14 +1,20 @@
 import doctest
+import itertools
 import os
 from typing import Any
 
 import pandas as pd
+import pyspark
 from pyspark.sql.types import DecimalType, DoubleType, FloatType, Row
 
 # This doctest option flag is used to annotate tests involving
 # extended Spark features supported by Sail.
 # The test will be skipped when running on JVM Spark.
 SAIL_ONLY = doctest.register_optionflag("SAIL_ONLY")
+
+
+def pyspark_version() -> tuple[int, ...]:
+    return tuple(int(x) for x in pyspark.__version__.split("."))
 
 
 def is_jvm_spark():
@@ -23,7 +29,7 @@ def to_pandas(df):
     """
 
     def _to_pandas_type(dt):
-        if isinstance(dt, (FloatType, DoubleType, DecimalType)):
+        if isinstance(dt, FloatType | DoubleType | DecimalType):
             return pd.Float64Dtype()
         return None
 
@@ -83,6 +89,13 @@ def any_of(*values):
     return AnyOf(*values)
 
 
+def escape_sql_identifier(s: str) -> str:
+    """Escapes a string for use as a SQL identifier enclosed in backticks.
+    Backtick characters in the raw string are replaced with two backticks.
+    """
+    return s.replace("`", "``")
+
+
 def escape_sql_string_literal(s: str) -> str:
     """Escapes a string for use in SQL literals.
     All non-ASCII characters remain unchanged,
@@ -106,12 +119,12 @@ def parse_show_string(text) -> list[list[str]]:
     # determine column width by the positions of the `+` character in the first line
     positions = [i for i, c in enumerate(border) if c == "+"]
     columns = []
-    for start, end in zip(positions, positions[1:]):
+    for start, end in itertools.pairwise(positions):
         columns.append(header[start + 1 : end].strip())
     result = [columns]
     for line in data:
         row = []
-        for start, end in zip(positions, positions[1:]):
+        for start, end in itertools.pairwise(positions):
             row.append(line[start + 1 : end].strip())
         result.append(row)
     return result

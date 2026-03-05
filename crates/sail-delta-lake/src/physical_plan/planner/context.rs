@@ -18,9 +18,10 @@ use datafusion::common::{DataFusionError, Result};
 use object_store::ObjectStore;
 use url::Url;
 
+use crate::kernel::DeltaTableConfig as KernelDeltaTableConfig;
 use crate::options::TableDeltaOptions;
 use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
-use crate::table::{open_table_with_object_store, DeltaTable};
+use crate::table::{open_table_with_object_store_and_table_config, DeltaTable};
 
 /// Configuration shared by all Delta planners.
 #[derive(Clone)]
@@ -114,10 +115,18 @@ impl<'a> PlannerContext<'a> {
 
     pub async fn open_table(&self) -> Result<DeltaTable> {
         let object_store = self.object_store()?;
-        open_table_with_object_store(
+        // Planning-time code only needs the log segment / metadata; avoid eagerly materializing
+        // the full active file list on the driver.
+        let table_config = KernelDeltaTableConfig {
+            require_files: false,
+            ..Default::default()
+        };
+
+        open_table_with_object_store_and_table_config(
             self.config.table_url.clone(),
             object_store,
-            Default::default(),
+            StorageConfig,
+            table_config,
         )
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))

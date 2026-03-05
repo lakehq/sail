@@ -3,9 +3,10 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, AsArray, Float64Array};
 use datafusion::arrow::datatypes::{
-    DataType, Decimal128Type, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type,
-    Int64Type, Int8Type, IntervalUnit, IntervalYearMonthType, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type,
+    DataType, Decimal128Type, DurationMicrosecondType, DurationMillisecondType,
+    DurationNanosecondType, DurationSecondType, Float16Type, Float32Type, Float64Type, Int16Type,
+    Int32Type, Int64Type, Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
+    IntervalYearMonthType, TimeUnit, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{
@@ -31,6 +32,12 @@ impl SparkSignum {
                 vec![
                     TypeSignature::Numeric(1),
                     TypeSignature::Uniform(1, vec![DataType::Interval(IntervalUnit::YearMonth)]),
+                    TypeSignature::Uniform(1, vec![DataType::Interval(IntervalUnit::DayTime)]),
+                    TypeSignature::Uniform(1, vec![DataType::Interval(IntervalUnit::MonthDayNano)]),
+                    TypeSignature::Uniform(1, vec![DataType::Duration(TimeUnit::Second)]),
+                    TypeSignature::Uniform(1, vec![DataType::Duration(TimeUnit::Millisecond)]),
+                    TypeSignature::Uniform(1, vec![DataType::Duration(TimeUnit::Microsecond)]),
+                    TypeSignature::Uniform(1, vec![DataType::Duration(TimeUnit::Nanosecond)]),
                 ],
                 Volatility::Immutable,
             ),
@@ -183,6 +190,51 @@ impl ScalarUDFImpl for SparkSignum {
                     }
                 }))))
             }
+            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(val)) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Float64(val.map(|x| {
+                    // IntervalDayTime has days and milliseconds components
+                    let days = x.days;
+                    let ms = x.milliseconds;
+                    if days == 0 && ms == 0 {
+                        0_f64
+                    } else if days > 0 || (days == 0 && ms > 0) {
+                        1_f64
+                    } else {
+                        -1_f64
+                    }
+                }))))
+            }
+            ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(val)) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Float64(val.map(|x| {
+                    // IntervalMonthDayNano stores months, days, nanoseconds as i128
+                    // The sign is determined by the overall value
+                    let months = IntervalMonthDayNanoType::to_parts(x).0;
+                    let days = IntervalMonthDayNanoType::to_parts(x).1;
+                    let nanos = IntervalMonthDayNanoType::to_parts(x).2;
+                    if months == 0 && days == 0 && nanos == 0 {
+                        0_f64
+                    } else if months > 0
+                        || (months == 0 && days > 0)
+                        || (months == 0 && days == 0 && nanos > 0)
+                    {
+                        1_f64
+                    } else {
+                        -1_f64
+                    }
+                }))))
+            }
+            ColumnarValue::Scalar(ScalarValue::DurationSecond(val))
+            | ColumnarValue::Scalar(ScalarValue::DurationMillisecond(val))
+            | ColumnarValue::Scalar(ScalarValue::DurationMicrosecond(val))
+            | ColumnarValue::Scalar(ScalarValue::DurationNanosecond(val)) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Float64(val.map(|x| {
+                    if x == 0_i64 {
+                        0_f64
+                    } else {
+                        x.signum() as f64
+                    }
+                }))))
+            }
             ColumnarValue::Array(array) => {
                 let result = match array.data_type() {
                     DataType::UInt8 => {
@@ -313,6 +365,62 @@ impl ScalarUDFImpl for SparkSignum {
                         let result: Float64Array = array
                             .as_primitive::<IntervalYearMonthType>()
                             .unary(|x| if x == 0_i32 { 0_f64 } else { x.signum() as f64 });
+                        Ok(Arc::new(result) as ArrayRef)
+                    }
+                    DataType::Interval(IntervalUnit::DayTime) => {
+                        let result: Float64Array =
+                            array.as_primitive::<IntervalDayTimeType>().unary(|x| {
+                                let days = x.days;
+                                let ms = x.milliseconds;
+                                if days == 0 && ms == 0 {
+                                    0_f64
+                                } else if days > 0 || (days == 0 && ms > 0) {
+                                    1_f64
+                                } else {
+                                    -1_f64
+                                }
+                            });
+                        Ok(Arc::new(result) as ArrayRef)
+                    }
+                    DataType::Interval(IntervalUnit::MonthDayNano) => {
+                        let result: Float64Array =
+                            array.as_primitive::<IntervalMonthDayNanoType>().unary(|x| {
+                                let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(x);
+                                if months == 0 && days == 0 && nanos == 0 {
+                                    0_f64
+                                } else if months > 0
+                                    || (months == 0 && days > 0)
+                                    || (months == 0 && days == 0 && nanos > 0)
+                                {
+                                    1_f64
+                                } else {
+                                    -1_f64
+                                }
+                            });
+                        Ok(Arc::new(result) as ArrayRef)
+                    }
+                    DataType::Duration(TimeUnit::Second) => {
+                        let result: Float64Array = array
+                            .as_primitive::<DurationSecondType>()
+                            .unary(|x| if x == 0 { 0_f64 } else { x.signum() as f64 });
+                        Ok(Arc::new(result) as ArrayRef)
+                    }
+                    DataType::Duration(TimeUnit::Millisecond) => {
+                        let result: Float64Array = array
+                            .as_primitive::<DurationMillisecondType>()
+                            .unary(|x| if x == 0 { 0_f64 } else { x.signum() as f64 });
+                        Ok(Arc::new(result) as ArrayRef)
+                    }
+                    DataType::Duration(TimeUnit::Microsecond) => {
+                        let result: Float64Array = array
+                            .as_primitive::<DurationMicrosecondType>()
+                            .unary(|x| if x == 0 { 0_f64 } else { x.signum() as f64 });
+                        Ok(Arc::new(result) as ArrayRef)
+                    }
+                    DataType::Duration(TimeUnit::Nanosecond) => {
+                        let result: Float64Array = array
+                            .as_primitive::<DurationNanosecondType>()
+                            .unary(|x| if x == 0 { 0_f64 } else { x.signum() as f64 });
                         Ok(Arc::new(result) as ArrayRef)
                     }
                     other => exec_err!("Unsupported data type {other:?} for function signum"),

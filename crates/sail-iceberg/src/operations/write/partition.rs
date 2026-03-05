@@ -44,9 +44,9 @@ pub fn build_partition_dir(
     spec: &PartitionSpec,
     iceberg_schema: &IcebergSchema,
     values: &[Option<Literal>],
-) -> String {
+) -> Result<String, String> {
     if spec.fields.is_empty() {
-        return String::new();
+        return Ok(String::new());
     }
     #[allow(clippy::unwrap_used)]
     let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
@@ -147,10 +147,9 @@ pub fn build_partition_dir(
 
         segs.push(format!("{}={}", f.name, human));
     }
-    segs.join("/")
+    Ok(segs.join("/"))
 }
 
-#[allow(dead_code)]
 pub fn compute_partition_values(
     batch: &RecordBatch,
     spec: &PartitionSpec,
@@ -173,7 +172,7 @@ pub fn compute_partition_values(
             .unwrap_or(&Type::Primitive(PrimitiveType::String));
         values.push(apply_transform(f.transform, field_type, lit));
     }
-    let dir = build_partition_dir(spec, iceberg_schema, &values);
+    let dir = build_partition_dir(spec, iceberg_schema, &values)?;
     Ok((values, dir))
 }
 
@@ -218,7 +217,7 @@ pub fn split_record_batch_by_partition(
                 .unwrap_or(&Type::Primitive(PrimitiveType::String));
             vals.push(apply_transform(f.transform, field_type, lit));
         }
-        let dir = build_partition_dir(spec, iceberg_schema, &vals);
+        let dir = build_partition_dir(spec, iceberg_schema, &vals)?;
         let entry = groups.entry(dir).or_insert_with(|| Group {
             values: vals.clone(),
             indices: Vec::new(),

@@ -6,14 +6,14 @@ use crate::ast::data_type::DataType;
 use crate::ast::expression::{BooleanLiteral, Expr, OrderDirection};
 use crate::ast::identifier::{table_ident, Ident, ObjectName};
 use crate::ast::keywords::{
-    Add, After, All, Alter, Always, Analyze, And, As, Buckets, By, Cache, Cascade, Catalog, Change,
-    Clear, Cluster, Clustered, Codegen, Collection, Column, Columns, Comment, Compute, Cost,
-    Create, Data, Database, Databases, Dbproperties, Default, Defined, Delete, Delimited, Desc,
-    Describe, Directory, Distributed, Drop, Escaped, Evolution, Exists, Explain, Extended,
-    External, Fields, Fileformat, First, For, Format, Formatted, From, Function, Functions,
-    Generated, Global, If, In, Inpath, Inputformat, Insert, Into, Is, Items, Keys, Lazy, Like,
-    Lines, Load, Local, Location, Map, Matched, Merge, Name, Noscan, Not, Null, On, Options, Or,
-    Outputformat, Overwrite, Partition, Partitioned, Partitions, Properties, Purge, Recover,
+    Add, After, All, Alter, Always, Analyze, And, As, Buckets, By, Cache, Cascade, Catalog,
+    Catalogs, Change, Clear, Cluster, Clustered, Codegen, Collection, Column, Columns, Comment,
+    Compute, Cost, Create, Data, Database, Databases, Dbproperties, Default, Defined, Delete,
+    Delimited, Desc, Describe, Directory, Distributed, Drop, Escaped, Evolution, Exists, Explain,
+    Extended, External, Fields, Fileformat, First, For, Format, Formatted, From, Function,
+    Functions, Generated, Global, If, In, Inpath, Inputformat, Insert, Into, Is, Items, Keys, Lazy,
+    Like, Lines, Load, Local, Location, Map, Matched, Merge, Name, Noscan, Not, Null, On, Options,
+    Or, Outputformat, Overwrite, Partition, Partitioned, Partitions, Properties, Purge, Recover,
     Refresh, Rename, Replace, Restrict, Row, Schema, Schemas, Serde, Serdeproperties, Set, Show,
     Sorted, Source, Statistics, Stored, Table, Tables, Target, Tblproperties, Temp, Temporary,
     Terminated, Then, Time, To, Type, Uncache, Unset, Update, Use, Using, Values, Verbose, View,
@@ -30,7 +30,6 @@ use crate::token::TokenLabel;
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "(Statement, Query, Expr, DataType)", label = TokenLabel::Statement)]
-#[allow(clippy::large_enum_variant)]
 pub enum Statement {
     Query(#[parser(function = |(_, q, _, _), _| q)] Query),
     SetCatalog {
@@ -42,6 +41,11 @@ pub enum Statement {
         r#use: Use,
         database: Either<Database, Schema>,
         name: ObjectName,
+    },
+    UseCatalog {
+        r#use: Use,
+        catalog: Catalog,
+        name: Ident,
     },
     CreateDatabase {
         create: Create,
@@ -67,6 +71,11 @@ pub enum Statement {
         show: Show,
         databases: Either<Databases, Schemas>,
         from: Option<(Either<From, In>, ObjectName)>,
+        like: Option<(Option<Like>, StringLiteral)>,
+    },
+    ShowCatalogs {
+        show: Show,
+        catalogs: Catalogs,
         like: Option<(Option<Like>, StringLiteral)>,
     },
     CreateTable {
@@ -180,7 +189,7 @@ pub enum Statement {
     DropFunction {
         drop: Drop,
         temporary: Option<Either<Temp, Temporary>>,
-        function: Functions,
+        function: Either<Function, Functions>,
         if_exists: Option<(If, Exists)>,
         name: ObjectName,
     },
@@ -232,11 +241,10 @@ pub enum Statement {
         into: Into,
         target: ObjectName,
         alias: Option<AliasClause>,
-        // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
-        #[parser(function = |(_, q, _, _), o| unit(o).then(compose(q, o)))]
-        using: (Using, MergeSource),
-        #[parser(function = |(_, _, e, _), o| unit(o).then(e))]
-        on: (On, Expr),
+        #[parser(function = |(_, q, _, _), o| boxed(unit(o).then(compose(q, o))))]
+        using: Box<(Using, MergeSource)>,
+        #[parser(function = |(_, _, e, _), o| boxed(unit(o).then(e)))]
+        on: Box<(On, Expr)>,
         #[parser(function = |(_, _, e, _), o| compose(e, o))]
         r#match: Vec<MergeMatchClause>,
     },
@@ -765,18 +773,20 @@ pub enum ColumnDropList {
     },
 }
 
-#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 pub enum InsertDirectoryDestination {
     Spark {
         path: Option<StringLiteral>,
         using: (Using, Ident),
-        options: Option<(Options, PropertyList)>,
+        #[parser(function = |(), o| boxed(unit(o)).or_not())]
+        options: Option<Box<(Options, PropertyList)>>,
     },
     Hive {
         path: StringLiteral,
-        row_format: Option<(Row, Format, RowFormat)>,
-        stored_as: Option<(Stored, As, FileFormat)>,
+        #[parser(function = |(), o| boxed(unit(o)).or_not())]
+        row_format: Option<Box<(Row, Format, RowFormat)>>,
+        #[parser(function = |(), o| boxed(unit(o)).or_not())]
+        stored_as: Option<Box<(Stored, As, FileFormat)>>,
     },
 }
 
@@ -928,14 +938,6 @@ pub enum AnalyzeTableModifier {
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "(Query, Expr)")]
 pub enum DescribeItem {
-    // We need to try `DESCRIBE QUERY` first since the `QUERY` keyword
-    // is optional. We will fall back to other choices if there is
-    // no valid query following the `DESCRIBE` keyword.
-    Query {
-        query: Option<ast::keywords::Query>,
-        #[parser(function = |(q, _), _| q)]
-        item: Query,
-    },
     Function {
         function: Function,
         extended: Option<Extended>,
@@ -951,13 +953,21 @@ pub enum DescribeItem {
         extended: Option<Extended>,
         item: ObjectName,
     },
+    // TODO: In Spark SQL, the `TABLE` keyword is optional.
+    //   Here we mark it as required to disambiguate between `DESCRIBE TABLE` and `DESCRIBE QUERY`.
     Table {
-        table: Option<Table>,
+        table: Table,
         extended: Option<Extended>,
         name: ObjectName,
         #[parser(function = |(_, e), o| compose(e, o))]
         partition: Option<PartitionClause>,
         column: Option<ObjectName>,
+    },
+    // We try `DESCRIBE QUERY` last since the `QUERY` keyword is optional.
+    Query {
+        query: Option<ast::keywords::Query>,
+        #[parser(function = |(q, _), _| q)]
+        item: Query,
     },
 }
 

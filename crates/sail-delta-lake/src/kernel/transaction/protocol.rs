@@ -87,17 +87,17 @@ impl ProtocolChecker {
             writer_features,
         }
     }
-    #[allow(unused)]
+    #[expect(unused)]
     pub fn default_reader_version(&self) -> i32 {
         1
     }
-    #[allow(unused)]
+    #[expect(unused)]
     pub fn default_writer_version(&self) -> i32 {
         2
     }
 
     /// Check append-only at the high level (operation level)
-    #[allow(unused)]
+    #[expect(unused)]
     pub fn check_append_only(&self, snapshot: &EagerSnapshot) -> Result<(), TransactionError> {
         if snapshot.table_properties().append_only() {
             return Err(TransactionError::DeltaTableAppendOnly);
@@ -106,7 +106,7 @@ impl ProtocolChecker {
     }
 
     /// Check can write_timestamp_ntz
-    #[allow(unused)]
+    #[expect(unused)]
     pub fn check_can_write_timestamp_ntz(
         &self,
         snapshot: &DeltaTableState,

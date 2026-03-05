@@ -25,33 +25,47 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_physical_expr::expressions::{lit, Column as PhysicalColumn};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
-use crate::kernel::models::Action;
-use crate::kernel::DeltaOperation;
-
+mod action_schema;
 mod commit_exec;
+pub mod discovery_exec;
 mod expr_adapter;
-mod file_lookup_exec;
-pub mod find_files_exec;
+mod log_replay_exec;
+mod meta_adds;
 mod remove_actions_exec;
 mod scan_by_adds_exec;
-mod utils;
 mod writer_exec;
 
+pub use action_schema::{
+    decode_actions_and_meta_from_batch, decode_adds_from_batch, delta_action_schema,
+    encode_actions, encode_add_actions, CommitMeta, ExecAction, COL_ACTION,
+};
 pub use commit_exec::DeltaCommitExec;
-pub use expr_adapter::DeltaPhysicalExprAdapterFactory;
-pub use file_lookup_exec::DeltaFileLookupExec;
-pub use find_files_exec::DeltaFindFilesExec;
+pub use discovery_exec::DeltaDiscoveryExec;
+pub use expr_adapter::{DeltaCastColumnExpr, DeltaPhysicalExprAdapterFactory};
+pub use log_replay_exec::DeltaLogReplayExec;
 pub mod planner;
 pub use planner::{
     plan_delete, plan_merge, plan_update, DeltaPhysicalPlanner, DeltaTableConfig, PlannerContext,
 };
 pub use remove_actions_exec::DeltaRemoveActionsExec;
 pub use scan_by_adds_exec::DeltaScanByAddsExec;
-pub(crate) use utils::join_batches_with_add_actions;
 pub use writer_exec::DeltaWriterExec;
+
+/// Top-level derived column used to co-locate log actions by file path for parallel replay.
+pub const COL_REPLAY_PATH: &str = "__sail_delta_replay_path";
+
+/// Derived boolean marker indicating whether a log row is a `remove(path)` action.
+///
+/// This is computed by the planner and consumed by `DeltaLogReplayExec` to avoid decoding the
+/// `remove` struct during streaming replay.
+pub const COL_LOG_IS_REMOVE: &str = "__sail_delta_is_remove";
+
+/// Derived log row version (from the 20-digit `_delta_log` filename prefix).
+///
+/// The planner attaches this as a partition column during log scanning so downstream nodes can
+/// order actions deterministically for replay.
+pub const COL_LOG_VERSION: &str = "__sail_delta_log_version";
 
 /// Create a `ProjectionExec` instance that reorders columns so that partition columns
 /// are placed at the end of the `RecordBatch`.
@@ -149,11 +163,12 @@ pub fn create_sort(
 pub fn create_repartition(
     input: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
+    num_partitions: usize,
 ) -> Result<Arc<RepartitionExec>> {
+    let num_partitions = num_partitions.max(1);
     let partitioning = if partition_columns.is_empty() {
         // No partition columns, ensure some parallelism
-        // TODO: Make partition count configurable
-        Partitioning::RoundRobinBatch(4)
+        Partitioning::RoundRobinBatch(num_partitions)
     } else {
         // Since create_projection moves partition columns to the end, we can rely on their positions.
         let schema = input.schema();
@@ -178,23 +193,10 @@ pub fn create_repartition(
             .map(|(idx, name)| Arc::new(PhysicalColumn::new(name, idx)) as Arc<dyn PhysicalExpr>)
             .collect();
 
-        // TODO: Partition count should be configurable
-        let num_partitions = 4;
         Partitioning::Hash(partition_exprs, num_partitions)
     };
 
     Ok(Arc::new(RepartitionExec::try_new(input, partitioning)?))
-}
-
-/// Helper struct for serializing commit information into a single JSON field
-#[derive(Serialize, Deserialize, Default)]
-pub struct CommitInfo {
-    pub row_count: u64,
-    pub actions: Vec<Action>,
-    pub initial_actions: Vec<Action>,
-    pub operation: Option<DeltaOperation>,
-    #[serde(rename = "operationMetrics", default)]
-    pub operation_metrics: std::collections::HashMap<String, Value>,
 }
 
 pub(crate) fn current_timestamp_millis() -> Result<i64> {

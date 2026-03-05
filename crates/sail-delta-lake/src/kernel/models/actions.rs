@@ -91,7 +91,6 @@ pub struct DeletionVectorDescriptor {
 /// Delta Lake action envelope.
 #[derive(Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(missing_docs)]
 pub enum Action {
     #[serde(rename = "metaData")]
     Metadata(Metadata),
@@ -227,6 +226,10 @@ pub struct Add {
     pub default_row_commit_version: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub clustering_provider: Option<String>,
+    #[serde(skip)]
+    pub commit_version: Option<i64>,
+    #[serde(skip)]
+    pub commit_timestamp: Option<i64>,
 }
 
 /// File removal action.

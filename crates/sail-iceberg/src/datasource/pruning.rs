@@ -33,7 +33,7 @@ use crate::utils::conversions::{scalar_to_primitive_literal, to_scalar};
 /// Pruning statistics over Iceberg DataFiles
 pub struct IcebergPruningStats {
     files: Vec<DataFile>,
-    #[allow(unused)]
+    #[expect(unused)]
     arrow_schema: Arc<ArrowSchema>,
     /// Arrow field name -> Iceberg field id
     name_to_field_id: HashMap<String, i32>,

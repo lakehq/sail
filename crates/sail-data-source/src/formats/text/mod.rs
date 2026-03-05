@@ -5,7 +5,7 @@ use datafusion::catalog::Session;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_datasource::file_format::FileFormat;
 
-use crate::formats::listing::{ListingFormat, ListingTableFormat};
+use crate::formats::listing::{DefaultSchemaInfer, ListingFormat, ListingTableFormat, SchemaInfer};
 use crate::formats::text::file_format::TextFileFormat;
 use crate::formats::text::options::{resolve_text_read_options, resolve_text_write_options};
 
@@ -64,5 +64,9 @@ impl ListingFormat for TextListingFormat {
     ) -> datafusion_common::Result<(Arc<dyn FileFormat>, Option<String>)> {
         let options = resolve_text_write_options(options)?;
         Ok((Arc::new(TextFileFormat::new(options)), None))
+    }
+
+    fn schema_inferrer(&self) -> Arc<dyn SchemaInfer> {
+        Arc::new(DefaultSchemaInfer)
     }
 }

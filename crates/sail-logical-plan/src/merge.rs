@@ -22,12 +22,14 @@ use log::trace;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::utils::items::ItemTaker;
 
+use crate::monotonic_id::MonotonicIdNode;
+
 pub const SOURCE_PRESENT_COLUMN: &str = "__sail_merge_source_row_present";
 pub const TARGET_PRESENT_COLUMN: &str = "__sail_merge_target_row_present";
 pub const TARGET_ROW_ID_COLUMN: &str = "__sail_merge_target_row_id";
 
-#[derive(Clone, Debug, PartialEq, Educe)]
-#[educe(Eq, Hash, PartialOrd)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
+#[educe(PartialOrd)]
 pub struct MergeCardinalityCheckNode {
     input: Arc<LogicalPlan>,
     target_row_id_col: String,
@@ -192,8 +194,8 @@ pub struct MergeAssignment {
     pub value: Expr,
 }
 
-#[derive(Clone, Debug, PartialEq, Educe)]
-#[educe(Eq, Hash, PartialOrd)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
+#[educe(PartialOrd)]
 pub struct MergeIntoNode {
     target: Arc<LogicalPlan>,
     source: Arc<LogicalPlan>,
@@ -280,8 +282,8 @@ impl UserDefinedLogicalNodeCore for MergeIntoNode {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Educe)]
-#[educe(Eq, Hash, PartialOrd)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
+#[educe(PartialOrd)]
 pub struct MergeIntoWriteNode {
     raw_target: Arc<LogicalPlan>,
     raw_source: Arc<LogicalPlan>,
@@ -516,16 +518,13 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
 
     if should_check_cardinality {
         // Add stable per-target-row id before join; JOIN will duplicate this value for matches.
-        let mut exprs: Vec<Expr> = target_plan
-            .schema()
-            .fields()
-            .iter()
-            .map(|f| Expr::Column(Column::from_name(f.name().clone())))
-            .collect();
-        exprs.push(datafusion::functions::string::expr_fn::uuid().alias(TARGET_ROW_ID_COLUMN));
-        target_plan = LogicalPlanBuilder::from(target_plan)
-            .project(exprs)?
-            .build()?;
+        // Use a dedicated logical node so we don't rely on later expression rewriters (MERGE builds plans directly).
+        target_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(MonotonicIdNode::try_new(
+                Arc::new(target_plan),
+                TARGET_ROW_ID_COLUMN.to_string(),
+            )?),
+        });
     }
 
     // To avoid duplicate unqualified names after JOIN, rename source columns with a stable prefix.
@@ -1271,6 +1270,10 @@ fn build_merge_projection(
 
         projections.push(expr.alias(name.clone()));
     }
+
+    // Preserve the file path column so downstream physical planning can implement
+    // targeted rewrite (filter writer input to touched files, while keeping inserts).
+    projections.push(col(path_column).alias(path_column.to_string()));
     Ok(projections)
 }
 

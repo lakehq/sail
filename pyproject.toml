@@ -1,13 +1,13 @@
 [project]
 name = "pysail"
-version = "0.4.5"
+version = "0.5.2"
 description = "Sail Python library"
 authors = [
     { name = "LakeSail", email = "hello@lakesail.com" },
 ]
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.9,<3.14"
+requires-python = ">=3.10,<3.15"
 dependencies = []
 keywords = ["data", "big data", "sql", "spark", "pyspark", "arrow", "datafusion"]
 classifiers = [
@@ -20,11 +20,11 @@ classifiers = [
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: Rust",
     "Topic :: Scientific/Engineering",
 ]
@@ -32,7 +32,10 @@ classifiers = [
 [project.optional-dependencies]
 test = [
     # The dependencies for testing the installed package.
-    "pyspark-client>=4.0,<4.1",
+    # PySpark 4.1.0 does not work on Windows.
+    #   https://issues.apache.org/jira/browse/SPARK-54745
+    "pyspark-client>=4.0,<4.2,!=4.1.0",
+    "pandas<3",
     "duckdb>=1.0,<2",
     "pytest>=8.4,<9",
     "pytest-bdd>=8.1,<9",
@@ -44,9 +47,16 @@ test = [
     "jedi>=0.19.2,<0.20",
     "jsonpath-ng>=1.6,<2",
     "PyYAML>=6.0,<7",
+    "moto[glue]>=5,<6",
+    "testcontainers>=4,<5",
+    "connectorx>=0.3,<1",
 ]
 mcp = [
     "mcp>=1.0.0,<2",
+]
+jdbc = [
+    "connectorx>=0.3,<1",
+    "pyarrow>=10.0,<20",
 ]
 
 [project.urls]
@@ -77,8 +87,9 @@ python = "3.11"
 installer = "pip"
 skip-install = true
 dependencies = [
-    "pyspark[connect]==4.1.0",
-    "ibis-framework>=11,<12",
+    "pyspark[connect]==4.1.1",
+    "ibis-framework>=12,<13",
+    "pandas<3",
     "pytest>=8.4,<9",
     "pytest-bdd>=8.1,<9",
     "syrupy>=5.0,<6",
@@ -92,6 +103,9 @@ dependencies = [
     "jedi>=0.19.2,<0.20",
     "jsonpath-ng>=1.6,<2",
     "PyYAML>=6.0,<7",
+    "moto[glue]>=5,<6",
+    "testcontainers>=4,<5",
+    "connectorx>=0.3,<1",
 ]
 path = ".venvs/default"
 
@@ -127,6 +141,7 @@ python = "3.11"
 installer = "pip"
 skip-install = true
 dependencies = [
+    "pandas<3",
     "pytest>=8.4,<9",
     "pytest-bdd>=8.1,<9",
     "syrupy>=5.0,<6",
@@ -138,21 +153,24 @@ dependencies = [
     "jedi>=0.19.2,<0.20",
     "jsonpath-ng>=1.6,<2",
     "PyYAML>=6.0,<7",
+    "moto[glue]>=5,<6",
+    "testcontainers>=4,<5",
+    "connectorx>=0.3,<1",
 ]
 
 [[tool.hatch.envs.test.matrix]]
-spark = ["3.5.7", "4.0.1", "4.1.0"]
+spark = ["3.5.7", "4.0.1", "4.1.1"]
 
 [tool.hatch.envs.test.overrides]
 matrix.spark.path = [
     { value = ".venvs/test.spark-3.5.7", if = ["3.5.7"] },
     { value = ".venvs/test.spark-4.0.1", if = ["4.0.1"] },
-    { value = ".venvs/test.spark-4.1.0", if = ["4.1.0"] },
+    { value = ".venvs/test.spark-4.1.1", if = ["4.1.1"] },
 ]
 matrix.spark.extra-dependencies = [
     { value = "pyspark[connect]==3.5.7", if = ["3.5.7"] },
     { value = "pyspark[connect]==4.0.1", if = ["4.0.1"] },
-    { value = "pyspark[connect]==4.1.0", if = ["4.1.0"] },
+    { value = "pyspark[connect]==4.1.1", if = ["4.1.1"] },
 ]
 env.CI.installer = "uv"
 
@@ -169,15 +187,15 @@ dependencies = [
 ]
 
 [[tool.hatch.envs.test-spark.matrix]]
-spark = ["3.5.7", "4.1.0"]
+spark = ["3.5.7", "4.1.1"]
 
 [tool.hatch.envs.test-spark.extra-scripts]
-install-pyspark = "\"{env:HATCH_UV}\" pip install --force-reinstall 'pyspark[connect] @ opt/spark/python/dist/pyspark-{matrix:spark}.tar.gz'"
+install-pyspark = "\"{env:HATCH_UV}\" pip install --force-reinstall 'pyspark[connect] @ opt/spark/python/dist/pyspark-{matrix:spark}.tar.gz' 'pandas<3'"
 
 [tool.hatch.envs.test-spark.overrides]
 matrix.spark.path = [
     { value = ".venvs/test-spark.spark-3.5.7", if = ["3.5.7"] },
-    { value = ".venvs/test-spark.spark-4.1.0", if = ["4.1.0"] },
+    { value = ".venvs/test-spark.spark-4.1.1", if = ["4.1.1"] },
 ]
 env.CI.installer = "uv"
 
@@ -187,7 +205,8 @@ installer = "pip"
 skip-install = true
 dependencies = [
     "pyspark[connect]==3.5.7",
-    "ibis-framework[pyspark]>=11,<12",
+    "ibis-framework[pyspark]>=12,<13",
+    "sqlglot>=23.4,!=26.32.0",
     # The test dependencies are borrowed from `pyproject.toml` of the Ibis project.
     # They need to be updated accordingly when we update the Ibis version.
     "cloudpickle",
@@ -228,11 +247,11 @@ packages = ["python/pysail"]
 line-length = 120
 
 [tool.ruff.lint.per-file-ignores]
-"crates/**/*.py" = ["INP001"]
+"crates/**/*.py" = ["INP001", "PLC0415"]
 "python/pysail/docs/conf.py" = ["INP001"]
-"python/pysail/examples/**/*.py" = ["T201"]
-"python/pysail/tests/**/*.py" = ["S101"]
-"scripts/**/*.py" = ["SLF001"]
+"python/pysail/examples/**/*.py" = ["T201", "PLC0415"]
+"python/pysail/tests/**/*.py" = ["S101", "PLC0415"]
+"scripts/**/*.py" = ["SLF001", "PLC0415"]
 
 [tool.pytest.ini_options]
 testpaths = ["python"]

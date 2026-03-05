@@ -9,7 +9,7 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference}
 use k8s_openapi::{DeepMerge, Resource};
 use kube::Api;
 use rand::distr::Uniform;
-use rand::Rng;
+use rand::RngExt;
 use sail_common::config::ClusterConfigEnv;
 use sail_server::RetryStrategy;
 use sail_telemetry::common::ContextPropagationEnv;
@@ -47,7 +47,7 @@ impl KubernetesWorkerManager {
     }
 
     pub fn generate_name() -> String {
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         rand::rng()
             .sample_iter(Uniform::new(0, 36).unwrap())
             .take(10)
@@ -111,7 +111,8 @@ impl KubernetesWorkerManager {
             driver_external_host,
             driver_external_port,
             worker_heartbeat_interval,
-            worker_stream_buffer,
+            task_stream_buffer,
+            task_stream_creation_timeout,
             rpc_retry_strategy,
         } = options;
         let w3c_traceparent =
@@ -190,8 +191,13 @@ impl KubernetesWorkerManager {
                 value_from: None,
             },
             EnvVar {
-                name: ClusterConfigEnv::WORKER_STREAM_BUFFER.to_string(),
-                value: Some(worker_stream_buffer.to_string()),
+                name: ClusterConfigEnv::TASK_STREAM_BUFFER.to_string(),
+                value: Some(task_stream_buffer.to_string()),
+                value_from: None,
+            },
+            EnvVar {
+                name: ClusterConfigEnv::TASK_STREAM_CREATION_TIMEOUT_SECS.to_string(),
+                value: Some(task_stream_creation_timeout.as_secs().to_string()),
                 value_from: None,
             },
             EnvVar {
@@ -279,7 +285,7 @@ mod tests {
     use super::*;
 
     #[test]
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     fn test_label_merging_from_template() {
         // Test that labels from worker_pod_template are properly merged with default labels
 

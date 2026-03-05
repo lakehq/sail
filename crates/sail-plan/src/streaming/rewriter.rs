@@ -18,6 +18,7 @@ use sail_logical_plan::file_write::FileWriteNode;
 use sail_logical_plan::range::RangeNode;
 use sail_logical_plan::show_string::ShowStringNode;
 use sail_logical_plan::streaming::collector::StreamCollectorNode;
+use sail_logical_plan::streaming::filter::StreamFilterNode;
 use sail_logical_plan::streaming::limit::StreamLimitNode;
 use sail_logical_plan::streaming::source_adapter::StreamSourceAdapterNode;
 use sail_logical_plan::streaming::source_wrapper::StreamSourceWrapperNode;
@@ -73,9 +74,9 @@ impl TreeNodeRewriter for StreamingRewriter {
                     predicate, input, ..
                 } = filter;
                 let predicate = or(predicate, col(MARKER_FIELD_NAME).is_not_null());
-                Ok(Transformed::yes(LogicalPlan::Filter(Filter::try_new(
-                    predicate, input,
-                )?)))
+                Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                    node: Arc::new(StreamFilterNode::new(input, predicate)),
+                })))
             }
             LogicalPlan::Window(_) => {
                 not_impl_err!("streaming window: {plan:?}")
@@ -93,27 +94,32 @@ impl TreeNodeRewriter for StreamingRewriter {
                 not_impl_err!("streaming repartition: {plan:?}")
             }
             LogicalPlan::TableScan(ref scan) => {
-                let provider = source_as_provider(&scan.source)?;
-                if let Some(source) = get_stream_source_opt(provider.as_ref()) {
-                    let NamedStreamSource { source, names } = source;
-                    let TableScan {
-                        table_name,
-                        source: _,
-                        projection,
-                        projected_schema: _,
-                        filters,
-                        fetch,
-                    } = scan;
-                    Ok(Transformed::yes(LogicalPlan::Extension(Extension {
-                        node: Arc::new(StreamSourceWrapperNode::try_new(
-                            table_name.clone(),
-                            source,
-                            names,
-                            projection.clone(),
-                            filters.clone(),
-                            *fetch,
-                        )?),
-                    })))
+                if let Ok(provider) = source_as_provider(&scan.source) {
+                    if let Some(source) = get_stream_source_opt(provider.as_ref()) {
+                        let NamedStreamSource { source, names } = source;
+                        let TableScan {
+                            table_name,
+                            source: _,
+                            projection,
+                            projected_schema: _,
+                            filters,
+                            fetch,
+                        } = scan;
+                        Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                            node: Arc::new(StreamSourceWrapperNode::try_new(
+                                table_name.clone(),
+                                source,
+                                names,
+                                projection.clone(),
+                                filters.clone(),
+                                *fetch,
+                            )?),
+                        })))
+                    } else {
+                        Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                            node: Arc::new(StreamSourceAdapterNode::try_new(Arc::new(plan))?),
+                        })))
+                    }
                 } else {
                     Ok(Transformed::yes(LogicalPlan::Extension(Extension {
                         node: Arc::new(StreamSourceAdapterNode::try_new(Arc::new(plan))?),
@@ -223,9 +229,8 @@ fn get_stream_source_opt(provider: &dyn TableProvider) -> Option<NamedStreamSour
 pub fn is_streaming_plan(plan: &LogicalPlan) -> Result<bool> {
     plan.exists(|plan| {
         if let LogicalPlan::TableScan(scan) = plan {
-            Ok(is_streaming_table_provider(
-                source_as_provider(&scan.source)?.as_ref(),
-            ))
+            Ok(source_as_provider(&scan.source)
+                .is_ok_and(|p| is_streaming_table_provider(p.as_ref())))
         } else {
             Ok(false)
         }

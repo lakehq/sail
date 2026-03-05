@@ -12,10 +12,10 @@ sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-python-udf = { path = "../sail-python-udf" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 sail-catalog = { path = "../sail-catalog" }
+sail-catalog-memory = { path = "../sail-catalog-memory" }
 sail-function = { path = "../sail-function" }
 sail-logical-plan = { path = "../sail-logical-plan" }
 sail-physical-plan = { path = "../sail-physical-plan" }
-sail-plan-lakehouse = { path = "../sail-plan-lakehouse" }
 
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
@@ -23,11 +23,11 @@ datafusion-expr = { workspace = true }
 datafusion-expr-common = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-functions-nested = { workspace = true }
-datafusion-physical-expr = { workspace = true }
 datafusion-spark = { workspace = true }
-datafusion-functions-json = { workspace = true }
+educe = { workspace = true }
 thiserror = { workspace = true }
 tonic = { workspace = true }
+chrono = { workspace = true }
 async-trait = { workspace = true }
 async-recursion = { workspace = true }
 lazy_static = { workspace = true }
@@ -39,6 +39,8 @@ object_store = { workspace = true }
 half = { workspace = true }
 arrow = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 uuid = { workspace = true }
 indexmap = { workspace = true }
 log = { workspace = true }
+regex = { workspace = true }

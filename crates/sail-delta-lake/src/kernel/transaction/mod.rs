@@ -24,7 +24,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::Utc;
-use datafusion::catalog::Session;
 use delta_kernel::table_features::TableFeature;
 use delta_kernel::table_properties::TableProperties;
 use futures::future::BoxFuture;
@@ -246,13 +245,16 @@ impl CommitData {
     }
 
     pub fn get_bytes(&self) -> Result<Bytes, TransactionError> {
-        let mut jsons = Vec::<String>::new();
-        for action in &self.actions {
-            let json = serde_json::to_string(action)
+        // Write newline-delimited JSON without building intermediate Strings.
+        let mut buf: Vec<u8> = Vec::new();
+        for (i, action) in self.actions.iter().enumerate() {
+            if i > 0 {
+                buf.push(b'\n');
+            }
+            serde_json::to_writer(&mut buf, action)
                 .map_err(|e| TransactionError::SerializeLogJson { json_err: e })?;
-            jsons.push(json);
         }
-        Ok(Bytes::from(jsons.join("\n")))
+        Ok(Bytes::from(buf))
     }
 
     fn is_blind_append(actions: &[Action], operation: &DeltaOperation) -> bool {
@@ -291,7 +293,7 @@ pub trait TableReference: Send + Sync {
     fn protocol(&self) -> &Protocol;
 
     /// Get the table metadata of the snapshot
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     fn metadata(&self) -> &Metadata;
 
     /// Try to cast this table reference to a `EagerSnapshot`
@@ -509,7 +511,6 @@ impl<'a> CommitBuilder {
         table_data: Option<&'a dyn TableReference>,
         log_store: LogStoreRef,
         operation: DeltaOperation,
-        session: &'a dyn Session,
     ) -> PreCommit<'a> {
         let data = CommitData::new(
             self.actions,
@@ -526,7 +527,6 @@ impl<'a> CommitBuilder {
             post_commit_hook: self.post_commit_hook,
             post_commit_hook_handler: self.post_commit_hook_handler,
             operation_id: self.operation_id,
-            session,
         }
     }
 }
@@ -540,7 +540,6 @@ pub struct PreCommit<'a> {
     post_commit_hook: Option<PostCommitHookProperties>,
     post_commit_hook_handler: Option<Arc<dyn CustomExecuteHandler>>,
     operation_id: Uuid,
-    session: &'a dyn Session,
 }
 
 impl<'a> std::future::IntoFuture for PreCommit<'a> {
@@ -599,7 +598,6 @@ impl<'a> PreCommit<'a> {
                 post_commit: this.post_commit_hook,
                 post_commit_hook_handler: this.post_commit_hook_handler,
                 operation_id: this.operation_id,
-                session: this.session,
             })
         })
     }
@@ -615,7 +613,6 @@ pub struct PreparedCommit<'a> {
     post_commit: Option<PostCommitHookProperties>,
     post_commit_hook_handler: Option<Arc<dyn CustomExecuteHandler>>,
     operation_id: Uuid,
-    session: &'a dyn Session,
 }
 
 // impl PreparedCommit<'_> {
@@ -772,10 +769,8 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                                 .await?;
                                 let transaction_info = TransactionInfo::try_new(
                                     snapshot.log_data(),
-                                    this.data.operation.read_predicate(),
                                     &local_actions,
                                     this.data.operation.read_whole_table(),
-                                    Some(this.session),
                                 )?;
                                 let conflict_checker = ConflictChecker::new(
                                     transaction_info,
@@ -850,7 +845,7 @@ pub struct PostCommit {
     /// The winning version number of the commit
     pub version: i64,
     /// The data that was committed to the log store
-    #[allow(unused)]
+    #[expect(unused)]
     pub data: CommitData,
     create_checkpoint: bool,
     cleanup_expired_logs: Option<bool>,
@@ -984,7 +979,6 @@ impl PostCommit {
 }
 
 /// A commit that successfully completed
-#[allow(unused)]
 pub struct FinalizedCommit {
     /// The new table state after a commit
     pub snapshot: DeltaTableState,
@@ -995,13 +989,14 @@ pub struct FinalizedCommit {
     /// Metrics associated with the commit operation
     pub metrics: Metrics,
 }
-#[allow(unused)]
 impl FinalizedCommit {
     /// The new table state after a commit
+    #[expect(dead_code)]
     pub fn snapshot(&self) -> DeltaTableState {
         self.snapshot.clone()
     }
     /// Version of the finalized commit
+    #[expect(dead_code)]
     pub fn version(&self) -> i64 {
         self.version
     }

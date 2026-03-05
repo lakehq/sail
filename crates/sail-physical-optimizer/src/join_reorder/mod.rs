@@ -1,13 +1,13 @@
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use datafusion::common::tree_node::TreeNode;
+use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::config::ConfigOptions;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::{displayable, ExecutionPlan};
-use log::trace;
+use log::{trace, warn};
 
 use crate::join_reorder::builder::{ColumnMap, ColumnMapEntry, GraphBuilder};
 use crate::join_reorder::enumerator::PlanEnumerator;
@@ -45,7 +45,8 @@ impl PhysicalOptimizerRule for JoinReorder {
             displayable(plan.as_ref()).indent(true)
         );
 
-        // Start the top-down region search and optimization from the root plan
+        // Search and optimize reorderable regions. We traverse bottom-up so nested reorderable
+        // regions inside "leaf" plans (as seen by a higher-level region) are also visited.
         self.find_and_optimize_regions(plan)
     }
 
@@ -59,97 +60,116 @@ impl PhysicalOptimizerRule for JoinReorder {
 }
 
 impl JoinReorder {
-    /// Recursively searches for reorderable join regions from the top down.
+    /// Recursively searches for reorderable join regions bottom-up.
     fn find_and_optimize_regions(
         &self,
         plan: Arc<dyn ExecutionPlan>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         trace!("find_and_optimize_regions: Processing {}", plan.name());
 
-        // Attempt to build a query graph starting from the current node.
-        // The GraphBuilder will traverse downwards to find a complete reorderable region.
-        let mut graph_builder = GraphBuilder::new();
-        if let Some((query_graph, target_column_map)) = graph_builder.build(plan.clone())? {
-            // A reorderable region was found. Optimize it if it has more than 2 relations.
-            if query_graph.relation_count() > 2 {
-                trace!(
-                    "JoinReorder: Found reorderable region. Graph has {} relations and {} edges.",
-                    query_graph.relation_count(),
-                    query_graph.edges.len()
-                );
-
-                let mut enumerator = PlanEnumerator::new(query_graph);
-                let best_plan = match enumerator.solve()? {
-                    Some(plan) => {
-                        trace!("JoinReorder: DP optimization completed successfully");
-                        plan
-                    }
-                    None => {
-                        trace!("JoinReorder: DP optimization exceeded threshold, falling back to greedy algorithm");
-                        enumerator.solve_greedy()?
-                    }
-                };
-                trace!(
-                    "JoinReorder: Optimal plan found with cost {:.2} and estimated cardinality {:.2}. Reconstructing plan.",
-                    best_plan.cost, best_plan.cardinality
-                );
-                trace!("JoinReorder: Optimal DPPlan structure:\n{:#?}", best_plan);
-
-                let mut reconstructor =
-                    PlanReconstructor::new(&enumerator.dp_table, &enumerator.query_graph);
-                let (join_tree, final_map) = reconstructor.reconstruct(&best_plan)?;
-
-                trace!(
-                    "JoinReorder: Reconstructed join tree (before final projection):\n{}",
-                    displayable(join_tree.as_ref()).indent(true)
-                );
-
-                // Preserve original output column names from the region root
-                let target_names: Vec<String> = (0..plan.schema().fields().len())
-                    .map(|i| plan.schema().field(i).name().clone())
-                    .collect();
-
-                let final_plan = self.build_final_projection(
-                    join_tree,
-                    &final_map,
-                    &target_column_map,
-                    &target_names,
-                )?;
-
-                trace!(
-                    "JoinReorder: Optimization successful at current level. Returning new plan."
-                );
-                trace!(
-                    "JoinReorder: Optimized plan:\n{}",
-                    displayable(final_plan.as_ref()).indent(true)
-                );
-
-                // The entire region has been optimized and replaced. Return the new plan.
-                // TODO: Recursively optimizing descendant regions.
-                return Ok(final_plan);
-            }
-        }
-
-        // If no significant reorderable region was found starting at the current node,
-        // recursively optimize the children of the current node.
-        trace!("find_and_optimize_regions: No reorderable region found at {}, recursing to {} children", 
-              plan.name(), plan.children().len());
-
-        // Allow recursion through Left Joins to find Inner Join regions below.
-        // Left Joins won't be included in reorderable regions but we optimize their children.
-
+        // Optimize children first so any nested reorderable regions inside "leaf" plans
+        // (from the perspective of the current region) are not skipped.
         let optimized_children = plan
             .children()
             .into_iter()
-            .map(|child| self.find_and_optimize_regions(child.clone()))
+            .map(|child| self.find_and_optimize_regions(Arc::clone(child)))
             .collect::<Result<Vec<_>>>()?;
 
-        // Rebuild the current node with its optimized children.
-        if optimized_children.is_empty() {
-            Ok(plan)
+        let plan = if optimized_children.is_empty() {
+            plan
         } else {
-            plan.with_new_children(optimized_children)
+            plan.with_new_children(optimized_children)?
+        };
+
+        // Attempt to optimize a reorderable region rooted at this node.
+        // Soft fallback: if join reordering fails for any reason, log a warning and return
+        // the plan with optimized children.
+        match self.try_optimize_region(Arc::clone(&plan)) {
+            Ok(Some(new_plan)) => Ok(new_plan),
+            Ok(None) => Ok(plan),
+            Err(e) => {
+                warn!(
+                    "JoinReorder: Optimization failed for region rooted at {} (fallback to children-optimized plan): {}",
+                    plan.name(),
+                    e
+                );
+                Ok(plan)
+            }
         }
+    }
+
+    /// Attempt to optimize a reorderable region rooted at `plan`.
+    /// Returns Ok(Some(new_plan)) if a region was optimized and replaced.
+    /// Returns Ok(None) if no reorderable region is rooted at this node (or it is too small).
+    fn try_optimize_region(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // Attempt to build a query graph starting from the current node.
+        // The GraphBuilder will traverse downwards to find a complete reorderable region.
+        let mut graph_builder = GraphBuilder::new();
+        let Some((query_graph, target_column_map)) = graph_builder.build(plan.clone())? else {
+            return Ok(None);
+        };
+
+        // Only optimize if it has more than 2 relations.
+        if query_graph.relation_count() <= 2 {
+            return Ok(None);
+        }
+
+        trace!(
+            "JoinReorder: Found reorderable region. Graph has {} relations and {} edges.",
+            query_graph.relation_count(),
+            query_graph.edges.len()
+        );
+
+        let mut enumerator = PlanEnumerator::new(query_graph);
+        let best_plan = match enumerator.solve()? {
+            Some(plan) => {
+                trace!("JoinReorder: DP optimization completed successfully");
+                plan
+            }
+            None => {
+                trace!("JoinReorder: DP optimization exceeded threshold, falling back to greedy algorithm");
+                enumerator.solve_greedy()?
+            }
+        };
+
+        trace!(
+            "JoinReorder: Optimal plan found with cost {:.2} and estimated cardinality {:.2}. Reconstructing plan.",
+            best_plan.cost, best_plan.cardinality
+        );
+        trace!("JoinReorder: Optimal DPPlan structure:\n{:#?}", best_plan);
+
+        let mut reconstructor =
+            PlanReconstructor::new(&enumerator.dp_table, &enumerator.query_graph);
+        // Pre-compute required output columns for each join subtree based on the original
+        // region-root output columns. This keeps intermediate join outputs narrow before
+        // `JoinSelection` runs, helping avoid plan-shape regressions when we see through
+        // projection nodes while building the query graph.
+        reconstructor.prepare_required_output_columns(&best_plan, &target_column_map)?;
+        let (join_tree, final_map) = reconstructor.reconstruct(&best_plan)?;
+
+        trace!(
+            "JoinReorder: Reconstructed join tree (before final projection):\n{}",
+            displayable(join_tree.as_ref()).indent(true)
+        );
+
+        // Preserve original output column names from the region root
+        let target_names: Vec<String> = (0..plan.schema().fields().len())
+            .map(|i| plan.schema().field(i).name().clone())
+            .collect();
+
+        let final_plan =
+            self.build_final_projection(join_tree, &final_map, &target_column_map, &target_names)?;
+
+        trace!("JoinReorder: Optimization successful at current level. Returning new plan.");
+        trace!(
+            "JoinReorder: Optimized plan:\n{}",
+            displayable(final_plan.as_ref()).indent(true)
+        );
+
+        Ok(Some(final_plan))
     }
 
     fn build_final_projection(
@@ -224,54 +244,12 @@ impl JoinReorder {
                     ));
                 }
                 ColumnMapEntry::Expression { expr, input_map } => {
-                    // Complex case: use expression rewriter to replace old column references
-                    // with new physical plan column references.
-                    let transformed = expr.clone().transform(|node| {
-                        // Check if current node in expression tree is a Column
-                        if let Some(col) = node.as_any().downcast_ref::<Column>() {
-                            // Use input_map to find column's stable identity
-                            let original_entry = input_map.get(col.index()).ok_or_else(|| {
-                                DataFusionError::Internal(format!(
-                                    "Expression column index {} out of bounds for its input_map (len {})",
-                                    col.index(),
-                                    input_map.len()
-                                ))
-                            })?;
-
-                            if let ColumnMapEntry::Stable { relation_id, column_index } = original_entry {
-                                let stable_target = StableColumn {
-                                    relation_id: *relation_id,
-                                    column_index: *column_index,
-                                    name: col.name().to_string(),
-                                };
-
-                                // Now, find the new physical index of this stable column in the
-                                // output of the reordered join plan (`final_map`).
-                                let new_physical_idx = find_physical_index(&stable_target, final_map)
-                                    .ok_or_else(|| DataFusionError::Internal(format!(
-                                        "Failed to find rewritten physical index for stable column R{}.C{}",
-                                        relation_id, column_index
-                                    )))?;
-
-                                // Get the column name from the new plan's schema.
-                                let new_name = input_plan.schema().field(new_physical_idx).name().to_string();
-
-                                // Create a new Column expression pointing to the correct new location.
-                                let new_col = Column::new(&new_name, new_physical_idx);
-                                // Return the transformed node.
-                                return Ok(datafusion::common::tree_node::Transformed::yes(Arc::new(new_col)));
-                            } else {
-                                // TODO: Support nested complex expressions
-                                return Err(DataFusionError::NotImplemented(
-                                    "Rewriting nested complex expressions is not supported".to_string(),
-                                ));
-                            }
-                        }
-                        // Continue traversing expression tree without changes
-                        Ok(datafusion::common::tree_node::Transformed::no(node))
-                    })?;
-
-                    let rewritten_expr = transformed.data;
+                    let rewritten_expr = self.rewrite_expr_to_final_map(
+                        Arc::clone(expr),
+                        input_map,
+                        final_map,
+                        &input_plan,
+                    )?;
                     let output_name = target_names
                         .get(output_idx)
                         .cloned()
@@ -286,6 +264,81 @@ impl JoinReorder {
             projection_exprs,
             input_plan,
         )?))
+    }
+
+    fn rewrite_expr_to_final_map(
+        &self,
+        expr: Arc<dyn datafusion::physical_expr::PhysicalExpr>,
+        input_map: &ColumnMap,
+        final_map: &ColumnMap,
+        input_plan: &Arc<dyn ExecutionPlan>,
+    ) -> Result<Arc<dyn datafusion::physical_expr::PhysicalExpr>> {
+        use std::collections::HashMap;
+
+        let mut rewritten_cache: HashMap<usize, Arc<dyn datafusion::physical_expr::PhysicalExpr>> =
+            HashMap::new();
+
+        let transformed = expr.transform(|node| {
+            if let Some(col) = node.as_any().downcast_ref::<Column>() {
+                let original_entry = input_map.get(col.index()).ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                        "Expression column index {} out of bounds for its input_map (len {})",
+                        col.index(),
+                        input_map.len()
+                    ))
+                })?;
+
+                match original_entry {
+                    ColumnMapEntry::Stable {
+                        relation_id,
+                        column_index,
+                    } => {
+                        let stable_target = StableColumn {
+                            relation_id: *relation_id,
+                            column_index: *column_index,
+                            name: col.name().to_string(),
+                        };
+
+                        let new_physical_idx =
+                            find_physical_index(&stable_target, final_map).ok_or_else(|| {
+                                DataFusionError::Internal(format!(
+                                    "Failed to find rewritten physical index for stable column R{}.C{}",
+                                    relation_id, column_index
+                                ))
+                            })?;
+
+                        let new_name = input_plan
+                            .schema()
+                            .field(new_physical_idx)
+                            .name()
+                            .to_string();
+                        let new_col = Column::new(&new_name, new_physical_idx);
+                        return Ok(Transformed::yes(Arc::new(new_col)));
+                    }
+                    ColumnMapEntry::Expression {
+                        expr: nested_expr,
+                        input_map: nested_input_map,
+                    } => {
+                        if let Some(cached) = rewritten_cache.get(&col.index()) {
+                            return Ok(Transformed::yes(Arc::clone(cached)));
+                        }
+
+                        // Inline nested derived expression by rewriting it against the final join schema.
+                        let rewritten_nested = self.rewrite_expr_to_final_map(
+                            Arc::clone(nested_expr),
+                            nested_input_map,
+                            final_map,
+                            input_plan,
+                        )?;
+                        rewritten_cache.insert(col.index(), Arc::clone(&rewritten_nested));
+                        return Ok(Transformed::yes(rewritten_nested));
+                    }
+                }
+            }
+            Ok(Transformed::no(node))
+        })?;
+
+        Ok(transformed.data)
     }
 }
 
@@ -313,14 +366,32 @@ mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::common::NullEquality;
     use datafusion::logical_expr::{JoinType, Operator};
-    use datafusion::physical_expr::expressions::{BinaryExpr, Column};
+    use datafusion::physical_expr::expressions::{BinaryExpr, Column, Literal};
+    use datafusion::physical_expr::utils::collect_columns;
     use datafusion::physical_expr::PhysicalExpr;
     use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
     use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion::physical_plan::filter::FilterExec;
     use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
     use datafusion::physical_plan::projection::ProjectionExec;
+    use datafusion::scalar::ScalarValue;
 
     use super::*;
+
+    fn find_node_by_name(
+        plan: Arc<dyn ExecutionPlan>,
+        name: &str,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        if plan.name() == name {
+            return Some(plan);
+        }
+        for child in plan.children() {
+            if let Some(found) = find_node_by_name(Arc::clone(child), name) {
+                return Some(found);
+            }
+        }
+        None
+    }
 
     /// Test that the recursive optimizer correctly processes plans with boundary nodes
     /// This test verifies that the optimizer doesn't crash and preserves plan structure
@@ -557,6 +628,93 @@ mod tests {
         Ok(())
     }
 
+    /// Regression test: nested reorderable regions inside leaf nodes of a higher-level region
+    /// must still be optimized. This requires a bottom-up traversal.
+    #[test]
+    fn test_nested_reorderable_region_under_leaf_is_optimized() -> Result<()> {
+        // Tables use the same simple schema so join conditions can consistently reference `id`.
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+
+        let t1 = Arc::new(EmptyExec::new(schema.clone()));
+        let t2 = Arc::new(EmptyExec::new(schema.clone()));
+        let t3 = Arc::new(EmptyExec::new(schema.clone()));
+        let t4 = Arc::new(EmptyExec::new(schema.clone()));
+        let t5 = Arc::new(EmptyExec::new(schema.clone()));
+
+        let on = vec![(
+            Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
+            Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
+        )];
+
+        // Build a nested reorderable region (3 relations): (t1 ⋈ t2) ⋈ t3
+        let join12 = Arc::new(HashJoinExec::try_new(
+            t1,
+            t2,
+            on.clone(),
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Auto,
+            NullEquality::NullEqualsNothing,
+        )?);
+        let join123 = Arc::new(HashJoinExec::try_new(
+            join12,
+            t3,
+            on.clone(),
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Auto,
+            NullEquality::NullEqualsNothing,
+        )?);
+
+        // Wrap the nested joins in a boundary node that GraphBuilder treats as a leaf.
+        // FilterExec is such a boundary (it has a child but isn't "see-through" for graph building).
+        let pred: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("id", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(0)))),
+        ));
+        let filtered_subplan = Arc::new(FilterExec::try_new(pred, join123)?);
+
+        // Higher-level reorderable region (3 relations): (filtered_subplan ⋈ t4) ⋈ t5
+        let join4 = Arc::new(HashJoinExec::try_new(
+            filtered_subplan,
+            t4,
+            on.clone(),
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Auto,
+            NullEquality::NullEqualsNothing,
+        )?);
+        let root = Arc::new(HashJoinExec::try_new(
+            join4,
+            t5,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Auto,
+            NullEquality::NullEqualsNothing,
+        )?);
+
+        let join_reorder = JoinReorder::new();
+        let optimized_plan = join_reorder.find_and_optimize_regions(root)?;
+
+        // Root region should be optimized (>= 3 relations), producing a ProjectionExec.
+        assert_eq!(optimized_plan.name(), "ProjectionExec");
+
+        // The nested region under FilterExec must also be optimized, producing its own ProjectionExec.
+        #[expect(clippy::expect_used)]
+        let filter_node = find_node_by_name(optimized_plan, "FilterExec")
+            .expect("expected FilterExec leaf to remain in the optimized plan");
+        assert_eq!(filter_node.children().len(), 1);
+        assert_eq!(filter_node.children()[0].name(), "ProjectionExec");
+
+        Ok(())
+    }
+
     /// Test that the join reorder optimizer correctly handles complex expressions in projections
     /// This test verifies that expressions referencing columns from different tables are properly
     /// rewritten when the join order changes.
@@ -649,6 +807,105 @@ mod tests {
         assert_eq!(optimized_plan.schema().field(1).name(), "c_name");
 
         // The test passes if we reach here without panicking or returning an error
+        Ok(())
+    }
+
+    #[test]
+    fn test_build_final_projection_rewrites_nested_derived_expressions() -> Result<()> {
+        // Simulate:
+        // - inner projection defines `new_uid_val = uid + inc`
+        // - outer projection uses it again: `result = new_uid_val + extra`
+        //
+        // This used to error with:
+        //   "Rewriting nested complex expressions is not supported"
+
+        let join_output_schema = Arc::new(Schema::new(vec![
+            Field::new("uid", DataType::Int32, false),
+            Field::new("inc", DataType::Int32, false),
+            Field::new("extra", DataType::Int32, false),
+        ]));
+        let input_plan: Arc<dyn datafusion::physical_plan::ExecutionPlan> =
+            Arc::new(EmptyExec::new(join_output_schema));
+
+        // Final join output columns map to stable ids.
+        let final_map: ColumnMap = vec![
+            ColumnMapEntry::Stable {
+                relation_id: 0,
+                column_index: 0,
+            }, // uid
+            ColumnMapEntry::Stable {
+                relation_id: 1,
+                column_index: 0,
+            }, // inc
+            ColumnMapEntry::Stable {
+                relation_id: 2,
+                column_index: 0,
+            }, // extra
+        ];
+
+        // Nested derived expression: uid + inc (refers to nested_input_map indices 0 and 1).
+        let nested_input_map: ColumnMap = vec![
+            ColumnMapEntry::Stable {
+                relation_id: 0,
+                column_index: 0,
+            },
+            ColumnMapEntry::Stable {
+                relation_id: 1,
+                column_index: 0,
+            },
+        ];
+        let nested_expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("uid", 0)),
+            Operator::Plus,
+            Arc::new(Column::new("inc", 1)),
+        ));
+
+        // Outer projection input schema has 2 cols: [new_uid_val, extra].
+        // new_uid_val is Expression (nested), extra is Stable.
+        let outer_input_map: ColumnMap = vec![
+            ColumnMapEntry::Expression {
+                expr: Arc::clone(&nested_expr),
+                input_map: nested_input_map,
+            },
+            ColumnMapEntry::Stable {
+                relation_id: 2,
+                column_index: 0,
+            },
+        ];
+
+        // Outer expression: new_uid_val + extra (refers to outer_input_map indices 0 and 1).
+        let outer_expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("new_uid_val", 0)),
+            Operator::Plus,
+            Arc::new(Column::new("extra", 1)),
+        ));
+
+        let target_map: ColumnMap = vec![ColumnMapEntry::Expression {
+            expr: outer_expr,
+            input_map: outer_input_map,
+        }];
+
+        let join_reorder = JoinReorder::new();
+        let plan = join_reorder.build_final_projection(
+            Arc::clone(&input_plan),
+            &final_map,
+            &target_map,
+            &["result".to_string()],
+        )?;
+        #[expect(clippy::expect_used)]
+        let proj = plan
+            .as_any()
+            .downcast_ref::<ProjectionExec>()
+            .expect("expected ProjectionExec");
+        assert_eq!(proj.schema().fields().len(), 1);
+        assert_eq!(proj.schema().field(0).name(), "result");
+
+        let cols = collect_columns(&proj.expr()[0].expr);
+        let mut indices: Vec<usize> = cols.iter().map(|c| c.index()).collect();
+        indices.sort_unstable();
+        indices.dedup();
+        assert_eq!(indices, vec![0, 1, 2]);
+
         Ok(())
     }
 }
