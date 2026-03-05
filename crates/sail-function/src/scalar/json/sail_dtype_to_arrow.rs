@@ -1,3 +1,5 @@
+// Copied mostly from PlanResolver to avoid circular imports:  https://github.com/lakehq/sail/blob/f64ccb2233473282f9d3ae2c95e2b90848a6f249/crates/sail-plan/src/resolver/data_type.rs#L61
+// some methods and struct inputs removed
 
 use std::sync::{Arc};
 
