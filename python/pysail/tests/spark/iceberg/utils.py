@@ -17,9 +17,13 @@ def pyiceberg_local_location(path: Path) -> str:
     """Return a local location string that PyIceberg can use across platforms."""
     resolved = path.resolve()
     if os.name == "nt":
-        # PyIceberg parses file URIs into '/C:/...' on Windows, which pyarrow rejects.
-        # Use an absolute local path instead.
-        return str(resolved)
+        # PyIceberg's PyArrowFileIO treats raw "C:\\..." paths as scheme "c".
+        # Use "file://C:/..." so parse_location returns scheme=file and path "C:/...".
+        drive = resolved.drive.rstrip(":")
+        tail = resolved.as_posix().lstrip("/")
+        if drive:
+            return f"file://{drive}:/{tail.split(':/', 1)[-1]}"
+        return resolved.as_uri()
     return resolved.as_uri()
 
 
