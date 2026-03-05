@@ -24,6 +24,7 @@ mod write_v1;
 mod write_v2;
 
 impl PlanResolver<'_> {
+    /// Resolves a command plan into a logical plan.
     pub(super) async fn resolve_command_plan(
         &self,
         plan: spec::CommandPlan,

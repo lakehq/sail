@@ -96,7 +96,7 @@ fn negated(expr: spec::Expr) -> spec::Expr {
     })
 }
 
-#[allow(clippy::type_complexity)]
+#[expect(clippy::type_complexity)]
 pub(crate) fn from_ast_function_arguments(
     args: impl IntoIterator<Item = FunctionArgument>,
 ) -> SqlResult<(Vec<spec::Expr>, Vec<(spec::Identifier, spec::Expr)>)> {
@@ -814,6 +814,9 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         AtomExpr::DateLiteral(_, value) => Ok(spec::Expr::UnresolvedDate {
             value: from_ast_string(value)?,
         }),
+        AtomExpr::TimeLiteral(_, value) => Ok(spec::Expr::UnresolvedTime {
+            value: from_ast_string(value)?,
+        }),
         AtomExpr::Function(function) => {
             let FunctionExpr {
                 name,
@@ -920,7 +923,9 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                             .into_iter()
                             .map(from_ast_order_by)
                             .collect::<SqlResult<Vec<_>>>()?;
-                        let frame = window_frame.map(from_ast_window_frame).transpose()?;
+                        let frame = window_frame
+                            .map(|f| from_ast_window_frame(*f))
+                            .transpose()?;
                         spec::Window::Unnamed {
                             cluster_by,
                             partition_by,
@@ -954,6 +959,9 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
             name: spec::ObjectName::bare(x.value),
             plan_id: None,
             is_metadata_column: false,
+        }),
+        AtomExpr::IdentifierClause(_, _, expr, _) => Ok(spec::Expr::IdentifierClause {
+            expr: Box::new(from_ast_expression(*expr)?),
         }),
     }
 }

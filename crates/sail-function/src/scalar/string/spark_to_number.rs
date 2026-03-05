@@ -27,7 +27,7 @@ pub struct SparkToNumber {
 
 lazy_static! {
     static ref FORMAT_REGEX: Regex = {
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         Regex::new(r"^(?<sign_left>MI|S)?(?<currency_left>L|\$)?(?<numbers>[09G,]+)(?<dot>[.D])?(?<decimals>[09]+)?(?<currency_right>L|\$)?(?<sign_right>PR|MI|S)?$")
             .map_err(|e| exec_datafusion_err!("Failed to compile regex: {e}"))
             .unwrap()

@@ -3,7 +3,7 @@ use datafusion::common::Result;
 use datafusion_common::DataFusionError;
 use tokio::sync::oneshot;
 
-use crate::system::catalog::{JobRow, SessionRow, StageRow, TaskRow, WorkerRow};
+use crate::system::catalog::{JobRow, OptionRow, SessionRow, StageRow, TaskRow, WorkerRow};
 use crate::system::predicate::Predicate;
 
 /// A trait for observing the state of a component.
@@ -60,6 +60,11 @@ pub enum SessionManagerObserver {
         fetch: usize,
         result: oneshot::Sender<Result<Vec<WorkerRow>>>,
     },
+    Options {
+        key: Predicate<String>,
+        fetch: usize,
+        result: oneshot::Sender<Result<Vec<OptionRow>>>,
+    },
 }
 
 impl Observer for SessionManagerObserver {
@@ -80,6 +85,9 @@ impl Observer for SessionManagerObserver {
             SessionManagerObserver::Workers { result, .. } => {
                 let _ = result.send(Ok(vec![]));
             }
+            SessionManagerObserver::Options { result, .. } => {
+                let _ = result.send(Ok(vec![]));
+            }
         }
     }
 
@@ -98,6 +106,9 @@ impl Observer for SessionManagerObserver {
                 let _ = result.send(Err(e));
             }
             SessionManagerObserver::Workers { result, .. } => {
+                let _ = result.send(Err(e));
+            }
+            SessionManagerObserver::Options { result, .. } => {
                 let _ = result.send(Err(e));
             }
         }

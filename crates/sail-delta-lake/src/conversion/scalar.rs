@@ -307,7 +307,6 @@ impl ScalarExt for Scalar {
                 Value::Object(map)
             }
             Self::Array(array_data) => {
-                #[allow(deprecated)]
                 let values: Vec<Value> = array_data
                     .array_elements()
                     .iter()
