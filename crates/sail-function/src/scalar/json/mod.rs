@@ -2,6 +2,7 @@ mod json_as_text;
 mod json_length;
 mod json_object_keys;
 mod to_json;
+mod schema_to_json;
 
 mod common;
 mod common_union;
