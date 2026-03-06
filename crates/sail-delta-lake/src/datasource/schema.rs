@@ -24,7 +24,7 @@ use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef, SchemaRef as ArrowSchemaRef,
 };
 
-use crate::kernel::snapshot::{EagerSnapshot, LogDataHandler, Snapshot};
+use crate::kernel::snapshot::{EagerSnapshot, Snapshot};
 use crate::schema::arrow_schema_reorder_partitions;
 use crate::spec::{DeltaError as DeltaTableError, DeltaResult};
 use crate::table::DeltaTableState;
@@ -65,16 +65,6 @@ impl DataFusionMixins for DeltaTableState {
 
     fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
         arrow_schema_reorder_partitions(self.schema(), self.metadata().partition_columns(), false)
-    }
-}
-
-impl DataFusionMixins for LogDataHandler<'_> {
-    fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        unimplemented!("arrow_schema for LogDataHandler");
-    }
-
-    fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        unimplemented!("input_schema for LogDataHandler");
     }
 }
 

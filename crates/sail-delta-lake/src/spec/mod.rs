@@ -13,6 +13,7 @@
 pub mod actions;
 pub mod checkpoint;
 pub mod error;
+pub mod fields;
 pub mod log;
 pub mod metadata;
 pub mod operation;

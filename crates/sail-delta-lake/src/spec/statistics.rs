@@ -2,6 +2,9 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::spec::fields::{
+    STATS_FIELD_MAX_VALUES, STATS_FIELD_MIN_VALUES, STATS_FIELD_NULL_COUNT, STATS_FIELD_NUM_RECORDS,
+};
 use crate::spec::{
     ColumnName, DataSkippingNumIndexedCols, DataType, PrimitiveType, Schema, StructField,
     StructType, TableProperties,
@@ -111,15 +114,27 @@ pub(crate) fn stats_schema(
     table_properties: &TableProperties,
 ) -> crate::spec::DeltaResult<Schema> {
     let mut fields = Vec::with_capacity(4);
-    fields.push(StructField::nullable("numRecords", DataType::LONG));
+    fields.push(StructField::nullable(
+        STATS_FIELD_NUM_RECORDS,
+        DataType::LONG,
+    ));
 
     if let Some(base_schema) = base_stats_schema(physical_file_schema, table_properties) {
         if let Some(null_count_schema) = null_count_stats_schema(&base_schema) {
-            fields.push(StructField::nullable("nullCount", null_count_schema));
+            fields.push(StructField::nullable(
+                STATS_FIELD_NULL_COUNT,
+                null_count_schema,
+            ));
         }
         if let Some(min_max_schema) = min_max_stats_schema(&base_schema) {
-            fields.push(StructField::nullable("minValues", min_max_schema.clone()));
-            fields.push(StructField::nullable("maxValues", min_max_schema));
+            fields.push(StructField::nullable(
+                STATS_FIELD_MIN_VALUES,
+                min_max_schema.clone(),
+            ));
+            fields.push(StructField::nullable(
+                STATS_FIELD_MAX_VALUES,
+                min_max_schema,
+            ));
         }
     }
     StructType::try_new(fields)

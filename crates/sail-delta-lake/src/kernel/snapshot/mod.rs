@@ -17,42 +17,30 @@
 // limitations under the License.
 
 use std::collections::{BTreeMap, HashMap};
-use std::io::{BufRead, BufReader, Cursor};
-use std::pin::Pin;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{
-    new_empty_array, Array, ArrayRef, MapArray, StringArray, StructArray,
-};
-use datafusion::arrow::datatypes::{
-    DataType as ArrowDataType, Field, FieldRef, Fields, Schema as ArrowSchema,
-};
-use datafusion::arrow::json::ReaderBuilder as JsonReaderBuilder;
+use datafusion::arrow::datatypes::Schema as ArrowSchema;
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::common::scalar::ScalarValue;
 use futures::stream::BoxStream;
-use futures::{StreamExt, TryStreamExt};
-use object_store::path::Path;
-use serde::{Deserialize, Serialize};
+use futures::StreamExt;
 use url::Url;
 
-use crate::conversion::ScalarConverter;
 use crate::kernel::checkpoints::{latest_replayable_version, load_replayed_table_state};
 use crate::kernel::snapshot::iterators::LogicalFileView;
 pub use crate::kernel::snapshot::log_data::LogDataHandler;
 use crate::kernel::{DeltaTableConfig, PredicateRef, SchemaRef};
 use crate::spec::{
-    delta_log_root_path, parse_commit_version, stats_schema, Add, ColumnMappingMode, CommitInfo,
-    DataType, DeltaError as DeltaTableError, DeltaResult, Metadata, Protocol, Remove, StorageType,
-    StructType, TableProperties, Transaction,
+    Add, ColumnMappingMode, DeltaError as DeltaTableError, DeltaResult, Metadata, Protocol, Remove,
+    TableProperties, Transaction,
 };
 use crate::storage::LogStore;
 
+mod deletion_vector;
+mod file_actions;
 pub mod iterators;
 pub mod log_data;
-
-pub(crate) type SendableRBStream =
-    Pin<Box<dyn futures::Stream<Item = DeltaResult<RecordBatch>> + Send>>;
+mod materialize;
+mod stats;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SnapshotTableConfiguration {
@@ -193,11 +181,6 @@ impl Snapshot {
         &self.config
     }
 
-    /// Get the table root of the snapshot.
-    pub(crate) fn table_root_path(&self) -> DeltaResult<Path> {
-        Ok(Path::from_url_path(self.table_url.path())?)
-    }
-
     /// Well known properties of the table.
     pub fn table_properties(&self) -> &TableProperties {
         self.table_configuration.table_properties()
@@ -205,99 +188,6 @@ impl Snapshot {
 
     pub fn table_configuration(&self) -> &SnapshotTableConfiguration {
         &self.table_configuration
-    }
-
-    fn build_files_batch_from_adds(&self, adds: &[Add]) -> DeltaResult<RecordBatch> {
-        let rows = adds
-            .iter()
-            .cloned()
-            .map(SnapshotAddRow::from)
-            .collect::<Vec<_>>();
-        let raw = encode_snapshot_add_rows(&rows)?;
-        parse_scan_row_columns(raw, self)
-    }
-
-    fn build_active_files_batch(&self) -> DeltaResult<RecordBatch> {
-        self.build_files_batch_from_adds(&self.active_adds)
-    }
-
-    fn build_empty_files_batch(&self) -> DeltaResult<RecordBatch> {
-        self.build_files_batch_from_adds(&[])
-    }
-
-    /// Get the active files for the current snapshot.
-    #[expect(dead_code)]
-    pub fn files(
-        &self,
-        _log_store: &dyn LogStore,
-        predicate: Option<PredicateRef>,
-    ) -> SendableRBStream {
-        if predicate.is_some() {
-            return Box::pin(futures::stream::once(async {
-                Err(DeltaTableError::generic(
-                    "Snapshot::files predicate pushdown is not supported in native replay mode",
-                ))
-            }));
-        }
-        match self.build_active_files_batch() {
-            Ok(batch) => Box::pin(futures::stream::once(async { Ok(batch) })),
-            Err(err) => Box::pin(futures::stream::once(async { Err(err) })),
-        }
-    }
-
-    /// Get the commit infos in the snapshot.
-    #[expect(dead_code)]
-    pub(crate) async fn commit_infos(
-        &self,
-        log_store: &dyn LogStore,
-        limit: Option<usize>,
-    ) -> DeltaResult<BoxStream<'_, DeltaResult<Option<CommitInfo>>>> {
-        let store = log_store.root_object_store(None);
-        let log_root = self
-            .table_root_path()?
-            .child(delta_log_root_path().as_ref());
-        let start_from = log_root.child(
-            format!(
-                "{:020}",
-                limit
-                    .map(|l| (self.version() - l as i64 + 1).max(0))
-                    .unwrap_or(0)
-            )
-            .as_str(),
-        );
-        let dummy_url = url::Url::parse("memory:///")
-            .map_err(|e| DeltaTableError::generic(format!("Failed to parse dummy URL: {e}")))?;
-        let mut commit_files = Vec::new();
-        for meta in store
-            .list_with_offset(Some(&log_root), &start_from)
-            .try_collect::<Vec<_>>()
-            .await?
-        {
-            let location = dummy_url
-                .join(meta.location.as_ref())
-                .map_err(|e| DeltaTableError::generic(format!("Failed to join URL path: {e}")))?;
-            if parse_commit_version_from_path(location.path()).is_some() {
-                commit_files.push(meta);
-            }
-        }
-        commit_files.sort_unstable_by(|a, b| b.location.cmp(&a.location));
-        Ok(futures::stream::iter(commit_files)
-            .map(move |meta| {
-                let store = store.clone();
-                async move {
-                    let commit_log_bytes = store.get(&meta.location).await?.bytes().await?;
-                    let reader = BufReader::new(Cursor::new(commit_log_bytes));
-                    for line in reader.lines() {
-                        let action: crate::spec::Action = serde_json::from_str(line?.as_str())?;
-                        if let crate::spec::Action::CommitInfo(commit_info) = action {
-                            return Ok::<_, DeltaTableError>(Some(commit_info));
-                        }
-                    }
-                    Ok(None)
-                }
-            })
-            .buffered(self.config.log_buffer_size)
-            .boxed())
     }
 
     pub(crate) fn tombstones(
@@ -322,11 +212,6 @@ impl Snapshot {
     }
 }
 
-fn parse_commit_version_from_path(path: &str) -> Option<i64> {
-    let filename = path.rsplit('/').next()?;
-    parse_commit_version(filename)
-}
-
 /// A snapshot of a Delta table that has been eagerly loaded into memory.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EagerSnapshot {
@@ -342,12 +227,12 @@ impl EagerSnapshot {
         version: Option<i64>,
     ) -> DeltaResult<Self> {
         let snapshot = Snapshot::try_new(log_store, config.clone(), version).await?;
-        let files = if config.require_files {
-            snapshot.build_active_files_batch()?
-        } else {
-            snapshot.build_empty_files_batch()?
+        let mut eager = Self {
+            snapshot,
+            files: RecordBatch::new_empty(Arc::new(ArrowSchema::empty())),
         };
-        Ok(Self { snapshot, files })
+        eager.refresh_files()?;
+        Ok(eager)
     }
 
     /// Update the snapshot to the given version.
@@ -357,12 +242,7 @@ impl EagerSnapshot {
         target_version: Option<u64>,
     ) -> DeltaResult<()> {
         self.snapshot.update(log_store, target_version).await?;
-        self.files = if self.snapshot.load_config().require_files {
-            self.snapshot.build_active_files_batch()?
-        } else {
-            self.snapshot.build_empty_files_batch()?
-        };
-        Ok(())
+        self.refresh_files()
     }
 
     pub(crate) fn snapshot(&self) -> &Snapshot {
@@ -434,418 +314,5 @@ impl EagerSnapshot {
         self.snapshot
             .application_transaction_version(log_store, app_id.to_string())
             .await
-    }
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SnapshotDeletionVectorRow {
-    storage_type: String,
-    path_or_inline_dv: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    offset: Option<i32>,
-    size_in_bytes: i32,
-    cardinality: i64,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SnapshotAddRow {
-    #[serde(with = "serde_path_compat")]
-    path: String,
-    partition_values: HashMap<String, Option<String>>,
-    size: i64,
-    modification_time: i64,
-    data_change: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stats: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tags: Option<HashMap<String, Option<String>>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    deletion_vector: Option<SnapshotDeletionVectorRow>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    base_row_id: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    default_row_commit_version: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    clustering_provider: Option<String>,
-}
-
-impl From<Add> for SnapshotAddRow {
-    fn from(value: Add) -> Self {
-        Self {
-            path: value.path,
-            partition_values: value.partition_values,
-            size: value.size,
-            modification_time: value.modification_time,
-            data_change: value.data_change,
-            stats: value.stats,
-            tags: value.tags,
-            deletion_vector: value.deletion_vector.map(|dv| SnapshotDeletionVectorRow {
-                storage_type: dv.storage_type.as_ref().to_string(),
-                path_or_inline_dv: dv.path_or_inline_dv,
-                offset: dv.offset,
-                size_in_bytes: dv.size_in_bytes,
-                cardinality: dv.cardinality,
-            }),
-            base_row_id: value.base_row_id,
-            default_row_commit_version: value.default_row_commit_version,
-            clustering_provider: value.clustering_provider,
-        }
-    }
-}
-
-fn snapshot_add_probe_row() -> SnapshotAddRow {
-    SnapshotAddRow {
-        path: "_probe.parquet".to_string(),
-        partition_values: HashMap::from([("p".to_string(), Some("x".to_string()))]),
-        size: 0,
-        modification_time: 0,
-        data_change: true,
-        stats: Some("{}".to_string()),
-        tags: Some(HashMap::from([("t".to_string(), Some("x".to_string()))])),
-        deletion_vector: Some(SnapshotDeletionVectorRow {
-            storage_type: StorageType::UuidRelativePath.as_ref().to_string(),
-            path_or_inline_dv: "dv.bin".to_string(),
-            offset: Some(0),
-            size_in_bytes: 1,
-            cardinality: 1,
-        }),
-        base_row_id: Some(0),
-        default_row_commit_version: Some(0),
-        clustering_provider: Some("none".to_string()),
-    }
-}
-
-fn snapshot_add_tracing_options() -> DeltaResult<serde_arrow::schema::TracingOptions> {
-    fn map_utf8_utf8(field_name: &str, nullable: bool) -> Field {
-        let entry_struct = ArrowDataType::Struct(
-            vec![
-                Arc::new(Field::new("key", ArrowDataType::Utf8, false)),
-                Arc::new(Field::new("value", ArrowDataType::Utf8, true)),
-            ]
-            .into(),
-        );
-        Field::new(
-            field_name,
-            ArrowDataType::Map(
-                Arc::new(Field::new("key_value", entry_struct, false)),
-                false,
-            ),
-            nullable,
-        )
-    }
-
-    serde_arrow::schema::TracingOptions::default()
-        .map_as_struct(false)
-        .allow_null_fields(true)
-        .strings_as_large_utf8(false)
-        .sequence_as_large_list(false)
-        .overwrite("partitionValues", map_utf8_utf8("partitionValues", false))
-        .map_err(DeltaTableError::generic_err)?
-        .overwrite("tags", map_utf8_utf8("tags", true))
-        .map_err(DeltaTableError::generic_err)
-}
-
-fn encode_snapshot_add_rows(rows: &[SnapshotAddRow]) -> DeltaResult<RecordBatch> {
-    use serde_arrow::schema::SchemaLike;
-
-    let mut samples = rows.to_vec();
-    samples.push(snapshot_add_probe_row());
-    let fields = Vec::<FieldRef>::from_samples(&samples, snapshot_add_tracing_options()?)
-        .map_err(DeltaTableError::generic_err)?;
-    let owned_rows = rows.to_vec();
-    serde_arrow::to_record_batch(&fields, &owned_rows).map_err(DeltaTableError::generic_err)
-}
-
-fn build_partition_schema(
-    schema: &ArrowSchema,
-    partition_columns: &[String],
-) -> DeltaResult<Option<ArrowSchema>> {
-    if partition_columns.is_empty() {
-        return Ok(None);
-    }
-    let fields = partition_columns
-        .iter()
-        .map(|col| {
-            schema
-                .field_with_name(col)
-                .cloned()
-                .map_err(|_| DeltaTableError::missing_column(col))
-        })
-        .collect::<DeltaResult<Vec<_>>>()?;
-    Ok(Some(ArrowSchema::new(fields)))
-}
-
-fn build_stats_source_schema(snapshot: &Snapshot) -> DeltaResult<ArrowSchema> {
-    use crate::schema::make_physical_arrow_schema;
-    let partition_columns = snapshot.metadata().partition_columns();
-    let mode = snapshot.table_configuration.column_mapping_mode();
-    let non_partition_fields: Vec<Field> = snapshot
-        .schema()
-        .fields()
-        .iter()
-        .filter(|field| !partition_columns.contains(field.name()))
-        .map(|f| f.as_ref().clone())
-        .collect();
-    let logical_non_partition = ArrowSchema::new(non_partition_fields);
-    Ok(make_physical_arrow_schema(&logical_non_partition, mode))
-}
-
-fn parse_scan_row_columns(raw: RecordBatch, snapshot: &Snapshot) -> DeltaResult<RecordBatch> {
-    let mut fields = raw.schema().fields().to_vec();
-    let mut columns = raw.columns().to_vec();
-    let mode = snapshot.table_configuration.column_mapping_mode();
-
-    if let Some((stats_idx, _)) = raw.schema_ref().column_with_name("stats") {
-        let stats_source_arrow = build_stats_source_schema(snapshot)?;
-        let stats_source_kernel = crate::schema::logical_arrow_to_kernel(&stats_source_arrow)?;
-        let stats_schema = Arc::new(stats_schema(
-            &stats_source_kernel,
-            snapshot.table_properties(),
-        )?);
-        let arrow_stats_schema = Arc::new(ArrowSchema::try_from(stats_schema.as_ref())?);
-        let stats_batch = raw.project(&[stats_idx])?;
-        let stats_json = stats_batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or_else(|| {
-                DeltaTableError::schema("expected Utf8 stats column when parsing stats".to_string())
-            })?;
-        let mut json_lines = String::new();
-        for value in stats_json.iter() {
-            if let Some(value) = value {
-                json_lines.push_str(value);
-            } else {
-                json_lines.push_str("{}");
-            }
-            json_lines.push('\n');
-        }
-        let mut reader = JsonReaderBuilder::new(Arc::clone(&arrow_stats_schema))
-            .with_batch_size(stats_batch.num_rows().max(1))
-            .build(Cursor::new(json_lines))
-            .map_err(DeltaTableError::generic_err)?;
-        let parsed_batch = match reader.next() {
-            Some(batch) => batch.map_err(DeltaTableError::generic_err)?,
-            None => RecordBatch::new_empty(arrow_stats_schema),
-        };
-        let stats_array: Arc<StructArray> = Arc::new(parsed_batch.into());
-        fields.push(Arc::new(Field::new(
-            "stats_parsed",
-            stats_array.data_type().to_owned(),
-            true,
-        )));
-        columns.push(stats_array);
-    }
-
-    if let Some(partition_schema_arrow) =
-        build_partition_schema(snapshot.schema(), snapshot.metadata().partition_columns())?
-    {
-        let partition_schema = crate::schema::logical_arrow_to_kernel(&partition_schema_arrow)?;
-        let partition_array =
-            parse_partition_values_array(&raw, &partition_schema, "partitionValues", mode)?;
-        fields.push(Arc::new(Field::new(
-            "partitionValues_parsed",
-            partition_array.data_type().to_owned(),
-            false,
-        )));
-        columns.push(Arc::new(partition_array));
-    }
-
-    Ok(RecordBatch::try_new(
-        Arc::new(ArrowSchema::new(fields)),
-        columns,
-    )?)
-}
-
-fn parse_partition_values_array(
-    batch: &RecordBatch,
-    partition_schema: &StructType,
-    path: &str,
-    column_mapping_mode: ColumnMappingMode,
-) -> DeltaResult<StructArray> {
-    let partitions = map_array_from_path(batch, path)?;
-    let num_rows = partitions.len();
-
-    let mut raw_collected: HashMap<String, Vec<Option<String>>> = partition_schema
-        .fields()
-        .map(|field| {
-            (
-                field.physical_name(column_mapping_mode).to_string(),
-                Vec::with_capacity(num_rows),
-            )
-        })
-        .collect();
-
-    for row in 0..num_rows {
-        if partitions.is_null(row) {
-            return Err(DeltaTableError::generic(
-                "Expected partition values map, found null entry.",
-            ));
-        }
-        let raw_values = collect_partition_row(&partitions.value(row))?;
-
-        for field in partition_schema.fields() {
-            if !matches!(field.data_type(), DataType::Primitive(_)) {
-                return Err(DeltaTableError::generic(
-                    "nested partitioning values are not supported",
-                ));
-            }
-            let physical_name = field.physical_name(column_mapping_mode);
-            let value = raw_values
-                .get(physical_name)
-                .or_else(|| raw_values.get(field.name()))
-                .and_then(Clone::clone);
-            raw_collected
-                .get_mut(physical_name)
-                .ok_or_else(|| DeltaTableError::schema("partition field missing".to_string()))?
-                .push(value);
-        }
-    }
-
-    let arrow_fields: Fields = Fields::from(
-        partition_schema
-            .fields()
-            .map(Field::try_from)
-            .collect::<Result<Vec<Field>, _>>()?,
-    );
-
-    let columns: Vec<ArrayRef> = partition_schema
-        .fields()
-        .zip(arrow_fields.iter())
-        .map(|(field, arrow_field)| {
-            let physical_name = field.physical_name(column_mapping_mode);
-            let raw_values = raw_collected
-                .get(physical_name)
-                .ok_or_else(|| DeltaTableError::schema("partition field missing".to_string()))?;
-            let arrow_dt = arrow_field.data_type();
-            let scalar_values: Vec<ScalarValue> = raw_values
-                .iter()
-                .map(|value| match value {
-                    Some(raw) => ScalarConverter::string_to_arrow_scalar_value(raw, arrow_dt)
-                        .map_err(|e| {
-                            DeltaTableError::generic(format!("partition value parse error: {e}"))
-                        }),
-                    None => ScalarValue::try_new_null(arrow_dt)
-                        .map_err(|e| DeltaTableError::generic(format!("null scalar error: {e}"))),
-                })
-                .collect::<DeltaResult<Vec<_>>>()?;
-            let array = if scalar_values.is_empty() {
-                new_empty_array(arrow_dt)
-            } else {
-                ScalarValue::iter_to_array(scalar_values)
-                    .map_err(|e| DeltaTableError::generic(format!("scalar to array error: {e}")))?
-            };
-            let array = if array.data_type() != arrow_dt {
-                datafusion::arrow::compute::cast(&array, arrow_dt)
-                    .map_err(|e| DeltaTableError::generic(format!("cast error: {e}")))?
-            } else {
-                array
-            };
-            Ok(Arc::new(array) as ArrayRef)
-        })
-        .collect::<DeltaResult<Vec<_>>>()?;
-
-    Ok(StructArray::try_new(arrow_fields, columns, None)?)
-}
-
-fn map_array_from_path<'a>(batch: &'a RecordBatch, path: &str) -> DeltaResult<&'a MapArray> {
-    let mut segments = path.split('.');
-    let first = segments
-        .next()
-        .ok_or_else(|| DeltaTableError::generic("partition column path must not be empty"))?;
-
-    let mut current: &dyn Array = batch
-        .column_by_name(first)
-        .map(|column| column.as_ref())
-        .ok_or_else(|| {
-            DeltaTableError::schema(format!("{first} column not found when parsing partitions"))
-        })?;
-
-    for segment in segments {
-        let struct_array = current
-            .as_any()
-            .downcast_ref::<StructArray>()
-            .ok_or_else(|| {
-                DeltaTableError::schema(format!("Expected struct column while traversing {path}"))
-            })?;
-        current = struct_array
-            .column_by_name(segment)
-            .map(|column| column.as_ref())
-            .ok_or_else(|| {
-                DeltaTableError::schema(format!(
-                    "{segment} column not found while traversing {path}"
-                ))
-            })?;
-    }
-
-    current
-        .as_any()
-        .downcast_ref::<MapArray>()
-        .ok_or_else(|| DeltaTableError::schema(format!("Column {path} is not a map")))
-}
-
-fn collect_partition_row(value: &StructArray) -> DeltaResult<HashMap<String, Option<String>>> {
-    let keys = value
-        .column(0)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .ok_or_else(|| DeltaTableError::schema("map key column is not Utf8".to_string()))?;
-    let values = value
-        .column(1)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .ok_or_else(|| DeltaTableError::schema("map value column is not Utf8".to_string()))?;
-
-    let mut result = HashMap::with_capacity(keys.len());
-    for (key, value) in keys.iter().zip(values.iter()) {
-        if let Some(key) = key {
-            result.insert(key.to_string(), value.map(|entry| entry.to_string()));
-        }
-    }
-    Ok(result)
-}
-
-mod serde_path_compat {
-    use percent_encoding::{percent_decode_str, percent_encode, AsciiSet, CONTROLS};
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    const INVALID: &AsciiSet = &CONTROLS
-        .add(b'\\')
-        .add(b'{')
-        .add(b'^')
-        .add(b'}')
-        .add(b'%')
-        .add(b'`')
-        .add(b']')
-        .add(b'"')
-        .add(b'>')
-        .add(b'[')
-        .add(b'<')
-        .add(b'#')
-        .add(b'|')
-        .add(b'\r')
-        .add(b'\n')
-        .add(b'*')
-        .add(b'?');
-
-    pub fn serialize<S>(value: &str, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let encoded = percent_encode(value.as_bytes(), INVALID).to_string();
-        String::serialize(&encoded, serializer)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<String, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        percent_decode_str(&s)
-            .decode_utf8()
-            .map(|v| v.to_string())
-            .map_err(serde::de::Error::custom)
     }
 }

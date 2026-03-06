@@ -31,6 +31,11 @@ use futures::TryStreamExt;
 
 use crate::kernel::snapshot::EagerSnapshot;
 use crate::kernel::DeltaTableConfig;
+use crate::spec::fields::{
+    FIELD_NAME_MODIFICATION_TIME, FIELD_NAME_PARTITION_VALUES_PARSED, FIELD_NAME_PATH,
+    FIELD_NAME_SIZE, FIELD_NAME_STATS_PARSED, STATS_FIELD_MAX_VALUES, STATS_FIELD_MIN_VALUES,
+    STATS_FIELD_NULL_COUNT, STATS_FIELD_NUM_RECORDS,
+};
 use crate::spec::{
     ColumnMappingMode, ColumnMetadataKey, DeltaError as DeltaTableError, DeltaResult, Remove,
 };
@@ -159,18 +164,30 @@ impl DeltaTableState {
         let mut fields: Vec<FieldRef> = Vec::new();
         let mut columns: Vec<ArrayRef> = Vec::new();
 
-        push_renamed_column(actions, "path", "path", &mut fields, &mut columns)?;
-        push_renamed_column(actions, "size", "size_bytes", &mut fields, &mut columns)?;
         push_renamed_column(
             actions,
-            "modificationTime",
+            FIELD_NAME_PATH,
+            FIELD_NAME_PATH,
+            &mut fields,
+            &mut columns,
+        )?;
+        push_renamed_column(
+            actions,
+            FIELD_NAME_SIZE,
+            "size_bytes",
+            &mut fields,
+            &mut columns,
+        )?;
+        push_renamed_column(
+            actions,
+            FIELD_NAME_MODIFICATION_TIME,
             "modification_time",
             &mut fields,
             &mut columns,
         )?;
 
-        if let Some(stats) = struct_column(actions, "stats_parsed") {
-            let (num_records, nullable) = required_struct_child(stats, "numRecords")?;
+        if let Some(stats) = struct_column(actions, FIELD_NAME_STATS_PARSED) {
+            let (num_records, nullable) = required_struct_child(stats, STATS_FIELD_NUM_RECORDS)?;
             fields.push(Arc::new(Field::new(
                 "num_records",
                 num_records.data_type().clone(),
@@ -178,7 +195,9 @@ impl DeltaTableState {
             )));
             columns.push(num_records);
 
-            if let Some((null_count, nullable)) = optional_struct_child(stats, "nullCount") {
+            if let Some((null_count, nullable)) =
+                optional_struct_child(stats, STATS_FIELD_NULL_COUNT)
+            {
                 fields.push(Arc::new(Field::new(
                     "null_count",
                     null_count.data_type().clone(),
@@ -186,7 +205,9 @@ impl DeltaTableState {
                 )));
                 columns.push(null_count);
             }
-            if let Some((min_values, nullable)) = optional_struct_child(stats, "minValues") {
+            if let Some((min_values, nullable)) =
+                optional_struct_child(stats, STATS_FIELD_MIN_VALUES)
+            {
                 fields.push(Arc::new(Field::new(
                     "min",
                     min_values.data_type().clone(),
@@ -194,7 +215,9 @@ impl DeltaTableState {
                 )));
                 columns.push(min_values);
             }
-            if let Some((max_values, nullable)) = optional_struct_child(stats, "maxValues") {
+            if let Some((max_values, nullable)) =
+                optional_struct_child(stats, STATS_FIELD_MAX_VALUES)
+            {
                 fields.push(Arc::new(Field::new(
                     "max",
                     max_values.data_type().clone(),
@@ -207,7 +230,7 @@ impl DeltaTableState {
         if !self.snapshot.metadata().partition_columns().is_empty() {
             push_renamed_column(
                 actions,
-                "partitionValues_parsed",
+                FIELD_NAME_PARTITION_VALUES_PARSED,
                 "partition",
                 &mut fields,
                 &mut columns,

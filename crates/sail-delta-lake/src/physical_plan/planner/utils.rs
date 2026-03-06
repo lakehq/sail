@@ -46,6 +46,9 @@ use crate::physical_plan::{
     DeltaPhysicalExprAdapterFactory, DeltaWriterExec, COL_LOG_IS_REMOVE, COL_LOG_VERSION,
     COL_REPLAY_PATH,
 };
+use crate::spec::fields::{
+    FIELD_NAME_MODIFICATION_TIME, FIELD_NAME_PATH, FIELD_NAME_SIZE, FIELD_NAME_STATS,
+};
 
 /// Options that control what the log replay pipeline materializes as payload columns.
 ///
@@ -318,14 +321,14 @@ pub async fn build_log_replay_pipeline_with_options(
     // struct's validity to avoid spurious values.
     let add_path = guard_with(
         add_is_not_null.clone(),
-        get_field_expr(add_col_expr.clone(), "path"),
+        get_field_expr(add_col_expr.clone(), FIELD_NAME_PATH),
     );
     let remove_path = remove_col_expr
         .as_ref()
         .map(|e| {
             guard_with(
                 remove_is_not_null.clone(),
-                get_field_expr(e.clone(), "path"),
+                get_field_expr(e.clone(), FIELD_NAME_PATH),
             )
         })
         .unwrap_or_else(lit_utf8_null);
@@ -350,8 +353,8 @@ pub async fn build_log_replay_pipeline_with_options(
         }
     };
     let has_add_field = |name: &str| add_struct_fields.iter().any(|f| f.name() == name);
-    let mod_time_field = if has_add_field("modificationTime") {
-        "modificationTime"
+    let mod_time_field = if has_add_field(FIELD_NAME_MODIFICATION_TIME) {
+        FIELD_NAME_MODIFICATION_TIME
     } else {
         "modification_time"
     };
@@ -360,8 +363,8 @@ pub async fn build_log_replay_pipeline_with_options(
     } else {
         "partition_values"
     };
-    let stats_field = if has_add_field("stats") {
-        "stats"
+    let stats_field = if has_add_field(FIELD_NAME_STATS) {
+        FIELD_NAME_STATS
     } else {
         "stats_json"
     };
@@ -370,12 +373,12 @@ pub async fn build_log_replay_pipeline_with_options(
     let guard_add = |e: Expr| guard_with(add_is_not_null.clone(), e);
 
     let path_expr = simplify(Expr::Cast(Cast::new(
-        Box::new(guard_add(get_add_field("path"))),
+        Box::new(guard_add(get_add_field(FIELD_NAME_PATH))),
         DataType::Utf8,
     )))?;
 
     let size_expr_i64 = Expr::Cast(Cast::new(
-        Box::new(guard_add(get_add_field("size"))),
+        Box::new(guard_add(get_add_field(FIELD_NAME_SIZE))),
         DataType::Int64,
     ));
     let size_expr = simplify(Expr::ScalarFunction(ScalarFunction::new_udf(
