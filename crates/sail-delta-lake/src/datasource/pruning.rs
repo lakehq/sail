@@ -20,6 +20,7 @@
 
 use std::sync::Arc;
 
+use datafusion::arrow::array::{ArrayRef, UInt64Array};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::common::{Result, ToDFSchema};
@@ -31,7 +32,8 @@ use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, DataFusionError};
 use futures::TryStreamExt;
 
-use crate::spec::statistics::{ColumnCountStat, ColumnValueStat, Stats};
+use crate::conversion::ScalarConverter;
+use crate::spec::statistics::Stats;
 use crate::spec::{Add, DeltaResult};
 use crate::storage::LogStoreRef;
 use crate::table::DeltaTableState;
@@ -192,6 +194,87 @@ impl AddStatsPruningStatistics {
             .map(Arc::new)
     }
 
+    fn should_build_stats_for(&self, column: &Column) -> bool {
+        self.field_for(column)
+            .is_some_and(|field| self.referenced_columns.contains(field.name()))
+    }
+
+    fn build_json_stat_array(
+        &self,
+        column: &Column,
+        lookup: impl for<'a> Fn(&'a Stats, &'a str) -> Option<&'a serde_json::Value>,
+    ) -> Option<ArrayRef> {
+        if !self.should_build_stats_for(column) {
+            return None;
+        }
+
+        let field = self.field_for(column)?;
+        let name = column.name();
+        if self.adds.iter().any(|add| add.partition_values.contains_key(name)) {
+            return None;
+        }
+
+        let mut has_value = false;
+        let values: Vec<Option<&serde_json::Value>> = self
+            .stats
+            .iter()
+            .map(|stats| {
+                let value = stats.as_ref().and_then(|stats| lookup(stats, name));
+                has_value |= value.is_some_and(|value: &serde_json::Value| !value.is_null());
+                value
+            })
+            .collect();
+
+        if !has_value {
+            return None;
+        }
+
+        ScalarConverter::json_values_to_array(&values, field.data_type())
+            .ok()
+            .flatten()
+    }
+
+    fn build_count_array(
+        &self,
+        column: &Column,
+        value_at: impl Fn(&Add, Option<&Stats>) -> Option<u64>,
+    ) -> Option<ArrayRef> {
+        if !self.should_build_stats_for(column) {
+            return None;
+        }
+
+        let mut has_value = false;
+        let values: Vec<Option<u64>> = self
+            .adds
+            .iter()
+            .zip(self.stats.iter())
+            .map(|(add, stats)| {
+                let value = value_at(add, stats.as_ref());
+                has_value |= value.is_some();
+                value
+            })
+            .collect();
+
+        has_value.then(|| Arc::new(UInt64Array::from(values)) as ArrayRef)
+    }
+
+    fn build_partition_array(&self, column: &Column) -> Option<ArrayRef> {
+        if !self.should_build_stats_for(column) {
+            return None;
+        }
+
+        let field = self.field_for(column)?;
+        let name = column.name();
+        let values: Option<Vec<Option<&str>>> = self
+            .adds
+            .iter()
+            .map(|add| add.partition_values.get(name).map(|value| value.as_deref()))
+            .collect();
+        let values = values?;
+
+        ScalarConverter::string_values_to_array(&values, field.data_type()).ok()
+    }
+
     fn null_scalar(dt: &datafusion::arrow::datatypes::DataType) -> ScalarValue {
         ScalarValue::try_new_null(dt).unwrap_or(ScalarValue::Null)
     }
@@ -214,19 +297,6 @@ impl AddStatsPruningStatistics {
         }
     }
 
-    fn scalar_from_json(
-        dt: &datafusion::arrow::datatypes::DataType,
-        v: &serde_json::Value,
-    ) -> Option<ScalarValue> {
-        match v {
-            serde_json::Value::Null => Some(Self::null_scalar(dt)),
-            serde_json::Value::Bool(b) => ScalarValue::try_from_string(b.to_string(), dt).ok(),
-            serde_json::Value::Number(n) => ScalarValue::try_from_string(n.to_string(), dt).ok(),
-            serde_json::Value::String(s) => ScalarValue::try_from_string(s.clone(), dt).ok(),
-            other => ScalarValue::try_from_string(other.to_string(), dt).ok(),
-        }
-    }
-
     fn scalar_from_partition_value(
         dt: &datafusion::arrow::datatypes::DataType,
         v: &Option<String>,
@@ -238,32 +308,6 @@ impl AddStatsPruningStatistics {
                 Self::null_scalar(dt)
             }),
         }
-    }
-
-    fn lookup_value_stat<'a>(
-        map: &'a std::collections::HashMap<String, ColumnValueStat>,
-        name: &str,
-    ) -> Option<&'a serde_json::Value> {
-        let mut parts = name.split('.');
-        let first = parts.next()?;
-        let mut cur = map.get(first)?;
-        for p in parts {
-            cur = cur.as_column()?.get(p)?;
-        }
-        cur.as_value()
-    }
-
-    fn lookup_count_stat(
-        map: &std::collections::HashMap<String, ColumnCountStat>,
-        name: &str,
-    ) -> Option<i64> {
-        let mut parts = name.split('.');
-        let first = parts.next()?;
-        let mut cur = map.get(first)?;
-        for p in parts {
-            cur = cur.as_column()?.get(p)?;
-        }
-        cur.as_value()
     }
 
     fn build_array(
@@ -322,14 +366,26 @@ impl AddStatsPruningStatistics {
 
 impl PruningStatistics for AddStatsPruningStatistics {
     fn min_values(&self, column: &Column) -> Option<datafusion::arrow::array::ArrayRef> {
+        if let Some(array) = self.build_partition_array(column) {
+            return Some(array);
+        }
+        if let Some(array) = self.build_json_stat_array(column, |stats, name| {
+            stats.min_value(name)
+        }) {
+            return Some(array);
+        }
+
         self.build_array(column, false, |a, s, dt| {
             let name = column.name();
             if let Some(pv) = a.partition_values.get(name) {
                 return Self::scalar_from_partition_value(dt, pv);
             }
             if let Some(s) = s {
-                if let Some(v) = Self::lookup_value_stat(&s.min_values, name) {
-                    return Self::scalar_from_json(dt, v).unwrap_or_else(|| Self::null_scalar(dt));
+                if let Some(v) = s.min_value(name) {
+                    return ScalarConverter::json_to_arrow_scalar_value(v, dt)
+                        .ok()
+                        .flatten()
+                        .unwrap_or_else(|| Self::null_scalar(dt));
                 }
             }
             Self::null_scalar(dt)
@@ -337,14 +393,26 @@ impl PruningStatistics for AddStatsPruningStatistics {
     }
 
     fn max_values(&self, column: &Column) -> Option<datafusion::arrow::array::ArrayRef> {
+        if let Some(array) = self.build_partition_array(column) {
+            return Some(array);
+        }
+        if let Some(array) = self.build_json_stat_array(column, |stats, name| {
+            stats.max_value(name)
+        }) {
+            return Some(array);
+        }
+
         self.build_array(column, false, |a, s, dt| {
             let name = column.name();
             if let Some(pv) = a.partition_values.get(name) {
                 return Self::scalar_from_partition_value(dt, pv);
             }
             if let Some(s) = s {
-                if let Some(v) = Self::lookup_value_stat(&s.max_values, name) {
-                    return Self::scalar_from_json(dt, v).unwrap_or_else(|| Self::null_scalar(dt));
+                if let Some(v) = s.max_value(name) {
+                    return ScalarConverter::json_to_arrow_scalar_value(v, dt)
+                        .ok()
+                        .flatten()
+                        .unwrap_or_else(|| Self::null_scalar(dt));
                 }
             }
             Self::null_scalar(dt)
@@ -356,35 +424,21 @@ impl PruningStatistics for AddStatsPruningStatistics {
     }
 
     fn null_counts(&self, column: &Column) -> Option<datafusion::arrow::array::ArrayRef> {
-        self.build_array(column, true, |a, s, _dt| {
+        self.build_count_array(column, |a, s| {
             let name = column.name();
-            // Partition columns: all rows in file share same partition value.
             if let Some(pv) = a.partition_values.get(name) {
                 if pv.is_none() {
-                    if let Some(s) = s {
-                        let n = s.num_records;
-                        return ScalarValue::UInt64(Some(n.max(0) as u64));
-                    }
-                    return ScalarValue::UInt64(None);
+                    return s.map(|s| s.num_records.max(0) as u64);
                 }
-                return ScalarValue::UInt64(Some(0));
+                return Some(0);
             }
-            if let Some(s) = s {
-                if let Some(v) = Self::lookup_count_stat(&s.null_count, name) {
-                    return ScalarValue::UInt64(Some(v.max(0) as u64));
-                }
-            }
-            ScalarValue::UInt64(None)
+            s.and_then(|s| s.null_count_value(name))
+                .map(|v| v.max(0) as u64)
         })
     }
 
     fn row_counts(&self, column: &Column) -> Option<datafusion::arrow::array::ArrayRef> {
-        self.build_array(column, true, |_a, s, _dt| {
-            let Some(s) = s else {
-                return ScalarValue::UInt64(None);
-            };
-            ScalarValue::UInt64(Some(s.num_records.max(0) as u64))
-        })
+        self.build_count_array(column, |_a, s| s.map(|s| s.num_records.max(0) as u64))
     }
 
     fn contained(
@@ -417,6 +471,24 @@ mod tests {
             modification_time: 0,
             data_change: true,
             stats: Some(stats_json.to_string()),
+            tags: None,
+            deletion_vector: None,
+            base_row_id: None,
+            default_row_commit_version: None,
+            clustering_provider: None,
+            commit_version: None,
+            commit_timestamp: None,
+        }
+    }
+
+    fn add_with_partition_value(name: &str, value: Option<&str>) -> Add {
+        Add {
+            path: "part-00000.parquet".to_string(),
+            partition_values: HashMap::from([(name.to_string(), value.map(ToOwned::to_owned))]),
+            size: 1,
+            modification_time: 0,
+            data_change: true,
+            stats: None,
             tags: None,
             deletion_vector: None,
             base_row_id: None,
@@ -480,6 +552,34 @@ mod tests {
             .downcast_ref::<UInt64Array>()
             .ok_or_else(|| DataFusionError::Internal("array should be UInt64".to_string()))?;
         assert_eq!(values.value(0), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn partition_min_values_build_arrays_without_scalar_roundtrip() -> Result<()> {
+        let table_schema = Arc::new(Schema::new(vec![Field::new(
+            "part_col",
+            DataType::Int32,
+            true,
+        )]));
+        let adds = vec![
+            add_with_partition_value("part_col", Some("10")),
+            add_with_partition_value("part_col", Some("20")),
+        ];
+        let referenced_columns = HashSet::from(["part_col".to_string()]);
+
+        let stats = AddStatsPruningStatistics::try_new(table_schema, adds, referenced_columns)?;
+        let array = stats
+            .min_values(&Column::from_name("part_col"))
+            .ok_or_else(|| DataFusionError::Internal("partition min values missing".to_string()))?;
+
+        assert_eq!(array.data_type(), &DataType::Int32);
+        let values = array
+            .as_any()
+            .downcast_ref::<datafusion::arrow::array::Int32Array>()
+            .ok_or_else(|| DataFusionError::Internal("array should be Int32".to_string()))?;
+        assert_eq!(values.value(0), 10);
+        assert_eq!(values.value(1), 20);
         Ok(())
     }
 }

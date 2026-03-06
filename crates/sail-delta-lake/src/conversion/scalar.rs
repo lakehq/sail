@@ -23,8 +23,12 @@ use std::fmt::Write;
 use std::sync::Arc;
 
 use chrono::{DateTime, TimeZone, Utc};
-use datafusion::arrow::array::{Array, RecordBatch};
-use datafusion::arrow::compute::{cast_with_options, CastOptions};
+use datafusion::arrow::array::{
+    Array, ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
+    Int64Array, Int8Array, LargeStringArray, RecordBatch, StringArray, UInt16Array,
+    UInt32Array, UInt64Array, UInt8Array,
+};
+use datafusion::arrow::compute::{cast, cast_with_options, CastOptions};
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
 use datafusion::common::scalar::ScalarValue;
 use datafusion::common::Result as DataFusionResult;
@@ -45,6 +49,110 @@ const RFC3986_PART: &AsciiSet = &NON_ALPHANUMERIC
 pub struct ScalarConverter;
 
 impl ScalarConverter {
+    pub fn json_values_to_array(
+        values: &[Option<&serde_json::Value>],
+        field_dt: &ArrowDataType,
+    ) -> DataFusionResult<Option<ArrayRef>> {
+        macro_rules! typed_array {
+            ($array_ty:ty, $extract:expr) => {{
+                let mut out = Vec::with_capacity(values.len());
+                for value in values {
+                    match value {
+                        None => out.push(None),
+                        Some(serde_json::Value::Null) => out.push(None),
+                        Some(value) => {
+                            let Some(converted) = $extract(value) else {
+                                return Ok(None);
+                            };
+                            out.push(Some(converted));
+                        }
+                    }
+                }
+                Ok(Some(Arc::new(<$array_ty>::from(out)) as ArrayRef))
+            }};
+        }
+
+        match field_dt {
+            ArrowDataType::Boolean => {
+                typed_array!(BooleanArray, |value: &serde_json::Value| value.as_bool())
+            }
+            ArrowDataType::Int8 => {
+                typed_array!(Int8Array, |value: &serde_json::Value| value
+                    .as_i64()
+                    .and_then(|v| i8::try_from(v).ok()))
+            }
+            ArrowDataType::Int16 => {
+                typed_array!(Int16Array, |value: &serde_json::Value| value
+                    .as_i64()
+                    .and_then(|v| i16::try_from(v).ok()))
+            }
+            ArrowDataType::Int32 => {
+                typed_array!(Int32Array, |value: &serde_json::Value| value
+                    .as_i64()
+                    .and_then(|v| i32::try_from(v).ok()))
+            }
+            ArrowDataType::Int64 => {
+                typed_array!(Int64Array, |value: &serde_json::Value| value.as_i64())
+            }
+            ArrowDataType::UInt8 => {
+                typed_array!(UInt8Array, |value: &serde_json::Value| value
+                    .as_u64()
+                    .and_then(|v| u8::try_from(v).ok()))
+            }
+            ArrowDataType::UInt16 => {
+                typed_array!(UInt16Array, |value: &serde_json::Value| value
+                    .as_u64()
+                    .and_then(|v| u16::try_from(v).ok()))
+            }
+            ArrowDataType::UInt32 => {
+                typed_array!(UInt32Array, |value: &serde_json::Value| value
+                    .as_u64()
+                    .and_then(|v| u32::try_from(v).ok()))
+            }
+            ArrowDataType::UInt64 => {
+                typed_array!(UInt64Array, |value: &serde_json::Value| value.as_u64())
+            }
+            ArrowDataType::Float32 => {
+                typed_array!(Float32Array, |value: &serde_json::Value| value.as_f64().map(|v| v as f32))
+            }
+            ArrowDataType::Float64 => {
+                typed_array!(Float64Array, |value: &serde_json::Value| value.as_f64())
+            }
+            ArrowDataType::Utf8 => typed_array!(StringArray, |value: &serde_json::Value| value
+                .as_str()
+                .map(ToOwned::to_owned)),
+            ArrowDataType::LargeUtf8 => {
+                typed_array!(LargeStringArray, |value: &serde_json::Value| value
+                    .as_str()
+                    .map(ToOwned::to_owned))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    pub fn string_values_to_array(
+        values: &[Option<&str>],
+        field_dt: &ArrowDataType,
+    ) -> DataFusionResult<ArrayRef> {
+        let utf8_array: ArrayRef = Arc::new(StringArray::from(
+            values
+                .iter()
+                .map(|value| value.map(ToOwned::to_owned))
+                .collect::<Vec<_>>(),
+        ));
+
+        match field_dt {
+            ArrowDataType::Utf8 => Ok(utf8_array),
+            ArrowDataType::LargeUtf8 => Ok(Arc::new(LargeStringArray::from(
+                values
+                    .iter()
+                    .map(|value| value.map(ToOwned::to_owned))
+                    .collect::<Vec<_>>(),
+            ))),
+            _ => Ok(cast(&utf8_array, field_dt)?),
+        }
+    }
+
     pub fn json_to_arrow_scalar_value(
         stat_val: &serde_json::Value,
         field_dt: &ArrowDataType,
@@ -52,13 +160,61 @@ impl ScalarConverter {
         match stat_val {
             serde_json::Value::Array(_) | serde_json::Value::Object(_) => Ok(None),
             serde_json::Value::Null => Ok(Some(ScalarValue::try_new_null(field_dt)?)),
-            serde_json::Value::String(value) => {
-                Ok(Some(Self::string_to_arrow_scalar_value(value, field_dt)?))
-            }
-            other => {
-                let owned = other.to_string();
-                Ok(Some(Self::string_to_arrow_scalar_value(&owned, field_dt)?))
-            }
+            serde_json::Value::Bool(value) => Self::bool_to_arrow_scalar_value(*value, field_dt),
+            serde_json::Value::Number(value) => Self::number_to_arrow_scalar_value(value, field_dt),
+            serde_json::Value::String(value) => Self::string_json_to_arrow_scalar_value(value, field_dt),
+        }
+    }
+
+    fn string_json_to_arrow_scalar_value(
+        value: &str,
+        field_dt: &ArrowDataType,
+    ) -> DataFusionResult<Option<ScalarValue>> {
+        match field_dt {
+            ArrowDataType::Utf8 => Ok(Some(ScalarValue::Utf8(Some(value.to_string())))),
+            ArrowDataType::LargeUtf8 => Ok(Some(ScalarValue::LargeUtf8(Some(value.to_string())))),
+            ArrowDataType::Utf8View => Ok(Some(ScalarValue::Utf8View(Some(value.to_string())))),
+            _ => Ok(Some(Self::string_to_arrow_scalar_value(value, field_dt)?)),
+        }
+    }
+
+    fn bool_to_arrow_scalar_value(
+        value: bool,
+        field_dt: &ArrowDataType,
+    ) -> DataFusionResult<Option<ScalarValue>> {
+        match field_dt {
+            ArrowDataType::Boolean => Ok(Some(ScalarValue::Boolean(Some(value)))),
+            _ => Ok(Some(Self::string_to_arrow_scalar_value(
+                if value { "true" } else { "false" },
+                field_dt,
+            )?)),
+        }
+    }
+
+    fn number_to_arrow_scalar_value(
+        value: &serde_json::Number,
+        field_dt: &ArrowDataType,
+    ) -> DataFusionResult<Option<ScalarValue>> {
+        let scalar = match field_dt {
+            ArrowDataType::Int8 => value.as_i64().and_then(|v| i8::try_from(v).ok()).map(|v| ScalarValue::Int8(Some(v))),
+            ArrowDataType::Int16 => value.as_i64().and_then(|v| i16::try_from(v).ok()).map(|v| ScalarValue::Int16(Some(v))),
+            ArrowDataType::Int32 => value.as_i64().and_then(|v| i32::try_from(v).ok()).map(|v| ScalarValue::Int32(Some(v))),
+            ArrowDataType::Int64 => value.as_i64().map(|v| ScalarValue::Int64(Some(v))),
+            ArrowDataType::UInt8 => value.as_u64().and_then(|v| u8::try_from(v).ok()).map(|v| ScalarValue::UInt8(Some(v))),
+            ArrowDataType::UInt16 => value.as_u64().and_then(|v| u16::try_from(v).ok()).map(|v| ScalarValue::UInt16(Some(v))),
+            ArrowDataType::UInt32 => value.as_u64().and_then(|v| u32::try_from(v).ok()).map(|v| ScalarValue::UInt32(Some(v))),
+            ArrowDataType::UInt64 => value.as_u64().map(|v| ScalarValue::UInt64(Some(v))),
+            ArrowDataType::Float32 => value.as_f64().map(|v| ScalarValue::Float32(Some(v as f32))),
+            ArrowDataType::Float64 => value.as_f64().map(|v| ScalarValue::Float64(Some(v))),
+            _ => None,
+        };
+
+        match scalar {
+            Some(scalar) => Ok(Some(scalar)),
+            None => Ok(Some(Self::string_to_arrow_scalar_value(
+                &value.to_string(),
+                field_dt,
+            )?)),
         }
     }
 

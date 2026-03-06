@@ -32,6 +32,14 @@ impl ColumnValueStat {
             _ => None,
         }
     }
+
+    pub fn get_path<'a>(&'a self, path: &[&str]) -> Option<&'a ColumnValueStat> {
+        let mut current = self;
+        for part in path {
+            current = current.as_column()?.get(*part)?;
+        }
+        Some(current)
+    }
 }
 
 /// Column null-count statistics stored in `Stats`.
@@ -55,6 +63,14 @@ impl ColumnCountStat {
             ColumnCountStat::Value(v) => Some(*v),
             _ => None,
         }
+    }
+
+    pub fn get_path<'a>(&'a self, path: &[&str]) -> Option<&'a ColumnCountStat> {
+        let mut current = self;
+        for part in path {
+            current = current.as_column()?.get(*part)?;
+        }
+        Some(current)
     }
 }
 
@@ -80,6 +96,35 @@ impl Stats {
     pub fn to_json_string(&self) -> Result<String, serde_json::error::Error> {
         serde_json::to_string(self)
     }
+
+    pub fn min_value(&self, name: &str) -> Option<&serde_json::Value> {
+        lookup_value_stat(&self.min_values, name)
+    }
+
+    pub fn max_value(&self, name: &str) -> Option<&serde_json::Value> {
+        lookup_value_stat(&self.max_values, name)
+    }
+
+    pub fn null_count_value(&self, name: &str) -> Option<i64> {
+        lookup_count_stat(&self.null_count, name)
+    }
+}
+
+fn lookup_value_stat<'a>(
+    map: &'a HashMap<String, ColumnValueStat>,
+    name: &str,
+) -> Option<&'a serde_json::Value> {
+    let mut parts = name.split('.');
+    let first = parts.next()?;
+    let path: Vec<&str> = parts.collect();
+    map.get(first)?.get_path(&path)?.as_value()
+}
+
+fn lookup_count_stat(map: &HashMap<String, ColumnCountStat>, name: &str) -> Option<i64> {
+    let mut parts = name.split('.');
+    let first = parts.next()?;
+    let path: Vec<&str> = parts.collect();
+    map.get(first)?.get_path(&path)?.as_value()
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq, Eq)]

@@ -35,6 +35,7 @@ use datafusion::datasource::table_schema::TableSchema;
 use datafusion::physical_expr::{LexOrdering, PhysicalExpr};
 use object_store::path::Path;
 
+use crate::conversion::ScalarConverter;
 use crate::datasource::{
     create_object_store_url, partitioned_file_from_action, DataFusionMixins, DeltaScanConfig,
     DeltaTableStateExt,
@@ -475,8 +476,12 @@ fn stats_for_add(
 
         for name in name_candidates {
             if min_value == Precision::Absent {
-                if let Some(value) = lookup_value_stat(&stats.min_values, name)
-                    .and_then(|v| scalar_from_json(field.data_type(), v))
+                if let Some(value) = stats.min_value(name)
+                    .and_then(|v| {
+                        ScalarConverter::json_to_arrow_scalar_value(v, field.data_type())
+                            .ok()
+                            .flatten()
+                    })
                 {
                     if !value.is_null() {
                         min_value = Precision::Exact(value);
@@ -484,8 +489,12 @@ fn stats_for_add(
                 }
             }
             if max_value == Precision::Absent {
-                if let Some(value) = lookup_value_stat(&stats.max_values, name)
-                    .and_then(|v| scalar_from_json(field.data_type(), v))
+                if let Some(value) = stats.max_value(name)
+                    .and_then(|v| {
+                        ScalarConverter::json_to_arrow_scalar_value(v, field.data_type())
+                            .ok()
+                            .flatten()
+                    })
                 {
                     if !value.is_null() {
                         max_value = Precision::Exact(value);
@@ -493,7 +502,7 @@ fn stats_for_add(
                 }
             }
             if null_count == Precision::Absent {
-                if let Some(value) = lookup_count_stat(&stats.null_count, name) {
+                if let Some(value) = stats.null_count_value(name) {
                     null_count = Precision::Exact(value.max(0) as usize);
                 }
             }
@@ -522,45 +531,6 @@ fn stats_for_add(
     })))
 }
 
-fn lookup_value_stat<'a>(
-    map: &'a std::collections::HashMap<String, crate::spec::statistics::ColumnValueStat>,
-    name: &str,
-) -> Option<&'a serde_json::Value> {
-    let mut parts = name.split('.');
-    let first = parts.next()?;
-    let mut cur = map.get(first)?;
-    for p in parts {
-        cur = cur.as_column()?.get(p)?;
-    }
-    cur.as_value()
-}
-
-fn lookup_count_stat(
-    map: &std::collections::HashMap<String, crate::spec::statistics::ColumnCountStat>,
-    name: &str,
-) -> Option<i64> {
-    let mut parts = name.split('.');
-    let first = parts.next()?;
-    let mut cur = map.get(first)?;
-    for p in parts {
-        cur = cur.as_column()?.get(p)?;
-    }
-    cur.as_value()
-}
-
-fn scalar_from_json(
-    dt: &datafusion::arrow::datatypes::DataType,
-    v: &serde_json::Value,
-) -> Option<ScalarValue> {
-    match v {
-        serde_json::Value::Null => ScalarValue::try_new_null(dt).ok(),
-        serde_json::Value::Bool(b) => ScalarValue::try_from_string(b.to_string(), dt).ok(),
-        serde_json::Value::Number(n) => ScalarValue::try_from_string(n.to_string(), dt).ok(),
-        serde_json::Value::String(s) => ScalarValue::try_from_string(s.clone(), dt).ok(),
-        other => ScalarValue::try_from_string(other.to_string(), dt).ok(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -569,11 +539,16 @@ mod tests {
     use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
     use datafusion::common::ScalarValue;
 
-    use super::{add_column_statistics, sanitize_statistics_for_schema, scalar_from_json};
+    use super::{add_column_statistics, sanitize_statistics_for_schema};
+    use crate::conversion::ScalarConverter;
 
     #[test]
     fn test_scalar_from_json_null_returns_typed_null() {
-        let value = scalar_from_json(&DataType::Int64, &serde_json::Value::Null);
+        let value = ScalarConverter::json_to_arrow_scalar_value(
+            &serde_json::Value::Null,
+            &DataType::Int64,
+        )
+        .unwrap();
         assert_eq!(value, Some(ScalarValue::Int64(None)));
     }
 
