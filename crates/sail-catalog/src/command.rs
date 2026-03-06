@@ -460,7 +460,9 @@ impl CatalogCommand {
                         "TRUNCATE TABLE is only supported on tables, not views".to_string(),
                     ));
                 };
-                // Clear data files at the table location
+                // Clear data files at the table location.
+                // When location is None (in-memory tables), we skip file deletion
+                // and rely on create_table(replace=true) below to reset the catalog entry.
                 if let Some(ref loc) = location {
                     let local_path = loc
                         .strip_prefix("file://")
@@ -471,6 +473,11 @@ impl CatalogCommand {
                             if !dir.is_absolute() || path.is_empty() {
                                 return Err(CatalogError::External(format!(
                                     "TRUNCATE TABLE requires an absolute local path, got: {path}"
+                                )));
+                            }
+                            if dir.parent().is_none() {
+                                return Err(CatalogError::External(format!(
+                                    "TRUNCATE TABLE on filesystem root is not allowed: {path}"
                                 )));
                             }
                             if dir.exists() {
@@ -491,8 +498,13 @@ impl CatalogCommand {
                                         })?;
                                         let name = entry.file_name();
                                         let name = name.to_string_lossy();
-                                        // Skip metadata directories (Delta Lake, Iceberg, etc.)
-                                        if name.starts_with('_') || name.starts_with('.') {
+                                        // Skip metadata directories used by table formats:
+                                        // _delta_log/ (Delta Lake), .iceberg/ (some Iceberg),
+                                        // metadata/ (Iceberg standard).
+                                        if name.starts_with('_')
+                                            || name.starts_with('.')
+                                            || *name == *"metadata"
+                                        {
                                             continue;
                                         }
                                         let entry_path = entry.path();
