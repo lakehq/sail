@@ -115,31 +115,90 @@ impl DeltaOperation {
         }
     }
 
-    pub fn operation_parameters(&self) -> DeltaResult<HashMap<String, Value>> {
-        if let Some(Some(Some(map))) = serde_json::to_value(self)?
-            .as_object()
-            .map(|p| p.values().next().map(|q| q.as_object()))
-        {
-            Ok(map
-                .iter()
-                .filter(|item| !item.1.is_null())
-                .map(|(k, v)| {
-                    // Delta commitInfo.operationParameters expects values to be strings.
-                    (
-                        k.to_owned(),
-                        Value::String(if v.is_string() {
-                            String::from(v.as_str().unwrap_or_default())
-                        } else {
-                            v.to_string()
-                        }),
-                    )
-                })
-                .collect())
-        } else {
-            Err(DeltaTableError::generic(
-                "Operation parameters serialized into unexpected shape",
-            ))
+    pub fn operation_parameters_string_map(&self) -> DeltaResult<HashMap<String, String>> {
+        fn insert_json<T: Serialize>(
+            map: &mut HashMap<String, String>,
+            key: &str,
+            value: &T,
+        ) -> DeltaResult<()> {
+            map.insert(
+                key.to_string(),
+                serde_json::to_string(value).map_err(DeltaTableError::generic_err)?,
+            );
+            Ok(())
         }
+
+        fn insert_opt<T: ToString>(map: &mut HashMap<String, String>, key: &str, value: Option<T>) {
+            if let Some(value) = value {
+                map.insert(key.to_string(), value.to_string());
+            }
+        }
+
+        let mut parameters = HashMap::new();
+        match self {
+            Self::Create {
+                mode,
+                location,
+                protocol,
+                metadata,
+            } => {
+                parameters.insert("mode".to_string(), format!("{mode:?}"));
+                parameters.insert("location".to_string(), location.clone());
+                insert_json(&mut parameters, "protocol", protocol.as_ref())?;
+                insert_json(&mut parameters, "metadata", metadata.as_ref())?;
+            }
+            Self::Write {
+                mode,
+                partition_by,
+                predicate,
+            } => {
+                parameters.insert("mode".to_string(), format!("{mode:?}"));
+                if let Some(partition_by) = partition_by {
+                    insert_json(&mut parameters, "partitionBy", partition_by)?;
+                }
+                insert_opt(&mut parameters, "predicate", predicate.clone());
+            }
+            Self::Delete { predicate } => {
+                insert_opt(&mut parameters, "predicate", predicate.clone());
+            }
+            Self::Merge {
+                predicate,
+                merge_predicate,
+                matched_predicates,
+                not_matched_predicates,
+                not_matched_by_source_predicates,
+            } => {
+                insert_opt(&mut parameters, "predicate", predicate.clone());
+                insert_opt(&mut parameters, "mergePredicate", merge_predicate.clone());
+                insert_json(&mut parameters, "matchedPredicates", matched_predicates)?;
+                insert_json(
+                    &mut parameters,
+                    "notMatchedPredicates",
+                    not_matched_predicates,
+                )?;
+                insert_json(
+                    &mut parameters,
+                    "notMatchedBySourcePredicates",
+                    not_matched_by_source_predicates,
+                )?;
+            }
+            Self::FileSystemCheck {} => {}
+            Self::Restore { version, datetime } => {
+                insert_opt(&mut parameters, "version", *version);
+                insert_opt(&mut parameters, "datetime", *datetime);
+            }
+        }
+
+        Ok(parameters)
+    }
+
+    pub fn operation_parameters(&self) -> DeltaResult<HashMap<String, Value>> {
+        self.operation_parameters_string_map().map(|parameters| {
+            parameters
+                .into_iter()
+                .map(|(key, value)| (key, Value::String(value)))
+                .collect()
+        })
     }
 
     pub fn changes_data(&self) -> bool {

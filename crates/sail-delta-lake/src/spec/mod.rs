@@ -27,8 +27,8 @@ pub use actions::{
     Transaction,
 };
 pub use checkpoint::{
-    protocol_from_checkpoint, protocol_to_checkpoint, CheckpointActionRow, CheckpointAdd,
-    CheckpointDeletionVector, CheckpointProtocol, CheckpointRemove, LastCheckpointHint,
+    CheckpointActionRow, CheckpointAdd, CheckpointDeletionVector, CheckpointProtocol,
+    CheckpointRemove, LastCheckpointHint,
 };
 pub use datafusion::arrow::datatypes::SchemaRef;
 pub use error::{CommitConflictError, DeltaError, DeltaResult, TransactionError};

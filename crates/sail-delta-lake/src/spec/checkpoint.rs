@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::spec::{
     Add, DeletionVectorDescriptor, DeltaError as DeltaTableError, DeltaResult, Metadata, Protocol,
-    Remove, Transaction,
+    Remove, TableFeature, Transaction,
 };
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -43,6 +43,56 @@ pub struct CheckpointProtocol {
     pub reader_features: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub writer_features: Option<Vec<String>>,
+}
+
+impl From<Protocol> for CheckpointProtocol {
+    fn from(value: Protocol) -> Self {
+        Self {
+            min_reader_version: value.min_reader_version(),
+            min_writer_version: value.min_writer_version(),
+            reader_features: value.reader_features().map(|features| {
+                features
+                    .iter()
+                    .map(|feature| feature.as_str().to_string())
+                    .collect()
+            }),
+            writer_features: value.writer_features().map(|features| {
+                features
+                    .iter()
+                    .map(|feature| feature.as_str().to_string())
+                    .collect()
+            }),
+        }
+    }
+}
+
+impl TryFrom<CheckpointProtocol> for Protocol {
+    type Error = DeltaTableError;
+
+    fn try_from(value: CheckpointProtocol) -> Result<Self, Self::Error> {
+        Ok(Protocol::new(
+            value.min_reader_version,
+            value.min_writer_version,
+            value
+                .reader_features
+                .map(|features| {
+                    features
+                        .into_iter()
+                        .map(|feature| TableFeature::parse_str_name(&feature))
+                        .collect::<DeltaResult<Vec<_>>>()
+                })
+                .transpose()?,
+            value
+                .writer_features
+                .map(|features| {
+                    features
+                        .into_iter()
+                        .map(|feature| TableFeature::parse_str_name(&feature))
+                        .collect::<DeltaResult<Vec<_>>>()
+                })
+                .transpose()?,
+        ))
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -231,16 +281,6 @@ impl TryFrom<CheckpointRemove> for Remove {
             default_row_commit_version: value.default_row_commit_version,
         })
     }
-}
-
-pub fn protocol_to_checkpoint(protocol: Protocol) -> DeltaResult<CheckpointProtocol> {
-    let value = serde_json::to_value(protocol)?;
-    serde_json::from_value(value).map_err(DeltaTableError::generic_err)
-}
-
-pub fn protocol_from_checkpoint(protocol: CheckpointProtocol) -> DeltaResult<Protocol> {
-    let value = serde_json::to_value(protocol)?;
-    serde_json::from_value(value).map_err(DeltaTableError::generic_err)
 }
 
 mod serde_path_compat {

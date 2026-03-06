@@ -12,6 +12,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::spec::{DeltaError as DeltaTableError, DeltaResult};
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_features/mod.rs#L44-L119>
@@ -29,6 +31,38 @@ pub enum TableFeature {
     Unknown,
 }
 
+impl TableFeature {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::AppendOnly => "appendOnly",
+            Self::Invariants => "invariants",
+            Self::CheckConstraints => "checkConstraints",
+            Self::ChangeDataFeed => "changeDataFeed",
+            Self::GeneratedColumns => "generatedColumns",
+            Self::IdentityColumns => "identityColumns",
+            Self::ColumnMapping => "columnMapping",
+            Self::TimestampWithoutTimezone => "timestampNtz",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn parse_str_name(value: &str) -> DeltaResult<Self> {
+        match value {
+            "appendOnly" => Ok(Self::AppendOnly),
+            "invariants" => Ok(Self::Invariants),
+            "checkConstraints" => Ok(Self::CheckConstraints),
+            "changeDataFeed" => Ok(Self::ChangeDataFeed),
+            "generatedColumns" => Ok(Self::GeneratedColumns),
+            "identityColumns" => Ok(Self::IdentityColumns),
+            "columnMapping" => Ok(Self::ColumnMapping),
+            "timestampNtz" => Ok(Self::TimestampWithoutTimezone),
+            _ => Err(DeltaTableError::generic(format!(
+                "Unknown table feature: {value}"
+            ))),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/actions/mod.rs#L374-L466>
@@ -42,6 +76,20 @@ pub struct Protocol {
 }
 
 impl Protocol {
+    pub fn new(
+        min_reader_version: i32,
+        min_writer_version: i32,
+        reader_features: Option<Vec<TableFeature>>,
+        writer_features: Option<Vec<TableFeature>>,
+    ) -> Self {
+        Self {
+            min_reader_version,
+            min_writer_version,
+            reader_features: reader_features.filter(|features| !features.is_empty()),
+            writer_features: writer_features.filter(|features| !features.is_empty()),
+        }
+    }
+
     pub fn min_reader_version(&self) -> i32 {
         self.min_reader_version
     }

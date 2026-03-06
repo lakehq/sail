@@ -19,7 +19,7 @@ use super::mapping::{
     annotate_new_fields_for_column_mapping, annotate_schema_for_column_mapping,
     compute_max_column_id,
 };
-use crate::spec::{ColumnMappingMode, DeltaResult, Metadata, Protocol, StructType};
+use crate::spec::{ColumnMappingMode, DeltaResult, Metadata, Protocol, StructType, TableFeature};
 
 /// Annotate a kernel schema for column mapping (assign ids + physical names).
 pub fn annotate_for_column_mapping(schema: &StructType) -> StructType {
@@ -106,27 +106,24 @@ pub fn protocol_for_create(
     enable_timestamp_ntz: bool,
 ) -> DeltaResult<Protocol> {
     if !enable_column_mapping && !enable_timestamp_ntz {
-        return Ok(serde_json::from_value(serde_json::json!({
-            "minReaderVersion": 1,
-            "minWriterVersion": 2,
-        }))?);
+        return Ok(Protocol::new(1, 2, None, None));
     }
 
     let mut reader_features = Vec::new();
     let mut writer_features = Vec::new();
     if enable_column_mapping {
-        reader_features.push("columnMapping");
-        writer_features.push("columnMapping");
+        reader_features.push(TableFeature::ColumnMapping);
+        writer_features.push(TableFeature::ColumnMapping);
     }
     if enable_timestamp_ntz {
-        reader_features.push("timestampNtz");
-        writer_features.push("timestampNtz");
+        reader_features.push(TableFeature::TimestampWithoutTimezone);
+        writer_features.push(TableFeature::TimestampWithoutTimezone);
     }
 
-    Ok(serde_json::from_value(serde_json::json!({
-        "minReaderVersion": 3,
-        "minWriterVersion": 7,
-        "readerFeatures": reader_features,
-        "writerFeatures": writer_features,
-    }))?)
+    Ok(Protocol::new(
+        3,
+        7,
+        Some(reader_features),
+        Some(writer_features),
+    ))
 }

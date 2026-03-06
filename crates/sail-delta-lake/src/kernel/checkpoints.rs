@@ -35,9 +35,9 @@ use regex::Regex;
 use uuid::Uuid;
 
 use crate::spec::{
-    checkpoint_path, delta_log_root_path, last_checkpoint_path, protocol_from_checkpoint,
-    protocol_to_checkpoint, Action, Add, CheckpointActionRow, DeltaError as DeltaTableError,
-    DeltaResult, LastCheckpointHint, Metadata, Protocol, Remove, Transaction,
+    checkpoint_path, delta_log_root_path, last_checkpoint_path, Action, Add, CheckpointActionRow,
+    CheckpointRemove, DeltaError as DeltaTableError, DeltaResult, LastCheckpointHint, Metadata,
+    Protocol, Remove, StructType, TableFeature, Transaction,
 };
 use crate::storage::{get_actions, LogStore};
 static DELTA_LOG_REGEX: LazyLock<Result<Regex, regex::Error>> =
@@ -112,7 +112,7 @@ impl ReconciledCheckpointState {
 
     fn apply_checkpoint_row(&mut self, row: CheckpointActionRow) -> DeltaResult<()> {
         if let Some(protocol) = row.protocol {
-            self.protocol = Some(protocol_from_checkpoint(protocol)?);
+            self.protocol = Some(protocol.try_into()?);
         }
         if let Some(metadata) = row.metadata {
             self.metadata = Some(metadata);
@@ -151,7 +151,7 @@ impl ReconciledCheckpointState {
                 .saturating_add(self.adds.len()),
         );
         rows.push(CheckpointActionRow {
-            protocol: Some(protocol_to_checkpoint(protocol)?),
+            protocol: Some(protocol.into()),
             ..Default::default()
         });
         rows.push(CheckpointActionRow {
@@ -208,68 +208,73 @@ fn decode_checkpoint_rows(batch: &RecordBatch) -> DeltaResult<Vec<CheckpointActi
 }
 
 fn checkpoint_schema_probe_row() -> DeltaResult<CheckpointActionRow> {
-    let value = serde_json::json!({
-        "add": {
-            "path": "_probe_add.parquet",
-            "partitionValues": { "p": "x" },
-            "size": 0,
-            "modificationTime": 0,
-            "dataChange": true,
-            "stats": "{}",
-            "tags": { "t": "x" },
-            "deletionVector": {
-                "storageType": "u",
-                "pathOrInlineDv": "dv.bin",
-                "offset": 0,
-                "sizeInBytes": 1,
-                "cardinality": 1
-            },
-            "baseRowId": 0,
-            "defaultRowCommitVersion": 0,
-            "clusteringProvider": "none"
-        },
-        "remove": {
-            "path": "_probe_remove.parquet",
-            "dataChange": true,
-            "deletionTimestamp": 0,
-            "extendedFileMetadata": true,
-            "partitionValues": { "p": "x" },
-            "size": 0,
-            "stats": "{}",
-            "tags": { "t": "x" },
-            "deletionVector": {
-                "storageType": "u",
-                "pathOrInlineDv": "dv.bin",
-                "offset": 0,
-                "sizeInBytes": 1,
-                "cardinality": 1
-            },
-            "baseRowId": 0,
-            "defaultRowCommitVersion": 0
-        },
-        "metaData": {
-            "id": "probe",
-            "name": "probe",
-            "description": "probe",
-            "format": { "provider": "parquet", "options": { "k": "v" } },
-            "schemaString": r#"{"type":"struct","fields":[]}"#,
-            "partitionColumns": ["p"],
-            "configuration": { "delta.appendOnly": "false" },
-            "createdTime": 0
-        },
-        "protocol": {
-            "minReaderVersion": 3,
-            "minWriterVersion": 7,
-            "readerFeatures": ["columnMapping"],
-            "writerFeatures": ["columnMapping"]
-        },
-        "txn": {
-            "appId": "probe",
-            "version": 0,
-            "lastUpdated": 0
-        }
-    });
-    serde_json::from_value(value).map_err(DeltaTableError::generic_err)
+    let partition_values = HashMap::from([("p".to_string(), Some("x".to_string()))]);
+    let tags = HashMap::from([("t".to_string(), Some("x".to_string()))]);
+    let deletion_vector = crate::spec::DeletionVectorDescriptor {
+        storage_type: crate::spec::StorageType::UuidRelativePath,
+        path_or_inline_dv: "dv.bin".to_string(),
+        offset: Some(0),
+        size_in_bytes: 1,
+        cardinality: 1,
+    };
+    let metadata = Metadata::try_new(
+        Some("probe".to_string()),
+        Some("probe".to_string()),
+        StructType::try_new([])?,
+        vec!["p".to_string()],
+        0,
+        HashMap::from([("delta.appendOnly".to_string(), "false".to_string())]),
+    )?
+    .with_table_id("probe".to_string());
+
+    Ok(CheckpointActionRow {
+        add: Some(
+            Add {
+                path: "_probe_add.parquet".to_string(),
+                partition_values: partition_values.clone(),
+                size: 0,
+                modification_time: 0,
+                data_change: true,
+                stats: Some("{}".to_string()),
+                tags: Some(tags.clone()),
+                deletion_vector: Some(deletion_vector.clone()),
+                base_row_id: Some(0),
+                default_row_commit_version: Some(0),
+                clustering_provider: Some("none".to_string()),
+                commit_version: None,
+                commit_timestamp: None,
+            }
+            .into(),
+        ),
+        remove: Some(CheckpointRemove {
+            path: "_probe_remove.parquet".to_string(),
+            deletion_timestamp: Some(0),
+            data_change: true,
+            extended_file_metadata: Some(true),
+            partition_values: Some(partition_values),
+            size: Some(0),
+            stats: Some("{}".to_string()),
+            tags: Some(tags),
+            deletion_vector: Some(deletion_vector.into()),
+            base_row_id: Some(0),
+            default_row_commit_version: Some(0),
+        }),
+        metadata: Some(metadata),
+        protocol: Some(
+            Protocol::new(
+                3,
+                7,
+                Some(vec![TableFeature::ColumnMapping]),
+                Some(vec![TableFeature::ColumnMapping]),
+            )
+            .into(),
+        ),
+        txn: Some(Transaction {
+            app_id: "probe".to_string(),
+            version: 0,
+            last_updated: Some(0),
+        }),
+    })
 }
 
 fn checkpoint_tracing_options() -> DeltaResult<serde_arrow::schema::TracingOptions> {
@@ -725,8 +730,11 @@ pub async fn cleanup_expired_logs_for(
 mod tests {
     use std::collections::HashMap;
 
-    use super::{decode_checkpoint_rows, encode_checkpoint_rows, ReconciledCheckpointState};
-    use crate::spec::{Action, Add, CheckpointActionRow, DeltaResult, Remove};
+    use super::{
+        checkpoint_schema_probe_row, decode_checkpoint_rows, encode_checkpoint_rows,
+        ReconciledCheckpointState,
+    };
+    use crate::spec::{Action, Add, CheckpointActionRow, DeltaResult, Remove, TableFeature};
 
     #[test]
     fn checkpoint_row_roundtrip_preserves_add_path() -> DeltaResult<()> {
@@ -796,5 +804,42 @@ mod tests {
         }));
         assert!(!state.adds.contains_key("a.parquet"));
         assert!(state.removes.contains_key("a.parquet"));
+    }
+
+    #[test]
+    fn checkpoint_probe_row_has_typed_protocol_and_metadata() -> DeltaResult<()> {
+        let row = checkpoint_schema_probe_row()?;
+
+        assert_eq!(
+            row.metadata.as_ref().and_then(|metadata| metadata.name()),
+            Some("probe")
+        );
+        assert_eq!(
+            row.protocol
+                .as_ref()
+                .and_then(|protocol| protocol.reader_features.as_ref())
+                .and_then(|features| features.first()),
+            Some(&TableFeature::ColumnMapping.as_str().to_string())
+        );
+        assert_eq!(
+            row.txn.as_ref().map(|txn| txn.app_id.as_str()),
+            Some("probe")
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn checkpoint_probe_row_keeps_remove_stats_field() -> DeltaResult<()> {
+        let row = checkpoint_schema_probe_row()?;
+
+        assert_eq!(
+            row.remove
+                .as_ref()
+                .and_then(|remove| remove.stats.as_deref()),
+            Some("{}")
+        );
+
+        Ok(())
     }
 }
