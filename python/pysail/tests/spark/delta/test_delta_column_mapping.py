@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-from pyspark.sql import functions as F
 from pyspark.sql import Row
+from pyspark.sql import functions as F  # noqa: N812
 
 if TYPE_CHECKING:
     from pathlib import Path

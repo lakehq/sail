@@ -197,10 +197,7 @@ class TestDeltaPartitionPruning:
         ]
 
         sentinel_count = (
-            spark.read.format("delta")
-            .load(delta_table_path)
-            .filter("region = '__HIVE_DEFAULT_PARTITION__'")
-            .count()
+            spark.read.format("delta").load(delta_table_path).filter("region = '__HIVE_DEFAULT_PARTITION__'").count()
         )
         assert sentinel_count == 0
 
