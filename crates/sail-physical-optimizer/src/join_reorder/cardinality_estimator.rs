@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use datafusion::common::NullEquality;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::Operator;
 use datafusion::physical_expr::expressions::BinaryExpr;
@@ -102,17 +103,11 @@ impl CardinalityEstimator {
     fn populate_column_statistics(&mut self) {
         for relation in &self.graph.relations {
             let relation_id = relation.relation_id;
-            // Prefer statistics.num_rows as denominator for null fraction,
-            // since null_count comes from the same statistics source.
-            let row_count = match relation.statistics.num_rows {
-                datafusion::common::stats::Precision::Exact(n)
-                | datafusion::common::stats::Precision::Inexact(n)
-                    if n > 0 =>
-                {
-                    n as f64
-                }
-                _ => relation.initial_cardinality,
-            };
+            // Use base_cardinality as denominator for null fraction: column stats
+            // (including null_count) reflect the pre-filter table, not the post-filter
+            // initial_cardinality. Using initial_cardinality after FilterExec would
+            // inflate null fractions (often clamping to 1.0).
+            let row_count = relation.base_cardinality;
             let schema = relation.plan.schema();
             let column_stats = &relation.statistics.column_statistics;
             for (column_index, stats) in column_stats.iter().enumerate() {
@@ -347,7 +342,11 @@ impl CardinalityEstimator {
 
     /// Compute the null adjustment factor for a join edge.
     /// Returns the product of (1 - null_fraction) for each side of each equi-pair.
+    /// When null_equality is NullEqualsNull, NULLs can match, so no adjustment is applied.
     fn null_adjustment_for_edge(&self, edge: &JoinEdge) -> f64 {
+        if edge.null_equality == NullEquality::NullEqualsNull {
+            return 1.0;
+        }
         edge.equi_pairs
             .iter()
             .fold(1.0, |acc, (left_col, right_col)| {
@@ -800,7 +799,7 @@ mod tests {
                     null_count: Precision::Exact(nulls),
                     max_value: Precision::Absent,
                     min_value: Precision::Absent,
-                    distinct_count: Precision::Exact(rows - nulls),
+                    distinct_count: Precision::Exact(rows.saturating_sub(nulls)),
                     sum_value: Precision::Absent,
                     byte_size: Precision::Absent,
                 }],
