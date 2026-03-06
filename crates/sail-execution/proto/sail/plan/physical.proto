@@ -51,6 +51,7 @@ message ExtendedPhysicalPlanNode {
     MonotonicIdExecNode monotonic_id = 36;
     PythonDataSourceWriteExecNode python_data_source_write = 37;
     PythonDataSourceWriteCommitExecNode python_data_source_write_commit = 38;
+    RandExecNode rand = 39;
   }
 }
 
@@ -538,6 +539,14 @@ message MonotonicIdExecNode {
   bytes input = 1;
   string column_name = 2;
   bytes schema = 3;
+}
+
+message RandExecNode {
+  bytes input = 1;
+  string column_name = 2;
+  int64 seed = 3;
+  string mode = 4;
+  bytes schema = 5;
 }
 
 message JoinOn {

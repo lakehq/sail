@@ -36,8 +36,8 @@ impl PlanResolver<'_> {
             num_partitions,
         } = range;
         let start = start.unwrap_or(0);
-        // TODO: use parallelism in Spark configuration as the default
-        let num_partitions = num_partitions.unwrap_or(1);
+        let num_partitions =
+            num_partitions.unwrap_or_else(|| self.ctx.state().config().target_partitions());
         if num_partitions < 1 {
             return Err(PlanError::invalid(format!(
                 "invalid number of partitions: {num_partitions}"

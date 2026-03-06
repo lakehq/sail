@@ -15,6 +15,7 @@
 #[derive(Debug, Clone)]
 pub struct SparkXorShiftRandom {
     seed: i64,
+    next_gaussian_cache: Option<f64>,
 }
 
 impl SparkXorShiftRandom {
@@ -24,6 +25,7 @@ impl SparkXorShiftRandom {
     pub fn new(init: i64) -> Self {
         Self {
             seed: Self::hash_seed(init),
+            next_gaussian_cache: None,
         }
     }
 
@@ -133,6 +135,27 @@ impl SparkXorShiftRandom {
     /// This is equivalent to Java's `Random.nextInt()`.
     pub fn next_int(&mut self) -> i32 {
         self.next(32)
+    }
+
+    /// Generate the next Gaussian (normally distributed) double.
+    ///
+    /// This is a port of Java's `Random.nextGaussian()` which uses the
+    /// polar form of the Box-Muller transform. It caches one value per
+    /// pair so that every other call reuses the cached result.
+    pub fn next_gaussian(&mut self) -> f64 {
+        if let Some(cached) = self.next_gaussian_cache.take() {
+            return cached;
+        }
+        loop {
+            let v1 = 2.0 * self.next_double() - 1.0;
+            let v2 = 2.0 * self.next_double() - 1.0;
+            let s = v1 * v1 + v2 * v2;
+            if s < 1.0 && s != 0.0 {
+                let multiplier = (-2.0 * s.ln() / s).sqrt();
+                self.next_gaussian_cache = Some(v2 * multiplier);
+                return v1 * multiplier;
+            }
+        }
     }
 }
 
