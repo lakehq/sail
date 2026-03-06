@@ -168,6 +168,42 @@ class TestDeltaPartitionPruning:
         result_count = filtered_df.count()
         assert result_count == 2, f"Expected 2 rows for region IS NOT NULL AND category = 'A', got {result_count}"  # noqa: PLR2004
 
+    def test_delta_pruning_with_null_string_partition_round_trips_as_null(self, spark, tmp_path):
+        """NULL string partitions must not round-trip as __HIVE_DEFAULT_PARTITION__."""
+        delta_path = tmp_path / "delta_null_string_partition"
+        delta_table_path = f"{delta_path}"
+
+        partition_data = [
+            Row(id=1, region="us", payload="a"),
+            Row(id=2, region=None, payload="b"),
+            Row(id=3, region="eu", payload="c"),
+            Row(id=4, region=None, payload="d"),
+        ]
+        df = spark.createDataFrame(partition_data)
+        df.write.format("delta").mode("overwrite").partitionBy("region").save(str(delta_path))
+
+        result = spark.read.format("delta").load(delta_table_path).orderBy("id").collect()
+        assert [row.asDict() for row in result] == [
+            {"id": 1, "region": "us", "payload": "a"},
+            {"id": 2, "region": None, "payload": "b"},
+            {"id": 3, "region": "eu", "payload": "c"},
+            {"id": 4, "region": None, "payload": "d"},
+        ]
+
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("region IS NULL")
+        assert filtered_df.orderBy("id").collect() == [
+            Row(id=2, payload="b", region=None),
+            Row(id=4, payload="d", region=None),
+        ]
+
+        sentinel_count = (
+            spark.read.format("delta")
+            .load(delta_table_path)
+            .filter("region = '__HIVE_DEFAULT_PARTITION__'")
+            .count()
+        )
+        assert sentinel_count == 0
+
     def test_delta_pruning_with_complex_expressions(self, spark, tmp_path):
         """Test partition pruning with complex boolean expressions"""
         delta_path = tmp_path / "delta_table"

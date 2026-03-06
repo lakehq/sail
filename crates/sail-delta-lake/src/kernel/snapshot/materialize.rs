@@ -32,7 +32,7 @@ use datafusion::common::scalar::ScalarValue;
 use serde::{Deserialize, Serialize};
 
 use super::{EagerSnapshot, Snapshot};
-use crate::conversion::ScalarConverter;
+use crate::conversion::parse_optional_partition_value;
 use crate::schema::{logical_arrow_to_kernel, make_physical_arrow_schema};
 use crate::spec::fields::{
     FIELD_NAME_PARTITION_VALUES_PARSED, FIELD_NAME_STATS, FIELD_NAME_STATS_PARSED,
@@ -350,13 +350,10 @@ fn parse_partition_values_array(
             let arrow_dt = arrow_field.data_type();
             let scalar_values: Vec<ScalarValue> = raw_values
                 .iter()
-                .map(|value| match value {
-                    Some(raw) => ScalarConverter::string_to_arrow_scalar_value(raw, arrow_dt)
-                        .map_err(|e| {
-                            DeltaTableError::generic(format!("partition value parse error: {e}"))
-                        }),
-                    None => ScalarValue::try_new_null(arrow_dt)
-                        .map_err(|e| DeltaTableError::generic(format!("null scalar error: {e}"))),
+                .map(|value| {
+                    parse_optional_partition_value(value.as_deref(), arrow_dt).map_err(|e| {
+                        DeltaTableError::generic(format!("partition value parse error: {e}"))
+                    })
                 })
                 .collect::<DeltaResult<Vec<_>>>()?;
             let array = if scalar_values.is_empty() {

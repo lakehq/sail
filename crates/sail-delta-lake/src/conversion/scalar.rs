@@ -510,12 +510,23 @@ fn number_from_f64(value: f64) -> Value {
 ///
 /// This implements Delta-specific parsing rules for partition values stored in the log.
 pub fn parse_partition_value(raw: &str, field_dt: &ArrowDataType) -> DeltaResultLocal<ScalarValue> {
-    if raw.is_empty() {
+    if raw.is_empty() || raw == NULL_PARTITION_VALUE_DATA_PATH {
         return ScalarValue::try_new_null(field_dt)
             .map_err(|e| DeltaTableError::generic(format!("Failed to create null scalar: {e}")));
     }
     ScalarConverter::string_to_arrow_scalar_value(raw, field_dt)
         .map_err(|e| DeltaTableError::generic(format!("Failed to parse partition value: {e}")))
+}
+
+pub fn parse_optional_partition_value(
+    raw: Option<&str>,
+    field_dt: &ArrowDataType,
+) -> DeltaResultLocal<ScalarValue> {
+    match raw {
+        Some(raw) => parse_partition_value(raw, field_dt),
+        None => ScalarValue::try_new_null(field_dt)
+            .map_err(|e| DeltaTableError::generic(format!("Failed to create null scalar: {e}"))),
+    }
 }
 
 /// Build a `ScalarValue` from an Arrow array at the given index, returning `None` for nulls.
@@ -541,4 +552,32 @@ pub fn scalar_value_to_array(
     value
         .to_array_of_size(len)
         .map_err(|e| DeltaTableError::generic(format!("Failed to convert scalar to array: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::datatypes::DataType as ArrowDataType;
+    use datafusion::common::ScalarValue;
+
+    use super::{
+        parse_optional_partition_value, parse_partition_value, NULL_PARTITION_VALUE_DATA_PATH,
+    };
+
+    #[test]
+    fn test_parse_partition_value_treats_hive_default_partition_as_null_for_strings() {
+        #[expect(clippy::expect_used)]
+        let value = parse_partition_value(NULL_PARTITION_VALUE_DATA_PATH, &ArrowDataType::Utf8)
+            .expect("partition value should parse");
+
+        assert_eq!(value, ScalarValue::Utf8(None));
+    }
+
+    #[test]
+    fn test_parse_optional_partition_value_none_returns_typed_null() {
+        #[expect(clippy::expect_used)]
+        let value = parse_optional_partition_value(None, &ArrowDataType::Utf8)
+            .expect("partition value should parse");
+
+        assert_eq!(value, ScalarValue::Utf8(None));
+    }
 }

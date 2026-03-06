@@ -32,7 +32,7 @@ use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, DataFusionError};
 use futures::TryStreamExt;
 
-use crate::conversion::ScalarConverter;
+use crate::conversion::{parse_optional_partition_value, ScalarConverter};
 use crate::spec::statistics::Stats;
 use crate::spec::{Add, DeltaResult};
 use crate::storage::LogStoreRef;
@@ -339,13 +339,10 @@ impl AddStatsPruningStatistics {
         dt: &datafusion::arrow::datatypes::DataType,
         v: &Option<String>,
     ) -> ScalarValue {
-        match v {
-            None => Self::null_scalar(dt),
-            Some(s) => ScalarValue::try_from_string(s.clone(), dt).unwrap_or_else(|_| {
-                // If we can't parse the partition value into the target type, treat it as unknown.
-                Self::null_scalar(dt)
-            }),
-        }
+        parse_optional_partition_value(v.as_deref(), dt).unwrap_or_else(|_| {
+            // If we can't parse the partition value into the target type, treat it as unknown.
+            Self::null_scalar(dt)
+        })
     }
 
     fn build_array(

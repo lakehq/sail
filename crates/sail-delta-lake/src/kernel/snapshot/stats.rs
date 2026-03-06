@@ -65,7 +65,8 @@ impl<'a> FileStatsAccessor<'a> {
 
 impl FileStatsAccessor<'_> {
     fn collect_count(&self, name: &str) -> Precision<usize> {
-        let num_records = struct_column_opt::<Int64Array>(self.stats, name);
+        let num_records = nested_struct_column_exact_or_path(self.stats, name)
+            .and_then(|col| col.as_any().downcast_ref::<Int64Array>());
         if let Some(num_records) = num_records {
             if num_records.is_empty() {
                 Precision::Exact(0)
@@ -93,8 +94,7 @@ impl FileStatsAccessor<'_> {
         name: &str,
         fun_type: AccumulatorType,
     ) -> Precision<ScalarValue> {
-        let mut path = name.split('.');
-        let array = match nested_column(self.stats, path_step, &mut path) {
+        let array = match nested_column(self.stats, path_step, name) {
             Ok(array) => array,
             Err(_) => return Precision::Absent,
         };
@@ -292,8 +292,7 @@ impl LogDataHandler<'_> {
                     return None;
                 }
             };
-            let path: Vec<&str> = column.name.split('.').collect();
-            return nested_struct_column(partition_values, &path);
+            return nested_struct_column_exact_or_path(partition_values, &column.name).cloned();
         }
 
         let stats = match batch_column::<StructArray>(self.data(), FIELD_NAME_STATS_PARSED) {
@@ -306,9 +305,9 @@ impl LogDataHandler<'_> {
                 return None;
             }
         };
-        let mut path = vec![stats_field];
-        path.extend(column.name.split('.'));
-        nested_struct_column(stats, &path)
+        nested_column(stats, stats_field, &column.name)
+            .ok()
+            .cloned()
     }
 }
 
@@ -319,43 +318,38 @@ fn batch_column<'a, T: Array + 'static>(batch: &'a RecordBatch, name: &str) -> D
         .ok_or_else(|| DeltaTableError::schema(format!("column {name} not found in log data")))
 }
 
-fn struct_column_opt<'a, T: Array + 'static>(array: &'a StructArray, name: &str) -> Option<&'a T> {
-    array
-        .column_by_name(name)
-        .and_then(|col| col.as_any().downcast_ref::<T>())
-}
-
 fn nested_column<'a>(
     array: &'a StructArray,
     root: &str,
-    path: &mut impl Iterator<Item = &'a str>,
+    name: &str,
 ) -> Result<&'a Arc<dyn Array>, DeltaTableError> {
-    let mut current = array.column_by_name(root).ok_or_else(|| {
+    let current = array.column_by_name(root).ok_or_else(|| {
         DeltaTableError::schema(format!("{root} column not found in stats struct"))
     })?;
-    for segment in path {
-        let struct_array = current
-            .as_any()
-            .downcast_ref::<StructArray>()
-            .ok_or_else(|| {
-                DeltaTableError::schema(format!(
-                    "Expected struct while accessing {segment} in stats"
-                ))
-            })?;
-        current = struct_array.column_by_name(segment).ok_or_else(|| {
-            DeltaTableError::schema(format!("{segment} column not found in stats struct"))
+    let struct_array = current
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .ok_or_else(|| {
+            DeltaTableError::schema(format!("Expected struct column for {root} in stats struct"))
         })?;
-    }
-    Ok(current)
+    nested_struct_column_exact_or_path(struct_array, name)
+        .ok_or_else(|| DeltaTableError::schema(format!("{name} column not found in stats struct")))
 }
 
-fn nested_struct_column(array: &StructArray, path: &[&str]) -> Option<ArrayRef> {
-    let mut path_iter = path.iter();
+fn nested_struct_column_exact_or_path<'a>(
+    array: &'a StructArray,
+    name: &str,
+) -> Option<&'a Arc<dyn Array>> {
+    if let Some(current) = array.column_by_name(name) {
+        return Some(current);
+    }
+
+    let mut path_iter = name.split('.');
     let first = path_iter.next()?;
-    let mut current = array.column_by_name(first)?.clone();
+    let mut current = array.column_by_name(first)?;
     for segment in path_iter {
         let struct_array = current.as_any().downcast_ref::<StructArray>()?;
-        current = struct_array.column_by_name(segment)?.clone();
+        current = struct_array.column_by_name(segment)?;
     }
     Some(current)
 }
@@ -415,7 +409,8 @@ impl PruningStatistics for LogDataHandler<'_> {
     /// Note: the returned array must contain `num_containers()` rows
     fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
         let stats = batch_column::<StructArray>(self.data(), FIELD_NAME_STATS_PARSED).ok()?;
-        let row_counts = nested_struct_column(stats, &[STATS_FIELD_NUM_RECORDS])?;
+        let row_counts =
+            nested_struct_column_exact_or_path(stats, STATS_FIELD_NUM_RECORDS)?.clone();
         ::datafusion::arrow::compute::cast(row_counts.as_ref(), &ArrowDataType::UInt64).ok()
     }
 

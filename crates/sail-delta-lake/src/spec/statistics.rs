@@ -134,6 +134,9 @@ fn lookup_value_stat<'a>(
     map: &'a HashMap<String, ColumnValueStat>,
     name: &str,
 ) -> Option<&'a StatValue> {
+    if let Some(value) = map.get(name).and_then(ColumnValueStat::as_value) {
+        return Some(value);
+    }
     let mut parts = name.split('.');
     let first = parts.next()?;
     let path: Vec<&str> = parts.collect();
@@ -141,6 +144,9 @@ fn lookup_value_stat<'a>(
 }
 
 fn lookup_count_stat(map: &HashMap<String, ColumnCountStat>, name: &str) -> Option<i64> {
+    if let Some(value) = map.get(name).and_then(ColumnCountStat::as_value) {
+        return Some(value);
+    }
     let mut parts = name.split('.');
     let first = parts.next()?;
     let path: Vec<&str> = parts.collect();
@@ -377,4 +383,23 @@ fn is_skipping_eligeble_datatype(data_type: &PrimitiveType) -> bool {
             | &PrimitiveType::String
             | PrimitiveType::Decimal(_)
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::{lookup_value_stat, ColumnValueStat, StatValue};
+
+    #[test]
+    fn test_lookup_value_stat_supports_top_level_keys_containing_dots() {
+        let stats = HashMap::from([(
+            "first.name".to_string(),
+            ColumnValueStat::Value(StatValue::String("alice".to_string())),
+        )]);
+
+        let value = lookup_value_stat(&stats, "first.name");
+
+        assert_eq!(value, Some(&StatValue::String("alice".to_string())));
+    }
 }
