@@ -3,6 +3,7 @@ use std::fmt;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
@@ -32,11 +33,11 @@ use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::common::{KeyValue, SpanAttribute};
 use crate::execution::metrics::MetricEmitter;
-use crate::metrics::{MetricAttribute, MetricRegistry};
+use crate::metrics::{MetricAttribute, MetricManager, MetricRegistry};
 
 #[derive(Debug, Clone, Default)]
 pub struct TracingExecOptions {
-    pub metric_registry: Option<Arc<MetricRegistry>>,
+    pub metrics: Option<MetricManager>,
     pub job_id: Option<u64>,
     pub stage: Option<usize>,
     pub attempt: Option<usize>,
@@ -44,8 +45,8 @@ pub struct TracingExecOptions {
 }
 
 impl TracingExecOptions {
-    pub fn with_metric_registry(mut self, registry: Arc<MetricRegistry>) -> Self {
-        self.metric_registry = Some(registry);
+    pub fn with_metrics(mut self, manager: MetricManager) -> Self {
+        self.metrics = Some(manager);
         self
     }
 }
@@ -177,13 +178,15 @@ impl ExecutionPlan for TracingExec {
             self.inner.execute(partition, context)?
         };
         let schema = stream.schema();
-        if let Some(ref registry) = self.options.metric_registry {
+        if let Some(ref manager) = self.options.metrics {
             let stream = MetricEmitterStream {
                 inner: stream,
                 plan: self.inner.clone(),
                 emitter: self.build_metric_emitter(),
                 attributes: self.build_metric_attributes(),
-                registry: registry.clone(),
+                registry: manager.registry.clone(),
+                interval: manager.collection_interval,
+                last_emit: None,
             };
             Ok(Box::pin(RecordBatchStreamAdapter::new(
                 schema,
@@ -307,6 +310,8 @@ pin_project! {
         emitter: Box<dyn MetricEmitter>,
         attributes: Vec<KeyValue>,
         registry: Arc<MetricRegistry>,
+        interval: Duration,
+        last_emit: Option<Instant>,
     }
 }
 
@@ -317,12 +322,20 @@ impl Stream for MetricEmitterStream {
         let this = self.project();
         let poll = this.inner.poll_next(cx);
         if poll.is_ready() {
-            if let Some(metrics) = this.plan.metrics() {
-                for metric in metrics.iter() {
-                    let _ = this
-                        .emitter
-                        .try_emit(metric, this.attributes, this.registry);
+            let is_done = matches!(poll, Poll::Ready(None));
+            // Note: metrics are not emitted regularly if a batch takes long to be produced,
+            // but this is acceptable for the purpose of execution metrics.
+            let should_emit =
+                is_done || this.last_emit.is_none_or(|t| t.elapsed() >= *this.interval);
+            if should_emit {
+                if let Some(metrics) = this.plan.metrics() {
+                    for metric in metrics.iter() {
+                        let _ = this
+                            .emitter
+                            .try_emit(metric, this.attributes, this.registry);
+                    }
                 }
+                *this.last_emit = Some(Instant::now());
             }
         }
         poll
