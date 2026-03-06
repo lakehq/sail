@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
+use datafusion::arrow::datatypes::{i256, DataType, IntervalUnit, TimeUnit};
 use datafusion::arrow::error::ArrowError;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{cast, expr, lit, Expr, ExprSchemable, Operator, ScalarUDF};
+use datafusion_expr::{cast, expr, lit, BinaryExpr, Expr, ExprSchemable, Operator, ScalarUDF};
 use datafusion_spark::function::math::expr_fn as math_fn;
 use half::f16;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -26,6 +26,7 @@ use sail_function::scalar::math::spark_try_mod::SparkTryMod;
 use sail_function::scalar::math::spark_try_mult::SparkTryMult;
 use sail_function::scalar::math::spark_try_subtract::SparkTrySubtract;
 use sail_function::scalar::math::spark_unhex::SparkUnHex;
+use sail_function::scalar::misc::raise_error::RaiseError;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -178,6 +179,86 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
     })
 }
 
+/// Check if an expression represents a zero literal value.
+/// Handles both direct literals and CAST expressions wrapping literals.
+fn is_zero_literal(expr: &Expr) -> bool {
+    // Helper to check if a ScalarValue is zero
+    fn is_scalar_zero(scalar: &ScalarValue) -> bool {
+        match scalar {
+            ScalarValue::Int8(Some(0))
+            | ScalarValue::Int16(Some(0))
+            | ScalarValue::Int32(Some(0))
+            | ScalarValue::Int64(Some(0))
+            | ScalarValue::UInt8(Some(0))
+            | ScalarValue::UInt16(Some(0))
+            | ScalarValue::UInt32(Some(0))
+            | ScalarValue::UInt64(Some(0))
+            | ScalarValue::Decimal128(Some(0), _, _) => true,
+            ScalarValue::Float32(Some(v)) if *v == 0.0 => true,
+            ScalarValue::Float64(Some(v)) if *v == 0.0 => true,
+            ScalarValue::Float16(Some(f)) if *f == f16::from_f32(0.0) => true,
+            ScalarValue::Decimal256(Some(v), _, _) if *v == i256::ZERO => true,
+            _ => false,
+        }
+    }
+
+    match expr {
+        // Direct literal
+        Expr::Literal(scalar, _) => is_scalar_zero(scalar),
+        // CAST(literal AS type) - unwrap the cast and check the inner literal
+        Expr::Cast(cast_expr) => {
+            if let Expr::Literal(scalar, _) = cast_expr.expr.as_ref() {
+                is_scalar_zero(scalar)
+            } else {
+                false
+            }
+        }
+        // TryCast is similar to Cast
+        Expr::TryCast(try_cast_expr) => {
+            if let Expr::Literal(scalar, _) = try_cast_expr.expr.as_ref() {
+                is_scalar_zero(scalar)
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
+}
+
+/// Returns a guarded divisor expression that handles division by zero at runtime.
+///
+/// In non-ANSI mode: returns `nullif(divisor, 0)` — evaluates to NULL when divisor is zero.
+/// In ANSI mode: returns `CASE WHEN divisor = 0 THEN raise_error(msg) ELSE divisor END`.
+///
+/// This wraps the divisor itself (not the entire division expression) to avoid
+/// duplicating complex divisor expressions (e.g., window functions) in the plan.
+fn make_safe_divisor(
+    divisor: Expr,
+    divisor_type: &DataType,
+    ansi_mode: bool,
+    error_message: &str,
+) -> Expr {
+    // Skip wrapping for Interval/Duration types (cannot be compared to lit(0)).
+    if matches!(divisor_type, DataType::Interval(_) | DataType::Duration(_)) {
+        return divisor;
+    }
+
+    if ansi_mode {
+        let zero_check = divisor.clone().eq(lit(0));
+        let raise = Expr::ScalarFunction(expr::ScalarFunction {
+            func: Arc::new(ScalarUDF::from(RaiseError::new())),
+            args: vec![lit(error_message)],
+        });
+        Expr::Case(expr::Case {
+            expr: None,
+            when_then_expr: vec![(Box::new(zero_check), Box::new(raise))],
+            else_expr: Some(Box::new(divisor)),
+        })
+    } else {
+        expr_fn::nullif(divisor, lit(0))
+    }
+}
+
 /// Arguments:
 ///   - dividend: A numeric or INTERVAL expression.
 ///   - divisor: A numeric expression.
@@ -199,35 +280,29 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
     let (dividend, divisor) = arguments.two()?;
 
-    if matches!(
-        &divisor,
-        Expr::Literal(ScalarValue::Int8(Some(0)), _metadata)
-            | Expr::Literal(ScalarValue::Int16(Some(0)), _metadata)
-            | Expr::Literal(ScalarValue::Int32(Some(0)), _metadata)
-            | Expr::Literal(ScalarValue::Int64(Some(0)), _metadata)
-            | Expr::Literal(ScalarValue::UInt8(Some(0)), _metadata)
-            | Expr::Literal(ScalarValue::UInt16(Some(0)), _metadata)
-            | Expr::Literal(ScalarValue::UInt32(Some(0)), _metadata)
-            | Expr::Literal(ScalarValue::UInt64(Some(0)), _metadata)
-            | Expr::Literal(ScalarValue::Float32(Some(0.0)), _metadata)
-            | Expr::Literal(ScalarValue::Float64(Some(0.0)), _metadata)
-    ) || matches!(
-        &divisor,
-        Expr::Literal(ScalarValue::Float16(Some(f16)), _metadata) if *f16 == f16::from_f32(0.0)
-    ) {
-        // FIXME: Account for array input.
-        return if function_context.plan_config.ansi_mode {
-            Err(PlanError::ArrowError(ArrowError::DivideByZero))
+    // Plan-time check for literal zero divisors (fast path, better error UX).
+    if is_zero_literal(&divisor) {
+        if function_context.plan_config.ansi_mode {
+            return Err(PlanError::ArrowError(ArrowError::DivideByZero));
         } else {
-            Ok(Expr::Literal(ScalarValue::Null, None))
-        };
+            return Ok(Expr::Literal(ScalarValue::Null, None));
+        }
     }
 
-    let (dividend_type, divisor_type) = (
-        dividend.get_type(function_context.schema),
-        divisor.get_type(function_context.schema),
+    let ansi_mode = function_context.plan_config.ansi_mode;
+    let dividend_type = dividend.get_type(function_context.schema);
+    let divisor_type = divisor.get_type(function_context.schema);
+
+    // Apply runtime zero-divisor guard to the divisor before building the division expression.
+    let effective_divisor_type = divisor_type.as_ref().cloned().unwrap_or(DataType::Int32);
+    let divisor = make_safe_divisor(
+        divisor,
+        &effective_divisor_type,
+        ansi_mode,
+        "Division by zero",
     );
-    Ok(match (dividend_type, divisor_type) {
+
+    let div_expr = match (&dividend_type, &divisor_type) {
         // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
         //  Seems to be a bug in DataFusion.
         // TODO: Cast the precision and scale that matches the Spark's behavior after the division.
@@ -249,7 +324,9 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
         // TODO: In case getting the type fails, we don't want to fail the query.
         //  Future work is needed here, ideally we create something like `Operator::SparkDivide`.
         (Err(_), _) | (_, Err(_)) => dividend / divisor,
-    })
+    };
+
+    Ok(div_expr)
 }
 
 /// Returns the integral part of the division of dividend by divisor.
@@ -268,11 +345,30 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
     } = input;
 
     let (dividend, divisor) = arguments.two()?;
-    let (dividend_type, divisor_type) = (
-        dividend.get_type(function_context.schema),
-        divisor.get_type(function_context.schema),
+
+    // Plan-time check for literal zero divisors.
+    if is_zero_literal(&divisor) {
+        if function_context.plan_config.ansi_mode {
+            return Err(PlanError::ArrowError(ArrowError::DivideByZero));
+        } else {
+            return Ok(Expr::Literal(ScalarValue::Null, None));
+        }
+    }
+
+    let ansi_mode = function_context.plan_config.ansi_mode;
+    let dividend_type = dividend.get_type(function_context.schema);
+    let divisor_type = divisor.get_type(function_context.schema);
+
+    // Apply runtime zero-divisor guard to the divisor before building the division expression.
+    let effective_divisor_type = divisor_type.as_ref().cloned().unwrap_or(DataType::Int32);
+    let divisor = make_safe_divisor(
+        divisor,
+        &effective_divisor_type,
+        ansi_mode,
+        "Division by zero",
     );
-    let expr = match (dividend_type, divisor_type) {
+
+    let div_expr = match (&dividend_type, &divisor_type) {
         // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
         //  Seems to be a bug in DataFusion.
         (Ok(DataType::Duration(_)), Ok(DataType::Duration(_))) => {
@@ -291,8 +387,8 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
         //  Future work is needed here, ideally we create something like `Operator::SparkDivide`.
         (Ok(_), Ok(_)) | (Err(_), _) | (_, Err(_)) => dividend / divisor,
     };
-    // We need this final cast because we are doing integer division.
-    Ok(cast(expr, DataType::Int64))
+
+    Ok(cast(div_expr, DataType::Int64))
 }
 
 fn power(base: Expr, exponent: Expr) -> Expr {
@@ -426,11 +522,54 @@ fn double2(func: impl Fn(Expr, Expr) -> Expr) -> impl Fn(Expr, Expr) -> Expr {
     move |arg1: Expr, arg2| func(cast(arg1, DataType::Float64), cast(arg2, DataType::Float64))
 }
 
+/// Modulo operation with division-by-zero handling.
+///
+/// In ANSI mode: raises error for integral/decimal modulo by zero.
+/// In non-ANSI mode: returns NULL for modulo by zero.
+/// Float/double modulo by zero returns NaN (IEEE 754).
+fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+
+    let (dividend, divisor) = arguments.two()?;
+
+    // Plan-time check for literal zero divisors.
+    if is_zero_literal(&divisor) {
+        if function_context.plan_config.ansi_mode {
+            return Err(PlanError::ArrowError(ArrowError::ArithmeticOverflow(
+                "Remainder by zero".to_string(),
+            )));
+        } else {
+            return Ok(Expr::Literal(ScalarValue::Null, None));
+        }
+    }
+
+    let ansi_mode = function_context.plan_config.ansi_mode;
+    let divisor_type = divisor.get_type(function_context.schema);
+
+    // Apply runtime zero-divisor guard to the divisor before building the modulo expression.
+    let effective_divisor_type = divisor_type.unwrap_or(DataType::Int32);
+    let divisor = make_safe_divisor(
+        divisor,
+        &effective_divisor_type,
+        ansi_mode,
+        "Remainder by zero",
+    );
+
+    Ok(Expr::BinaryExpr(BinaryExpr {
+        left: Box::new(dividend),
+        op: Operator::Modulo,
+        right: Box::new(divisor),
+    }))
+}
+
 pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
-        ("%", F::binary_op(Operator::Modulo)),
+        ("%", F::custom(spark_modulo)),
         ("*", F::custom(spark_multiply)),
         ("+", F::custom(spark_plus)),
         ("-", F::custom(spark_minus)),
@@ -469,7 +608,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("log10", F::unary(double(log10))),
         ("log1p", F::unary(double(log1p))),
         ("log2", F::unary(double(log2))),
-        ("mod", F::binary_op(Operator::Modulo)),
+        ("mod", F::custom(spark_modulo)),
         ("negative", F::unary(|x| Expr::Negative(Box::new(x)))),
         ("pi", F::nullary(expr_fn::pi)),
         ("pmod", F::binary(math_fn::pmod)),

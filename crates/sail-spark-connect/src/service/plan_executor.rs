@@ -26,9 +26,10 @@ use crate::spark::connect::execute_plan_response::{
     ResponseType, ResultComplete, SqlCommandResult,
 };
 use crate::spark::connect::{
-    relation, CheckpointCommand, CheckpointCommandResult, CommonInlineUserDefinedFunction,
-    CommonInlineUserDefinedTableFunction, CreateDataFrameViewCommand, ExecutePlanResponse,
-    GetResourcesCommand, LocalRelation, Relation, SqlCommand, StreamingQueryCommand,
+    relation, CheckpointCommand, CheckpointCommandResult, CommonInlineUserDefinedDataSource,
+    CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction,
+    CreateDataFrameViewCommand, ExecutePlanResponse, GetResourcesCommand, LocalRelation,
+    MergeIntoTableCommand, Relation, SqlCommand, StreamingQueryCommand,
     StreamingQueryCommandResult, StreamingQueryListenerBusCommand, StreamingQueryManagerCommand,
     StreamingQueryManagerCommandResult, WriteOperation, WriteOperationV2,
     WriteStreamOperationStart, WriteStreamOperationStartResult,
@@ -206,6 +207,15 @@ pub(crate) async fn handle_execute_write_operation_v2(
     let plan = spec::Plan::Command(spec::CommandPlan::new(spec::CommandNode::WriteTo(
         write.try_into()?,
     )));
+    handle_execute_plan(ctx, plan, metadata, ExecutePlanMode::EagerSilent).await
+}
+
+pub(crate) async fn handle_execute_merge_into_table_command(
+    ctx: &SessionContext,
+    command: MergeIntoTableCommand,
+    metadata: ExecutorMetadata,
+) -> SparkResult<ExecutePlanResponseStream> {
+    let plan = spec::Plan::Command(spec::CommandPlan::new(command.try_into()?));
     handle_execute_plan(ctx, plan, metadata, ExecutePlanMode::EagerSilent).await
 }
 
@@ -598,4 +608,64 @@ pub(crate) async fn handle_release_execute(
         executor.release(response_id)?;
     }
     Ok(())
+}
+
+pub(crate) async fn handle_execute_register_datasource(
+    ctx: &SessionContext,
+    datasource: CommonInlineUserDefinedDataSource,
+    metadata: ExecutorMetadata,
+) -> SparkResult<ExecutePlanResponseStream> {
+    use crate::spark::connect::common_inline_user_defined_data_source::DataSource;
+
+    log::info!(
+        "RegisterDataSource handler called for datasource: {}",
+        datasource.name
+    );
+
+    let spark = ctx.extension::<SparkSession>()?;
+    let name = datasource.name.clone();
+
+    // Extract the pickled Python datasource class
+    let command = match datasource.data_source {
+        Some(DataSource::PythonDataSource(pds)) => pds.command,
+        None => {
+            return Err(SparkError::invalid(
+                "RegisterDataSource requires a python_data_source",
+            ))
+        }
+    };
+
+    // Register in the session-scoped TableFormatRegistry with embedded pickled bytes
+    {
+        use std::sync::Arc;
+
+        use sail_common_datafusion::datasource::TableFormatRegistry;
+        use sail_data_source::formats::python::PythonTableFormat;
+
+        // Register format in session's TableFormatRegistry with embedded pickled class
+        // This provides session isolation - the format is only visible to this session
+        if let Ok(registry) = ctx.extension::<TableFormatRegistry>() {
+            let format = Arc::new(PythonTableFormat::with_pickled_class(name.clone(), command));
+            // Ignore error if already registered (allows re-registration to update)
+            if let Err(e) = registry.register(format) {
+                warn!("Failed to register python datasource {}: {}", name, e);
+            }
+            log::info!("Registered session-scoped datasource: {}", name);
+        } else {
+            return Err(SparkError::internal(
+                "TableFormatRegistry not found in session context",
+            ));
+        }
+    }
+
+    // Return empty success response
+    let mut output = vec![];
+    if metadata.reattachable {
+        output.push(ExecutorOutput::complete());
+    }
+    Ok(ExecutePlanResponseStream::new(
+        spark.session_id().to_string(),
+        metadata.operation_id,
+        Box::pin(stream::iter(output)),
+    ))
 }

@@ -105,7 +105,6 @@ impl DeltaWriterExec {
         }
         map
     }
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         table_url: Url,
@@ -375,7 +374,7 @@ impl DeltaWriterExec {
                         predicate: None,
                     });
                 }
-                PhysicalSinkMode::OverwriteIf { condition } => {
+                PhysicalSinkMode::OverwriteIf { source, .. } => {
                     operation = Some(DeltaOperation::Write {
                         mode: SaveMode::Overwrite,
                         partition_by: if partition_columns.is_empty() {
@@ -383,7 +382,7 @@ impl DeltaWriterExec {
                         } else {
                             Some(partition_columns.clone())
                         },
-                        predicate: condition.source.clone(),
+                        predicate: source.clone(),
                     });
                 }
                 PhysicalSinkMode::ErrorIfExists => {
@@ -518,8 +517,8 @@ impl DeltaWriterExec {
                     operation = Some(DeltaOperation::Create {
                         mode: SaveMode::ErrorIfExists,
                         location: table_url.to_string(),
-                        protocol,
-                        metadata,
+                        protocol: Box::new(protocol),
+                        metadata: Box::new(metadata),
                     });
                 } else if has_timestamp_ntz {
                     let protocol: Protocol = serde_json::from_value(serde_json::json!({
@@ -546,8 +545,8 @@ impl DeltaWriterExec {
                     operation = Some(DeltaOperation::Create {
                         mode: SaveMode::ErrorIfExists,
                         location: table_url.to_string(),
-                        protocol,
-                        metadata,
+                        protocol: Box::new(protocol),
+                        metadata: Box::new(metadata),
                     });
                 }
             }

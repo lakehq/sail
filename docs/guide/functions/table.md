@@ -5,6 +5,12 @@ rank: 5
 
 # Built-in Spark Table Functions
 
-| Function | Supported          |
-| -------- | ------------------ |
-| `range`  | :white_check_mark: |
+::: info
+
+The table functions are for use in Spark SQL.
+
+:::
+
+| Function | Supported          | Note |
+| -------- | ------------------ | ---- |
+| `range`  | :white_check_mark: |      |

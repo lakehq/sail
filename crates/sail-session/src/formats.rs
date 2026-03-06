@@ -9,6 +9,7 @@ use sail_data_source::formats::console::ConsoleTableFormat;
 use sail_data_source::formats::csv::CsvTableFormat;
 use sail_data_source::formats::json::JsonTableFormat;
 use sail_data_source::formats::parquet::ParquetTableFormat;
+use sail_data_source::formats::python::{discover_data_sources, PythonTableFormat};
 use sail_data_source::formats::rate::RateTableFormat;
 use sail_data_source::formats::socket::SocketTableFormat;
 use sail_data_source::formats::text::TextTableFormat;
@@ -39,5 +40,12 @@ fn register_builtin_formats(registry: &Arc<TableFormatRegistry>) -> Result<()> {
 fn register_external_formats(registry: &Arc<TableFormatRegistry>) -> Result<()> {
     DeltaTableFormat::register(registry)?;
     IcebergTableFormat::register(registry)?;
+
+    // Register Python data sources
+    {
+        discover_data_sources()?;
+        PythonTableFormat::register_all(registry)?;
+    }
+
     Ok(())
 }

@@ -50,7 +50,7 @@ impl PlanResolver<'_> {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(super) fn resolve_python_udtf_plan(
         &self,
         function: PythonUdtf,

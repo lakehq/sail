@@ -5,7 +5,6 @@ pub mod stream;
 
 use datafusion::arrow::array::{BooleanArray, BooleanBuilder, RecordBatch};
 
-#[allow(clippy::all)]
 pub(crate) mod gen {
     tonic::include_proto!("sail.streaming");
 }

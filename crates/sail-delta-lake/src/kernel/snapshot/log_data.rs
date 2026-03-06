@@ -48,22 +48,20 @@ impl<'a> LogDataHandler<'a> {
         Self { data, config }
     }
 
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub(crate) fn table_configuration(&self) -> &TableConfiguration {
         self.config
     }
 
-    #[allow(dead_code)]
     pub(crate) fn table_properties(&self) -> &TableProperties {
         self.config.table_properties()
     }
 
-    #[allow(dead_code)]
     pub(crate) fn protocol(&self) -> &Protocol {
         self.config.protocol()
     }
 
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub(crate) fn metadata(&self) -> &Metadata {
         self.config.metadata()
     }

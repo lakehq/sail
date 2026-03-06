@@ -47,6 +47,10 @@ message ExtendedPhysicalPlanNode {
     IcebergWriterExecNode iceberg_writer = 32;
     IcebergCommitExecNode iceberg_commit = 33;
     MergeCardinalityCheckExecNode merge_cardinality_check = 34;
+    PythonDataSourceExecNode python_data_source = 35;
+    MonotonicIdExecNode monotonic_id = 36;
+    PythonDataSourceWriteExecNode python_data_source_write = 37;
+    PythonDataSourceWriteCommitExecNode python_data_source_write_commit = 38;
   }
 }
 
@@ -74,7 +78,8 @@ message ExtendedScalarUdf {
     TimestampNowUdf timestamp_now = 9;
     SparkTimestampUdf spark_timestamp = 10;
     SparkDateUdf spark_date = 11;
-    SparkArrayFilterUdf spark_array_filter = 12;
+    SparkFromCsvUdf spark_from_csv = 12;
+    SparkArrayFilterUdf spark_array_filter = 13;
   }
 }
 
@@ -151,6 +156,10 @@ message SparkTimestampUdf {
 
 message SparkDateUdf {
   bool is_try = 1;
+}
+
+message SparkFromCsvUdf {
+  string session_timezone = 1;
 }
 
 message SparkArrayFilterUdf {
@@ -297,6 +306,7 @@ message RangeExecNode {
   int64 step = 3;
   uint64 num_partitions = 4;
   bytes schema = 5;
+  repeated uint64 projection = 6;
 }
 
 message ShowStringExecNode {
@@ -418,8 +428,7 @@ message PartialSortExecNode {
 message AppendMode {}
 message OverwriteMode {}
 message OverwriteIfMode {
-  bytes condition = 1;
-  optional string source = 2;
+  optional string source = 1;
 }
 message ErrorIfExistsMode {}
 message IgnoreIfExistsMode {}
@@ -460,6 +469,14 @@ message DeltaScanByAddsExecNode {
   bytes input = 1;
   string table_url = 2;
   bytes table_schema = 3;
+  optional bytes output_schema = 4;
+  string scan_config_json = 5;
+  optional PhysicalProjection projection = 6;
+  optional uint64 limit = 7;
+  optional bytes pushdown_filter = 8;
+  int64 version = 9;
+  optional bytes statistics = 10;
+  // TODO: Consider snapshot hints (partition columns, kernel schema) to avoid worker log reads.
 }
 
 message DeltaDiscoveryExecNode {
@@ -531,6 +548,12 @@ message MergeCardinalityCheckExecNode {
   string source_present_col = 4;
 }
 
+message MonotonicIdExecNode {
+  bytes input = 1;
+  string column_name = 2;
+  bytes schema = 3;
+}
+
 message JoinOn {
   bytes left = 1;
   bytes right = 2;
@@ -579,10 +602,48 @@ message IcebergCommitExecNode {
 }
 
 message DeltaLogReplayExecNode {
+  // Legacy single-input encoding for sort replay mode.
   bytes input = 1;
   string table_url = 2;
   int64 version = 3;
   repeated string partition_columns = 4;
   repeated string checkpoint_files = 5;
   repeated string commit_files = 6;
+  // Preferred encoding for hash replay mode.
+  optional bytes checkpoint_input = 7;
+  optional bytes commits_input = 8;
+}
+
+message PythonDataSourceInputPartition {
+  uint64 partition_id = 1;
+  bytes data = 2;
+}
+
+message PythonDataSourceExecNode {
+  // Pickled Python DataSourceReader instance (with filters already applied)
+  bytes pickled_reader = 1;
+  bytes schema = 2;
+  repeated PythonDataSourceInputPartition partitions = 3;
+}
+
+message PythonDataSourceWriteExecNode {
+  // Pickled Python DataSourceWriter instance obtained from
+  // DataSource.writer(schema, overwrite), ready for write(), commit(),
+  // and abort() calls (stateless boundary matches write_exec.rs).
+  bytes pickled_writer = 1;
+  // Schema of the data being written
+  bytes schema = 2;
+  // Whether writer is DataSourceArrowWriter (true) or DataSourceWriter (false)
+  bool is_arrow = 3;
+  // Input plan that generates data to write
+  bytes input = 4;
+}
+
+message PythonDataSourceWriteCommitExecNode {
+  // Pickled Python DataSourceWriter instance used for commit()/abort().
+  bytes pickled_writer = 1;
+  // Number of partition-level write results expected from the write stage.
+  uint64 expected_partitions = 2;
+  // Input plan that yields per-partition write results.
+  bytes input = 3;
 }

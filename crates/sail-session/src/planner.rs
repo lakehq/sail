@@ -21,10 +21,12 @@ use sail_common_datafusion::rename::physical_plan::rename_projected_physical_pla
 use sail_common_datafusion::streaming::event::schema::{
     to_flow_event_field_names, to_flow_event_projection,
 };
+use sail_delta_lake::logical::RewriteDeltaTableSource;
 use sail_logical_plan::file_delete::FileDeleteNode;
 use sail_logical_plan::file_write::FileWriteNode;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_logical_plan::merge::MergeIntoNode;
+use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::range::RangeNode;
 use sail_logical_plan::repartition::ExplicitRepartitionNode;
 use sail_logical_plan::schema_pivot::SchemaPivotNode;
@@ -38,6 +40,7 @@ use sail_logical_plan::streaming::source_wrapper::StreamSourceWrapperNode;
 use sail_physical_plan::file_delete::create_file_delete_physical_plan;
 use sail_physical_plan::file_write::create_file_write_physical_plan;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
+use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
@@ -59,7 +62,10 @@ impl QueryPlanner for ExtensionQueryPlanner {
         session_state: &SessionState,
     ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
         // TODO: show rewriters and the final logical plan in `EXPLAIN`
-        let rewriters = vec![RewriteSystemTableSource];
+        let rewriters: Vec<Box<dyn LogicalRewriter>> = vec![
+            Box::new(RewriteSystemTableSource),
+            Box::new(RewriteDeltaTableSource),
+        ];
         let mut logical_plan = logical_plan.clone();
         for rewriter in rewriters {
             logical_plan = rewriter.rewrite(logical_plan)?.data
@@ -89,11 +95,14 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
         let plan: Arc<dyn ExecutionPlan> = if let Some(node) =
             node.as_any().downcast_ref::<RangeNode>()
         {
-            Arc::new(RangeExec::new(
+            let schema = UserDefinedLogicalNode::schema(node).inner().clone();
+            let projection = (0..schema.fields().len()).collect();
+            Arc::new(RangeExec::try_new(
                 node.range().clone(),
                 node.num_partitions(),
-                UserDefinedLogicalNode::schema(node).inner().clone(),
-            ))
+                schema,
+                projection,
+            )?)
         } else if let Some(node) = node.as_any().downcast_ref::<ShowStringNode>() {
             let [input] = physical_inputs else {
                 return internal_err!("ShowStringExec requires exactly one physical input");
@@ -114,6 +123,15 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 node.udf().clone(),
                 UserDefinedLogicalNode::schema(node).inner().clone(),
             ))
+        } else if let Some(node) = node.as_any().downcast_ref::<MonotonicIdNode>() {
+            let [input] = physical_inputs else {
+                return internal_err!("MonotonicIdExec requires exactly one physical input");
+            };
+            Arc::new(MonotonicIdExec::try_new(
+                input.clone(),
+                node.column_name().to_string(),
+                UserDefinedLogicalNode::schema(node).inner().clone(),
+            )?)
         } else if let Some(node) = node.as_any().downcast_ref::<SortWithinPartitionsNode>() {
             let [input] = physical_inputs else {
                 return internal_err!("SortExec requires exactly one physical input");
@@ -188,11 +206,11 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                         options: vec![],
                     };
                     let registry = session_state.extension::<TableFormatRegistry>()?;
-                    let provider = registry
+                    let source = registry
                         .get(format)?
-                        .create_provider(session_state, source_info)
+                        .create_source(session_state, source_info)
                         .await?;
-                    Ok(provider.schema().to_dfschema_ref()?)
+                    Ok(source.schema().to_dfschema_ref()?)
                 }
                 TableKind::Table { columns, .. } => {
                     let schema = datafusion::arrow::datatypes::Schema::new(

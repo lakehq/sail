@@ -1,18 +1,13 @@
 ---
-title: Iceberg
-rank: 2
+title: Examples
+rank: 1
 ---
 
-# Iceberg
+# Examples
 
-You can use the `iceberg` format in Sail to work with [Apache Iceberg](https://iceberg.apache.org/).
-You can use the Spark DataFrame API or Spark SQL to read and write Iceberg tables.
+<!--@include: ../../_common/spark-session.md-->
 
-## Examples
-
-<!--@include: ../_common/spark-session.md-->
-
-### Basic Usage
+## Basic Usage
 
 ::: code-group
 
@@ -44,7 +39,7 @@ SELECT * FROM users;
 
 :::
 
-### Data Partitioning
+## Data Partitioning
 
 You can work with partitioned Iceberg tables using the Spark DataFrame API.
 Partitioned Iceberg tables organize data into directories based on the values of one or more columns.
@@ -78,7 +73,7 @@ SELECT * FROM metrics WHERE year > 2024;
 
 :::
 
-### Time Travel
+## Time Travel
 
 You can use the time travel feature to query tags, branches, or historical versions of an Iceberg table.
 
@@ -90,7 +85,7 @@ df = spark.read.format("iceberg").option("branch", "main").load(path)
 
 Time travel is not available for Spark SQL in Sail yet, but we plan to support it soon.
 
-### More Features
+## More Features
 
 We will continue adding more examples for advanced Iceberg features as they become available in Sail.
 In the meantime, feel free to reach out to us on [Slack](https://lakesail.com/slack) or [GitHub Discussions](https://github.com/lakehq/sail/discussions) if you have questions!

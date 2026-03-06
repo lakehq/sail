@@ -4,8 +4,8 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field};
 use datafusion::functions_aggregate::{
     approx_distinct, approx_percentile_cont, array_agg, average, bit_and_or_xor, bool_and_or,
-    correlation, count, covariance, first_last, grouping, median, min_max, percentile_cont, regr,
-    stddev, sum, variance,
+    correlation, count, covariance, first_last, grouping, min_max, percentile_cont, regr, stddev,
+    sum, variance,
 };
 use datafusion::functions_nested::string::array_to_string;
 use datafusion_common::ScalarValue;
@@ -15,9 +15,11 @@ use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use lazy_static::lazy_static;
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
+use sail_function::aggregate::percentile::PercentileFunction;
 use sail_function::aggregate::percentile_disc::percentile_disc_udaf;
 use sail_function::aggregate::skewness::SkewnessFunc;
 use sail_function::aggregate::try_avg::TryAvgFunction;
@@ -154,7 +156,7 @@ fn mode(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 /// DataFusion's percentile_cont expects args = [column, percentile], but Spark's
 /// SQL syntax `percentile_cont(0.5) WITHIN GROUP (ORDER BY col)` puts the column
 /// in order_by and the percentile in arguments. This function combines them.
-fn percentile_cont_expr(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+fn percentile_cont(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     // Extract the single column expression from ORDER BY (error if multiple)
     let sort = input.order_by.clone().one()?;
     let column = sort.expr;
@@ -178,7 +180,7 @@ fn percentile_cont_expr(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 /// Builds a percentile_disc aggregate expression from WITHIN GROUP syntax.
-fn percentile_disc_expr(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+fn percentile_disc(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let sort = input.order_by.clone().one()?;
     let column = sort.expr;
     let percentile = input.arguments.one()?;
@@ -259,14 +261,34 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         function_context: _,
     } = input;
     let null_treatment = get_null_treatment(ignore_nulls);
+    // For COUNT(DISTINCT *), the resolver already expanded the wildcard to column references
+    // (with hidden-column filtering). For COUNT(*), convert to COUNT(1).
     let args = transform_count_star_wildcard_expr(arguments);
     // TODO: remove StructFunction call when count distinct from multiple arguments is implemented
     // https://github.com/apache/datafusion/blob/58ddf0d4390c770bc571f3ac2727c7de77aa25ab/datafusion/functions-aggregate/src/count.rs#L333
     let args = if distinct && (args.len() > 1) {
-        vec![ScalarUDF::from(StructFunction::new(
+        // In Spark, COUNT(DISTINCT col1, col2, ...) skips rows where ANY column is NULL.
+        // Since we wrap multiple columns into a struct for DataFusion, a struct with NULL
+        // fields is still a non-NULL value and would be counted. To match Spark semantics,
+        // return NULL (instead of a struct with NULL fields) when any argument is NULL.
+        // Compute any_null first (borrowing args), then move args into .call() to avoid cloning.
+        let any_null = args
+            .iter()
+            .map(|arg| arg.clone().is_null())
+            .reduce(|a, b| a.or(b));
+        let struct_expr = ScalarUDF::from(StructFunction::new(
             (0..args.len()).map(|i| format!("col{i}")).collect(),
         ))
-        .call(args)]
+        .call(args);
+        // `any_null` is always `Some` here since `args.len() > 1` guarantees `reduce` succeeds.
+        match any_null {
+            Some(any_null) => vec![expr::Expr::Case(expr::Case {
+                expr: None,
+                when_then_expr: vec![(Box::new(any_null), Box::new(lit(ScalarValue::Null)))],
+                else_expr: Some(Box::new(struct_expr)),
+            })],
+            None => vec![struct_expr],
+        }
     } else {
         args
     };
@@ -419,20 +441,45 @@ fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         .end()?)
 }
 
+fn histogram_numeric(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(HistogramNumericFunction::new())),
+        params: AggregateFunctionParams {
+            args: input.arguments,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
 fn median(input: AggFunctionInput) -> PlanResult<expr::Expr> {
-    Ok(cast(
-        expr::Expr::AggregateFunction(AggregateFunction {
-            func: median::median_udaf(),
-            params: AggregateFunctionParams {
-                args: input.arguments.clone(),
-                distinct: input.distinct,
-                order_by: input.order_by,
-                filter: input.filter,
-                null_treatment: get_null_treatment(input.ignore_nulls),
-            },
-        }),
-        DataType::Float64,
-    ))
+    let mut args = input.arguments.clone();
+    args.push(lit(0.5_f64));
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(PercentileFunction::new())),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
+fn percentile_exact(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(PercentileFunction::new())),
+        params: AggregateFunctionParams {
+            args: input.arguments,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
 }
 
 fn approx_count_distinct(input: AggFunctionInput) -> PlanResult<expr::Expr> {
@@ -487,7 +534,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("first_value", F::custom(first_value)),
         ("grouping", F::default(grouping::grouping_udaf)),
         ("grouping_id", F::unknown("grouping_id")),
-        ("histogram_numeric", F::unknown("histogram_numeric")),
+        ("histogram_numeric", F::custom(histogram_numeric)),
         ("hll_sketch_agg", F::unknown("hll_sketch_agg")),
         ("hll_union_agg", F::unknown("hll_union_agg")),
         ("kurtosis", F::custom(kurtosis)),
@@ -501,13 +548,13 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("min", F::default(min_max::min_udaf)),
         ("min_by", F::custom(min_by)),
         ("mode", F::custom(mode)),
-        ("percentile", F::unknown("percentile")),
+        ("percentile", F::custom(percentile_exact)),
         (
             "percentile_approx",
             F::default(approx_percentile_cont::approx_percentile_cont_udaf),
         ),
-        ("percentile_cont", F::custom(percentile_cont_expr)),
-        ("percentile_disc", F::custom(percentile_disc_expr)),
+        ("percentile_cont", F::custom(percentile_cont)),
+        ("percentile_disc", F::custom(percentile_disc)),
         ("regr_avgx", F::default(regr::regr_avgx_udaf)),
         ("regr_avgy", F::default(regr::regr_avgy_udaf)),
         ("regr_count", F::default(regr::regr_count_udaf)),

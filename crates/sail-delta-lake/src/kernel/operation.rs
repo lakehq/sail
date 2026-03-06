@@ -61,15 +61,14 @@ impl std::str::FromStr for SaveMode {
     }
 }
 
-#[allow(clippy::large_enum_variant)]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub enum DeltaOperation {
     Create {
         mode: SaveMode,
         location: String,
-        protocol: Protocol,
-        metadata: Metadata,
+        protocol: Box<Protocol>,
+        metadata: Box<Metadata>,
     },
     Write {
         mode: SaveMode,

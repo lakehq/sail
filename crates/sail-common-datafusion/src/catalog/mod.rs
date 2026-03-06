@@ -3,11 +3,12 @@ mod status;
 
 use datafusion_common::Column;
 use datafusion_expr::expr;
+use serde::{Deserialize, Serialize};
 pub use status::*;
 
 use crate::datasource::BucketBy;
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub enum CatalogTableConstraint {
     Unique {
         name: Option<String>,
@@ -19,7 +20,7 @@ pub enum CatalogTableConstraint {
     },
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct CatalogTableBucketBy {
     pub columns: Vec<String>,
     pub num_buckets: usize,
@@ -38,7 +39,7 @@ impl From<CatalogTableBucketBy> for BucketBy {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct CatalogTableSort {
     pub column: String,
     pub ascending: bool,

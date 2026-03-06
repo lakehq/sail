@@ -2077,14 +2077,14 @@
                       {
                         "literal": {
                           "utf8": {
-                            "value": "yxTomxx"
+                            "value": "xyz"
                           }
                         }
                       },
                       {
                         "literal": {
                           "utf8": {
-                            "value": "xyz"
+                            "value": "yxTomxx"
                           }
                         }
                       }
@@ -2127,14 +2127,14 @@
                       {
                         "literal": {
                           "utf8": {
-                            "value": "@ $ % & ()abc "
+                            "value": "@$%&( )abc"
                           }
                         }
                       },
                       {
                         "literal": {
                           "utf8": {
-                            "value": "@$%&( )abc"
+                            "value": "@ $ % & ()abc "
                           }
                         }
                       }
@@ -2220,14 +2220,14 @@
                       {
                         "literal": {
                           "utf8": {
-                            "value": "[ ccccbcc "
+                            "value": "c []"
                           }
                         }
                       },
                       {
                         "literal": {
                           "utf8": {
-                            "value": "c []"
+                            "value": "[ ccccbcc "
                           }
                         }
                       }
@@ -2313,14 +2313,14 @@
                       {
                         "literal": {
                           "utf8": {
-                            "value": "bc...,,,&&&ccc"
+                            "value": "c&^,."
                           }
                         }
                       },
                       {
                         "literal": {
                           "utf8": {
-                            "value": "c&^,."
+                            "value": "bc...,,,&&&ccc"
                           }
                         }
                       }

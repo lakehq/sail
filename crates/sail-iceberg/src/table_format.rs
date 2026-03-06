@@ -193,7 +193,7 @@ pub async fn create_iceberg_provider(
 }
 
 /// Load metadata and pick snapshot per options (precedence: snapshot_id > ref > timestamp > current).
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub(crate) async fn load_table_metadata_with_options(
     ctx: &dyn Session,
     table_url: &Url,

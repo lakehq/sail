@@ -9,12 +9,11 @@ use sail_common_datafusion::datasource::{
     create_sort_order, PhysicalSinkMode, SinkInfo, SinkMode, TableFormatRegistry,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::physical_expr::PhysicalExprWithSource;
 use sail_logical_plan::file_write::FileWriteOptions;
 
 pub async fn create_file_write_physical_plan(
     ctx: &SessionState,
-    planner: &dyn PhysicalPlanner,
+    _planner: &dyn PhysicalPlanner,
     logical_input: &LogicalPlan,
     physical_input: Arc<dyn ExecutionPlan>,
     options: FileWriteOptions,
@@ -34,10 +33,10 @@ pub async fn create_file_write_physical_plan(
         SinkMode::Append => PhysicalSinkMode::Append,
         SinkMode::Overwrite => PhysicalSinkMode::Overwrite,
         SinkMode::OverwriteIf { condition } => {
-            let expr =
-                planner.create_physical_expr(&condition.expr, logical_input.schema(), ctx)?;
+            let source = condition.source.clone();
             PhysicalSinkMode::OverwriteIf {
-                condition: PhysicalExprWithSource::new(expr, condition.source),
+                condition: Some(condition),
+                source,
             }
         }
         SinkMode::OverwritePartitions => PhysicalSinkMode::OverwritePartitions,

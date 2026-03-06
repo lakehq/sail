@@ -8,6 +8,8 @@ on:
     paths:
       - ".github/**"
       - "python/**"
+      - "crates/**/*.py"
+      - "scripts/**/*.py"
       - "pyproject.toml"
 
 jobs:

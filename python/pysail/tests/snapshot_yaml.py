@@ -49,7 +49,7 @@ def _normalize_for_yaml(data: Any) -> Any:
     """
     if isinstance(data, dict):
         return {k: _normalize_for_yaml(v) for k, v in data.items()}
-    if isinstance(data, (set, frozenset)):
+    if isinstance(data, set | frozenset):
         return [_normalize_for_yaml(v) for v in sorted(data, key=lambda v: (type(v).__name__, str(v)))]
     if isinstance(data, tuple):
         return [_normalize_for_yaml(v) for v in data]

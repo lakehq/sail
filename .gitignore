@@ -28,6 +28,7 @@ out/
 /opt/
 
 # Editor directories and files
+.cursor/
 .idea/
 .vscode/*
 *.iml
@@ -99,5 +100,7 @@ docs/.vitepress/.temp
 
 # Claude Code settings
 .claude/
+.worktrees/
 
 CLAUDE.md
+AGENTS.md

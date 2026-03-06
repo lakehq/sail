@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use datafusion::common::{DataFusionError, Result};
+use datafusion::common::{DataFusionError, Result, ToDFSchema};
 use datafusion::physical_expr::expressions::NotExpr;
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -21,7 +21,7 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
-use sail_common_datafusion::physical_expr::PhysicalExprWithSource;
+use sail_common_datafusion::logical_expr::ExprWithSource;
 
 use super::context::PlannerContext;
 use super::utils::{build_log_replay_pipeline_with_options, LogReplayFilter, LogReplayOptions};
@@ -35,7 +35,7 @@ use crate::physical_plan::{
 
 pub async fn build_delete_plan(
     ctx: &PlannerContext<'_>,
-    condition: PhysicalExprWithSource,
+    condition: ExprWithSource,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let table = ctx.open_table().await?;
     let snapshot_state = table
@@ -44,16 +44,22 @@ pub async fn build_delete_plan(
     let version = snapshot_state.version();
 
     let table_schema = snapshot_state
-        .snapshot()
-        .arrow_schema()
+        .input_schema()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let partition_columns = snapshot_state.metadata().partition_columns().clone();
+    let table_df_schema = table_schema
+        .clone()
+        .to_dfschema()
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let physical_condition = ctx
+        .session()
+        .create_physical_expr(condition.expr, &table_df_schema)?;
 
     // Partition-only predicates can delete entire files without scanning data. In that case,
     // build a visible metadata pipeline over a log-derived meta table.
     let mut expr_props = PredicateProperties::new(partition_columns.clone());
     expr_props
-        .analyze_predicate(&condition.expr)
+        .analyze_predicate(&physical_condition)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     let kernel_snapshot = snapshot_state.snapshot().snapshot().inner.clone();
@@ -73,16 +79,29 @@ pub async fn build_delete_plan(
     let mut log_replay_options = LogReplayOptions::default();
     if expr_props.partition_only {
         log_replay_options.log_filter = Some(LogReplayFilter {
-            predicate: condition.expr.clone(),
+            predicate: physical_condition.clone(),
             table_schema: table_schema.clone(),
         });
     }
+
+    let kschema_arc = snapshot_state.snapshot().table_configuration().schema();
+    let kmode = snapshot_state.effective_column_mapping_mode();
+    let partition_columns_map = partition_columns
+        .iter()
+        .map(|col| {
+            let physical = kschema_arc
+                .field(col)
+                .map(|f| f.physical_name(kmode).to_string())
+                .unwrap_or_else(|| col.clone());
+            (col.clone(), physical)
+        })
+        .collect::<Vec<_>>();
 
     let meta_scan: Arc<dyn ExecutionPlan> = build_log_replay_pipeline_with_options(
         ctx,
         ctx.table_url().clone(),
         version,
-        partition_columns.clone(),
+        partition_columns_map,
         checkpoint_files,
         commit_files,
         log_replay_options,
@@ -93,7 +112,7 @@ pub async fn build_delete_plan(
     let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
         meta_scan,
         ctx.table_url().clone(),
-        Some(condition.expr.clone()),
+        Some(physical_condition.clone()),
         Some(table_schema.clone()),
         version,
         partition_columns.clone(),
@@ -101,6 +120,9 @@ pub async fn build_delete_plan(
     )?);
 
     // Spread Add actions across partitions so `DeltaScanByAddsExec` can scan files in parallel.
+    // TODO(adaptive-partitioning): Keep this aligned with `scan_planner.rs`.
+    // Plan: switch from fixed `target_partitions` + round-robin to size-driven partition count
+    // first, then size-aware distribution to avoid oversharding and worker skew.
     let target_partitions = ctx.session().config().target_partitions().max(1);
     let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
         find_files_exec,
@@ -110,7 +132,13 @@ pub async fn build_delete_plan(
     let scan_exec = Arc::new(DeltaScanByAddsExec::new(
         Arc::clone(&find_files_exec),
         ctx.table_url().clone(),
+        version,
         table_schema.clone(),
+        table_schema.clone(),
+        crate::datasource::DeltaScanConfig::default(),
+        None,
+        None,
+        None,
     ));
 
     // Adapt the predicate to the scan schema. PhysicalExpr Column indices are schema-dependent,
@@ -118,7 +146,7 @@ pub async fn build_delete_plan(
     let adapter_factory = Arc::new(crate::physical_plan::DeltaPhysicalExprAdapterFactory {});
     let adapter = adapter_factory.create(table_schema.clone(), scan_exec.schema());
     let adapted_condition = adapter
-        .rewrite(condition.expr.clone())
+        .rewrite(physical_condition.clone())
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     let negated_condition = Arc::new(NotExpr::new(adapted_condition));

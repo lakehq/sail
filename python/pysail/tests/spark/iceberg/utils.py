@@ -23,7 +23,7 @@ def create_sql_catalog(tmp_path: Path):
 def pyiceberg_to_pandas(table, sort_by=None, dtypes_like: pd.Series | None = None):
     df = table.scan().to_arrow().to_pandas()
     if sort_by is not None:
-        if isinstance(sort_by, (list, tuple)):
+        if isinstance(sort_by, list | tuple):
             df = df.sort_values(list(sort_by)).reset_index(drop=True)
         else:
             df = df.sort_values(sort_by).reset_index(drop=True)

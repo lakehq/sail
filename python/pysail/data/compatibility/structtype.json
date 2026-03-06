@@ -47,8 +47,7 @@
   {
     "module": "pyspark.sql.types.StructType",
     "function": "toDDL",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/1060"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.types.StructType",

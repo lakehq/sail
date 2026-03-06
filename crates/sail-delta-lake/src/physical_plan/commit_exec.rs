@@ -323,8 +323,8 @@ impl ExecutionPlan for DeltaCommitExec {
                         DeltaOperation::Create {
                             mode: SaveMode::ErrorIfExists,
                             location: table_url.to_string(),
-                            protocol,
-                            metadata,
+                            protocol: Box::new(protocol),
+                            metadata: Box::new(metadata),
                         },
                         final_actions,
                     )
@@ -363,8 +363,8 @@ impl ExecutionPlan for DeltaCommitExec {
                         DeltaOperation::Create {
                             mode: SaveMode::ErrorIfExists,
                             location: table_url.to_string(),
-                            protocol,
-                            metadata,
+                            protocol: Box::new(protocol),
+                            metadata: Box::new(metadata),
                         },
                         updated_actions,
                     )

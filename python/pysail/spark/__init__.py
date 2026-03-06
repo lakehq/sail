@@ -6,8 +6,6 @@ __all__ = [
     "SparkConnectServer",
 ]
 
-_native.initialize()
-
 
 class SparkConnectServer:
     """The Spark Connect server that uses Sail as the computation engine."""

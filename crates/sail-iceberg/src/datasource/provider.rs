@@ -70,7 +70,6 @@ pub struct IcebergTableProvider {
     /// The current snapshot of the table
     snapshot: Snapshot,
     /// All partition specs referenced by the table
-    #[allow(unused)]
     partition_specs: Vec<PartitionSpec>,
     /// Arrow schema for DataFusion
     arrow_schema: Arc<ArrowSchema>,

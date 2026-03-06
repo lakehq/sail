@@ -77,4 +77,4 @@ jobs:
           track_progress: false # Do not track progress, unresolved code comments can result in unwanted bias: https://github.com/anthropics/claude-code-action/issues/590
           claude_args: |
             --allowedTools Bash,Read,Write,Edit,MultiEdit,Glob,Grep,LS,mcp__github_inline_comment__create_inline_comment
-            --model us.anthropic.claude-opus-4-5-20251101-v1:0
+            --model us.anthropic.claude-opus-4-6-v1

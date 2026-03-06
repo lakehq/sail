@@ -806,8 +806,15 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                     .map(|s| s.as_str()),
             )
             .await
-            .map_err(|e| {
-                CatalogError::External(format!("Failed to load table {database}.{table}: {e}"))
+            .map_err(|e| match e {
+                apis::Error::ResponseError(apis::ResponseContent { status, .. })
+                    if status == 404 =>
+                {
+                    CatalogError::NotFound("table", format!("{database}.{table}"))
+                }
+                _ => {
+                    CatalogError::External(format!("Failed to load table {database}.{table}: {e}"))
+                }
             })?;
         self.load_table_result_to_status(table, database, result)
     }
@@ -1255,7 +1262,7 @@ fn build_sort_order(
     })))
 }
 
-#[allow(clippy::unwrap_used, clippy::panic)]
+#[expect(clippy::unwrap_used, clippy::panic)]
 #[cfg(test)]
 mod tests {
     use wiremock::matchers::{method, path, query_param, query_param_is_missing};

@@ -6,11 +6,57 @@ use sail_common::spec;
 use sail_common::spec::{
     SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME,
 };
+use serde_json::json;
 
 use crate::config::DefaultTimestampType;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+
+/// Map SRID to CRS string for Arrow metadata.
+///
+/// Returns `None` for SRID -1 (mixed) since there is no single CRS for the column.
+/// Only SRIDs supported by Spark 4.1 are accepted.
+///
+/// References:
+///
+/// - `org.apache.spark.sql.types.GeometryType#crs`
+/// - `org.apache.spark.sql.types.GeographyType#crs`
+/// - `org.apache.spark.sql.catalyst.util.CartesianSpatialReferenceSystemMapper`
+/// - `org.apache.spark.sql.catalyst.util.GeographicSpatialReferenceSystemMapper`
+fn srid_to_crs(srid: i32) -> PlanResult<Option<String>> {
+    match srid {
+        4326 => Ok(Some("OGC:CRS84".to_string())),
+        3857 => Ok(Some("EPSG:3857".to_string())),
+        0 => Ok(Some("SRID:0".to_string())),
+        -1 => Ok(None),
+        _ => Err(PlanError::invalid(format!(
+            "unsupported SRID: {srid}. Supported values: 0, 3857, 4326, or ANY (-1)"
+        ))),
+    }
+}
+
+/// Validate SRID for Geometry type against Spark 4.1's CartesianSpatialReferenceSystemMapper.
+/// Valid SRIDs: 0 (unspecified), 3857 (Web Mercator), 4326 (WGS84), -1 (mixed).
+fn validate_geometry_srid(srid: i32) -> PlanResult<()> {
+    if !matches!(srid, 0 | 3857 | 4326 | -1) {
+        return Err(PlanError::invalid(format!(
+            "SRID {srid} is not valid for GEOMETRY. Valid values: 0, 3857, 4326, or ANY"
+        )));
+    }
+    Ok(())
+}
+
+/// Validate SRID for Geography type against Spark 4.1's GeographicSpatialReferenceSystemMapper.
+/// Valid SRIDs: 4326 (WGS84), -1 (mixed).
+fn validate_geography_srid(srid: i32) -> PlanResult<()> {
+    if !matches!(srid, 4326 | -1) {
+        return Err(PlanError::invalid(format!(
+            "SRID {srid} is not valid for GEOGRAPHY. Valid values: 4326 or ANY"
+        )));
+    }
+    Ok(())
+}
 
 impl PlanResolver<'_> {
     fn arrow_binary_type(&self, state: &mut PlanResolverState) -> adt::DataType {
@@ -83,14 +129,20 @@ impl PlanResolver<'_> {
                 interval_unit,
                 start_field: _,
                 end_field: _,
-            } => {
-                // TODO: Currently `start_field` and `end_field` is lost in translation.
-                //  This does not impact computation accuracy,
-                //  This may affect the display string in the `data_type_to_simple_string` function.
-                Ok(adt::DataType::Interval(Self::resolve_interval_unit(
-                    interval_unit,
-                )))
-            }
+            } => match interval_unit {
+                spec::IntervalUnit::YearMonth => {
+                    Ok(adt::DataType::Interval(adt::IntervalUnit::YearMonth))
+                }
+                // Spark's DayTimeInterval has microsecond precision.
+                // Arrow's IntervalUnit::DayTime has millisecond precision.
+                // Use Duration to preserve microsecond precision.
+                spec::IntervalUnit::DayTime => {
+                    Ok(adt::DataType::Duration(adt::TimeUnit::Microsecond))
+                }
+                spec::IntervalUnit::MonthDayNano => {
+                    Ok(adt::DataType::Interval(adt::IntervalUnit::MonthDayNano))
+                }
+            },
             DataType::Binary => Ok(adt::DataType::Binary),
             DataType::FixedSizeBinary { size } => Ok(adt::DataType::FixedSizeBinary(*size)),
             DataType::LargeBinary => Ok(adt::DataType::LargeBinary),
@@ -200,6 +252,21 @@ impl PlanResolver<'_> {
                     *keys_sorted,
                 ))
             }
+            DataType::Geometry { srid: _ } => {
+                // Geometry types are stored as Binary (WKB-encoded)
+                // Extension type metadata is added at the Field level, not DataType level
+                // See resolve_field() for metadata handling
+                Ok(adt::DataType::Binary)
+            }
+            DataType::Geography {
+                srid: _,
+                algorithm: _,
+            } => {
+                // Geography types are stored as Binary (WKB-encoded)
+                // Extension type metadata is added at the Field level, not DataType level
+                // See resolve_field() for metadata handling
+                Ok(adt::DataType::Binary)
+            }
             DataType::ConfiguredUtf8 { utf8_type: _ } => {
                 // FIXME: Currently `length` and `utf8_type` is lost in translation.
                 //  This impacts accuracy if `spec::ConfiguredUtf8Type` is `VarChar` or `Char`.
@@ -248,6 +315,39 @@ impl PlanResolver<'_> {
                 }
                 sql_type
             }
+            spec::DataType::Geometry { srid } => {
+                validate_geometry_srid(*srid)?;
+                // Add geoarrow extension type metadata for WKB-encoded geometries.
+                // ARROW:extension:* keys follow the Apache Arrow extension type standard
+                // and are automatically filtered from Spark client responses.
+                // Edges default to planar in GeoArrow, so we omit them for Geometry.
+                metadata.insert(
+                    "ARROW:extension:name".to_string(),
+                    "geoarrow.wkb".to_string(),
+                );
+                let mut ext = json!({});
+                if let Some(crs) = srid_to_crs(*srid)? {
+                    ext["crs"] = serde_json::Value::String(crs);
+                }
+                metadata.insert("ARROW:extension:metadata".to_string(), ext.to_string());
+                data_type
+            }
+            spec::DataType::Geography { srid, algorithm: _ } => {
+                validate_geography_srid(*srid)?;
+                // Add geoarrow extension type metadata for WKB-encoded geographies.
+                // ARROW:extension:* keys follow the Apache Arrow extension type standard
+                // and are automatically filtered from Spark client responses.
+                metadata.insert(
+                    "ARROW:extension:name".to_string(),
+                    "geoarrow.wkb".to_string(),
+                );
+                let mut ext = json!({"edges": "spherical"});
+                if let Some(crs) = srid_to_crs(*srid)? {
+                    ext["crs"] = serde_json::Value::String(crs);
+                }
+                metadata.insert("ARROW:extension:metadata".to_string(), ext.to_string());
+                data_type
+            }
             x => x,
         };
         Ok(
@@ -283,14 +383,6 @@ impl PlanResolver<'_> {
             spec::TimeUnit::Millisecond => Ok(adt::TimeUnit::Millisecond),
             spec::TimeUnit::Microsecond => Ok(adt::TimeUnit::Microsecond),
             spec::TimeUnit::Nanosecond => Ok(adt::TimeUnit::Nanosecond),
-        }
-    }
-
-    pub fn resolve_interval_unit(interval_unit: &spec::IntervalUnit) -> adt::IntervalUnit {
-        match interval_unit {
-            spec::IntervalUnit::YearMonth => adt::IntervalUnit::YearMonth,
-            spec::IntervalUnit::DayTime => adt::IntervalUnit::DayTime,
-            spec::IntervalUnit::MonthDayNano => adt::IntervalUnit::MonthDayNano,
         }
     }
 

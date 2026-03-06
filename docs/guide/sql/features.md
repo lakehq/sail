@@ -31,7 +31,7 @@ The following table lists the supported clauses in the `SELECT` statement.
 | Clause                            | Supported          |
 | --------------------------------- | ------------------ |
 | `FROM <relation>`                 | :white_check_mark: |
-| `FROM <format>.<path>` (files)    | :construction:     |
+| `FROM <format>.<path>` (files)    | :white_check_mark: |
 | `WHERE`                           | :white_check_mark: |
 | `GROUP BY`                        | :white_check_mark: |
 | `HAVING`                          | :white_check_mark: |
@@ -53,7 +53,7 @@ The following table lists the supported clauses in the `SELECT` statement.
 | `UNPIVOT`                         | :construction:     |
 | `LATERAL VIEW`                    | :white_check_mark: |
 | `LATERAL <subquery>`              | :construction:     |
-| `TABLESAMPLE`                     | :construction:     |
+| `TABLESAMPLE`                     | :white_check_mark: |
 | `TRANSFORM`                       | :construction:     |
 
 The `EXPLAIN` statement is also supported, but the output shows the Sail logical and physical plan.
@@ -62,16 +62,16 @@ The `DESCRIBE QUERY` statement is not supported yet.
 
 ### Data Manipulation
 
-| Statement                           | Supported          |
-| ----------------------------------- | ------------------ |
-| `INSERT INTO <table>`               | :white_check_mark: |
-| `INSERT OVERWRITE <table>`          | :construction:     |
-| `INSERT OVERWRITE DIRECTORY <path>` | :construction:     |
-| `LOAD DATA`                         | :construction:     |
-| `COPY INTO`                         | :construction:     |
-| `MERGE INTO`                        | :construction:     |
-| `UPDATE`                            | :construction:     |
-| `DELETE FROM`                       | :construction:     |
+| Statement                           | Supported                    |
+| ----------------------------------- | ---------------------------- |
+| `INSERT INTO <table>`               | :white_check_mark:           |
+| `INSERT OVERWRITE <table>`          | :construction:               |
+| `INSERT OVERWRITE DIRECTORY <path>` | :construction:               |
+| `LOAD DATA`                         | :construction:               |
+| `COPY INTO`                         | :construction:               |
+| `MERGE INTO`                        | :white_check_mark: (partial) |
+| `UPDATE`                            | :construction:               |
+| `DELETE FROM`                       | :white_check_mark: (partial) |
 
 The `COPY INTO`, `MERGE INTO`, `UPDATE`, and `DELETE FROM` statements are not core Spark features.
 But some extensions support these statements for lakehouse tables (e.g., Delta Lake).
@@ -91,7 +91,7 @@ But some extensions support these statements for lakehouse tables (e.g., Delta L
 | `CREATE VIEW`           | :construction:               |
 | `DESCRIBE DATABASE`     | :construction:               |
 | `DESCRIBE FUNCTION`     | :construction:               |
-| `DESCRIBE TABLE`        | :construction:               |
+| `DESCRIBE TABLE`        | :white_check_mark:           |
 | `DROP DATABASE`         | :white_check_mark:           |
 | `DROP FUNCTION`         | :construction:               |
 | `DROP TABLE`            | :white_check_mark:           |
@@ -115,8 +115,6 @@ But some extensions support these statements for lakehouse tables (e.g., Delta L
 Currently, Sail only supports in-memory catalog, which means the databases and tables are available only within the
 session.
 Remote catalog support is in our roadmap.
-
-For the `CREATE TABLE` statement, the `CREATE TABLE ... AS ...` syntax is not supported yet.
 
 ### Configuration Management
 

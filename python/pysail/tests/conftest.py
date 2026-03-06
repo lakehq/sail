@@ -43,6 +43,8 @@ def configure_sail_environment():
     # number of CPU cores to ensure deterministic test results, especially for
     # snapshot tests involving execution plans.
     os.environ["SAIL_EXECUTION__DEFAULT_PARALLELISM"] = "4"
+    # Set the stack size explicitly to assist the configuration removal test.
+    os.environ["SAIL_RUNTIME__STACK_SIZE"] = "8388608"
 
     # Ensure the native module can be imported successfully.
     # This allows this function to be future-proof in case we ever change the native module name.

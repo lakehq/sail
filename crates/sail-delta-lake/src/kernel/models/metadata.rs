@@ -26,7 +26,7 @@ use super::StructType;
 use crate::kernel::DeltaResult;
 
 /// Extension trait for working with `Metadata` until kernel exposes mutation APIs.
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub trait MetadataExt {
     fn with_table_id(self, table_id: String) -> DeltaResult<Metadata>;
 

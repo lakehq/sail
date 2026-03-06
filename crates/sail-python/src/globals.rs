@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::env;
 use std::ffi::CString;
-use std::sync::Arc;
 
 use log::debug;
 use pyo3::exceptions::{PyRuntimeError, PyRuntimeWarning};
@@ -19,6 +18,13 @@ pub struct EnvironmentSnapshot {
 }
 
 impl EnvironmentSnapshot {
+    // TODO: implement a systematic way to manage static config
+    const SAIL_STATIC_ENV_VAR_PREFIXES: &[&str] = &[
+        "SAIL_RUNTIME__ENABLE_SECONDARY",
+        "SAIL_RUNTIME__STACK_SIZE",
+        "SAIL_TELEMETRY__",
+    ];
+
     pub fn initialize() -> Self {
         let vars = Self::capture();
         Self { vars }
@@ -52,6 +58,12 @@ impl EnvironmentSnapshot {
             }
         }
 
+        changed.retain(|key| {
+            Self::SAIL_STATIC_ENV_VAR_PREFIXES
+                .iter()
+                .any(|prefix| key.starts_with(prefix))
+        });
+
         if !changed.is_empty() {
             let message = format!(
                 "changes to the environment variables are ignored: {}",
@@ -69,12 +81,11 @@ impl EnvironmentSnapshot {
 }
 
 pub struct GlobalState {
-    pub config: Arc<AppConfig>,
     pub runtime: RuntimeManager,
     /// The environment variables when the global state is initialized.
     ///
     /// This is an approximation and may not be exactly the same as the
-    /// environment variables used to load the configuration.
+    /// environment variables used to initialize the global state.
     pub environment: EnvironmentSnapshot,
 }
 
@@ -134,7 +145,6 @@ impl GlobalState {
         })?;
 
         Ok(GlobalState {
-            config: Arc::new(config),
             runtime,
             environment,
         })

@@ -41,6 +41,7 @@ impl WorkerClient {
 }
 
 impl WorkerClient {
+    /// Sends a task to a remote worker for execution via gRPC.
     pub async fn run_task(
         &self,
         key: TaskKey,

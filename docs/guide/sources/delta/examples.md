@@ -1,18 +1,13 @@
 ---
-title: Delta Lake
+title: Examples
 rank: 1
 ---
 
-# Delta Lake
+# Examples
 
-You can use the `delta` format in Sail to work with [Delta Lake](https://delta.io/).
-You can use the Spark DataFrame API or Spark SQL to read and write Delta tables.
+<!--@include: ../../_common/spark-session.md-->
 
-## Examples
-
-<!--@include: ../_common/spark-session.md-->
-
-### Basic Usage
+## Basic Usage
 
 ::: code-group
 
@@ -44,7 +39,7 @@ SELECT * FROM users;
 
 :::
 
-### Data Partitioning
+## Data Partitioning
 
 You can work with partitioned Delta tables using the Spark DataFrame API.
 Partitioned Delta tables organize data into directories based on the values of one or more columns.
@@ -78,7 +73,7 @@ SELECT * FROM metrics WHERE year > 2024;
 
 :::
 
-### Schema Evolution
+## Schema Evolution
 
 Delta Lake handles schema evolution gracefully.
 By default, if you try to write data with a different schema than the one of the existing Delta table, an error will occur.
@@ -96,7 +91,7 @@ But this works only if you set the write mode to `overwrite`.
 df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").save(path)
 ```
 
-### Time Travel
+## Time Travel
 
 You can use the time travel feature to query historical versions of a Delta table.
 
@@ -107,7 +102,7 @@ df = spark.read.format("delta").option("timestampAsOf", "2025-01-02T03:04:05.678
 
 Time travel is not available for Spark SQL in Sail yet, but we plan to support it soon.
 
-### Column Mapping
+## Column Mapping
 
 You can write Delta tables with column mapping enabled. The supported column mapping modes are `name` and `id`. You must write to a new Delta table to enable column mapping.
 
@@ -118,7 +113,7 @@ df.write.format("delta").option("columnMappingMode", "id").save(path)
 
 Existing Delta tables with column mapping can be read as usual.
 
-### More Features
+## More Features
 
 We will continue adding more examples for advanced Delta Lake features as they become available in Sail.
 In the meantime, feel free to reach out to us on [Slack](https://lakesail.com/slack) or [GitHub Discussions](https://github.com/lakehq/sail/discussions) if you have questions!

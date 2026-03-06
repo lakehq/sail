@@ -91,7 +91,6 @@ pub struct DeletionVectorDescriptor {
 /// Delta Lake action envelope.
 #[derive(Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(missing_docs)]
 pub enum Action {
     #[serde(rename = "metaData")]
     Metadata(Metadata),
