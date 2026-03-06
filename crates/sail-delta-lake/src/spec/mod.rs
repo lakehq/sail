@@ -44,6 +44,7 @@ pub use schema::{
     ArrayType, ColumnMappingMode, ColumnMetadataKey, ColumnName, DataType, DecimalType, MapType,
     MetadataValue, PrimitiveType, Schema, StructField, StructType,
 };
+pub(crate) use statistics::stats_schema;
 pub use statistics::{ColumnCountStat, ColumnValueStat, Stats};
 
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/actions.rs>

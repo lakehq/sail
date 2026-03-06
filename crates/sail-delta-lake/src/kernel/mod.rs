@@ -10,7 +10,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod arrow;
 pub mod log_segment;
 pub mod snapshot;
 pub mod transaction;

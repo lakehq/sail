@@ -21,27 +21,30 @@ use std::io::{BufRead, BufReader, Cursor};
 use std::pin::Pin;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, StringArray, StructArray};
+use datafusion::arrow::array::{
+    new_empty_array, Array, ArrayRef, MapArray, StringArray, StructArray,
+};
 use datafusion::arrow::datatypes::{
-    DataType as ArrowDataType, Field, FieldRef, Schema as ArrowSchema,
+    DataType as ArrowDataType, Field, FieldRef, Fields, Schema as ArrowSchema,
 };
 use datafusion::arrow::json::ReaderBuilder as JsonReaderBuilder;
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::common::scalar::ScalarValue;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::kernel::arrow::engine_ext::{parse_partition_values_array, stats_schema};
+use crate::conversion::ScalarConverter;
 use crate::kernel::checkpoints::{latest_replayable_version, load_replayed_table_state};
 use crate::kernel::snapshot::iterators::LogicalFileView;
 pub use crate::kernel::snapshot::log_data::LogDataHandler;
 use crate::kernel::{DeltaTableConfig, PredicateRef, SchemaRef};
 use crate::spec::{
-    delta_log_root_path, parse_commit_version, Add, ColumnMappingMode, CommitInfo,
-    DeltaError as DeltaTableError, DeltaResult, Metadata, Protocol, Remove, StorageType,
-    TableProperties, Transaction,
+    delta_log_root_path, parse_commit_version, stats_schema, Add, ColumnMappingMode, CommitInfo,
+    DataType, DeltaError as DeltaTableError, DeltaResult, Metadata, Protocol, Remove, StorageType,
+    StructType, TableProperties, Transaction,
 };
 use crate::storage::LogStore;
 
@@ -654,6 +657,154 @@ fn parse_scan_row_columns(raw: RecordBatch, snapshot: &Snapshot) -> DeltaResult<
         Arc::new(ArrowSchema::new(fields)),
         columns,
     )?)
+}
+
+fn parse_partition_values_array(
+    batch: &RecordBatch,
+    partition_schema: &StructType,
+    path: &str,
+    column_mapping_mode: ColumnMappingMode,
+) -> DeltaResult<StructArray> {
+    let partitions = map_array_from_path(batch, path)?;
+    let num_rows = partitions.len();
+
+    let mut raw_collected: HashMap<String, Vec<Option<String>>> = partition_schema
+        .fields()
+        .map(|field| {
+            (
+                field.physical_name(column_mapping_mode).to_string(),
+                Vec::with_capacity(num_rows),
+            )
+        })
+        .collect();
+
+    for row in 0..num_rows {
+        if partitions.is_null(row) {
+            return Err(DeltaTableError::generic(
+                "Expected partition values map, found null entry.",
+            ));
+        }
+        let raw_values = collect_partition_row(&partitions.value(row))?;
+
+        for field in partition_schema.fields() {
+            if !matches!(field.data_type(), DataType::Primitive(_)) {
+                return Err(DeltaTableError::generic(
+                    "nested partitioning values are not supported",
+                ));
+            }
+            let physical_name = field.physical_name(column_mapping_mode);
+            let value = raw_values
+                .get(physical_name)
+                .or_else(|| raw_values.get(field.name()))
+                .and_then(Clone::clone);
+            raw_collected
+                .get_mut(physical_name)
+                .ok_or_else(|| DeltaTableError::schema("partition field missing".to_string()))?
+                .push(value);
+        }
+    }
+
+    let arrow_fields: Fields = Fields::from(
+        partition_schema
+            .fields()
+            .map(Field::try_from)
+            .collect::<Result<Vec<Field>, _>>()?,
+    );
+
+    let columns: Vec<ArrayRef> = partition_schema
+        .fields()
+        .zip(arrow_fields.iter())
+        .map(|(field, arrow_field)| {
+            let physical_name = field.physical_name(column_mapping_mode);
+            let raw_values = raw_collected
+                .get(physical_name)
+                .ok_or_else(|| DeltaTableError::schema("partition field missing".to_string()))?;
+            let arrow_dt = arrow_field.data_type();
+            let scalar_values: Vec<ScalarValue> = raw_values
+                .iter()
+                .map(|value| match value {
+                    Some(raw) => ScalarConverter::string_to_arrow_scalar_value(raw, arrow_dt)
+                        .map_err(|e| {
+                            DeltaTableError::generic(format!("partition value parse error: {e}"))
+                        }),
+                    None => ScalarValue::try_new_null(arrow_dt)
+                        .map_err(|e| DeltaTableError::generic(format!("null scalar error: {e}"))),
+                })
+                .collect::<DeltaResult<Vec<_>>>()?;
+            let array = if scalar_values.is_empty() {
+                new_empty_array(arrow_dt)
+            } else {
+                ScalarValue::iter_to_array(scalar_values)
+                    .map_err(|e| DeltaTableError::generic(format!("scalar to array error: {e}")))?
+            };
+            let array = if array.data_type() != arrow_dt {
+                datafusion::arrow::compute::cast(&array, arrow_dt)
+                    .map_err(|e| DeltaTableError::generic(format!("cast error: {e}")))?
+            } else {
+                array
+            };
+            Ok(Arc::new(array) as ArrayRef)
+        })
+        .collect::<DeltaResult<Vec<_>>>()?;
+
+    Ok(StructArray::try_new(arrow_fields, columns, None)?)
+}
+
+fn map_array_from_path<'a>(batch: &'a RecordBatch, path: &str) -> DeltaResult<&'a MapArray> {
+    let mut segments = path.split('.');
+    let first = segments
+        .next()
+        .ok_or_else(|| DeltaTableError::generic("partition column path must not be empty"))?;
+
+    let mut current: &dyn Array = batch
+        .column_by_name(first)
+        .map(|column| column.as_ref())
+        .ok_or_else(|| {
+            DeltaTableError::schema(format!("{first} column not found when parsing partitions"))
+        })?;
+
+    for segment in segments {
+        let struct_array = current
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| {
+                DeltaTableError::schema(format!("Expected struct column while traversing {path}"))
+            })?;
+        current = struct_array
+            .column_by_name(segment)
+            .map(|column| column.as_ref())
+            .ok_or_else(|| {
+                DeltaTableError::schema(format!(
+                    "{segment} column not found while traversing {path}"
+                ))
+            })?;
+    }
+
+    current
+        .as_any()
+        .downcast_ref::<MapArray>()
+        .ok_or_else(|| DeltaTableError::schema(format!("Column {path} is not a map")))
+}
+
+fn collect_partition_row(value: &StructArray) -> DeltaResult<HashMap<String, Option<String>>> {
+    let keys = value
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| DeltaTableError::schema("map key column is not Utf8".to_string()))?;
+    let values = value
+        .column(1)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| DeltaTableError::schema("map value column is not Utf8".to_string()))?;
+
+    let mut result = HashMap::with_capacity(keys.len());
+    for (key, value) in keys.iter().zip(values.iter()) {
+        if let Some(key) = key {
+            result.insert(key.to_string(), value.map(|entry| entry.to_string()));
+        }
+    }
+    Ok(result)
 }
 
 mod serde_path_compat {
