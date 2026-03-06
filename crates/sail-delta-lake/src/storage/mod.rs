@@ -34,10 +34,9 @@ use serde_json::Deserializer as JsonDeserializer;
 use url::Url;
 use uuid::Uuid;
 
-use crate::kernel::transaction::TransactionError;
 use crate::spec::{
     commit_path, delta_log_root_path, Action, DeltaError as DeltaTableError, DeltaError,
-    DeltaResult,
+    DeltaResult, TransactionError,
 };
 
 mod config;

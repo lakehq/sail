@@ -30,7 +30,7 @@ pub use checkpoint::{
     CheckpointDeletionVector, CheckpointProtocol, CheckpointRemove, LastCheckpointHint,
 };
 pub use datafusion::arrow::datatypes::SchemaRef;
-pub use error::{DeltaError, DeltaResult};
+pub use error::{CommitConflictError, DeltaError, DeltaResult, TransactionError};
 pub use log::{
     checkpoint_path, commit_path, delta_log_file_path, delta_log_prefix_path, delta_log_root_path,
     last_checkpoint_path, parse_checkpoint_version, parse_commit_version, parse_version_prefix,

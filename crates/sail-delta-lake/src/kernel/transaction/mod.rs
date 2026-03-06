@@ -26,10 +26,8 @@ use bytes::Bytes;
 use chrono::Utc;
 use futures::future::BoxFuture;
 use log::*;
-use object_store::Error as ObjectStoreError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use thiserror::Error;
 use uuid::Uuid;
 
 use crate::kernel::checkpoints::{cleanup_expired_logs_for, create_checkpoint_for};
@@ -37,9 +35,10 @@ use crate::kernel::snapshot::EagerSnapshot;
 use crate::kernel::transaction::conflict_checker::{TransactionInfo, WinningCommitSummary};
 use crate::kernel::DeltaOperation;
 use crate::spec::{
-    temp_commit_path, Action, Add, DeltaError, DeltaResult, Metadata, Protocol, TableFeature,
-    TableProperties, Transaction,
+    temp_commit_path, Action, Add, DeltaError, DeltaResult, Metadata, Protocol, TableProperties,
+    Transaction,
 };
+pub use crate::spec::{CommitConflictError, TransactionError};
 use crate::storage::{CommitOrBytes, LogStore, LogStoreRef, ObjectStoreRef};
 use crate::table::DeltaTableState;
 
@@ -138,45 +137,6 @@ impl From<HashMap<String, Value>> for OperationMetrics {
             extra: value,
         }
     }
-}
-
-#[derive(Error, Debug)]
-pub enum TransactionError {
-    #[error("Tried committing existing table version: {0}")]
-    VersionAlreadyExists(i64),
-
-    #[error("Error serializing commit log to json: {json_err}")]
-    SerializeLogJson { json_err: serde_json::error::Error },
-
-    #[error("Log storage error: {source}")]
-    ObjectStore {
-        #[from]
-        source: ObjectStoreError,
-    },
-
-    #[error("Failed to commit transaction: {0}")]
-    CommitConflict(#[from] conflict_checker::CommitConflictError),
-
-    #[error("Failed to commit transaction: {0}")]
-    MaxCommitAttempts(i32),
-
-    #[error(
-        "The transaction includes Remove action with data change but Delta table is append-only"
-    )]
-    DeltaTableAppendOnly,
-
-    #[error("Unsupported table features required: {0:?}")]
-    UnsupportedTableFeatures(Vec<TableFeature>),
-
-    #[error("Table features must be specified, please specify: {0:?}")]
-    TableFeaturesRequired(TableFeature),
-
-    #[error("Transaction failed: {msg}")]
-    LogStoreError {
-        msg: String,
-        #[source]
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
-    },
 }
 
 #[derive(Debug)]
@@ -747,7 +707,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                             if let Some(txn_protocol) = creation_protocol.as_ref() {
                                 if txn_protocol != snapshot.protocol() {
                                     return Err(TransactionError::CommitConflict(
-                                        conflict_checker::CommitConflictError::ProtocolChanged(
+                                        CommitConflictError::ProtocolChanged(
                                             "protocol changed".into(),
                                         ),
                                     )
@@ -767,7 +727,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                                 });
                             if !metadata_compatible {
                                 return Err(TransactionError::CommitConflict(
-                                    conflict_checker::CommitConflictError::MetadataChanged,
+                                    CommitConflictError::MetadataChanged,
                                 )
                                 .into());
                             }

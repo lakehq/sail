@@ -22,56 +22,13 @@
 
 use std::collections::HashSet;
 
-use thiserror::Error;
-
 use super::WriteSnapshot;
 use crate::kernel::DeltaOperation;
 use crate::spec::{
-    Action, Add, CommitInfo, DeltaError, DeltaResult, IsolationLevel, Metadata, Protocol, Remove,
-    Transaction,
+    Action, Add, CommitConflictError, CommitInfo, DeltaError, DeltaResult, IsolationLevel,
+    Metadata, Protocol, Remove, Transaction,
 };
 use crate::storage::{get_actions, LogStore};
-
-/// Exceptions raised during commit conflict resolution.
-#[derive(Error, Debug)]
-pub enum CommitConflictError {
-    #[error("Commit failed: a concurrent transactions added new data.\nHelp: This transaction's query must be rerun to include the new data. Also, if you don't care to require this check to pass in the future, the isolation level can be set to Snapshot Isolation.")]
-    ConcurrentAppend,
-
-    #[error("Commit failed: a concurrent transaction deleted data this operation read.\nHelp: This transaction's query must be rerun to exclude the removed data. Also, if you don't care to require this check to pass in the future, the isolation level can be set to Snapshot Isolation.")]
-    ConcurrentDeleteRead,
-
-    #[error("Commit failed: a concurrent transaction deleted the same data your transaction deletes.\nHelp: you should retry this write operation. If it was based on data contained in the table, you should rerun the query generating the data.")]
-    ConcurrentDeleteDelete,
-
-    #[error("Metadata changed since last commit.")]
-    MetadataChanged,
-
-    #[error("Concurrent transaction failed.")]
-    ConcurrentTransaction,
-
-    #[error("Protocol changed since last commit: {0}")]
-    ProtocolChanged(String),
-
-    #[error("Delta-rs does not support writer version {0}")]
-    UnsupportedWriterVersion(i32),
-
-    #[error("Delta-rs does not support reader version {0}")]
-    UnsupportedReaderVersion(i32),
-
-    #[error("Snapshot is corrupted: {source}")]
-    CorruptedState {
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
-    },
-
-    #[error("Error evaluating predicate: {source}")]
-    Predicate {
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
-    },
-
-    #[error("No metadata found, please make sure table is loaded.")]
-    NoMetadata,
-}
 
 /// A struct representing different attributes of current transaction needed for conflict detection.
 #[expect(unused)]

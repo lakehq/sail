@@ -14,9 +14,89 @@ use datafusion_common::{Column, DataFusionError, SchemaError};
 use object_store::Error as ObjectStoreError;
 use thiserror::Error;
 
-use crate::kernel::transaction::TransactionError;
+use crate::spec::protocol::TableFeature;
 
 pub type DeltaResult<T> = Result<T, DeltaError>;
+
+/// Conflict during commit due to concurrent changes.
+#[derive(Error, Debug)]
+pub enum CommitConflictError {
+    #[error("Commit failed: a concurrent transactions added new data.\nHelp: This transaction's query must be rerun to include the new data. Also, if you don't care to require this check to pass in the future, the isolation level can be set to Snapshot Isolation.")]
+    ConcurrentAppend,
+
+    #[error("Commit failed: a concurrent transaction deleted data this operation read.\nHelp: This transaction's query must be rerun to exclude the removed data. Also, if you don't care to require this check to pass in the future, the isolation level can be set to Snapshot Isolation.")]
+    ConcurrentDeleteRead,
+
+    #[error("Commit failed: a concurrent transaction deleted the same data your transaction deletes.\nHelp: you should retry this write operation. If it was based on data contained in the table, you should rerun the query generating the data.")]
+    ConcurrentDeleteDelete,
+
+    #[error("Metadata changed since last commit.")]
+    MetadataChanged,
+
+    #[error("Concurrent transaction failed.")]
+    ConcurrentTransaction,
+
+    #[error("Protocol changed since last commit: {0}")]
+    ProtocolChanged(String),
+
+    #[error("Sail Delta Lake does not support writer version {0}")]
+    UnsupportedWriterVersion(i32),
+
+    #[error("Sail Delta Lake does not support reader version {0}")]
+    UnsupportedReaderVersion(i32),
+
+    #[error("Snapshot is corrupted: {source}")]
+    CorruptedState {
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+
+    #[error("Error evaluating predicate: {source}")]
+    Predicate {
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+
+    #[error("No metadata found, please make sure table is loaded.")]
+    NoMetadata,
+}
+
+#[derive(Error, Debug)]
+pub enum TransactionError {
+    #[error("Tried committing existing table version: {0}")]
+    VersionAlreadyExists(i64),
+
+    #[error("Error serializing commit log to json: {json_err}")]
+    SerializeLogJson { json_err: serde_json::error::Error },
+
+    #[error("Log storage error: {source}")]
+    ObjectStore {
+        #[from]
+        source: object_store::Error,
+    },
+
+    #[error("Failed to commit transaction: {0}")]
+    CommitConflict(#[from] CommitConflictError),
+
+    #[error("Failed to commit transaction: {0}")]
+    MaxCommitAttempts(i32),
+
+    #[error(
+        "The transaction includes Remove action with data change but Delta table is append-only"
+    )]
+    DeltaTableAppendOnly,
+
+    #[error("Unsupported table features required: {0:?}")]
+    UnsupportedTableFeatures(Vec<TableFeature>),
+
+    #[error("Table features must be specified, please specify: {0:?}")]
+    TableFeaturesRequired(TableFeature),
+
+    #[error("Transaction failed: {msg}")]
+    LogStoreError {
+        msg: String,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+}
 
 #[derive(Debug, Error)]
 pub enum DeltaError {

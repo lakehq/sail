@@ -21,10 +21,12 @@
 use std::collections::HashSet;
 use std::sync::LazyLock;
 
-use super::{TableReference, TransactionError};
+use super::TableReference;
 use crate::kernel::snapshot::EagerSnapshot;
 use crate::kernel::DeltaOperation;
-use crate::spec::{contains_timestampntz, Action, Protocol, Schema, TableFeature};
+use crate::spec::{
+    contains_timestampntz, Action, Protocol, Schema, TableFeature, TransactionError,
+};
 use crate::table::DeltaTableState;
 
 static READER_V2: LazyLock<HashSet<TableFeature>> =
