@@ -1,25 +1,20 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
+use crate::kernel::transaction::OperationMetrics;
 use crate::kernel::DeltaOperation;
 use crate::spec::{Action, Add, Metadata, Protocol, Remove};
 
 pub const COL_ACTION: &str = "action";
 const COL_PARTITION_VALUES: &str = "partition_values";
 
-static ACTION_FIELDS: LazyLock<Vec<datafusion::arrow::datatypes::FieldRef>> = LazyLock::new(|| {
-    #[expect(
-        clippy::unwrap_used,
-        reason = "ACTION_FIELDS is a process-global constant."
-    )]
-    delta_action_fields_build()
-});
+static ACTION_FIELDS: LazyLock<Vec<datafusion::arrow::datatypes::FieldRef>> =
+    LazyLock::new(delta_action_fields_build);
 static ACTION_SCHEMA: LazyLock<SchemaRef> =
     LazyLock::new(|| Arc::new(Schema::new((*ACTION_FIELDS).clone())));
 
@@ -27,7 +22,7 @@ static ACTION_SCHEMA: LazyLock<SchemaRef> =
 pub struct CommitMeta {
     pub row_count: u64,
     pub operation: Option<DeltaOperation>,
-    pub operation_metrics: HashMap<String, Value>,
+    pub operation_metrics: OperationMetrics,
 }
 
 fn partition_values_type() -> DataType {
@@ -115,7 +110,17 @@ fn action_union_type() -> DataType {
         vec![
             action_field("commit_row_count", DataType::UInt64, false),
             action_field("operation_json", DataType::Utf8, true),
-            action_field("operation_metrics_json", DataType::Utf8, false),
+            action_field("num_files", DataType::UInt64, true),
+            action_field("num_output_rows", DataType::UInt64, true),
+            action_field("num_output_bytes", DataType::UInt64, true),
+            action_field("execution_time_ms", DataType::UInt64, true),
+            action_field("num_removed_files", DataType::UInt64, true),
+            action_field("num_added_files", DataType::UInt64, true),
+            action_field("num_output_files", DataType::UInt64, true),
+            action_field("num_added_bytes", DataType::UInt64, true),
+            action_field("num_removed_bytes", DataType::UInt64, true),
+            action_field("write_time_ms", DataType::UInt64, true),
+            action_field("operation_metrics_extra_json", DataType::Utf8, true),
         ]
         .into(),
     );
@@ -159,7 +164,17 @@ pub struct RemoveAction {
 pub struct CommitMetaAction {
     commit_row_count: u64,
     operation_json: Option<String>,
-    operation_metrics_json: String,
+    num_files: Option<u64>,
+    num_output_rows: Option<u64>,
+    num_output_bytes: Option<u64>,
+    execution_time_ms: Option<u64>,
+    num_removed_files: Option<u64>,
+    num_added_files: Option<u64>,
+    num_output_files: Option<u64>,
+    num_added_bytes: Option<u64>,
+    num_removed_bytes: Option<u64>,
+    write_time_ms: Option<u64>,
+    operation_metrics_extra_json: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -269,14 +284,25 @@ impl TryFrom<CommitMeta> for PhysicalExecAction {
             .map(serde_json::to_string)
             .transpose()
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        let operation_metrics_json = serde_json::to_string(&meta.operation_metrics)
+        let operation_metrics_extra_json = (!meta.operation_metrics.extra.is_empty())
+            .then(|| serde_json::to_string(&meta.operation_metrics.extra))
+            .transpose()
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         Ok(PhysicalExecAction::CommitMeta(CommitMetaAction {
             commit_row_count: meta.row_count,
             operation_json,
-            operation_metrics_json,
+            num_files: meta.operation_metrics.num_files,
+            num_output_rows: meta.operation_metrics.num_output_rows,
+            num_output_bytes: meta.operation_metrics.num_output_bytes,
+            execution_time_ms: meta.operation_metrics.execution_time_ms,
+            num_removed_files: meta.operation_metrics.num_removed_files,
+            num_added_files: meta.operation_metrics.num_added_files,
+            num_output_files: meta.operation_metrics.num_output_files,
+            num_added_bytes: meta.operation_metrics.num_added_bytes,
+            num_removed_bytes: meta.operation_metrics.num_removed_bytes,
+            write_time_ms: meta.operation_metrics.write_time_ms,
+            operation_metrics_extra_json,
         }))
     }
 }
@@ -343,13 +369,29 @@ pub fn decode_actions_and_meta_from_batch(
                     .map(serde_json::from_str::<DeltaOperation>)
                     .transpose()
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let operation_metrics: HashMap<String, Value> =
-                    serde_json::from_str::<HashMap<String, Value>>(&cm.operation_metrics_json)
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let extra = cm
+                    .operation_metrics_extra_json
+                    .as_deref()
+                    .map(serde_json::from_str)
+                    .transpose()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+                    .unwrap_or_default();
                 out_meta = Some(CommitMeta {
                     row_count: cm.commit_row_count,
                     operation,
-                    operation_metrics,
+                    operation_metrics: OperationMetrics {
+                        num_files: cm.num_files,
+                        num_output_rows: cm.num_output_rows,
+                        num_output_bytes: cm.num_output_bytes,
+                        execution_time_ms: cm.execution_time_ms,
+                        num_removed_files: cm.num_removed_files,
+                        num_added_files: cm.num_added_files,
+                        num_output_files: cm.num_output_files,
+                        num_added_bytes: cm.num_added_bytes,
+                        num_removed_bytes: cm.num_removed_bytes,
+                        write_time_ms: cm.write_time_ms,
+                        extra,
+                    },
                 });
             }
         }
@@ -360,7 +402,10 @@ pub fn decode_actions_and_meta_from_batch(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
+    use crate::kernel::transaction::OperationMetrics;
     use crate::spec::StructType;
 
     #[test]
@@ -422,7 +467,7 @@ mod tests {
         let meta = CommitMeta {
             row_count: 10,
             operation: None,
-            operation_metrics: HashMap::new(),
+            operation_metrics: OperationMetrics::default(),
         };
 
         let mut exec_actions: Vec<PhysicalExecAction> = Vec::new();

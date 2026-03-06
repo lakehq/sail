@@ -46,10 +46,10 @@ use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use futures::stream::{once, StreamExt};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
-use serde_json::Value;
 use url::Url;
 
 use crate::conversion::DeltaTypeConverter;
+use crate::kernel::transaction::OperationMetrics;
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::options::{ColumnMappingModeOption, TableDeltaOptions};
@@ -672,21 +672,17 @@ impl DeltaWriterExec {
 
             let operation = operation_override.or(operation);
 
-            let mut operation_metrics: HashMap<String, Value> = HashMap::new();
-            operation_metrics.insert("numOutputRows".to_string(), Value::from(total_rows));
-            operation_metrics.insert("numFiles".to_string(), Value::from(num_added_files));
-            operation_metrics.insert("numOutputFiles".to_string(), Value::from(num_added_files));
-            operation_metrics.insert("numAddedFiles".to_string(), Value::from(num_added_files));
-            operation_metrics.insert("numOutputBytes".to_string(), Value::from(num_added_bytes));
-            operation_metrics.insert("numAddedBytes".to_string(), Value::from(num_added_bytes));
-            operation_metrics.insert(
-                "writeTimeMs".to_string(),
-                Value::from(write_time_ms.saturating_add(close_time_ms)),
-            );
-            operation_metrics.insert(
-                "executionTimeMs".to_string(),
-                Value::from(exec_start.elapsed().as_millis() as u64),
-            );
+            let operation_metrics = OperationMetrics {
+                num_files: Some(num_added_files),
+                num_output_rows: Some(total_rows),
+                num_output_bytes: Some(num_added_bytes),
+                execution_time_ms: Some(exec_start.elapsed().as_millis() as u64),
+                num_added_files: Some(num_added_files),
+                num_output_files: Some(num_added_files),
+                num_added_bytes: Some(num_added_bytes),
+                write_time_ms: Some(write_time_ms.saturating_add(close_time_ms)),
+                ..Default::default()
+            };
 
             output_rows.add(usize::try_from(total_rows).unwrap_or(usize::MAX));
             output_bytes.add(usize::try_from(num_added_bytes).unwrap_or(usize::MAX));

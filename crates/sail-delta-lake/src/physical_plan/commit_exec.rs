@@ -34,7 +34,9 @@ use futures::stream::{self, StreamExt};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
-use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
+use crate::kernel::transaction::{
+    CommitBuilder, CommitProperties, OperationMetrics, TableReference,
+};
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::physical_plan::action_schema::CommitMeta;
 use crate::physical_plan::{decode_actions_and_meta_from_batch, COL_ACTION};
@@ -230,7 +232,7 @@ impl ExecutionPlan for DeltaCommitExec {
             let mut actions: Vec<Action> = Vec::new();
             let mut initial_actions: Vec<Action> = Vec::new();
             let mut operation: Option<DeltaOperation> = None;
-            let mut operation_metrics: HashMap<String, serde_json::Value> = HashMap::new();
+            let mut operation_metrics = OperationMetrics::default();
             let mut data = input_stream;
 
             while let Some(batch_result) = data.next().await {
@@ -256,7 +258,7 @@ impl ExecutionPlan for DeltaCommitExec {
                         if operation.is_none() {
                             operation = op;
                         }
-                        merge_operation_metrics(&mut operation_metrics, metrics);
+                        operation_metrics.merge(metrics);
                     }
                     has_data = has_data || batch.num_rows() > 0;
                 } else {
@@ -422,48 +424,6 @@ impl ExecutionPlan for DeltaCommitExec {
             self.schema(),
             stream,
         )))
-    }
-}
-
-fn merge_operation_metrics(
-    target: &mut HashMap<String, serde_json::Value>,
-    source: HashMap<String, serde_json::Value>,
-) {
-    for (k, v) in source {
-        match (target.get(&k), &v) {
-            (Some(serde_json::Value::Number(a)), serde_json::Value::Number(b)) => {
-                let sum_i64 = a
-                    .as_i64()
-                    .and_then(|ai| b.as_i64().map(|bi| ai.saturating_add(bi)));
-                let sum_u64 = a
-                    .as_u64()
-                    .and_then(|au| b.as_u64().map(|bu| au.saturating_add(bu)));
-
-                if let Some(sum) = sum_u64 {
-                    target.insert(k, serde_json::Value::from(sum));
-                } else if let Some(sum) = sum_i64 {
-                    target.insert(k, serde_json::Value::from(sum));
-                } else if let (Some(af), Some(bf)) = (a.as_f64(), b.as_f64()) {
-                    let sum = af + bf;
-                    target.insert(
-                        k,
-                        serde_json::Value::Number(
-                            serde_json::Number::from_f64(sum)
-                                .unwrap_or_else(|| serde_json::Number::from(0)),
-                        ),
-                    );
-                } else {
-                    target.insert(k, v);
-                }
-            }
-            (None, _) => {
-                target.insert(k, v);
-            }
-            _ => {
-                // Different shapes; prefer the latest value.
-                target.insert(k, v);
-            }
-        }
     }
 }
 

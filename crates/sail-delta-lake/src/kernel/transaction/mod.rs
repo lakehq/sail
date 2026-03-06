@@ -71,7 +71,7 @@ pub struct Metrics {
     pub num_log_files_cleaned_up: u64,
 }
 
-#[derive(Default, Debug, PartialEq, Clone)]
+#[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub struct OperationMetrics {
     pub num_files: Option<u64>,
     pub num_output_rows: Option<u64>,
@@ -79,6 +79,10 @@ pub struct OperationMetrics {
     pub execution_time_ms: Option<u64>,
     pub num_removed_files: Option<u64>,
     pub num_added_files: Option<u64>,
+    pub num_output_files: Option<u64>,
+    pub num_added_bytes: Option<u64>,
+    pub num_removed_bytes: Option<u64>,
+    pub write_time_ms: Option<u64>,
     pub extra: HashMap<String, Value>,
 }
 
@@ -103,7 +107,41 @@ impl OperationMetrics {
         if let Some(v) = self.num_added_files {
             out.insert("numAddedFiles".to_string(), Value::from(v));
         }
+        if let Some(v) = self.num_output_files {
+            out.insert("numOutputFiles".to_string(), Value::from(v));
+        }
+        if let Some(v) = self.num_added_bytes {
+            out.insert("numAddedBytes".to_string(), Value::from(v));
+        }
+        if let Some(v) = self.num_removed_bytes {
+            out.insert("numRemovedBytes".to_string(), Value::from(v));
+        }
+        if let Some(v) = self.write_time_ms {
+            out.insert("writeTimeMs".to_string(), Value::from(v));
+        }
         out
+    }
+
+    pub fn merge(&mut self, other: Self) {
+        fn merge_opt(target: &mut Option<u64>, source: Option<u64>) {
+            if let Some(source) = source {
+                let merged = target.unwrap_or_default().saturating_add(source);
+                *target = Some(merged);
+            }
+        }
+
+        merge_opt(&mut self.num_files, other.num_files);
+        merge_opt(&mut self.num_output_rows, other.num_output_rows);
+        merge_opt(&mut self.num_output_bytes, other.num_output_bytes);
+        merge_opt(&mut self.execution_time_ms, other.execution_time_ms);
+        merge_opt(&mut self.num_removed_files, other.num_removed_files);
+        merge_opt(&mut self.num_added_files, other.num_added_files);
+        merge_opt(&mut self.num_output_files, other.num_output_files);
+        merge_opt(&mut self.num_added_bytes, other.num_added_bytes);
+        merge_opt(&mut self.num_removed_bytes, other.num_removed_bytes);
+        merge_opt(&mut self.write_time_ms, other.write_time_ms);
+
+        self.extra.extend(other.extra);
     }
 }
 
@@ -126,6 +164,10 @@ impl From<HashMap<String, Value>> for OperationMetrics {
         let execution_time_ms = take_u64(&mut value, "executionTimeMs");
         let num_removed_files = take_u64(&mut value, "numRemovedFiles");
         let num_added_files = take_u64(&mut value, "numAddedFiles");
+        let num_output_files = take_u64(&mut value, "numOutputFiles");
+        let num_added_bytes = take_u64(&mut value, "numAddedBytes");
+        let num_removed_bytes = take_u64(&mut value, "numRemovedBytes");
+        let write_time_ms = take_u64(&mut value, "writeTimeMs");
 
         Self {
             num_files,
@@ -134,9 +176,25 @@ impl From<HashMap<String, Value>> for OperationMetrics {
             execution_time_ms,
             num_removed_files,
             num_added_files,
+            num_output_files,
+            num_added_bytes,
+            num_removed_bytes,
+            write_time_ms,
             extra: value,
         }
     }
+}
+
+fn actions_to_log_bytes(actions: &[Action]) -> Result<Bytes, TransactionError> {
+    let mut buf: Vec<u8> = Vec::new();
+    for (index, action) in actions.iter().enumerate() {
+        if index > 0 {
+            buf.push(b'\n');
+        }
+        serde_json::to_writer(&mut buf, action)
+            .map_err(|e| TransactionError::SerializeLogJson { json_err: e })?;
+    }
+    Ok(Bytes::from(buf))
 }
 
 #[derive(Debug)]
@@ -203,16 +261,7 @@ impl CommitData {
     }
 
     pub fn get_bytes(&self) -> Result<Bytes, TransactionError> {
-        // Write newline-delimited JSON without building intermediate Strings.
-        let mut buf: Vec<u8> = Vec::new();
-        for (i, action) in self.actions.iter().enumerate() {
-            if i > 0 {
-                buf.push(b'\n');
-            }
-            serde_json::to_writer(&mut buf, action)
-                .map_err(|e| TransactionError::SerializeLogJson { json_err: e })?;
-        }
-        Ok(Bytes::from(buf))
+        actions_to_log_bytes(&self.actions)
     }
 
     fn is_blind_append(actions: &[Action], operation: &DeltaOperation) -> bool {
@@ -747,15 +796,8 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                                     }
                                 }
 
-                                let mut jsons = Vec::<String>::new();
-                                for action in &local_actions {
-                                    let json = serde_json::to_string(action).map_err(|e| {
-                                        TransactionError::SerializeLogJson { json_err: e }
-                                    })?;
-                                    jsons.push(json);
-                                }
                                 commit_or_bytes =
-                                    CommitOrBytes::LogBytes(Bytes::from(jsons.join("\n")));
+                                    CommitOrBytes::LogBytes(actions_to_log_bytes(&local_actions)?);
                                 creation_actions_stripped = true;
                             }
                         }
