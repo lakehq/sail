@@ -18,10 +18,7 @@ static ACTION_FIELDS: LazyLock<Vec<datafusion::arrow::datatypes::FieldRef>> = La
         clippy::unwrap_used,
         reason = "ACTION_FIELDS is a process-global constant."
     )]
-    let fields = delta_action_fields_build()
-        .map_err(|msg| format!("delta action fields initialization failed: {msg}"))
-        .unwrap();
-    fields
+    delta_action_fields_build()
 });
 static ACTION_SCHEMA: LazyLock<SchemaRef> =
     LazyLock::new(|| Arc::new(Schema::new((*ACTION_FIELDS).clone())));
@@ -44,6 +41,97 @@ fn partition_values_type() -> DataType {
     );
     let entries_field = Arc::new(Field::new("entries", entries_struct, false));
     DataType::Map(entries_field, false)
+}
+
+fn action_field(name: &str, data_type: DataType, nullable: bool) -> Arc<Field> {
+    Arc::new(Field::new(name, data_type, nullable))
+}
+
+fn action_union_type() -> DataType {
+    let protocol_type = DataType::Struct(
+        vec![
+            action_field("minReaderVersion", DataType::Int32, false),
+            action_field("minWriterVersion", DataType::Int32, false),
+            action_field(
+                "readerFeatures",
+                DataType::List(action_field("element", DataType::Utf8, true)),
+                true,
+            ),
+            action_field(
+                "writerFeatures",
+                DataType::List(action_field("element", DataType::Utf8, true)),
+                true,
+            ),
+        ]
+        .into(),
+    );
+    let metadata_format_type = DataType::Struct(
+        vec![
+            action_field("provider", DataType::Utf8, false),
+            action_field("options", partition_values_type(), false),
+        ]
+        .into(),
+    );
+    let metadata_type = DataType::Struct(
+        vec![
+            action_field("id", DataType::Utf8, false),
+            action_field("name", DataType::Utf8, true),
+            action_field("description", DataType::Utf8, true),
+            action_field("format", metadata_format_type, false),
+            action_field("schemaString", DataType::Utf8, false),
+            action_field(
+                "partitionColumns",
+                DataType::List(action_field("element", DataType::Utf8, true)),
+                false,
+            ),
+            action_field("createdTime", DataType::Int64, true),
+            action_field("configuration", partition_values_type(), false),
+        ]
+        .into(),
+    );
+    let add_type = DataType::Struct(
+        vec![
+            action_field("path", DataType::Utf8, false),
+            action_field(COL_PARTITION_VALUES, partition_values_type(), false),
+            action_field("size", DataType::Int64, false),
+            action_field("modification_time", DataType::Int64, false),
+            action_field("data_change", DataType::Boolean, false),
+            action_field("stats_json", DataType::Utf8, true),
+        ]
+        .into(),
+    );
+    let remove_type = DataType::Struct(
+        vec![
+            action_field("path", DataType::Utf8, false),
+            action_field("data_change", DataType::Boolean, false),
+            action_field("deletion_timestamp", DataType::Int64, true),
+            action_field("extended_file_metadata", DataType::Boolean, true),
+            action_field(COL_PARTITION_VALUES, partition_values_type(), false),
+            action_field("size", DataType::Int64, true),
+        ]
+        .into(),
+    );
+    let commit_meta_type = DataType::Struct(
+        vec![
+            action_field("commit_row_count", DataType::UInt64, false),
+            action_field("operation_json", DataType::Utf8, true),
+            action_field("operation_metrics_json", DataType::Utf8, false),
+        ]
+        .into(),
+    );
+
+    DataType::Union(
+        vec![
+            (0, action_field("add", add_type, false)),
+            (1, action_field("remove", remove_type, false)),
+            (2, action_field("protocol", protocol_type, false)),
+            (3, action_field("metadata", metadata_type, false)),
+            (4, action_field("commit_meta", commit_meta_type, false)),
+        ]
+        .into_iter()
+        .collect(),
+        datafusion::arrow::datatypes::UnionMode::Dense,
+    )
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,9 +170,9 @@ pub enum PhysicalExecAction {
     Remove(RemoveAction),
     // Protocol / Metadata are relatively rare; we keep them as JSON strings for now.
     #[serde(rename = "protocol")]
-    Protocol(String),
+    Protocol(Protocol),
     #[serde(rename = "metadata")]
-    Metadata(String),
+    Metadata(Metadata),
     #[serde(rename = "commit_meta")]
     CommitMeta(CommitMetaAction),
 }
@@ -94,36 +182,8 @@ struct ActionRow {
     action: PhysicalExecAction,
 }
 
-fn delta_action_tracing_options() -> std::result::Result<serde_arrow::schema::TracingOptions, String>
-{
-    use serde_arrow::schema::TracingOptions;
-
-    TracingOptions::default()
-        .map_as_struct(false)
-        .strings_as_large_utf8(false)
-        .sequence_as_large_list(false)
-        // Force MapArray strategy + stable entry field names ("keys"/"values") inside the union variants.
-        .overwrite(
-            "action.add.partition_values",
-            Field::new(COL_PARTITION_VALUES, partition_values_type(), false),
-        )
-        .and_then(|opts| {
-            opts.overwrite(
-                "action.remove.partition_values",
-                Field::new(COL_PARTITION_VALUES, partition_values_type(), false),
-            )
-        })
-        .map_err(|e| format!("failed to overwrite partition_values field: {e}"))
-}
-
-fn delta_action_fields_build(
-) -> std::result::Result<Vec<datafusion::arrow::datatypes::FieldRef>, String> {
-    use serde_arrow::schema::SchemaLike;
-
-    Vec::<datafusion::arrow::datatypes::FieldRef>::from_type::<ActionRow>(
-        delta_action_tracing_options()?,
-    )
-    .map_err(|e| format!("ActionRow schema tracing failed: {e}"))
+fn delta_action_fields_build() -> Vec<datafusion::arrow::datatypes::FieldRef> {
+    vec![action_field(COL_ACTION, action_union_type(), false)]
 }
 
 fn delta_action_fields() -> Result<&'static Vec<datafusion::arrow::datatypes::FieldRef>> {
@@ -187,9 +247,7 @@ impl TryFrom<Protocol> for PhysicalExecAction {
     type Error = DataFusionError;
 
     fn try_from(protocol: Protocol) -> Result<Self> {
-        let protocol_json =
-            serde_json::to_string(&protocol).map_err(|e| DataFusionError::External(Box::new(e)))?;
-        Ok(PhysicalExecAction::Protocol(protocol_json))
+        Ok(PhysicalExecAction::Protocol(protocol))
     }
 }
 
@@ -197,9 +255,7 @@ impl TryFrom<Metadata> for PhysicalExecAction {
     type Error = DataFusionError;
 
     fn try_from(metadata: Metadata) -> Result<Self> {
-        let metadata_json =
-            serde_json::to_string(&metadata).map_err(|e| DataFusionError::External(Box::new(e)))?;
-        Ok(PhysicalExecAction::Metadata(metadata_json))
+        Ok(PhysicalExecAction::Metadata(metadata))
     }
 }
 
@@ -278,16 +334,8 @@ pub fn decode_actions_and_meta_from_batch(
                     default_row_commit_version: None,
                 }));
             }
-            PhysicalExecAction::Protocol(s) => {
-                let p: Protocol =
-                    serde_json::from_str(&s).map_err(|e| DataFusionError::External(Box::new(e)))?;
-                out_actions.push(Action::Protocol(p));
-            }
-            PhysicalExecAction::Metadata(s) => {
-                let m: Metadata =
-                    serde_json::from_str(&s).map_err(|e| DataFusionError::External(Box::new(e)))?;
-                out_actions.push(Action::Metadata(m));
-            }
+            PhysicalExecAction::Protocol(protocol) => out_actions.push(Action::Protocol(protocol)),
+            PhysicalExecAction::Metadata(metadata) => out_actions.push(Action::Metadata(metadata)),
             PhysicalExecAction::CommitMeta(cm) => {
                 let operation: Option<DeltaOperation> = cm
                     .operation_json
@@ -313,6 +361,7 @@ pub fn decode_actions_and_meta_from_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::spec::StructType;
 
     #[test]
     fn encode_actions_produces_action_column() -> Result<()> {
@@ -395,6 +444,33 @@ mod tests {
             DataFusionError::Internal("expected CommitMeta to be present in roundtrip batch".into())
         })?;
         assert_eq!(decoded_meta.row_count, 10);
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_and_metadata_roundtrip_as_typed_actions() -> Result<()> {
+        let protocol = Protocol::new(3, 7, None, None);
+        let metadata = Metadata::try_new(
+            Some("tbl".to_string()),
+            Some("desc".to_string()),
+            StructType::try_new([]).map_err(|e| DataFusionError::External(Box::new(e)))?,
+            vec!["p".to_string()],
+            0,
+            HashMap::from([("k".to_string(), "v".to_string())]),
+        )
+        .map_err(|e| DataFusionError::External(Box::new(e)))?
+        .with_table_id("table-id".to_string());
+
+        let batch = encode_actions(vec![
+            protocol.clone().try_into()?,
+            metadata.clone().try_into()?,
+        ])?;
+        let (actions, decoded_meta) = decode_actions_and_meta_from_batch(&batch)?;
+
+        assert!(decoded_meta.is_none());
+        assert_eq!(actions.len(), 2);
+        assert!(matches!(&actions[0], Action::Protocol(value) if value == &protocol));
+        assert!(matches!(&actions[1], Action::Metadata(value) if value == &metadata));
         Ok(())
     }
 }
