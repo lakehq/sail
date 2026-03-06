@@ -42,7 +42,7 @@ use crate::storage::{get_actions, LogStore};
 const DELTA_LOG_FOLDER: &str = "_delta_log";
 static DELTA_LOG_REGEX: LazyLock<Result<Regex, regex::Error>> =
     LazyLock::new(|| Regex::new(r"(\d{20})\.json$"));
-// Multipart checkpoints are deprecated in the Delta protocol. 
+// Multipart checkpoints are deprecated in the Delta protocol.
 static CHECKPOINT_REGEX: LazyLock<Result<Regex, regex::Error>> =
     LazyLock::new(|| Regex::new(r"(\d{20})\.checkpoint.*\.parquet$"));
 

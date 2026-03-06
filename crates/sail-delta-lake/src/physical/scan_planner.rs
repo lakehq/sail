@@ -18,12 +18,12 @@ use crate::datasource::scan::{build_file_scan_config, FileScanParams, TableStats
 use crate::datasource::{
     df_logical_schema, simplify_expr, DataFusionMixins, DeltaScanConfig, DeltaTableStateExt,
 };
-use crate::schema::{arrow_field_physical_name, get_physical_schema, logical_arrow_to_kernel};
-use crate::spec::{Add, ColumnMappingMode};
 use crate::options::TableDeltaOptions;
 use crate::physical_plan::planner::utils::{LogReplayFilter, LogReplayOptions};
 use crate::physical_plan::planner::{DeltaTableConfig as PlannerTableConfig, PlannerContext};
 use crate::physical_plan::{DeltaDiscoveryExec, DeltaScanByAddsExec};
+use crate::schema::{arrow_field_physical_name, get_physical_schema, logical_arrow_to_kernel};
+use crate::spec::{Add, ColumnMappingMode};
 use crate::storage::LogStoreRef;
 use crate::table::DeltaTableState;
 
