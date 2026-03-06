@@ -26,8 +26,8 @@ use sail_common_datafusion::logical_expr::ExprWithSource;
 
 use super::context::PlannerContext;
 use super::utils::{
-    align_schemas_for_union, build_log_replay_pipeline, build_log_replay_pipeline_with_options,
-    build_standard_write_layers, LogReplayFilter, LogReplayOptions,
+    align_schemas_for_union, build_log_replay_pipeline_with_options, build_standard_write_layers,
+    LogReplayFilter, LogReplayOptions,
 };
 use crate::datasource::schema::DataFusionMixins;
 use crate::datasource::PredicateProperties;
@@ -105,6 +105,18 @@ async fn build_full_overwrite_plan(
             .clone();
         let version = snapshot_state.version();
         let partition_columns = snapshot_state.metadata().partition_columns().clone();
+        let kschema_arc = snapshot_state.snapshot().table_configuration().schema();
+        let kmode = snapshot_state.effective_column_mapping_mode();
+        let partition_columns_map = partition_columns
+            .iter()
+            .map(|col| {
+                let physical = kschema_arc
+                    .field(col)
+                    .map(|f| f.physical_name(kmode).to_string())
+                    .unwrap_or_else(|| col.clone());
+                (col.clone(), physical)
+            })
+            .collect::<Vec<_>>();
 
         let kernel_snapshot = snapshot_state.snapshot().snapshot().inner.clone();
         let log_segment = kernel_snapshot.log_segment();
@@ -119,13 +131,14 @@ async fn build_full_overwrite_plan(
             .map(|p| p.filename.clone())
             .collect::<Vec<_>>();
 
-        let meta_scan: Arc<dyn ExecutionPlan> = build_log_replay_pipeline(
+        let meta_scan: Arc<dyn ExecutionPlan> = build_log_replay_pipeline_with_options(
             ctx,
             ctx.table_url().clone(),
             version,
-            partition_columns.clone(),
+            partition_columns_map,
             checkpoint_files,
             commit_files,
+            LogReplayOptions::default(),
         )
         .await?;
 
@@ -167,10 +180,21 @@ async fn build_overwrite_if_plan(
         .clone();
     let version = snapshot_state.version();
     let table_schema = snapshot_state
-        .snapshot()
-        .arrow_schema()
+        .input_schema()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let partition_columns = snapshot_state.metadata().partition_columns().clone();
+    let kschema_arc = snapshot_state.snapshot().table_configuration().schema();
+    let kmode = snapshot_state.effective_column_mapping_mode();
+    let partition_columns_map = partition_columns
+        .iter()
+        .map(|col| {
+            let physical = kschema_arc
+                .field(col)
+                .map(|f| f.physical_name(kmode).to_string())
+                .unwrap_or_else(|| col.clone());
+            (col.clone(), physical)
+        })
+        .collect::<Vec<_>>();
     let table_df_schema = table_schema
         .clone()
         .to_dfschema()
@@ -251,7 +275,7 @@ async fn build_overwrite_if_plan(
         ctx,
         ctx.table_url().clone(),
         version,
-        partition_columns.clone(),
+        partition_columns_map,
         checkpoint_files,
         commit_files,
         log_replay_options,
@@ -302,6 +326,19 @@ async fn build_old_data_plan(
         .snapshot()
         .map_err(|e| DataFusionError::External(Box::new(e)))?
         .clone();
+    let kschema_arc = snapshot_state.snapshot().table_configuration().schema();
+    let kmode = snapshot_state.effective_column_mapping_mode();
+    let partition_columns_map = ctx
+        .partition_columns()
+        .iter()
+        .map(|col| {
+            let physical = kschema_arc
+                .field(col)
+                .map(|f| f.physical_name(kmode).to_string())
+                .unwrap_or_else(|| col.clone());
+            (col.clone(), physical)
+        })
+        .collect::<Vec<_>>();
     let kernel_snapshot = snapshot_state.snapshot().snapshot().inner.clone();
     let log_segment = kernel_snapshot.log_segment();
     let checkpoint_files = log_segment
@@ -326,7 +363,7 @@ async fn build_old_data_plan(
         ctx,
         ctx.table_url().clone(),
         version,
-        ctx.partition_columns().to_vec(),
+        partition_columns_map,
         checkpoint_files,
         commit_files,
         log_replay_options,
@@ -344,6 +381,9 @@ async fn build_old_data_plan(
     )?);
 
     // Spread Add actions across partitions so `DeltaScanByAddsExec` can scan files in parallel.
+    // TODO(adaptive-partitioning): Keep this aligned with `scan_planner.rs`.
+    // Plan: switch from fixed `target_partitions` + round-robin to size-driven partition count
+    // first, then size-aware distribution to avoid oversharding and worker skew.
     let target_partitions = ctx.session().config().target_partitions().max(1);
     let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
         find_files_exec,
@@ -353,7 +393,13 @@ async fn build_old_data_plan(
     let scan_exec = Arc::new(DeltaScanByAddsExec::new(
         Arc::clone(&find_files_exec),
         ctx.table_url().clone(),
+        version,
+        table_schema.clone(),
         table_schema,
+        crate::datasource::DeltaScanConfig::default(),
+        None,
+        None,
+        None,
     ));
 
     let negated_condition = Arc::new(NotExpr::new(condition));
