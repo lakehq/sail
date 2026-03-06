@@ -329,7 +329,7 @@ impl CardinalityEstimator {
         // Compute null adjustment by collecting unique columns across all contained edges.
         // A column that appears in multiple edges (e.g., a fact key joined to several
         // dimensions) should only contribute its (1 - null_fraction) factor once.
-        let null_adjustment = self.null_adjustment_for_edges(&contained_edges);
+        let null_adjustment = self.null_adjustment_for_edges(contained_edges.iter().copied());
 
         numerator / denominator * null_adjustment
     }
@@ -349,7 +349,7 @@ impl CardinalityEstimator {
     /// even when the same column appears in multiple edges (e.g., a fact key joined to
     /// several dimension tables). Edges with `NullEqualsNull` semantics are skipped
     /// because NULLs can match in those joins.
-    fn null_adjustment_for_edges(&self, edges: &[&JoinEdge]) -> f64 {
+    fn null_adjustment_for_edges<'a>(&self, edges: impl IntoIterator<Item = &'a JoinEdge>) -> f64 {
         let mut seen = std::collections::HashSet::new();
         let mut adjustment = 1.0;
         for edge in edges {
@@ -444,12 +444,8 @@ impl CardinalityEstimator {
     ) -> f64 {
         let mut selectivity = 1.0;
 
-        let edges: Vec<&JoinEdge> = connecting_edge_indices
-            .iter()
-            .map(|&idx| &self.graph.edges[idx])
-            .collect();
-
-        for &edge in &edges {
+        for &index in connecting_edge_indices {
+            let edge = &self.graph.edges[index];
             // Equi-join selectivity (TDom-based).
             if !edge.equi_pairs.is_empty() {
                 let tdom = self.get_tdom_for_edge(edge);
@@ -475,7 +471,11 @@ impl CardinalityEstimator {
         }
 
         // Null-aware adjustment: each column contributes (1 - null_fraction) once.
-        let null_adjustment = self.null_adjustment_for_edges(&edges);
+        let null_adjustment = self.null_adjustment_for_edges(
+            connecting_edge_indices
+                .iter()
+                .map(|&idx| &self.graph.edges[idx]),
+        );
 
         left_card * right_card * selectivity * null_adjustment
     }
@@ -1412,8 +1412,7 @@ mod tests {
         // Both edges connect to fact.fk — it should only contribute (1-0.2)=0.8 once.
         // dim1.fk and dim2.fk have 0 nulls → factor = 1.0 each.
         // Total null_adjustment = 0.8 * 1.0 * 1.0 = 0.8
-        let edges: Vec<&JoinEdge> = estimator.graph.edges.iter().collect();
-        let adj = estimator.null_adjustment_for_edges(&edges);
+        let adj = estimator.null_adjustment_for_edges(&estimator.graph.edges);
         assert!(
             (adj - 0.8).abs() < 1e-9,
             "expected 0.8 with dedup, got {adj}"
