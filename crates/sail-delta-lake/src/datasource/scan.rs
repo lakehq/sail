@@ -476,26 +476,22 @@ fn stats_for_add(
 
         for name in name_candidates {
             if min_value == Precision::Absent {
-                if let Some(value) = stats.min_value(name)
-                    .and_then(|v| {
-                        ScalarConverter::json_to_arrow_scalar_value(v, field.data_type())
-                            .ok()
-                            .flatten()
-                    })
-                {
+                if let Some(value) = stats.min_value(name).and_then(|v| {
+                    ScalarConverter::stat_value_to_arrow_scalar_value(v, field.data_type())
+                        .ok()
+                        .flatten()
+                }) {
                     if !value.is_null() {
                         min_value = Precision::Exact(value);
                     }
                 }
             }
             if max_value == Precision::Absent {
-                if let Some(value) = stats.max_value(name)
-                    .and_then(|v| {
-                        ScalarConverter::json_to_arrow_scalar_value(v, field.data_type())
-                            .ok()
-                            .flatten()
-                    })
-                {
+                if let Some(value) = stats.max_value(name).and_then(|v| {
+                    ScalarConverter::stat_value_to_arrow_scalar_value(v, field.data_type())
+                        .ok()
+                        .flatten()
+                }) {
                     if !value.is_null() {
                         max_value = Precision::Exact(value);
                     }
@@ -544,11 +540,10 @@ mod tests {
 
     #[test]
     fn test_scalar_from_json_null_returns_typed_null() {
-        let value = ScalarConverter::json_to_arrow_scalar_value(
-            &serde_json::Value::Null,
-            &DataType::Int64,
-        )
-        .unwrap();
+        #[expect(clippy::unwrap_used)]
+        let value =
+            ScalarConverter::json_to_arrow_scalar_value(&serde_json::Value::Null, &DataType::Int64)
+                .unwrap();
         assert_eq!(value, Some(ScalarValue::Int64(None)));
     }
 

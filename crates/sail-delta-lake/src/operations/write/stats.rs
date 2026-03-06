@@ -34,7 +34,9 @@ use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
 
 use crate::conversion::ScalarExt;
-use crate::spec::{Add, ColumnCountStat, ColumnValueStat, DeltaError as DeltaTableError, Stats};
+use crate::spec::{
+    Add, ColumnCountStat, ColumnValueStat, DeltaError as DeltaTableError, StatValue, Stats,
+};
 
 /// Creates an [`Add`] log action struct with statistics.
 pub fn create_add(
@@ -393,23 +395,29 @@ pub fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
     result
 }
 
-impl From<StatsScalar> for serde_json::Value {
+impl From<StatsScalar> for StatValue {
     fn from(scalar: StatsScalar) -> Self {
         match scalar {
-            StatsScalar::Boolean(v) => serde_json::Value::Bool(v),
-            StatsScalar::Int32(v) => serde_json::Value::from(v),
-            StatsScalar::Int64(v) => serde_json::Value::from(v),
-            StatsScalar::Float32(v) => serde_json::Value::from(v),
-            StatsScalar::Float64(v) => serde_json::Value::from(v),
-            StatsScalar::Date(v) => serde_json::Value::from(v.format("%Y-%m-%d").to_string()),
+            StatsScalar::Boolean(v) => StatValue::Boolean(v),
+            StatsScalar::Int32(v) => StatValue::Number(v.into()),
+            StatsScalar::Int64(v) => StatValue::Number(v.into()),
+            StatsScalar::Float32(v) => serde_json::Number::from_f64(v as f64)
+                .map(StatValue::Number)
+                .unwrap_or_else(|| StatValue::String(v.to_string())),
+            StatsScalar::Float64(v) => serde_json::Number::from_f64(v)
+                .map(StatValue::Number)
+                .unwrap_or_else(|| StatValue::String(v.to_string())),
+            StatsScalar::Date(v) => StatValue::String(v.format("%Y-%m-%d").to_string()),
             StatsScalar::Timestamp(v) => {
-                serde_json::Value::from(v.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string())
+                StatValue::String(v.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string())
             }
             StatsScalar::TimestampNtz(v) => {
-                serde_json::Value::from(v.format("%Y-%m-%dT%H:%M:%S%.f").to_string())
+                StatValue::String(v.format("%Y-%m-%dT%H:%M:%S%.f").to_string())
             }
-            StatsScalar::Decimal(v) => serde_json::Value::from(v),
-            StatsScalar::String(v) => serde_json::Value::from(v),
+            StatsScalar::Decimal(v) => serde_json::Number::from_f64(v)
+                .map(StatValue::Number)
+                .unwrap_or_else(|| StatValue::String(v.to_string())),
+            StatsScalar::String(v) => StatValue::String(v),
             StatsScalar::Bytes(v) => {
                 let escaped_bytes = v
                     .into_iter()
@@ -417,10 +425,16 @@ impl From<StatsScalar> for serde_json::Value {
                     .collect::<Vec<u8>>();
                 // escape_default always produces valid ASCII so we can use from_utf8_lossy here
                 let escaped_string = String::from_utf8_lossy(escaped_bytes.as_slice()).into_owned();
-                serde_json::Value::from(escaped_string)
+                StatValue::String(escaped_string)
             }
-            StatsScalar::Uuid(v) => serde_json::Value::from(v.hyphenated().to_string()),
+            StatsScalar::Uuid(v) => StatValue::String(v.hyphenated().to_string()),
         }
+    }
+}
+
+impl From<StatsScalar> for serde_json::Value {
+    fn from(scalar: StatsScalar) -> Self {
+        StatValue::from(scalar).into()
     }
 }
 

@@ -11,11 +11,31 @@ use crate::spec::{
 };
 
 /// Column statistics stored in `Stats`.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(untagged)]
+pub enum StatValue {
+    Null,
+    Boolean(bool),
+    Number(serde_json::Number),
+    String(String),
+}
+
+impl From<StatValue> for serde_json::Value {
+    fn from(value: StatValue) -> Self {
+        match value {
+            StatValue::Null => serde_json::Value::Null,
+            StatValue::Boolean(value) => serde_json::Value::Bool(value),
+            StatValue::Number(value) => serde_json::Value::Number(value),
+            StatValue::String(value) => serde_json::Value::String(value),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum ColumnValueStat {
     Column(HashMap<String, ColumnValueStat>),
-    Value(serde_json::Value),
+    Value(StatValue),
 }
 
 impl ColumnValueStat {
@@ -26,7 +46,7 @@ impl ColumnValueStat {
         }
     }
 
-    pub fn as_value(&self) -> Option<&serde_json::Value> {
+    pub fn as_value(&self) -> Option<&StatValue> {
         match self {
             ColumnValueStat::Value(v) => Some(v),
             _ => None,
@@ -97,11 +117,11 @@ impl Stats {
         serde_json::to_string(self)
     }
 
-    pub fn min_value(&self, name: &str) -> Option<&serde_json::Value> {
+    pub fn min_value(&self, name: &str) -> Option<&StatValue> {
         lookup_value_stat(&self.min_values, name)
     }
 
-    pub fn max_value(&self, name: &str) -> Option<&serde_json::Value> {
+    pub fn max_value(&self, name: &str) -> Option<&StatValue> {
         lookup_value_stat(&self.max_values, name)
     }
 
@@ -113,7 +133,7 @@ impl Stats {
 fn lookup_value_stat<'a>(
     map: &'a HashMap<String, ColumnValueStat>,
     name: &str,
-) -> Option<&'a serde_json::Value> {
+) -> Option<&'a StatValue> {
     let mut parts = name.split('.');
     let first = parts.next()?;
     let path: Vec<&str> = parts.collect();

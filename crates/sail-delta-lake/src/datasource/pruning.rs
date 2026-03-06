@@ -157,11 +157,20 @@ pub(crate) fn prune_adds_by_physical_predicate(
 }
 
 #[derive(Debug)]
+struct MaterializedColumnStats {
+    min_values: Option<ArrayRef>,
+    max_values: Option<ArrayRef>,
+    null_counts: Option<ArrayRef>,
+    row_counts: Option<ArrayRef>,
+}
+
+#[derive(Debug)]
 struct AddStatsPruningStatistics {
     table_schema: SchemaRef,
     adds: Vec<Add>,
     stats: Vec<Option<Stats>>,
     referenced_columns: std::collections::HashSet<String>,
+    materialized_columns: std::collections::HashMap<String, MaterializedColumnStats>,
 }
 
 impl AddStatsPruningStatistics {
@@ -177,12 +186,36 @@ impl AddStatsPruningStatistics {
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
             stats.push(parsed);
         }
-        Ok(Self {
+        let mut out = Self {
             table_schema,
             adds,
             stats,
             referenced_columns,
-        })
+            materialized_columns: Default::default(),
+        };
+        out.materialize_referenced_columns();
+        Ok(out)
+    }
+
+    fn materialize_referenced_columns(&mut self) {
+        self.materialized_columns = self
+            .referenced_columns
+            .iter()
+            .filter_map(|name| {
+                let column = Column::from_name(name.clone());
+                self.field_for(&column).map(|_| {
+                    (
+                        name.clone(),
+                        MaterializedColumnStats {
+                            min_values: self.compute_min_values(&column),
+                            max_values: self.compute_max_values(&column),
+                            null_counts: self.compute_null_counts(&column),
+                            row_counts: self.compute_row_counts(&column),
+                        },
+                    )
+                })
+            })
+            .collect();
     }
 
     fn field_for(&self, column: &Column) -> Option<Arc<datafusion::arrow::datatypes::Field>> {
@@ -202,7 +235,7 @@ impl AddStatsPruningStatistics {
     fn build_json_stat_array(
         &self,
         column: &Column,
-        lookup: impl for<'a> Fn(&'a Stats, &'a str) -> Option<&'a serde_json::Value>,
+        lookup: impl for<'a> Fn(&'a Stats, &'a str) -> Option<&'a crate::spec::StatValue>,
     ) -> Option<ArrayRef> {
         if !self.should_build_stats_for(column) {
             return None;
@@ -210,17 +243,22 @@ impl AddStatsPruningStatistics {
 
         let field = self.field_for(column)?;
         let name = column.name();
-        if self.adds.iter().any(|add| add.partition_values.contains_key(name)) {
+        if self
+            .adds
+            .iter()
+            .any(|add| add.partition_values.contains_key(name))
+        {
             return None;
         }
 
         let mut has_value = false;
-        let values: Vec<Option<&serde_json::Value>> = self
+        let values: Vec<Option<&crate::spec::StatValue>> = self
             .stats
             .iter()
             .map(|stats| {
                 let value = stats.as_ref().and_then(|stats| lookup(stats, name));
-                has_value |= value.is_some_and(|value: &serde_json::Value| !value.is_null());
+                has_value |=
+                    value.is_some_and(|value| !matches!(value, crate::spec::StatValue::Null));
                 value
             })
             .collect();
@@ -229,7 +267,7 @@ impl AddStatsPruningStatistics {
             return None;
         }
 
-        ScalarConverter::json_values_to_array(&values, field.data_type())
+        ScalarConverter::stat_values_to_array(&values, field.data_type())
             .ok()
             .flatten()
     }
@@ -362,16 +400,13 @@ impl AddStatsPruningStatistics {
 
         Some(array)
     }
-}
 
-impl PruningStatistics for AddStatsPruningStatistics {
-    fn min_values(&self, column: &Column) -> Option<datafusion::arrow::array::ArrayRef> {
+    fn compute_min_values(&self, column: &Column) -> Option<ArrayRef> {
         if let Some(array) = self.build_partition_array(column) {
             return Some(array);
         }
-        if let Some(array) = self.build_json_stat_array(column, |stats, name| {
-            stats.min_value(name)
-        }) {
+        if let Some(array) = self.build_json_stat_array(column, |stats, name| stats.min_value(name))
+        {
             return Some(array);
         }
 
@@ -382,7 +417,7 @@ impl PruningStatistics for AddStatsPruningStatistics {
             }
             if let Some(s) = s {
                 if let Some(v) = s.min_value(name) {
-                    return ScalarConverter::json_to_arrow_scalar_value(v, dt)
+                    return ScalarConverter::stat_value_to_arrow_scalar_value(v, dt)
                         .ok()
                         .flatten()
                         .unwrap_or_else(|| Self::null_scalar(dt));
@@ -392,13 +427,12 @@ impl PruningStatistics for AddStatsPruningStatistics {
         })
     }
 
-    fn max_values(&self, column: &Column) -> Option<datafusion::arrow::array::ArrayRef> {
+    fn compute_max_values(&self, column: &Column) -> Option<ArrayRef> {
         if let Some(array) = self.build_partition_array(column) {
             return Some(array);
         }
-        if let Some(array) = self.build_json_stat_array(column, |stats, name| {
-            stats.max_value(name)
-        }) {
+        if let Some(array) = self.build_json_stat_array(column, |stats, name| stats.max_value(name))
+        {
             return Some(array);
         }
 
@@ -409,7 +443,7 @@ impl PruningStatistics for AddStatsPruningStatistics {
             }
             if let Some(s) = s {
                 if let Some(v) = s.max_value(name) {
-                    return ScalarConverter::json_to_arrow_scalar_value(v, dt)
+                    return ScalarConverter::stat_value_to_arrow_scalar_value(v, dt)
                         .ok()
                         .flatten()
                         .unwrap_or_else(|| Self::null_scalar(dt));
@@ -419,11 +453,7 @@ impl PruningStatistics for AddStatsPruningStatistics {
         })
     }
 
-    fn num_containers(&self) -> usize {
-        self.adds.len()
-    }
-
-    fn null_counts(&self, column: &Column) -> Option<datafusion::arrow::array::ArrayRef> {
+    fn compute_null_counts(&self, column: &Column) -> Option<ArrayRef> {
         self.build_count_array(column, |a, s| {
             let name = column.name();
             if let Some(pv) = a.partition_values.get(name) {
@@ -437,8 +467,38 @@ impl PruningStatistics for AddStatsPruningStatistics {
         })
     }
 
-    fn row_counts(&self, column: &Column) -> Option<datafusion::arrow::array::ArrayRef> {
+    fn compute_row_counts(&self, column: &Column) -> Option<ArrayRef> {
         self.build_count_array(column, |_a, s| s.map(|s| s.num_records.max(0) as u64))
+    }
+}
+
+impl PruningStatistics for AddStatsPruningStatistics {
+    fn min_values(&self, column: &Column) -> Option<datafusion::arrow::array::ArrayRef> {
+        self.materialized_columns
+            .get(column.name())
+            .and_then(|stats| stats.min_values.clone())
+    }
+
+    fn max_values(&self, column: &Column) -> Option<datafusion::arrow::array::ArrayRef> {
+        self.materialized_columns
+            .get(column.name())
+            .and_then(|stats| stats.max_values.clone())
+    }
+
+    fn num_containers(&self) -> usize {
+        self.adds.len()
+    }
+
+    fn null_counts(&self, column: &Column) -> Option<datafusion::arrow::array::ArrayRef> {
+        self.materialized_columns
+            .get(column.name())
+            .and_then(|stats| stats.null_counts.clone())
+    }
+
+    fn row_counts(&self, column: &Column) -> Option<datafusion::arrow::array::ArrayRef> {
+        self.materialized_columns
+            .get(column.name())
+            .and_then(|stats| stats.row_counts.clone())
     }
 
     fn contained(

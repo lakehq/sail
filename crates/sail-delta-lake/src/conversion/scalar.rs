@@ -24,9 +24,9 @@ use std::sync::Arc;
 
 use chrono::{DateTime, TimeZone, Utc};
 use datafusion::arrow::array::{
-    Array, ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
-    Int64Array, Int8Array, LargeStringArray, RecordBatch, StringArray, UInt16Array,
-    UInt32Array, UInt64Array, UInt8Array,
+    Array, ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
+    Int8Array, LargeStringArray, RecordBatch, StringArray, UInt16Array, UInt32Array, UInt64Array,
+    UInt8Array,
 };
 use datafusion::arrow::compute::{cast, cast_with_options, CastOptions};
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
@@ -35,7 +35,7 @@ use datafusion::common::Result as DataFusionResult;
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use serde_json::Value;
 
-use crate::spec::{DeltaError as DeltaTableError, DeltaResult as DeltaResultLocal};
+use crate::spec::{DeltaError as DeltaTableError, DeltaResult as DeltaResultLocal, StatValue};
 
 pub const NULL_PARTITION_VALUE_DATA_PATH: &str = "__HIVE_DEFAULT_PARTITION__";
 
@@ -49,8 +49,8 @@ const RFC3986_PART: &AsciiSet = &NON_ALPHANUMERIC
 pub struct ScalarConverter;
 
 impl ScalarConverter {
-    pub fn json_values_to_array(
-        values: &[Option<&serde_json::Value>],
+    pub fn stat_values_to_array(
+        values: &[Option<&StatValue>],
         field_dt: &ArrowDataType,
     ) -> DataFusionResult<Option<ArrayRef>> {
         macro_rules! typed_array {
@@ -59,7 +59,7 @@ impl ScalarConverter {
                 for value in values {
                     match value {
                         None => out.push(None),
-                        Some(serde_json::Value::Null) => out.push(None),
+                        Some(StatValue::Null) => out.push(None),
                         Some(value) => {
                             let Some(converted) = $extract(value) else {
                                 return Ok(None);
@@ -73,60 +73,87 @@ impl ScalarConverter {
         }
 
         match field_dt {
-            ArrowDataType::Boolean => {
-                typed_array!(BooleanArray, |value: &serde_json::Value| value.as_bool())
-            }
+            ArrowDataType::Boolean => typed_array!(BooleanArray, |value: &StatValue| match value {
+                StatValue::Boolean(value) => Some(*value),
+                _ => None,
+            }),
             ArrowDataType::Int8 => {
-                typed_array!(Int8Array, |value: &serde_json::Value| value
-                    .as_i64()
-                    .and_then(|v| i8::try_from(v).ok()))
+                typed_array!(Int8Array, |value: &StatValue| match value {
+                    StatValue::Number(value) => value.as_i64().and_then(|v| i8::try_from(v).ok()),
+                    _ => None,
+                })
             }
             ArrowDataType::Int16 => {
-                typed_array!(Int16Array, |value: &serde_json::Value| value
-                    .as_i64()
-                    .and_then(|v| i16::try_from(v).ok()))
+                typed_array!(Int16Array, |value: &StatValue| match value {
+                    StatValue::Number(value) => value.as_i64().and_then(|v| i16::try_from(v).ok()),
+                    _ => None,
+                })
             }
             ArrowDataType::Int32 => {
-                typed_array!(Int32Array, |value: &serde_json::Value| value
-                    .as_i64()
-                    .and_then(|v| i32::try_from(v).ok()))
+                typed_array!(Int32Array, |value: &StatValue| match value {
+                    StatValue::Number(value) => value.as_i64().and_then(|v| i32::try_from(v).ok()),
+                    _ => None,
+                })
             }
-            ArrowDataType::Int64 => {
-                typed_array!(Int64Array, |value: &serde_json::Value| value.as_i64())
-            }
+            ArrowDataType::Int64 => typed_array!(Int64Array, |value: &StatValue| match value {
+                StatValue::Number(value) => value.as_i64(),
+                _ => None,
+            }),
             ArrowDataType::UInt8 => {
-                typed_array!(UInt8Array, |value: &serde_json::Value| value
-                    .as_u64()
-                    .and_then(|v| u8::try_from(v).ok()))
+                typed_array!(UInt8Array, |value: &StatValue| match value {
+                    StatValue::Number(value) => value.as_u64().and_then(|v| u8::try_from(v).ok()),
+                    _ => None,
+                })
             }
             ArrowDataType::UInt16 => {
-                typed_array!(UInt16Array, |value: &serde_json::Value| value
-                    .as_u64()
-                    .and_then(|v| u16::try_from(v).ok()))
+                typed_array!(UInt16Array, |value: &StatValue| match value {
+                    StatValue::Number(value) => value.as_u64().and_then(|v| u16::try_from(v).ok()),
+                    _ => None,
+                })
             }
             ArrowDataType::UInt32 => {
-                typed_array!(UInt32Array, |value: &serde_json::Value| value
-                    .as_u64()
-                    .and_then(|v| u32::try_from(v).ok()))
+                typed_array!(UInt32Array, |value: &StatValue| match value {
+                    StatValue::Number(value) => value.as_u64().and_then(|v| u32::try_from(v).ok()),
+                    _ => None,
+                })
             }
-            ArrowDataType::UInt64 => {
-                typed_array!(UInt64Array, |value: &serde_json::Value| value.as_u64())
-            }
+            ArrowDataType::UInt64 => typed_array!(UInt64Array, |value: &StatValue| match value {
+                StatValue::Number(value) => value.as_u64(),
+                _ => None,
+            }),
             ArrowDataType::Float32 => {
-                typed_array!(Float32Array, |value: &serde_json::Value| value.as_f64().map(|v| v as f32))
+                typed_array!(Float32Array, |value: &StatValue| match value {
+                    StatValue::Number(value) => value.as_f64().map(|v| v as f32),
+                    _ => None,
+                })
             }
-            ArrowDataType::Float64 => {
-                typed_array!(Float64Array, |value: &serde_json::Value| value.as_f64())
-            }
-            ArrowDataType::Utf8 => typed_array!(StringArray, |value: &serde_json::Value| value
-                .as_str()
-                .map(ToOwned::to_owned)),
+            ArrowDataType::Float64 => typed_array!(Float64Array, |value: &StatValue| match value {
+                StatValue::Number(value) => value.as_f64(),
+                _ => None,
+            }),
+            ArrowDataType::Utf8 => typed_array!(StringArray, |value: &StatValue| match value {
+                StatValue::String(value) => Some(value.clone()),
+                _ => None,
+            }),
             ArrowDataType::LargeUtf8 => {
-                typed_array!(LargeStringArray, |value: &serde_json::Value| value
-                    .as_str()
-                    .map(ToOwned::to_owned))
+                typed_array!(LargeStringArray, |value: &StatValue| match value {
+                    StatValue::String(value) => Some(value.clone()),
+                    _ => None,
+                })
             }
             _ => Ok(None),
+        }
+    }
+
+    pub fn stat_value_to_arrow_scalar_value(
+        stat_val: &StatValue,
+        field_dt: &ArrowDataType,
+    ) -> DataFusionResult<Option<ScalarValue>> {
+        match stat_val {
+            StatValue::Null => Ok(Some(ScalarValue::try_new_null(field_dt)?)),
+            StatValue::Boolean(value) => Self::bool_to_arrow_scalar_value(*value, field_dt),
+            StatValue::Number(value) => Self::number_to_arrow_scalar_value(value, field_dt),
+            StatValue::String(value) => Self::string_json_to_arrow_scalar_value(value, field_dt),
         }
     }
 
@@ -157,13 +184,16 @@ impl ScalarConverter {
         stat_val: &serde_json::Value,
         field_dt: &ArrowDataType,
     ) -> DataFusionResult<Option<ScalarValue>> {
-        match stat_val {
-            serde_json::Value::Array(_) | serde_json::Value::Object(_) => Ok(None),
-            serde_json::Value::Null => Ok(Some(ScalarValue::try_new_null(field_dt)?)),
-            serde_json::Value::Bool(value) => Self::bool_to_arrow_scalar_value(*value, field_dt),
-            serde_json::Value::Number(value) => Self::number_to_arrow_scalar_value(value, field_dt),
-            serde_json::Value::String(value) => Self::string_json_to_arrow_scalar_value(value, field_dt),
-        }
+        let Some(stat_val) = (match stat_val {
+            serde_json::Value::Array(_) | serde_json::Value::Object(_) => None,
+            serde_json::Value::Null => Some(StatValue::Null),
+            serde_json::Value::Bool(value) => Some(StatValue::Boolean(*value)),
+            serde_json::Value::Number(value) => Some(StatValue::Number(value.clone())),
+            serde_json::Value::String(value) => Some(StatValue::String(value.clone())),
+        }) else {
+            return Ok(None);
+        };
+        Self::stat_value_to_arrow_scalar_value(&stat_val, field_dt)
     }
 
     fn string_json_to_arrow_scalar_value(
@@ -196,13 +226,31 @@ impl ScalarConverter {
         field_dt: &ArrowDataType,
     ) -> DataFusionResult<Option<ScalarValue>> {
         let scalar = match field_dt {
-            ArrowDataType::Int8 => value.as_i64().and_then(|v| i8::try_from(v).ok()).map(|v| ScalarValue::Int8(Some(v))),
-            ArrowDataType::Int16 => value.as_i64().and_then(|v| i16::try_from(v).ok()).map(|v| ScalarValue::Int16(Some(v))),
-            ArrowDataType::Int32 => value.as_i64().and_then(|v| i32::try_from(v).ok()).map(|v| ScalarValue::Int32(Some(v))),
+            ArrowDataType::Int8 => value
+                .as_i64()
+                .and_then(|v| i8::try_from(v).ok())
+                .map(|v| ScalarValue::Int8(Some(v))),
+            ArrowDataType::Int16 => value
+                .as_i64()
+                .and_then(|v| i16::try_from(v).ok())
+                .map(|v| ScalarValue::Int16(Some(v))),
+            ArrowDataType::Int32 => value
+                .as_i64()
+                .and_then(|v| i32::try_from(v).ok())
+                .map(|v| ScalarValue::Int32(Some(v))),
             ArrowDataType::Int64 => value.as_i64().map(|v| ScalarValue::Int64(Some(v))),
-            ArrowDataType::UInt8 => value.as_u64().and_then(|v| u8::try_from(v).ok()).map(|v| ScalarValue::UInt8(Some(v))),
-            ArrowDataType::UInt16 => value.as_u64().and_then(|v| u16::try_from(v).ok()).map(|v| ScalarValue::UInt16(Some(v))),
-            ArrowDataType::UInt32 => value.as_u64().and_then(|v| u32::try_from(v).ok()).map(|v| ScalarValue::UInt32(Some(v))),
+            ArrowDataType::UInt8 => value
+                .as_u64()
+                .and_then(|v| u8::try_from(v).ok())
+                .map(|v| ScalarValue::UInt8(Some(v))),
+            ArrowDataType::UInt16 => value
+                .as_u64()
+                .and_then(|v| u16::try_from(v).ok())
+                .map(|v| ScalarValue::UInt16(Some(v))),
+            ArrowDataType::UInt32 => value
+                .as_u64()
+                .and_then(|v| u32::try_from(v).ok())
+                .map(|v| ScalarValue::UInt32(Some(v))),
             ArrowDataType::UInt64 => value.as_u64().map(|v| ScalarValue::UInt64(Some(v))),
             ArrowDataType::Float32 => value.as_f64().map(|v| ScalarValue::Float32(Some(v as f32))),
             ArrowDataType::Float64 => value.as_f64().map(|v| ScalarValue::Float64(Some(v))),
