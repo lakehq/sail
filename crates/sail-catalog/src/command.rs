@@ -484,8 +484,22 @@ impl CatalogCommand {
                                 let dir = dir.to_path_buf();
                                 let path = path.to_string();
                                 tokio::task::spawn_blocking(move || -> CatalogResult<()> {
-                                    // Only remove data files, preserving metadata directories
-                                    // like _delta_log/ for Delta Lake tables.
+                                    // Reject tables with transaction logs (Delta Lake, Iceberg).
+                                    // Deleting data files without updating their metadata would
+                                    // leave the table in a corrupted state.
+                                    let has_delta = dir.join("_delta_log").exists();
+                                    let has_iceberg_meta = dir.join("metadata").exists();
+                                    let has_iceberg_dot = dir.join(".iceberg").exists();
+                                    if has_delta || has_iceberg_meta || has_iceberg_dot {
+                                        return Err(CatalogError::NotSupported(
+                                            "TRUNCATE TABLE is not supported for tables with \
+                                             transaction logs (Delta Lake, Iceberg). \
+                                             Use format-specific overwrite operations instead."
+                                                .to_string(),
+                                        ));
+                                    }
+
+                                    // Remove data files and partition directories.
                                     for entry in std::fs::read_dir(&dir).map_err(|e| {
                                         CatalogError::External(format!(
                                             "failed to read table directory at {path}: {e}"
@@ -498,25 +512,29 @@ impl CatalogCommand {
                                         })?;
                                         let name = entry.file_name();
                                         let name = name.to_string_lossy();
-                                        // Skip metadata directories used by table formats:
-                                        // _delta_log/ (Delta Lake), .iceberg/ (some Iceberg),
-                                        // metadata/ (Iceberg standard).
-                                        if name.starts_with('_')
-                                            || name.starts_with('.')
-                                            || *name == *"metadata"
-                                        {
+                                        // Skip hidden/internal entries.
+                                        if name.starts_with('_') || name.starts_with('.') {
                                             continue;
                                         }
+                                        // Use symlink_metadata to avoid following symlinks.
+                                        // Symlinks are removed as links (not their targets).
+                                        let meta = std::fs::symlink_metadata(entry.path())
+                                            .map_err(|e| {
+                                                CatalogError::External(format!(
+                                                    "failed to read metadata for {}: {e}",
+                                                    entry.path().display()
+                                                ))
+                                            })?;
                                         let entry_path = entry.path();
-                                        if entry_path.is_dir() {
-                                            std::fs::remove_dir_all(&entry_path).map_err(|e| {
+                                        if meta.is_symlink() || meta.is_file() {
+                                            std::fs::remove_file(&entry_path).map_err(|e| {
                                                 CatalogError::External(format!(
                                                     "failed to remove {}: {e}",
                                                     entry_path.display()
                                                 ))
                                             })?;
-                                        } else {
-                                            std::fs::remove_file(&entry_path).map_err(|e| {
+                                        } else if meta.is_dir() {
+                                            std::fs::remove_dir_all(&entry_path).map_err(|e| {
                                                 CatalogError::External(format!(
                                                     "failed to remove {}: {e}",
                                                     entry_path.display()
