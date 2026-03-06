@@ -61,9 +61,18 @@ async fn convert_spark_integer_types(
     const MAX_SAMPLE_FILES: usize = 8;
     const MAX_BATCH_SIZE: usize = 8192;
     let max_rows = csv_options.schema_infer_max_rec.unwrap_or(1000);
+    if max_rows == 0 {
+        return Ok(schema.clone());
+    }
     let batch_size = max_rows.min(MAX_BATCH_SIZE);
     let mut total_rows_checked: usize = 0;
     let mut sampled_any = false;
+
+    // Skip sampling for compressed files: we read a raw byte prefix (up to 1 MiB) which
+    // cannot be decoded without full decompression.
+    if csv_options.compression != CompressionTypeVariant::UNCOMPRESSED {
+        return Ok(schema.clone());
+    }
 
     for file in files.iter().take(MAX_SAMPLE_FILES) {
         let sample_end = std::cmp::min(file.size, MAX_SAMPLE_BYTES);
@@ -98,32 +107,41 @@ async fn convert_spark_integer_types(
         let Ok(mut reader) = reader_builder.build(cursor) else {
             continue;
         };
-        if !sampled_any {
-            for &col_idx in &int64_cols {
-                fits_in_int32[col_idx] = true;
-            }
-            sampled_any = true;
-        }
-        while let Some(Ok(batch)) = reader.next() {
-            for &col_idx in &int64_cols {
-                if !fits_in_int32[col_idx] {
-                    continue;
+        loop {
+            match reader.next() {
+                Some(Ok(batch)) => {
+                    if !sampled_any {
+                        for &col_idx in &int64_cols {
+                            fits_in_int32[col_idx] = true;
+                        }
+                        sampled_any = true;
+                    }
+                    for &col_idx in &int64_cols {
+                        if !fits_in_int32[col_idx] {
+                            continue;
+                        }
+                        let array = batch.column(col_idx).as_primitive::<Int64Type>();
+                        let all_fit = array
+                            .iter()
+                            .flatten()
+                            .all(|val| val >= i64::from(i32::MIN) && val <= i64::from(i32::MAX));
+                        if !all_fit {
+                            fits_in_int32[col_idx] = false;
+                        }
+                    }
+                    total_rows_checked += batch.num_rows();
+                    if total_rows_checked >= max_rows {
+                        break;
+                    }
+                    if !int64_cols.iter().any(|&idx| fits_in_int32[idx]) {
+                        break;
+                    }
                 }
-                let array = batch.column(col_idx).as_primitive::<Int64Type>();
-                let all_fit = array
-                    .iter()
-                    .flatten()
-                    .all(|val| val >= i64::from(i32::MIN) && val <= i64::from(i32::MAX));
-                if !all_fit {
-                    fits_in_int32[col_idx] = false;
+                Some(Err(_)) => {
+                    // Parse error (e.g. truncated sample) — stop sampling this file.
+                    break;
                 }
-            }
-            total_rows_checked += batch.num_rows();
-            if total_rows_checked >= max_rows {
-                break;
-            }
-            if !int64_cols.iter().any(|&idx| fits_in_int32[idx]) {
-                break;
+                None => break,
             }
         }
         if total_rows_checked >= max_rows || !int64_cols.iter().any(|&idx| fits_in_int32[idx]) {
