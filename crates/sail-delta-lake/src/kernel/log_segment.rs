@@ -12,9 +12,9 @@
 
 use futures::TryStreamExt;
 use object_store::path::Path;
-use serde::Deserialize;
 
 use crate::error::DeltaResult;
+use crate::spec::LastCheckpointHint;
 use crate::storage::LogStoreRef;
 
 pub(crate) const DELTA_LOG_DIR: &str = "_delta_log";
@@ -34,11 +34,6 @@ pub struct LogSegmentFiles {
 pub struct LogSegmentResolveOptions {
     /// If set, only include commit JSON files whose version falls within `[start, end]`.
     pub commit_version_range: Option<(i64, i64)>,
-}
-
-#[derive(Debug, Deserialize)]
-struct LastCheckpointHint {
-    version: i64,
 }
 
 /// Extract the 20-digit version prefix from a log filename, returning `None` if the filename

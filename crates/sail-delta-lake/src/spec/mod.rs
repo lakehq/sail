@@ -11,6 +11,7 @@
 // limitations under the License.
 
 pub mod actions;
+pub mod checkpoint;
 pub mod metadata;
 pub mod operation;
 pub mod properties;
@@ -21,6 +22,10 @@ pub mod statistics;
 pub use actions::{
     Action, Add, CommitInfo, DeletionVectorDescriptor, Remove, RemoveOptions, StorageType,
     Transaction,
+};
+pub use checkpoint::{
+    protocol_from_checkpoint, protocol_to_checkpoint, CheckpointActionRow, CheckpointAdd,
+    CheckpointDeletionVector, CheckpointProtocol, CheckpointRemove, LastCheckpointHint,
 };
 pub use datafusion::arrow::datatypes::SchemaRef;
 pub use metadata::{Format, Metadata};

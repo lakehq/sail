@@ -32,11 +32,13 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::async_writer::ParquetObjectWriter;
 use parquet::arrow::AsyncArrowWriter;
 use regex::Regex;
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::kernel::{DeltaResult, DeltaTableError};
-use crate::spec::{Action, Add, DeletionVectorDescriptor, Metadata, Protocol, Remove, Transaction};
+use crate::spec::{
+    protocol_from_checkpoint, protocol_to_checkpoint, Action, Add, CheckpointActionRow,
+    LastCheckpointHint, Metadata, Protocol, Remove, Transaction,
+};
 use crate::storage::{get_actions, LogStore};
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
@@ -71,253 +73,6 @@ fn parse_version(regex: &Regex, location: &Path) -> Option<i64> {
         .captures(location.as_ref())
         .and_then(|caps| caps.get(1))
         .and_then(|m| m.as_str().parse::<i64>().ok())
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CheckpointActionRow {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    add: Option<CheckpointAdd>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    remove: Option<CheckpointRemove>,
-    #[serde(rename = "metaData", skip_serializing_if = "Option::is_none")]
-    metadata: Option<Metadata>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    protocol: Option<CheckpointProtocol>,
-    #[serde(rename = "txn", skip_serializing_if = "Option::is_none")]
-    txn: Option<Transaction>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CheckpointProtocol {
-    min_reader_version: i32,
-    min_writer_version: i32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reader_features: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    writer_features: Option<Vec<String>>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CheckpointDeletionVector {
-    storage_type: String,
-    path_or_inline_dv: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    offset: Option<i32>,
-    size_in_bytes: i32,
-    cardinality: i64,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CheckpointAdd {
-    #[serde(with = "serde_path_compat")]
-    path: String,
-    partition_values: HashMap<String, Option<String>>,
-    size: i64,
-    modification_time: i64,
-    data_change: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stats: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tags: Option<HashMap<String, Option<String>>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    deletion_vector: Option<CheckpointDeletionVector>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    base_row_id: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    default_row_commit_version: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    clustering_provider: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CheckpointRemove {
-    #[serde(with = "serde_path_compat")]
-    path: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    deletion_timestamp: Option<i64>,
-    data_change: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    extended_file_metadata: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    partition_values: Option<HashMap<String, Option<String>>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    size: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stats: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tags: Option<HashMap<String, Option<String>>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    deletion_vector: Option<CheckpointDeletionVector>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    base_row_id: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    default_row_commit_version: Option<i64>,
-}
-
-impl From<DeletionVectorDescriptor> for CheckpointDeletionVector {
-    fn from(value: DeletionVectorDescriptor) -> Self {
-        Self {
-            storage_type: value.storage_type.as_ref().to_string(),
-            path_or_inline_dv: value.path_or_inline_dv,
-            offset: value.offset,
-            size_in_bytes: value.size_in_bytes,
-            cardinality: value.cardinality,
-        }
-    }
-}
-
-impl TryFrom<CheckpointDeletionVector> for DeletionVectorDescriptor {
-    type Error = DeltaTableError;
-
-    fn try_from(value: CheckpointDeletionVector) -> Result<Self, Self::Error> {
-        Ok(Self {
-            storage_type: std::str::FromStr::from_str(&value.storage_type).map_err(|_| {
-                DeltaTableError::generic(format!(
-                    "Unsupported deletion vector storage type '{}'",
-                    value.storage_type
-                ))
-            })?,
-            path_or_inline_dv: value.path_or_inline_dv,
-            offset: value.offset,
-            size_in_bytes: value.size_in_bytes,
-            cardinality: value.cardinality,
-        })
-    }
-}
-
-impl From<Add> for CheckpointAdd {
-    fn from(value: Add) -> Self {
-        Self {
-            path: value.path,
-            partition_values: value.partition_values,
-            size: value.size,
-            modification_time: value.modification_time,
-            data_change: value.data_change,
-            stats: value.stats,
-            tags: value.tags,
-            deletion_vector: value.deletion_vector.map(CheckpointDeletionVector::from),
-            base_row_id: value.base_row_id,
-            default_row_commit_version: value.default_row_commit_version,
-            clustering_provider: value.clustering_provider,
-        }
-    }
-}
-
-impl TryFrom<CheckpointAdd> for Add {
-    type Error = DeltaTableError;
-
-    fn try_from(value: CheckpointAdd) -> Result<Self, Self::Error> {
-        Ok(Self {
-            path: value.path,
-            partition_values: value.partition_values,
-            size: value.size,
-            modification_time: value.modification_time,
-            data_change: value.data_change,
-            stats: value.stats,
-            tags: value.tags,
-            deletion_vector: value.deletion_vector.map(TryInto::try_into).transpose()?,
-            base_row_id: value.base_row_id,
-            default_row_commit_version: value.default_row_commit_version,
-            clustering_provider: value.clustering_provider,
-            commit_version: None,
-            commit_timestamp: None,
-        })
-    }
-}
-
-impl From<Remove> for CheckpointRemove {
-    fn from(value: Remove) -> Self {
-        Self {
-            path: value.path,
-            deletion_timestamp: value.deletion_timestamp,
-            data_change: value.data_change,
-            extended_file_metadata: value.extended_file_metadata,
-            partition_values: value.partition_values,
-            size: value.size,
-            stats: None,
-            tags: value.tags,
-            deletion_vector: value.deletion_vector.map(CheckpointDeletionVector::from),
-            base_row_id: value.base_row_id,
-            default_row_commit_version: value.default_row_commit_version,
-        }
-    }
-}
-
-impl TryFrom<CheckpointRemove> for Remove {
-    type Error = DeltaTableError;
-
-    fn try_from(value: CheckpointRemove) -> Result<Self, Self::Error> {
-        Ok(Self {
-            path: value.path,
-            deletion_timestamp: value.deletion_timestamp,
-            data_change: value.data_change,
-            extended_file_metadata: value.extended_file_metadata,
-            partition_values: value.partition_values,
-            size: value.size,
-            tags: value.tags,
-            deletion_vector: value.deletion_vector.map(TryInto::try_into).transpose()?,
-            base_row_id: value.base_row_id,
-            default_row_commit_version: value.default_row_commit_version,
-        })
-    }
-}
-
-fn protocol_to_checkpoint(protocol: Protocol) -> DeltaResult<CheckpointProtocol> {
-    let value = serde_json::to_value(protocol)?;
-    serde_json::from_value(value).map_err(DeltaTableError::generic_err)
-}
-
-fn protocol_from_checkpoint(protocol: CheckpointProtocol) -> DeltaResult<Protocol> {
-    let value = serde_json::to_value(protocol)?;
-    serde_json::from_value(value).map_err(DeltaTableError::generic_err)
-}
-
-mod serde_path_compat {
-    use percent_encoding::{percent_decode_str, percent_encode, AsciiSet, CONTROLS};
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    const INVALID: &AsciiSet = &CONTROLS
-        .add(b'\\')
-        .add(b'{')
-        .add(b'^')
-        .add(b'}')
-        .add(b'%')
-        .add(b'`')
-        .add(b']')
-        .add(b'"')
-        .add(b'>')
-        .add(b'[')
-        .add(b'<')
-        .add(b'#')
-        .add(b'|')
-        .add(b'\r')
-        .add(b'\n')
-        .add(b'*')
-        .add(b'?');
-
-    pub fn serialize<S>(value: &str, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let encoded = percent_encode(value.as_bytes(), INVALID).to_string();
-        String::serialize(&encoded, serializer)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<String, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        percent_decode_str(&s)
-            .decode_utf8()
-            .map(|v| v.to_string())
-            .map_err(serde::de::Error::custom)
-    }
 }
 
 #[derive(Debug, Default)]
@@ -602,25 +357,6 @@ fn ensure_schema_supported_for_parquet(batch: &RecordBatch) -> DeltaResult<()> {
     Ok(())
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct LastCheckpointHint {
-    version: i64,
-    size: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    parts: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    size_in_bytes: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    num_of_add_files: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    checkpoint_schema: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    checksum: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tags: Option<std::collections::HashMap<String, String>>,
-}
-
 struct CheckpointManager<'a> {
     log_store: &'a dyn LogStore,
     operation_id: Uuid,
@@ -706,7 +442,7 @@ impl<'a> CheckpointManager<'a> {
         let last_checkpoint_path = Path::from(format!("{DELTA_LOG_FOLDER}/_last_checkpoint"));
         let hint = LastCheckpointHint {
             version,
-            size: checkpoint_row_count,
+            size: Some(checkpoint_row_count),
             parts: None,
             size_in_bytes: Some(file_meta.size as i64),
             num_of_add_files: Some(checkpoint_add_count),
@@ -993,12 +729,9 @@ pub async fn cleanup_expired_logs_for(
 mod tests {
     use std::collections::HashMap;
 
-    use super::{
-        decode_checkpoint_rows, encode_checkpoint_rows, CheckpointActionRow,
-        ReconciledCheckpointState,
-    };
+    use super::{decode_checkpoint_rows, encode_checkpoint_rows, ReconciledCheckpointState};
     use crate::error::DeltaResult;
-    use crate::spec::{Action, Add, Remove};
+    use crate::spec::{Action, Add, CheckpointActionRow, Remove};
 
     #[test]
     fn checkpoint_row_roundtrip_preserves_add_path() -> DeltaResult<()> {
