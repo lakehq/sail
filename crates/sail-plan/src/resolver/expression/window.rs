@@ -241,7 +241,7 @@ impl PlanResolver<'_> {
         // Apply type coercion and constant folding before evaluating.
         let props = ExecutionProps::new();
         let context = SimplifyContext::new(&props).with_schema(schema.clone());
-        let simplifier = ExprSimplifier::new(context);
+        let simplifier = ExprSimplifier::new(context).with_max_cycles(10);
         let coerced = simplifier.coerce(resolved, schema).map_err(|e| {
             PlanError::invalid(format!(
                 "window boundary must be a constant expression: {e}"
