@@ -437,7 +437,7 @@ impl DeltaWriterExec {
             };
 
             // Determine the kernel column mapping mode once for downstream conversions
-            let kernel_mode = effective_mode.to_kernel();
+            let kernel_mode = ColumnMappingMode::from(effective_mode);
 
             // If creating a new table and column mapping or timestampNtz features are required,
             // prepare initial protocol+metadata

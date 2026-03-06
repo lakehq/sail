@@ -17,7 +17,7 @@ use sail_data_source::options::{
 use sail_data_source::resolve_listing_urls;
 use url::Url;
 
-use crate::options::{ColumnMappingModeOption, DeltaLogReplayStrategyOption, TableDeltaOptions};
+use crate::options::{DeltaLogReplayStrategyOption, TableDeltaOptions};
 use crate::physical_plan::planner::{
     plan_delete, plan_merge, DeltaPhysicalPlanner, DeltaTableConfig, PlannerContext,
 };
@@ -314,7 +314,7 @@ fn apply_delta_write_options(from: DeltaWriteOptions, to: &mut TableDeltaOptions
         to.write_batch_size = write_batch_size;
     }
     if let Some(column_mapping_mode) = from.column_mapping_mode {
-        to.column_mapping_mode = ColumnMappingModeOption::parse(&column_mapping_mode);
+        to.column_mapping_mode = column_mapping_mode.parse().unwrap_or_default();
     }
     if let Some(ref raw) = from.delta_log_replay_strategy {
         to.delta_log_replay_strategy = match raw.to_ascii_lowercase().as_str() {
