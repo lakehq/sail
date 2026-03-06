@@ -4,6 +4,7 @@ use datafusion_expr::utils::{expr_as_column_expr, find_aggregate_exprs};
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, Volatility};
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::expression::NamedExpr;
@@ -59,6 +60,46 @@ impl PlanResolver<'_> {
                 return Err(PlanError::AnalysisError(format!(
                     "Non-deterministic expression {name} should not appear in the arguments of an aggregate function",
                 )));
+            }
+        }
+
+        // Spark CheckAnalysis: GroupedAgg Pandas/Arrow UDFs cannot be mixed with regular
+        // (non-UDF) aggregate functions in the same .agg() call.
+        {
+            let mut pyspark_agg_name: Option<String> = None;
+            let mut has_regular_agg = false;
+            for proj in &projections {
+                let _ = proj.expr.apply(|e| {
+                    if let Expr::AggregateFunction(agg) = e {
+                        if agg
+                            .func
+                            .inner()
+                            .as_any()
+                            .downcast_ref::<PySparkGroupAggregateUDF>()
+                            .is_some()
+                        {
+                            if pyspark_agg_name.is_none() {
+                                // Strip the "@hash" suffix to get the Python function name
+                                let full = agg.func.name();
+                                let human = full.split('@').next().unwrap_or(full);
+                                pyspark_agg_name = Some(human.to_string());
+                            }
+                        } else {
+                            has_regular_agg = true;
+                        }
+                        // Don't recurse into the aggregate's args — no nested aggs here
+                        return Ok(TreeNodeRecursion::Jump);
+                    }
+                    Ok(TreeNodeRecursion::Continue)
+                });
+            }
+            if let Some(udf_name) = pyspark_agg_name {
+                if has_regular_agg {
+                    return Err(PlanError::AnalysisError(format!(
+                        "The group aggregate pandas UDF `{udf_name}` cannot be invoked \
+                         together with as other, non-pandas aggregate functions."
+                    )));
+                }
             }
         }
 
