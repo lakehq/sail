@@ -23,7 +23,9 @@ use std::sync::Arc;
 use datafusion::arrow::array::{
     new_empty_array, Array, ArrayRef, MapArray, StringArray, StructArray,
 };
-use datafusion::arrow::datatypes::{Field, Fields, Schema as ArrowSchema};
+use datafusion::arrow::datatypes::{
+    DataType as ArrowDataType, Field, Fields, Schema as ArrowSchema,
+};
 use datafusion::arrow::json::ReaderBuilder as JsonReaderBuilder;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::scalar::ScalarValue;
@@ -37,7 +39,7 @@ use crate::spec::fields::{
 };
 use crate::spec::{
     stats_schema, Add, ColumnMappingMode, DataType, DeltaError as DeltaTableError, DeltaResult,
-    StorageType, StructType,
+    StructType,
 };
 
 impl Snapshot {
@@ -129,71 +131,59 @@ impl From<Add> for SnapshotAddRow {
     }
 }
 
-fn snapshot_add_probe_row() -> SnapshotAddRow {
-    SnapshotAddRow {
-        path: "_probe.parquet".to_string(),
-        partition_values: HashMap::from([("p".to_string(), Some("x".to_string()))]),
-        size: 0,
-        modification_time: 0,
-        data_change: true,
-        stats: Some("{}".to_string()),
-        tags: Some(HashMap::from([("t".to_string(), Some("x".to_string()))])),
-        deletion_vector: Some(SnapshotDeletionVectorRow {
-            storage_type: StorageType::UuidRelativePath.as_ref().to_string(),
-            path_or_inline_dv: "dv.bin".to_string(),
-            offset: Some(0),
-            size_in_bytes: 1,
-            cardinality: 1,
-        }),
-        base_row_id: Some(0),
-        default_row_commit_version: Some(0),
-        clustering_provider: Some("none".to_string()),
-    }
+fn map_utf8_utf8_field(field_name: &str, nullable: bool, value_nullable: bool) -> Arc<Field> {
+    let entry_struct = ArrowDataType::Struct(
+        vec![
+            Arc::new(Field::new("key", ArrowDataType::Utf8, false)),
+            Arc::new(Field::new("value", ArrowDataType::Utf8, value_nullable)),
+        ]
+        .into(),
+    );
+
+    Arc::new(Field::new(
+        field_name,
+        ArrowDataType::Map(
+            Arc::new(Field::new("key_value", entry_struct, false)),
+            false,
+        ),
+        nullable,
+    ))
 }
 
-fn snapshot_add_tracing_options() -> DeltaResult<serde_arrow::schema::TracingOptions> {
-    fn map_utf8_utf8(field_name: &str, nullable: bool) -> Field {
-        use datafusion::arrow::datatypes::DataType as ArrowDataType;
+fn snapshot_add_fields() -> Vec<Arc<Field>> {
+    let deletion_vector = ArrowDataType::Struct(
+        vec![
+            Arc::new(Field::new("storageType", ArrowDataType::Utf8, false)),
+            Arc::new(Field::new("pathOrInlineDv", ArrowDataType::Utf8, false)),
+            Arc::new(Field::new("offset", ArrowDataType::Int32, true)),
+            Arc::new(Field::new("sizeInBytes", ArrowDataType::Int32, false)),
+            Arc::new(Field::new("cardinality", ArrowDataType::Int64, false)),
+        ]
+        .into(),
+    );
 
-        let entry_struct = ArrowDataType::Struct(
-            vec![
-                Arc::new(Field::new("key", ArrowDataType::Utf8, false)),
-                Arc::new(Field::new("value", ArrowDataType::Utf8, true)),
-            ]
-            .into(),
-        );
-        Field::new(
-            field_name,
-            ArrowDataType::Map(
-                Arc::new(Field::new("key_value", entry_struct, false)),
-                false,
-            ),
-            nullable,
-        )
-    }
-
-    serde_arrow::schema::TracingOptions::default()
-        .map_as_struct(false)
-        .allow_null_fields(true)
-        .strings_as_large_utf8(false)
-        .sequence_as_large_list(false)
-        .overwrite("partitionValues", map_utf8_utf8("partitionValues", false))
-        .map_err(DeltaTableError::generic_err)?
-        .overwrite("tags", map_utf8_utf8("tags", true))
-        .map_err(DeltaTableError::generic_err)
+    vec![
+        Arc::new(Field::new("path", ArrowDataType::Utf8, false)),
+        map_utf8_utf8_field("partitionValues", false, true),
+        Arc::new(Field::new("size", ArrowDataType::Int64, false)),
+        Arc::new(Field::new("modificationTime", ArrowDataType::Int64, false)),
+        Arc::new(Field::new("dataChange", ArrowDataType::Boolean, false)),
+        Arc::new(Field::new("stats", ArrowDataType::Utf8, true)),
+        map_utf8_utf8_field("tags", true, true),
+        Arc::new(Field::new("deletionVector", deletion_vector, true)),
+        Arc::new(Field::new("baseRowId", ArrowDataType::Int64, true)),
+        Arc::new(Field::new(
+            "defaultRowCommitVersion",
+            ArrowDataType::Int64,
+            true,
+        )),
+        Arc::new(Field::new("clusteringProvider", ArrowDataType::Utf8, true)),
+    ]
 }
 
 fn encode_snapshot_add_rows(rows: &[SnapshotAddRow]) -> DeltaResult<RecordBatch> {
-    use serde_arrow::schema::SchemaLike;
-
-    let mut samples = rows.to_vec();
-    samples.push(snapshot_add_probe_row());
-    let fields = Vec::<datafusion::arrow::datatypes::FieldRef>::from_samples(
-        &samples,
-        snapshot_add_tracing_options()?,
-    )
-    .map_err(DeltaTableError::generic_err)?;
     let owned_rows = rows.to_vec();
+    let fields = snapshot_add_fields();
     serde_arrow::to_record_batch(&fields, &owned_rows).map_err(DeltaTableError::generic_err)
 }
 
