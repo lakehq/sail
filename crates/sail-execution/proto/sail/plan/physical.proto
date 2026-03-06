@@ -632,6 +632,9 @@ message CatalogCommandExecNode {
 }
 
 message BarrierExecNode {
+  // Precondition plans to be exhausted before the main plan starts.
   // Each element is a DataFusion PhysicalPlanNode encoded as bytes.
-  repeated bytes inputs = 1;
+  repeated bytes preconditions = 1;
+  // The main plan to execute after all preconditions are exhausted.
+  bytes plan = 2;
 }

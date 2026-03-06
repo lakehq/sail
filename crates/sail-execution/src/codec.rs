@@ -958,15 +958,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .map_err(|e| plan_datafusion_err!("failed to decode CatalogCommand: {e}"))?;
                 Ok(Arc::new(CatalogCommandExec::new(command, schema)))
             }
-            NodeKind::Barrier(gen::BarrierExecNode { inputs }) => {
-                let mut decoded: Vec<Arc<dyn ExecutionPlan>> = inputs
+            NodeKind::Barrier(gen::BarrierExecNode {
+                preconditions,
+                plan,
+            }) => {
+                let preconditions = preconditions
                     .into_iter()
                     .map(|i| self.try_decode_plan(&i, ctx))
                     .collect::<Result<_>>()?;
-                let plan = decoded
-                    .pop()
-                    .ok_or_else(|| plan_datafusion_err!("BarrierExec requires at least 1 input"))?;
-                let preconditions = decoded;
+                let plan = self.try_decode_plan(&plan, ctx)?;
                 Ok(Arc::new(BarrierExec::new(preconditions, plan)))
             }
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
@@ -1488,12 +1488,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 .map_err(|e| plan_datafusion_err!("failed to encode CatalogCommand: {e}"))?;
             NodeKind::CatalogCommand(gen::CatalogCommandExecNode { schema, command })
         } else if let Some(barrier_exec) = node.as_any().downcast_ref::<BarrierExec>() {
-            let inputs = barrier_exec
-                .children()
-                .into_iter()
+            let preconditions = barrier_exec
+                .preconditions()
+                .iter()
                 .map(|child| self.try_encode_plan(child.clone()))
                 .collect::<Result<_>>()?;
-            NodeKind::Barrier(gen::BarrierExecNode { inputs })
+            let plan = self.try_encode_plan(barrier_exec.plan().clone())?;
+            NodeKind::Barrier(gen::BarrierExecNode {
+                preconditions,
+                plan,
+            })
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");
         };
