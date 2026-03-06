@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 use datafusion_common::{DFSchemaRef, DataFusionError};
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_expr::expr::AggregateFunctionParams;
 use datafusion_expr::{expr, AggregateUDF, Expr, ExprSchemable, ScalarUDF};
 use sail_common::spec;
@@ -17,6 +18,20 @@ use crate::resolver::expression::NamedExpr;
 use crate::resolver::function::PythonUdf;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+
+/// If `expr` contains (or is) an `AggregateFunction`, return its name.
+/// Used to detect illegal nesting of aggregate functions as UDAF arguments.
+fn find_aggregate_in_expr(expr: &Expr) -> Option<String> {
+    let mut found: Option<String> = None;
+    let _ = expr.apply(|e| {
+        if let Expr::AggregateFunction(agg) = e {
+            found = Some(agg.func.name().to_string());
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    });
+    found
+}
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_expression_common_inline_udf(
@@ -217,6 +232,16 @@ impl PlanResolver<'_> {
                 }))
             }
             PySparkUdfType::GroupedAggPandas => {
+                // Spark CheckAnalysis: aggregate functions cannot be nested inside another
+                // aggregate function's arguments.
+                for arg in &arguments {
+                    if let Some(inner) = find_aggregate_in_expr(arg) {
+                        return Err(PlanError::AnalysisError(format!(
+                            "The aggregate function '{name}' cannot take an argument containing \
+                             another aggregate function: '{inner}'."
+                        )));
+                    }
+                }
                 // DataFusion requires at least one input to an aggregate function.
                 // For 0-arg UDFs inject a dummy Int64 literal; the accumulator will
                 // strip it before calling Python.
@@ -288,6 +313,16 @@ impl PlanResolver<'_> {
             }
             // Arrow-native grouped aggregate UDF (252): user func receives pa.Arrays, returns scalar
             PySparkUdfType::GroupedAggArrow => {
+                // Spark CheckAnalysis: aggregate functions cannot be nested inside another
+                // aggregate function's arguments.
+                for arg in &arguments {
+                    if let Some(inner) = find_aggregate_in_expr(arg) {
+                        return Err(PlanError::AnalysisError(format!(
+                            "The aggregate function '{name}' cannot take an argument containing \
+                             another aggregate function: '{inner}'."
+                        )));
+                    }
+                }
                 // DataFusion requires at least one input to an aggregate function.
                 // For 0-arg UDFs inject a dummy Int64 literal; the accumulator will
                 // strip it before calling Python.
