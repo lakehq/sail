@@ -959,19 +959,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(CatalogCommandExec::new(command, schema)))
             }
             NodeKind::Barrier(gen::BarrierExecNode { inputs }) => {
-                if inputs.len() < 2 {
-                    return plan_err!(
-                        "BarrierExec requires at least 2 inputs but got {}",
-                        inputs.len()
-                    );
-                }
                 let mut decoded: Vec<Arc<dyn ExecutionPlan>> = inputs
                     .into_iter()
                     .map(|i| self.try_decode_plan(&i, ctx))
                     .collect::<Result<_>>()?;
                 let plan = decoded
                     .pop()
-                    .unwrap_or_else(|| unreachable!("decoded is non-empty"));
+                    .ok_or_else(|| plan_datafusion_err!("BarrierExec requires at least 1 input"))?;
                 let preconditions = decoded;
                 Ok(Arc::new(BarrierExec::new(preconditions, plan)))
             }

@@ -625,14 +625,13 @@ message PythonDataSourceWriteCommitExecNode {
 }
 
 message CatalogCommandExecNode {
-  // Arrow IPC-serialized schema for the command output.
+  // Schema for the command output.
   bytes schema = 1;
   // JSON-encoded CatalogCommand.
   string command = 2;
 }
 
 message BarrierExecNode {
-  // All children: first n-1 are preconditions, the last one is the main plan.
   // Each element is a DataFusion PhysicalPlanNode encoded as bytes.
   repeated bytes inputs = 1;
 }

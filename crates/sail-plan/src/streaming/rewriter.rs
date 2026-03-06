@@ -14,6 +14,7 @@ use sail_common_datafusion::streaming::event::schema::{
     is_flow_event_schema, MARKER_FIELD_NAME, RETRACTED_FIELD_NAME,
 };
 use sail_common_datafusion::streaming::source::{StreamSource, StreamSourceTableProvider};
+use sail_logical_plan::barrier::BarrierNode;
 use sail_logical_plan::file_write::FileWriteNode;
 use sail_logical_plan::range::RangeNode;
 use sail_logical_plan::show_string::ShowStringNode;
@@ -46,6 +47,9 @@ impl StreamingRewriter {
                 node: show.with_exprs_and_inputs(vec![], vec![input])?,
             })))
         } else if node.as_any().is::<FileWriteNode>() {
+            Ok(Transformed::no(LogicalPlan::Extension(extension)))
+        } else if node.as_any().is::<BarrierNode>() {
+            // TODO: support BarrierNode for streaming properly.
             Ok(Transformed::no(LogicalPlan::Extension(extension)))
         } else {
             plan_err!("unsupported extension node for streaming: {node:?}")

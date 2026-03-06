@@ -6,7 +6,7 @@ use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use sail_common_datafusion::utils::items::ItemTaker;
 
 /// A logical plan node that represents a plan with preconditions.
-/// The preconditions are logical plans that must be executed before the main plan.
+/// The precondition plans must be executed before the main plan.
 /// For example, this is useful for executing catalog operations before physical execution
 /// of the main plan. Such catalog operations are not supposed to be executed when
 /// resolving the logical plan since the plan resolver should not have side effects.

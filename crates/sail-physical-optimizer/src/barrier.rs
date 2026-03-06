@@ -11,17 +11,14 @@ use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion_physical_expr::Partitioning;
 use sail_physical_plan::barrier::BarrierExec;
 
-/// A physical optimizer rule that ensures all precondition children of a [`BarrierExec`]
-/// have the same partition count as the actual (last) child.
+/// A physical optimizer rule that wraps all precondition children of a [`BarrierExec`]
+/// with `RepartitionExec` (round-robin) or `CoalescePartitionsExec` to match the partition
+/// count of the actual plan.
 ///
-/// When a [`CatalogCommandExec`](sail_physical_plan::catalog_command::CatalogCommandExec)
-/// precondition produces a single partition but the actual write plan has multiple partitions,
-/// this rule wraps each mismatched precondition with either:
-/// - A `RepartitionExec` (round-robin) to fan out from 1 → N partitions, or
-/// - A `CoalescePartitionsExec` to gather from M → 1 partitions.
-///
-/// No wrapping is applied when both the precondition and the actual plan have exactly one
-/// partition, since exhausting the single precondition partition is already sufficient.
+/// By wrapping preconditions this way, the actual plan will not start until all partitions of
+/// the preconditions are completed, even if we only call `execute()` for one partition.
+/// Such wrapping can be skipped if the precondition and the actual plan both have only one
+/// partition, since a single precondition partition is sufficient to block the actual plan.
 pub struct EnforceBarrierPartitioning {}
 
 impl EnforceBarrierPartitioning {
@@ -49,43 +46,34 @@ impl PhysicalOptimizerRule for EnforceBarrierPartitioning {
 
             let plan = barrier.plan();
             let target_partitions = plan.output_partitioning().partition_count();
-            let preconditions = barrier.preconditions();
 
-            // Check whether any precondition needs adjustment.
-            let needs_adjustment = preconditions
+            let preconditions: Vec<Arc<dyn ExecutionPlan>> = barrier
+                .preconditions()
                 .iter()
-                .any(|pre| pre.output_partitioning().partition_count() != target_partitions);
-
-            if !needs_adjustment {
-                return Ok(Transformed::no(node));
-            }
-
-            // Wrap mismatched preconditions.
-            let new_preconditions: Vec<Arc<dyn ExecutionPlan>> = preconditions
-                .iter()
-                .map(|pre| {
-                    let pre_partitions = pre.output_partitioning().partition_count();
-                    if pre_partitions == target_partitions {
-                        return Ok(pre.clone());
+                .map(|precondition| {
+                    let precondition_partitions =
+                        precondition.output_partitioning().partition_count();
+                    // Skip wrapping if both the precondition and the actual plan have only one
+                    // partition, since a single precondition partition is sufficient.
+                    if precondition_partitions == 1 && target_partitions == 1 {
+                        return Ok(precondition.clone());
                     }
                     if target_partitions == 1 {
                         // Coalesce to a single partition.
-                        Ok(Arc::new(CoalescePartitionsExec::new(pre.clone()))
+                        Ok(Arc::new(CoalescePartitionsExec::new(precondition.clone()))
                             as Arc<dyn ExecutionPlan>)
                     } else {
                         // Fan out to the target partition count using round-robin.
                         Ok(Arc::new(RepartitionExec::try_new(
-                            pre.clone(),
+                            precondition.clone(),
                             Partitioning::RoundRobinBatch(target_partitions),
                         )?) as Arc<dyn ExecutionPlan>)
                     }
                 })
                 .collect::<Result<_>>()?;
 
-            let new_barrier = BarrierExec::new(new_preconditions, plan.clone());
-            Ok(Transformed::yes(
-                Arc::new(new_barrier) as Arc<dyn ExecutionPlan>
-            ))
+            let barrier = BarrierExec::new(preconditions, plan.clone());
+            Ok(Transformed::yes(Arc::new(barrier) as Arc<dyn ExecutionPlan>))
         })?;
         Ok(result.data)
     }

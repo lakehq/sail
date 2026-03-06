@@ -307,14 +307,17 @@ Ensure expand_merge is enabled; MERGE is currently only supported for Delta tabl
             let schema = node.schema().inner().clone();
             Arc::new(CatalogCommandExec::new(node.command().clone(), schema))
         } else if let Some(_node) = node.as_any().downcast_ref::<BarrierNode>() {
-            if physical_inputs.is_empty() {
-                return internal_err!("BarrierExec requires at least one physical input");
+            let (plan, preconditions) = physical_inputs.split_last().ok_or_else(|| {
+                datafusion_common::DataFusionError::Internal(format!(
+                    "{} requires at least one physical input",
+                    BarrierExec::static_name()
+                ))
+            })?;
+            if preconditions.is_empty() {
+                plan.clone()
+            } else {
+                Arc::new(BarrierExec::new(preconditions.to_vec(), plan.clone()))
             }
-            let (preconditions, plan) = physical_inputs.split_at(physical_inputs.len() - 1);
-            let [plan] = plan else {
-                return internal_err!("BarrierExec requires at least one physical input");
-            };
-            Arc::new(BarrierExec::new(preconditions.to_vec(), plan.clone()))
         } else {
             return internal_err!("unsupported logical extension node: {:?}", node);
         };
