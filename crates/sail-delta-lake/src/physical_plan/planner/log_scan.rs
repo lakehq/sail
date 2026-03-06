@@ -19,8 +19,7 @@ use object_store::{ObjectMeta, ObjectStore};
 use super::context::PlannerContext;
 use crate::datasource::create_object_store_url;
 use crate::physical_plan::COL_LOG_VERSION;
-
-const DELTA_LOG_DIR: &str = "_delta_log";
+use crate::spec::{delta_log_file_path, parse_version_prefix};
 
 #[derive(Debug, Clone, Default)]
 pub struct LogScanOptions {
@@ -33,25 +32,13 @@ pub struct LogScanOptions {
 }
 
 fn parse_log_version_prefix(filename: &str) -> Option<u64> {
-    // Delta log files are typically named with a 20-digit version prefix:
-    // - commits:     00000000000000000010.json
-    // - checkpoints: 00000000000000000010.checkpoint.parquet
-    //
-    // For multipart checkpoints, we still take the leading version prefix.
-    let prefix = filename.get(0..20)?;
-    if !prefix.as_bytes().iter().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    prefix.parse::<u64>().ok()
+    parse_version_prefix(filename)?.try_into().ok()
 }
 
 fn log_file_path(table_root_path: &str, filename: &str) -> Path {
     // Object store paths are absolute for local filesystem stores in our setup (DataFusion uses
     // `ObjectStoreUrl::local_filesystem()`).
-    Path::from(format!(
-        "{}{}{}{}{}",
-        table_root_path, DELIMITER, DELTA_LOG_DIR, DELIMITER, filename
-    ))
+    delta_log_file_path(table_root_path, filename)
 }
 
 async fn head_many(

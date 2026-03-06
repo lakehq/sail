@@ -26,7 +26,6 @@ use bytes::Bytes;
 use chrono::Utc;
 use futures::future::BoxFuture;
 use log::*;
-use object_store::path::Path;
 use object_store::Error as ObjectStoreError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -38,7 +37,9 @@ use crate::kernel::checkpoints::{cleanup_expired_logs_for, create_checkpoint_for
 use crate::kernel::snapshot::EagerSnapshot;
 use crate::kernel::transaction::conflict_checker::{TransactionInfo, WinningCommitSummary};
 use crate::kernel::{DeltaOperation, DeltaResult};
-use crate::spec::{Action, Add, Metadata, Protocol, TableFeature, TableProperties, Transaction};
+use crate::spec::{
+    temp_commit_path, Action, Add, Metadata, Protocol, TableFeature, TableProperties, Transaction,
+};
 use crate::storage::{CommitOrBytes, LogStore, LogStoreRef, ObjectStoreRef};
 use crate::table::DeltaTableState;
 
@@ -48,7 +49,6 @@ mod protocol;
 use conflict_checker::ConflictChecker;
 pub use protocol::INSTANCE as PROTOCOL;
 
-const DELTA_LOG_FOLDER: &str = "_delta_log";
 pub(crate) const DEFAULT_RETRIES: usize = 15;
 
 #[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
@@ -622,7 +622,7 @@ impl<'a> PreCommit<'a> {
             store: ObjectStoreRef,
         ) -> DeltaResult<CommitOrBytes> {
             let token = uuid::Uuid::new_v4().to_string();
-            let path = Path::from_iter([DELTA_LOG_FOLDER, &format!("_commit_{token}.json.tmp")]);
+            let path = temp_commit_path(&token);
             store.put(&path, log_entry.into()).await?;
             Ok(CommitOrBytes::TmpCommit(path))
         }

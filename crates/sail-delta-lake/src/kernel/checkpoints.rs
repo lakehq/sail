@@ -36,12 +36,11 @@ use uuid::Uuid;
 
 use crate::kernel::{DeltaResult, DeltaTableError};
 use crate::spec::{
-    protocol_from_checkpoint, protocol_to_checkpoint, Action, Add, CheckpointActionRow,
-    LastCheckpointHint, Metadata, Protocol, Remove, Transaction,
+    checkpoint_path, delta_log_root_path, last_checkpoint_path, protocol_from_checkpoint,
+    protocol_to_checkpoint, Action, Add, CheckpointActionRow, LastCheckpointHint, Metadata,
+    Protocol, Remove, Transaction,
 };
 use crate::storage::{get_actions, LogStore};
-
-const DELTA_LOG_FOLDER: &str = "_delta_log";
 static DELTA_LOG_REGEX: LazyLock<Result<Regex, regex::Error>> =
     LazyLock::new(|| Regex::new(r"(\d{20})\.json$"));
 // Multipart checkpoints are deprecated in the Delta protocol.
@@ -379,7 +378,7 @@ impl<'a> CheckpointManager<'a> {
 
         let store = self.log_store.object_store(Some(self.operation_id));
         let log_entries = store
-            .list(Some(&Path::from(DELTA_LOG_FOLDER)))
+            .list(Some(&delta_log_root_path()))
             .try_collect::<Vec<_>>()
             .await?;
         let delta_log_pattern = delta_log_regex()?;
@@ -426,9 +425,7 @@ impl<'a> CheckpointManager<'a> {
         let checkpoint_batch = encode_checkpoint_rows(&rows)?;
         ensure_schema_supported_for_parquet(&checkpoint_batch)?;
 
-        let cp_path = Path::from(format!(
-            "{DELTA_LOG_FOLDER}/{version:020}.checkpoint.parquet"
-        ));
+        let cp_path = checkpoint_path(version);
         let object_store_writer = ParquetObjectWriter::new(store.clone(), cp_path.clone());
         let mut writer =
             AsyncArrowWriter::try_new(object_store_writer, checkpoint_batch.schema(), None)
@@ -439,7 +436,7 @@ impl<'a> CheckpointManager<'a> {
             .map_err(DeltaTableError::generic_err)?;
         let _ = writer.close().await.map_err(DeltaTableError::generic_err)?;
         let file_meta = store.head(&cp_path).await?;
-        let last_checkpoint_path = Path::from(format!("{DELTA_LOG_FOLDER}/_last_checkpoint"));
+        let last_checkpoint_path = last_checkpoint_path();
         let hint = LastCheckpointHint {
             version,
             size: Some(checkpoint_row_count),
@@ -541,7 +538,7 @@ pub(crate) async fn load_replayed_table_state(
 
     let store = log_store.object_store(None);
     let log_entries = store
-        .list(Some(&Path::from(DELTA_LOG_FOLDER)))
+        .list(Some(&delta_log_root_path()))
         .try_collect::<Vec<_>>()
         .await?;
     let delta_log_pattern = delta_log_regex()?;
@@ -627,7 +624,7 @@ pub(crate) async fn load_replayed_table_state(
 pub(crate) async fn latest_replayable_version(log_store: &dyn LogStore) -> DeltaResult<i64> {
     let store = log_store.object_store(None);
     let log_entries = store
-        .list(Some(&Path::from(DELTA_LOG_FOLDER)))
+        .list(Some(&delta_log_root_path()))
         .try_collect::<Vec<_>>()
         .await?;
     let delta_log_pattern = delta_log_regex()?;
@@ -655,7 +652,7 @@ pub async fn cleanup_expired_logs_for(
     let delta_log_pattern = delta_log_regex()?;
     let checkpoint_pattern = checkpoint_regex()?;
     let object_store = log_store.object_store(operation_id);
-    let log_path = Path::from(DELTA_LOG_FOLDER);
+    let log_path = delta_log_root_path();
 
     let log_entries = object_store.list(Some(&log_path)).collect::<Vec<_>>().await;
 

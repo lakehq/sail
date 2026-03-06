@@ -14,9 +14,10 @@ use datafusion::common::Result;
 
 use super::context::PlannerContext;
 pub use crate::kernel::log_segment::{
-    list_log_segment_files as kernel_list_log_segment_files, parse_commit_version,
-    parse_version_prefix, LogSegmentFiles, LogSegmentResolveOptions,
+    list_log_segment_files as kernel_list_log_segment_files, LogSegmentFiles,
+    LogSegmentResolveOptions,
 };
+use crate::spec::{parse_commit_version, parse_version_prefix};
 
 /// List Delta log files up to `max_version`, using the planner-local cache when available.
 pub async fn list_log_segment_files(

@@ -11,14 +11,13 @@
 // limitations under the License.
 
 use futures::TryStreamExt;
-use object_store::path::Path;
 
 use crate::error::DeltaResult;
-use crate::spec::LastCheckpointHint;
+use crate::spec::{
+    delta_log_prefix_path, delta_log_root_path, last_checkpoint_path, parse_checkpoint_version,
+    parse_commit_version, parse_version_prefix, LastCheckpointHint,
+};
 use crate::storage::LogStoreRef;
-
-pub(crate) const DELTA_LOG_DIR: &str = "_delta_log";
-const LAST_CHECKPOINT_FILE: &str = "_last_checkpoint";
 
 /// The minimal set of Delta log files needed to reconstruct table state up to a given version.
 #[derive(Debug, Clone, Default)]
@@ -36,37 +35,9 @@ pub struct LogSegmentResolveOptions {
     pub commit_version_range: Option<(i64, i64)>,
 }
 
-/// Extract the 20-digit version prefix from a log filename, returning `None` if the filename
-/// does not start with exactly 20 ASCII digits.
-pub fn parse_version_prefix(filename: &str) -> Option<i64> {
-    let prefix = filename.get(0..20)?;
-    if !prefix.as_bytes().iter().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    prefix.parse::<i64>().ok()
-}
-
-/// Parse the version from a commit JSON filename (`<20-digit-version>.json`).
-/// Returns `None` if the filename does not match the expected pattern.
-pub fn parse_commit_version(filename: &str) -> Option<i64> {
-    if filename.len() != 25 || !filename.ends_with(".json") {
-        return None;
-    }
-    parse_version_prefix(filename)
-}
-
-/// Parse the version from a checkpoint parquet filename.
-/// Returns `None` if the filename does not contain `.checkpoint` and end with `.parquet`.
-pub fn parse_checkpoint_version(filename: &str) -> Option<i64> {
-    if !filename.contains(".checkpoint") || !filename.ends_with(".parquet") {
-        return None;
-    }
-    parse_version_prefix(filename)
-}
-
 async fn read_last_checkpoint_version(log_store: &dyn crate::storage::LogStore) -> Option<i64> {
     let store = log_store.object_store(None);
-    let path = Path::from(format!("{DELTA_LOG_DIR}/{LAST_CHECKPOINT_FILE}"));
+    let path = last_checkpoint_path();
     let bytes = store.get(&path).await.ok()?.bytes().await.ok()?;
     let hint: LastCheckpointHint = serde_json::from_slice(&bytes).ok()?;
     Some(hint.version)
@@ -85,12 +56,12 @@ pub async fn list_log_segment_files(
     max_version: i64,
 ) -> DeltaResult<LogSegmentFiles> {
     let store = log_store.object_store(None);
-    let log_root = Path::from(DELTA_LOG_DIR);
+    let log_root = delta_log_root_path();
     let offset_version = read_last_checkpoint_version(log_store.as_ref())
         .await
         .map(|v| v.min(max_version).saturating_sub(1))
         .unwrap_or(0);
-    let offset = Path::from(format!("{DELTA_LOG_DIR}/{offset_version:020}"));
+    let offset = delta_log_prefix_path(offset_version);
 
     // Prefer offset listing from `_last_checkpoint`, then fall back to full listing if unsupported.
     let mut entries = match store

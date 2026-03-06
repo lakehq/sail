@@ -39,8 +39,8 @@ use crate::kernel::snapshot::iterators::LogicalFileView;
 pub use crate::kernel::snapshot::log_data::LogDataHandler;
 use crate::kernel::{DeltaResult, DeltaTableConfig, DeltaTableError, PredicateRef, SchemaRef};
 use crate::spec::{
-    Add, ColumnMappingMode, CommitInfo, Metadata, Protocol, Remove, StorageType, TableProperties,
-    Transaction,
+    delta_log_root_path, parse_commit_version, Add, ColumnMappingMode, CommitInfo, Metadata,
+    Protocol, Remove, StorageType, TableProperties, Transaction,
 };
 use crate::storage::LogStore;
 
@@ -249,7 +249,9 @@ impl Snapshot {
         limit: Option<usize>,
     ) -> DeltaResult<BoxStream<'_, DeltaResult<Option<CommitInfo>>>> {
         let store = log_store.root_object_store(None);
-        let log_root = self.table_root_path()?.child("_delta_log");
+        let log_root = self
+            .table_root_path()?
+            .child(delta_log_root_path().as_ref());
         let start_from = log_root.child(
             format!(
                 "{:020}",
@@ -318,14 +320,7 @@ impl Snapshot {
 
 fn parse_commit_version_from_path(path: &str) -> Option<i64> {
     let filename = path.rsplit('/').next()?;
-    if filename.len() != 25 || !filename.ends_with(".json") {
-        return None;
-    }
-    let prefix = filename.get(0..20)?;
-    if !prefix.as_bytes().iter().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    prefix.parse::<i64>().ok()
+    parse_commit_version(filename)
 }
 
 /// A snapshot of a Delta table that has been eagerly loaded into memory.

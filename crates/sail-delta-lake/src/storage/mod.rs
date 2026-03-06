@@ -37,7 +37,7 @@ use uuid::Uuid;
 use crate::error::DeltaError;
 use crate::kernel::transaction::TransactionError;
 use crate::kernel::{DeltaResult, DeltaTableError};
-use crate::spec::Action;
+use crate::spec::{commit_path, delta_log_root_path, Action};
 
 mod config;
 
@@ -58,8 +58,7 @@ pub fn get_object_store_from_context(
         .map_err(|e| DataFusionError::External(Box::new(e)))
 }
 
-const DELTA_LOG_FOLDER: &str = "_delta_log";
-static DELTA_LOG_PATH: LazyLock<Path> = LazyLock::new(|| Path::from(DELTA_LOG_FOLDER));
+static DELTA_LOG_PATH: LazyLock<Path> = LazyLock::new(delta_log_root_path);
 
 /// Holder for temporary commit paths or prepared bytes.
 #[derive(Clone)]
@@ -120,7 +119,7 @@ fn extract_version_from_meta(meta: &ObjectMeta) -> Option<i64> {
 
 /// Return the `_delta_log` commit URI for the given version.
 pub fn commit_uri_from_version(version: i64) -> Path {
-    Path::from_iter([DELTA_LOG_FOLDER, &format!("{version:020}.json")])
+    commit_path(version)
 }
 
 /// Reads a commit and gets list of actions.
