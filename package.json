@@ -32,7 +32,7 @@
     "prettier-plugin-tailwindcss": "^0.7.2",
     "prettier-plugin-vitepress": "^0.0.10",
     "sql-formatter": "^15.7.2",
-    "svgo": "^4.0.0",
+    "svgo": "^4.0.1",
     "tailwindcss": "^4.2.1",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.56.1",

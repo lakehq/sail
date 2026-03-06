@@ -1,0 +1,3 @@
+== Physical Plan ==
+ProjectionExec: expr=[#3@0 as id, #4@1 as value, #5@2 as year]
+  DataSourceExec: file_groups={1 group: [[<tmp>/delta_read_driver_partitioned/year=2024/part-<id>.snappy.parquet]]}, projection=[id@0 as #3, value@1 as #4, year@2 as #5], file_type=parquet
