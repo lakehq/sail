@@ -316,17 +316,20 @@ impl CardinalityEstimator {
 
         // Denominator: Find all JoinEdges completely contained in join_set
         let mut denominator = 1.0;
-        let mut null_adjustment = 1.0;
         let contained_edges = self.get_edges_contained_in_set(join_set);
 
-        for edge in contained_edges {
+        for edge in &contained_edges {
             // For each edge, find TDom of its join keys
             let tdom = self.get_tdom_for_edge(edge);
             if tdom > 1.0 {
                 denominator *= tdom;
             }
-            null_adjustment *= self.null_adjustment_for_edge(edge);
         }
+
+        // Compute null adjustment by collecting unique columns across all contained edges.
+        // A column that appears in multiple edges (e.g., a fact key joined to several
+        // dimensions) should only contribute its (1 - null_fraction) factor once.
+        let null_adjustment = self.null_adjustment_for_edges(&contained_edges);
 
         numerator / denominator * null_adjustment
     }
@@ -340,21 +343,31 @@ impl CardinalityEstimator {
             .collect()
     }
 
-    /// Compute the null adjustment factor for a join edge.
-    /// Returns the product of (1 - null_fraction) for each side of each equi-pair.
-    /// When null_equality is NullEqualsNull, NULLs can match, so no adjustment is applied.
-    fn null_adjustment_for_edge(&self, edge: &JoinEdge) -> f64 {
-        if edge.null_equality == NullEquality::NullEqualsNull {
-            return 1.0;
+    /// Compute the null adjustment factor for a set of join edges.
+    ///
+    /// Each unique column contributes its `(1 - null_fraction)` factor exactly once,
+    /// even when the same column appears in multiple edges (e.g., a fact key joined to
+    /// several dimension tables). Edges with `NullEqualsNull` semantics are skipped
+    /// because NULLs can match in those joins.
+    fn null_adjustment_for_edges(&self, edges: &[&JoinEdge]) -> f64 {
+        let mut seen = std::collections::HashSet::new();
+        let mut adjustment = 1.0;
+        for edge in edges {
+            if edge.null_equality == NullEquality::NullEqualsNull {
+                continue;
+            }
+            for (left_col, right_col) in &edge.equi_pairs {
+                if seen.insert(left_col) {
+                    let non_null = 1.0 - self.null_fractions.get(left_col).copied().unwrap_or(0.0);
+                    adjustment *= non_null;
+                }
+                if seen.insert(right_col) {
+                    let non_null = 1.0 - self.null_fractions.get(right_col).copied().unwrap_or(0.0);
+                    adjustment *= non_null;
+                }
+            }
         }
-        edge.equi_pairs
-            .iter()
-            .fold(1.0, |acc, (left_col, right_col)| {
-                let left_non_null = 1.0 - self.null_fractions.get(left_col).copied().unwrap_or(0.0);
-                let right_non_null =
-                    1.0 - self.null_fractions.get(right_col).copied().unwrap_or(0.0);
-                acc * left_non_null * right_non_null
-            })
+        adjustment
     }
 
     /// Get a domain cardinality (TDom) for a join edge.
@@ -430,10 +443,13 @@ impl CardinalityEstimator {
         connecting_edge_indices: &[usize],
     ) -> f64 {
         let mut selectivity = 1.0;
-        let mut null_adjustment = 1.0;
 
-        for &index in connecting_edge_indices {
-            let edge = &self.graph.edges[index];
+        let edges: Vec<&JoinEdge> = connecting_edge_indices
+            .iter()
+            .map(|&idx| &self.graph.edges[idx])
+            .collect();
+
+        for &edge in &edges {
             // Equi-join selectivity (TDom-based).
             if !edge.equi_pairs.is_empty() {
                 let tdom = self.get_tdom_for_edge(edge);
@@ -448,9 +464,6 @@ impl CardinalityEstimator {
                 selectivity *= HEURISTIC_THETA_JOIN_SELECTIVITY;
             }
 
-            // Null-aware adjustment: NULLs don't match in equi-joins.
-            null_adjustment *= self.null_adjustment_for_edge(edge);
-
             // Non-equi residual predicates: do NOT apply an extra aggressive heuristic here.
             // A fixed 0.1 factor can severely under-estimate output and cause greedy ordering
             // to pick NLJ-like joins too early (`... filter=... != ...`).
@@ -460,6 +473,9 @@ impl CardinalityEstimator {
                 selectivity *= 0.8;
             }
         }
+
+        // Null-aware adjustment: each column contributes (1 - null_fraction) once.
+        let null_adjustment = self.null_adjustment_for_edges(&edges);
 
         left_card * right_card * selectivity * null_adjustment
     }
@@ -1256,5 +1272,151 @@ mod tests {
         // null_adjustment = (1 - 1.0) * (1 - 0.0) = 0.0
         // card = ... * 0.0 = 0.0
         assert!(card.abs() < 0.01, "expected 0.0, got {card}");
+    }
+
+    #[test]
+    fn test_null_equals_null_skips_adjustment() {
+        // R0: 1000 rows, 500 nulls (50%)
+        // R1: 1000 rows, 500 nulls (50%)
+        // With NullEqualsNothing: adjustment = (1-0.5)*(1-0.5) = 0.25
+        // With NullEqualsNull: adjustment = 1.0 (no penalty)
+        let mut graph = create_graph_with_null_stats(1000, 500, 1000, 500);
+        add_equi_edge(&mut graph);
+        // Override null_equality to NullEqualsNull
+        graph.edges[0].null_equality = NullEquality::NullEqualsNull;
+        let estimator = CardinalityEstimator::new(graph);
+
+        let card = estimator.estimate_join_cardinality(1000.0, 1000.0, &[0]);
+
+        // TDom = max(500, 500) = 500
+        // card = 1000 * 1000 / 500 * 1.0 = 2000 (no null penalty)
+        assert!(
+            (card - 2000.0).abs() < 1.0,
+            "expected ~2000 with NullEqualsNull, got {card}"
+        );
+    }
+
+    #[test]
+    fn test_shared_column_deduplication_in_null_adjustment() {
+        // Star schema: fact(fk) joins dim1(pk) and dim2(pk) on the same fact.fk column.
+        // fact.fk has 20% nulls. Without dedup, (1-0.2) is applied twice = 0.64.
+        // With dedup, (1-0.2) is applied once for fact.fk = 0.8 (times dim non-null factors).
+        use datafusion::common::stats::{ColumnStatistics, Precision};
+        use datafusion::logical_expr::JoinType;
+        use datafusion::physical_expr::expressions::{BinaryExpr, Column};
+        use datafusion::physical_expr::PhysicalExpr;
+
+        let mut graph = QueryGraph::new();
+        let schema = Arc::new(Schema::new(vec![Field::new("fk", DataType::Int32, true)]));
+
+        // Fact table: 1000 rows, 200 nulls on fk
+        let fact_stats = Statistics {
+            num_rows: Precision::Exact(1000),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Exact(200),
+                distinct_count: Precision::Exact(800),
+                ..ColumnStatistics::default()
+            }],
+        };
+        graph.add_relation(RelationNode::new(
+            Arc::new(EmptyExec::new(schema.clone())),
+            0,
+            1000.0,
+            1000.0,
+            fact_stats,
+        ));
+
+        // dim1: 100 rows, 0 nulls
+        let dim1_stats = Statistics {
+            num_rows: Precision::Exact(100),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Exact(0),
+                distinct_count: Precision::Exact(100),
+                ..ColumnStatistics::default()
+            }],
+        };
+        graph.add_relation(RelationNode::new(
+            Arc::new(EmptyExec::new(schema.clone())),
+            1,
+            100.0,
+            100.0,
+            dim1_stats,
+        ));
+
+        // dim2: 50 rows, 0 nulls
+        let dim2_stats = Statistics {
+            num_rows: Precision::Exact(50),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Exact(0),
+                distinct_count: Precision::Exact(50),
+                ..ColumnStatistics::default()
+            }],
+        };
+        graph.add_relation(RelationNode::new(
+            Arc::new(EmptyExec::new(schema.clone())),
+            2,
+            50.0,
+            50.0,
+            dim2_stats,
+        ));
+
+        let fact_col = StableColumn {
+            relation_id: 0,
+            column_index: 0,
+            name: "fk".into(),
+        };
+        let dim1_col = StableColumn {
+            relation_id: 1,
+            column_index: 0,
+            name: "fk".into(),
+        };
+        let dim2_col = StableColumn {
+            relation_id: 2,
+            column_index: 0,
+            name: "fk".into(),
+        };
+
+        // Edge 0: fact.fk = dim1.fk
+        let l0: Arc<dyn PhysicalExpr> = Arc::new(Column::new("fk", 0));
+        let r0: Arc<dyn PhysicalExpr> = Arc::new(Column::new("fk", 0));
+        let filter0 = Arc::new(BinaryExpr::new(l0, Operator::Eq, r0)) as Arc<dyn PhysicalExpr>;
+        let js0 = JoinSet::new_singleton(0)
+            .unwrap()
+            .union(&JoinSet::new_singleton(1).unwrap());
+        let _ = graph.add_edge(JoinEdge::new(
+            js0,
+            filter0,
+            JoinType::Inner,
+            vec![(fact_col.clone(), dim1_col)],
+        ));
+
+        // Edge 1: fact.fk = dim2.fk
+        let l1: Arc<dyn PhysicalExpr> = Arc::new(Column::new("fk", 0));
+        let r1: Arc<dyn PhysicalExpr> = Arc::new(Column::new("fk", 0));
+        let filter1 = Arc::new(BinaryExpr::new(l1, Operator::Eq, r1)) as Arc<dyn PhysicalExpr>;
+        let js1 = JoinSet::new_singleton(0)
+            .unwrap()
+            .union(&JoinSet::new_singleton(2).unwrap());
+        let _ = graph.add_edge(JoinEdge::new(
+            js1,
+            filter1,
+            JoinType::Inner,
+            vec![(fact_col, dim2_col)],
+        ));
+
+        let estimator = CardinalityEstimator::new(graph);
+
+        // Both edges connect to fact.fk — it should only contribute (1-0.2)=0.8 once.
+        // dim1.fk and dim2.fk have 0 nulls → factor = 1.0 each.
+        // Total null_adjustment = 0.8 * 1.0 * 1.0 = 0.8
+        let edges: Vec<&JoinEdge> = estimator.graph.edges.iter().collect();
+        let adj = estimator.null_adjustment_for_edges(&edges);
+        assert!(
+            (adj - 0.8).abs() < 1e-9,
+            "expected 0.8 with dedup, got {adj}"
+        );
     }
 }
