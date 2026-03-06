@@ -161,12 +161,10 @@ pub fn build_file_scan_config(
     // Rewrite file paths with table location prefix
     file_groups.iter_mut().for_each(|(_, files)| {
         files.iter_mut().for_each(|file| {
-            file.object_meta.location = Path::from(format!(
-                "{}{}{}",
-                log_store.config().location.path(),
-                object_store::path::DELIMITER,
-                file.object_meta.location
-            ));
+            file.object_meta.location = rewrite_data_file_location(
+                Path::from(log_store.config().location.path()),
+                file.object_meta.location.clone(),
+            );
         });
     });
 
@@ -450,6 +448,31 @@ fn bounds_have_mismatched_types(a: &Precision<ScalarValue>, b: &Precision<Scalar
     }
 }
 
+fn rewrite_data_file_location(table_root: Path, location: Path) -> Path {
+    let raw = location.as_ref();
+    if looks_like_absolute_uri(raw) {
+        return location;
+    }
+
+    Path::from(format!(
+        "{}{}{}",
+        table_root,
+        object_store::path::DELIMITER,
+        location
+    ))
+}
+
+fn looks_like_absolute_uri(path: &str) -> bool {
+    let Some((scheme, rest)) = path.split_once(':') else {
+        return false;
+    };
+    !scheme.is_empty()
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+        && rest.starts_with('/')
+}
+
 fn stats_for_add(
     action: &Add,
     file_schema: &SchemaRef,
@@ -534,8 +557,11 @@ mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
     use datafusion::common::ScalarValue;
+    use object_store::path::Path;
 
-    use super::{add_column_statistics, sanitize_statistics_for_schema};
+    use super::{
+        add_column_statistics, rewrite_data_file_location, sanitize_statistics_for_schema,
+    };
     use crate::conversion::ScalarConverter;
 
     #[test]
@@ -594,5 +620,28 @@ mod tests {
             Precision::Exact(ScalarValue::Int64(Some(5)))
         );
         assert_eq!(stats.column_statistics[0].min_value, Precision::Absent);
+    }
+
+    #[test]
+    fn test_rewrite_data_file_location_preserves_absolute_uri_paths() {
+        let table_root = Path::from("bucket/table");
+        let absolute = Path::from("s3://other-bucket/path/part-000.parquet");
+
+        let rewritten = rewrite_data_file_location(table_root, absolute.clone());
+
+        assert_eq!(rewritten, absolute);
+    }
+
+    #[test]
+    fn test_rewrite_data_file_location_prefixes_relative_paths() {
+        let rewritten = rewrite_data_file_location(
+            Path::from("bucket/table"),
+            Path::from("part=1/part-000.parquet"),
+        );
+
+        assert_eq!(
+            rewritten,
+            Path::from("bucket/table/part=1/part-000.parquet")
+        );
     }
 }
