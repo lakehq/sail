@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use datafusion::common::ScalarValue;
+use datafusion::common::{NullEquality, ScalarValue};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::Operator;
 use datafusion::physical_expr::expressions::BinaryExpr;
@@ -63,6 +63,7 @@ fn is_discrete_scalar(value: &ScalarValue) -> bool {
             | ScalarValue::UInt16(_)
             | ScalarValue::UInt32(_)
             | ScalarValue::UInt64(_)
+            | ScalarValue::Decimal128(_, _, 0)
     )
 }
 
@@ -161,12 +162,19 @@ impl CardinalityEstimator {
                     datafusion::common::stats::Precision::Absent => {}
                 }
 
-                // Extract null fraction
-                if row_count > 0.0 {
+                // Extract null fraction.
+                // Prefer statistics.num_rows as denominator (same source as null_count)
+                // to avoid mismatch when initial_cardinality is post-filter.
+                let stats_row_count = match relation.statistics.num_rows {
+                    datafusion::common::stats::Precision::Exact(c)
+                    | datafusion::common::stats::Precision::Inexact(c) => c as f64,
+                    datafusion::common::stats::Precision::Absent => row_count,
+                };
+                if stats_row_count > 0.0 {
                     match stats.null_count {
                         datafusion::common::stats::Precision::Exact(n)
                         | datafusion::common::stats::Precision::Inexact(n) => {
-                            let fraction = (n as f64 / row_count).min(1.0);
+                            let fraction = (n as f64 / stats_row_count).min(1.0);
                             self.null_fractions.insert(stable_col.clone(), fraction);
                         }
                         datafusion::common::stats::Precision::Absent => {}
@@ -512,7 +520,11 @@ impl CardinalityEstimator {
     /// Compute the null adjustment factor for a join edge.
     /// Returns the product of `(1 - null_fraction)` for each side of each equi-pair,
     /// since NULLs don't match in equi-joins.
+    /// For `NullEqualsNull` semantics, NULLs can match so no adjustment is applied.
     fn null_adjustment_for_edge(&self, edge: &JoinEdge) -> f64 {
+        if edge.null_equality == NullEquality::NullEqualsNull {
+            return 1.0;
+        }
         edge.equi_pairs
             .iter()
             .fold(1.0, |acc, (left_col, right_col)| {
@@ -1286,7 +1298,7 @@ mod tests {
                 },
             )],
         );
-        let _ = graph.add_edge(edge);
+        graph.add_edge(edge).unwrap();
     }
 
     #[test]
