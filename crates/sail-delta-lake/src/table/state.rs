@@ -30,8 +30,10 @@ use datafusion::arrow::record_batch::RecordBatch;
 use futures::TryStreamExt;
 
 use crate::kernel::snapshot::EagerSnapshot;
-use crate::kernel::{DeltaResult, DeltaTableConfig, DeltaTableError};
-use crate::spec::{ColumnMappingMode, ColumnMetadataKey, Remove};
+use crate::kernel::DeltaTableConfig;
+use crate::spec::{
+    ColumnMappingMode, ColumnMetadataKey, DeltaError as DeltaTableError, DeltaResult, Remove,
+};
 use crate::storage::LogStore;
 
 /// State snapshot currently held by the Delta Table instance.

@@ -34,8 +34,7 @@ use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
 
 use crate::conversion::ScalarExt;
-use crate::kernel::DeltaTableError;
-use crate::spec::{Add, ColumnCountStat, ColumnValueStat, Stats};
+use crate::spec::{Add, ColumnCountStat, ColumnValueStat, DeltaError as DeltaTableError, Stats};
 
 /// Creates an [`Add`] log action struct with statistics.
 pub fn create_add(

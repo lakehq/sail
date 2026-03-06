@@ -19,7 +19,7 @@ use std::str::FromStr;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{DeltaError as DeltaTableError, DeltaResult};
+use crate::spec::{DeltaError as DeltaTableError, DeltaResult};
 
 pub type Schema = StructType;
 

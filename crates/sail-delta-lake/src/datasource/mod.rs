@@ -29,8 +29,8 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::kernel::snapshot::LogDataHandler;
-use crate::kernel::{DeltaResult, DeltaTableError};
 use crate::options::{default_delta_log_replay_hash_threshold, DeltaLogReplayStrategyOption};
+use crate::spec::{DeltaError as DeltaTableError, DeltaResult};
 use crate::table::DeltaTableState;
 pub const PATH_COLUMN: &str = "__sail_file_path";
 pub const COMMIT_VERSION_COLUMN: &str = "_commit_version";

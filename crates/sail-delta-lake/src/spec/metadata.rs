@@ -15,8 +15,8 @@ use std::collections::HashMap;
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{DeltaError as DeltaTableError, DeltaResult};
 use crate::spec::schema::StructType;
+use crate::spec::{DeltaError as DeltaTableError, DeltaResult};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]

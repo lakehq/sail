@@ -17,8 +17,8 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{DeltaError as DeltaTableError, DeltaResult};
 use crate::spec::schema::{ColumnMappingMode, ColumnName};
+use crate::spec::{DeltaError as DeltaTableError, DeltaResult};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties.rs#L183-L204>

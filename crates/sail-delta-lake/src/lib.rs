@@ -12,7 +12,6 @@
 
 pub mod conversion;
 pub mod datasource;
-pub mod error;
 mod kernel;
 pub mod logical;
 pub mod operations;
@@ -34,7 +33,7 @@ use sail_physical_plan::{register_format_type, FormatTag};
 pub use table::{create_delta_provider, create_delta_source};
 pub use table_format::DeltaTableFormat;
 
-pub use crate::error::{DeltaError, DeltaError as DeltaTableError, DeltaResult};
+pub use crate::spec::{DeltaError, DeltaError as DeltaTableError, DeltaResult};
 
 static INIT: Once = Once::new();
 

@@ -14,8 +14,10 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{DeltaError as DeltaTableError, DeltaResult};
-use crate::spec::{Add, DeletionVectorDescriptor, Metadata, Protocol, Remove, Transaction};
+use crate::spec::{
+    Add, DeletionVectorDescriptor, DeltaError as DeltaTableError, DeltaResult, Metadata, Protocol,
+    Remove, Transaction,
+};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

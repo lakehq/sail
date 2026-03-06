@@ -19,8 +19,7 @@ use super::mapping::{
     annotate_new_fields_for_column_mapping, annotate_schema_for_column_mapping,
     compute_max_column_id,
 };
-use crate::kernel::DeltaResult;
-use crate::spec::{ColumnMappingMode, Metadata, Protocol, StructType};
+use crate::spec::{ColumnMappingMode, DeltaResult, Metadata, Protocol, StructType};
 
 /// Annotate a kernel schema for column mapping (assign ids + physical names).
 pub fn annotate_for_column_mapping(schema: &StructType) -> StructType {

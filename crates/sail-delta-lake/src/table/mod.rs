@@ -31,10 +31,10 @@ pub use state::DeltaTableState;
 use url::Url;
 
 use crate::datasource::{DeltaScanConfig, DeltaTableProvider};
-use crate::error::DeltaError;
-use crate::kernel::{DeltaResult, DeltaTableConfig, DeltaTableError};
+use crate::kernel::DeltaTableConfig;
 use crate::logical::table_source::DeltaTableSource;
 use crate::options::TableDeltaOptions;
+use crate::spec::{DeltaError, DeltaError as DeltaTableError, DeltaResult};
 use crate::storage::{commit_uri_from_version, default_logstore, LogStoreRef, StorageConfig};
 mod state;
 

@@ -25,8 +25,8 @@ use datafusion::arrow::datatypes::{
 };
 
 use crate::kernel::snapshot::{EagerSnapshot, LogDataHandler, Snapshot};
-use crate::kernel::{DeltaResult, DeltaTableError};
 use crate::schema::arrow_schema_reorder_partitions;
+use crate::spec::{DeltaError as DeltaTableError, DeltaResult};
 use crate::table::DeltaTableState;
 
 /// Convenience trait for calling common methods on snapshot hierarchies

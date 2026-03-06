@@ -4,7 +4,7 @@ use datafusion::common::scalar::ScalarValue;
 use indexmap::IndexMap;
 
 use crate::conversion::ScalarExt;
-use crate::kernel::DeltaTableError;
+use crate::spec::DeltaError as DeltaTableError;
 
 /// A contiguous range of rows that share the same partition values.
 #[derive(Debug)]

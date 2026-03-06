@@ -31,7 +31,7 @@ use datafusion::common::Result as DataFusionResult;
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use serde_json::Value;
 
-use crate::kernel::{DeltaResult as DeltaResultLocal, DeltaTableError};
+use crate::spec::{DeltaError as DeltaTableError, DeltaResult as DeltaResultLocal};
 
 pub const NULL_PARTITION_VALUE_DATA_PATH: &str = "__HIVE_DEFAULT_PARTITION__";
 

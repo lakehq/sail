@@ -37,10 +37,11 @@ use crate::kernel::arrow::engine_ext::{parse_partition_values_array, stats_schem
 use crate::kernel::checkpoints::{latest_replayable_version, load_replayed_table_state};
 use crate::kernel::snapshot::iterators::LogicalFileView;
 pub use crate::kernel::snapshot::log_data::LogDataHandler;
-use crate::kernel::{DeltaResult, DeltaTableConfig, DeltaTableError, PredicateRef, SchemaRef};
+use crate::kernel::{DeltaTableConfig, PredicateRef, SchemaRef};
 use crate::spec::{
-    delta_log_root_path, parse_commit_version, Add, ColumnMappingMode, CommitInfo, Metadata,
-    Protocol, Remove, StorageType, TableProperties, Transaction,
+    delta_log_root_path, parse_commit_version, Add, ColumnMappingMode, CommitInfo,
+    DeltaError as DeltaTableError, DeltaResult, Metadata, Protocol, Remove, StorageType,
+    TableProperties, Transaction,
 };
 use crate::storage::LogStore;
 
@@ -116,7 +117,7 @@ impl Snapshot {
             Some(v) => v,
             None => match latest_replayable_version(log_store).await {
                 Ok(v) => v,
-                Err(crate::error::DeltaError::MissingVersion) => {
+                Err(crate::spec::DeltaError::MissingVersion) => {
                     return Err(DeltaTableError::invalid_table_location(
                         "No commit files found in _delta_log",
                     ))

@@ -16,10 +16,8 @@ use thiserror::Error;
 
 use crate::kernel::transaction::TransactionError;
 
-/// Result type that is used throughout the Delta Lake integration.
 pub type DeltaResult<T> = Result<T, DeltaError>;
 
-/// Unified error type for the Sail Delta Lake integration.
 #[derive(Debug, Error)]
 pub enum DeltaError {
     #[error("No table version found.")]

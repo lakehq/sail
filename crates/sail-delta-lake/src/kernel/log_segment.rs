@@ -12,10 +12,9 @@
 
 use futures::TryStreamExt;
 
-use crate::error::DeltaResult;
 use crate::spec::{
     delta_log_prefix_path, delta_log_root_path, last_checkpoint_path, parse_checkpoint_version,
-    parse_commit_version, parse_version_prefix, LastCheckpointHint,
+    parse_commit_version, parse_version_prefix, DeltaResult, LastCheckpointHint,
 };
 use crate::storage::LogStoreRef;
 

@@ -24,8 +24,7 @@ use object_store::ObjectMeta;
 
 /// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
 use crate::conversion::ScalarConverter;
-use crate::kernel::{DeltaResult, DeltaTableError};
-use crate::spec::{Add, Remove};
+use crate::spec::{Add, DeltaError as DeltaTableError, DeltaResult, Remove};
 
 /// Convert an Add action to a PartitionedFile for DataFusion scanning
 pub fn partitioned_file_from_action(

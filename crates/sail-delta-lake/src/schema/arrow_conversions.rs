@@ -264,7 +264,7 @@ impl TryFrom<&ArrowDataType> for DataType {
 }
 
 impl TryFrom<ArrowSchemaRef> for DataType {
-    type Error = crate::error::DeltaError;
+    type Error = crate::spec::DeltaError;
 
     fn try_from(schema: ArrowSchemaRef) -> Result<Self, Self::Error> {
         let struct_type = StructType::try_from(schema)?;

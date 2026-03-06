@@ -23,8 +23,7 @@ use log::warn;
 
 use crate::kernel::snapshot::iterators::LogicalFileView;
 use crate::kernel::snapshot::SnapshotTableConfiguration;
-use crate::kernel::{DeltaResult, DeltaTableError};
-use crate::spec::Metadata;
+use crate::spec::{DeltaError as DeltaTableError, DeltaResult, Metadata};
 
 const COL_NUM_RECORDS: &str = "numRecords";
 const COL_MIN_VALUES: &str = "minValues";

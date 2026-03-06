@@ -25,10 +25,10 @@ use std::collections::HashSet;
 use thiserror::Error;
 
 use super::WriteSnapshot;
-use crate::error::DeltaError;
-use crate::kernel::{DeltaOperation, DeltaResult};
+use crate::kernel::DeltaOperation;
 use crate::spec::{
-    Action, Add, CommitInfo, IsolationLevel, Metadata, Protocol, Remove, Transaction,
+    Action, Add, CommitInfo, DeltaError, DeltaResult, IsolationLevel, Metadata, Protocol, Remove,
+    Transaction,
 };
 use crate::storage::{get_actions, LogStore};
 

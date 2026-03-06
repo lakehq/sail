@@ -22,9 +22,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::error::{DeltaError as DeltaTableError, DeltaResult};
 use crate::spec::actions::CommitInfo;
-use crate::spec::{Metadata, Protocol};
+use crate::spec::{DeltaError as DeltaTableError, DeltaResult, Metadata, Protocol};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]

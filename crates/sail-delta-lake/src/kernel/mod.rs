@@ -17,11 +17,9 @@ pub mod transaction;
 
 pub(crate) mod checkpoints;
 mod config;
-mod error;
 
 pub use config::DeltaTableConfig;
-pub use error::{DeltaResult, DeltaTableError};
 
 pub use crate::spec::operation::{DeltaOperation, MergePredicate, SaveMode};
-pub use crate::spec::{ColumnName, DataSkippingNumIndexedCols, SchemaRef};
+pub use crate::spec::SchemaRef;
 pub type PredicateRef = std::sync::Arc<()>;

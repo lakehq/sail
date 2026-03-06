@@ -5,9 +5,9 @@ use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field, Fields, Schema as ArrowSchema, SchemaRef,
 };
 
-use crate::kernel::{DeltaResult, DeltaTableError};
 use crate::spec::{
-    ColumnMappingMode, ColumnMetadataKey, DataType, MetadataValue, StructField, StructType,
+    ColumnMappingMode, ColumnMetadataKey, DataType, DeltaError as DeltaTableError, DeltaResult,
+    MetadataValue, StructField, StructType,
 };
 
 pub fn logical_arrow_to_kernel(arrow: &ArrowSchema) -> DeltaResult<StructType> {

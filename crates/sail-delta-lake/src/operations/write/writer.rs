@@ -39,8 +39,7 @@ use super::async_utils::AsyncShareableBuffer;
 use super::partitioning::partition_ranges;
 use super::stats::create_add;
 use crate::conversion::ScalarExt;
-use crate::kernel::DeltaTableError;
-use crate::spec::Add;
+use crate::spec::{Add, DeltaError as DeltaTableError};
 
 /// Trait for creating hive partition paths from partition values
 pub trait PartitionsExt {
@@ -554,7 +553,7 @@ mod tests {
     use object_store::ObjectStore;
 
     use super::{DeltaWriter, WriterConfig};
-    use crate::kernel::DeltaTableError;
+    use crate::spec::DeltaError as DeltaTableError;
 
     fn make_batch(values: Vec<i32>, parts: Vec<&str>) -> Result<RecordBatch, DeltaTableError> {
         let schema = Arc::new(Schema::new(vec![

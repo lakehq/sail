@@ -32,8 +32,9 @@ use datafusion::common::scalar::ScalarValue;
 use percent_encoding::percent_decode_str;
 
 use crate::conversion::ScalarExt;
-use crate::kernel::{DeltaResult, DeltaTableError};
-use crate::spec::{Add, DeletionVectorDescriptor, Remove, StorageType};
+use crate::spec::{
+    Add, DeletionVectorDescriptor, DeltaError as DeltaTableError, DeltaResult, Remove, StorageType,
+};
 
 const FIELD_NAME_PATH: &str = "path";
 const FIELD_NAME_SIZE: &str = "size";

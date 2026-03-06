@@ -32,13 +32,13 @@ use serde_json::Value;
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::error::DeltaError;
 use crate::kernel::checkpoints::{cleanup_expired_logs_for, create_checkpoint_for};
 use crate::kernel::snapshot::EagerSnapshot;
 use crate::kernel::transaction::conflict_checker::{TransactionInfo, WinningCommitSummary};
-use crate::kernel::{DeltaOperation, DeltaResult};
+use crate::kernel::DeltaOperation;
 use crate::spec::{
-    temp_commit_path, Action, Add, Metadata, Protocol, TableFeature, TableProperties, Transaction,
+    temp_commit_path, Action, Add, DeltaError, DeltaResult, Metadata, Protocol, TableFeature,
+    TableProperties, Transaction,
 };
 use crate::storage::{CommitOrBytes, LogStore, LogStoreRef, ObjectStoreRef};
 use crate::table::DeltaTableState;

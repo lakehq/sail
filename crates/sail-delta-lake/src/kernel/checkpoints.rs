@@ -34,11 +34,10 @@ use parquet::arrow::AsyncArrowWriter;
 use regex::Regex;
 use uuid::Uuid;
 
-use crate::kernel::{DeltaResult, DeltaTableError};
 use crate::spec::{
     checkpoint_path, delta_log_root_path, last_checkpoint_path, protocol_from_checkpoint,
-    protocol_to_checkpoint, Action, Add, CheckpointActionRow, LastCheckpointHint, Metadata,
-    Protocol, Remove, Transaction,
+    protocol_to_checkpoint, Action, Add, CheckpointActionRow, DeltaError as DeltaTableError,
+    DeltaResult, LastCheckpointHint, Metadata, Protocol, Remove, Transaction,
 };
 use crate::storage::{get_actions, LogStore};
 static DELTA_LOG_REGEX: LazyLock<Result<Regex, regex::Error>> =
@@ -638,7 +637,7 @@ pub(crate) async fn latest_replayable_version(log_store: &dyn LogStore) -> Delta
         })
         .max();
 
-    latest.ok_or(crate::error::DeltaError::MissingVersion)
+    latest.ok_or(crate::spec::DeltaError::MissingVersion)
 }
 
 /// Delete expired Delta log files up to a safe checkpoint boundary.
@@ -727,8 +726,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{decode_checkpoint_rows, encode_checkpoint_rows, ReconciledCheckpointState};
-    use crate::error::DeltaResult;
-    use crate::spec::{Action, Add, CheckpointActionRow, Remove};
+    use crate::spec::{Action, Add, CheckpointActionRow, DeltaResult, Remove};
 
     #[test]
     fn checkpoint_row_roundtrip_preserves_add_path() -> DeltaResult<()> {
