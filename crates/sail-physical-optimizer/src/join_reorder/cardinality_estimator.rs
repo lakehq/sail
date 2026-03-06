@@ -549,13 +549,14 @@ impl CardinalityEstimator {
                 ) {
                     (Some(&(min_l, max_l, disc_l)), Some(&(min_r, max_r, disc_r))) => {
                         let offset = if disc_l && disc_r { 1.0 } else { 0.0 };
+                        let smaller_range = (max_l - min_l + offset).min(max_r - min_r + offset);
                         let overlap = (max_l.min(max_r)) - (min_l.max(min_r)) + offset;
-                        if overlap <= 0.0 {
-                            // No overlap: join is effectively empty.
+                        if overlap < 0.0 {
+                            // Disjoint ranges: join is effectively empty.
                             return acc * 0.0;
                         }
-                        let smaller_range = (max_l - min_l + offset).min(max_r - min_r + offset);
-                        if smaller_range <= 0.0 {
+                        // Point ranges (min == max) that are not disjoint are fully overlapping.
+                        if smaller_range == 0.0 {
                             return acc;
                         }
                         acc * (overlap / smaller_range).min(1.0)
@@ -1437,6 +1438,61 @@ mod tests {
         assert!(
             (card_partial - 3333.33).abs() < 1.0,
             "expected ~3333.33, got {card_partial}"
+        );
+    }
+
+    #[test]
+    fn test_range_overlap_float_point_range() {
+        // Both sides have min=max=5.0 (Float64 point range).
+        // This should NOT be treated as "no overlap" — the single matching value overlaps.
+        let mut graph = create_graph_with_stats(
+            1000,
+            0,
+            Some((
+                ScalarValue::Float64(Some(5.0)),
+                ScalarValue::Float64(Some(5.0)),
+            )),
+            1000,
+            0,
+            Some((
+                ScalarValue::Float64(Some(5.0)),
+                ScalarValue::Float64(Some(5.0)),
+            )),
+        );
+        add_equi_edge(&mut graph);
+        let estimator = CardinalityEstimator::new(graph);
+        let card = estimator.estimate_join_cardinality(1000.0, 1000.0, &[0]);
+        // Point ranges that overlap should not drive cardinality to 0.
+        assert!(
+            card > 1.0,
+            "expected card > 1.0 for matching point ranges, got {card}"
+        );
+    }
+
+    #[test]
+    fn test_range_overlap_float_disjoint() {
+        // L: [1.0, 3.0], R: [5.0, 7.0] — fully disjoint.
+        let mut graph = create_graph_with_stats(
+            1000,
+            0,
+            Some((
+                ScalarValue::Float64(Some(1.0)),
+                ScalarValue::Float64(Some(3.0)),
+            )),
+            1000,
+            0,
+            Some((
+                ScalarValue::Float64(Some(5.0)),
+                ScalarValue::Float64(Some(7.0)),
+            )),
+        );
+        add_equi_edge(&mut graph);
+        let estimator = CardinalityEstimator::new(graph);
+        let card = estimator.estimate_join_cardinality(1000.0, 1000.0, &[0]);
+        // Disjoint ranges should yield minimal cardinality (clamped to 1.0).
+        assert!(
+            (card - 1.0).abs() < 0.01,
+            "expected 1.0 for disjoint ranges, got {card}"
         );
     }
 
