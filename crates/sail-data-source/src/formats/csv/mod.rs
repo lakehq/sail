@@ -78,18 +78,40 @@ async fn convert_spark_integer_types(
                 reader_builder = reader_builder.with_null_regex(re);
             }
         }
+        if let Some(terminator) = csv_options.terminator {
+            reader_builder = reader_builder.with_terminator(terminator);
+        }
+        if let Some(true) = csv_options.truncated_rows {
+            reader_builder = reader_builder.with_truncated_rows(true);
+        }
         let batch_size = csv_options.schema_infer_max_rec.unwrap_or(1000);
         reader_builder = reader_builder.with_batch_size(batch_size);
         if let Ok(mut reader) = reader_builder.build(cursor) {
-            if let Some(Ok(batch)) = reader.next() {
-                // Sampling succeeded — mark columns that fit as downcastable.
+            // Optimistically assume Int32 fits, then invalidate on any out-of-range value.
+            for &col_idx in &int64_cols {
+                fits_in_int32[col_idx] = true;
+            }
+            let mut rows_checked: usize = 0;
+            while let Some(Ok(batch)) = reader.next() {
                 for &col_idx in &int64_cols {
+                    if !fits_in_int32[col_idx] {
+                        continue;
+                    }
                     let array = batch.column(col_idx).as_primitive::<Int64Type>();
                     let all_fit = array
                         .iter()
                         .flatten()
                         .all(|val| val >= i64::from(i32::MIN) && val <= i64::from(i32::MAX));
-                    fits_in_int32[col_idx] = all_fit;
+                    if !all_fit {
+                        fits_in_int32[col_idx] = false;
+                    }
+                }
+                rows_checked += batch.num_rows();
+                if rows_checked >= batch_size {
+                    break;
+                }
+                if !int64_cols.iter().any(|&idx| fits_in_int32[idx]) {
+                    break;
                 }
             }
         }
