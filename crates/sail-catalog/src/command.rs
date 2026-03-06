@@ -462,22 +462,72 @@ impl CatalogCommand {
                 };
                 // Clear data files at the table location
                 if let Some(ref loc) = location {
-                    let path = loc
+                    let local_path = loc
                         .strip_prefix("file://")
-                        .or_else(|| loc.strip_prefix("file:"))
-                        .unwrap_or(loc);
-                    let dir = std::path::Path::new(path);
-                    if dir.exists() {
-                        std::fs::remove_dir_all(dir).map_err(|e| {
-                            CatalogError::External(format!(
-                                "failed to clear table data at {path}: {e}"
-                            ))
-                        })?;
-                        std::fs::create_dir_all(dir).map_err(|e| {
-                            CatalogError::External(format!(
-                                "failed to recreate table directory at {path}: {e}"
-                            ))
-                        })?;
+                        .or_else(|| loc.strip_prefix("file:"));
+                    match local_path {
+                        Some(path) => {
+                            let dir = std::path::Path::new(path);
+                            if !dir.is_absolute() || path.is_empty() {
+                                return Err(CatalogError::External(format!(
+                                    "TRUNCATE TABLE requires an absolute local path, got: {path}"
+                                )));
+                            }
+                            if dir.exists() {
+                                let dir = dir.to_path_buf();
+                                let path = path.to_string();
+                                tokio::task::spawn_blocking(move || -> CatalogResult<()> {
+                                    // Only remove data files, preserving metadata directories
+                                    // like _delta_log/ for Delta Lake tables.
+                                    for entry in std::fs::read_dir(&dir).map_err(|e| {
+                                        CatalogError::External(format!(
+                                            "failed to read table directory at {path}: {e}"
+                                        ))
+                                    })? {
+                                        let entry = entry.map_err(|e| {
+                                            CatalogError::External(format!(
+                                                "failed to read directory entry at {path}: {e}"
+                                            ))
+                                        })?;
+                                        let name = entry.file_name();
+                                        let name = name.to_string_lossy();
+                                        // Skip metadata directories (Delta Lake, Iceberg, etc.)
+                                        if name.starts_with('_') || name.starts_with('.') {
+                                            continue;
+                                        }
+                                        let entry_path = entry.path();
+                                        if entry_path.is_dir() {
+                                            std::fs::remove_dir_all(&entry_path).map_err(|e| {
+                                                CatalogError::External(format!(
+                                                    "failed to remove {}: {e}",
+                                                    entry_path.display()
+                                                ))
+                                            })?;
+                                        } else {
+                                            std::fs::remove_file(&entry_path).map_err(|e| {
+                                                CatalogError::External(format!(
+                                                    "failed to remove {}: {e}",
+                                                    entry_path.display()
+                                                ))
+                                            })?;
+                                        }
+                                    }
+                                    Ok(())
+                                })
+                                .await
+                                .map_err(|e| {
+                                    CatalogError::External(format!(
+                                        "TRUNCATE TABLE task failed: {e}"
+                                    ))
+                                })??;
+                            }
+                        }
+                        None => {
+                            // Non-file locations (e.g. s3://, gs://) are not yet supported.
+                            return Err(CatalogError::NotSupported(format!(
+                                "TRUNCATE TABLE for non-local table location: {loc}"
+                            )));
+                        }
                     }
                 }
                 let create_options = CreateTableOptions {
