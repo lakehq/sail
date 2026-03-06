@@ -15,6 +15,10 @@ pub const FIELD_NAME_SIZE: &str = "size";
 pub const FIELD_NAME_MODIFICATION_TIME: &str = "modificationTime";
 pub const FIELD_NAME_STATS: &str = "stats";
 pub const FIELD_NAME_STATS_PARSED: &str = "stats_parsed";
+#[expect(dead_code)]
+const FIELD_NAME_FILE_CONSTANT_VALUES: &str = "fileConstantValues";
+#[expect(dead_code)]
+const FIELD_NAME_PARTITION_VALUES: &str = "partitionValues";
 pub const FIELD_NAME_PARTITION_VALUES_PARSED: &str = "partitionValues_parsed";
 pub const FIELD_NAME_DELETION_VECTOR: &str = "deletionVector";
 
