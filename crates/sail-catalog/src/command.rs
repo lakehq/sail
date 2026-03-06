@@ -1,6 +1,7 @@
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use sail_common_datafusion::array::serde::ArrowSerializer;
+use sail_common_datafusion::catalog::TableKind;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use serde::{Deserialize, Serialize};
@@ -9,8 +10,9 @@ use crate::error::{CatalogError, CatalogResult};
 use crate::manager::tracker::{CatalogFunctionId, CatalogLogicalPlanId};
 use crate::manager::CatalogManager;
 use crate::provider::{
-    CreateDatabaseOptions, CreateTableOptions, CreateTemporaryViewOptions, CreateViewOptions,
-    DropDatabaseOptions, DropTableOptions, DropTemporaryViewOptions, DropViewOptions,
+    CatalogPartitionField, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions,
+    CreateTemporaryViewOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions,
+    DropTemporaryViewOptions, DropViewOptions,
 };
 use crate::utils::quote_namespace_if_needed;
 
@@ -116,6 +118,9 @@ pub enum CatalogCommand {
         table: Vec<String>,
         extended: bool,
     },
+    TruncateTable {
+        table: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
@@ -155,6 +160,7 @@ impl CatalogCommand {
             CatalogCommand::CreateTemporaryView { .. } => "CreateTemporaryView",
             CatalogCommand::CreateView { .. } => "CreateView",
             CatalogCommand::DescribeTable { .. } => "DescribeTable",
+            CatalogCommand::TruncateTable { .. } => "TruncateTable",
         }
     }
 
@@ -194,7 +200,8 @@ impl CatalogCommand {
             | CatalogCommand::DropTable { .. }
             | CatalogCommand::DropFunction { .. }
             | CatalogCommand::DropTemporaryView { .. }
-            | CatalogCommand::DropView { .. } => display.bools().schema()?,
+            | CatalogCommand::DropView { .. }
+            | CatalogCommand::TruncateTable { .. } => display.bools().schema()?,
         };
         Ok(schema)
     }
@@ -432,6 +439,78 @@ impl CatalogCommand {
             }
             CatalogCommand::CreateView { view, options } => {
                 manager.create_view(&view, options).await?;
+                display.bools().to_record_batch(vec![true])?
+            }
+            CatalogCommand::TruncateTable { table } => {
+                let status = manager.get_table(&table).await?;
+                let TableKind::Table {
+                    columns,
+                    comment,
+                    constraints,
+                    location,
+                    format,
+                    partition_by,
+                    sort_by,
+                    bucket_by,
+                    options,
+                    properties,
+                } = status.kind
+                else {
+                    return Err(CatalogError::NotSupported(
+                        "TRUNCATE TABLE is only supported on tables, not views".to_string(),
+                    ));
+                };
+                // Clear data files at the table location
+                if let Some(ref loc) = location {
+                    let path = loc
+                        .strip_prefix("file://")
+                        .or_else(|| loc.strip_prefix("file:"))
+                        .unwrap_or(loc);
+                    let dir = std::path::Path::new(path);
+                    if dir.exists() {
+                        std::fs::remove_dir_all(dir).map_err(|e| {
+                            CatalogError::External(format!(
+                                "failed to clear table data at {path}: {e}"
+                            ))
+                        })?;
+                        std::fs::create_dir_all(dir).map_err(|e| {
+                            CatalogError::External(format!(
+                                "failed to recreate table directory at {path}: {e}"
+                            ))
+                        })?;
+                    }
+                }
+                let create_options = CreateTableOptions {
+                    columns: columns
+                        .into_iter()
+                        .map(|c| CreateTableColumnOptions {
+                            name: c.name,
+                            data_type: c.data_type,
+                            nullable: c.nullable,
+                            comment: c.comment,
+                            default: c.default,
+                            generated_always_as: c.generated_always_as,
+                        })
+                        .collect(),
+                    comment,
+                    constraints,
+                    location,
+                    format,
+                    partition_by: partition_by
+                        .into_iter()
+                        .map(|col| CatalogPartitionField {
+                            column: col,
+                            transform: None,
+                        })
+                        .collect(),
+                    sort_by,
+                    bucket_by,
+                    if_not_exists: false,
+                    replace: true,
+                    options,
+                    properties,
+                };
+                manager.create_table(&table, create_options).await?;
                 display.bools().to_record_batch(vec![true])?
             }
         };
