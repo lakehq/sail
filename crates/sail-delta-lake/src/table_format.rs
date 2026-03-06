@@ -278,7 +278,7 @@ fn apply_delta_read_options(from: DeltaReadOptions, to: &mut TableDeltaOptions) 
         to.delta_log_replay_strategy = match raw.to_ascii_lowercase().as_str() {
             "auto" => DeltaLogReplayStrategyOption::Auto,
             "sort" => DeltaLogReplayStrategyOption::Sort,
-            "hash" | "hashnosort" | "hash_no_sort" => DeltaLogReplayStrategyOption::Hash,
+            "hash" => DeltaLogReplayStrategyOption::Hash,
             other => {
                 return plan_err!(
                     "invalid value for deltaLogReplayStrategy: {other}, expected auto/sort/hash"
@@ -324,7 +324,7 @@ fn apply_delta_write_options(from: DeltaWriteOptions, to: &mut TableDeltaOptions
         to.delta_log_replay_strategy = match raw.to_ascii_lowercase().as_str() {
             "auto" => DeltaLogReplayStrategyOption::Auto,
             "sort" => DeltaLogReplayStrategyOption::Sort,
-            "hash" | "hashnosort" | "hash_no_sort" => DeltaLogReplayStrategyOption::Hash,
+            "hash" => DeltaLogReplayStrategyOption::Hash,
             other => {
                 return plan_err!(
                     "invalid value for deltaLogReplayStrategy: {other}, expected auto/sort/hash"
