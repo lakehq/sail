@@ -571,15 +571,55 @@ impl GraphBuilder {
         } else if plan.as_any().is::<ProjectionExec>() {
             // Preserve ProjectionExec as a relation leaf, but prefer its input statistics
             // (ProjectionExec may not have accurate stats of its own).
+            // We must remap column_statistics from the input schema order to the output
+            // schema order, because ProjectionExec may reorder, subset, or duplicate columns.
+            //
+            // Collect each projection layer's column mappings (output_idx → input_idx)
+            // as we peel through nested ProjectionExecs, then apply them in reverse.
+            let mut projection_mappings: Vec<Vec<Option<usize>>> = Vec::new();
             let mut cur = plan.clone();
-            while let Some(p) = cur.as_any().downcast_ref::<ProjectionExec>() {
-                cur = p.input().clone();
+            loop {
+                let Some(proj) = cur.as_any().downcast_ref::<ProjectionExec>() else {
+                    break;
+                };
+                let mapping: Vec<Option<usize>> = proj
+                    .expr()
+                    .iter()
+                    .map(|proj_expr| {
+                        proj_expr
+                            .expr
+                            .as_any()
+                            .downcast_ref::<Column>()
+                            .map(|col| col.index())
+                    })
+                    .collect();
+                let next = proj.input().clone();
+                projection_mappings.push(mapping);
+                cur = next;
             }
-            let stats = cur.partition_statistics(None)?;
-            let initial_cardinality = match stats.num_rows {
+            let input_stats = cur.partition_statistics(None)?;
+            let initial_cardinality = match input_stats.num_rows {
                 Precision::Exact(count) => count as f64,
                 Precision::Inexact(count) => count as f64,
                 Precision::Absent => 1000.0, // Default estimation
+            };
+            // Walk projection mappings in reverse (innermost first) to remap column stats
+            // from the base input schema through each projection layer to the final output.
+            let mut col_stats = input_stats.column_statistics.clone();
+            for mapping in projection_mappings.iter().rev() {
+                col_stats = mapping
+                    .iter()
+                    .map(|opt_idx| {
+                        opt_idx
+                            .and_then(|idx| col_stats.get(idx).cloned())
+                            .unwrap_or_default()
+                    })
+                    .collect();
+            }
+            let stats = datafusion::common::Statistics {
+                num_rows: input_stats.num_rows,
+                total_byte_size: input_stats.total_byte_size,
+                column_statistics: col_stats,
             };
             (stats, initial_cardinality, initial_cardinality)
         } else {
@@ -1756,6 +1796,245 @@ mod tests {
             }
             _ => unreachable!("expected Stable for projected r0"),
         }
+
+        Ok(())
+    }
+
+    /// Verify that ProjectionExec stats remapping works when columns are reordered.
+    ///
+    /// The bug: `create_relation_node` used to take stats from the input plan but index them
+    /// using the output schema, so a projection that reordered columns would associate
+    /// distinct_count/null_count with the wrong column.
+    #[test]
+    fn test_projection_remaps_column_statistics_on_reorder() -> Result<()> {
+        use datafusion::common::stats::{ColumnStatistics, Precision};
+        use datafusion::common::Statistics;
+        use datafusion::physical_plan::test::exec::StatisticsExec;
+
+        // Base plan with 3 columns: a (distinct=100, null=10), b (distinct=200, null=20), c (distinct=300, null=30)
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+        ]);
+        let stats = Statistics {
+            num_rows: Precision::Exact(1000),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![
+                ColumnStatistics {
+                    distinct_count: Precision::Exact(100),
+                    null_count: Precision::Exact(10),
+                    ..ColumnStatistics::default()
+                },
+                ColumnStatistics {
+                    distinct_count: Precision::Exact(200),
+                    null_count: Precision::Exact(20),
+                    ..ColumnStatistics::default()
+                },
+                ColumnStatistics {
+                    distinct_count: Precision::Exact(300),
+                    null_count: Precision::Exact(30),
+                    ..ColumnStatistics::default()
+                },
+            ],
+        };
+        let base = Arc::new(StatisticsExec::new(stats, schema)) as Arc<dyn ExecutionPlan>;
+
+        // ProjectionExec reorders columns: output = (c, a) — drops b, swaps c and a.
+        let proj = Arc::new(ProjectionExec::try_new(
+            vec![
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("c", 2)),
+                    alias: "c_out".to_string(),
+                },
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("a", 0)),
+                    alias: "a_out".to_string(),
+                },
+            ],
+            base,
+        )?) as Arc<dyn ExecutionPlan>;
+
+        let mut builder = GraphBuilder::new();
+        let _col_map = builder.create_relation_node(proj)?;
+
+        assert_eq!(builder.graph.relation_count(), 1);
+        let rel = &builder.graph.relations[0];
+
+        // Output schema has 2 columns: c_out (idx 0) and a_out (idx 1).
+        // column_statistics[0] should match c's stats (distinct=300, null=30).
+        // column_statistics[1] should match a's stats (distinct=100, null=10).
+        assert_eq!(rel.statistics.column_statistics.len(), 2);
+
+        let c_stats = &rel.statistics.column_statistics[0];
+        assert_eq!(c_stats.distinct_count, Precision::Exact(300));
+        assert_eq!(c_stats.null_count, Precision::Exact(30));
+
+        let a_stats = &rel.statistics.column_statistics[1];
+        assert_eq!(a_stats.distinct_count, Precision::Exact(100));
+        assert_eq!(a_stats.null_count, Precision::Exact(10));
+
+        Ok(())
+    }
+
+    /// Verify that nested ProjectionExecs correctly remap stats through multiple layers.
+    #[test]
+    fn test_nested_projection_remaps_column_statistics() -> Result<()> {
+        use datafusion::common::stats::{ColumnStatistics, Precision};
+        use datafusion::common::Statistics;
+        use datafusion::physical_plan::test::exec::StatisticsExec;
+
+        // Base: a (distinct=10), b (distinct=20), c (distinct=30)
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+        ]);
+        let stats = Statistics {
+            num_rows: Precision::Exact(500),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![
+                ColumnStatistics {
+                    distinct_count: Precision::Exact(10),
+                    ..ColumnStatistics::default()
+                },
+                ColumnStatistics {
+                    distinct_count: Precision::Exact(20),
+                    ..ColumnStatistics::default()
+                },
+                ColumnStatistics {
+                    distinct_count: Precision::Exact(30),
+                    ..ColumnStatistics::default()
+                },
+            ],
+        };
+        let base = Arc::new(StatisticsExec::new(stats, schema)) as Arc<dyn ExecutionPlan>;
+
+        // Inner projection: (b, c, a) — cyclic permutation
+        let proj1 = Arc::new(ProjectionExec::try_new(
+            vec![
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("b", 1)),
+                    alias: "b".to_string(),
+                },
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("c", 2)),
+                    alias: "c".to_string(),
+                },
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("a", 0)),
+                    alias: "a".to_string(),
+                },
+            ],
+            base,
+        )?) as Arc<dyn ExecutionPlan>;
+
+        // Outer projection: (a, b) from inner's output — indices refer to inner's output
+        // Inner output: [b(idx=0), c(idx=1), a(idx=2)]
+        // So "a" is at idx=2, "b" is at idx=0
+        let proj2 = Arc::new(ProjectionExec::try_new(
+            vec![
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("a", 2)),
+                    alias: "a_final".to_string(),
+                },
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("b", 0)),
+                    alias: "b_final".to_string(),
+                },
+            ],
+            proj1,
+        )?) as Arc<dyn ExecutionPlan>;
+
+        let mut builder = GraphBuilder::new();
+        let _col_map = builder.create_relation_node(proj2)?;
+
+        let rel = &builder.graph.relations[0];
+        assert_eq!(rel.statistics.column_statistics.len(), 2);
+
+        // a_final should have a's original distinct=10
+        assert_eq!(
+            rel.statistics.column_statistics[0].distinct_count,
+            Precision::Exact(10)
+        );
+        // b_final should have b's original distinct=20
+        assert_eq!(
+            rel.statistics.column_statistics[1].distinct_count,
+            Precision::Exact(20)
+        );
+
+        Ok(())
+    }
+
+    /// Verify that computed expressions in a projection get default (unknown) stats.
+    #[test]
+    fn test_projection_computed_expr_gets_default_stats() -> Result<()> {
+        use datafusion::common::stats::{ColumnStatistics, Precision};
+        use datafusion::common::Statistics;
+        use datafusion::physical_plan::test::exec::StatisticsExec;
+
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]);
+        let stats = Statistics {
+            num_rows: Precision::Exact(100),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![
+                ColumnStatistics {
+                    distinct_count: Precision::Exact(50),
+                    null_count: Precision::Exact(5),
+                    ..ColumnStatistics::default()
+                },
+                ColumnStatistics {
+                    distinct_count: Precision::Exact(80),
+                    null_count: Precision::Exact(8),
+                    ..ColumnStatistics::default()
+                },
+            ],
+        };
+        let base = Arc::new(StatisticsExec::new(stats, schema)) as Arc<dyn ExecutionPlan>;
+
+        // Projection: (literal 42, b) — first column is computed, second is column ref
+        let proj = Arc::new(ProjectionExec::try_new(
+            vec![
+                ProjectionExpr {
+                    expr: Arc::new(Literal::new(ScalarValue::Int32(Some(42)))),
+                    alias: "constant".to_string(),
+                },
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("b", 1)),
+                    alias: "b_out".to_string(),
+                },
+            ],
+            base,
+        )?) as Arc<dyn ExecutionPlan>;
+
+        let mut builder = GraphBuilder::new();
+        let _col_map = builder.create_relation_node(proj)?;
+
+        let rel = &builder.graph.relations[0];
+        assert_eq!(rel.statistics.column_statistics.len(), 2);
+
+        // Computed expression → default (Absent) stats
+        assert_eq!(
+            rel.statistics.column_statistics[0].distinct_count,
+            Precision::Absent
+        );
+        assert_eq!(
+            rel.statistics.column_statistics[0].null_count,
+            Precision::Absent
+        );
+
+        // Column ref to b → b's original stats
+        assert_eq!(
+            rel.statistics.column_statistics[1].distinct_count,
+            Precision::Exact(80)
+        );
+        assert_eq!(
+            rel.statistics.column_statistics[1].null_count,
+            Precision::Exact(8)
+        );
 
         Ok(())
     }
