@@ -69,19 +69,9 @@ pub fn parse_checkpoint_version(filename: &str) -> Option<i64> {
     parse_version_prefix(filename)
 }
 
-fn join_path(base: &str, suffix: &str) -> String {
-    if base.ends_with('/') {
-        format!("{base}{suffix}")
-    } else {
-        format!("{base}/{suffix}")
-    }
-}
-
 async fn read_last_checkpoint_version(log_store: &dyn crate::storage::LogStore) -> Option<i64> {
     let store = log_store.object_store(None);
-    let table_root_path = log_store.config().location.path();
-    let log_root_path = join_path(table_root_path, DELTA_LOG_DIR);
-    let path = Path::from(join_path(&log_root_path, LAST_CHECKPOINT_FILE));
+    let path = Path::from(format!("{DELTA_LOG_DIR}/{LAST_CHECKPOINT_FILE}"));
     let bytes = store.get(&path).await.ok()?.bytes().await.ok()?;
     let hint: LastCheckpointHint = serde_json::from_slice(&bytes).ok()?;
     Some(hint.version)
@@ -100,14 +90,12 @@ pub async fn list_log_segment_files(
     max_version: i64,
 ) -> DeltaResult<LogSegmentFiles> {
     let store = log_store.object_store(None);
-    let table_root_path = log_store.config().location.path();
-    let log_root_path = join_path(table_root_path, DELTA_LOG_DIR);
-    let log_root = Path::from(log_root_path.clone());
+    let log_root = Path::from(DELTA_LOG_DIR);
     let offset_version = read_last_checkpoint_version(log_store.as_ref())
         .await
         .map(|v| v.min(max_version).saturating_sub(1))
         .unwrap_or(0);
-    let offset = Path::from(format!("{log_root_path}/{offset_version:020}"));
+    let offset = Path::from(format!("{DELTA_LOG_DIR}/{offset_version:020}"));
 
     // Prefer offset listing from `_last_checkpoint`, then fall back to full listing if unsupported.
     let mut entries = match store
@@ -118,7 +106,10 @@ pub async fn list_log_segment_files(
         Ok(entries) => entries,
         Err(_) => store.list(Some(&log_root)).try_collect::<Vec<_>>().await?,
     };
-    if entries.is_empty() && offset_version > 0 {
+    // Some object stores treat `list_with_offset` as strictly greater-than and can
+    // skip the exact `offset` object. For small tables (only version 0 commit),
+    // that may return empty even though files exist. Fall back to full listing.
+    if entries.is_empty() {
         entries = store.list(Some(&log_root)).try_collect::<Vec<_>>().await?;
     }
 

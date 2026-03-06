@@ -14,9 +14,8 @@ use datafusion::common::Result;
 
 use super::context::PlannerContext;
 pub use crate::kernel::log_segment::{
-    list_log_segment_files as kernel_list_log_segment_files,
-    resolve_log_segment_files as kernel_resolve_log_segment_files, LogSegmentFiles,
-    LogSegmentResolveOptions,
+    list_log_segment_files as kernel_list_log_segment_files, parse_commit_version,
+    parse_version_prefix, LogSegmentFiles, LogSegmentResolveOptions,
 };
 
 /// List Delta log files up to `max_version`, using the planner-local cache when available.
@@ -43,16 +42,28 @@ pub async fn resolve_log_segment_files(
     options: LogSegmentResolveOptions,
 ) -> Result<LogSegmentFiles> {
     // Obtain the full listing (possibly from cache), then apply resolve options.
-    let cached = list_log_segment_files(ctx, max_version).await?;
+    let mut files = list_log_segment_files(ctx, max_version).await?;
 
-    // Re-apply the resolve logic on the cached listing.
-    let log_store = ctx.log_store()?;
-    kernel_resolve_log_segment_files(&log_store, max_version, options)
-        .await
-        .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))
-        .map(|mut resolved| {
-            // Preserve checkpoint files from the cached listing to avoid a second store round-trip.
-            resolved.checkpoint_files = cached.checkpoint_files;
-            resolved
-        })
+    // Avoid double-counting actions already materialized into the latest checkpoint:
+    // only replay commit JSONs strictly newer than that checkpoint version.
+    let latest_checkpoint_version = files
+        .checkpoint_files
+        .iter()
+        .filter_map(|f| parse_version_prefix(f))
+        .max();
+    if let Some(cp_ver) = latest_checkpoint_version {
+        files
+            .commit_files
+            .retain(|f| parse_commit_version(f).map(|v| v > cp_ver).unwrap_or(true));
+    }
+
+    if let Some((start, end)) = options.commit_version_range {
+        files.commit_files.retain(|f| {
+            parse_commit_version(f)
+                .map(|v| v >= start && v <= end)
+                .unwrap_or(false)
+        });
+    }
+
+    Ok(files)
 }

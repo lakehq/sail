@@ -127,8 +127,11 @@ impl<'a> PlannerContext<'a> {
     pub fn log_store(&self) -> Result<LogStoreRef> {
         let storage_config = StorageConfig;
         let object_store = self.object_store()?;
+        let prefixed_store = storage_config
+            .decorate_store(Arc::clone(&object_store), &self.config.table_url)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
         Ok(default_logstore(
-            Arc::clone(&object_store),
+            prefixed_store,
             object_store,
             &self.config.table_url,
             &storage_config,
