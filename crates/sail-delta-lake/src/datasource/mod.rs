@@ -28,7 +28,7 @@ use datafusion::datasource::object_store::ObjectStoreUrl;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::kernel::snapshot::LogDataHandler;
+use crate::kernel::snapshot::SnapshotPruningStats;
 use crate::options::{default_delta_log_replay_hash_threshold, DeltaLogReplayStrategyOption};
 use crate::spec::{DeltaError as DeltaTableError, DeltaResult};
 use crate::table::DeltaSnapshot;
@@ -65,9 +65,11 @@ impl DeltaSnapshot {
             let files = self.files_batch().ok()?;
             let boolean_array = BooleanArray::from(mask.to_vec());
             let pruned_files = filter_record_batch(files, &boolean_array).ok()?;
-            LogDataHandler::new(&pruned_files, self).statistics()
+            SnapshotPruningStats::try_new(&pruned_files, self)
+                .ok()?
+                .statistics()
         } else {
-            self.log_data().ok()?.statistics()
+            self.pruning_stats().ok()?.statistics()
         }
     }
 }

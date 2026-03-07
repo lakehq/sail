@@ -107,7 +107,7 @@ impl<'a> TransactionInfo<'a> {
 
     /// Files read by the transaction
     pub fn read_files(&self) -> Result<impl Iterator<Item = Add> + '_, CommitConflictError> {
-        Ok(self.read_snapshot.read_files())
+        Ok(self.read_snapshot.adds().iter().cloned())
     }
 
     /// Whether the whole table was read during the transaction

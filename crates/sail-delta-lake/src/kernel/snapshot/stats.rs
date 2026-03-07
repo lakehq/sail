@@ -32,7 +32,7 @@ use datafusion::physical_optimizer::pruning::PruningStatistics;
 use datafusion::physical_plan::Accumulator;
 use log::warn;
 
-use crate::kernel::snapshot::log_data::LogDataHandler;
+use super::DeltaSnapshot;
 use crate::spec::fields::{
     FIELD_NAME_PARTITION_VALUES_PARSED, FIELD_NAME_SIZE, FIELD_NAME_STATS_PARSED,
     STATS_FIELD_MAX_VALUES, STATS_FIELD_MIN_VALUES, STATS_FIELD_NULL_COUNT,
@@ -40,30 +40,40 @@ use crate::spec::fields::{
 };
 use crate::spec::{DeltaError as DeltaTableError, DeltaResult};
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 enum AccumulatorType {
     Min,
     Max,
-    #[default]
-    Unused,
 }
+
 // TODO validate this works with "wide and narrow" builds / stats
 
-/// Helper for processing data from the materialized Delta log.
-struct FileStatsAccessor<'a> {
+/// Pruning/statistics view over a materialized snapshot file batch.
+#[derive(Clone)]
+pub struct SnapshotPruningStats<'a> {
+    data: &'a RecordBatch,
+    snapshot: &'a DeltaSnapshot,
     sizes: &'a Int64Array,
     stats: &'a StructArray,
 }
 
-impl<'a> FileStatsAccessor<'a> {
-    pub(crate) fn try_new(data: &'a RecordBatch) -> DeltaResult<Self> {
+impl<'a> SnapshotPruningStats<'a> {
+    pub(crate) fn try_new(data: &'a RecordBatch, snapshot: &'a DeltaSnapshot) -> DeltaResult<Self> {
         let sizes = batch_column::<Int64Array>(data, FIELD_NAME_SIZE)?;
         let stats = batch_column::<StructArray>(data, FIELD_NAME_STATS_PARSED)?;
-        Ok(Self { sizes, stats })
+        Ok(Self {
+            data,
+            snapshot,
+            sizes,
+            stats,
+        })
     }
-}
 
-impl FileStatsAccessor<'_> {
+    /// The number of files in the log data.
+    pub fn num_files(&self) -> usize {
+        self.data.num_rows()
+    }
+
     fn collect_count(&self, name: &str) -> Precision<usize> {
         let num_records = nested_struct_column_exact_or_path(self.stats, name)
             .and_then(|col| col.as_any().downcast_ref::<Int64Array>());
@@ -106,7 +116,6 @@ impl FileStatsAccessor<'_> {
                     .map_or(None, |a| Some(Box::new(a))),
                 AccumulatorType::Max => MaxAccumulator::try_new(array_ref.data_type())
                     .map_or(None, |a| Some(Box::new(a))),
-                _ => None,
             };
 
             if let Some(mut accumulator) = accumulator {
@@ -162,7 +171,7 @@ impl FileStatsAccessor<'_> {
         Precision::Inexact(size)
     }
 
-    fn column_stats(&self, name: impl AsRef<str>) -> DeltaResult<ColumnStatistics> {
+    fn build_column_stats(&self, name: impl AsRef<str>) -> DeltaResult<ColumnStatistics> {
         let null_count_col = format!("{STATS_FIELD_NULL_COUNT}.{}", name.as_ref());
         let null_count = self.collect_count(&null_count_col);
 
@@ -197,64 +206,20 @@ impl FileStatsAccessor<'_> {
             byte_size: Precision::Absent,
         })
     }
-}
-
-trait StatsExt {
-    fn add(&self, other: &Self) -> Self;
-}
-
-impl StatsExt for ColumnStatistics {
-    fn add(&self, other: &Self) -> Self {
-        Self {
-            null_count: self.null_count.add(&other.null_count),
-            max_value: self.max_value.max(&other.max_value),
-            min_value: self.min_value.min(&other.min_value),
-            sum_value: Precision::Absent,
-            distinct_count: self.distinct_count.add(&other.distinct_count),
-            byte_size: self.byte_size.add(&other.byte_size),
-        }
-    }
-}
-
-impl LogDataHandler<'_> {
-    fn num_records(&self) -> Precision<usize> {
-        FileStatsAccessor::try_new(self.data())
-            .map(|a| a.num_records())
-            .into_iter()
-            .reduce(|acc, num_records| acc.add(&num_records))
-            .unwrap_or(Precision::Absent)
-    }
-
-    fn total_size_files(&self) -> Precision<usize> {
-        FileStatsAccessor::try_new(self.data())
-            .map(|a| a.total_size_files())
-            .into_iter()
-            .reduce(|acc, size| acc.add(&size))
-            .unwrap_or(Precision::Absent)
-    }
 
     pub(crate) fn column_stats(&self, name: impl AsRef<str>) -> Option<ColumnStatistics> {
-        FileStatsAccessor::try_new(self.data())
-            .map(|a| a.column_stats(name.as_ref()))
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()
-            .ok()?
-            .iter()
-            .fold(None::<ColumnStatistics>, |acc, stats| match (acc, stats) {
-                (None, stats) => Some(stats.clone()),
-                (Some(acc), stats) => Some(acc.add(stats)),
-            })
+        self.build_column_stats(name).ok()
     }
 
     pub(crate) fn statistics(&self) -> Option<Statistics> {
         let num_rows = self.num_records();
         let total_byte_size = self.total_size_files();
         let column_statistics = self
-            .snapshot()
+            .snapshot
             .schema()
             .fields()
             .iter()
-            .map(|f: &Arc<arrow_schema::Field>| self.column_stats(f.name()))
+            .map(|field| self.column_stats(field.name()))
             .collect::<Option<Vec<_>>>()?;
         Some(Statistics {
             num_rows,
@@ -264,7 +229,7 @@ impl LogDataHandler<'_> {
     }
 
     fn pick_stats(&self, column: &Column, stats_field: &'static str) -> Option<ArrayRef> {
-        let schema = self.snapshot().schema();
+        let schema = self.snapshot.schema();
         let field = schema.field_with_name(&column.name).ok()?;
         // See issue #1214. Binary type does not support natural order which is required for Datafusion to prune
         if matches!(
@@ -274,38 +239,26 @@ impl LogDataHandler<'_> {
             return None;
         }
         if self
-            .snapshot()
+            .snapshot
             .metadata()
             .partition_columns()
             .contains(&column.name)
         {
-            let partition_values = match batch_column::<StructArray>(
-                self.data(),
-                FIELD_NAME_PARTITION_VALUES_PARSED,
-            ) {
-                Ok(values) => values,
-                Err(err) => {
-                    warn!(
-                        "Failed to access partitionValues_parsed for column {}: {err}",
-                        column.name()
-                    );
-                    return None;
-                }
-            };
+            let partition_values =
+                match batch_column::<StructArray>(self.data, FIELD_NAME_PARTITION_VALUES_PARSED) {
+                    Ok(values) => values,
+                    Err(err) => {
+                        warn!(
+                            "Failed to access partitionValues_parsed for column {}: {err}",
+                            column.name()
+                        );
+                        return None;
+                    }
+                };
             return nested_struct_column_exact_or_path(partition_values, &column.name).cloned();
         }
 
-        let stats = match batch_column::<StructArray>(self.data(), FIELD_NAME_STATS_PARSED) {
-            Ok(values) => values,
-            Err(err) => {
-                warn!(
-                    "Failed to access stats_parsed for column {}: {err}",
-                    column.name()
-                );
-                return None;
-            }
-        };
-        nested_column(stats, stats_field, &column.name)
+        nested_column(self.stats, stats_field, &column.name)
             .ok()
             .cloned()
     }
@@ -354,7 +307,7 @@ fn nested_struct_column_exact_or_path<'a>(
     Some(current)
 }
 
-impl PruningStatistics for LogDataHandler<'_> {
+impl PruningStatistics for SnapshotPruningStats<'_> {
     /// return the minimum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
@@ -370,7 +323,7 @@ impl PruningStatistics for LogDataHandler<'_> {
     /// return the number of containers (e.g. row groups) being
     /// pruned with these statistics
     fn num_containers(&self) -> usize {
-        self.data().num_rows()
+        self.data.num_rows()
     }
 
     /// return the number of null values for the named column as an
@@ -379,7 +332,7 @@ impl PruningStatistics for LogDataHandler<'_> {
     /// Note: the returned array must contain `num_containers()` rows.
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
         if !self
-            .snapshot()
+            .snapshot
             .metadata()
             .partition_columns()
             .contains(&column.name)
@@ -408,9 +361,8 @@ impl PruningStatistics for LogDataHandler<'_> {
     ///
     /// Note: the returned array must contain `num_containers()` rows
     fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
-        let stats = batch_column::<StructArray>(self.data(), FIELD_NAME_STATS_PARSED).ok()?;
         let row_counts =
-            nested_struct_column_exact_or_path(stats, STATS_FIELD_NUM_RECORDS)?.clone();
+            nested_struct_column_exact_or_path(self.stats, STATS_FIELD_NUM_RECORDS)?.clone();
         ::datafusion::arrow::compute::cast(row_counts.as_ref(), &ArrowDataType::UInt64).ok()
     }
 
@@ -418,7 +370,7 @@ impl PruningStatistics for LogDataHandler<'_> {
     fn contained(&self, column: &Column, value: &HashSet<ScalarValue>) -> Option<BooleanArray> {
         if value.is_empty()
             || !self
-                .snapshot()
+                .snapshot
                 .metadata()
                 .partition_columns()
                 .contains(&column.name)

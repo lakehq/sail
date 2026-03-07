@@ -61,10 +61,6 @@ impl DeltaTableSource {
         })
     }
 
-    pub fn try_with_config(&self, config: DeltaScanConfig) -> DeltaResult<Self> {
-        Self::try_new(Arc::clone(&self.snapshot), self.log_store.clone(), config)
-    }
-
     pub fn snapshot(&self) -> &Arc<DeltaSnapshot> {
         &self.snapshot
     }

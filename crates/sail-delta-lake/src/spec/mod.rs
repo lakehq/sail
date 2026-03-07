@@ -21,6 +21,7 @@ pub mod properties;
 pub mod protocol;
 pub mod schema;
 pub mod statistics;
+pub(crate) mod utils;
 
 pub use actions::{
     Action, Add, CommitInfo, DeletionVectorDescriptor, Remove, RemoveOptions, StorageType,

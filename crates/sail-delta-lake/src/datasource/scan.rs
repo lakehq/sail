@@ -86,16 +86,7 @@ pub fn build_file_scan_config(
     let table_partition_cols = snapshot.metadata().partition_columns();
     let column_mapping_mode = snapshot.effective_column_mapping_mode();
     let kernel_schema = snapshot.schema();
-    let partition_columns_mapped: Vec<(String, String)> = table_partition_cols
-        .iter()
-        .map(|logical| {
-            let physical = kernel_schema
-                .field_with_name(logical)
-                .map(|f| arrow_field_physical_name(f, column_mapping_mode).to_string())
-                .unwrap_or_else(|_| logical.clone());
-            (logical.clone(), physical)
-        })
-        .collect();
+    let partition_columns_mapped = snapshot.physical_partition_columns();
     let mut physical_to_logical = HashMap::new();
     for field in complete_schema.fields() {
         let logical = field.name().clone();

@@ -76,7 +76,7 @@ struct SnapshotDeletionVectorRow {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SnapshotAddRow {
-    #[serde(with = "serde_path_compat")]
+    #[serde(with = "crate::spec::utils::serde_path")]
     path: String,
     partition_values: HashMap<String, Option<String>>,
     size: i64,
@@ -419,47 +419,4 @@ fn collect_partition_row(value: &StructArray) -> DeltaResult<HashMap<String, Opt
         }
     }
     Ok(result)
-}
-
-mod serde_path_compat {
-    use percent_encoding::{percent_decode_str, percent_encode, AsciiSet, CONTROLS};
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    const INVALID: &AsciiSet = &CONTROLS
-        .add(b'\\')
-        .add(b'{')
-        .add(b'^')
-        .add(b'}')
-        .add(b'%')
-        .add(b'`')
-        .add(b']')
-        .add(b'"')
-        .add(b'>')
-        .add(b'[')
-        .add(b'<')
-        .add(b'#')
-        .add(b'|')
-        .add(b'\r')
-        .add(b'\n')
-        .add(b'*')
-        .add(b'?');
-
-    pub fn serialize<S>(value: &str, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let encoded = percent_encode(value.as_bytes(), INVALID).to_string();
-        String::serialize(&encoded, serializer)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<String, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        percent_decode_str(&s)
-            .decode_utf8()
-            .map(|value| value.to_string())
-            .map_err(serde::de::Error::custom)
-    }
 }

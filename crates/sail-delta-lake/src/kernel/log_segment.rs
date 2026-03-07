@@ -14,7 +14,7 @@ use futures::TryStreamExt;
 
 use crate::spec::{
     delta_log_prefix_path, delta_log_root_path, last_checkpoint_path, parse_checkpoint_version,
-    parse_commit_version, parse_version_prefix, DeltaResult, LastCheckpointHint,
+    parse_commit_version, DeltaResult, LastCheckpointHint,
 };
 use crate::storage::LogStoreRef;
 
@@ -48,8 +48,7 @@ async fn read_last_checkpoint_version(log_store: &dyn crate::storage::LogStore) 
 /// - all parquet files belonging to the **latest** checkpoint at or before `max_version`
 /// - all commit JSON files at or before `max_version`
 ///
-/// Commit files are **not** filtered against the checkpoint here; call
-/// [`resolve_log_segment_files`] if you need the minimal replay set.
+/// Commit files are **not** filtered against the checkpoint here.
 pub async fn list_log_segment_files(
     log_store: &LogStoreRef,
     max_version: i64,
@@ -122,40 +121,4 @@ pub async fn list_log_segment_files(
         checkpoint_files,
         commit_files,
     })
-}
-
-/// Resolve the minimal set of Delta log files needed to replay table state up to `max_version`.
-///
-/// Unlike [`list_log_segment_files`], this function:
-/// 1. Filters out commit JSON files that are already covered by the latest checkpoint.
-/// 2. Optionally restricts commit files to a specific version range via `options`.
-pub async fn resolve_log_segment_files(
-    log_store: &LogStoreRef,
-    max_version: i64,
-    options: LogSegmentResolveOptions,
-) -> DeltaResult<LogSegmentFiles> {
-    let mut files = list_log_segment_files(log_store, max_version).await?;
-
-    // Avoid double-counting actions already materialized into the latest checkpoint:
-    // only replay commit JSONs strictly newer than that checkpoint version.
-    let latest_checkpoint_version = files
-        .checkpoint_files
-        .iter()
-        .filter_map(|f| parse_version_prefix(f))
-        .max();
-    if let Some(cp_ver) = latest_checkpoint_version {
-        files
-            .commit_files
-            .retain(|f| parse_commit_version(f).map(|v| v > cp_ver).unwrap_or(true));
-    }
-
-    if let Some((start, end)) = options.commit_version_range {
-        files.commit_files.retain(|f| {
-            parse_commit_version(f)
-                .map(|v| v >= start && v <= end)
-                .unwrap_or(false)
-        });
-    }
-
-    Ok(files)
 }

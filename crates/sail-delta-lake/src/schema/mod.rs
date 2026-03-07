@@ -18,15 +18,16 @@ pub mod normalize;
 
 pub use converter::{
     arrow_field_physical_name, arrow_schema_from_struct_type, arrow_schema_reorder_partitions,
-    kernel_to_logical_arrow, logical_arrow_to_kernel, make_physical_arrow_schema,
+    get_physical_arrow_schema as get_physical_schema, kernel_to_logical_arrow,
+    logical_arrow_to_kernel, logical_arrow_to_kernel as struct_type_from_logical_arrow,
+    make_physical_arrow_schema,
 };
 pub use manager::{
-    annotate_for_column_mapping, evolve_schema, get_physical_schema,
-    metadata_for_create_with_logical_arrow, metadata_for_create_with_struct_type,
-    protocol_for_create, struct_type_from_logical_arrow,
+    evolve_schema, metadata_for_create_with_logical_arrow, metadata_for_create_with_struct_type,
+    protocol_for_create,
 };
 pub use mapping::{
     annotate_new_fields_for_column_mapping, annotate_schema_for_column_mapping,
-    compute_max_column_id,
+    annotate_schema_for_column_mapping as annotate_for_column_mapping, compute_max_column_id,
 };
 pub use normalize::normalize_delta_schema;

@@ -109,7 +109,7 @@ pub struct CheckpointDeletionVector {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckpointAdd {
-    #[serde(with = "serde_path_compat")]
+    #[serde(with = "crate::spec::utils::serde_path")]
     pub path: String,
     pub partition_values: HashMap<String, Option<String>>,
     pub size: i64,
@@ -132,7 +132,7 @@ pub struct CheckpointAdd {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckpointRemove {
-    #[serde(with = "serde_path_compat")]
+    #[serde(with = "crate::spec::utils::serde_path")]
     pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deletion_timestamp: Option<i64>,
@@ -280,48 +280,5 @@ impl TryFrom<CheckpointRemove> for Remove {
             base_row_id: value.base_row_id,
             default_row_commit_version: value.default_row_commit_version,
         })
-    }
-}
-
-mod serde_path_compat {
-    use percent_encoding::{percent_decode_str, percent_encode, AsciiSet, CONTROLS};
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    const INVALID: &AsciiSet = &CONTROLS
-        .add(b'\\')
-        .add(b'{')
-        .add(b'^')
-        .add(b'}')
-        .add(b'%')
-        .add(b'`')
-        .add(b']')
-        .add(b'"')
-        .add(b'>')
-        .add(b'[')
-        .add(b'<')
-        .add(b'#')
-        .add(b'|')
-        .add(b'\r')
-        .add(b'\n')
-        .add(b'*')
-        .add(b'?');
-
-    pub fn serialize<S>(value: &str, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let encoded = percent_encode(value.as_bytes(), INVALID).to_string();
-        String::serialize(&encoded, serializer)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<String, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        percent_decode_str(&s)
-            .decode_utf8()
-            .map(|v| v.to_string())
-            .map_err(serde::de::Error::custom)
     }
 }

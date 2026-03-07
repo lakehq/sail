@@ -14,17 +14,8 @@ use std::collections::HashMap;
 
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
 
-use super::converter::{get_physical_arrow_schema, logical_arrow_to_kernel};
-use super::mapping::{
-    annotate_new_fields_for_column_mapping, annotate_schema_for_column_mapping,
-    compute_max_column_id,
-};
+use super::mapping::{annotate_new_fields_for_column_mapping, compute_max_column_id};
 use crate::spec::{ColumnMappingMode, DeltaResult, Metadata, Protocol, StructType, TableFeature};
-
-/// Annotate a kernel schema for column mapping (assign ids + physical names).
-pub fn annotate_for_column_mapping(schema: &StructType) -> StructType {
-    annotate_schema_for_column_mapping(schema)
-}
 
 /// Evolve table schema and update metadata according to column mapping mode.
 pub fn evolve_schema(
@@ -56,17 +47,6 @@ pub fn evolve_schema(
     Ok(updated)
 }
 
-/// Get the Arrow physical schema for reading/writing files, enriched with PARQUET:field_id
-/// when column mapping Name/Id mode is active.
-pub fn get_physical_schema(logical: &StructType, mode: ColumnMappingMode) -> ArrowSchema {
-    get_physical_arrow_schema(logical, mode)
-}
-
-/// Convert a logical Arrow schema into Delta kernel StructType through the schema adapter layer.
-pub fn struct_type_from_logical_arrow(schema: &ArrowSchema) -> DeltaResult<StructType> {
-    logical_arrow_to_kernel(schema)
-}
-
 /// Build Metadata for table creation from a logical Arrow schema.
 pub fn metadata_for_create_with_logical_arrow(
     schema: &ArrowSchema,
@@ -74,7 +54,7 @@ pub fn metadata_for_create_with_logical_arrow(
     created_time: i64,
     configuration: HashMap<String, String>,
 ) -> DeltaResult<Metadata> {
-    let logical_kernel = struct_type_from_logical_arrow(schema)?;
+    let logical_kernel = super::converter::logical_arrow_to_kernel(schema)?;
     metadata_for_create_with_struct_type(
         logical_kernel,
         partition_columns,

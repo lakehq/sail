@@ -20,7 +20,7 @@ use crate::options::TableDeltaOptions;
 use crate::physical_plan::planner::utils::{LogReplayFilter, LogReplayOptions};
 use crate::physical_plan::planner::{DeltaTableConfig as PlannerTableConfig, PlannerContext};
 use crate::physical_plan::{DeltaDiscoveryExec, DeltaScanByAddsExec};
-use crate::schema::{arrow_field_physical_name, get_physical_schema, logical_arrow_to_kernel};
+use crate::schema::{get_physical_schema, logical_arrow_to_kernel};
 use crate::spec::{Add, ColumnMappingMode};
 use crate::storage::LogStoreRef;
 use crate::table::DeltaSnapshot;
@@ -170,14 +170,10 @@ pub(crate) async fn plan_delta_scan(
     let kschema_arc = snapshot.schema();
     let logical_kernel = logical_arrow_to_kernel(kschema_arc)?;
     let physical_arrow: ArrowSchema = get_physical_schema(&logical_kernel, kmode);
-    let physical_partition_cols: HashSet<String> = table_partition_cols
-        .iter()
-        .map(|col| {
-            kschema_arc
-                .field_with_name(col)
-                .map(|f| arrow_field_physical_name(f, kmode).to_string())
-                .unwrap_or_else(|_| col.clone())
-        })
+    let physical_partition_cols: HashSet<String> = snapshot
+        .physical_partition_columns()
+        .into_iter()
+        .map(|(_, physical)| physical)
         .collect();
 
     let file_fields = physical_arrow
@@ -254,18 +250,6 @@ pub(crate) async fn plan_delta_scan(
             true,
         ),
     );
-    let log_segment_files = crate::kernel::log_segment::resolve_log_segment_files(
-        log_store,
-        snapshot.version(),
-        crate::kernel::log_segment::LogSegmentResolveOptions {
-            commit_version_range: None,
-        },
-    )
-    .await
-    .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
-    let checkpoint_files = log_segment_files.checkpoint_files;
-    let commit_files = log_segment_files.commit_files;
-
     let mut log_replay_options = LogReplayOptions::default();
     if let Some(predicate) = pruning_predicate.as_ref() {
         let mut expr_props =
@@ -284,25 +268,10 @@ pub(crate) async fn plan_delta_scan(
         log_replay_options.include_stats_json = false;
     }
 
-    let partition_columns_map = table_partition_cols
-        .iter()
-        .map(|col| {
-            let physical = kschema_arc
-                .field_with_name(col)
-                .map(|f| arrow_field_physical_name(f, kmode).to_string())
-                .unwrap_or_else(|_| col.clone());
-            (col.clone(), physical)
-        })
-        .collect::<Vec<_>>();
-
     let meta_scan: Arc<dyn ExecutionPlan> =
         crate::physical_plan::planner::utils::build_log_replay_pipeline_with_options(
             &planner_ctx,
-            table_url.clone(),
-            snapshot.version(),
-            partition_columns_map,
-            checkpoint_files,
-            commit_files,
+            snapshot,
             log_replay_options,
         )
         .await

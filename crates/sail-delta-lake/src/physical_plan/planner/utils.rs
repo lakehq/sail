@@ -49,6 +49,7 @@ use crate::physical_plan::{
 use crate::spec::fields::{
     FIELD_NAME_MODIFICATION_TIME, FIELD_NAME_PATH, FIELD_NAME_SIZE, FIELD_NAME_STATS,
 };
+use crate::table::DeltaSnapshot;
 
 /// Options that control what the log replay pipeline materializes as payload columns.
 ///
@@ -194,36 +195,60 @@ pub fn align_schemas_for_union(
 /// -> `DeltaLogReplayExec`.
 pub async fn build_log_replay_pipeline(
     ctx: &PlannerContext<'_>,
-    table_url: Url,
-    version: i64,
-    partition_columns: Vec<String>,
+    snapshot: &DeltaSnapshot,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let partition_columns = partition_columns
-        .into_iter()
-        .map(|col| (col.clone(), col))
-        .collect::<Vec<_>>();
-    let log_segment_files = resolve_log_segment_files(
-        ctx,
-        version,
-        LogSegmentResolveOptions {
-            commit_version_range: None,
-        },
-    )
-    .await?;
-    build_log_replay_pipeline_with_options(
-        ctx,
-        table_url,
-        version,
-        partition_columns,
-        log_segment_files.checkpoint_files,
-        log_segment_files.commit_files,
-        LogReplayOptions::default(),
-    )
-    .await
+    build_log_replay_pipeline_with_options(ctx, snapshot, LogReplayOptions::default()).await
 }
 
 /// Same as [`build_log_replay_pipeline`], but allows controlling projected payload columns.
 pub async fn build_log_replay_pipeline_with_options(
+    ctx: &PlannerContext<'_>,
+    snapshot: &DeltaSnapshot,
+    options: LogReplayOptions,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let version = snapshot.version();
+    let log_segment_files = resolve_log_segment_files(
+        ctx,
+        version,
+        LogSegmentResolveOptions {
+            commit_version_range: options.commit_version_range,
+        },
+    )
+    .await?;
+    build_log_replay_pipeline_from_parts(
+        ctx,
+        ctx.table_url().clone(),
+        version,
+        snapshot.physical_partition_columns(),
+        log_segment_files.checkpoint_files,
+        log_segment_files.commit_files,
+        options,
+    )
+    .await
+}
+
+async fn build_log_replay_pipeline_from_parts(
+    ctx: &PlannerContext<'_>,
+    table_url: Url,
+    version: i64,
+    partition_columns: Vec<(String, String)>,
+    checkpoint_files: Vec<String>,
+    commit_files: Vec<String>,
+    options: LogReplayOptions,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    build_log_replay_pipeline_with_files(
+        ctx,
+        table_url,
+        version,
+        partition_columns,
+        checkpoint_files,
+        commit_files,
+        options,
+    )
+    .await
+}
+
+async fn build_log_replay_pipeline_with_files(
     ctx: &PlannerContext<'_>,
     table_url: Url,
     version: i64,

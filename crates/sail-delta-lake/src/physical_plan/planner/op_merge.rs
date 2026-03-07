@@ -34,6 +34,7 @@ use crate::options::TableDeltaOptions;
 use crate::physical_plan::{
     DeltaCommitExec, DeltaDiscoveryExec, DeltaRemoveActionsExec, DeltaWriterExec,
 };
+use crate::table::DeltaSnapshot;
 
 /// Entry point for MERGE execution. Expects the logical MERGE to be fully
 /// expanded (handled by ExpandMergeRule) and passed down as pre-expanded plans.
@@ -97,6 +98,7 @@ pub async fn build_merge_plan(
     finalize_merge(
         ctx,
         expanded,
+        &snapshot_state,
         ctx.table_url().clone(),
         version,
         options,
@@ -112,6 +114,7 @@ pub async fn build_merge_plan(
 async fn finalize_merge(
     ctx: &PlannerContext<'_>,
     projected: Arc<dyn ExecutionPlan>,
+    snapshot: &DeltaSnapshot,
     table_url: Url,
     version: i64,
     options: TableDeltaOptions,
@@ -238,41 +241,9 @@ async fn finalize_merge(
     if let Some(touched_plan) = &touched_plan_opt {
         // Build a log-side stream of active Add rows using a visible log replay pipeline:
         // Union(DataSourceExec parquet/json) -> DeltaLogReplayExec -> ... -> DeltaDiscoveryExec.
-        let log_segment_files = super::log_segment::resolve_log_segment_files(
-            ctx,
-            version,
-            super::log_segment::LogSegmentResolveOptions {
-                commit_version_range: None,
-            },
-        )
-        .await?;
-        let checkpoint_files = log_segment_files.checkpoint_files;
-        let commit_files = log_segment_files.commit_files;
-        let partition_columns_map = partition_columns
-            .iter()
-            .map(|col| {
-                let physical = table_schema
-                    .field_with_name(col)
-                    .ok()
-                    .and_then(|f| {
-                        f.metadata()
-                            .get("delta.columnMapping.physicalName")
-                            .cloned()
-                    })
-                    .unwrap_or_else(|| col.clone());
-                (col.clone(), physical)
-            })
-            .collect::<Vec<_>>();
-        let meta_scan: Arc<dyn ExecutionPlan> = build_log_replay_pipeline_with_options(
-            ctx,
-            table_url.clone(),
-            version,
-            partition_columns_map,
-            checkpoint_files,
-            commit_files,
-            LogReplayOptions::default(),
-        )
-        .await?;
+        let meta_scan: Arc<dyn ExecutionPlan> =
+            build_log_replay_pipeline_with_options(ctx, snapshot, LogReplayOptions::default())
+                .await?;
 
         // Restrict to touched file paths by joining touched_paths with the metadata stream.
         let touched_schema = touched_plan.schema();

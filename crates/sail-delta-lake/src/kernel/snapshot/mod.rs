@@ -31,9 +31,9 @@ use once_cell::sync::OnceCell;
 use url::Url;
 
 use crate::kernel::checkpoints::{latest_replayable_version, load_replayed_table_state};
-pub use crate::kernel::snapshot::log_data::LogDataHandler;
+pub use crate::kernel::snapshot::stats::SnapshotPruningStats;
 use crate::kernel::{DeltaTableConfig, SchemaRef};
-use crate::schema::arrow_schema_reorder_partitions;
+use crate::schema::{arrow_field_physical_name, arrow_schema_reorder_partitions};
 use crate::spec::fields::{
     FIELD_NAME_MODIFICATION_TIME, FIELD_NAME_PARTITION_VALUES_PARSED, FIELD_NAME_PATH,
     FIELD_NAME_SIZE, FIELD_NAME_STATS_PARSED, STATS_FIELD_MAX_VALUES, STATS_FIELD_MIN_VALUES,
@@ -45,7 +45,6 @@ use crate::spec::{
 };
 use crate::storage::LogStore;
 
-pub mod log_data;
 mod materialize;
 mod stats;
 
@@ -241,8 +240,20 @@ impl DeltaSnapshot {
         self.removes.as_ref()
     }
 
-    pub fn read_files(&self) -> impl Iterator<Item = Add> + '_ {
-        self.adds.iter().cloned()
+    pub fn physical_partition_columns(&self) -> Vec<(String, String)> {
+        let mode = self.effective_column_mapping_mode();
+        self.metadata()
+            .partition_columns()
+            .iter()
+            .map(|logical| {
+                let physical = self
+                    .schema()
+                    .field_with_name(logical)
+                    .map(|field| arrow_field_physical_name(field, mode).to_string())
+                    .unwrap_or_else(|_| logical.clone());
+                (logical.clone(), physical)
+            })
+            .collect()
     }
 
     pub fn files_batch(&self) -> DeltaResult<&RecordBatch> {
@@ -255,8 +266,8 @@ impl DeltaSnapshot {
         })
     }
 
-    pub fn log_data(&self) -> DeltaResult<LogDataHandler<'_>> {
-        Ok(LogDataHandler::new(self.files_batch()?, self))
+    pub fn pruning_stats(&self) -> DeltaResult<SnapshotPruningStats<'_>> {
+        SnapshotPruningStats::try_new(self.files_batch()?, self)
     }
 
     pub async fn all_tombstones(

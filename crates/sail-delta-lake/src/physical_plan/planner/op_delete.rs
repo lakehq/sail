@@ -31,7 +31,6 @@ use crate::physical_plan::{
     DeltaCommitExec, DeltaDiscoveryExec, DeltaRemoveActionsExec, DeltaScanByAddsExec,
     DeltaWriterExec,
 };
-use crate::schema::arrow_field_physical_name;
 
 pub async fn build_delete_plan(
     ctx: &PlannerContext<'_>,
@@ -71,39 +70,8 @@ pub async fn build_delete_plan(
         });
     }
 
-    let kschema_arc = snapshot_state.schema();
-    let kmode = snapshot_state.effective_column_mapping_mode();
-    let partition_columns_map = partition_columns
-        .iter()
-        .map(|col| {
-            let physical = kschema_arc
-                .field_with_name(col)
-                .map(|f| arrow_field_physical_name(f, kmode).to_string())
-                .unwrap_or_else(|_| col.clone());
-            (col.clone(), physical)
-        })
-        .collect::<Vec<_>>();
-    let log_segment_files = super::log_segment::resolve_log_segment_files(
-        ctx,
-        version,
-        super::log_segment::LogSegmentResolveOptions {
-            commit_version_range: None,
-        },
-    )
-    .await?;
-    let checkpoint_files = log_segment_files.checkpoint_files;
-    let commit_files = log_segment_files.commit_files;
-
-    let meta_scan: Arc<dyn ExecutionPlan> = build_log_replay_pipeline_with_options(
-        ctx,
-        ctx.table_url().clone(),
-        version,
-        partition_columns_map,
-        checkpoint_files,
-        commit_files,
-        log_replay_options,
-    )
-    .await?;
+    let meta_scan: Arc<dyn ExecutionPlan> =
+        build_log_replay_pipeline_with_options(ctx, snapshot_state, log_replay_options).await?;
 
     // Always wrap with DeltaDiscoveryExec so EXPLAIN shows the metadata pipeline.
     let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(

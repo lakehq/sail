@@ -209,7 +209,7 @@ impl Borrow<str> for Remove {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Add {
-    #[serde(with = "serde_path")]
+    #[serde(with = "crate::spec::utils::serde_path")]
     pub path: String,
     pub partition_values: HashMap<String, Option<String>>,
     pub size: i64,
@@ -235,7 +235,7 @@ pub struct Add {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Remove {
-    #[serde(with = "serde_path")]
+    #[serde(with = "crate::spec::utils::serde_path")]
     pub path: String,
     pub data_change: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -275,7 +275,7 @@ impl Default for RemoveOptions {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AddCDCFile {
-    #[serde(with = "serde_path")]
+    #[serde(with = "crate::spec::utils::serde_path")]
     pub path: String,
     pub partition_values: HashMap<String, Option<String>>,
     pub size: i64,
@@ -380,56 +380,5 @@ impl TryFrom<&Add> for ObjectMeta {
             e_tag: None,
             version: None,
         })
-    }
-}
-
-/// Serde helpers for encoding/decoding log paths.
-pub(crate) mod serde_path {
-    use std::str::Utf8Error;
-
-    use percent_encoding::{percent_decode_str, percent_encode, AsciiSet, CONTROLS};
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<String, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        decode_path(&s).map_err(serde::de::Error::custom)
-    }
-
-    pub fn serialize<S>(value: &str, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let encoded = encode_path(value);
-        String::serialize(&encoded, serializer)
-    }
-
-    const INVALID: &AsciiSet = &CONTROLS
-        .add(b'\\')
-        .add(b'{')
-        .add(b'^')
-        .add(b'}')
-        .add(b'%')
-        .add(b'`')
-        .add(b']')
-        .add(b'"')
-        .add(b'>')
-        .add(b'[')
-        .add(b'<')
-        .add(b'#')
-        .add(b'|')
-        .add(b'\r')
-        .add(b'\n')
-        .add(b'*')
-        .add(b'?');
-
-    fn encode_path(path: &str) -> String {
-        percent_encode(path.as_bytes(), INVALID).to_string()
-    }
-
-    pub fn decode_path(path: &str) -> Result<String, Utf8Error> {
-        Ok(percent_decode_str(path).decode_utf8()?.to_string())
     }
 }
