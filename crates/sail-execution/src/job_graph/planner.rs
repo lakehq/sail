@@ -16,6 +16,7 @@ use datafusion::physical_plan::{
 };
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_physical_plan::catalog_command::CatalogCommandExec;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::job_graph::{
@@ -257,7 +258,7 @@ fn build_job_graph(
         let child = plan.children().one()?;
         plan.clone()
             .with_new_children(vec![create_merge_input(child, graph)?])?
-    } else if plan.as_any().is::<SystemTableExec>() {
+    } else if plan.as_any().is::<SystemTableExec>() || plan.as_any().is::<CatalogCommandExec>() {
         plan.children().zero()?;
         create_driver_stage(&plan, graph)?
     } else {

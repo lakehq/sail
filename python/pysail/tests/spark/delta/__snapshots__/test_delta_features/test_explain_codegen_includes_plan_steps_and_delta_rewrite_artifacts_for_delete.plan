@@ -322,6 +322,9 @@ SAME TEXT AS ABOVE
 physical_plan after RewriteExplicitRepartition:
 SAME TEXT AS ABOVE
 
+physical_plan after EnforceBarrierPartitioning:
+SAME TEXT AS ABOVE
+
 physical_plan after SanityCheckPlan:
 SAME TEXT AS ABOVE
 
