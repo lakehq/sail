@@ -31,6 +31,14 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
         self.inner.get_name()
     }
 
+    fn get_description(&self) -> Option<&str> {
+        self.inner.get_description()
+    }
+
+    fn provider_name(&self) -> &'static str {
+        self.inner.provider_name()
+    }
+
     async fn create_database(
         &self,
         database: &Namespace,

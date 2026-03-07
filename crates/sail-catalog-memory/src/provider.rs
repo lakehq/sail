@@ -52,6 +52,10 @@ impl CatalogProvider for MemoryCatalogProvider {
         &self.name
     }
 
+    fn provider_name(&self) -> &'static str {
+        "memory"
+    }
+
     async fn create_database(
         &self,
         database: &Namespace,

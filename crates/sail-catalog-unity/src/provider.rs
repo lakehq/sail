@@ -344,6 +344,10 @@ impl CatalogProvider for UnityCatalogProvider {
         &self.name
     }
 
+    fn provider_name(&self) -> &'static str {
+        "unity"
+    }
+
     async fn create_database(
         &self,
         database: &Namespace,

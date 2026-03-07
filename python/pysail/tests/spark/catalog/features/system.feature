@@ -130,7 +130,6 @@ Feature: System catalog queries
     Then query result ordered
       | info_name    | info_value |
       | Catalog Name | sail       |
-      | Description  | sail       |
 
     When query
       """
@@ -139,5 +138,4 @@ Feature: System catalog queries
     Then query result ordered
       | info_name    | info_value |
       | Catalog Name | sail       |
-      | Description  | sail       |
-      | Provider     | sail       |
+      | Provider     | memory     |

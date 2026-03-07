@@ -20,6 +20,14 @@ pub trait CatalogProvider: Send + Sync {
     /// in different sessions.
     fn get_name(&self) -> &str;
 
+    /// A user-facing description of the catalog, if available.
+    fn get_description(&self) -> Option<&str> {
+        None
+    }
+
+    /// The implementation type of the catalog provider.
+    fn provider_name(&self) -> &'static str;
+
     /// Creates a new database in the catalog.
     async fn create_database(
         &self,

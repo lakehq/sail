@@ -316,6 +316,10 @@ impl CatalogProvider for OneLakeCatalogProvider {
         &self.name
     }
 
+    fn provider_name(&self) -> &'static str {
+        "onelake"
+    }
+
     async fn create_database(
         &self,
         _database: &Namespace,

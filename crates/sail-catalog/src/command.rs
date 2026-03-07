@@ -234,14 +234,14 @@ impl CatalogCommand {
             }
             CatalogCommand::DescribeCatalog { catalog, extended } => {
                 let provider = manager.get_catalog(&catalog)?;
-                let mut rows = vec![
-                    DescribeInfoRow::new("Catalog Name", catalog),
-                    DescribeInfoRow::new("Description", provider.get_name().to_string()),
-                ];
+                let mut rows = vec![DescribeInfoRow::new("Catalog Name", catalog)];
+                if let Some(description) = provider.get_description() {
+                    rows.push(DescribeInfoRow::new("Description", description.to_string()));
+                }
                 if extended {
                     rows.push(DescribeInfoRow::new(
                         "Provider",
-                        provider.get_name().to_string(),
+                        provider.provider_name(),
                     ));
                 }
                 ArrowSerializer::default().build_record_batch(&rows)?

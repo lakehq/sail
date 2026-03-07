@@ -302,6 +302,10 @@ impl CatalogProvider for GlueCatalogProvider {
         &self.name
     }
 
+    fn provider_name(&self) -> &'static str {
+        "glue"
+    }
+
     async fn create_database(
         &self,
         database: &Namespace,

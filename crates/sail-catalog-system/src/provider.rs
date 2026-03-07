@@ -83,6 +83,14 @@ impl CatalogProvider for SystemCatalogProvider {
         SYSTEM_CATALOG_NAME
     }
 
+    fn get_description(&self) -> Option<&str> {
+        Some("System catalog")
+    }
+
+    fn provider_name(&self) -> &'static str {
+        "system"
+    }
+
     async fn create_database(
         &self,
         _database: &Namespace,

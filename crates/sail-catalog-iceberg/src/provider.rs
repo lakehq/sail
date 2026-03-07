@@ -490,6 +490,10 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         &self.name
     }
 
+    fn provider_name(&self) -> &'static str {
+        "iceberg"
+    }
+
     async fn create_database(
         &self,
         database: &Namespace,
