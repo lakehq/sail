@@ -239,10 +239,7 @@ impl CatalogCommand {
                     rows.push(DescribeInfoRow::new("Description", description.to_string()));
                 }
                 if extended {
-                    rows.push(DescribeInfoRow::new(
-                        "Provider",
-                        provider.provider_name(),
-                    ));
+                    rows.push(DescribeInfoRow::new("Provider", provider.provider_name()));
                 }
                 ArrowSerializer::default().build_record_batch(&rows)?
             }
