@@ -7,6 +7,7 @@ use sail_catalog::provider::{
     CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewOptions,
     DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
 };
+use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
 use sail_common_datafusion::system::catalog::{SystemCatalog, SystemDatabase, SystemTable};
 
@@ -100,7 +101,10 @@ impl CatalogProvider for SystemCatalogProvider {
                 return Self::get_database_status(database, &db);
             }
         }
-        Err(CatalogError::NotFound("database", database.to_string()))
+        Err(CatalogError::NotFound(
+            "database",
+            quote_namespace_if_needed(database),
+        ))
     }
 
     async fn list_databases(
@@ -154,7 +158,10 @@ impl CatalogProvider for SystemCatalogProvider {
                 return Err(CatalogError::NotFound("table", table.to_string()));
             }
         }
-        Err(CatalogError::NotFound("database", database.to_string()))
+        Err(CatalogError::NotFound(
+            "database",
+            quote_namespace_if_needed(database),
+        ))
     }
 
     async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
@@ -169,7 +176,10 @@ impl CatalogProvider for SystemCatalogProvider {
                 return Ok(result);
             }
         }
-        Err(CatalogError::NotFound("database", database.to_string()))
+        Err(CatalogError::NotFound(
+            "database",
+            quote_namespace_if_needed(database),
+        ))
     }
 
     async fn drop_table(
@@ -199,7 +209,10 @@ impl CatalogProvider for SystemCatalogProvider {
         if tail.is_empty() && SystemDatabase::get(head).is_some() {
             return Err(CatalogError::NotFound("view", view.to_string()));
         }
-        Err(CatalogError::NotFound("database", database.to_string()))
+        Err(CatalogError::NotFound(
+            "database",
+            quote_namespace_if_needed(database),
+        ))
     }
 
     async fn list_views(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
@@ -207,7 +220,10 @@ impl CatalogProvider for SystemCatalogProvider {
         if tail.is_empty() && SystemDatabase::get(head).is_some() {
             return Ok(vec![]);
         }
-        Err(CatalogError::NotFound("database", database.to_string()))
+        Err(CatalogError::NotFound(
+            "database",
+            quote_namespace_if_needed(database),
+        ))
     }
 
     async fn drop_view(
