@@ -137,7 +137,11 @@ impl ScalarUDFImpl for SparkBase64 {
                 Ok(results)
             }
             ColumnarValue::Scalar(s) if s.is_null() => {
-                return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
+                let null_scalar = match s.data_type() {
+                    DataType::LargeUtf8 | DataType::LargeBinary => ScalarValue::LargeUtf8(None),
+                    _ => ScalarValue::Utf8(None),
+                };
+                return Ok(ColumnarValue::Scalar(null_scalar));
             }
             other => exec_err!("Spark `base64`: Expr must be BINARY or STRING, got {other:?}"),
         }?;
