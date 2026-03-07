@@ -74,13 +74,54 @@ fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .two()
         .map_err(|_| PlanError::invalid("substr requires 2 or 3 arguments"))?;
     let string = cast_to_logical_string_or_try(string, function_context.schema, false)?;
+    // Spark treats negative positions as counting from the end of the string.
+    // DataFusion ignores negative positions and returns the whole string.
+    // Convert: position < 0 → length(string) + position + 1
+    let pos = cast(position, DataType::Int64);
+    let spark_position = when(
+        pos.clone().lt(lit(0i64)),
+        expr_fn::length(string.clone()) + pos.clone() + lit(1i64),
+    )
+    .otherwise(pos)
+    .map_err(|e| PlanError::invalid(format!("substr position: {e}")))?;
     let substr_res = match length_opt {
-        Some(length) => expr_fn::substring(string, position, length),
-        None => expr_fn::substr(string, position),
+        Some(length) => expr_fn::substring(string, spark_position, length),
+        None => expr_fn::substr(string, spark_position),
     };
     // TODO: Spark client throws "UNEXPECTED EXCEPTION: ArrowInvalid('Unrecognized type: 24')"
     //  when the return type is Utf8View.
     Ok(cast(substr_res, DataType::Utf8))
+}
+
+/// Spark `left(string, n)`: returns the leftmost n characters.
+/// For negative n, Spark returns empty string. DataFusion removes from the end.
+fn spark_left(string: expr::Expr, length: expr::Expr) -> expr::Expr {
+    let len = cast(length, DataType::Int64);
+    when(len.clone().lt(lit(0i64)), lit(""))
+        .otherwise(expr_fn::left(string, len))
+        .unwrap_or_else(|_| lit(""))
+}
+
+/// Spark `right(string, n)`: returns the rightmost n characters.
+/// For negative n, Spark returns empty string. DataFusion removes from the start.
+fn spark_right(string: expr::Expr, length: expr::Expr) -> expr::Expr {
+    let len = cast(length, DataType::Int64);
+    when(len.clone().lt(lit(0i64)), lit(""))
+        .otherwise(expr_fn::right(string, len))
+        .unwrap_or_else(|_| lit(""))
+}
+
+/// Spark `char(n)` / `chr(n)`: returns the character for the given codepoint.
+/// For invalid codepoints (negative or > max unicode), Spark returns empty string.
+/// DataFusion throws an error for invalid codepoints.
+fn spark_chr(codepoint: expr::Expr) -> expr::Expr {
+    let cp = cast(codepoint, DataType::Int64);
+    when(
+        cp.clone().lt(lit(1i64)).or(cp.clone().gt(lit(0x10FFFFi64))),
+        lit(""),
+    )
+    .otherwise(expr_fn::chr(cp))
+    .unwrap_or_else(|_| lit(""))
 }
 
 fn overlay(mut args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
@@ -238,10 +279,10 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("base64", F::udf(SparkBase64::new())),
         ("bit_length", F::custom(bit_length)),
         ("btrim", F::var_arg(expr_fn::btrim)),
-        ("char", F::unary(expr_fn::chr)),
+        ("char", F::unary(spark_chr)),
         ("char_length", F::unary(expr_fn::char_length)),
         ("character_length", F::unary(expr_fn::char_length)),
-        ("chr", F::unary(expr_fn::chr)),
+        ("chr", F::unary(spark_chr)),
         ("collate", F::unknown("collate")),
         ("collation", F::unknown("collation")),
         ("concat_ws", F::udf(SparkConcatWs::new())),
@@ -257,7 +298,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("instr", F::binary(expr_fn::instr)),
         ("is_valid_utf8", F::custom(is_valid_utf8)),
         ("lcase", F::custom(lower)),
-        ("left", F::binary(expr_fn::left)),
+        ("left", F::binary(spark_left)),
         ("len", F::unary(expr_fn::length)),
         ("length", F::unary(expr_fn::length)),
         ("levenshtein", F::udf(Levenshtein::new())),
@@ -281,7 +322,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("regexp_substr", F::custom(regexp_substr)),
         ("repeat", F::binary(expr_fn::repeat)),
         ("replace", F::var_arg(replace)),
-        ("right", F::binary(expr_fn::right)),
+        ("right", F::binary(spark_right)),
         ("rpad", F::var_arg(expr_fn::rpad)),
         ("rtrim", F::var_arg(rev_args(expr_fn::rtrim))),
         ("sentences", F::unknown("sentences")),
