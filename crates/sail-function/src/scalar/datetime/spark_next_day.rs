@@ -145,8 +145,14 @@ impl ScalarUDFImpl for SparkNextDay {
             if matches!(&arg_types[1], DataType::Utf8)
                 || matches!(&arg_types[1], DataType::LargeUtf8)
                 || matches!(&arg_types[1], DataType::Utf8View)
+                || matches!(&arg_types[1], DataType::Null)
             {
-                Ok(vec![DataType::Date32, arg_types[1].clone()])
+                let second_type = if matches!(&arg_types[1], DataType::Null) {
+                    DataType::Utf8
+                } else {
+                    arg_types[1].clone()
+                };
+                Ok(vec![DataType::Date32, second_type])
             } else {
                 plan_err!(
                     "The second argument of the Spark `next_day` function must be a string, but got {}",
