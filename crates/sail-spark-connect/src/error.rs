@@ -293,7 +293,18 @@ impl From<SparkThrowable> for Status {
         // The original Spark Connect server implementation uses the "INTERNAL" status code
         // for all Spark exceptions, so we do the same here.
         // Reference: org.apache.spark.sql.connect.utils.ErrorUtils#buildStatusFromThrowable
-        Status::with_error_details(Code::Internal, throwable.message(), details)
+        //
+        // Truncate the message to avoid exceeding the gRPC trailing metadata size limit (~8KB).
+        // The message appears both in `grpc-message` and `grpc-status-details-bin`,
+        // so the effective budget per message is roughly half the limit.
+        const MAX_ERROR_MESSAGE_LEN: usize = 2048;
+        let message = throwable.message();
+        let message = if message.len() > MAX_ERROR_MESSAGE_LEN {
+            &message[..message.floor_char_boundary(MAX_ERROR_MESSAGE_LEN)]
+        } else {
+            message
+        };
+        Status::with_error_details(Code::Internal, message, details)
     }
 }
 
