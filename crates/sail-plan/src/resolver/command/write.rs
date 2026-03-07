@@ -18,8 +18,8 @@ use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_common_datafusion::rename::schema::rename_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_logical_plan::barrier::BarrierNode;
 use sail_logical_plan::file_write::{FileWriteNode, FileWriteOptions};
-use sail_logical_plan::precondition::WithPreconditionsNode;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
@@ -357,7 +357,7 @@ impl PlanResolver<'_> {
             node: Arc::new(FileWriteNode::new(Arc::new(input), file_write_options)),
         });
         Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(WithPreconditionsNode::new(preconditions, Arc::new(plan))),
+            node: Arc::new(BarrierNode::new(preconditions, Arc::new(plan))),
         }))
     }
 

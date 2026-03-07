@@ -5,19 +5,18 @@ use datafusion_common::{plan_err, DFSchemaRef};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use sail_common_datafusion::utils::items::ItemTaker;
 
-/// A logical plan node that represents a plan with "logical preconditions".
-/// The preconditions are logical plans that will be executed before physical planning
-/// of the main plan.
+/// A logical plan node that represents a plan with preconditions.
+/// The precondition plans must be executed before the main plan.
 /// For example, this is useful for executing catalog operations before physical execution
 /// of the main plan. Such catalog operations are not supposed to be executed when
 /// resolving the logical plan since the plan resolver should not have side effects.
 #[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Hash)]
-pub struct WithPreconditionsNode {
+pub struct BarrierNode {
     preconditions: Vec<Arc<LogicalPlan>>,
     plan: Arc<LogicalPlan>,
 }
 
-impl WithPreconditionsNode {
+impl BarrierNode {
     pub fn new(preconditions: Vec<Arc<LogicalPlan>>, plan: Arc<LogicalPlan>) -> Self {
         Self {
             preconditions,
@@ -34,9 +33,9 @@ impl WithPreconditionsNode {
     }
 }
 
-impl UserDefinedLogicalNodeCore for WithPreconditionsNode {
+impl UserDefinedLogicalNodeCore for BarrierNode {
     fn name(&self) -> &str {
-        "WithPreconditions"
+        "Barrier"
     }
 
     fn inputs(&self) -> Vec<&LogicalPlan> {
@@ -76,8 +75,6 @@ impl UserDefinedLogicalNodeCore for WithPreconditionsNode {
     }
 
     fn necessary_children_exprs(&self, _output_columns: &[usize]) -> Option<Vec<Vec<usize>>> {
-        // We do not need to precisely implement this method since this node is "executed"
-        // and removed before logical optimization.
         None
     }
 }
