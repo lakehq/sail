@@ -3,7 +3,7 @@ use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::{cast, expr, lit, when};
 use datafusion_functions::unicode::expr_fn as unicode_fn;
 use sail_function::scalar::json::{
-    SparkFromJson, json_as_text_udf, json_length_udf, json_object_keys_udf, to_json_udf
+    json_as_text_udf, json_length_udf, json_object_keys_udf, to_json_udf, SparkFromJson,
 };
 
 use crate::error::{PlanError, PlanResult};
@@ -63,4 +63,3 @@ pub(super) fn list_built_in_json_functions() -> Vec<(&'static str, ScalarFunctio
         ("to_json", F::var_arg(to_json)),
     ]
 }
-

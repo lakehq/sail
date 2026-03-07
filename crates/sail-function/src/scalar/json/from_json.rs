@@ -1,27 +1,26 @@
 use core::any::type_name;
-use std::sync::{Arc};
+use std::sync::Arc;
 
 use chrono::NaiveDate;
-use datafusion_expr::{function::Hint};
+use datafusion_expr::function::Hint;
 
-use datafusion_common::{DataFusionError, Result, ScalarValue, plan_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion::arrow::{
     array::{
-        Array, ArrayRef, Float32Builder, Float64Builder, Int32Builder, Int64Builder, ListArray, MapArray, StringArray, StringBuilder, StructArray , TimestampMicrosecondBuilder
-    }, buffer::{
-        NullBuffer, OffsetBuffer, ScalarBuffer
-    }, datatypes::{
-        DataType, Field, FieldRef, Fields, TimeUnit
-    }
+        Array, ArrayRef, Float32Builder, Float64Builder, Int32Builder, Int64Builder, ListArray,
+        MapArray, StringArray, StringBuilder, StructArray, TimestampMicrosecondBuilder,
+    },
+    buffer::{NullBuffer, OffsetBuffer, ScalarBuffer},
+    datatypes::{DataType, Field, FieldRef, Fields, TimeUnit},
 };
+use datafusion_common::{plan_err, DataFusionError, Result, ScalarValue};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions::utils::make_scalar_function;
 
 use serde_json::Value;
 
-use crate::functions_nested_utils::downcast_arg;
-use super::SailToArrayDataType;
 use super::data_type::parse_spark_data_type;
+use super::SailToArrayDataType;
+use crate::functions_nested_utils::downcast_arg;
 
 #[derive(Debug)]
 enum FieldBuilder {
@@ -34,14 +33,14 @@ enum FieldBuilder {
     Struct {
         fields: Fields,
         nested_builders: Vec<FieldBuilder>,
-        nulls: Vec<bool>
+        nulls: Vec<bool>,
     },
     Map {
         field: Arc<Field>,
         offsets: Vec<i32>,
         struct_builder: Box<FieldBuilder>,
         nulls: Vec<bool>,
-        ordered: bool
+        ordered: bool,
     },
     List {
         field: Arc<Field>,
@@ -56,7 +55,7 @@ enum ModeOptions {
     #[default]
     Permissive,
     FailFast,
-    DropMalformed
+    DropMalformed,
 }
 
 impl ModeOptions {
@@ -65,7 +64,7 @@ impl ModeOptions {
             "PERMISSIVE" => Ok(ModeOptions::Permissive),
             "FAILFAST" => Ok(ModeOptions::FailFast),
             "DROPMALFORMED" => Ok(ModeOptions::DropMalformed),
-            other => plan_err!("Invalid mode option: {other}")
+            other => plan_err!("Invalid mode option: {other}"),
         }
     }
 }
@@ -95,13 +94,13 @@ impl SparkFromJsonOptions {
             let key = key.expect("Should be string");
             let value = value.expect("Should be string");
             match key {
-                "mode" => {
-                    self.mode = ModeOptions::from_str(value.to_string())?
-                },
+                "mode" => self.mode = ModeOptions::from_str(value.to_string())?,
                 "timestampFormat" => {
                     self.timestamp_format = SparkFromJsonOptions::convert_format(value)
-                },
-                other => return plan_err!("Found unsupported option type when parsing options: {other}")
+                }
+                other => {
+                    return plan_err!("Found unsupported option type when parsing options: {other}")
+                }
             }
         }
         Ok(self)
@@ -121,7 +120,7 @@ impl Default for SparkFromJsonOptions {
     fn default() -> Self {
         Self {
             mode: Default::default(),
-            timestamp_format: SparkFromJsonOptions::convert_format("yyyy-MM-dd'T'HH:mm:ss")
+            timestamp_format: SparkFromJsonOptions::convert_format("yyyy-MM-dd'T'HH:mm:ss"),
         }
     }
 }
@@ -145,7 +144,6 @@ impl SparkFromJson {
             aliases: ["from_json".to_string()],
         }
     }
-
 }
 
 impl ScalarUDFImpl for SparkFromJson {
@@ -173,7 +171,10 @@ impl ScalarUDFImpl for SparkFromJson {
     fn return_field_from_args(&self, args: datafusion_expr::ReturnFieldArgs) -> Result<FieldRef> {
         let schema_scalar_value = match args.scalar_arguments[1] {
             Some(value) => Ok(value),
-            None => plan_err!("Function {} got a non-literal schema argument which is not allowed", self.name())
+            None => plan_err!(
+                "Function {} got a non-literal schema argument which is not allowed",
+                self.name()
+            ),
         }?;
         let schema_data_type = args.arg_fields[1].data_type();
 
@@ -225,19 +226,16 @@ impl ScalarUDFImpl for SparkFromJson {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         match arg_types {
-            [
-                DataType::Utf8 | DataType::LargeUtf8,
-                DataType::Utf8 | DataType::Struct(_) | DataType::Map(_, _) | DataType::List(_)
-            ] => {
+            [DataType::Utf8 | DataType::LargeUtf8, DataType::Utf8 | DataType::Struct(_) | DataType::Map(_, _) | DataType::List(_)] => {
                 Ok(vec![arg_types[0].clone(), arg_types[1].clone()])
-            },
-            [
-                DataType::Utf8 | DataType::LargeUtf8,
-                DataType::Utf8 | DataType::Struct(_) | DataType::Map(_, _) | DataType::List(_),
-                DataType::Map(_, _)
-            ] => {
-                Ok(vec![arg_types[0].clone(), arg_types[1].clone(), arg_types[2].clone()])
-            },
+            }
+            [DataType::Utf8 | DataType::LargeUtf8, DataType::Utf8 | DataType::Struct(_) | DataType::Map(_, _) | DataType::List(_), DataType::Map(_, _)] => {
+                Ok(vec![
+                    arg_types[0].clone(),
+                    arg_types[1].clone(),
+                    arg_types[2].clone(),
+                ])
+            }
             other => {
                 plan_err!(
                     "Unsupported datatypes for function `{}`: found {}, {}, {}",
@@ -254,9 +252,10 @@ impl ScalarUDFImpl for SparkFromJson {
 #[allow(dead_code)]
 fn from_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() < 2 || args.len() > 3 {
-        return Err(datafusion_common::DataFusionError::Plan(
-            format!("from_json requires 2 or 3 arguments but got {}", args.len())
-        ));
+        return Err(datafusion_common::DataFusionError::Plan(format!(
+            "from_json requires 2 or 3 arguments but got {}",
+            args.len()
+        )));
     };
 
     let rows: &StringArray = downcast_arg!(&args[0], StringArray);
@@ -293,11 +292,15 @@ fn schema_str_to_data_type(string: &str) -> Result<DataType> {
     let arrow_dtype = SailToArrayDataType.resolve_data_type(&sail_dtype)?;
     match arrow_dtype {
         DataType::Struct(_) | DataType::Map(_, _) | DataType::List(_) => Ok(arrow_dtype),
-        other => plan_err!("Function `from_json` using unsupported schema type: {other:?}")
+        other => plan_err!("Function `from_json` using unsupported schema type: {other:?}"),
     }
 }
 
-fn parse_rows(rows: &StringArray, schema: DataType, options: SparkFromJsonOptions) -> Result<ArrayRef> {
+fn parse_rows(
+    rows: &StringArray,
+    schema: DataType,
+    options: SparkFromJsonOptions,
+) -> Result<ArrayRef> {
     let mut builder = create_builder(schema, rows.len())?;
     for i in 0..rows.len() {
         let json_str = rows.value(i);
@@ -309,12 +312,23 @@ fn parse_rows(rows: &StringArray, schema: DataType, options: SparkFromJsonOption
 
 fn create_builder(data_type: DataType, capacity: usize) -> Result<FieldBuilder> {
     match data_type {
-        DataType::Utf8 => Ok(FieldBuilder::String(StringBuilder::with_capacity(capacity, capacity*16))),
+        DataType::Utf8 => Ok(FieldBuilder::String(StringBuilder::with_capacity(
+            capacity,
+            capacity * 16,
+        ))),
         DataType::Int32 => Ok(FieldBuilder::Int32(Int32Builder::with_capacity(capacity))),
         DataType::Int64 => Ok(FieldBuilder::Int64(Int64Builder::with_capacity(capacity))),
-        DataType::Float32 => Ok(FieldBuilder::Float32(Float32Builder::with_capacity(capacity))),
-        DataType::Float64 => Ok(FieldBuilder::Float64(Float64Builder::with_capacity(capacity))),
-        DataType::Timestamp(TimeUnit::Microsecond, _) => Ok(FieldBuilder::TimestampMicrosecondBuilder(TimestampMicrosecondBuilder::with_capacity(capacity))),
+        DataType::Float32 => Ok(FieldBuilder::Float32(Float32Builder::with_capacity(
+            capacity,
+        ))),
+        DataType::Float64 => Ok(FieldBuilder::Float64(Float64Builder::with_capacity(
+            capacity,
+        ))),
+        DataType::Timestamp(TimeUnit::Microsecond, _) => {
+            Ok(FieldBuilder::TimestampMicrosecondBuilder(
+                TimestampMicrosecondBuilder::with_capacity(capacity),
+            ))
+        }
         DataType::Struct(fields) => {
             let nested_builders = fields
                 .iter()
@@ -323,9 +337,9 @@ fn create_builder(data_type: DataType, capacity: usize) -> Result<FieldBuilder> 
             Ok(FieldBuilder::Struct {
                 fields: fields.clone(),
                 nested_builders,
-                nulls: Vec::with_capacity(capacity)
+                nulls: Vec::with_capacity(capacity),
             })
-        },
+        }
         DataType::Map(field, ordered) => {
             let struct_builder = create_builder(field.data_type().clone(), capacity)?;
             let mut offsets = Vec::with_capacity(capacity);
@@ -335,28 +349,30 @@ fn create_builder(data_type: DataType, capacity: usize) -> Result<FieldBuilder> 
                 offsets,
                 struct_builder: Box::new(struct_builder),
                 nulls: Vec::with_capacity(capacity),
-                ordered
+                ordered,
             })
-        },
+        }
         DataType::List(field) => {
             let values = create_builder(field.data_type().clone(), capacity)?;
             let mut offsets = Vec::with_capacity(capacity);
             offsets.push(0);
             Ok(FieldBuilder::List {
                 field,
-			    offsets,
-			    values: Box::new(values),
-			    nulls: Vec::with_capacity(capacity)
+                offsets,
+                values: Box::new(values),
+                nulls: Vec::with_capacity(capacity),
             })
-        },
-        other => Err(DataFusionError::NotImplemented(format!("Unimplemented builder for data type {other:?}")))
+        }
+        other => Err(DataFusionError::NotImplemented(format!(
+            "Unimplemented builder for data type {other:?}"
+        ))),
     }
 }
 
 fn append_to_builder(
     builder: &mut FieldBuilder,
     value: &Value,
-    options: &SparkFromJsonOptions
+    options: &SparkFromJsonOptions,
 ) -> Result<()> {
     // null value
     if let Value::Null = value {
@@ -372,16 +388,20 @@ fn append_to_builder(
                 for nested_builder in nested_builders.iter_mut() {
                     append_to_builder(nested_builder, value, options)?;
                 }
-            },
-            FieldBuilder::Map { struct_builder, nulls, .. } => {
+            }
+            FieldBuilder::Map {
+                struct_builder,
+                nulls,
+                ..
+            } => {
                 nulls.push(false);
                 append_to_builder(struct_builder, value, options)?;
-            },
+            }
             FieldBuilder::List { values, nulls, .. } => {
                 nulls.push(false);
                 append_to_builder(values, value, options)?;
-            },
-            _ => unimplemented!("Not yet")
+            }
+            _ => unimplemented!("Not yet"),
         }
     }
 
@@ -395,14 +415,14 @@ fn append_to_builder(
                     b.append_null();
                 }
             }
-        },
+        }
         (FieldBuilder::Float64(b), Value::Number(num)) => {
             if let Some(float) = num.as_f64() {
                 b.append_value(float);
             } else {
                 b.append_null();
             }
-        },
+        }
         (FieldBuilder::TimestampMicrosecondBuilder(b), Value::String(string)) => {
             // TODO: partly hardcoded for sail-spark-connect tests
             let micro_seconds = NaiveDate::parse_from_str(string, &options.timestamp_format)
@@ -412,27 +432,32 @@ fn append_to_builder(
                 .and_utc()
                 .timestamp_micros();
             b.append_value(micro_seconds);
-        },
+        }
         (FieldBuilder::String(b), Value::String(string)) => {
             b.append_value(string);
-        },
+        }
         (
             FieldBuilder::Struct {
                 fields,
                 nested_builders,
-                nulls
+                nulls,
             },
-            Value::Object(obj)
+            Value::Object(obj),
         ) => {
             nulls.push(true);
             for (field, nested_builder) in fields.iter().zip(nested_builders.iter_mut()) {
                 let val = obj.get(field.name()).unwrap();
                 append_to_builder(nested_builder, val, options)?;
             }
-        },
+        }
         (
-            FieldBuilder::Map { struct_builder, nulls, offsets, .. },
-            Value::Object(obj)
+            FieldBuilder::Map {
+                struct_builder,
+                nulls,
+                offsets,
+                ..
+            },
+            Value::Object(obj),
         ) => {
             // just push to struct builder
             nulls.push(true);
@@ -446,7 +471,7 @@ fn append_to_builder(
             }
             let curr_len = offsets.last().unwrap() + obj.len() as i32;
             offsets.push(curr_len);
-        },
+        }
         (
             FieldBuilder::List {
                 offsets,
@@ -454,7 +479,7 @@ fn append_to_builder(
                 nulls,
                 ..
             },
-            Value::Array(arr)
+            Value::Array(arr),
         ) => {
             nulls.push(true);
             for val in arr.iter() {
@@ -462,7 +487,7 @@ fn append_to_builder(
             }
             let curr_len = offsets.last().unwrap() + arr.len() as i32;
             offsets.push(curr_len);
-        },
+        }
         // it's valid to cast structs into a struct array
         (
             FieldBuilder::List {
@@ -477,8 +502,10 @@ fn append_to_builder(
             append_to_builder(nested_builder, value, options)?;
             let curr_len = offsets.last().unwrap() + obj.len() as i32;
             offsets.push(curr_len);
-        },
-        (other, other1) => return plan_err!("Unsupported conversion of value {other1:?} to type {other:?}")
+        }
+        (other, other1) => {
+            return plan_err!("Unsupported conversion of value {other1:?} to type {other:?}")
+        }
     };
     Ok(())
 }
@@ -494,45 +521,50 @@ fn finish_builder(builder: FieldBuilder) -> Result<ArrayRef> {
         FieldBuilder::Struct {
             fields,
             nested_builders,
-            nulls
+            nulls,
         } => {
             let arrays = nested_builders
                 .into_iter()
                 .map(finish_builder)
                 .collect::<Result<Vec<_>>>()?;
-            Ok(Arc::new(StructArray::new(fields, arrays, Some(NullBuffer::from(nulls)))))
-        },
+            Ok(Arc::new(StructArray::new(
+                fields,
+                arrays,
+                Some(NullBuffer::from(nulls)),
+            )))
+        }
         FieldBuilder::Map {
             field,
-			offsets,
-			struct_builder,
-			nulls,
-			ordered
+            offsets,
+            struct_builder,
+            nulls,
+            ordered,
         } => {
             let deref_struct_builder = *struct_builder;
             let array_ref = finish_builder(deref_struct_builder)?;
-            let struct_array = array_ref
-                .as_any()
-                .downcast_ref::<StructArray>()
-                .unwrap();
+            let struct_array = array_ref.as_any().downcast_ref::<StructArray>().unwrap();
             Ok(Arc::new(MapArray::new(
                 field,
                 OffsetBuffer::new(ScalarBuffer::from(offsets)),
                 struct_array.clone(),
                 Some(NullBuffer::from(nulls)),
-                ordered
+                ordered,
             )))
-        },
-        FieldBuilder::List { field, offsets, values, nulls } => {
+        }
+        FieldBuilder::List {
+            field,
+            offsets,
+            values,
+            nulls,
+        } => {
             let deref_values = *values;
             let array_ref = finish_builder(deref_values)?;
             Ok(Arc::new(ListArray::new(
                 field,
-				OffsetBuffer::new(ScalarBuffer::from(offsets)),
-				array_ref,
-				Some(NullBuffer::from(nulls))
+                OffsetBuffer::new(ScalarBuffer::from(offsets)),
+                array_ref,
+                Some(NullBuffer::from(nulls)),
             )))
-        },
+        }
     }
 }
-

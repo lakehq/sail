@@ -1,7 +1,7 @@
 // Copied mostly from PlanResolver to avoid circular imports:  https://github.com/lakehq/sail/blob/f64ccb2233473282f9d3ae2c95e2b90848a6f249/crates/sail-plan/src/resolver/data_type.rs#L61
 // some methods and struct inputs removed
 
-use std::sync::{Arc};
+use std::sync::Arc;
 
 use sail_common::spec;
 use sail_common::spec::{
@@ -9,12 +9,8 @@ use sail_common::spec::{
 };
 
 use datafusion::arrow::datatypes as adt;
+use datafusion::arrow::datatypes::Field;
 use datafusion_common::{DataFusionError, Result};
-use datafusion::arrow::{
-    datatypes::{
-        Field
-    },
-};
 
 use std::collections::HashMap;
 
@@ -48,10 +44,7 @@ impl SailToArrayDataType {
     /// References:
     ///   org.apache.spark.sql.util.ArrowUtils#toArrowType
     ///   org.apache.spark.sql.connect.common.DataTypeProtoConverter
-    pub fn resolve_data_type(
-        &self,
-        data_type: &spec::DataType,
-    ) -> Result<adt::DataType> {
+    pub fn resolve_data_type(&self, data_type: &spec::DataType) -> Result<adt::DataType> {
         use spec::DataType;
 
         match data_type {
@@ -115,9 +108,7 @@ impl SailToArrayDataType {
                     nullable: *nullable,
                     metadata: vec![],
                 };
-                Ok(adt::DataType::List(Arc::new(
-                    self.resolve_field(&field)?,
-                )))
+                Ok(adt::DataType::List(Arc::new(self.resolve_field(&field)?)))
             }
             DataType::FixedSizeList {
                 data_type,
@@ -149,9 +140,7 @@ impl SailToArrayDataType {
                     self.resolve_field(&field)?,
                 )))
             }
-            DataType::Struct { fields } => {
-                Ok(adt::DataType::Struct(self.resolve_fields(fields)?))
-            }
+            DataType::Struct { fields } => Ok(adt::DataType::Struct(self.resolve_fields(fields)?)),
             DataType::Union {
                 union_fields,
                 union_mode,
@@ -232,17 +221,16 @@ impl SailToArrayDataType {
                 //Ok(self.arrow_string_type(state))
                 Ok(adt::DataType::Utf8)
             }
-            DataType::ConfiguredBinary => Err(DataFusionError::Internal("Conversion of ConfiguredBinary to Binary not supported".to_string())),
+            DataType::ConfiguredBinary => Err(DataFusionError::Internal(
+                "Conversion of ConfiguredBinary to Binary not supported".to_string(),
+            )),
             DataType::UserDefined { .. } => Err(DataFusionError::Internal(
                 "user defined data type should only exist in a field".to_string(),
             )),
         }
     }
 
-    pub fn resolve_field(
-        &self,
-        field: &spec::Field,
-    ) -> Result<adt::Field> {
+    pub fn resolve_field(&self, field: &spec::Field) -> Result<adt::Field> {
         let spec::Field {
             name,
             data_type,
@@ -282,10 +270,7 @@ impl SailToArrayDataType {
         )
     }
 
-    pub fn resolve_fields(
-        &self,
-        fields: &spec::Fields,
-    ) -> Result<adt::Fields> {
+    pub fn resolve_fields(&self, fields: &spec::Fields) -> Result<adt::Fields> {
         let fields = fields
             .into_iter()
             .map(|f| self.resolve_field(f))
@@ -294,10 +279,7 @@ impl SailToArrayDataType {
     }
 
     #[allow(dead_code)]
-    pub fn resolve_schema(
-        &self,
-        schema: spec::Schema,
-    ) -> Result<adt::Schema> {
+    pub fn resolve_schema(&self, schema: spec::Schema) -> Result<adt::Schema> {
         let fields = self.resolve_fields(&schema.fields)?;
         Ok(adt::Schema::new(fields))
     }

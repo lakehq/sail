@@ -34,7 +34,8 @@ pub(crate) fn parse_spark_data_type(schema: &str) -> Result<spec::DataType> {
 }
 
 fn parse_spark_json_data_type(schema: &str) -> Result<spec::DataType> {
-    let json_type: JsonDataType = serde_json::from_str(schema).map_err(|e| DataFusionError::Plan(e.to_string()))?;
+    let json_type: JsonDataType =
+        serde_json::from_str(schema).map_err(|e| DataFusionError::Plan(e.to_string()))?;
     dbg!(&json_type);
     from_spark_json_data_type(json_type)
 }
@@ -68,8 +69,8 @@ fn from_spark_json_data_type(data_type: JsonDataType) -> Result<spec::DataType> 
             ..
         } => spec::DataType::List {
             data_type: Box::new(from_spark_json_data_type(*element_type)?),
-            nullable: contains_null
-        }
+            nullable: contains_null,
+        },
     })
 }
 
@@ -81,13 +82,13 @@ pub enum JsonDataType {
     #[serde(untagged, rename_all = "camelCase")]
     Struct {
         r#type: MustBe!("struct"),
-        fields: Vec<JsonStructField>
+        fields: Vec<JsonStructField>,
     },
     #[serde(untagged, rename_all = "camelCase")]
     Array {
         r#type: MustBe!("array"),
         element_type: Box<JsonDataType>,
-        contains_null: bool
+        contains_null: bool,
     },
 }
 
