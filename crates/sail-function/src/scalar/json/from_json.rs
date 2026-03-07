@@ -6,13 +6,12 @@ use datafusion_expr::function::Hint;
 
 use datafusion::arrow::{
     array::{
-        Array, ArrayRef, Float32Builder, Float64Builder, Int32Builder, Int64Builder, ListArray,
-        MapArray, StringArray, StringBuilder, StructArray, TimestampMicrosecondBuilder,
+        Array, ArrayRef, Float32Builder, Float64Builder, Int32Builder, Int64Builder, ListArray, MapArray, StringArray, StringBuilder, StructArray, TimestampMicrosecondBuilder, BooleanBuilder
     },
     buffer::{NullBuffer, OffsetBuffer, ScalarBuffer},
     datatypes::{DataType, Field, FieldRef, Fields, TimeUnit},
 };
-use datafusion_common::{plan_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions::utils::make_scalar_function;
 
@@ -29,6 +28,7 @@ enum FieldBuilder {
     Float32(Float32Builder),
     Float64(Float64Builder),
     String(StringBuilder),
+    Boolean(BooleanBuilder),
     TimestampMicrosecondBuilder(TimestampMicrosecondBuilder),
     Struct {
         fields: Fields,
@@ -304,7 +304,8 @@ fn parse_rows(
     let mut builder = create_builder(schema, rows.len())?;
     for i in 0..rows.len() {
         let json_str = rows.value(i);
-        let value = serde_json::from_str::<serde_json::Value>(json_str).unwrap();
+        let value = serde_json::from_str::<serde_json::Value>(json_str)
+            .map_err(|e| DataFusionError::Execution(e.to_string()))?;
         append_to_builder(&mut builder, &value, &options)?;
     }
     finish_builder(builder)
@@ -324,6 +325,7 @@ fn create_builder(data_type: DataType, capacity: usize) -> Result<FieldBuilder> 
         DataType::Float64 => Ok(FieldBuilder::Float64(Float64Builder::with_capacity(
             capacity,
         ))),
+        DataType::Boolean => Ok(FieldBuilder::Boolean(BooleanBuilder::with_capacity(capacity))),
         DataType::Timestamp(TimeUnit::Microsecond, _) => {
             Ok(FieldBuilder::TimestampMicrosecondBuilder(
                 TimestampMicrosecondBuilder::with_capacity(capacity),
@@ -378,7 +380,12 @@ fn append_to_builder(
     if let Value::Null = value {
         match builder {
             FieldBuilder::Int32(b) => b.append_null(),
+            FieldBuilder::Int64(b) => b.append_null(),
+            FieldBuilder::Float32(b) => b.append_null(),
+            FieldBuilder::Float64(b) => b.append_null(),
             FieldBuilder::String(b) => b.append_null(),
+            FieldBuilder::Boolean(b) => b.append_null(),
+            FieldBuilder::TimestampMicrosecondBuilder(b) => b.append_null(),
             FieldBuilder::Struct {
                 nested_builders,
                 nulls,
@@ -388,7 +395,7 @@ fn append_to_builder(
                 for nested_builder in nested_builders.iter_mut() {
                     append_to_builder(nested_builder, value, options)?;
                 }
-            }
+            },
             FieldBuilder::Map {
                 struct_builder,
                 nulls,
@@ -396,118 +403,144 @@ fn append_to_builder(
             } => {
                 nulls.push(false);
                 append_to_builder(struct_builder, value, options)?;
-            }
+            },
             FieldBuilder::List { values, nulls, .. } => {
                 nulls.push(false);
                 append_to_builder(values, value, options)?;
             }
-            _ => unimplemented!("Not yet"),
         }
-    }
-
     // not null value
-    match (builder, value) {
-        (FieldBuilder::Int32(b), Value::Number(num)) => {
-            if let Some(n) = num.as_i64() {
-                if n >= i32::MIN as i64 && n <= i32::MAX as i64 {
-                    b.append_value(n as i32);
+    } else {
+        match (builder, value) {
+            (FieldBuilder::Int32(b), Value::Number(num)) => {
+                if let Some(n) = num.as_i64() {
+                    if n >= i32::MIN as i64 && n <= i32::MAX as i64 {
+                        b.append_value(n as i32);
+                    } else {
+                        b.append_null();
+                    }
+                }
+            },
+            (FieldBuilder::Int64(b), Value::Number(num)) => {
+                if let Some(n) = num.as_i64() {
+                    b.append_value(n);
+                } else {
+                    b.append_null();
+                }
+            },
+            (FieldBuilder::Float32(b), Value::Number(num)) => {
+                if let Some(float) = num.as_f64() {
+                    if float >= f32::MIN as f64 && float <= f32::MAX as f64 {
+                        b.append_value(float as f32);
+                    } else {
+                        b.append_null();
+                    }
+                }
+            },
+            (FieldBuilder::Float64(b), Value::Number(num)) => {
+                if let Some(float) = num.as_f64() {
+                    b.append_value(float);
                 } else {
                     b.append_null();
                 }
             }
-        }
-        (FieldBuilder::Float64(b), Value::Number(num)) => {
-            if let Some(float) = num.as_f64() {
-                b.append_value(float);
-            } else {
-                b.append_null();
-            }
-        }
-        (FieldBuilder::TimestampMicrosecondBuilder(b), Value::String(string)) => {
-            // TODO: partly hardcoded for sail-spark-connect tests
-            let micro_seconds = NaiveDate::parse_from_str(string, &options.timestamp_format)
-                .unwrap()
-                .and_hms_opt(0, 0, 0)
-                .unwrap()
-                .and_utc()
-                .timestamp_micros();
-            b.append_value(micro_seconds);
-        }
-        (FieldBuilder::String(b), Value::String(string)) => {
-            b.append_value(string);
-        }
-        (
-            FieldBuilder::Struct {
-                fields,
-                nested_builders,
-                nulls,
+            (FieldBuilder::TimestampMicrosecondBuilder(b), Value::String(string)) => {
+                // TODO: partly hardcoded for sail-spark-connect tests
+                let micro_seconds = NaiveDate::parse_from_str(string, &options.timestamp_format)
+                    .unwrap()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap()
+                    .and_utc()
+                    .timestamp_micros();
+                b.append_value(micro_seconds);
             },
-            Value::Object(obj),
-        ) => {
-            nulls.push(true);
-            for (field, nested_builder) in fields.iter().zip(nested_builders.iter_mut()) {
-                let val = obj.get(field.name()).unwrap();
-                append_to_builder(nested_builder, val, options)?;
-            }
-        }
-        (
-            FieldBuilder::Map {
-                struct_builder,
-                nulls,
-                offsets,
-                ..
+            (FieldBuilder::String(b), Value::String(string)) => b.append_value(string),
+            (FieldBuilder::Boolean(b), Value::Bool(bool)) => b.append_value(*bool),
+            (
+                FieldBuilder::Struct {
+                    fields,
+                    nested_builders,
+                    nulls,
+                },
+                Value::Object(obj),
+            ) => {
+                nulls.push(true);
+                for (field, nested_builder) in fields.iter().zip(nested_builders.iter_mut()) {
+                    let val = if let Some(v) = obj.get(field.name()) {
+                        v
+                    } else {
+                        let possible_keys = fields.iter()
+                            .map(|f| format!("{:?}", f.name()))
+                            .collect::<Vec<_>>()
+                            .join(r#", "#);
+                        return Err(DataFusionError::Execution(format!(
+                            "Couldn't find the key {:?} out of specified keys: {possible_keys}",
+                            field.name()
+                        )));
+                    };
+                    append_to_builder(nested_builder, val, options)?;
+                }
             },
-            Value::Object(obj),
-        ) => {
-            // just push to struct builder
-            nulls.push(true);
-            for (k, v) in obj.iter() {
-                // map each pair to "key" and "value" - default field names
-                let entry = serde_json::json!({
-                    "key": k,
-                    "value": v
-                });
-                append_to_builder(struct_builder, &entry, options)?;
+            (
+                FieldBuilder::Map {
+                    struct_builder,
+                    nulls,
+                    offsets,
+                    ..
+                },
+                Value::Object(obj),
+            ) => {
+                // just push to struct builder
+                nulls.push(true);
+                for (k, v) in obj.iter() {
+                    // map each pair to "key" and "value" - default field names
+                    let entry = serde_json::json!({
+                        "key": k,
+                        "value": v
+                    });
+                    append_to_builder(struct_builder, &entry, options)?;
+                }
+                let curr_len = offsets.last().unwrap() + obj.len() as i32;
+                offsets.push(curr_len);
             }
-            let curr_len = offsets.last().unwrap() + obj.len() as i32;
-            offsets.push(curr_len);
-        }
-        (
-            FieldBuilder::List {
-                offsets,
-                values,
-                nulls,
-                ..
-            },
-            Value::Array(arr),
-        ) => {
-            nulls.push(true);
-            for val in arr.iter() {
-                append_to_builder(values, val, options)?;
+            (
+                FieldBuilder::List {
+                    offsets,
+                    values,
+                    nulls,
+                    ..
+                },
+                Value::Array(arr),
+            ) => {
+                nulls.push(true);
+                for val in arr.iter() {
+                    append_to_builder(values, val, options)?;
+                }
+                let curr_len = offsets.last().unwrap() + arr.len() as i32;
+                offsets.push(curr_len);
             }
-            let curr_len = offsets.last().unwrap() + arr.len() as i32;
-            offsets.push(curr_len);
+            // it's valid to cast structs into a struct array
+            (
+                FieldBuilder::List {
+                    offsets,
+                    values: nested_builder,
+                    nulls,
+                    ..
+                },
+                Value::Object(_),
+            ) => {
+                nulls.push(true);
+                append_to_builder(nested_builder, value, options)?;
+                let curr_len = offsets.last().unwrap() + 1 as i32; // only need to increment by 1
+                offsets.push(curr_len);
+            }
+            (other, other1) => {
+                return plan_err!("Unsupported conversion of value {other1:?} to type {other:?}")
+            }
+        };
         }
-        // it's valid to cast structs into a struct array
-        (
-            FieldBuilder::List {
-                offsets,
-                values: nested_builder,
-                nulls,
-                ..
-            },
-            Value::Object(obj),
-        ) => {
-            nulls.push(true);
-            append_to_builder(nested_builder, value, options)?;
-            let curr_len = offsets.last().unwrap() + obj.len() as i32;
-            offsets.push(curr_len);
-        }
-        (other, other1) => {
-            return plan_err!("Unsupported conversion of value {other1:?} to type {other:?}")
-        }
-    };
-    Ok(())
+
+        Ok(())
 }
 
 fn finish_builder(builder: FieldBuilder) -> Result<ArrayRef> {
@@ -517,6 +550,7 @@ fn finish_builder(builder: FieldBuilder) -> Result<ArrayRef> {
         FieldBuilder::Float32(mut b) => Ok(Arc::new(b.finish())),
         FieldBuilder::Float64(mut b) => Ok(Arc::new(b.finish())),
         FieldBuilder::String(mut b) => Ok(Arc::new(b.finish())),
+        FieldBuilder::Boolean(mut b) => Ok(Arc::new(b.finish())),
         FieldBuilder::TimestampMicrosecondBuilder(mut b) => Ok(Arc::new(b.finish())),
         FieldBuilder::Struct {
             fields,
@@ -566,5 +600,24 @@ fn finish_builder(builder: FieldBuilder) -> Result<ArrayRef> {
                 Some(NullBuffer::from(nulls)),
             )))
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_tmp() {
+        let rows = StringArray::from(vec![r#"{"a": 1, "b": 2}"#]);
+        let schema = DataType::List(Arc::new(Field::new(
+            "struct",
+            DataType::Struct(Fields::from(vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Int32, true),
+            ])),
+            true
+        )));
+        parse_rows(&rows, schema, SparkFromJsonOptions::default()).unwrap();
     }
 }
