@@ -107,11 +107,12 @@ impl GlueCatalogProvider {
         // Extract location
         let location = storage.and_then(|sd| sd.location()).map(|s| s.to_string());
 
-        // Detect format from serde info
+        // Detect format from serde info and table parameters
         let format = storage
             .and_then(|sd| sd.serde_info())
             .and_then(|si| si.serialization_library())
             .map(|lib| GlueStorageFormat::detect_format_from_serde(Some(lib)))
+            .or_else(|| GlueStorageFormat::detect_iceberg_format(table.parameters()))
             .unwrap_or_else(|| "unknown".to_string());
 
         // Extract columns from storage descriptor
