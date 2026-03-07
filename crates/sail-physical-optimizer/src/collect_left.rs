@@ -15,7 +15,8 @@ use datafusion::physical_plan::{
 /// DataFusion's `EnforceDistribution` rule normally takes care of this,
 /// but after join reordering or other plan transformations the invariant
 /// can be violated. This rule wraps the left child in a
-/// `CoalescePartitionsExec` when needed, just before `SanityCheckPlan`.
+/// `CoalescePartitionsExec` when needed, and runs late in the optimizer
+/// pipeline, before `EnforceBarrierPartitioning` and `SanityCheckPlan`.
 #[derive(Debug, Default)]
 pub struct RewriteCollectLeftHashJoin;
 
@@ -40,14 +41,14 @@ impl PhysicalOptimizerRule for RewriteCollectLeftHashJoin {
                 return Ok(Transformed::no(node));
             }
 
-            let left = join.children()[0].clone();
+            let left = join.left.clone();
             if left.output_partitioning().partition_count() == 1 {
                 return Ok(Transformed::no(node));
             }
 
             // Wrap in CoalescePartitionsExec to merge into a single partition.
             let coalesced: Arc<dyn ExecutionPlan> = Arc::new(CoalescePartitionsExec::new(left));
-            let new_children = vec![coalesced, join.children()[1].clone()];
+            let new_children = vec![coalesced, join.right.clone()];
             let new_node = with_new_children_if_necessary(node, new_children)?;
             Ok(Transformed::yes(new_node))
         })?;
