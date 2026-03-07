@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use datafusion_expr::{Extension, LogicalPlan};
+use datafusion_common::DFSchema;
+use datafusion_expr::{EmptyRelation, Extension, LogicalPlan};
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::provider::{DropDatabaseOptions, DropTableOptions};
 use sail_common::spec;
@@ -260,8 +261,14 @@ impl PlanResolver<'_> {
             CommandNode::AlterTable { .. } => Err(PlanError::todo("CommandNode::AlterTable")),
             CommandNode::AlterView { .. } => Err(PlanError::todo("CommandNode::AlterView")),
             CommandNode::LoadData { .. } => Err(PlanError::todo("CommandNode::LoadData")),
-            CommandNode::AnalyzeTable { .. } => Err(PlanError::todo("CommandNode::AnalyzeTable")),
-            CommandNode::AnalyzeTables { .. } => Err(PlanError::todo("CommandNode::AnalyzeTables")),
+            CommandNode::AnalyzeTable { .. } | CommandNode::AnalyzeTables { .. } => {
+                // ANALYZE TABLE COMPUTE STATISTICS is a no-op in Sail.
+                // DataFusion computes statistics dynamically from file metadata.
+                Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+                    produce_one_row: false,
+                    schema: Arc::new(DFSchema::empty()),
+                }))
+            }
             CommandNode::DescribeQuery { .. } => Err(PlanError::todo("CommandNode::DescribeQuery")),
             CommandNode::DescribeFunction { .. } => {
                 Err(PlanError::todo("CommandNode::DescribeFunction"))
