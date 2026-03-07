@@ -72,6 +72,11 @@ impl PlanResolver<'_> {
                     table: table.into(),
                 })
             }
+            CommandNode::ListPartitions { table } => {
+                self.resolve_catalog_command(CatalogCommand::ListPartitions {
+                    table: table.into(),
+                })
+            }
             CommandNode::GetDatabase { database } => {
                 self.resolve_catalog_command(CatalogCommand::GetDatabase {
                     database: database.into(),

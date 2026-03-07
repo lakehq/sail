@@ -307,6 +307,9 @@ pub enum CommandNode {
     ListColumns {
         table: ObjectName,
     },
+    ListPartitions {
+        table: ObjectName,
+    },
     GetDatabase {
         database: ObjectName,
     },

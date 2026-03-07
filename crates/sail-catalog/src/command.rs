@@ -116,6 +116,9 @@ pub enum CatalogCommand {
         table: Vec<String>,
         extended: bool,
     },
+    ListPartitions {
+        table: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
@@ -155,6 +158,7 @@ impl CatalogCommand {
             CatalogCommand::CreateTemporaryView { .. } => "CreateTemporaryView",
             CatalogCommand::CreateView { .. } => "CreateView",
             CatalogCommand::DescribeTable { .. } => "DescribeTable",
+            CatalogCommand::ListPartitions { .. } => "ListPartitions",
         }
     }
 
@@ -170,6 +174,9 @@ impl CatalogCommand {
             | CatalogCommand::ListTables { .. }
             | CatalogCommand::ListViews { .. } => display.tables().schema()?,
             CatalogCommand::ListColumns { .. } => display.table_columns().schema()?,
+            CatalogCommand::ListPartitions { .. } => {
+                ArrowSerializer::default().schema::<ShowPartitionRow>()?
+            }
             CatalogCommand::GetFunction { .. } | CatalogCommand::ListFunctions { .. } => {
                 display.functions().schema()?
             }
@@ -434,6 +441,21 @@ impl CatalogCommand {
                 manager.create_view(&view, options).await?;
                 display.bools().to_record_batch(vec![true])?
             }
+            CatalogCommand::ListPartitions { table } => {
+                let table_status = manager.get_table_or_view(&table).await?;
+                let partition_cols = table_status.kind.partition_columns();
+                if partition_cols.is_empty() {
+                    return Err(CatalogError::External(format!(
+                        "[INVALID_PARTITION_OPERATION.PARTITION_SCHEMA_IS_EMPTY] SHOW PARTITIONS is not allowed on a table that is not partitioned: {}",
+                        table.join(".")
+                    )));
+                }
+                // TODO: list actual partition values from the underlying table format
+                //   This requires object store integration to list partition directories.
+                let serializer = ArrowSerializer::default();
+                let rows: Vec<ShowPartitionRow> = vec![];
+                serializer.build_record_batch(&rows)?
+            }
         };
         Ok(batch)
     }
@@ -444,4 +466,9 @@ struct DescribeTableRow {
     col_name: String,
     data_type: String,
     comment: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ShowPartitionRow {
+    partition: String,
 }

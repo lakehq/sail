@@ -197,6 +197,13 @@ pub enum Statement {
         show: Show,
         functions: Functions,
     },
+    ShowPartitions {
+        show: Show,
+        partitions: Partitions,
+        name: ObjectName,
+        #[parser(function = |(_, _, e, _), o| compose(e, o))]
+        partition: Option<PartitionClause>,
+    },
     Explain {
         explain: Explain,
         format: Option<ExplainFormat>,
