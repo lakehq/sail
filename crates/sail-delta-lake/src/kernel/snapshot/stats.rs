@@ -250,7 +250,7 @@ impl LogDataHandler<'_> {
         let num_rows = self.num_records();
         let total_byte_size = self.total_size_files();
         let column_statistics = self
-            .table_configuration()
+            .snapshot()
             .schema()
             .fields()
             .iter()
@@ -264,7 +264,7 @@ impl LogDataHandler<'_> {
     }
 
     fn pick_stats(&self, column: &Column, stats_field: &'static str) -> Option<ArrayRef> {
-        let schema = self.table_configuration().schema();
+        let schema = self.snapshot().schema();
         let field = schema.field_with_name(&column.name).ok()?;
         // See issue #1214. Binary type does not support natural order which is required for Datafusion to prune
         if matches!(
@@ -274,7 +274,7 @@ impl LogDataHandler<'_> {
             return None;
         }
         if self
-            .table_configuration()
+            .snapshot()
             .metadata()
             .partition_columns()
             .contains(&column.name)
@@ -379,7 +379,7 @@ impl PruningStatistics for LogDataHandler<'_> {
     /// Note: the returned array must contain `num_containers()` rows.
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
         if !self
-            .table_configuration()
+            .snapshot()
             .metadata()
             .partition_columns()
             .contains(&column.name)
@@ -418,7 +418,7 @@ impl PruningStatistics for LogDataHandler<'_> {
     fn contained(&self, column: &Column, value: &HashSet<ScalarValue>) -> Option<BooleanArray> {
         if value.is_empty()
             || !self
-                .table_configuration()
+                .snapshot()
                 .metadata()
                 .partition_columns()
                 .contains(&column.name)

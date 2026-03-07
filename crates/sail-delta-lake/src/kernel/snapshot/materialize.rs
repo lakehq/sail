@@ -31,7 +31,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::scalar::ScalarValue;
 use serde::{Deserialize, Serialize};
 
-use super::{EagerSnapshot, Snapshot};
+use super::DeltaSnapshot;
 use crate::conversion::parse_optional_partition_value;
 use crate::schema::{logical_arrow_to_kernel, make_physical_arrow_schema};
 use crate::spec::fields::{
@@ -42,7 +42,7 @@ use crate::spec::{
     StructType,
 };
 
-impl Snapshot {
+impl DeltaSnapshot {
     pub(super) fn build_files_batch_from_adds(&self, adds: &[Add]) -> DeltaResult<RecordBatch> {
         let rows = adds
             .iter()
@@ -54,22 +54,11 @@ impl Snapshot {
     }
 
     pub(super) fn build_active_files_batch(&self) -> DeltaResult<RecordBatch> {
-        self.build_files_batch_from_adds(&self.active_adds)
+        self.build_files_batch_from_adds(self.adds())
     }
 
     pub(super) fn build_empty_files_batch(&self) -> DeltaResult<RecordBatch> {
         self.build_files_batch_from_adds(&[])
-    }
-}
-
-impl EagerSnapshot {
-    pub(super) fn refresh_files(&mut self) -> DeltaResult<()> {
-        self.files = if self.snapshot.load_config().require_files {
-            self.snapshot.build_active_files_batch()?
-        } else {
-            self.snapshot.build_empty_files_batch()?
-        };
-        Ok(())
     }
 }
 
@@ -206,9 +195,9 @@ fn build_partition_schema(
     Ok(Some(ArrowSchema::new(fields)))
 }
 
-fn build_stats_source_schema(snapshot: &Snapshot) -> DeltaResult<ArrowSchema> {
+fn build_stats_source_schema(snapshot: &DeltaSnapshot) -> DeltaResult<ArrowSchema> {
     let partition_columns = snapshot.metadata().partition_columns();
-    let mode = snapshot.table_configuration.column_mapping_mode();
+    let mode = snapshot.column_mapping_mode();
     let non_partition_fields: Vec<Field> = snapshot
         .schema()
         .fields()
@@ -220,10 +209,10 @@ fn build_stats_source_schema(snapshot: &Snapshot) -> DeltaResult<ArrowSchema> {
     Ok(make_physical_arrow_schema(&logical_non_partition, mode))
 }
 
-fn parse_scan_row_columns(raw: RecordBatch, snapshot: &Snapshot) -> DeltaResult<RecordBatch> {
+fn parse_scan_row_columns(raw: RecordBatch, snapshot: &DeltaSnapshot) -> DeltaResult<RecordBatch> {
     let mut fields = raw.schema().fields().to_vec();
     let mut columns = raw.columns().to_vec();
-    let mode = snapshot.table_configuration.column_mapping_mode();
+    let mode = snapshot.column_mapping_mode();
 
     if let Some((stats_idx, _)) = raw.schema_ref().column_with_name(FIELD_NAME_STATS) {
         let stats_source_arrow = build_stats_source_schema(snapshot)?;

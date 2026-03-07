@@ -15,9 +15,7 @@ use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
 
 use crate::datasource::scan::{build_file_scan_config, FileScanParams, TableStatsMode};
-use crate::datasource::{
-    df_logical_schema, simplify_expr, DataFusionMixins, DeltaScanConfig, DeltaTableStateExt,
-};
+use crate::datasource::{df_logical_schema, simplify_expr, DeltaScanConfig};
 use crate::options::TableDeltaOptions;
 use crate::physical_plan::planner::utils::{LogReplayFilter, LogReplayOptions};
 use crate::physical_plan::planner::{DeltaTableConfig as PlannerTableConfig, PlannerContext};
@@ -25,11 +23,11 @@ use crate::physical_plan::{DeltaDiscoveryExec, DeltaScanByAddsExec};
 use crate::schema::{arrow_field_physical_name, get_physical_schema, logical_arrow_to_kernel};
 use crate::spec::{Add, ColumnMappingMode};
 use crate::storage::LogStoreRef;
-use crate::table::DeltaTableState;
+use crate::table::DeltaSnapshot;
 
 pub(crate) async fn plan_delta_scan(
     session: &dyn Session,
-    snapshot: &DeltaTableState,
+    snapshot: &DeltaSnapshot,
     log_store: &LogStoreRef,
     config: &DeltaScanConfig,
     files: Option<Arc<Vec<Add>>>,
@@ -169,7 +167,7 @@ pub(crate) async fn plan_delta_scan(
 
     // Build physical file schema (non-partition columns)
     let kmode: ColumnMappingMode = snapshot.effective_column_mapping_mode();
-    let kschema_arc = snapshot.snapshot().schema();
+    let kschema_arc = snapshot.schema();
     let logical_kernel = logical_arrow_to_kernel(kschema_arc)?;
     let physical_arrow: ArrowSchema = get_physical_schema(&logical_kernel, kmode);
     let physical_partition_cols: HashSet<String> = table_partition_cols

@@ -31,16 +31,12 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::kernel::checkpoints::{cleanup_expired_logs_for, create_checkpoint_for};
-use crate::kernel::snapshot::EagerSnapshot;
 use crate::kernel::transaction::conflict_checker::{TransactionInfo, WinningCommitSummary};
 use crate::kernel::DeltaOperation;
-use crate::spec::{
-    temp_commit_path, Action, Add, DeltaError, DeltaResult, Metadata, Protocol, TableProperties,
-    Transaction,
-};
+use crate::spec::{temp_commit_path, Action, DeltaError, DeltaResult, Transaction};
 pub use crate::spec::{CommitConflictError, TransactionError};
-use crate::storage::{CommitOrBytes, LogStore, LogStoreRef, ObjectStoreRef};
-use crate::table::DeltaTableState;
+use crate::storage::{CommitOrBytes, LogStoreRef, ObjectStoreRef};
+use crate::table::DeltaSnapshot;
 
 mod conflict_checker;
 mod protocol;
@@ -291,119 +287,6 @@ pub trait CustomExecuteHandler: Send + Sync {
     ) -> DeltaResult<()>;
 }
 
-/// Reference to some structure that contains mandatory attributes for performing a commit.
-pub trait TableReference: Send + Sync {
-    /// Well known table configuration
-    fn config(&self) -> &TableProperties;
-
-    /// Get the table protocol of the snapshot
-    fn protocol(&self) -> &Protocol;
-
-    /// Get the table metadata of the snapshot
-    #[expect(dead_code)]
-    fn metadata(&self) -> &Metadata;
-
-    /// Build the write-transaction snapshot view used by OCC checks.
-    fn write_snapshot(&self) -> WriteSnapshot;
-}
-
-/// Narrow write-transaction view over table state.
-///
-/// This type keeps commit/OCC logic independent from a concrete snapshot backend and
-/// allows replacing the snapshot source later without changing transaction control flow.
-#[derive(Debug, Clone)]
-pub struct WriteSnapshot {
-    inner: EagerSnapshot,
-}
-
-impl WriteSnapshot {
-    pub fn from_eager_snapshot(inner: EagerSnapshot) -> Self {
-        Self { inner }
-    }
-
-    pub fn from_table_state(state: &DeltaTableState) -> Self {
-        Self::from_eager_snapshot(state.snapshot().clone())
-    }
-
-    pub async fn try_new(log_store: &dyn LogStore, version: Option<i64>) -> DeltaResult<Self> {
-        let state = DeltaTableState::try_new(log_store, Default::default(), version).await?;
-        Ok(Self::from_table_state(&state))
-    }
-
-    pub fn version(&self) -> i64 {
-        self.inner.version()
-    }
-
-    pub fn protocol(&self) -> &Protocol {
-        self.inner.protocol()
-    }
-
-    pub fn metadata(&self) -> &Metadata {
-        self.inner.metadata()
-    }
-
-    pub fn table_properties(&self) -> &TableProperties {
-        self.inner.table_properties()
-    }
-
-    pub fn read_files(&self) -> Box<dyn Iterator<Item = Add>> {
-        Box::new(
-            self.inner
-                .log_data()
-                .into_iter()
-                .map(|file| file.add_action()),
-        )
-    }
-
-    pub async fn update(
-        &mut self,
-        log_store: &dyn LogStore,
-        target_version: Option<u64>,
-    ) -> DeltaResult<()> {
-        self.inner.update(log_store, target_version).await
-    }
-
-    pub fn into_eager_snapshot(self) -> EagerSnapshot {
-        self.inner
-    }
-}
-
-impl TableReference for EagerSnapshot {
-    fn protocol(&self) -> &Protocol {
-        EagerSnapshot::protocol(self)
-    }
-
-    fn metadata(&self) -> &Metadata {
-        EagerSnapshot::metadata(self)
-    }
-
-    fn config(&self) -> &TableProperties {
-        self.table_properties()
-    }
-
-    fn write_snapshot(&self) -> WriteSnapshot {
-        WriteSnapshot::from_eager_snapshot(self.clone())
-    }
-}
-
-impl TableReference for DeltaTableState {
-    fn config(&self) -> &TableProperties {
-        self.table_properties()
-    }
-
-    fn protocol(&self) -> &Protocol {
-        EagerSnapshot::protocol(self)
-    }
-
-    fn metadata(&self) -> &Metadata {
-        EagerSnapshot::metadata(self)
-    }
-
-    fn write_snapshot(&self) -> WriteSnapshot {
-        WriteSnapshot::from_table_state(self)
-    }
-}
-
 #[derive(Clone, Debug, Copy)]
 /// Properties for post commit hook.
 pub struct PostCommitHookProperties {
@@ -533,7 +416,7 @@ impl Default for CommitBuilder {
     }
 }
 
-impl<'a> CommitBuilder {
+impl CommitBuilder {
     /// Actions to be included in the commit
     pub fn with_actions(mut self, actions: Vec<Action>) -> Self {
         self.actions = actions;
@@ -576,10 +459,10 @@ impl<'a> CommitBuilder {
     /// Prepare a Commit operation using the configured builder
     pub fn build(
         self,
-        table_data: Option<&'a dyn TableReference>,
+        table_data: Option<Arc<DeltaSnapshot>>,
         log_store: LogStoreRef,
         operation: DeltaOperation,
-    ) -> PreCommit<'a> {
+    ) -> PreCommit {
         let data = CommitData::new(
             self.actions,
             operation,
@@ -600,9 +483,9 @@ impl<'a> CommitBuilder {
 }
 
 /// Represents a commit that has not yet started but all details are finalized
-pub struct PreCommit<'a> {
+pub struct PreCommit {
     log_store: LogStoreRef,
-    table_data: Option<&'a dyn TableReference>,
+    table_data: Option<Arc<DeltaSnapshot>>,
     data: CommitData,
     max_retries: usize,
     post_commit_hook: Option<PostCommitHookProperties>,
@@ -610,18 +493,18 @@ pub struct PreCommit<'a> {
     operation_id: Uuid,
 }
 
-impl<'a> std::future::IntoFuture for PreCommit<'a> {
+impl std::future::IntoFuture for PreCommit {
     type Output = DeltaResult<FinalizedCommit>;
-    type IntoFuture = BoxFuture<'a, Self::Output>;
+    type IntoFuture = BoxFuture<'static, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move { self.into_prepared_commit_future().await?.await?.await })
     }
 }
 
-impl<'a> PreCommit<'a> {
+impl PreCommit {
     /// Prepare the commit but do not finalize it
-    pub fn into_prepared_commit_future(self) -> BoxFuture<'a, DeltaResult<PreparedCommit<'a>>> {
+    pub fn into_prepared_commit_future(self) -> BoxFuture<'static, DeltaResult<PreparedCommit>> {
         let this = self;
 
         // Write delta log entry as temporary file to storage. For the actual commit,
@@ -638,8 +521,12 @@ impl<'a> PreCommit<'a> {
 
         Box::pin(async move {
             let local_actions: Vec<_> = this.data.actions.to_vec();
-            if let Some(table_reference) = this.table_data {
-                PROTOCOL.can_commit(table_reference, &local_actions, &this.data.operation)?;
+            if let Some(table_reference) = &this.table_data {
+                PROTOCOL.can_commit(
+                    table_reference.as_ref(),
+                    &local_actions,
+                    &this.data.operation,
+                )?;
             }
             let log_entry = this.data.get_bytes()?;
 
@@ -672,11 +559,11 @@ impl<'a> PreCommit<'a> {
 }
 
 /// Represents a inflight commit
-pub struct PreparedCommit<'a> {
+pub struct PreparedCommit {
     commit_or_bytes: CommitOrBytes,
     log_store: LogStoreRef,
     data: CommitData,
-    table_data: Option<&'a dyn TableReference>,
+    table_data: Option<Arc<DeltaSnapshot>>,
     max_retries: usize,
     post_commit: Option<PostCommitHookProperties>,
     post_commit_hook_handler: Option<Arc<dyn CustomExecuteHandler>>,
@@ -690,9 +577,9 @@ pub struct PreparedCommit<'a> {
 //     }
 // }
 
-impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
+impl std::future::IntoFuture for PreparedCommit {
     type Output = DeltaResult<PostCommit>;
-    type IntoFuture = BoxFuture<'a, Self::Output>;
+    type IntoFuture = BoxFuture<'static, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
         let this = self;
@@ -723,8 +610,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
             };
             let total_retries = effective_max_retries + 1;
 
-            let mut read_snapshot: Option<WriteSnapshot> =
-                this.table_data.map(|table_ref| table_ref.write_snapshot());
+            let mut read_snapshot: Option<Arc<DeltaSnapshot>> = this.table_data.clone();
             let mut creation_actions_stripped = false;
             for attempt_number in 1..=total_retries {
                 let snapshot_version = read_snapshot.as_ref().map(|s| s.version()).unwrap_or(-1);
@@ -736,17 +622,14 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                 };
 
                 if let Some(latest_version) = latest_version {
-                    // Ensure we have a snapshot aligned to the latest version.
-                    if read_snapshot
-                        .as_ref()
-                        .map(|s| s.version() < latest_version)
-                        .unwrap_or(true)
-                    {
-                        let snapshot =
-                            WriteSnapshot::try_new(this.log_store.as_ref(), Some(latest_version))
-                                .await?;
-
-                        read_snapshot = Some(snapshot);
+                    if read_snapshot.is_none() {
+                        let snapshot = DeltaSnapshot::try_new(
+                            this.log_store.as_ref(),
+                            Default::default(),
+                            Some(latest_version),
+                        )
+                        .await?;
+                        read_snapshot = Some(Arc::new(snapshot));
                     }
 
                     if let Some(snapshot) = &read_snapshot {
@@ -844,7 +727,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                             }
                             // Update snapshot to latest version after successful conflict check
                             if let Some(snapshot) = &mut read_snapshot {
-                                snapshot
+                                Arc::make_mut(snapshot)
                                     .update(this.log_store.as_ref(), Some(latest_version as u64))
                                     .await?;
                             }
@@ -871,9 +754,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                                 .map(|v| v.cleanup_expired_logs)
                                 .unwrap_or_default(),
                             log_store: this.log_store,
-                            table_data: read_snapshot.map(|snapshot| {
-                                Box::new(snapshot.into_eager_snapshot()) as Box<dyn TableReference>
-                            }),
+                            table_data: read_snapshot,
                             custom_execute_handler: this.post_commit_hook_handler,
                             metrics: CommitMetrics {
                                 num_retries: attempt_number as u64 - 1,
@@ -908,33 +789,35 @@ pub struct PostCommit {
     create_checkpoint: bool,
     cleanup_expired_logs: Option<bool>,
     log_store: LogStoreRef,
-    table_data: Option<Box<dyn TableReference>>,
+    table_data: Option<Arc<DeltaSnapshot>>,
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
     metrics: CommitMetrics,
 }
 
 impl PostCommit {
     /// Runs the post commit activities
-    async fn run_post_commit_hook(&self) -> DeltaResult<(DeltaTableState, PostCommitMetrics)> {
+    async fn run_post_commit_hook(&self) -> DeltaResult<(Arc<DeltaSnapshot>, PostCommitMetrics)> {
         let post_commit_operation_id = Uuid::new_v4();
 
         // Always construct a state for the committed version so checkpoint + cleanup can run
         // even when `table_data` isn't available (e.g. planner didn't provide a snapshot).
-        let mut state = if let Some(table) = &self.table_data {
-            let mut snapshot = table.write_snapshot().into_eager_snapshot();
+        let mut state = if let Some(snapshot) = &self.table_data {
+            let mut snapshot = Arc::clone(snapshot);
             if self.version != snapshot.version() {
-                snapshot
+                Arc::make_mut(&mut snapshot)
                     .update(self.log_store.as_ref(), Some(self.version as u64))
                     .await?;
             }
-            DeltaTableState { snapshot }
+            snapshot
         } else {
-            DeltaTableState::try_new(
-                self.log_store.as_ref(),
-                Default::default(),
-                Some(self.version),
+            Arc::new(
+                DeltaSnapshot::try_new(
+                    self.log_store.as_ref(),
+                    Default::default(),
+                    Some(self.version),
+                )
+                .await?,
             )
-            .await?
         };
 
         let cleanup_logs = if let Some(cleanup_logs) = self.cleanup_expired_logs {
@@ -959,7 +842,7 @@ impl PostCommit {
             // Execute create checkpoint hook
             new_checkpoint_created = self
                 .create_checkpoint(
-                    &state,
+                    state.as_ref(),
                     &self.log_store,
                     self.version,
                     post_commit_operation_id,
@@ -982,12 +865,14 @@ impl PostCommit {
             )
             .await? as u64;
             if num_log_files_cleaned_up > 0 {
-                state = DeltaTableState::try_new(
-                    self.log_store.as_ref(),
-                    state.load_config().clone(),
-                    Some(self.version),
-                )
-                .await?;
+                state = Arc::new(
+                    DeltaSnapshot::try_new(
+                        self.log_store.as_ref(),
+                        state.load_config().clone(),
+                        Some(self.version),
+                    )
+                    .await?,
+                );
             }
         }
 
@@ -1012,7 +897,7 @@ impl PostCommit {
     }
     async fn create_checkpoint(
         &self,
-        table_state: &DeltaTableState,
+        table_state: &DeltaSnapshot,
         log_store: &LogStoreRef,
         version: i64,
         operation_id: Uuid,
@@ -1024,7 +909,7 @@ impl PostCommit {
             debug!("table_state.load_config().require_files=false; creating checkpoint via kernel snapshot anyway");
         }
 
-        let checkpoint_interval = table_state.config().checkpoint_interval().get() as i64;
+        let checkpoint_interval = table_state.table_properties().checkpoint_interval().get() as i64;
         // TODO: SQL `TBLPROPERTIES(delta.checkpointInterval)` isn't plumbed into `metaData.configuration` yet.
         if version >= 0 && (version % checkpoint_interval) == 0 {
             info!("Creating checkpoint for version {version}");
@@ -1039,7 +924,7 @@ impl PostCommit {
 /// A commit that successfully completed
 pub struct FinalizedCommit {
     /// The new table state after a commit
-    pub snapshot: DeltaTableState,
+    pub snapshot: Arc<DeltaSnapshot>,
 
     /// Version of the finalized commit
     pub version: i64,
@@ -1050,7 +935,7 @@ pub struct FinalizedCommit {
 impl FinalizedCommit {
     /// The new table state after a commit
     #[expect(dead_code)]
-    pub fn snapshot(&self) -> DeltaTableState {
+    pub fn snapshot(&self) -> Arc<DeltaSnapshot> {
         self.snapshot.clone()
     }
     /// Version of the finalized commit

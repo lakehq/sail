@@ -27,16 +27,15 @@ use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::Result;
 use object_store::ObjectStore;
-pub use state::DeltaTableState;
 use url::Url;
 
 use crate::datasource::{DeltaScanConfig, DeltaTableProvider};
+pub use crate::kernel::snapshot::DeltaSnapshot;
 use crate::kernel::DeltaTableConfig;
 use crate::logical::table_source::DeltaTableSource;
 use crate::options::TableDeltaOptions;
 use crate::spec::{DeltaError, DeltaError as DeltaTableError, DeltaResult};
 use crate::storage::{commit_uri_from_version, default_logstore, LogStoreRef, StorageConfig};
-mod state;
 
 /// In memory representation of a Delta Table
 ///
@@ -47,7 +46,7 @@ mod state;
 #[derive(Clone)]
 pub struct DeltaTable {
     /// The state of the table as of the most recent loaded Delta log entry.
-    pub state: Option<DeltaTableState>,
+    pub state: Option<Arc<DeltaSnapshot>>,
     /// the load options used during load
     pub config: DeltaTableConfig,
     /// log store
@@ -104,22 +103,27 @@ impl DeltaTable {
         max_version: Option<i64>,
     ) -> Result<(), DeltaTableError> {
         match self.state.as_mut() {
-            Some(state) => state.update(self.log_store.as_ref(), max_version).await,
+            Some(state) => {
+                Arc::make_mut(state)
+                    .update(self.log_store.as_ref(), max_version.map(|v| v as u64))
+                    .await?;
+                Ok(())
+            }
             _ => {
-                let state = DeltaTableState::try_new(
+                let state = DeltaSnapshot::try_new(
                     self.log_store.as_ref(),
                     self.config.clone(),
                     max_version,
                 )
                 .await?;
-                self.state = Some(state);
+                self.state = Some(Arc::new(state));
                 Ok(())
             }
         }
     }
 
     /// Returns the currently loaded state snapshot.
-    pub fn snapshot(&self) -> DeltaResult<&DeltaTableState> {
+    pub fn snapshot(&self) -> DeltaResult<&Arc<DeltaSnapshot>> {
         self.state
             .as_ref()
             .ok_or_else(|| DeltaTableError::generic("Table has not yet been initialized"))
@@ -275,10 +279,8 @@ pub async fn create_delta_provider(
     };
 
     let mut table_provider = DeltaTableProvider::try_new(snapshot.clone(), log_store, scan_config)?;
-    if !options.metadata_as_data_read && snapshot.log_data().num_files() > 0 {
-        let adds: Vec<crate::spec::Add> =
-            snapshot.log_data().iter().map(|v| v.add_action()).collect();
-        table_provider = table_provider.with_files(adds);
+    if !options.metadata_as_data_read && !snapshot.adds().is_empty() {
+        table_provider = table_provider.with_files(snapshot.adds().to_vec());
     }
 
     Ok(Arc::new(table_provider))

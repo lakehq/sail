@@ -31,17 +31,15 @@ use datafusion::datasource::{TableProvider, TableType};
 use datafusion::logical_expr::{Expr, LogicalPlan, TableProviderFilterPushDown};
 use datafusion::physical_plan::ExecutionPlan;
 
-use crate::datasource::{
-    df_logical_schema, get_pushdown_filters, DeltaScanConfig, DeltaTableStateExt,
-};
+use crate::datasource::{df_logical_schema, get_pushdown_filters, DeltaScanConfig};
 use crate::physical::scan_planner::plan_delta_scan;
 use crate::spec::{Add, DeltaResult};
 use crate::storage::LogStoreRef;
-use crate::table::DeltaTableState;
+use crate::table::DeltaSnapshot;
 
 /// A Delta table provider that enables additional metadata columns to be included during the scan
 pub struct DeltaTableProvider {
-    snapshot: DeltaTableState,
+    snapshot: Arc<DeltaSnapshot>,
     log_store: LogStoreRef,
     config: DeltaScanConfig,
     schema: Arc<ArrowSchema>,
@@ -64,13 +62,13 @@ impl std::fmt::Debug for DeltaTableProvider {
 
 impl DeltaTableProvider {
     pub fn try_new(
-        snapshot: DeltaTableState,
+        snapshot: Arc<DeltaSnapshot>,
         log_store: LogStoreRef,
         config: DeltaScanConfig,
     ) -> DeltaResult<Self> {
         Ok(DeltaTableProvider {
             schema: df_logical_schema(
-                &snapshot,
+                snapshot.as_ref(),
                 &config.file_column_name,
                 &config.commit_version_column_name,
                 &config.commit_timestamp_column_name,
@@ -88,7 +86,7 @@ impl DeltaTableProvider {
         self
     }
 
-    pub fn snapshot(&self) -> &DeltaTableState {
+    pub fn snapshot(&self) -> &Arc<DeltaSnapshot> {
         &self.snapshot
     }
 
@@ -132,7 +130,7 @@ impl TableProvider for DeltaTableProvider {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan_delta_scan(
             session,
-            &self.snapshot,
+            self.snapshot.as_ref(),
             &self.log_store,
             &self.config,
             self.files.clone(),

@@ -34,9 +34,7 @@ use futures::stream::{self, StreamExt};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
-use crate::kernel::transaction::{
-    CommitBuilder, CommitProperties, OperationMetrics, TableReference,
-};
+use crate::kernel::transaction::{CommitBuilder, CommitProperties, OperationMetrics};
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::physical_plan::action_schema::CommitMeta;
 use crate::physical_plan::{decode_actions_and_meta_from_batch, COL_ACTION};
@@ -383,7 +381,7 @@ impl ExecutionPlan for DeltaCommitExec {
             } else {
                 None
             };
-            let reference = snapshot.as_ref().map(|s| *s as &dyn TableReference);
+            let reference = snapshot.cloned();
 
             let finalized_commit = CommitBuilder::from(
                 CommitProperties::default().with_operation_metrics(operation_metrics),

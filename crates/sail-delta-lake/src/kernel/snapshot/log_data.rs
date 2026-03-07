@@ -20,49 +20,30 @@
 
 use datafusion::arrow::record_batch::RecordBatch;
 
-use crate::kernel::snapshot::iterators::LogicalFileView;
-use crate::kernel::snapshot::SnapshotTableConfiguration;
+use crate::kernel::snapshot::DeltaSnapshot;
 
-/// Provides semanitc access to the log data.
-///
-/// This is a helper struct that provides access to the log data in a more semantic way
-/// to avid the necessiity of knowing the exact layout of the underlying log data.
+/// Provides semantic access to the lazily materialized file batch.
 #[derive(Clone)]
 pub struct LogDataHandler<'a> {
     data: &'a RecordBatch,
-    config: &'a SnapshotTableConfiguration,
+    snapshot: &'a DeltaSnapshot,
 }
 
 impl<'a> LogDataHandler<'a> {
-    pub(crate) fn new(data: &'a RecordBatch, config: &'a SnapshotTableConfiguration) -> Self {
-        Self { data, config }
+    pub(crate) fn new(data: &'a RecordBatch, snapshot: &'a DeltaSnapshot) -> Self {
+        Self { data, snapshot }
     }
 
     pub(super) fn data(&self) -> &RecordBatch {
         self.data
     }
 
-    pub(crate) fn table_configuration(&self) -> &SnapshotTableConfiguration {
-        self.config
+    pub(crate) fn snapshot(&self) -> &DeltaSnapshot {
+        self.snapshot
     }
 
     /// The number of files in the log data.
     pub fn num_files(&self) -> usize {
         self.data.num_rows()
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = LogicalFileView> {
-        let batch = self.data.clone();
-        (0..batch.num_rows()).map(move |idx| LogicalFileView::new(batch.clone(), idx))
-    }
-}
-
-impl IntoIterator for LogDataHandler<'_> {
-    type Item = LogicalFileView;
-    type IntoIter = Box<dyn Iterator<Item = Self::Item>>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        let batch = self.data.clone();
-        Box::new((0..self.data.num_rows()).map(move |idx| LogicalFileView::new(batch.clone(), idx)))
     }
 }

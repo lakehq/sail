@@ -29,7 +29,6 @@ use super::utils::{
     align_schemas_for_union, build_log_replay_pipeline_with_options, build_standard_write_layers,
     LogReplayFilter, LogReplayOptions,
 };
-use crate::datasource::schema::DataFusionMixins;
 use crate::datasource::PredicateProperties;
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::physical_plan::{
@@ -106,7 +105,7 @@ async fn build_full_overwrite_plan(
             .clone();
         let version = snapshot_state.version();
         let partition_columns = snapshot_state.metadata().partition_columns().clone();
-        let kschema_arc = snapshot_state.snapshot().table_configuration().schema();
+        let kschema_arc = snapshot_state.schema();
         let kmode = snapshot_state.effective_column_mapping_mode();
         let partition_columns_map = partition_columns
             .iter()
@@ -181,7 +180,7 @@ async fn build_overwrite_if_plan(
         .input_schema()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let partition_columns = snapshot_state.metadata().partition_columns().clone();
-    let kschema_arc = snapshot_state.snapshot().table_configuration().schema();
+    let kschema_arc = snapshot_state.schema();
     let kmode = snapshot_state.effective_column_mapping_mode();
     let partition_columns_map = partition_columns
         .iter()
@@ -321,7 +320,7 @@ async fn build_old_data_plan(
         .snapshot()
         .map_err(|e| DataFusionError::External(Box::new(e)))?
         .clone();
-    let kschema_arc = snapshot_state.snapshot().table_configuration().schema();
+    let kschema_arc = snapshot_state.schema();
     let kmode = snapshot_state.effective_column_mapping_mode();
     let partition_columns_map = ctx
         .partition_columns()

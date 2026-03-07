@@ -51,6 +51,7 @@ percent-encoding = { workspace = true }
 regex = { workspace = true }
 serde_arrow = { workspace = true }
 moka = { workspace = true }
+once_cell = { workspace = true }
 
 [lints]
 workspace = true

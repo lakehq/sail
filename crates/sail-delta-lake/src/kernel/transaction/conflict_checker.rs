@@ -22,13 +22,13 @@
 
 use std::collections::HashSet;
 
-use super::WriteSnapshot;
 use crate::kernel::DeltaOperation;
 use crate::spec::{
     Action, Add, CommitConflictError, CommitInfo, DeltaError, DeltaResult, IsolationLevel,
     Metadata, Protocol, Remove, Transaction,
 };
 use crate::storage::{get_actions, LogStore};
+use crate::table::DeltaSnapshot;
 
 /// A struct representing different attributes of current transaction needed for conflict detection.
 #[expect(unused)]
@@ -39,14 +39,14 @@ pub(crate) struct TransactionInfo<'a> {
     /// delta log actions that the transaction wants to commit
     actions: &'a [Action],
     /// read snapshot used for the transaction
-    read_snapshot: &'a WriteSnapshot,
+    read_snapshot: &'a DeltaSnapshot,
     /// Whether the transaction tainted the whole table
     read_whole_table: bool,
 }
 
 impl<'a> TransactionInfo<'a> {
     pub fn try_new(
-        read_snapshot: &'a WriteSnapshot,
+        read_snapshot: &'a DeltaSnapshot,
         actions: &'a [Action],
         read_whole_table: bool,
     ) -> DeltaResult<Self> {
@@ -61,7 +61,7 @@ impl<'a> TransactionInfo<'a> {
     }
 
     pub fn new(
-        read_snapshot: &'a WriteSnapshot,
+        read_snapshot: &'a DeltaSnapshot,
         actions: &'a [Action],
         read_whole_table: bool,
     ) -> Self {

@@ -541,7 +541,6 @@ impl DeltaWriterExec {
                             table
                                 .snapshot()
                                 .map_err(|e| DataFusionError::External(Box::new(e)))?
-                                .snapshot()
                                 .schema(),
                         )
                         .map_err(|e| DataFusionError::External(Box::new(e)))?
@@ -787,9 +786,8 @@ impl DeltaWriterExec {
 
                     let snapshot = table.snapshot()?;
                     let current_metadata = snapshot.metadata();
-                    let current_kernel =
-                        struct_type_from_logical_arrow(snapshot.snapshot().schema())
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    let current_kernel = struct_type_from_logical_arrow(snapshot.schema())
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
                     let kmode = snapshot.effective_column_mapping_mode();
 
                     // Delegate schema evolution to SchemaManager
@@ -810,7 +808,7 @@ impl DeltaWriterExec {
 
                 let snapshot = table.snapshot()?;
                 let current_metadata = snapshot.metadata();
-                let current_kernel = struct_type_from_logical_arrow(snapshot.snapshot().schema())
+                let current_kernel = struct_type_from_logical_arrow(snapshot.schema())
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let kmode = snapshot.effective_column_mapping_mode();
 

@@ -36,15 +36,12 @@ use datafusion::physical_expr::{LexOrdering, PhysicalExpr};
 use object_store::path::Path;
 
 use crate::conversion::ScalarConverter;
-use crate::datasource::{
-    create_object_store_url, partitioned_file_from_action, DataFusionMixins, DeltaScanConfig,
-    DeltaTableStateExt,
-};
+use crate::datasource::{create_object_store_url, partitioned_file_from_action, DeltaScanConfig};
 use crate::physical_plan::DeltaPhysicalExprAdapterFactory;
 use crate::schema::arrow_field_physical_name;
 use crate::spec::Add;
 use crate::storage::LogStoreRef;
-use crate::table::DeltaTableState;
+use crate::table::DeltaSnapshot;
 
 /// Parameters for building file scan configuration
 pub struct FileScanParams<'a> {
@@ -72,7 +69,7 @@ pub enum TableStatsMode {
 
 /// Build a FileScanConfig from pruned files and scan configuration
 pub fn build_file_scan_config(
-    snapshot: &DeltaTableState,
+    snapshot: &DeltaSnapshot,
     log_store: &LogStoreRef,
     files: &[Add],
     scan_config: &DeltaScanConfig,
@@ -88,7 +85,7 @@ pub fn build_file_scan_config(
     let config = scan_config.clone();
     let table_partition_cols = snapshot.metadata().partition_columns();
     let column_mapping_mode = snapshot.effective_column_mapping_mode();
-    let kernel_schema = snapshot.snapshot().schema();
+    let kernel_schema = snapshot.schema();
     let partition_columns_mapped: Vec<(String, String)> = table_partition_cols
         .iter()
         .map(|logical| {

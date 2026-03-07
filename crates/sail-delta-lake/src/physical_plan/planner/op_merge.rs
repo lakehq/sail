@@ -28,7 +28,7 @@ use url::Url;
 
 use super::context::PlannerContext;
 use super::utils::{build_log_replay_pipeline_with_options, LogReplayOptions};
-use crate::datasource::{DataFusionMixins, PATH_COLUMN};
+use crate::datasource::PATH_COLUMN;
 use crate::kernel::{DeltaOperation, MergePredicate};
 use crate::options::TableDeltaOptions;
 use crate::physical_plan::{

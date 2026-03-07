@@ -30,13 +30,12 @@ use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, DataFusionError};
-use futures::TryStreamExt;
 
 use crate::conversion::{parse_optional_partition_value, ScalarConverter};
 use crate::spec::statistics::Stats;
 use crate::spec::{Add, DeltaResult};
 use crate::storage::LogStoreRef;
-use crate::table::DeltaTableState;
+use crate::table::DeltaSnapshot;
 
 /// Result of file pruning operation
 #[derive(Debug, Clone)]
@@ -48,20 +47,15 @@ pub struct PruningResult {
 }
 
 async fn collect_add_actions(
-    snapshot: &DeltaTableState,
-    log_store: &LogStoreRef,
+    snapshot: &DeltaSnapshot,
+    _log_store: &LogStoreRef,
 ) -> DeltaResult<Vec<Add>> {
-    snapshot
-        .snapshot()
-        .files(log_store.as_ref(), None)
-        .map_ok(|view| view.add_action())
-        .try_collect()
-        .await
+    Ok(snapshot.adds().to_vec())
 }
 
 /// Core file pruning function that filters files based on predicates and limit
 pub async fn prune_files(
-    snapshot: &DeltaTableState,
+    snapshot: &DeltaSnapshot,
     log_store: &LogStoreRef,
     session: &dyn Session,
     filters: &[Expr],
@@ -79,23 +73,24 @@ pub async fn prune_files(
         });
     }
 
-    let log_data = snapshot.snapshot().log_data();
-    let num_containers = log_data.num_containers();
+    let all_files = collect_add_actions(snapshot, log_store).await?;
+    let num_containers = all_files.len();
 
     // Apply predicate-based pruning
     let files_to_prune = if let Some(predicate) = &filter_expr {
-        // Convert logical expression to physical expression for pruning
         let df_schema = logical_schema.clone().to_dfschema()?;
         let physical_predicate = session.create_physical_expr(predicate.clone(), &df_schema)?;
-
+        let referenced_columns = crate::datasource::collect_physical_columns(&physical_predicate);
+        let stats = AddStatsPruningStatistics::try_new(
+            logical_schema.clone(),
+            all_files.clone(),
+            referenced_columns,
+        )?;
         let pruning_predicate = PruningPredicate::try_new(physical_predicate, logical_schema)?;
-        pruning_predicate.prune(&log_data)?
+        pruning_predicate.prune(&stats)?
     } else {
         vec![true; num_containers]
     };
-
-    // Collect all files and apply pruning logic
-    let all_files = collect_add_actions(snapshot, log_store).await?;
 
     // Apply limit-based pruning with statistics consideration
     let mut pruned_without_stats = vec![];

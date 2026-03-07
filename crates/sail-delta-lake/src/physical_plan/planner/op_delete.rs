@@ -25,7 +25,6 @@ use sail_common_datafusion::logical_expr::ExprWithSource;
 
 use super::context::PlannerContext;
 use super::utils::{build_log_replay_pipeline_with_options, LogReplayFilter, LogReplayOptions};
-use crate::datasource::schema::DataFusionMixins;
 use crate::datasource::PredicateProperties;
 use crate::kernel::DeltaOperation;
 use crate::physical_plan::{
@@ -72,7 +71,7 @@ pub async fn build_delete_plan(
         });
     }
 
-    let kschema_arc = snapshot_state.snapshot().table_configuration().schema();
+    let kschema_arc = snapshot_state.schema();
     let kmode = snapshot_state.effective_column_mapping_mode();
     let partition_columns_map = partition_columns
         .iter()

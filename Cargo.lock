@@ -6176,6 +6176,7 @@ dependencies = [
  "log",
  "moka",
  "object_store",
+ "once_cell",
  "parquet",
  "percent-encoding",
  "regex",

@@ -21,4 +21,3 @@ pub use config::DeltaTableConfig;
 
 pub use crate::spec::operation::{DeltaOperation, MergePredicate, SaveMode};
 pub use crate::spec::SchemaRef;
-pub type PredicateRef = std::sync::Arc<()>;
