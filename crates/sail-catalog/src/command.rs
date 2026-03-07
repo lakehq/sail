@@ -112,6 +112,10 @@ pub enum CatalogCommand {
         view: Vec<String>,
         options: CreateViewOptions,
     },
+    DescribeCatalog {
+        catalog: String,
+        extended: bool,
+    },
     DescribeTable {
         table: Vec<String>,
         extended: bool,
@@ -154,6 +158,7 @@ impl CatalogCommand {
             CatalogCommand::DropView { .. } => "DropView",
             CatalogCommand::CreateTemporaryView { .. } => "CreateTemporaryView",
             CatalogCommand::CreateView { .. } => "CreateView",
+            CatalogCommand::DescribeCatalog { .. } => "DescribeCatalog",
             CatalogCommand::DescribeTable { .. } => "DescribeTable",
         }
     }
@@ -179,6 +184,9 @@ impl CatalogCommand {
             | CatalogCommand::RegisterTableFunction { .. } => display.empty().schema()?,
             CatalogCommand::CurrentCatalog | CatalogCommand::CurrentDatabase => {
                 display.strings().schema()?
+            }
+            CatalogCommand::DescribeCatalog { .. } => {
+                ArrowSerializer::default().schema::<DescribeInfoRow>()?
             }
             CatalogCommand::DescribeTable { .. } => {
                 ArrowSerializer::default().schema::<DescribeTableRow>()?
@@ -223,6 +231,20 @@ impl CatalogCommand {
                     .map(|x| x.to_string())
                     .collect::<Vec<_>>();
                 display.catalogs().to_record_batch(rows)?
+            }
+            CatalogCommand::DescribeCatalog { catalog, extended } => {
+                let provider = manager.get_catalog(&catalog)?;
+                let mut rows = vec![
+                    DescribeInfoRow::new("Catalog Name", catalog),
+                    DescribeInfoRow::new("Description", provider.get_name().to_string()),
+                ];
+                if extended {
+                    rows.push(DescribeInfoRow::new(
+                        "Provider",
+                        provider.get_name().to_string(),
+                    ));
+                }
+                ArrowSerializer::default().build_record_batch(&rows)?
             }
             CatalogCommand::CurrentDatabase => {
                 let value = manager.default_database()?;
@@ -436,6 +458,21 @@ impl CatalogCommand {
             }
         };
         Ok(batch)
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct DescribeInfoRow {
+    info_name: String,
+    info_value: String,
+}
+
+impl DescribeInfoRow {
+    fn new(info_name: impl Into<String>, info_value: impl Into<String>) -> Self {
+        Self {
+            info_name: info_name.into(),
+            info_value: info_value.into(),
+        }
     }
 }
 

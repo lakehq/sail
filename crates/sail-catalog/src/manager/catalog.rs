@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::error::{CatalogError, CatalogResult};
 use crate::manager::CatalogManager;
+use crate::provider::CatalogProvider;
 use crate::utils::match_pattern;
 
 impl CatalogManager {
@@ -29,5 +30,9 @@ impl CatalogManager {
             .filter(|name| match_pattern(name.as_ref(), pattern))
             .cloned()
             .collect::<Vec<_>>())
+    }
+
+    pub fn get_catalog(&self, catalog: &str) -> CatalogResult<Arc<dyn CatalogProvider>> {
+        self.state()?.get_catalog(catalog)
     }
 }

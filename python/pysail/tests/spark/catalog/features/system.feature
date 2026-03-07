@@ -120,3 +120,24 @@ Feature: System catalog queries
     Then query result
       | has_options |
       | true        |
+
+  @sail-only
+  Scenario: Describe catalog
+    When query
+      """
+      DESCRIBE CATALOG sail
+      """
+    Then query result ordered
+      | info_name    | info_value |
+      | Catalog Name | sail       |
+      | Description  | sail       |
+
+    When query
+      """
+      DESCRIBE CATALOG EXTENDED sail
+      """
+    Then query result ordered
+      | info_name    | info_value |
+      | Catalog Name | sail       |
+      | Description  | sail       |
+      | Provider     | sail       |

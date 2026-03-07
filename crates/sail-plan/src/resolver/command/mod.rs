@@ -266,8 +266,17 @@ impl PlanResolver<'_> {
             CommandNode::DescribeFunction { .. } => {
                 Err(PlanError::todo("CommandNode::DescribeFunction"))
             }
-            CommandNode::DescribeCatalog { .. } => {
-                Err(PlanError::todo("CommandNode::DescribeCatalog"))
+            CommandNode::DescribeCatalog { catalog, extended } => {
+                let catalog: Vec<String> = catalog.into();
+                let [catalog] = catalog.as_slice() else {
+                    return Err(PlanError::invalid(
+                        "DESCRIBE CATALOG expects a catalog name",
+                    ));
+                };
+                self.resolve_catalog_command(CatalogCommand::DescribeCatalog {
+                    catalog: catalog.clone(),
+                    extended,
+                })
             }
             CommandNode::DescribeDatabase { .. } => {
                 Err(PlanError::todo("CommandNode::DescribeDatabase"))
