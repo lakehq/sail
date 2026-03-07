@@ -472,10 +472,16 @@ impl CatalogProvider for GlueCatalogProvider {
         &self,
         database: &Namespace,
         table: &str,
-        options: CreateTableOptions,
+        mut options: CreateTableOptions,
     ) -> CatalogResult<TableStatus> {
         let client = self.get_client().await?;
         let format_lower = options.format.to_lowercase();
+
+        // Skip location or path options since the location is available in
+        // the `location` field in `CreateTableOptions`.
+        options
+            .options
+            .retain(|(k, _)| k != "location" && k != "path");
 
         if format_lower == "iceberg" {
             iceberg::create_iceberg_table(self, client, database, table, options).await
