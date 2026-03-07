@@ -76,7 +76,7 @@ impl fmt::Display for StorageType {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct DeletionVectorDescriptor {
     pub storage_type: StorageType,
@@ -91,7 +91,7 @@ pub struct DeletionVectorDescriptor {
 #[derive(Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Action {
-    #[serde(rename = "metaData")]
+    #[serde(rename = "metaData", alias = "metadata")]
     Metadata(Metadata),
     Protocol(Protocol),
     Add(Add),
@@ -186,6 +186,7 @@ impl Add {
             extended_file_metadata: options.extended_file_metadata,
             partition_values: Some(self.partition_values),
             size: Some(self.size),
+            stats: None,
             tags,
             deletion_vector: self.deletion_vector,
             base_row_id: self.base_row_id,
@@ -246,6 +247,8 @@ pub struct Remove {
     pub partition_values: Option<HashMap<String, Option<String>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stats: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<HashMap<String, Option<String>>>,
     #[serde(skip_serializing_if = "Option::is_none")]

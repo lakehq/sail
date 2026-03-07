@@ -155,7 +155,7 @@ impl ReconciledCheckpointState {
 
     fn apply_checkpoint_row(&mut self, row: CheckpointActionRow) -> DeltaResult<()> {
         if let Some(protocol) = row.protocol {
-            self.protocol = Some(protocol.try_into()?);
+            self.protocol = Some(protocol);
         }
         if let Some(metadata) = row.metadata {
             self.metadata = Some(metadata);
@@ -164,12 +164,10 @@ impl ReconciledCheckpointState {
             self.txns.insert(txn.app_id.clone(), txn);
         }
         if let Some(add) = row.add {
-            let add: Add = add.try_into()?;
             self.removes.remove(&add.path);
             self.adds.insert(add.path.clone(), add);
         }
         if let Some(remove) = row.remove {
-            let remove: Remove = remove.try_into()?;
             self.adds.remove(&remove.path);
             self.removes.insert(remove.path.clone(), remove);
         }
@@ -244,7 +242,7 @@ impl ReconciledCheckpointState {
                 batch_size,
                 leading_rows: VecDeque::from([
                     CheckpointActionRow {
-                        protocol: Some(protocol.into()),
+                        protocol: Some(protocol),
                         ..Default::default()
                     },
                     CheckpointActionRow {
@@ -299,14 +297,14 @@ impl CheckpointBatchIter {
             }
             if let Some((_, remove)) = self.removes.next() {
                 rows.push(CheckpointActionRow {
-                    remove: Some(remove.into()),
+                    remove: Some(remove),
                     ..Default::default()
                 });
                 continue;
             }
             if let Some((_, add)) = self.adds.next() {
                 rows.push(CheckpointActionRow {
-                    add: Some(add.into()),
+                    add: Some(add),
                     ..Default::default()
                 });
                 continue;
@@ -907,8 +905,9 @@ mod tests {
         ReconciledCheckpointState,
     };
     use crate::spec::{
-        Action, Add, CheckpointActionRow, DataType, DeltaResult, Metadata, Remove, StructField,
-        StructType, Transaction,
+        Action, Add, CheckpointActionRow, DataType, DeletionVectorDescriptor, DeltaResult,
+        Metadata, Protocol, Remove, StorageType, StructField, StructType, TableFeature,
+        Transaction,
     };
 
     fn test_metadata(
@@ -930,24 +929,21 @@ mod tests {
     #[test]
     fn checkpoint_row_roundtrip_preserves_add_path() -> DeltaResult<()> {
         let rows = vec![CheckpointActionRow {
-            add: Some(
-                Add {
-                    path: "part-000.parquet".to_string(),
-                    partition_values: HashMap::new(),
-                    size: 10,
-                    modification_time: 20,
-                    data_change: true,
-                    stats: None,
-                    tags: None,
-                    deletion_vector: None,
-                    base_row_id: None,
-                    default_row_commit_version: None,
-                    clustering_provider: None,
-                    commit_version: None,
-                    commit_timestamp: None,
-                }
-                .into(),
-            ),
+            add: Some(Add {
+                path: "part-000.parquet".to_string(),
+                partition_values: HashMap::new(),
+                size: 10,
+                modification_time: 20,
+                data_change: true,
+                stats: None,
+                tags: None,
+                deletion_vector: None,
+                base_row_id: None,
+                default_row_commit_version: None,
+                clustering_provider: None,
+                commit_version: None,
+                commit_timestamp: None,
+            }),
             ..Default::default()
         }];
         let batch = encode_checkpoint_rows(&rows)?;
@@ -959,6 +955,119 @@ mod tests {
                 .and_then(|row| row.add.as_ref())
                 .map(|add| add.path.as_str()),
             Some("part-000.parquet")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn checkpoint_row_roundtrip_preserves_shared_protocol_and_dv_models() -> DeltaResult<()> {
+        let protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::TimestampWithoutTimezone]),
+            Some(vec![TableFeature::AppendOnly, TableFeature::ColumnMapping]),
+        );
+        let deletion_vector = DeletionVectorDescriptor {
+            storage_type: StorageType::Inline,
+            path_or_inline_dv: "encoded-dv".to_string(),
+            offset: Some(12),
+            size_in_bytes: 34,
+            cardinality: 56,
+        };
+        let rows = vec![
+            CheckpointActionRow {
+                protocol: Some(protocol.clone()),
+                ..Default::default()
+            },
+            CheckpointActionRow {
+                add: Some(Add {
+                    path: "part-001.parquet".to_string(),
+                    partition_values: HashMap::new(),
+                    size: 10,
+                    modification_time: 20,
+                    data_change: true,
+                    stats: None,
+                    tags: None,
+                    deletion_vector: Some(deletion_vector.clone()),
+                    base_row_id: Some(1),
+                    default_row_commit_version: Some(2),
+                    clustering_provider: Some("liquid".to_string()),
+                    commit_version: None,
+                    commit_timestamp: None,
+                }),
+                ..Default::default()
+            },
+            CheckpointActionRow {
+                remove: Some(Remove {
+                    path: "part-001.parquet".to_string(),
+                    data_change: true,
+                    deletion_timestamp: Some(30),
+                    extended_file_metadata: Some(true),
+                    partition_values: Some(HashMap::new()),
+                    size: Some(10),
+                    stats: Some("{\"numRecords\":1}".to_string()),
+                    tags: None,
+                    deletion_vector: Some(deletion_vector),
+                    base_row_id: Some(1),
+                    default_row_commit_version: Some(2),
+                }),
+                ..Default::default()
+            },
+        ];
+
+        let batch = encode_checkpoint_rows(&rows)?;
+        let decoded = decode_checkpoint_rows(&batch)?;
+
+        assert_eq!(decoded.len(), 3);
+        assert_eq!(decoded[0].protocol.as_ref(), Some(&protocol));
+        assert_eq!(
+            decoded[1]
+                .add
+                .as_ref()
+                .and_then(|add| add.deletion_vector.as_ref())
+                .map(|dv| (&dv.storage_type, dv.path_or_inline_dv.as_str(), dv.offset)),
+            Some((&StorageType::Inline, "encoded-dv", Some(12)))
+        );
+        assert_eq!(
+            decoded[2]
+                .remove
+                .as_ref()
+                .and_then(|remove| remove.stats.as_deref()),
+            Some("{\"numRecords\":1}")
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn checkpoint_row_roundtrip_preserves_remove_stats() -> DeltaResult<()> {
+        let rows = vec![CheckpointActionRow {
+            remove: Some(Remove {
+                path: "part-000.parquet".to_string(),
+                data_change: true,
+                deletion_timestamp: Some(20),
+                extended_file_metadata: Some(true),
+                partition_values: Some(HashMap::new()),
+                size: Some(10),
+                stats: Some("{\"numRecords\":1}".to_string()),
+                tags: None,
+                deletion_vector: None,
+                base_row_id: None,
+                default_row_commit_version: None,
+            }),
+            ..Default::default()
+        }];
+
+        let batch = encode_checkpoint_rows(&rows)?;
+        let decoded = decode_checkpoint_rows(&batch)?;
+
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(
+            decoded
+                .first()
+                .and_then(|row| row.remove.as_ref())
+                .and_then(|remove| remove.stats.as_deref()),
+            Some("{\"numRecords\":1}")
         );
         Ok(())
     }
@@ -988,6 +1097,7 @@ mod tests {
             extended_file_metadata: None,
             partition_values: None,
             size: None,
+            stats: None,
             tags: None,
             deletion_vector: None,
             base_row_id: None,
@@ -1014,6 +1124,7 @@ mod tests {
             extended_file_metadata: None,
             partition_values: None,
             size: None,
+            stats: None,
             tags: None,
             deletion_vector: None,
             base_row_id: None,
@@ -1026,6 +1137,7 @@ mod tests {
             extended_file_metadata: None,
             partition_values: None,
             size: None,
+            stats: None,
             tags: None,
             deletion_vector: None,
             base_row_id: None,
@@ -1038,6 +1150,7 @@ mod tests {
             extended_file_metadata: None,
             partition_values: None,
             size: None,
+            stats: None,
             tags: None,
             deletion_vector: None,
             base_row_id: None,
@@ -1087,6 +1200,7 @@ mod tests {
             extended_file_metadata: None,
             partition_values: None,
             size: None,
+            stats: None,
             tags: None,
             deletion_vector: None,
             base_row_id: None,

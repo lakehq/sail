@@ -27,10 +27,7 @@ pub use actions::{
     Action, Add, CommitInfo, DeletionVectorDescriptor, Remove, RemoveOptions, StorageType,
     Transaction,
 };
-pub use checkpoint::{
-    CheckpointActionRow, CheckpointAdd, CheckpointDeletionVector, CheckpointProtocol,
-    CheckpointRemove, LastCheckpointHint,
-};
+pub use checkpoint::{CheckpointActionRow, LastCheckpointHint};
 pub use datafusion::arrow::datatypes::SchemaRef;
 pub use error::{CommitConflictError, DeltaError, DeltaResult, TransactionError};
 pub use log::{
