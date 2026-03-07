@@ -37,7 +37,7 @@ use uuid::Uuid;
 use crate::spec::{
     checkpoint_path, delta_log_root_path, last_checkpoint_path, Action, Add, CheckpointActionRow,
     DeltaError as DeltaTableError, DeltaResult, LastCheckpointHint, Metadata, Protocol, Remove,
-    Transaction,
+    TableProperties, Transaction,
 };
 use crate::storage::{get_actions, LogStore};
 static DELTA_LOG_REGEX: LazyLock<Result<Regex, regex::Error>> =
@@ -71,6 +71,49 @@ fn parse_version(regex: &Regex, location: &Path) -> Option<i64> {
         .captures(location.as_ref())
         .and_then(|caps| caps.get(1))
         .and_then(|m| m.as_str().parse::<i64>().ok())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CheckpointRetentionTimestamps {
+    deleted_file_retention_timestamp: i64,
+    transaction_expiration_timestamp: i64,
+}
+
+impl CheckpointRetentionTimestamps {
+    fn try_new(metadata: &Metadata, reference_timestamp: i64) -> DeltaResult<Self> {
+        let table_properties = TableProperties::from(metadata.configuration().iter());
+        Ok(Self {
+            deleted_file_retention_timestamp: retention_cutoff_timestamp(
+                reference_timestamp,
+                table_properties.deleted_file_retention_duration(),
+                "delta.deletedFileRetentionDuration",
+            )?,
+            transaction_expiration_timestamp: retention_cutoff_timestamp(
+                reference_timestamp,
+                table_properties.log_retention_duration(),
+                "delta.logRetentionDuration",
+            )?,
+        })
+    }
+}
+
+fn retention_cutoff_timestamp(
+    reference_timestamp: i64,
+    retention_duration: std::time::Duration,
+    property_name: &str,
+) -> DeltaResult<i64> {
+    let retention_millis = i64::try_from(retention_duration.as_millis()).map_err(|_| {
+        DeltaTableError::generic(format!(
+            "{property_name} exceeds the supported millisecond range"
+        ))
+    })?;
+    reference_timestamp
+        .checked_sub(retention_millis)
+        .ok_or_else(|| {
+            DeltaTableError::generic(format!(
+                "Failed to compute retention cutoff for {property_name}"
+            ))
+        })
 }
 
 #[derive(Debug, Default)]
@@ -130,6 +173,38 @@ impl ReconciledCheckpointState {
             self.adds.remove(&remove.path);
             self.removes.insert(remove.path.clone(), remove);
         }
+        Ok(())
+    }
+
+    fn prune_expired_checkpoint_actions(&mut self, reference_timestamp: i64) -> DeltaResult<()> {
+        let metadata = self.metadata.as_ref().ok_or_else(|| {
+            DeltaTableError::generic("Cannot prune checkpoint actions without metadata action")
+        })?;
+        let retention = CheckpointRetentionTimestamps::try_new(metadata, reference_timestamp)?;
+
+        let txns_before = self.txns.len();
+        self.txns.retain(|_, txn| {
+            txn.last_updated
+                .map(|last_updated| last_updated > retention.transaction_expiration_timestamp)
+                .unwrap_or(true)
+        });
+
+        let removes_before = self.removes.len();
+        self.removes.retain(|_, remove| {
+            remove
+                .deletion_timestamp
+                .map(|deletion_timestamp| {
+                    deletion_timestamp > retention.deleted_file_retention_timestamp
+                })
+                .unwrap_or(true)
+        });
+
+        debug!(
+            "Pruned {} expired txn actions and {} expired remove actions before checkpoint write",
+            txns_before.saturating_sub(self.txns.len()),
+            removes_before.saturating_sub(self.removes.len()),
+        );
+
         Ok(())
     }
 
@@ -492,6 +567,8 @@ impl<'a> CheckpointManager<'a> {
             version,
         )
         .await?;
+        state.prune_expired_checkpoint_actions(Utc::now().timestamp_millis())?;
+
         // Design note:
         // - This write path is intentionally batch-oriented so checkpoint output does not require a
         //   single giant RecordBatch.
@@ -829,7 +906,26 @@ mod tests {
         checkpoint_fields, decode_checkpoint_rows, encode_checkpoint_rows,
         ReconciledCheckpointState,
     };
-    use crate::spec::{Action, Add, CheckpointActionRow, DeltaResult, Remove};
+    use crate::spec::{
+        Action, Add, CheckpointActionRow, DataType, DeltaResult, Metadata, Remove, StructField,
+        StructType, Transaction,
+    };
+
+    fn test_metadata(
+        configuration: impl IntoIterator<Item = (&'static str, &'static str)>,
+    ) -> DeltaResult<Metadata> {
+        Metadata::try_new(
+            None,
+            None,
+            StructType::try_new([StructField::not_null("id", DataType::LONG)])?,
+            Vec::new(),
+            0,
+            configuration
+                .into_iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect(),
+        )
+    }
 
     #[test]
     fn checkpoint_row_roundtrip_preserves_add_path() -> DeltaResult<()> {
@@ -899,6 +995,112 @@ mod tests {
         }));
         assert!(!state.adds.contains_key("a.parquet"));
         assert!(state.removes.contains_key("a.parquet"));
+    }
+
+    #[test]
+    fn checkpoint_pruning_drops_expired_remove_and_txn_actions() -> DeltaResult<()> {
+        const DAY_MILLIS: i64 = 24 * 60 * 60 * 1000;
+        let now = 10 * DAY_MILLIS;
+
+        let mut state = ReconciledCheckpointState::default();
+        state.apply_action(Action::Metadata(test_metadata([
+            ("delta.deletedFileRetentionDuration", "interval 7 days"),
+            ("delta.logRetentionDuration", "interval 30 days"),
+        ])?));
+        state.apply_action(Action::Remove(Remove {
+            path: "expired.parquet".to_string(),
+            data_change: true,
+            deletion_timestamp: Some(now - 8 * DAY_MILLIS),
+            extended_file_metadata: None,
+            partition_values: None,
+            size: None,
+            tags: None,
+            deletion_vector: None,
+            base_row_id: None,
+            default_row_commit_version: None,
+        }));
+        state.apply_action(Action::Remove(Remove {
+            path: "fresh.parquet".to_string(),
+            data_change: true,
+            deletion_timestamp: Some(now - 6 * DAY_MILLIS),
+            extended_file_metadata: None,
+            partition_values: None,
+            size: None,
+            tags: None,
+            deletion_vector: None,
+            base_row_id: None,
+            default_row_commit_version: None,
+        }));
+        state.apply_action(Action::Remove(Remove {
+            path: "unknown-ts.parquet".to_string(),
+            data_change: true,
+            deletion_timestamp: None,
+            extended_file_metadata: None,
+            partition_values: None,
+            size: None,
+            tags: None,
+            deletion_vector: None,
+            base_row_id: None,
+            default_row_commit_version: None,
+        }));
+        state.apply_action(Action::Txn(Transaction {
+            app_id: "expired-app".to_string(),
+            version: 1,
+            last_updated: Some(now - 31 * DAY_MILLIS),
+        }));
+        state.apply_action(Action::Txn(Transaction {
+            app_id: "fresh-app".to_string(),
+            version: 2,
+            last_updated: Some(now - 29 * DAY_MILLIS),
+        }));
+        state.apply_action(Action::Txn(Transaction {
+            app_id: "legacy-app".to_string(),
+            version: 3,
+            last_updated: None,
+        }));
+
+        state.prune_expired_checkpoint_actions(now)?;
+
+        assert!(!state.removes.contains_key("expired.parquet"));
+        assert!(state.removes.contains_key("fresh.parquet"));
+        assert!(state.removes.contains_key("unknown-ts.parquet"));
+        assert!(!state.txns.contains_key("expired-app"));
+        assert!(state.txns.contains_key("fresh-app"));
+        assert!(state.txns.contains_key("legacy-app"));
+        Ok(())
+    }
+
+    #[test]
+    fn checkpoint_pruning_uses_latest_metadata_configuration() -> DeltaResult<()> {
+        const DAY_MILLIS: i64 = 24 * 60 * 60 * 1000;
+        let now = 3 * DAY_MILLIS;
+
+        let mut state = ReconciledCheckpointState::default();
+        state.apply_action(Action::Metadata(test_metadata([
+            ("delta.deletedFileRetentionDuration", "interval 1 day"),
+            ("delta.logRetentionDuration", "interval 1 day"),
+        ])?));
+        state.apply_action(Action::Remove(Remove {
+            path: "older-remove.parquet".to_string(),
+            data_change: true,
+            deletion_timestamp: Some(now - 2 * DAY_MILLIS),
+            extended_file_metadata: None,
+            partition_values: None,
+            size: None,
+            tags: None,
+            deletion_vector: None,
+            base_row_id: None,
+            default_row_commit_version: None,
+        }));
+        state.apply_action(Action::Metadata(test_metadata([
+            ("delta.deletedFileRetentionDuration", "interval 30 days"),
+            ("delta.logRetentionDuration", "interval 30 days"),
+        ])?));
+
+        state.prune_expired_checkpoint_actions(now)?;
+
+        assert!(state.removes.contains_key("older-remove.parquet"));
+        Ok(())
     }
 
     #[test]
