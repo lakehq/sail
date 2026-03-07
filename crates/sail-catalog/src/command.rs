@@ -469,6 +469,6 @@ struct DescribeTableRow {
 }
 
 #[derive(Serialize, Deserialize)]
-struct ShowPartitionRow {
-    partition: String,
+pub struct ShowPartitionRow {
+    pub partition: String,
 }
