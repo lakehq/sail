@@ -238,25 +238,18 @@ impl PlanResolver<'_> {
         if let datafusion_expr::Expr::Literal(scalar, _) = resolved {
             return Ok(scalar);
         }
-        // Apply type coercion and constant folding before evaluating.
+        // Apply type coercion so that expressions like `CAST(0 AS INTERVAL SECOND)`
+        // have compatible types before physical evaluation.
         let props = ExecutionProps::new();
         let context = SimplifyContext::new(&props).with_schema(schema.clone());
-        let simplifier = ExprSimplifier::new(context).with_max_cycles(10);
+        let simplifier = ExprSimplifier::new(context);
         let coerced = simplifier.coerce(resolved, schema).map_err(|e| {
             PlanError::invalid(format!(
                 "window boundary must be a constant expression: {e}"
             ))
         })?;
-        let simplified = simplifier.simplify(coerced).map_err(|e| {
-            PlanError::invalid(format!(
-                "window boundary must be a constant expression: {e}"
-            ))
-        })?;
-        if let datafusion_expr::Expr::Literal(scalar, _) = simplified {
-            return Ok(scalar);
-        }
         let evaluator = LiteralEvaluator::new();
-        evaluator.evaluate(&simplified).map_err(|e| {
+        evaluator.evaluate(&coerced).map_err(|e| {
             PlanError::invalid(format!(
                 "window boundary must be a constant expression: {e}"
             ))

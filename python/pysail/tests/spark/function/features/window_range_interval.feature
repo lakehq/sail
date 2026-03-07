@@ -72,3 +72,30 @@ Feature: Window RANGE frame with interval boundaries
         | 20  | 30    |
         | 30  | 60    |
         | 40  | 70    |
+
+  Rule: RANGE frame with integer boundary on numeric ORDER BY
+
+    Scenario: sum with integer range boundary
+      When query
+        """
+        SELECT
+          id,
+          SUM(val) OVER (ORDER BY id RANGE BETWEEN 2 PRECEDING AND CURRENT ROW) AS total
+        FROM (
+          SELECT * FROM VALUES
+            (1, 10),
+            (2, 20),
+            (3, 30),
+            (5, 50),
+            (8, 80)
+          AS t(id, val)
+        )
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | total |
+        | 1  | 10    |
+        | 2  | 30    |
+        | 3  | 60    |
+        | 5  | 80    |
+        | 8  | 80    |
