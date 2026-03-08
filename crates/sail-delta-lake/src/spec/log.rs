@@ -16,13 +16,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/path.rs#L23-L25>
-// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/path.rs#L328-L339>
-// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/last_checkpoint_hint.rs#L14-L46>
-
 use object_store::path::{Path, DELIMITER};
 
+// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/path.rs#L23-L25>
 pub const DELTA_LOG_DIR: &str = "_delta_log";
+
+// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/last_checkpoint_hint.rs#L14-L17>
 pub const LAST_CHECKPOINT_FILE: &str = "_last_checkpoint";
 
 pub fn delta_log_root_path() -> Path {
@@ -37,6 +36,7 @@ pub fn delta_log_prefix_path(version: i64) -> Path {
     Path::from(format!("{DELTA_LOG_DIR}/{version:020}"))
 }
 
+// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/path.rs#L328-L339>
 pub fn checkpoint_path(version: i64) -> Path {
     Path::from(format!("{DELTA_LOG_DIR}/{version:020}.checkpoint.parquet"))
 }

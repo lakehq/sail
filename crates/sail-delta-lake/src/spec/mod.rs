@@ -46,7 +46,7 @@ pub use schema::{
 pub(crate) use statistics::stats_schema;
 pub use statistics::{ColumnCountStat, ColumnValueStat, StatValue, Stats};
 
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/actions.rs>
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/actions.rs#L149-L160>
 /// Checks if any field (including nested) in the provided iterator is a `timestampNtz`.
 pub fn contains_timestampntz<'a>(mut fields: impl Iterator<Item = &'a StructField>) -> bool {
     fn has_timestamp(dtype: &DataType) -> bool {

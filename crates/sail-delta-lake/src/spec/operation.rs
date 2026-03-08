@@ -16,7 +16,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/protocol/mod.rs>
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
@@ -25,6 +24,7 @@ use serde_json::Value;
 use crate::spec::actions::CommitInfo;
 use crate::spec::{DeltaError as DeltaTableError, DeltaResult, Metadata, Protocol};
 
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/protocol/mod.rs#L211-L518>
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct MergePredicate {

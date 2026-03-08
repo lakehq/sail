@@ -16,10 +16,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/actions.rs>
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/mod.rs>
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/protocol/mod.rs>
-
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::fmt;
@@ -34,6 +30,8 @@ use serde::{Deserialize, Serialize};
 use crate::spec::statistics::Stats;
 use crate::spec::{DeltaError as DeltaTableError, DeltaResult, IsolationLevel, Metadata, Protocol};
 
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/actions.rs#L694-L1065>
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/mod.rs#L18-L27>
 #[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum StorageType {
     #[serde(rename = "u")]

@@ -16,12 +16,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/actions.rs#L1092-L1150>
-
 use std::str::Utf8Error;
 
 use percent_encoding::{percent_decode_str, percent_encode, AsciiSet, CONTROLS};
 
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/actions.rs#L1092-L1150>
 const INVALID: &AsciiSet = &CONTROLS
     .add(b'\\')
     .add(b'{')
