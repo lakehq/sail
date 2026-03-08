@@ -1,3 +1,11 @@
+// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+// https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/LICENSE
+//
+// Copyright (2020) QP Hou and a number of other contributors.
+// Copyright 2023-2024 The Delta Kernel Rust Authors
+// Portions Copyright (2025) LakeSail, Inc.
+// Ported and modified in 2025 by LakeSail, Inc.
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -19,6 +27,7 @@ use crate::spec::protocol::TableFeature;
 pub type DeltaResult<T> = Result<T, DeltaError>;
 
 /// Conflict during commit due to concurrent changes.
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/kernel/transaction/conflict_checker.rs#L21-L85>
 #[derive(Error, Debug)]
 pub enum CommitConflictError {
     #[error("Commit failed: a concurrent transactions added new data.\nHelp: This transaction's query must be rerun to include the new data. Also, if you don't care to require this check to pass in the future, the isolation level can be set to Snapshot Isolation.")]
@@ -59,6 +68,7 @@ pub enum CommitConflictError {
     NoMetadata,
 }
 
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/kernel/transaction/mod.rs#L150-L203>
 #[derive(Error, Debug)]
 pub enum TransactionError {
     #[error("Tried committing existing table version: {0}")]
@@ -98,6 +108,7 @@ pub enum TransactionError {
     },
 }
 
+// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/error.rs#L21-L180>
 #[derive(Debug, Error)]
 pub enum DeltaError {
     #[error("No table version found.")]
@@ -170,6 +181,7 @@ pub enum DeltaError {
     Transaction(#[from] TransactionError),
 }
 
+// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/error.rs#L216-L279>
 impl DeltaError {
     pub fn generic(msg: impl ToString) -> Self {
         Self::Generic(msg.to_string())
