@@ -1,3 +1,9 @@
+// https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/LICENSE
+//
+// Copyright 2023-2024 The Delta Kernel Rust Authors
+// Portions Copyright (2025) LakeSail, Inc.
+// Ported and modified in 2025 by LakeSail, Inc.
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -16,6 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::spec::{Add, Metadata, Protocol, Remove, Transaction};
 
+// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/checkpoint/mod.rs#L126-L135>
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckpointActionRow {
@@ -35,6 +42,7 @@ pub struct CheckpointActionRow {
     pub txn: Option<Transaction>,
 }
 
+// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/last_checkpoint_hint.rs#L14-L46>
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LastCheckpointHint {
