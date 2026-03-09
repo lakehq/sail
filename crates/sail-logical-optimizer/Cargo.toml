@@ -8,3 +8,12 @@ workspace = true
 
 [dependencies]
 datafusion = { workspace = true }
+
+[dev-dependencies]
+criterion = "0.5"
+arrow = { workspace = true }
+rand = { workspace = true }
+
+[[bench]]
+name = "case_expr"
+harness = false

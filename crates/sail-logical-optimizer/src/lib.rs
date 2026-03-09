@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use datafusion::optimizer::{Analyzer, AnalyzerRule, Optimizer, OptimizerRule};
 
+pub mod case_expr;
+
 pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
     let Analyzer {
         function_rewrites: _,
@@ -15,5 +17,7 @@ pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
 
 pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
     let Optimizer { rules } = Optimizer::default();
+    let mut rules = rules;
+    rules.push(Arc::new(case_expr::ReconstructSimpleCaseExpr));
     rules
 }
