@@ -39,7 +39,7 @@ impl OptimizerRule for ReconstructSimpleCaseExpr {
     }
 }
 
-pub fn try_reconstruct_simple_case(case: Case) -> Transformed<Expr> {
+fn try_reconstruct_simple_case(case: Case) -> Transformed<Expr> {
     let Case {
         expr: case_expr,
         when_then_expr,
