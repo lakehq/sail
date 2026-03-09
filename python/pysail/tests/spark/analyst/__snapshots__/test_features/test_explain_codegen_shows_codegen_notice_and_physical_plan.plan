@@ -94,6 +94,9 @@ Projection: t.#2 AS #4, sum(t.#3) AS #5
       Projection: column1 AS #2, column2 AS #3
         Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
 
+logical_plan after reconstruct_simple_case_expr:
+SAME TEXT AS ABOVE
+
 logical_plan after expand_merge:
 SAME TEXT AS ABOVE
 
@@ -158,6 +161,9 @@ logical_plan after common_sub_expression_eliminate:
 SAME TEXT AS ABOVE
 
 logical_plan after optimize_projections:
+SAME TEXT AS ABOVE
+
+logical_plan after reconstruct_simple_case_expr:
 SAME TEXT AS ABOVE
 
 logical_plan:

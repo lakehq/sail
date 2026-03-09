@@ -284,6 +284,9 @@ MergeIntoWrite: options=MergeIntoOptions { target_alias: Some("t"), source_alias
 logical_plan after optimize_projections:
 SAME TEXT AS ABOVE
 
+logical_plan after reconstruct_simple_case_expr:
+SAME TEXT AS ABOVE
+
 logical_plan after expand_merge:
 SAME TEXT AS ABOVE
 
@@ -348,6 +351,9 @@ logical_plan after common_sub_expression_eliminate:
 SAME TEXT AS ABOVE
 
 logical_plan after optimize_projections:
+SAME TEXT AS ABOVE
+
+logical_plan after reconstruct_simple_case_expr:
 SAME TEXT AS ABOVE
 
 logical_plan:

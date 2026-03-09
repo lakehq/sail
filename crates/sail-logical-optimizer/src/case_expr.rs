@@ -55,43 +55,37 @@ pub fn try_reconstruct_simple_case(case: Case) -> Transformed<Expr> {
         }));
     }
 
+    // First pass: validate ALL branches match the pattern by reference.
+    // This avoids partially consuming when_then_expr and losing branches on bail-out.
+    if !can_reconstruct(&when_then_expr, &else_expr) {
+        return Transformed::no(Expr::Case(Case {
+            expr: None,
+            when_then_expr,
+            else_expr,
+        }));
+    }
+
+    // Second pass: extract common expression and literal WHEN values.
+    // Safe to consume since we validated everything above.
     let mut common_expr: Option<Box<Expr>> = None;
     let mut new_when_then = Vec::with_capacity(when_then_expr.len());
 
     for (condition, result) in when_then_expr {
-        // Each condition must be `expr = literal` (or `literal = expr`)
-        let Expr::BinaryExpr(BinaryExpr { left, op, right }) = *condition else {
-            return reconstruct_no(common_expr, new_when_then, else_expr);
+        let Expr::BinaryExpr(BinaryExpr { left, op: _, right }) = *condition else {
+            unreachable!("validated in can_reconstruct");
         };
-        if op != Operator::Eq {
-            return reconstruct_no(common_expr, new_when_then, else_expr);
-        }
 
-        // Determine which side is the literal
         let (expr_side, literal_side) = if is_literal(&right) {
             (left, right)
-        } else if is_literal(&left) {
-            (right, left)
         } else {
-            return reconstruct_no(common_expr, new_when_then, else_expr);
+            (right, left)
         };
 
-        // All branches must reference the same expression
-        match &common_expr {
-            None => common_expr = Some(expr_side),
-            Some(existing) if **existing == *expr_side => {}
-            _ => return reconstruct_no(common_expr, new_when_then, else_expr),
+        if common_expr.is_none() {
+            common_expr = Some(expr_side);
         }
 
         new_when_then.push((literal_side, result));
-    }
-
-    // All THEN results must also be literals for DataFusion's LookupTable
-    let all_then_literal = new_when_then.iter().all(|(_, result)| is_literal(result));
-    let else_literal = else_expr.as_ref().is_none_or(|e| is_literal(e));
-
-    if !all_then_literal || !else_literal {
-        return reconstruct_no(common_expr, new_when_then, else_expr);
     }
 
     Transformed::yes(Expr::Case(Case {
@@ -101,33 +95,47 @@ pub fn try_reconstruct_simple_case(case: Case) -> Transformed<Expr> {
     }))
 }
 
-/// Rebuild the original CASE WHEN form (no transformation).
-fn reconstruct_no(
-    common_expr: Option<Box<Expr>>,
-    partial_when_then: Vec<(Box<Expr>, Box<Expr>)>,
-    else_expr: Option<Box<Expr>>,
-) -> Transformed<Expr> {
-    // We partially destructured the original; rebuild equality conditions
-    let when_then_expr = match &common_expr {
-        Some(col) => partial_when_then
-            .into_iter()
-            .map(|(literal, result)| {
-                let condition = Box::new(Expr::BinaryExpr(BinaryExpr {
-                    left: col.clone(),
-                    op: Operator::Eq,
-                    right: literal,
-                }));
-                (condition, result)
-            })
-            .collect(),
-        None => partial_when_then,
-    };
+/// Check if all branches can be reconstructed into simple CASE form,
+/// without consuming the data.
+fn can_reconstruct(
+    when_then_expr: &[(Box<Expr>, Box<Expr>)],
+    else_expr: &Option<Box<Expr>>,
+) -> bool {
+    let mut common_expr: Option<&Expr> = None;
 
-    Transformed::no(Expr::Case(Case {
-        expr: None,
-        when_then_expr,
-        else_expr,
-    }))
+    for (condition, result) in when_then_expr {
+        // Each condition must be `expr = literal` (or `literal = expr`)
+        let Expr::BinaryExpr(BinaryExpr { left, op, right }) = condition.as_ref() else {
+            return false;
+        };
+        if *op != Operator::Eq {
+            return false;
+        }
+
+        // Determine which side is the literal
+        let expr_side = if is_literal(right) {
+            left.as_ref()
+        } else if is_literal(left) {
+            right.as_ref()
+        } else {
+            return false;
+        };
+
+        // All branches must reference the same expression
+        match common_expr {
+            None => common_expr = Some(expr_side),
+            Some(existing) if *existing == *expr_side => {}
+            _ => return false,
+        }
+
+        // THEN must be a literal for DataFusion's LookupTable
+        if !is_literal(result) {
+            return false;
+        }
+    }
+
+    // ELSE must be a literal (or absent)
+    else_expr.as_ref().is_none_or(|e| is_literal(e))
 }
 
 fn is_literal(expr: &Expr) -> bool {
@@ -257,5 +265,38 @@ mod tests {
 
         let result = try_reconstruct_simple_case(case);
         assert!(!result.transformed);
+    }
+
+    #[test]
+    fn test_no_reconstruct_non_equality_conditions() {
+        // CASE WHEN col IS NOT NULL THEN 'yes' WHEN col2 THEN 'no' ELSE 'maybe' END
+        // This pattern appears in MERGE INTO — must NOT be transformed.
+        let case = Case {
+            expr: None,
+            when_then_expr: vec![
+                (
+                    Box::new(Expr::IsNotNull(Box::new(col("a")))),
+                    lit_expr(ScalarValue::from("yes")),
+                ),
+                (Box::new(col("b")), lit_expr(ScalarValue::from("no"))),
+            ],
+            else_expr: Some(lit_expr(ScalarValue::from("maybe"))),
+        };
+
+        let result = try_reconstruct_simple_case(case);
+        assert!(!result.transformed);
+
+        // Verify the original expression is preserved intact
+        let Expr::Case(Case {
+            expr,
+            when_then_expr,
+            else_expr,
+        }) = result.data
+        else {
+            unreachable!("expected Case expression");
+        };
+        assert!(expr.is_none());
+        assert_eq!(when_then_expr.len(), 2);
+        assert!(else_expr.is_some());
     }
 }
