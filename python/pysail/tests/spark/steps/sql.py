@@ -55,6 +55,22 @@ def config_set(key, value, spark):
     spark.conf.set(key, value)
 
 
+@given(parsers.parse("spark config override {key} = {value}"))
+def spark_config_override(key, value, spark, variables):
+    """Sets a Spark configuration value and restores/unsets it after the scenario."""
+    rendered_value = Template(value).render(**variables)
+    try:
+        old_value = spark.conf.get(key)
+    except Exception:  # noqa: BLE001
+        old_value = None
+    spark.conf.set(key, rendered_value)
+    yield
+    if old_value is None:
+        spark.conf.unset(key)
+    else:
+        spark.conf.set(key, old_value)
+
+
 @given(parsers.re("statement(?P<template>( template)?)"))
 def statement(template, docstring, spark, variables):
     """Executes a SQL statement that is expected to succeed."""

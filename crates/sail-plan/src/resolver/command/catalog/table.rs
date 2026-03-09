@@ -199,21 +199,25 @@ impl PlanResolver<'_> {
         &self,
         table: &spec::ObjectName,
     ) -> PlanResult<String> {
-        let parts = table.parts();
-        let name: String = parts
-            .last()
-            .ok_or_else(|| PlanError::invalid("missing table name"))?
-            .clone()
-            .into();
+        let [qualifier @ .., last] = table.parts() else {
+            return Err(PlanError::invalid("missing table name"));
+        };
+        let name: String = last.clone().into();
         // For characters in the table name that are not alphanumeric, `-`, `_`, or `.`,
-        // replace with `U+` followed by the uppercase hex value of the Unicode code point.
+        // replace with `U+` followed by the fixed-width uppercase hex value of the Unicode
+        // code point: 4 hex digits for U+0000..U+FFFF, 8 hex digits for U+10000..U+10FFFF.
         let name: String = name
             .chars()
             .map(|c| {
                 if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' {
                     c.to_string()
                 } else {
-                    format!("U+{:X}", c as u32)
+                    let v = c as u32;
+                    if v <= 0xFFFF {
+                        format!("U+{v:04X}")
+                    } else {
+                        format!("U+{v:08X}")
+                    }
                 }
             })
             .collect();
@@ -222,26 +226,10 @@ impl PlanResolver<'_> {
         // Note that this is different from how Spark handles table locations
         // for the default catalog.
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
-        let base = {
-            let db_location = if parts.len() <= 1 {
-                // Unqualified table name: look up the default database location.
-                let default_db: Vec<String> = catalog_manager.default_database()?.into();
-                catalog_manager
-                    .get_database(&default_db)
-                    .await
-                    .ok()
-                    .and_then(|s| s.location)
-            } else {
-                // Qualified table name: use all parts except the last as the database reference.
-                let db_parts = &parts[..parts.len() - 1];
-                catalog_manager
-                    .get_database(db_parts)
-                    .await
-                    .ok()
-                    .and_then(|s| s.location)
-            };
-            db_location.unwrap_or_else(|| self.config.default_warehouse_directory.clone())
-        };
+        let db_status = catalog_manager.get_database_by_qualifier(qualifier).await?;
+        let base = db_status
+            .location
+            .unwrap_or_else(|| self.config.default_warehouse_directory.clone());
         Ok(format!("{}{}{}", base, object_store::path::DELIMITER, name,))
     }
 

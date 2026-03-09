@@ -103,36 +103,40 @@ Feature: CREATE TABLE default location
       | 2  |
     Then file tree in db_location matches
       """
-      📂 myU+40table
+      📂 myU+0040table
         📄 part-<id>.<codec>.parquet
       """
 
   @sail-only
   Scenario: CREATE TABLE uses warehouse directory when database has no location
     Given variable warehouse for temporary directory create_table_fallback_warehouse
-    Given config spark.sql.warehouse.dir = {{ warehouse.string }}
+    Given spark config override spark.sql.warehouse.dir = {{ warehouse.string }}
     Given final statement
       """
-      DROP TABLE IF EXISTS create_table_fallback_t
+      DROP DATABASE IF EXISTS create_table_fallback_db CASCADE
       """
     Given statement
       """
-      CREATE TABLE create_table_fallback_t (id INT, name STRING)
+      CREATE DATABASE IF NOT EXISTS create_table_fallback_db
+      """
+    Given statement
+      """
+      CREATE TABLE create_table_fallback_db.fallback_t (id INT, name STRING)
       USING DELTA
       """
     Given statement
       """
-      INSERT INTO create_table_fallback_t VALUES (1, 'Alice')
+      INSERT INTO create_table_fallback_db.fallback_t VALUES (1, 'Alice')
       """
     When query
       """
-      SELECT * FROM create_table_fallback_t ORDER BY id
+      SELECT * FROM create_table_fallback_db.fallback_t ORDER BY id
       """
     Then query result ordered
       | id | name  |
       | 1  | Alice |
     Then file tree in warehouse matches
       """
-      📂 create_table_fallback_t
+      📂 fallback_t
         📄 part-<id>.<codec>.parquet
       """
