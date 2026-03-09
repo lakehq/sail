@@ -60,12 +60,8 @@ impl CatalogManager {
         &self,
         qualifier: &[T],
     ) -> CatalogResult<DatabaseStatus> {
-        if qualifier.is_empty() {
-            let default_db: Vec<String> = self.default_database()?.into();
-            self.get_database(&default_db).await
-        } else {
-            self.get_database(qualifier).await
-        }
+        let (provider, database) = self.resolve_database_by_qualifier(qualifier)?;
+        provider.get_database(&database).await
     }
 
     pub async fn list_databases<T: AsRef<str>>(

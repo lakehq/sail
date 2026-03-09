@@ -103,14 +103,14 @@ Feature: CREATE TABLE default location
       | 2  |
     Then file tree in db_location matches
       """
-      📂 myU+0040table
+      📂 myu+0040table
         📄 part-<id>.<codec>.parquet
       """
 
   @sail-only
   Scenario: CREATE TABLE uses warehouse directory when database has no location
     Given variable warehouse for temporary directory create_table_fallback_warehouse
-    Given spark config override spark.sql.warehouse.dir = {{ warehouse.string }}
+    Given config spark.sql.warehouse.dir = {{ warehouse.string }}
     Given final statement
       """
       DROP DATABASE IF EXISTS create_table_fallback_db CASCADE

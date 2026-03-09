@@ -50,12 +50,6 @@ def variable_for_temporary_directory(name, directory, tmp_path, variables):
 
 
 @given(parsers.parse("config {key} = {value}"))
-def config_set(key, value, spark):
-    """Sets a Spark configuration value using spark.conf.set()."""
-    spark.conf.set(key, value)
-
-
-@given(parsers.parse("spark config override {key} = {value}"))
 def spark_config_override(key, value, spark, variables):
     """Sets a Spark configuration value and restores/unsets it after the scenario."""
     rendered_value = Template(value).render(**variables)
