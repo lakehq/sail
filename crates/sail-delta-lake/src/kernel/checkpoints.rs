@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, LazyLock};
 
 use chrono::{TimeZone, Utc};
-use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, FieldRef};
+use datafusion::arrow::datatypes::{DataType as ArrowDataType, FieldRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, error};
@@ -332,7 +332,7 @@ pub(crate) struct ReplayedTableState {
 }
 
 fn encode_checkpoint_rows(rows: &Vec<CheckpointActionRow>) -> DeltaResult<RecordBatch> {
-    let fields = checkpoint_fields();
+    let fields = checkpoint_fields()?;
     serde_arrow::to_record_batch(&fields, rows).map_err(DeltaTableError::generic_err)
 }
 
@@ -340,133 +340,20 @@ fn decode_checkpoint_rows(batch: &RecordBatch) -> DeltaResult<Vec<CheckpointActi
     serde_arrow::from_record_batch(batch).map_err(DeltaTableError::generic_err)
 }
 
-fn map_utf8_utf8_field(field_name: &str, nullable: bool, value_nullable: bool) -> FieldRef {
-    let entry_struct = ArrowDataType::Struct(
-        vec![
-            Arc::new(Field::new("key", ArrowDataType::Utf8, false)),
-            Arc::new(Field::new("value", ArrowDataType::Utf8, value_nullable)),
-        ]
-        .into(),
-    );
-
-    Arc::new(Field::new(
-        field_name,
-        ArrowDataType::Map(
-            Arc::new(Field::new("key_value", entry_struct, false)),
-            false,
-        ),
-        nullable,
-    ))
-}
-
-fn utf8_list_field(field_name: &str, nullable: bool) -> FieldRef {
-    Arc::new(Field::new(
-        field_name,
-        ArrowDataType::List(Arc::new(Field::new("element", ArrowDataType::Utf8, true))),
-        nullable,
-    ))
-}
-
-fn checkpoint_fields() -> Vec<FieldRef> {
-    let deletion_vector = ArrowDataType::Struct(
-        vec![
-            Arc::new(Field::new("storageType", ArrowDataType::Utf8, false)),
-            Arc::new(Field::new("pathOrInlineDv", ArrowDataType::Utf8, false)),
-            Arc::new(Field::new("offset", ArrowDataType::Int32, true)),
-            Arc::new(Field::new("sizeInBytes", ArrowDataType::Int32, false)),
-            Arc::new(Field::new("cardinality", ArrowDataType::Int64, false)),
-        ]
-        .into(),
-    );
-    let checkpoint_add = ArrowDataType::Struct(
-        vec![
-            Arc::new(Field::new("path", ArrowDataType::Utf8, false)),
-            map_utf8_utf8_field("partitionValues", false, true),
-            Arc::new(Field::new("size", ArrowDataType::Int64, false)),
-            Arc::new(Field::new("modificationTime", ArrowDataType::Int64, false)),
-            Arc::new(Field::new("dataChange", ArrowDataType::Boolean, false)),
-            Arc::new(Field::new("stats", ArrowDataType::Utf8, true)),
-            map_utf8_utf8_field("tags", true, true),
-            Arc::new(Field::new("deletionVector", deletion_vector.clone(), true)),
-            Arc::new(Field::new("baseRowId", ArrowDataType::Int64, true)),
-            Arc::new(Field::new(
-                "defaultRowCommitVersion",
-                ArrowDataType::Int64,
-                true,
-            )),
-            Arc::new(Field::new("clusteringProvider", ArrowDataType::Utf8, true)),
-        ]
-        .into(),
-    );
-    let checkpoint_remove = ArrowDataType::Struct(
-        vec![
-            Arc::new(Field::new("path", ArrowDataType::Utf8, false)),
-            Arc::new(Field::new("deletionTimestamp", ArrowDataType::Int64, true)),
-            Arc::new(Field::new("dataChange", ArrowDataType::Boolean, false)),
-            Arc::new(Field::new(
-                "extendedFileMetadata",
-                ArrowDataType::Boolean,
-                true,
-            )),
-            map_utf8_utf8_field("partitionValues", true, false),
-            Arc::new(Field::new("size", ArrowDataType::Int64, true)),
-            Arc::new(Field::new("stats", ArrowDataType::Utf8, true)),
-            map_utf8_utf8_field("tags", true, false),
-            Arc::new(Field::new("deletionVector", deletion_vector, true)),
-            Arc::new(Field::new("baseRowId", ArrowDataType::Int64, true)),
-            Arc::new(Field::new(
-                "defaultRowCommitVersion",
-                ArrowDataType::Int64,
-                true,
-            )),
-        ]
-        .into(),
-    );
-    let format = ArrowDataType::Struct(
-        vec![
-            Arc::new(Field::new("provider", ArrowDataType::Utf8, false)),
-            map_utf8_utf8_field("options", false, true),
-        ]
-        .into(),
-    );
-    let metadata = ArrowDataType::Struct(
-        vec![
-            Arc::new(Field::new("id", ArrowDataType::Utf8, false)),
-            Arc::new(Field::new("name", ArrowDataType::Utf8, true)),
-            Arc::new(Field::new("description", ArrowDataType::Utf8, true)),
-            Arc::new(Field::new("format", format, false)),
-            Arc::new(Field::new("schemaString", ArrowDataType::Utf8, false)),
-            utf8_list_field("partitionColumns", false),
-            Arc::new(Field::new("createdTime", ArrowDataType::Int64, true)),
-            map_utf8_utf8_field("configuration", false, true),
-        ]
-        .into(),
-    );
-    let protocol = ArrowDataType::Struct(
-        vec![
-            Arc::new(Field::new("minReaderVersion", ArrowDataType::Int32, false)),
-            Arc::new(Field::new("minWriterVersion", ArrowDataType::Int32, false)),
-            utf8_list_field("readerFeatures", true),
-            utf8_list_field("writerFeatures", true),
-        ]
-        .into(),
-    );
-    let txn = ArrowDataType::Struct(
-        vec![
-            Arc::new(Field::new("appId", ArrowDataType::Utf8, false)),
-            Arc::new(Field::new("version", ArrowDataType::Int64, false)),
-            Arc::new(Field::new("lastUpdated", ArrowDataType::Int64, true)),
-        ]
-        .into(),
-    );
-
-    vec![
-        Arc::new(Field::new("add", checkpoint_add, true)),
-        Arc::new(Field::new("remove", checkpoint_remove, true)),
-        Arc::new(Field::new("metaData", metadata, true)),
-        Arc::new(Field::new("protocol", protocol, true)),
-        Arc::new(Field::new("txn", txn, true)),
-    ]
+fn checkpoint_fields() -> DeltaResult<Vec<FieldRef>> {
+    let schema = CheckpointActionRow::struct_type();
+    schema
+        .fields()
+        .map(|field| {
+            datafusion::arrow::datatypes::Field::try_from(field)
+                .map(|f| Arc::new(f) as FieldRef)
+                .map_err(|e| {
+                    DeltaTableError::generic(format!(
+                        "checkpoint schema should convert to Arrow: {e}"
+                    ))
+                })
+        })
+        .collect()
 }
 
 fn find_union_path_in_type(dtype: &ArrowDataType, path: &str) -> Option<String> {
@@ -1219,7 +1106,8 @@ mod tests {
 
     #[test]
     fn checkpoint_schema_keeps_protocol_and_metadata_fields() {
-        let fields = checkpoint_fields();
+        #[expect(clippy::expect_used)]
+        let fields = checkpoint_fields().expect("checkpoint fields should build");
         let metadata_has_configuration = fields
             .iter()
             .find(|field| field.name() == "metaData")
@@ -1245,7 +1133,8 @@ mod tests {
 
     #[test]
     fn checkpoint_schema_keeps_remove_stats_field() {
-        let fields = checkpoint_fields();
+        #[expect(clippy::expect_used)]
+        let fields = checkpoint_fields().expect("checkpoint fields should build");
         let remove_has_stats = fields
             .iter()
             .find(|field| field.name() == "remove")
@@ -1257,5 +1146,32 @@ mod tests {
             });
 
         assert_eq!(remove_has_stats, Some(true));
+    }
+
+    #[test]
+    fn checkpoint_schema_reuses_shared_payload_types() {
+        #[expect(clippy::expect_used)]
+        let fields = checkpoint_fields().expect("checkpoint fields should build");
+        #[expect(clippy::expect_used)]
+        let expected_add =
+            ArrowDataType::try_from(&crate::spec::DataType::from(crate::spec::add_struct_type()))
+                .expect("shared add schema should convert to Arrow");
+        #[expect(clippy::expect_used)]
+        let expected_metadata = ArrowDataType::try_from(&crate::spec::DataType::from(
+            crate::spec::metadata_struct_type(),
+        ))
+        .expect("shared metadata schema should convert to Arrow");
+
+        let add_type = fields
+            .iter()
+            .find(|field| field.name() == "add")
+            .map(|field| field.data_type().clone());
+        let metadata_type = fields
+            .iter()
+            .find(|field| field.name() == "metaData")
+            .map(|field| field.data_type().clone());
+
+        assert_eq!(add_type, Some(expected_add));
+        assert_eq!(metadata_type, Some(expected_metadata));
     }
 }

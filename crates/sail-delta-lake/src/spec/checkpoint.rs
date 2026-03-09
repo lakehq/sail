@@ -20,7 +20,11 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::spec::{Add, Metadata, Protocol, Remove, Transaction};
+use crate::spec::{
+    add_struct_type, metadata_struct_type, protocol_struct_type, remove_struct_type,
+    transaction_struct_type, Add, DataType, Metadata, Protocol, Remove, StructField, StructType,
+    Transaction,
+};
 
 // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/checkpoint/mod.rs#L126-L135>
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -40,6 +44,18 @@ pub struct CheckpointActionRow {
     pub protocol: Option<Protocol>,
     #[serde(rename = "txn", skip_serializing_if = "Option::is_none")]
     pub txn: Option<Transaction>,
+}
+
+impl CheckpointActionRow {
+    pub fn struct_type() -> StructType {
+        StructType::new_unchecked([
+            StructField::nullable("add", DataType::from(add_struct_type())),
+            StructField::nullable("remove", DataType::from(remove_struct_type())),
+            StructField::nullable("metaData", DataType::from(metadata_struct_type())),
+            StructField::nullable("protocol", DataType::from(protocol_struct_type())),
+            StructField::nullable("txn", DataType::from(transaction_struct_type())),
+        ])
+    }
 }
 
 // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/last_checkpoint_hint.rs#L14-L46>

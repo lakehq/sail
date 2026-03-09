@@ -31,9 +31,9 @@ use futures::stream::{self, StreamExt};
 use crate::kernel::transaction::OperationMetrics;
 use crate::physical_plan::{
     current_timestamp_millis, decode_adds_from_batch, delta_action_schema, encode_actions,
-    meta_adds, CommitMeta, PhysicalExecAction, COL_ACTION,
+    meta_adds, ExecCommitMeta, COL_ACTION,
 };
-use crate::spec::{Add, Remove, RemoveOptions};
+use crate::spec::{Action, Add, Remove, RemoveOptions};
 
 /// Physical execution node to convert Add actions (from FindFiles) into Remove actions
 #[derive(Debug)]
@@ -183,22 +183,16 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
                 ..Default::default()
             };
 
-            let mut exec_actions: Vec<PhysicalExecAction> = Vec::new();
+            let output_actions = remove_actions.into_iter().map(Action::Remove).collect();
 
-            for remove in remove_actions {
-                exec_actions.push(remove.into());
-            }
-
-            exec_actions.push(
-                CommitMeta {
+            encode_actions(
+                output_actions,
+                Some(ExecCommitMeta {
                     row_count: 0,
                     operation: None,
                     operation_metrics,
-                }
-                .try_into()?,
-            );
-
-            encode_actions(exec_actions)
+                }),
+            )
         };
 
         let stream = stream::once(future);

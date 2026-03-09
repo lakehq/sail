@@ -53,7 +53,7 @@ use crate::kernel::transaction::OperationMetrics;
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::options::{ColumnMappingModeOption, TableDeltaOptions};
-use crate::physical_plan::{delta_action_schema, encode_actions, CommitMeta, PhysicalExecAction};
+use crate::physical_plan::{delta_action_schema, encode_actions, ExecCommitMeta};
 use crate::schema::{
     annotate_for_column_mapping, compute_max_column_id, evolve_schema, get_physical_schema,
     metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_create,
@@ -396,7 +396,7 @@ impl DeltaWriterExec {
                         // Still update execution metrics so callers see a completed node.
                         output_rows.add(0);
                         output_bytes.add(0);
-                        return encode_actions(vec![CommitMeta::default().try_into()?]);
+                        return encode_actions(vec![], Some(ExecCommitMeta::default()));
                     }
                 }
                 PhysicalSinkMode::OverwritePartitions => {
@@ -691,21 +691,23 @@ impl DeltaWriterExec {
             // - schema evolution actions (metadata)
             // - Add actions (one row per file)
             // - CommitMeta row (row_count + operation + metrics)
-            let mut exec_actions: Vec<PhysicalExecAction> = Vec::new();
+            let mut output_actions: Vec<Action> = Vec::new();
 
             if partition == 0 {
                 for ia in &initial_actions {
                     match ia {
-                        Action::Protocol(p) => exec_actions.push(p.clone().try_into()?),
-                        Action::Metadata(m) => exec_actions.push(m.clone().try_into()?),
+                        Action::Protocol(_) | Action::Metadata(_) => {
+                            output_actions.push(ia.clone())
+                        }
                         _ => {}
                     }
                 }
 
                 for sa in &actions {
                     match sa {
-                        Action::Metadata(m) => exec_actions.push(m.clone().try_into()?),
-                        Action::Protocol(p) => exec_actions.push(p.clone().try_into()?),
+                        Action::Metadata(_) | Action::Protocol(_) => {
+                            output_actions.push(sa.clone())
+                        }
                         _ => {}
                     }
                 }
@@ -713,20 +715,18 @@ impl DeltaWriterExec {
 
             for action in actions {
                 if let Action::Add(add) = action {
-                    exec_actions.push(add.into());
+                    output_actions.push(Action::Add(add));
                 }
             }
 
-            exec_actions.push(
-                CommitMeta {
+            encode_actions(
+                output_actions,
+                Some(ExecCommitMeta {
                     row_count: total_rows,
                     operation,
                     operation_metrics,
-                }
-                .try_into()?,
-            );
-
-            encode_actions(exec_actions)
+                }),
+            )
         };
 
         let stream = once(future);

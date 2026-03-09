@@ -23,13 +23,10 @@ use std::sync::Arc;
 use datafusion::arrow::array::{
     new_empty_array, Array, ArrayRef, MapArray, StringArray, StructArray,
 };
-use datafusion::arrow::datatypes::{
-    DataType as ArrowDataType, Field, Fields, Schema as ArrowSchema,
-};
+use datafusion::arrow::datatypes::{Field, Fields, Schema as ArrowSchema};
 use datafusion::arrow::json::ReaderBuilder as JsonReaderBuilder;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::scalar::ScalarValue;
-use serde::{Deserialize, Serialize};
 
 use super::DeltaSnapshot;
 use crate::conversion::parse_optional_partition_value;
@@ -44,12 +41,7 @@ use crate::spec::{
 
 impl DeltaSnapshot {
     pub(super) fn build_files_batch_from_adds(&self, adds: &[Add]) -> DeltaResult<RecordBatch> {
-        let rows = adds
-            .iter()
-            .cloned()
-            .map(SnapshotAddRow::from)
-            .collect::<Vec<_>>();
-        let raw = encode_snapshot_add_rows(&rows)?;
+        let raw = encode_snapshot_add_rows(adds)?;
         parse_scan_row_columns(raw, self)
     }
 
@@ -62,117 +54,22 @@ impl DeltaSnapshot {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SnapshotDeletionVectorRow {
-    storage_type: String,
-    path_or_inline_dv: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    offset: Option<i32>,
-    size_in_bytes: i32,
-    cardinality: i64,
+fn snapshot_add_fields() -> DeltaResult<Vec<Arc<Field>>> {
+    crate::spec::add_struct_type()
+        .fields()
+        .map(|field| {
+            Field::try_from(field).map(Arc::new).map_err(|e| {
+                DeltaTableError::generic(format!(
+                    "snapshot add schema should convert to Arrow: {e}"
+                ))
+            })
+        })
+        .collect()
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SnapshotAddRow {
-    #[serde(with = "crate::spec::utils::serde_path")]
-    path: String,
-    partition_values: HashMap<String, Option<String>>,
-    size: i64,
-    modification_time: i64,
-    data_change: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stats: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tags: Option<HashMap<String, Option<String>>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    deletion_vector: Option<SnapshotDeletionVectorRow>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    base_row_id: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    default_row_commit_version: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    clustering_provider: Option<String>,
-}
-
-impl From<Add> for SnapshotAddRow {
-    fn from(value: Add) -> Self {
-        Self {
-            path: value.path,
-            partition_values: value.partition_values,
-            size: value.size,
-            modification_time: value.modification_time,
-            data_change: value.data_change,
-            stats: value.stats,
-            tags: value.tags,
-            deletion_vector: value.deletion_vector.map(|dv| SnapshotDeletionVectorRow {
-                storage_type: dv.storage_type.as_ref().to_string(),
-                path_or_inline_dv: dv.path_or_inline_dv,
-                offset: dv.offset,
-                size_in_bytes: dv.size_in_bytes,
-                cardinality: dv.cardinality,
-            }),
-            base_row_id: value.base_row_id,
-            default_row_commit_version: value.default_row_commit_version,
-            clustering_provider: value.clustering_provider,
-        }
-    }
-}
-
-fn map_utf8_utf8_field(field_name: &str, nullable: bool, value_nullable: bool) -> Arc<Field> {
-    let entry_struct = ArrowDataType::Struct(
-        vec![
-            Arc::new(Field::new("key", ArrowDataType::Utf8, false)),
-            Arc::new(Field::new("value", ArrowDataType::Utf8, value_nullable)),
-        ]
-        .into(),
-    );
-
-    Arc::new(Field::new(
-        field_name,
-        ArrowDataType::Map(
-            Arc::new(Field::new("key_value", entry_struct, false)),
-            false,
-        ),
-        nullable,
-    ))
-}
-
-fn snapshot_add_fields() -> Vec<Arc<Field>> {
-    let deletion_vector = ArrowDataType::Struct(
-        vec![
-            Arc::new(Field::new("storageType", ArrowDataType::Utf8, false)),
-            Arc::new(Field::new("pathOrInlineDv", ArrowDataType::Utf8, false)),
-            Arc::new(Field::new("offset", ArrowDataType::Int32, true)),
-            Arc::new(Field::new("sizeInBytes", ArrowDataType::Int32, false)),
-            Arc::new(Field::new("cardinality", ArrowDataType::Int64, false)),
-        ]
-        .into(),
-    );
-
-    vec![
-        Arc::new(Field::new("path", ArrowDataType::Utf8, false)),
-        map_utf8_utf8_field("partitionValues", false, true),
-        Arc::new(Field::new("size", ArrowDataType::Int64, false)),
-        Arc::new(Field::new("modificationTime", ArrowDataType::Int64, false)),
-        Arc::new(Field::new("dataChange", ArrowDataType::Boolean, false)),
-        Arc::new(Field::new("stats", ArrowDataType::Utf8, true)),
-        map_utf8_utf8_field("tags", true, true),
-        Arc::new(Field::new("deletionVector", deletion_vector, true)),
-        Arc::new(Field::new("baseRowId", ArrowDataType::Int64, true)),
-        Arc::new(Field::new(
-            "defaultRowCommitVersion",
-            ArrowDataType::Int64,
-            true,
-        )),
-        Arc::new(Field::new("clusteringProvider", ArrowDataType::Utf8, true)),
-    ]
-}
-
-fn encode_snapshot_add_rows(rows: &[SnapshotAddRow]) -> DeltaResult<RecordBatch> {
+fn encode_snapshot_add_rows(rows: &[Add]) -> DeltaResult<RecordBatch> {
     let owned_rows = rows.to_vec();
-    let fields = snapshot_add_fields();
+    let fields = snapshot_add_fields()?;
     serde_arrow::to_record_batch(&fields, &owned_rows).map_err(DeltaTableError::generic_err)
 }
 
@@ -419,4 +316,28 @@ fn collect_partition_row(value: &StructArray) -> DeltaResult<HashMap<String, Opt
         }
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::Field;
+
+    use super::snapshot_add_fields;
+
+    #[test]
+    fn snapshot_add_schema_reuses_shared_add_schema() {
+        #[expect(clippy::expect_used)]
+        let expected: Vec<Arc<Field>> = crate::spec::add_struct_type()
+            .fields()
+            .map(|field| {
+                Arc::new(Field::try_from(field).expect("shared add schema should convert to Arrow"))
+            })
+            .collect();
+
+        #[expect(clippy::expect_used)]
+        let actual = snapshot_add_fields().expect("snapshot add fields should build");
+        assert_eq!(actual, expected);
+    }
 }

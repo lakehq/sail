@@ -36,7 +36,7 @@ use url::Url;
 
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, OperationMetrics};
 use crate::kernel::{DeltaOperation, SaveMode};
-use crate::physical_plan::action_schema::CommitMeta;
+use crate::physical_plan::action_schema::ExecCommitMeta;
 use crate::physical_plan::{decode_actions_and_meta_from_batch, COL_ACTION};
 use crate::schema::{
     metadata_for_create_with_logical_arrow, normalize_delta_schema, protocol_for_create,
@@ -246,7 +246,7 @@ impl ExecutionPlan for DeltaCommitExec {
                             _ => actions.push(a),
                         }
                     }
-                    if let Some(CommitMeta {
+                    if let Some(ExecCommitMeta {
                         row_count,
                         operation: op,
                         operation_metrics: metrics,

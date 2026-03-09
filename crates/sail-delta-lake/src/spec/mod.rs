@@ -10,6 +10,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod action_schema;
 pub mod actions;
 pub mod checkpoint;
 pub mod error;
@@ -23,6 +24,10 @@ pub mod schema;
 pub mod statistics;
 pub(crate) mod utils;
 
+pub use action_schema::{
+    add_struct_type, deletion_vector_struct_type, metadata_struct_type, protocol_struct_type,
+    remove_struct_type, transaction_struct_type,
+};
 pub use actions::{
     Action, Add, CommitInfo, DeletionVectorDescriptor, Remove, RemoveOptions, StorageType,
     Transaction,
