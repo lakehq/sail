@@ -389,4 +389,33 @@ impl CatalogProvider for MemoryCatalogProvider {
             ))
         }
     }
+
+    async fn rename_table(
+        &self,
+        database: &Namespace,
+        old_name: &str,
+        new_database: &Namespace,
+        new_name: &str,
+    ) -> CatalogResult<()> {
+        // Remove the table from the old location.
+        let mut status = {
+            let mut db = self.databases.get_mut(database).ok_or_else(|| {
+                CatalogError::NotFound("database", quote_namespace_if_needed(database))
+            })?;
+            db.tables
+                .remove(old_name)
+                .ok_or_else(|| CatalogError::NotFound("table", old_name.to_string()))?
+        };
+        // Update the table metadata and insert into the new location.
+        status.name = new_name.to_string();
+        status.database = new_database.clone().into();
+        let mut new_db = self.databases.get_mut(new_database).ok_or_else(|| {
+            CatalogError::NotFound("database", quote_namespace_if_needed(new_database))
+        })?;
+        if new_db.tables.contains_key(new_name) {
+            return Err(CatalogError::AlreadyExists("table", new_name.to_string()));
+        }
+        new_db.tables.insert(new_name.to_string(), status);
+        Ok(())
+    }
 }

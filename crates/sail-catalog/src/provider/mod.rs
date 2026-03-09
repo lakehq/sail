@@ -7,7 +7,7 @@ pub use options::*;
 pub use runtime::*;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
 
-use crate::error::CatalogResult;
+use crate::error::{CatalogError, CatalogResult};
 
 /// A trait that defines the interface for a catalog.
 /// A catalog contains *databases*, where each database has a multi-level name
@@ -88,4 +88,16 @@ pub trait CatalogProvider: Send + Sync {
         view: &str,
         options: DropViewOptions,
     ) -> CatalogResult<()>;
+
+    /// Renames a table in the catalog.
+    async fn rename_table(
+        &self,
+        database: &Namespace,
+        old_name: &str,
+        new_database: &Namespace,
+        new_name: &str,
+    ) -> CatalogResult<()> {
+        let _ = (database, old_name, new_database, new_name);
+        Err(CatalogError::NotSupported("rename table".to_string()))
+    }
 }
