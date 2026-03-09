@@ -48,6 +48,7 @@ pub struct CheckpointActionRow {
 
 impl CheckpointActionRow {
     pub fn struct_type() -> StructType {
+        // TODO: sidecar
         StructType::new_unchecked([
             StructField::nullable("add", DataType::from(add_struct_type())),
             StructField::nullable("remove", DataType::from(remove_struct_type())),

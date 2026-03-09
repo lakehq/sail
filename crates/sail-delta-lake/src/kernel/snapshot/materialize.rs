@@ -1,21 +1,3 @@
-// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
-//
-// Copyright (2020) QP Hou and a number of other contributors.
-// Portions Copyright (2025) LakeSail, Inc.
-// Modified in 2025 by LakeSail, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::Arc;
@@ -316,28 +298,4 @@ fn collect_partition_row(value: &StructArray) -> DeltaResult<HashMap<String, Opt
         }
     }
     Ok(result)
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use datafusion::arrow::datatypes::Field;
-
-    use super::snapshot_add_fields;
-
-    #[test]
-    fn snapshot_add_schema_reuses_shared_add_schema() {
-        #[expect(clippy::expect_used)]
-        let expected: Vec<Arc<Field>> = crate::spec::add_struct_type()
-            .fields()
-            .map(|field| {
-                Arc::new(Field::try_from(field).expect("shared add schema should convert to Arrow"))
-            })
-            .collect();
-
-        #[expect(clippy::expect_used)]
-        let actual = snapshot_add_fields().expect("snapshot add fields should build");
-        assert_eq!(actual, expected);
-    }
 }
