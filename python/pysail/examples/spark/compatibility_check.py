@@ -2,17 +2,34 @@ import argparse
 import logging
 from pathlib import Path
 
-from pysail.utils.logging_config import setup_logging
-from pysail.utils.sail_function_support import (
-    _check_sail_pyspark_compatibility,
-    _format_output,
+from pysail.spark.utils._function_support import (
+    check_sail_pyspark_compatibility,
+    format_output,
 )
 
-setup_logging()
 logger = logging.getLogger(__name__)
+
+_LOG_FORMAT = "%(asctime)s [%(levelname)s] %(module)s.%(funcName)s(): %(message)s"
+
+
+def setup_logging(level: int = logging.INFO) -> None:
+    """Idempotent logging setup."""
+    root = logging.getLogger()
+    if root.handlers:
+        return  # end early if logging is already configured
+
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+
+    root.setLevel(level)
+    root.addHandler(handler)
+
+    # suppress noisy third-party loggers
+    logging.getLogger("jedi").setLevel(logging.WARNING)
 
 
 def main() -> None:
+    setup_logging()
     parser = argparse.ArgumentParser(
         description="Scan Python files for PySpark function usage and cross-reference it with sail docs for compatibility."
     )
@@ -37,10 +54,10 @@ def main() -> None:
 
     logger.info("Scanning: %s", base_dir)
 
-    counts = _check_sail_pyspark_compatibility(base_dir)
+    counts = check_sail_pyspark_compatibility(base_dir)
     logger.info("Scan complete.")
 
-    print(_format_output(counts, args.output))
+    print(format_output(counts, args.output))
 
 
 if __name__ == "__main__":

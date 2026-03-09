@@ -1,13 +1,13 @@
 from inspect import cleandoc
 
-from pysail.utils.sail_function_support import (
-    _check_sail_pyspark_compatibility,
-    _load_sail_support_data,
+from pysail.spark.utils._function_support import (
+    check_sail_pyspark_compatibility,
+    load_sail_support_data,
 )
 
 
 def test_load_sail_support_data():
-    support_data = _load_sail_support_data()
+    support_data = load_sail_support_data()
     assert support_data[("pyspark.sql.functions", "count")] == "supported"
     assert support_data[("pyspark.sql.DataFrame", "join")] == "supported"
 
@@ -34,4 +34,4 @@ def test_check_sail_pyspark_compatibility(tmp_path):
         ("pyspark.sql.session.SparkSession", "getOrCreate", "unknown"): 1,
         ("pyspark.sql.session.SparkSession", "range", "supported"): 1,
     }
-    assert _check_sail_pyspark_compatibility(tmp_path) == expected
+    assert check_sail_pyspark_compatibility(tmp_path) == expected

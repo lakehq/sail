@@ -4,10 +4,10 @@ from pathlib import Path
 from typing import Literal
 
 import pysail
-from pysail.utils.pyspark_function_scanner import _scan_directory
+from pysail.spark.utils._function_scanner import scan_directory
 
 
-def _load_sail_support_data() -> dict[tuple[str, str], str]:
+def load_sail_support_data() -> dict[tuple[str, str], str]:
     """Retrieve support information from internal JSON files."""
     sail_support_index: dict[tuple[str, str], str] = {}
 
@@ -21,11 +21,11 @@ def _load_sail_support_data() -> dict[tuple[str, str], str]:
     return sail_support_index
 
 
-def _check_sail_pyspark_compatibility(repo_path: Path) -> Counter[tuple[str, str, str]]:
+def check_sail_pyspark_compatibility(repo_path: Path) -> Counter[tuple[str, str, str]]:
     """Scan a directory for PySpark function usage and look up sail support."""
-    sail_support_index = _load_sail_support_data()
+    sail_support_index = load_sail_support_data()
 
-    pyspark_function_usage = _scan_directory(repo_path)
+    pyspark_function_usage = scan_directory(repo_path)
 
     counter: Counter[tuple[str, str, str]] = Counter()
     for key, count in pyspark_function_usage.items():
@@ -34,7 +34,7 @@ def _check_sail_pyspark_compatibility(repo_path: Path) -> Counter[tuple[str, str
     return counter
 
 
-def _decode_support_label(label: str) -> str:
+def decode_support_label(label: str) -> str:
     """Decode support labels into emoji-style status strings."""
     preprocessed_label = label.strip().lower()
     mappings = {
@@ -47,7 +47,7 @@ def _decode_support_label(label: str) -> str:
     return mappings.get(preprocessed_label, "❔ unknown")
 
 
-def _format_output(counts: Counter[tuple[str, str, str]], fmt: Literal["json", "csv", "text"]) -> str:
+def format_output(counts: Counter[tuple[str, str, str]], fmt: Literal["json", "csv", "text"]) -> str:
     """Format results as text, CSV or JSON."""
 
     if fmt == "json":
@@ -81,7 +81,7 @@ def _format_output(counts: Counter[tuple[str, str, str]], fmt: Literal["json", "
             if mod != current_mod:
                 lines.append(f"\n[{mod}]")
                 current_mod = mod
-            lines.append(f"  .{func}: {cnt} ({_decode_support_label(support)})")
+            lines.append(f"  .{func}: {cnt} ({decode_support_label(support)})")
 
         return "\n".join(lines)
 
