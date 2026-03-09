@@ -98,8 +98,14 @@ impl CatalogManager {
         qualifier: &[T],
     ) -> CatalogResult<(Arc<dyn CatalogProvider>, Namespace)> {
         let state = self.state()?;
-        let (catalog, database) = state.resolve_database_by_qualifier(qualifier)?;
-        Ok((state.get_catalog(&catalog)?, database))
+        if qualifier.is_empty() {
+            let catalog = state.default_catalog.clone();
+            let database = state.default_database.clone();
+            Ok((state.get_catalog(&catalog)?, database))
+        } else {
+            let (catalog, database) = state.resolve_database_reference(qualifier)?;
+            Ok((state.get_catalog(&catalog)?, database))
+        }
     }
 
     pub(super) fn resolve_optional_database<T: AsRef<str>>(
@@ -183,19 +189,6 @@ impl CatalogManagerState {
                 let database = x.try_into()?;
                 Ok((catalog, Some(database)))
             }
-        }
-    }
-
-    pub fn resolve_database_by_qualifier<T: AsRef<str>>(
-        &self,
-        qualifier: &[T],
-    ) -> CatalogResult<(Arc<str>, Namespace)> {
-        if qualifier.is_empty() {
-            let catalog = self.default_catalog.clone();
-            let database = self.default_database.clone();
-            Ok((catalog, database))
-        } else {
-            self.resolve_database_reference(qualifier)
         }
     }
 

@@ -14,6 +14,8 @@ _SPARK_PART_FILE_RE = re.compile(
     r"-c\d+\.(?P<codec>[A-Za-z0-9]+)\.parquet$"
 )
 
+_UUID_SUFFIX_RE = re.compile(r"^(.+)-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
 
 def _normalize_name(name: str) -> str | None:
     """
@@ -45,6 +47,11 @@ def _normalize_name(name: str) -> str | None:
     if m is not None:
         _ = m.group("codec")
         return "part-<id>.<codec>.parquet"
+
+    # Normalize UUID suffixes in directory names (e.g., `table-<uuid>` -> `table-<uuid>`).
+    m = _UUID_SUFFIX_RE.match(name)
+    if m is not None:
+        return f"{m.group(1)}-<uuid>"
 
     return name
 

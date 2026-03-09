@@ -137,6 +137,6 @@ Feature: CREATE TABLE default location
       | 1  | Alice |
     Then file tree in warehouse matches
       """
-      📂 fallback_t
+      📂 fallback_t-<uuid>
         📄 part-<id>.<codec>.parquet
       """

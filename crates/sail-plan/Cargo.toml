@@ -35,6 +35,7 @@ ryu = { workspace = true }
 either = { workspace = true }
 tokio = { workspace = true }
 rand = { workspace = true }
+uuid = { workspace = true }
 object_store = { workspace = true }
 half = { workspace = true }
 arrow = { workspace = true }

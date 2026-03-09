@@ -51,7 +51,7 @@ def variable_for_temporary_directory(name, directory, tmp_path, variables):
 
 @given(parsers.parse("config {key} = {value}"))
 def spark_config_override(key, value, spark, variables):
-    """Sets a Spark configuration value and restores/unsets it after the scenario."""
+    """Sets a Spark configuration value. Restores the original value or unsets the value after the scenario."""
     rendered_value = Template(value).render(**variables)
     try:
         old_value = spark.conf.get(key)

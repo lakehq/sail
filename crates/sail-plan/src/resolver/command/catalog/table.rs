@@ -205,7 +205,7 @@ impl PlanResolver<'_> {
         let name: String = last.clone().into();
         // For characters in the table name that are not alphanumeric, `-`, or `_`,
         // replace with a fixed-width hex encoding of the Unicode code point:
-        // lowercase `u+XXXX` for U+0000..U+FFFF, uppercase `U+XXXXXXXX` for U+10000..U+10FFFF.
+        // `u+XXXX` for U+0000..U+FFFF and `U+XXXXXXXX` for U+10000..U+10FFFF.
         let name: String = name
             .chars()
             .map(|c| {
@@ -226,13 +226,29 @@ impl PlanResolver<'_> {
         // Note that this is different from how Spark handles table locations
         // for the default catalog.
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
-        let base = catalog_manager
+        let location = catalog_manager
             .get_database_by_qualifier(qualifier)
             .await?
-            .location
-            .unwrap_or_else(|| self.config.default_warehouse_directory.clone());
-        let base = base.trim_end_matches(object_store::path::DELIMITER);
-        Ok(format!("{}{}{}", base, object_store::path::DELIMITER, name,))
+            .location;
+        let (base, suffix) = match &location {
+            Some(loc) => (
+                loc.trim_end_matches(object_store::path::DELIMITER),
+                String::new(),
+            ),
+            None => (
+                self.config
+                    .default_warehouse_directory
+                    .trim_end_matches(object_store::path::DELIMITER),
+                format!("-{}", uuid::Uuid::new_v4()),
+            ),
+        };
+        Ok(format!(
+            "{}{}{}{}",
+            base,
+            object_store::path::DELIMITER,
+            name,
+            suffix,
+        ))
     }
 
     fn resolve_catalog_table_format(
