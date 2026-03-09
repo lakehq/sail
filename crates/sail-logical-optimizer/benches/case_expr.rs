@@ -1,10 +1,12 @@
+#![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+
 use std::sync::Arc;
 
 use arrow::array::{RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use datafusion::common::ScalarValue;
-use datafusion::logical_expr::{BinaryExpr, Case, Expr, Operator, col};
+use datafusion::logical_expr::{col, BinaryExpr, Case, Expr, Operator};
 use datafusion::physical_expr::expressions::{
     BinaryExpr as PhysBinaryExpr, CaseExpr, Column, Literal,
 };
@@ -32,10 +34,7 @@ fn build_flattened_logical_case(num_branches: usize) -> Case {
                 )
             })
             .collect(),
-        else_expr: Some(Box::new(Expr::Literal(
-            ScalarValue::Int32(Some(-1)),
-            None,
-        ))),
+        else_expr: Some(Box::new(Expr::Literal(ScalarValue::Int32(Some(-1)), None))),
     }
 }
 
@@ -44,7 +43,7 @@ fn build_flattened_logical_case(num_branches: usize) -> Case {
 fn logical_to_physical(case: &Case) -> CaseExpr {
     let expr: Option<Arc<dyn PhysicalExpr>> = case.expr.as_ref().map(|e| match e.as_ref() {
         Expr::Column(c) => Arc::new(Column::new(&c.name, 0)) as Arc<dyn PhysicalExpr>,
-        _ => panic!("expected column in case expr"),
+        _ => unreachable!("expected column in case expr"),
     });
 
     let when_then: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> = case
@@ -55,38 +54,34 @@ fn logical_to_physical(case: &Case) -> CaseExpr {
                 // Simple form: WHEN is a literal
                 Expr::Literal(sv, _) => Arc::new(Literal::new(sv.clone())),
                 // Flattened form: WHEN is col = literal
-                Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                    assert_eq!(*op, Operator::Eq);
-                    let left_phys = match left.as_ref() {
-                        Expr::Column(c) => {
-                            Arc::new(Column::new(&c.name, 0)) as Arc<dyn PhysicalExpr>
-                        }
+                Expr::BinaryExpr(BinaryExpr { left, op: _, right }) => {
+                    let left_phys: Arc<dyn PhysicalExpr> = match left.as_ref() {
+                        Expr::Column(c) => Arc::new(Column::new(&c.name, 0)),
                         Expr::Literal(sv, _) => Arc::new(Literal::new(sv.clone())),
-                        other => panic!("unexpected left expr: {other:?}"),
+                        _ => unreachable!("unexpected left expr in WHEN"),
                     };
-                    let right_phys = match right.as_ref() {
-                        Expr::Column(c) => {
-                            Arc::new(Column::new(&c.name, 0)) as Arc<dyn PhysicalExpr>
-                        }
+                    let right_phys: Arc<dyn PhysicalExpr> = match right.as_ref() {
+                        Expr::Column(c) => Arc::new(Column::new(&c.name, 0)),
                         Expr::Literal(sv, _) => Arc::new(Literal::new(sv.clone())),
-                        other => panic!("unexpected right expr: {other:?}"),
+                        _ => unreachable!("unexpected right expr in WHEN"),
                     };
                     Arc::new(PhysBinaryExpr::new(left_phys, Operator::Eq, right_phys))
                 }
-                other => panic!("unexpected when expr: {other:?}"),
+                _ => unreachable!("unexpected when expr"),
             };
             let then_phys: Arc<dyn PhysicalExpr> = match then.as_ref() {
                 Expr::Literal(sv, _) => Arc::new(Literal::new(sv.clone())),
-                other => panic!("unexpected then expr: {other:?}"),
+                _ => unreachable!("unexpected then expr"),
             };
             (when_phys, then_phys)
         })
         .collect();
 
-    let else_phys: Option<Arc<dyn PhysicalExpr>> = case.else_expr.as_ref().map(|e| match e.as_ref() {
-        Expr::Literal(sv, _) => Arc::new(Literal::new(sv.clone())) as Arc<dyn PhysicalExpr>,
-        other => panic!("unexpected else expr: {other:?}"),
-    });
+    let else_phys: Option<Arc<dyn PhysicalExpr>> =
+        case.else_expr.as_ref().map(|e| match e.as_ref() {
+            Expr::Literal(sv, _) => Arc::new(Literal::new(sv.clone())) as Arc<dyn PhysicalExpr>,
+            _ => unreachable!("unexpected else expr"),
+        });
 
     CaseExpr::try_new(expr, when_then, else_phys).expect("failed to create CaseExpr")
 }
@@ -100,8 +95,7 @@ fn generate_batch(num_rows: usize, num_distinct: usize) -> RecordBatch {
 
     let array = StringArray::from(values);
     let schema = Schema::new(vec![Field::new("status", DataType::Utf8, false)]);
-    RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)])
-        .expect("failed to create batch")
+    RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).expect("failed to create batch")
 }
 
 fn bench_case_expr(c: &mut Criterion) {
@@ -119,9 +113,8 @@ fn bench_case_expr(c: &mut Criterion) {
             optimized.transformed,
             "ReconstructSimpleCaseExpr must transform the flattened CASE"
         );
-        let simple_logical = match optimized.data {
-            Expr::Case(case) => case,
-            other => panic!("expected Case after optimization, got: {other:?}"),
+        let Expr::Case(simple_logical) = optimized.data else {
+            unreachable!("expected Case after optimization");
         };
 
         // Convert both to physical expressions
@@ -140,9 +133,7 @@ fn bench_case_expr(c: &mut Criterion) {
 
         group.bench_function(BenchmarkId::new("optimized_hash", num_rows), |b| {
             b.iter(|| {
-                simple_physical
-                    .evaluate(&batch)
-                    .expect("evaluation failed");
+                simple_physical.evaluate(&batch).expect("evaluation failed");
             });
         });
 

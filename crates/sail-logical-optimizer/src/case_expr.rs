@@ -87,11 +87,8 @@ pub fn try_reconstruct_simple_case(case: Case) -> Transformed<Expr> {
     }
 
     // All THEN results must also be literals for DataFusion's LookupTable
-    let all_then_literal =
-        new_when_then.iter().all(|(_, result)| is_literal(result));
-    let else_literal = else_expr
-        .as_ref()
-        .is_none_or(|e| is_literal(e));
+    let all_then_literal = new_when_then.iter().all(|(_, result)| is_literal(result));
+    let else_literal = else_expr.as_ref().is_none_or(|e| is_literal(e));
 
     if !all_then_literal || !else_literal {
         return reconstruct_no(common_expr, new_when_then, else_expr);
@@ -139,9 +136,10 @@ fn is_literal(expr: &Expr) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use datafusion::common::ScalarValue;
     use datafusion::logical_expr::col;
+
+    use super::*;
 
     fn lit_expr(val: impl Into<ScalarValue>) -> Box<Expr> {
         Box::new(Expr::Literal(val.into(), None))
@@ -161,15 +159,24 @@ mod tests {
             expr: None,
             when_then_expr: vec![
                 (
-                    eq_expr(col("status"), Expr::Literal(ScalarValue::from("active"), None)),
+                    eq_expr(
+                        col("status"),
+                        Expr::Literal(ScalarValue::from("active"), None),
+                    ),
                     lit_expr(ScalarValue::Int32(Some(1))),
                 ),
                 (
-                    eq_expr(col("status"), Expr::Literal(ScalarValue::from("inactive"), None)),
+                    eq_expr(
+                        col("status"),
+                        Expr::Literal(ScalarValue::from("inactive"), None),
+                    ),
                     lit_expr(ScalarValue::Int32(Some(0))),
                 ),
                 (
-                    eq_expr(col("status"), Expr::Literal(ScalarValue::from("pending"), None)),
+                    eq_expr(
+                        col("status"),
+                        Expr::Literal(ScalarValue::from("pending"), None),
+                    ),
                     lit_expr(ScalarValue::Int32(Some(2))),
                 ),
             ],
@@ -179,7 +186,12 @@ mod tests {
         let result = try_reconstruct_simple_case(case);
         assert!(result.transformed);
 
-        let Expr::Case(Case { expr, when_then_expr, else_expr }) = result.data else {
+        let Expr::Case(Case {
+            expr,
+            when_then_expr,
+            else_expr,
+        }) = result.data
+        else {
             unreachable!("expected Case expression");
         };
         assert_eq!(expr, Some(Box::new(col("status"))));
