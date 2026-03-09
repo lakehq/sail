@@ -33,7 +33,7 @@ use datafusion_common::{Column, DataFusionError};
 
 use crate::conversion::{parse_optional_partition_value, ScalarConverter};
 use crate::spec::statistics::Stats;
-use crate::spec::{Add, DeltaResult};
+use crate::spec::Add;
 use crate::storage::LogStoreRef;
 use crate::table::DeltaSnapshot;
 
@@ -46,17 +46,10 @@ pub struct PruningResult {
     pub pruning_mask: Option<Vec<bool>>,
 }
 
-async fn collect_add_actions(
-    snapshot: &DeltaSnapshot,
-    _log_store: &LogStoreRef,
-) -> DeltaResult<Vec<Add>> {
-    Ok(snapshot.adds().to_vec())
-}
-
 /// Core file pruning function that filters files based on predicates and limit
 pub async fn prune_files(
     snapshot: &DeltaSnapshot,
-    log_store: &LogStoreRef,
+    _log_store: &LogStoreRef,
     session: &dyn Session,
     filters: &[Expr],
     limit: Option<usize>,
@@ -66,14 +59,14 @@ pub async fn prune_files(
 
     // Early return if no filters and no limit
     if filter_expr.is_none() && limit.is_none() {
-        let files = collect_add_actions(snapshot, log_store).await?;
+        let files = snapshot.adds().to_vec();
         return Ok(PruningResult {
             files,
             pruning_mask: None,
         });
     }
 
-    let all_files = collect_add_actions(snapshot, log_store).await?;
+    let all_files = snapshot.adds().to_vec();
     let num_containers = all_files.len();
 
     // Apply predicate-based pruning

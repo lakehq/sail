@@ -37,8 +37,9 @@ use url::Url;
 use crate::datasource::scan::{FileScanParams, TableStatsMode};
 use crate::datasource::{build_file_scan_config, df_logical_schema, DeltaScanConfig};
 use crate::physical_plan::{decode_adds_from_batch, meta_adds, COL_ACTION};
-use crate::schema::{arrow_field_physical_name, get_physical_schema, logical_arrow_to_kernel};
+use crate::schema::{arrow_field_physical_name, get_physical_schema};
 use crate::session_extension::{load_table_uncached, DeltaTableCache};
+use crate::spec::StructType;
 
 // TODO(dynamic-file-scheduling): Replace fixed file-count chunking with byte-aware chunking
 // and optional work-stealing so executors pull remaining file work dynamically under skew.
@@ -164,7 +165,7 @@ impl ScanByAddsStreamState {
         let table_partition_cols = snapshot_state.metadata().partition_columns();
         let kmode = snapshot_state.effective_column_mapping_mode();
         let kschema_arc = snapshot_state.schema();
-        let logical_kernel = logical_arrow_to_kernel(kschema_arc)
+        let logical_kernel = StructType::try_from(kschema_arc)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let physical_arrow = get_physical_schema(&logical_kernel, kmode);
         let physical_partition_cols: std::collections::HashSet<String> = table_partition_cols

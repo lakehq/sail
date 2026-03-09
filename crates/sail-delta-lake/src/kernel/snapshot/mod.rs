@@ -389,21 +389,11 @@ impl DeltaSnapshot {
         futures::stream::iter(self.removes.iter().cloned().map(Ok::<_, DeltaTableError>)).boxed()
     }
 
-    async fn application_transaction_version(
-        &self,
-        _log_store: &dyn LogStore,
-        app_id: String,
-    ) -> DeltaResult<Option<i64>> {
-        Ok(self.app_txns.get(&app_id).map(|txn| txn.version))
-    }
-
-    pub async fn transaction_version(
-        &self,
-        log_store: &dyn LogStore,
-        app_id: impl ToString,
-    ) -> DeltaResult<Option<i64>> {
-        self.application_transaction_version(log_store, app_id.to_string())
-            .await
+    pub fn transaction_version(&self, app_id: impl ToString) -> DeltaResult<Option<i64>> {
+        Ok(self
+            .app_txns
+            .get(&app_id.to_string())
+            .map(|txn| txn.version))
     }
 }
 

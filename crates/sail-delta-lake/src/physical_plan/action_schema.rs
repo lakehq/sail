@@ -246,10 +246,6 @@ pub fn encode_actions(
     encode_transport_actions(transport_actions)
 }
 
-pub fn encode_add_actions(adds: Vec<Add>) -> Result<RecordBatch> {
-    encode_actions(adds.into_iter().map(Action::Add).collect(), None)
-}
-
 pub fn decode_adds_from_batch(batch: &RecordBatch) -> Result<Vec<Add>> {
     let (actions, _meta) = decode_actions_and_meta_from_batch(batch)?;
     Ok(actions

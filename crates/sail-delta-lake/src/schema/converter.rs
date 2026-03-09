@@ -10,14 +10,6 @@ use crate::spec::{
     MetadataValue, StructField, StructType,
 };
 
-pub fn logical_arrow_to_kernel(arrow: &ArrowSchema) -> DeltaResult<StructType> {
-    Ok(StructType::try_from(arrow)?)
-}
-
-pub fn kernel_to_logical_arrow(schema: &StructType) -> ArrowSchema {
-    ArrowSchema::try_from(schema).unwrap_or_else(|_| ArrowSchema::empty())
-}
-
 pub fn arrow_schema_from_struct_type(
     schema: &StructType,
     partition_columns: &[String],

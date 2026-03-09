@@ -215,34 +215,13 @@ pub async fn build_log_replay_pipeline_with_options(
         },
     )
     .await?;
-    build_log_replay_pipeline_from_parts(
+    build_log_replay_pipeline_with_files(
         ctx,
         ctx.table_url().clone(),
         version,
         snapshot.physical_partition_columns(),
         log_segment_files.checkpoint_files,
         log_segment_files.commit_files,
-        options,
-    )
-    .await
-}
-
-async fn build_log_replay_pipeline_from_parts(
-    ctx: &PlannerContext<'_>,
-    table_url: Url,
-    version: i64,
-    partition_columns: Vec<(String, String)>,
-    checkpoint_files: Vec<String>,
-    commit_files: Vec<String>,
-    options: LogReplayOptions,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    build_log_replay_pipeline_with_files(
-        ctx,
-        table_url,
-        version,
-        partition_columns,
-        checkpoint_files,
-        commit_files,
         options,
     )
     .await

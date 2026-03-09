@@ -117,11 +117,6 @@ fn extract_version_from_meta(meta: &ObjectMeta) -> Option<i64> {
     prefix.parse::<i64>().ok()
 }
 
-/// Return the `_delta_log` commit URI for the given version.
-pub fn commit_uri_from_version(version: i64) -> Path {
-    commit_path(version)
-}
-
 /// Reads a commit and gets list of actions.
 pub fn get_actions(version: i64, commit_log_bytes: &Bytes) -> Result<Vec<Action>, DeltaTableError> {
     debug!("parsing commit with version {version}...");
@@ -226,7 +221,7 @@ impl LogStore for DefaultLogStore {
             CommitOrBytes::LogBytes(log_bytes) => self
                 .object_store(None)
                 .put_opts(
-                    &commit_uri_from_version(version),
+                    &commit_path(version),
                     log_bytes.into(),
                     put_options().clone(),
                 )
@@ -289,7 +284,7 @@ fn put_options() -> &'static PutOptions {
 }
 
 async fn read_commit_entry(storage: &dyn ObjectStore, version: i64) -> DeltaResult<Option<Bytes>> {
-    let commit_uri = commit_uri_from_version(version);
+    let commit_uri = commit_path(version);
     match storage.get(&commit_uri).await {
         Ok(res) => {
             let bytes = res.bytes().await?;

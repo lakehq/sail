@@ -12,7 +12,7 @@ use datafusion::common::scalar::ScalarValue;
 
 use super::DeltaSnapshot;
 use crate::conversion::parse_optional_partition_value;
-use crate::schema::{logical_arrow_to_kernel, make_physical_arrow_schema};
+use crate::schema::make_physical_arrow_schema;
 use crate::spec::fields::{
     FIELD_NAME_PARTITION_VALUES_PARSED, FIELD_NAME_STATS, FIELD_NAME_STATS_PARSED,
 };
@@ -95,7 +95,7 @@ fn parse_scan_row_columns(raw: RecordBatch, snapshot: &DeltaSnapshot) -> DeltaRe
 
     if let Some((stats_idx, _)) = raw.schema_ref().column_with_name(FIELD_NAME_STATS) {
         let stats_source_arrow = build_stats_source_schema(snapshot)?;
-        let stats_source_kernel = logical_arrow_to_kernel(&stats_source_arrow)?;
+        let stats_source_kernel = StructType::try_from(&stats_source_arrow)?;
         let stats_schema = Arc::new(stats_schema(
             &stats_source_kernel,
             snapshot.table_properties(),
@@ -138,7 +138,7 @@ fn parse_scan_row_columns(raw: RecordBatch, snapshot: &DeltaSnapshot) -> DeltaRe
     if let Some(partition_schema_arrow) =
         build_partition_schema(snapshot.schema(), snapshot.metadata().partition_columns())?
     {
-        let partition_schema = logical_arrow_to_kernel(&partition_schema_arrow)?;
+        let partition_schema = StructType::try_from(&partition_schema_arrow)?;
         let partition_array =
             parse_partition_values_array(&raw, &partition_schema, "partitionValues", mode)?;
         fields.push(Arc::new(Field::new(

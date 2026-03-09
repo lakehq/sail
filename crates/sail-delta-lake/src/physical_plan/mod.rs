@@ -38,7 +38,7 @@ mod writer_exec;
 
 pub use action_schema::{
     decode_actions_and_meta_from_batch, decode_adds_from_batch, delta_action_schema,
-    encode_actions, encode_add_actions, ExecCommitMeta, COL_ACTION,
+    encode_actions, ExecCommitMeta, COL_ACTION,
 };
 pub use commit_exec::DeltaCommitExec;
 pub use discovery_exec::DeltaDiscoveryExec;

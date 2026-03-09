@@ -34,8 +34,8 @@ pub use crate::kernel::snapshot::DeltaSnapshot;
 use crate::kernel::DeltaTableConfig;
 use crate::logical::table_source::DeltaTableSource;
 use crate::options::TableDeltaOptions;
-use crate::spec::{DeltaError, DeltaError as DeltaTableError, DeltaResult};
-use crate::storage::{commit_uri_from_version, default_logstore, LogStoreRef, StorageConfig};
+use crate::spec::{commit_path, DeltaError, DeltaError as DeltaTableError, DeltaResult};
+use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
 
 /// In memory representation of a Delta Table
 ///
@@ -91,7 +91,7 @@ impl DeltaTable {
             return Ok(ts);
         }
 
-        let commit_uri = commit_uri_from_version(version);
+        let commit_uri = commit_path(version);
         let meta = self.log_store.object_store(None).head(&commit_uri).await?;
         Ok(meta.last_modified.timestamp_millis())
     }

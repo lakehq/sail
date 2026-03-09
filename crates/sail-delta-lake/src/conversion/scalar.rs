@@ -539,11 +539,6 @@ pub fn scalar_from_array_opt(arr: &dyn Array, index: usize) -> Option<ScalarValu
     ScalarValue::try_from_array(arr, index).ok()
 }
 
-/// Build a `ScalarValue` from an Arrow array at the given index, including nulls.
-pub fn scalar_from_array(arr: &dyn Array, index: usize) -> Option<ScalarValue> {
-    ScalarValue::from_array(arr, index)
-}
-
 /// Convert a `ScalarValue` to an `Arc<dyn Array>` suitable for use as a partition column.
 pub fn scalar_value_to_array(
     value: &ScalarValue,

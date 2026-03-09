@@ -12,8 +12,6 @@
 
 use std::collections::HashMap;
 
-use datafusion::arrow::datatypes::Schema as ArrowSchema;
-
 use super::mapping::{annotate_new_fields_for_column_mapping, compute_max_column_id};
 use crate::spec::{ColumnMappingMode, DeltaResult, Metadata, Protocol, StructType, TableFeature};
 
@@ -45,22 +43,6 @@ pub fn evolve_schema(
         (candidate.clone(), meta)
     };
     Ok(updated)
-}
-
-/// Build Metadata for table creation from a logical Arrow schema.
-pub fn metadata_for_create_with_logical_arrow(
-    schema: &ArrowSchema,
-    partition_columns: Vec<String>,
-    created_time: i64,
-    configuration: HashMap<String, String>,
-) -> DeltaResult<Metadata> {
-    let logical_kernel = super::converter::logical_arrow_to_kernel(schema)?;
-    metadata_for_create_with_struct_type(
-        logical_kernel,
-        partition_columns,
-        created_time,
-        configuration,
-    )
 }
 
 /// Build Metadata for table creation from an existing kernel StructType.
