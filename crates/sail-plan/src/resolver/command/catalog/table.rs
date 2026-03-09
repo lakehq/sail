@@ -1,13 +1,14 @@
 use datafusion_expr::LogicalPlan;
 use sail_catalog::command::CatalogCommand;
+use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::{CatalogPartitionField, CreateTableColumnOptions, CreateTableOptions};
 use sail_common::spec;
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
 };
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_common_datafusion::utils::items::ItemTaker;
-use uuid::Uuid;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
@@ -48,7 +49,7 @@ impl PlanResolver<'_> {
         let location = if let Some(location) = location {
             location
         } else {
-            self.resolve_default_table_location(&table)?
+            self.resolve_default_table_location(&table).await?
         };
         let format = self.resolve_catalog_table_format(file_format)?;
         let partition_by = partition_by
@@ -194,30 +195,54 @@ impl PlanResolver<'_> {
         self.resolve_write_with_builder(input, builder, state).await
     }
 
-    pub(in super::super) fn resolve_default_table_location(
+    pub(in super::super) async fn resolve_default_table_location(
         &self,
         table: &spec::ObjectName,
     ) -> PlanResult<String> {
-        let name: String = table
-            .parts()
+        let parts = table.parts();
+        let name: String = parts
             .last()
             .ok_or_else(|| PlanError::invalid("missing table name"))?
             .clone()
             .into();
-        let name = name
-            .replace(|c: char| !c.is_alphanumeric() && c != '-', "-")
-            .to_lowercase();
+        // For characters in the table name that are not alphanumeric, `-`, `_`, or `.`,
+        // replace with `U+` followed by the uppercase hex value of the Unicode code point.
+        let name: String = name
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                    c.to_string()
+                } else {
+                    format!("U+{:X}", c as u32)
+                }
+            })
+            .collect();
         // We use our own logic to map tables to locations. This avoids conflicts
         // and avoids issues with special characters in table names.
         // Note that this is different from how Spark handles table locations
         // for the default catalog.
-        Ok(format!(
-            "{}{}{}-{}",
-            self.config.default_warehouse_directory,
-            object_store::path::DELIMITER,
-            name,
-            Uuid::new_v4()
-        ))
+        let catalog_manager = self.ctx.extension::<CatalogManager>()?;
+        let base = {
+            let db_location = if parts.len() <= 1 {
+                // Unqualified table name: look up the default database location.
+                let default_db: Vec<String> = catalog_manager.default_database()?.into();
+                catalog_manager
+                    .get_database(&default_db)
+                    .await
+                    .ok()
+                    .and_then(|s| s.location)
+            } else {
+                // Qualified table name: use all parts except the last as the database reference.
+                let db_parts = &parts[..parts.len() - 1];
+                catalog_manager
+                    .get_database(db_parts)
+                    .await
+                    .ok()
+                    .and_then(|s| s.location)
+            };
+            db_location.unwrap_or_else(|| self.config.default_warehouse_directory.clone())
+        };
+        Ok(format!("{}{}{}", base, object_store::path::DELIMITER, name,))
     }
 
     fn resolve_catalog_table_format(
