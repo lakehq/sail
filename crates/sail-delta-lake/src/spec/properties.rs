@@ -121,7 +121,7 @@ where
 const DEFAULT_LOG_RETENTION_SECS: u64 = 30 * 24 * 60 * 60;
 const DEFAULT_DELETED_FILE_RETENTION_SECS: u64 = 7 * 24 * 60 * 60;
 const DEFAULT_CHECKPOINT_INTERVAL: NonZeroU64 =
-    NonZeroU64::new(100).expect("non-zero checkpoint interval");
+    NonZeroU64::new(10).expect("non-zero checkpoint interval");
 
 impl TableProperties {
     pub fn append_only(&self) -> bool {
@@ -149,6 +149,75 @@ impl TableProperties {
 
     pub fn isolation_level(&self) -> IsolationLevel {
         self.isolation_level.unwrap_or_default()
+    }
+}
+
+pub fn canonicalize_and_validate_table_properties<K, V, I>(
+    properties: I,
+) -> DeltaResult<HashMap<String, String>>
+where
+    I: IntoIterator<Item = (K, V)>,
+    K: AsRef<str>,
+    V: AsRef<str>,
+{
+    let mut canonicalized = HashMap::new();
+    for (key, value) in properties {
+        let key = canonicalize_table_property_key(key.as_ref()).unwrap_or_else(|| key.as_ref());
+        validate_table_property(key, value.as_ref())?;
+        canonicalized.insert(key.to_string(), value.as_ref().to_string());
+    }
+    Ok(canonicalized)
+}
+
+fn canonicalize_table_property_key(key: &str) -> Option<&'static str> {
+    match key.to_ascii_lowercase().as_str() {
+        "delta.appendonly" => Some("delta.appendOnly"),
+        "delta.checkpointinterval" | "checkpoint_interval" | "checkpointinterval" => {
+            Some("delta.checkpointInterval")
+        }
+        "delta.checkpoint.writestatsasjson" => Some("delta.checkpoint.writeStatsAsJson"),
+        "delta.checkpoint.writestatsasstruct" => Some("delta.checkpoint.writeStatsAsStruct"),
+        "delta.columnmapping.mode"
+        | "column_mapping_mode"
+        | "columnmappingmode"
+        | "column_mapping" => Some("delta.columnMapping.mode"),
+        "delta.dataskippingnumindexedcols" => Some("delta.dataSkippingNumIndexedCols"),
+        "delta.dataskippingstatscolumns" => Some("delta.dataSkippingStatsColumns"),
+        "delta.deletedfileretentionduration" => Some("delta.deletedFileRetentionDuration"),
+        "delta.isolationlevel" => Some("delta.isolationLevel"),
+        "delta.logretentionduration" => Some("delta.logRetentionDuration"),
+        "delta.enableexpiredlogcleanup" => Some("delta.enableExpiredLogCleanup"),
+        _ => None,
+    }
+}
+
+fn validate_table_property(key: &str, value: &str) -> DeltaResult<()> {
+    match key {
+        "delta.appendOnly"
+        | "delta.checkpoint.writeStatsAsJson"
+        | "delta.checkpoint.writeStatsAsStruct"
+        | "delta.enableExpiredLogCleanup" => parse_bool(value).map(|_| ()).ok_or_else(|| {
+            DeltaTableError::generic(format!("invalid boolean value for {key}: {value}"))
+        }),
+        "delta.checkpointInterval" => parse_positive_int(value).map(|_| ()).ok_or_else(|| {
+            DeltaTableError::generic(format!(
+                "invalid value for {key}: expected positive integer"
+            ))
+        }),
+        "delta.columnMapping.mode" => ColumnMappingMode::try_from(value).map(|_| ()),
+        "delta.dataSkippingNumIndexedCols" => {
+            DataSkippingNumIndexedCols::try_from(value).map(|_| ())
+        }
+        "delta.dataSkippingStatsColumns" => ColumnName::parse_column_name_list(value).map(|_| ()),
+        "delta.deletedFileRetentionDuration" | "delta.logRetentionDuration" => {
+            parse_interval(value).map(|_| ()).ok_or_else(|| {
+                DeltaTableError::generic(format!(
+                    "invalid value for {key}: expected Delta interval literal"
+                ))
+            })
+        }
+        "delta.isolationLevel" => IsolationLevel::from_str(value).map(|_| ()),
+        _ => Ok(()),
     }
 }
 
@@ -241,4 +310,46 @@ pub fn resolve_data_skipping_num_indexed_cols(
     Ok(props
         .data_skipping_num_indexed_cols
         .unwrap_or(DataSkippingNumIndexedCols::AllColumns))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_checkpoint_interval_default_is_ten() {
+        assert_eq!(TableProperties::default().checkpoint_interval().get(), 10);
+    }
+
+    #[test]
+    fn test_canonicalize_table_property_aliases() -> DeltaResult<()> {
+        let props = canonicalize_and_validate_table_properties([
+            ("column_mapping_mode", "name"),
+            ("checkpoint_interval", "7"),
+            ("custom.key", "value"),
+        ])?;
+
+        assert_eq!(
+            props.get("delta.columnMapping.mode"),
+            Some(&"name".to_string())
+        );
+        assert_eq!(
+            props.get("delta.checkpointInterval"),
+            Some(&"7".to_string())
+        );
+        assert_eq!(props.get("custom.key"), Some(&"value".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn test_invalid_modeled_property_is_rejected() {
+        let result =
+            canonicalize_and_validate_table_properties([("delta.checkpointInterval", "0")]);
+        assert!(result.is_err());
+        if let Err(err) = result {
+            assert!(err
+                .to_string()
+                .contains("invalid value for delta.checkpointInterval"));
+        }
+    }
 }

@@ -29,7 +29,10 @@ pub use log::{
 };
 pub use metadata::{Format, Metadata};
 pub use operation::{DeltaOperation, MergePredicate, SaveMode};
-pub use properties::{DataSkippingNumIndexedCols, IsolationLevel, TableProperties};
+pub use properties::{
+    canonicalize_and_validate_table_properties, DataSkippingNumIndexedCols, IsolationLevel,
+    TableProperties,
+};
 pub use protocol::{Protocol, TableFeature};
 pub use schema::{
     ArrayType, ColumnMappingMode, ColumnMetadataKey, ColumnName, DataType, DecimalType, MapType,

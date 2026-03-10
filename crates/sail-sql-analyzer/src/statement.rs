@@ -1841,8 +1841,12 @@ fn from_ast_alter_table_operation(
         }
         AlterTableOperation::AddPartitions { .. } => {}
         AlterTableOperation::DropPartition { .. } => {}
-        AlterTableOperation::SetTableProperties { .. } => {}
-        AlterTableOperation::UnsetTableProperties { .. } => {}
+        AlterTableOperation::SetTableProperties { .. } => {
+            // TODO: reuse Delta metadata property canonicalization and apply via metadata-only commit.
+        }
+        AlterTableOperation::UnsetTableProperties { .. } => {
+            // TODO: reuse Delta metadata property canonicalization and apply via metadata-only commit.
+        }
         AlterTableOperation::SetFileFormat { .. } => {}
         AlterTableOperation::SetLocation { .. } => {}
         AlterTableOperation::RecoverPartitions { .. } => {}

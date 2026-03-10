@@ -112,6 +112,20 @@ where
     Ok(Some(value))
 }
 
+pub fn deserialize_positive_u64<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    let value = value
+        .parse()
+        .map_err(|e| Error::custom(format!("invalid u64 value: {e}")))?;
+    if value == 0 {
+        return Err(Error::custom("expected a positive integer"));
+    }
+    Ok(Some(value))
+}
+
 pub fn deserialize_i64<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
 where
     D: serde::Deserializer<'de>,

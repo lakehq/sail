@@ -24,6 +24,7 @@ pub struct TableDeltaOptions {
     pub overwrite_schema: bool,
     pub target_file_size: u64,
     pub write_batch_size: usize,
+    pub checkpoint_interval: Option<u64>,
 
     pub version_as_of: Option<i64>,
     pub timestamp_as_of: Option<String>,
@@ -51,6 +52,7 @@ impl Default for TableDeltaOptions {
             overwrite_schema: false,
             target_file_size: 0,
             write_batch_size: 0,
+            checkpoint_interval: None,
             version_as_of: None,
             timestamp_as_of: None,
             metadata_as_data_read: false,

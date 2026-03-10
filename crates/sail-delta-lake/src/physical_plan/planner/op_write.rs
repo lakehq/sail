@@ -88,6 +88,7 @@ async fn build_full_overwrite_plan(
         plan,
         ctx.table_url().clone(),
         ctx.options().clone(),
+        ctx.metadata_configuration().clone(),
         ctx.partition_columns().to_vec(),
         PhysicalSinkMode::Overwrite,
         ctx.table_exists(),
@@ -195,6 +196,7 @@ async fn build_overwrite_if_plan(
         Arc::clone(&union_plan),
         ctx.table_url().clone(),
         ctx.options().clone(),
+        ctx.metadata_configuration().clone(),
         ctx.partition_columns().to_vec(),
         PhysicalSinkMode::OverwriteIf {
             condition: None,

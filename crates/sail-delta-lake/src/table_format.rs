@@ -21,6 +21,7 @@ use crate::options::{DeltaLogReplayStrategyOption, TableDeltaOptions};
 use crate::physical_plan::planner::{
     plan_delete, plan_merge, DeltaPhysicalPlanner, DeltaTableConfig, PlannerContext,
 };
+use crate::spec::canonicalize_and_validate_table_properties;
 use crate::table::open_table_with_object_store;
 use crate::{create_delta_provider, create_delta_source, DeltaTableError};
 
@@ -93,6 +94,7 @@ impl TableFormat for DeltaTableFormat {
             partition_by,
             bucket_by,
             sort_order,
+            table_properties,
             options,
         } = info;
 
@@ -104,7 +106,16 @@ impl TableFormat for DeltaTableFormat {
         }
 
         let table_url = Self::parse_table_url(ctx, vec![path]).await?;
-        let delta_options = resolve_delta_write_options(options)?;
+        let metadata_configuration =
+            resolve_delta_metadata_configuration(&table_properties, &options)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let mut effective_options =
+            Vec::with_capacity(options.len() + usize::from(!table_properties.is_empty()));
+        if !table_properties.is_empty() {
+            effective_options.push(table_properties.clone());
+        }
+        effective_options.extend(options.clone());
+        let delta_options = resolve_delta_write_options(effective_options)?;
 
         let object_store = ctx
             .runtime_env()
@@ -197,6 +208,7 @@ impl TableFormat for DeltaTableFormat {
         let table_config = DeltaTableConfig::new(
             table_url,
             delta_options,
+            metadata_configuration,
             partition_columns,
             table_schema_for_cond,
             table_exists,
@@ -227,7 +239,14 @@ impl TableFormat for DeltaTableFormat {
 
         let delta_options = resolve_delta_write_options(options)?;
 
-        let delete_config = DeltaTableConfig::new(table_url, delta_options, Vec::new(), None, true);
+        let delete_config = DeltaTableConfig::new(
+            table_url,
+            delta_options,
+            HashMap::new(),
+            Vec::new(),
+            None,
+            true,
+        );
         let delete_ctx = PlannerContext::new(ctx, delete_config);
         let delete_exec = plan_delete(&delete_ctx, condition).await?;
 
@@ -244,6 +263,7 @@ impl TableFormat for DeltaTableFormat {
         let merge_config = DeltaTableConfig::new(
             table_url,
             delta_options,
+            HashMap::new(),
             info.target.partition_by.clone(),
             None,
             true,
@@ -313,8 +333,13 @@ fn apply_delta_write_options(from: DeltaWriteOptions, to: &mut TableDeltaOptions
     if let Some(write_batch_size) = from.write_batch_size {
         to.write_batch_size = write_batch_size;
     }
+    if let Some(checkpoint_interval) = from.checkpoint_interval {
+        to.checkpoint_interval = Some(checkpoint_interval);
+    }
     if let Some(column_mapping_mode) = from.column_mapping_mode {
-        to.column_mapping_mode = column_mapping_mode.parse().unwrap_or_default();
+        to.column_mapping_mode = column_mapping_mode.parse().map_err(|e| {
+            DataFusionError::Plan(format!("invalid value for delta.columnMapping.mode: {e}"))
+        })?;
     }
     if let Some(ref raw) = from.delta_log_replay_strategy {
         to.delta_log_replay_strategy = match raw.to_ascii_lowercase().as_str() {
@@ -359,4 +384,34 @@ pub fn resolve_delta_write_options(
         apply_delta_write_options(load_options(opt)?, &mut delta_options)?;
     }
     Ok(delta_options)
+}
+
+fn resolve_delta_metadata_configuration(
+    table_properties: &HashMap<String, String>,
+    options: &[HashMap<String, String>],
+) -> crate::spec::DeltaResult<HashMap<String, String>> {
+    let mut properties: Vec<(String, String)> = table_properties
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+
+    for layer in options {
+        for (key, value) in layer {
+            let key_lower = key.to_ascii_lowercase();
+            if key_lower.starts_with("delta.")
+                || matches!(
+                    key_lower.as_str(),
+                    "checkpoint_interval"
+                        | "checkpointinterval"
+                        | "column_mapping_mode"
+                        | "columnmappingmode"
+                        | "column_mapping"
+                )
+            {
+                properties.push((key.clone(), value.clone()));
+            }
+        }
+    }
+
+    canonicalize_and_validate_table_properties(properties)
 }
