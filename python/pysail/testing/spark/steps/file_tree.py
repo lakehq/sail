@@ -27,9 +27,7 @@ _ICEBERG_MANIFEST_FILE_RE = re.compile(
 )
 _ICEBERG_SNAP_FILE_RE = re.compile(r"^snap-\d+\.avro$")
 
-_UUID_SUFFIX_RE = re.compile(
-    r"^(.+)-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
-)
+_UUID_SUFFIX_RE = re.compile(r"^(.+)-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 
 def _normalize_name(name: str) -> str | None:
