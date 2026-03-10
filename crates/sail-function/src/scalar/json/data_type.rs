@@ -36,7 +36,6 @@ pub(crate) fn parse_spark_data_type(schema: &str) -> Result<spec::DataType> {
 fn parse_spark_json_data_type(schema: &str) -> Result<spec::DataType> {
     let json_type: JsonDataType =
         serde_json::from_str(schema).map_err(|e| DataFusionError::Plan(e.to_string()))?;
-    dbg!(&json_type);
     from_spark_json_data_type(json_type)
 }
 
@@ -45,13 +44,11 @@ fn from_spark_json_data_type(data_type: JsonDataType) -> Result<spec::DataType> 
         JsonDataType::String => spec::DataType::Utf8,
         JsonDataType::Integer => spec::DataType::Int32,
         JsonDataType::Float => spec::DataType::Float32,
-        // TODO: whats the proto default?
         JsonDataType::Decimal => spec::DataType::Decimal128 {
             precision: 10,
-            scale: 2,
+            scale: 0,
         },
         JsonDataType::Boolean => spec::DataType::Boolean,
-        // TODO: whats the proto default?
         JsonDataType::Timestamp => spec::DataType::Timestamp {
             time_unit: spec::TimeUnit::Microsecond,
             timestamp_type: spec::TimestampType::WithoutTimeZone,
