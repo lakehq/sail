@@ -1,8 +1,8 @@
 // https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/LICENSE
 //
 // Copyright 2023-2024 The Delta Kernel Rust Authors
-// Portions Copyright (2025) LakeSail, Inc.
-// Ported and modified in 2025 by LakeSail, Inc.
+// Portions Copyright 2025-2026 LakeSail, Inc.
+// Ported and modified in 2026 by LakeSail, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
