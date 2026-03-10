@@ -1446,3 +1446,192 @@ def test_write_none_commit_message(spark):
     # Verify commit was called — messages list should contain the None message
     assert NoneMessageWriter._commit_messages is not None  # noqa: SLF001
     assert len(NoneMessageWriter._commit_messages) > 0  # noqa: SLF001
+
+
+# ============================================================================
+# SQL tests (CREATE TABLE ... USING)
+# ============================================================================
+
+
+def test_sql_create_table_and_select(spark):
+    """Test CREATE TABLE ... USING with a tuple-based Python data source."""
+    from pyspark.sql.types import IntegerType, StringType, StructField, StructType
+
+    table_name = f"sql_simple_{uuid4().hex[:8]}"
+
+    class SQLSimpleDataSource(DataSource):
+        @classmethod
+        def name(cls) -> str:
+            return table_name
+
+        def schema(self) -> StructType:
+            return StructType(
+                [
+                    StructField("name", StringType()),
+                    StructField("age", IntegerType()),
+                ]
+            )
+
+        def reader(self, schema: StructType) -> DataSourceReader:  # noqa: ARG002
+            return SQLSimpleReader()
+
+    class SQLSimpleReader(DataSourceReader):
+        def read(self, partition: InputPartition) -> Iterator[tuple]:  # noqa: ARG002
+            yield ("Alice", 20)
+            yield ("Bob", 30)
+
+    spark.dataSource.register(SQLSimpleDataSource)
+    spark.sql(f"CREATE TABLE {table_name} USING {table_name}")
+
+    try:
+        rows = spark.sql(f"SELECT * FROM {table_name}").collect()  # noqa: S608
+        assert len(rows) == 2  # noqa: PLR2004
+        names = sorted(row.name for row in rows)
+        ages = sorted(row.age for row in rows)
+        assert names == ["Alice", "Bob"]
+        assert ages == [20, 30]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+def test_sql_create_table_and_select_with_filter(spark):
+    """Test SQL queries with WHERE clause on a Python data source table."""
+    from pyspark.sql.types import IntegerType, StringType, StructField, StructType
+
+    table_name = f"sql_filter_{uuid4().hex[:8]}"
+
+    class SQLFilterDataSource(DataSource):
+        @classmethod
+        def name(cls) -> str:
+            return table_name
+
+        def schema(self) -> StructType:
+            return StructType(
+                [
+                    StructField("name", StringType()),
+                    StructField("age", IntegerType()),
+                ]
+            )
+
+        def reader(self, schema: StructType) -> DataSourceReader:  # noqa: ARG002
+            return SQLFilterReader()
+
+    class SQLFilterReader(DataSourceReader):
+        def read(self, partition: InputPartition) -> Iterator[tuple]:  # noqa: ARG002
+            yield ("Alice", 20)
+            yield ("Bob", 30)
+            yield ("Charlie", 25)
+
+    spark.dataSource.register(SQLFilterDataSource)
+    spark.sql(f"CREATE TABLE {table_name} USING {table_name}")
+
+    try:
+        rows = spark.sql(f"SELECT name FROM {table_name} WHERE age > 22").collect()  # noqa: S608
+        names = sorted(row.name for row in rows)
+        assert names == ["Bob", "Charlie"]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+def test_sql_create_table_arrow_datasource(spark):
+    """Test CREATE TABLE ... USING with an Arrow-based Python data source."""
+    table_name = f"sql_arrow_{uuid4().hex[:8]}"
+
+    class SQLArrowDataSource(DataSource):
+        @classmethod
+        def name(cls) -> str:
+            return table_name
+
+        def schema(self):
+            return pa.schema(
+                [
+                    ("id", pa.int32()),
+                    ("value", pa.string()),
+                ]
+            )
+
+        def reader(self, schema) -> DataSourceReader:  # noqa: ARG002
+            return SQLArrowReader()
+
+    class SQLArrowReader(DataSourceReader):
+        def partitions(self):
+            return [InputPartition(0)]
+
+        def read(self, partition):  # noqa: ARG002
+            batch = pa.RecordBatch.from_pydict(
+                {"id": [1, 2, 3], "value": ["a", "b", "c"]},
+                schema=pa.schema([("id", pa.int32()), ("value", pa.string())]),
+            )
+            yield batch
+
+    spark.dataSource.register(SQLArrowDataSource)
+    spark.sql(f"CREATE TABLE {table_name} USING {table_name}")
+
+    try:
+        rows = spark.sql(f"SELECT * FROM {table_name} ORDER BY id").collect()  # noqa: S608
+        assert len(rows) == 3  # noqa: PLR2004
+        assert [(r.id, r.value) for r in rows] == [(1, "a"), (2, "b"), (3, "c")]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+def test_sql_insert_into_python_datasource(spark):
+    """Test INSERT INTO on a Python data source table."""
+    table_name = f"sql_insert_{uuid4().hex[:8]}"
+
+    class SQLInsertWriter(DataSourceWriter):
+        _commit_messages = None
+
+        def __init__(self, schema, overwrite):  # noqa: ARG002
+            self.data = []
+
+        def write(self, iterator):
+            for row in iterator:
+                self.data.append(dict(row.asDict()))
+            return {"count": len(self.data)}
+
+        def commit(self, messages):
+            SQLInsertWriter._commit_messages = messages
+
+    SQLInsertWriter._commit_messages = None  # noqa: SLF001
+
+    class SQLInsertDataSource(DataSource):
+        @classmethod
+        def name(cls) -> str:
+            return table_name
+
+        def schema(self):
+            return pa.schema([("id", pa.int32()), ("value", pa.string())])
+
+        def reader(self, schema) -> DataSourceReader:  # noqa: ARG002
+            return SQLInsertReader()
+
+        def writer(self, schema, overwrite):
+            return SQLInsertWriter(schema, overwrite)
+
+    class SQLInsertReader(DataSourceReader):
+        def partitions(self):
+            return [InputPartition(0)]
+
+        def read(self, partition):  # noqa: ARG002
+            batch = pa.RecordBatch.from_pydict(
+                {"id": [1], "value": ["existing"]},
+                schema=pa.schema([("id", pa.int32()), ("value", pa.string())]),
+            )
+            yield batch
+
+    spark.dataSource.register(SQLInsertDataSource)
+    spark.sql(f"CREATE TABLE {table_name} USING {table_name}")
+
+    try:
+        # Read should work
+        rows = spark.sql(f"SELECT * FROM {table_name}").collect()  # noqa: S608
+        assert len(rows) == 1
+        assert rows[0].value == "existing"
+
+        # INSERT INTO should trigger the writer
+        spark.sql(f"INSERT INTO {table_name} VALUES (2, 'new'), (3, 'another')")  # noqa: S608
+        assert SQLInsertWriter._commit_messages is not None  # noqa: SLF001
+        assert len(SQLInsertWriter._commit_messages) > 0  # noqa: SLF001
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")

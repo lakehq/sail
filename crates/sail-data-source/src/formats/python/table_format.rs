@@ -174,11 +174,12 @@ impl TableFormat for PythonTableFormat {
         // Create PythonDataSource from options
         let datasource = self.create_datasource(&info.options)?;
 
-        // Get schema (use provided schema or discover from Python)
-        let schema = if let Some(schema) = info.schema {
-            Arc::new(schema)
-        } else {
-            datasource.schema()?
+        // Get schema (use provided schema or discover from Python).
+        // When a table is created without column definitions (e.g. `CREATE TABLE t USING fmt`),
+        // the catalog stores an empty schema. Fall back to Python discovery in that case.
+        let schema = match info.schema {
+            Some(schema) if !schema.fields().is_empty() => Arc::new(schema),
+            _ => datasource.schema()?,
         };
 
         // Create executor (MVP: in-process via PyO3)

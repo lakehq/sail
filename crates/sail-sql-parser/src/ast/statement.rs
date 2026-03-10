@@ -50,8 +50,8 @@ pub enum Statement {
     CreateDatabase {
         create: Create,
         database: Either<Database, Schema>,
-        name: ObjectName,
         if_not_exists: Option<(If, Not, Exists)>,
+        name: ObjectName,
         clauses: Vec<CreateDatabaseClause>,
     },
     AlterDatabase {
