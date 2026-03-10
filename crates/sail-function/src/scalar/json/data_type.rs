@@ -3,12 +3,11 @@
 // Also `parse_spark_json_data_type` was rewritten to parse directly to sail data types
 // instead of types defined in the proto files
 
+use datafusion_common::{DataFusionError, Result};
 use monostate::MustBe;
 use sail_common::spec;
 use sail_sql_analyzer::data_type::from_ast_data_type;
 use sail_sql_analyzer::parser::parse_data_type;
-
-use datafusion_common::{DataFusionError, Result};
 use serde::{Deserialize, Serialize};
 
 /// Parse a Spark data type string of various forms.

@@ -2,21 +2,17 @@ use core::any::type_name;
 use std::sync::Arc;
 
 use chrono::{NaiveDate, NaiveDateTime};
-use datafusion_expr::function::Hint;
-
-use datafusion::arrow::{
-    array::{
-        downcast_array, Array, ArrayRef, BooleanBuilder, Decimal128Builder, Float32Builder,
-        Float64Builder, Int32Builder, Int64Builder, ListArray, MapArray, StringArray,
-        StringBuilder, StructArray, TimestampMicrosecondBuilder,
-    },
-    buffer::{NullBuffer, OffsetBuffer, ScalarBuffer},
-    datatypes::{DataType, Field, FieldRef, Fields, TimeUnit},
+use datafusion::arrow::array::{
+    downcast_array, Array, ArrayRef, BooleanBuilder, Decimal128Builder, Float32Builder,
+    Float64Builder, Int32Builder, Int64Builder, ListArray, MapArray, StringArray, StringBuilder,
+    StructArray, TimestampMicrosecondBuilder,
 };
+use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, TimeUnit};
 use datafusion_common::{plan_err, DataFusionError, Result, ScalarValue};
+use datafusion_expr::function::Hint;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions::utils::make_scalar_function;
-
 use serde_json::Value;
 
 use super::data_type::parse_spark_data_type;

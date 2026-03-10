@@ -1,18 +1,16 @@
 // Copied mostly from PlanResolver to avoid circular imports:  https://github.com/lakehq/sail/blob/f64ccb2233473282f9d3ae2c95e2b90848a6f249/crates/sail-plan/src/resolver/data_type.rs#L61
 // some methods and struct inputs removed
 
+use std::collections::HashMap;
 use std::sync::Arc;
-
-use sail_common::spec;
-use sail_common::spec::{
-    SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME,
-};
 
 use datafusion::arrow::datatypes as adt;
 use datafusion::arrow::datatypes::Field;
 use datafusion_common::{DataFusionError, Result};
-
-use std::collections::HashMap;
+use sail_common::spec;
+use sail_common::spec::{
+    SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME,
+};
 
 pub struct SailToArrayDataType;
 
