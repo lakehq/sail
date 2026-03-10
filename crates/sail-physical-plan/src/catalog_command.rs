@@ -96,9 +96,13 @@ impl ExecutionPlan for CatalogCommandExec {
         }
         let command = self.command.clone();
         let schema = self.schema.clone();
-        // Extract table name before moving command into the async block.
-        let partition_table = if let CatalogCommand::ListPartitions { ref table } = command {
-            Some(table.clone())
+        // Extract partition-related fields before moving command into the async block.
+        let partition_info = if let CatalogCommand::ListPartitions {
+            ref table,
+            ref partition_filter,
+        } = command
+        {
+            Some((table.clone(), partition_filter.clone()))
         } else {
             None
         };
@@ -112,9 +116,9 @@ impl ExecutionPlan for CatalogCommandExec {
             // For ListPartitions, fall back to filesystem listing when the catalog
             // did not return any partitions. This avoids overwriting non-empty results
             // from metadata-based implementations (e.g., Iceberg/Delta).
-            let batch = if let Some(table) = &partition_table {
+            let batch = if let Some((table, partition_filter)) = &partition_info {
                 if batch.num_rows() == 0 {
-                    list_partition_values(&context, &manager, table).await?
+                    list_partition_values(&context, &manager, table, partition_filter).await?
                 } else {
                     batch
                 }
@@ -136,6 +140,7 @@ async fn list_partition_values(
     context: &TaskContext,
     manager: &CatalogManager,
     table: &[String],
+    partition_filter: &[(String, Option<String>)],
 ) -> Result<RecordBatch> {
     let table_status = manager
         .get_table_or_view(table)
@@ -190,6 +195,24 @@ async fn list_partition_values(
     .await?;
 
     partitions.sort();
+
+    // Apply partition filter if provided (e.g., PARTITION (year=2023))
+    if !partition_filter.is_empty() {
+        partitions.retain(|partition_path| {
+            partition_filter.iter().all(|(key, value)| {
+                let Some(value) = value else {
+                    // No value specified for this key — match any partition with this key
+                    return partition_path.contains(&format!("{key}="));
+                };
+                // Check if the partition path contains the key=value segment
+                let segment = format!("{key}={value}");
+                partition_path
+                    .split('/')
+                    .any(|part| part == segment.as_str())
+            })
+        });
+    }
+
     let rows: Vec<ShowPartitionRow> = partitions
         .into_iter()
         .map(|partition| ShowPartitionRow { partition })

@@ -309,6 +309,9 @@ pub enum CommandNode {
     },
     ListPartitions {
         table: ObjectName,
+        /// Optional partition filter: `PARTITION (col=value, ...)`.
+        /// Each entry is `(column_name, optional_value)`.
+        partition_filter: Vec<(Identifier, Option<Expr>)>,
     },
     GetDatabase {
         database: ObjectName,

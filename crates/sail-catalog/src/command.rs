@@ -118,6 +118,9 @@ pub enum CatalogCommand {
     },
     ListPartitions {
         table: Vec<String>,
+        /// Optional partition filter: `PARTITION (col=value, ...)`.
+        /// Each entry is `(column_name, optional_string_value)`.
+        partition_filter: Vec<(String, Option<String>)>,
     },
 }
 
@@ -441,7 +444,10 @@ impl CatalogCommand {
                 manager.create_view(&view, options).await?;
                 display.bools().to_record_batch(vec![true])?
             }
-            CatalogCommand::ListPartitions { table } => {
+            CatalogCommand::ListPartitions {
+                table,
+                partition_filter: _,
+            } => {
                 let table_status = manager.get_table_or_view(&table).await?;
                 let partition_cols = table_status.kind.partition_columns();
                 if partition_cols.is_empty() {
