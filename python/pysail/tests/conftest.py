@@ -26,6 +26,10 @@ def pytest_configure(config):
     default_ext = getattr(config.option, "default_extension", None)
     if default_ext is None:
         config.option.default_extension = "pysail.tests.snapshot_yaml.YamlSnapshotExtension"
+    # Store snapshots in `snapshots` directories instead of the default `__snapshots__`.
+    snapshot_dirname = getattr(config.option, "snapshot_dirname", None)
+    if snapshot_dirname is None or snapshot_dirname == "__snapshots__":
+        config.option.snapshot_dirname = "snapshots"
 
     configure_sail_environment()
 
