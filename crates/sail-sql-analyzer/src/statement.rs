@@ -452,8 +452,13 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             show: _,
             partitions: _,
             name,
-            partition: _,
+            partition,
         } => {
+            if partition.is_some() {
+                return Err(SqlError::unsupported(
+                    "SHOW PARTITIONS with PARTITION filter clause",
+                ));
+            }
             let node = spec::CommandNode::ListPartitions {
                 table: from_ast_object_name(name)?,
             };

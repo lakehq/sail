@@ -12,7 +12,7 @@ use crate::provider::{
     CreateDatabaseOptions, CreateTableOptions, CreateTemporaryViewOptions, CreateViewOptions,
     DropDatabaseOptions, DropTableOptions, DropTemporaryViewOptions, DropViewOptions,
 };
-use crate::utils::quote_namespace_if_needed;
+use crate::utils::{quote_names_if_needed, quote_namespace_if_needed};
 
 #[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum CatalogCommand {
@@ -447,7 +447,7 @@ impl CatalogCommand {
                 if partition_cols.is_empty() {
                     return Err(CatalogError::External(format!(
                         "[INVALID_PARTITION_OPERATION.PARTITION_SCHEMA_IS_EMPTY] SHOW PARTITIONS is not allowed on a table that is not partitioned: {}",
-                        table.join(".")
+                        quote_names_if_needed(&table)
                     )));
                 }
                 // TODO: list actual partition values from the underlying table format

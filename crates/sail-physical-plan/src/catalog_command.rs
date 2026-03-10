@@ -109,11 +109,15 @@ impl ExecutionPlan for CatalogCommandExec {
                 .await
                 .map_err(|e| datafusion_common::exec_datafusion_err!("{e}"))?;
 
-            // For ListPartitions, enrich the (empty) result with actual partition values
-            // from the filesystem. This must happen here because we need TaskContext
-            // for object store access, which CatalogCommand::execute doesn't have.
+            // For ListPartitions, fall back to filesystem listing when the catalog
+            // did not return any partitions. This avoids overwriting non-empty results
+            // from metadata-based implementations (e.g., Iceberg/Delta).
             let batch = if let Some(table) = &partition_table {
-                list_partition_values(&context, &manager, table).await?
+                if batch.num_rows() == 0 {
+                    list_partition_values(&context, &manager, table).await?
+                } else {
+                    batch
+                }
             } else {
                 batch
             };
@@ -144,10 +148,18 @@ async fn list_partition_values(
             partition_by,
             ..
         } if !partition_by.is_empty() => (loc.clone(), partition_by.clone()),
+        TableKind::Table {
+            location: None,
+            partition_by,
+            ..
+        } if !partition_by.is_empty() => {
+            return Err(datafusion_common::exec_datafusion_err!(
+                "SHOW PARTITIONS requires a table with a known location"
+            ));
+        }
         _ => {
-            // Non-partitioned or no location: return empty batch.
-            // The error for non-partitioned tables is already handled
-            // in CatalogCommand::execute.
+            // Non-partitioned tables: the error is already handled
+            // in CatalogCommand::execute, so return empty batch as fallback.
             let serializer = ArrowSerializer::default();
             return serializer
                 .build_record_batch::<ShowPartitionRow>(&[])
@@ -165,8 +177,17 @@ async fn list_partition_values(
     let prefix = table_url.prefix().clone();
 
     let depth = partition_by.len();
+    let expected_keys: Vec<&str> = partition_by.iter().map(|c| c.as_str()).collect();
     let mut partitions = Vec::new();
-    collect_partitions(&store, &prefix, depth, String::new(), &mut partitions).await?;
+    collect_partitions(
+        &store,
+        &prefix,
+        depth,
+        &expected_keys,
+        String::new(),
+        &mut partitions,
+    )
+    .await?;
 
     partitions.sort();
     let rows: Vec<ShowPartitionRow> = partitions
@@ -181,10 +202,14 @@ async fn list_partition_values(
 }
 
 /// Recursively collects Hive partition paths by walking subdirectories.
+///
+/// Validates that each directory level matches the expected partition column name
+/// from `partition_by`, ensuring only well-formed Hive partition directories are included.
 fn collect_partitions<'a>(
     store: &'a Arc<dyn ObjectStore>,
     prefix: &'a ObjectPath,
     remaining_depth: usize,
+    expected_keys: &'a [&'a str],
     current_path: String,
     result: &'a mut Vec<String>,
 ) -> futures::future::BoxFuture<'a, Result<()>> {
@@ -200,6 +225,9 @@ fn collect_partitions<'a>(
             datafusion_common::exec_datafusion_err!("failed to list partition directories: {e}")
         })?;
 
+        let current_depth = expected_keys.len() - remaining_depth;
+        let expected_key = expected_keys[current_depth];
+
         for dir in &listing.common_prefixes {
             let dir_name = dir
                 .filename()
@@ -210,8 +238,11 @@ fn collect_partitions<'a>(
                 })?
                 .to_string();
 
-            // Only include directories that look like Hive partitions (key=value)
-            if !dir_name.contains('=') {
+            // Only include directories that match the expected partition key (key=value)
+            let Some(key) = dir_name.split('=').next() else {
+                continue;
+            };
+            if key != expected_key {
                 continue;
             }
 
@@ -221,7 +252,8 @@ fn collect_partitions<'a>(
                 format!("{current_path}/{dir_name}")
             };
 
-            collect_partitions(store, dir, remaining_depth - 1, next_path, result).await?;
+            collect_partitions(store, dir, remaining_depth - 1, expected_keys, next_path, result)
+                .await?;
         }
 
         Ok(())

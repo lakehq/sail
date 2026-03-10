@@ -69,6 +69,26 @@ Feature: SHOW PARTITIONS
         | year=2023 |
         | year=2024 |
 
+    @sail-only
+    Scenario: SHOW PARTITIONS with PARTITION filter clause is not supported
+      Given statement
+        """
+        DROP TABLE IF EXISTS show_part_filter
+        """
+      Given statement
+        """
+        CREATE TABLE show_part_filter (id INT, year INT, month INT) USING parquet PARTITIONED BY (year, month)
+        """
+      Given final statement
+        """
+        DROP TABLE IF EXISTS show_part_filter
+        """
+      When query
+        """
+        SHOW PARTITIONS show_part_filter PARTITION (year=2023)
+        """
+      Then query error not supported
+
     Scenario: SHOW PARTITIONS lists multi-column partition values
       Given statement
         """
