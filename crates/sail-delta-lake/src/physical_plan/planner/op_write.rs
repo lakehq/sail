@@ -26,16 +26,16 @@ use sail_common_datafusion::logical_expr::ExprWithSource;
 
 use super::context::PlannerContext;
 use super::utils::{
-    align_schemas_for_union, build_log_replay_pipeline, build_log_replay_pipeline_with_options,
-    build_standard_write_layers, LogReplayFilter, LogReplayOptions,
+    align_schemas_for_union, build_log_replay_pipeline_with_options, build_standard_write_layers,
+    LogReplayFilter, LogReplayOptions,
 };
-use crate::datasource::schema::DataFusionMixins;
 use crate::datasource::PredicateProperties;
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::physical_plan::{
     create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaDiscoveryExec,
     DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
 };
+use crate::table::DeltaSnapshot;
 
 pub async fn build_write_plan(
     ctx: &PlannerContext<'_>,
@@ -106,26 +106,10 @@ async fn build_full_overwrite_plan(
         let version = snapshot_state.version();
         let partition_columns = snapshot_state.metadata().partition_columns().clone();
 
-        let kernel_snapshot = snapshot_state.snapshot().snapshot().inner.clone();
-        let log_segment = kernel_snapshot.log_segment();
-        let checkpoint_files = log_segment
-            .checkpoint_parts
-            .iter()
-            .map(|p| p.filename.clone())
-            .collect::<Vec<_>>();
-        let commit_files = log_segment
-            .ascending_commit_files
-            .iter()
-            .map(|p| p.filename.clone())
-            .collect::<Vec<_>>();
-
-        let meta_scan: Arc<dyn ExecutionPlan> = build_log_replay_pipeline(
+        let meta_scan: Arc<dyn ExecutionPlan> = build_log_replay_pipeline_with_options(
             ctx,
-            ctx.table_url().clone(),
-            version,
-            partition_columns.clone(),
-            checkpoint_files,
-            commit_files,
+            &snapshot_state,
+            LogReplayOptions::default(),
         )
         .await?;
 
@@ -167,8 +151,7 @@ async fn build_overwrite_if_plan(
         .clone();
     let version = snapshot_state.version();
     let table_schema = snapshot_state
-        .snapshot()
-        .arrow_schema()
+        .input_schema()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let partition_columns = snapshot_state.metadata().partition_columns().clone();
     let table_df_schema = table_schema
@@ -183,7 +166,7 @@ async fn build_overwrite_if_plan(
     let old_data_plan = build_old_data_plan(
         ctx,
         physical_condition.clone(),
-        version,
+        &snapshot_state,
         table_schema.clone(),
     )
     .await?;
@@ -227,19 +210,6 @@ async fn build_overwrite_if_plan(
         .analyze_predicate(&physical_condition)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-    let kernel_snapshot = snapshot_state.snapshot().snapshot().inner.clone();
-    let log_segment = kernel_snapshot.log_segment();
-    let checkpoint_files = log_segment
-        .checkpoint_parts
-        .iter()
-        .map(|p| p.filename.clone())
-        .collect::<Vec<_>>();
-    let commit_files = log_segment
-        .ascending_commit_files
-        .iter()
-        .map(|p| p.filename.clone())
-        .collect::<Vec<_>>();
-
     let mut log_replay_options = LogReplayOptions::default();
     if expr_props.partition_only {
         log_replay_options.log_filter = Some(LogReplayFilter {
@@ -247,16 +217,8 @@ async fn build_overwrite_if_plan(
             table_schema: table_schema.clone(),
         });
     }
-    let meta_scan: Arc<dyn ExecutionPlan> = build_log_replay_pipeline_with_options(
-        ctx,
-        ctx.table_url().clone(),
-        version,
-        partition_columns.clone(),
-        checkpoint_files,
-        commit_files,
-        log_replay_options,
-    )
-    .await?;
+    let meta_scan: Arc<dyn ExecutionPlan> =
+        build_log_replay_pipeline_with_options(ctx, &snapshot_state, log_replay_options).await?;
 
     let find_files_plan: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
         meta_scan,
@@ -287,7 +249,7 @@ async fn build_overwrite_if_plan(
 async fn build_old_data_plan(
     ctx: &PlannerContext<'_>,
     condition: Arc<dyn PhysicalExpr>,
-    version: i64,
+    snapshot_state: &DeltaSnapshot,
     table_schema: SchemaRef,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     // For partition-only predicates, the scan-by-adds stage will be a no-op (partition_scan=true),
@@ -297,24 +259,7 @@ async fn build_old_data_plan(
         .analyze_predicate(&condition)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-    let table = ctx.open_table().await?;
-    let snapshot_state = table
-        .snapshot()
-        .map_err(|e| DataFusionError::External(Box::new(e)))?
-        .clone();
-    let kernel_snapshot = snapshot_state.snapshot().snapshot().inner.clone();
-    let log_segment = kernel_snapshot.log_segment();
-    let checkpoint_files = log_segment
-        .checkpoint_parts
-        .iter()
-        .map(|p| p.filename.clone())
-        .collect::<Vec<_>>();
-    let commit_files = log_segment
-        .ascending_commit_files
-        .iter()
-        .map(|p| p.filename.clone())
-        .collect::<Vec<_>>();
-
+    let version = snapshot_state.version();
     let mut log_replay_options = LogReplayOptions::default();
     if expr_props.partition_only {
         log_replay_options.log_filter = Some(LogReplayFilter {
@@ -322,16 +267,8 @@ async fn build_old_data_plan(
             table_schema: table_schema.clone(),
         });
     }
-    let meta_scan: Arc<dyn ExecutionPlan> = build_log_replay_pipeline_with_options(
-        ctx,
-        ctx.table_url().clone(),
-        version,
-        ctx.partition_columns().to_vec(),
-        checkpoint_files,
-        commit_files,
-        log_replay_options,
-    )
-    .await?;
+    let meta_scan: Arc<dyn ExecutionPlan> =
+        build_log_replay_pipeline_with_options(ctx, snapshot_state, log_replay_options).await?;
 
     let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
         meta_scan,
@@ -344,6 +281,9 @@ async fn build_old_data_plan(
     )?);
 
     // Spread Add actions across partitions so `DeltaScanByAddsExec` can scan files in parallel.
+    // TODO(adaptive-partitioning): Keep this aligned with `scan_planner.rs`.
+    // Plan: switch from fixed `target_partitions` + round-robin to size-driven partition count
+    // first, then size-aware distribution to avoid oversharding and worker skew.
     let target_partitions = ctx.session().config().target_partitions().max(1);
     let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
         find_files_exec,
@@ -353,7 +293,13 @@ async fn build_old_data_plan(
     let scan_exec = Arc::new(DeltaScanByAddsExec::new(
         Arc::clone(&find_files_exec),
         ctx.table_url().clone(),
+        version,
+        table_schema.clone(),
         table_schema,
+        crate::datasource::DeltaScanConfig::default(),
+        None,
+        None,
+        None,
     ));
 
     let negated_condition = Arc::new(NotExpr::new(condition));

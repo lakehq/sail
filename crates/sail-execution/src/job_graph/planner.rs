@@ -16,6 +16,7 @@ use datafusion::physical_plan::{
 };
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_physical_plan::catalog_command::CatalogCommandExec;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::job_graph::{
@@ -165,6 +166,7 @@ enum PartitionUsage {
     Shared,
 }
 
+/// Recursively splits an execution plan into stages at shuffle boundaries and adds them to the job graph.
 fn build_job_graph(
     plan: Arc<dyn ExecutionPlan>,
     usage: PartitionUsage,
@@ -202,10 +204,12 @@ fn build_job_graph(
             build_job_graph(left.clone(), PartitionUsage::Shared, graph)?,
             build_job_graph(right.clone(), usage, graph)?,
         ]
-    } else if plan.as_any().is::<RepartitionExec>() || plan.as_any().is::<CoalescePartitionsExec>()
+    } else if plan.as_any().is::<RepartitionExec>()
+        || plan.as_any().is::<CoalescePartitionsExec>()
+        || plan.as_any().is::<SortPreservingMergeExec>()
     {
         let child = plan.children().one()?;
-        // At the shuffle boundary, we only expect to use the child partition once
+        // At the stage boundary, we only expect to use the child partition once
         // since the shuffle writer can materialize the data for multiple consumption.
         vec![build_job_graph(child.clone(), PartitionUsage::Once, graph)?]
     } else {
@@ -260,7 +264,7 @@ fn build_job_graph(
         let child = plan.children().one()?;
         plan.clone()
             .with_new_children(vec![create_merge_input(child, graph)?])?
-    } else if plan.as_any().is::<SystemTableExec>() {
+    } else if plan.as_any().is::<SystemTableExec>() || plan.as_any().is::<CatalogCommandExec>() {
         plan.children().zero()?;
         create_driver_stage(&plan, graph)?
     } else {

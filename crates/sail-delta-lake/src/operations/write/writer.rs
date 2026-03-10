@@ -24,7 +24,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
-use delta_kernel::expressions::Scalar;
+use datafusion::common::scalar::ScalarValue;
 use indexmap::IndexMap;
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt};
@@ -38,8 +38,8 @@ use uuid::Uuid;
 use super::async_utils::AsyncShareableBuffer;
 use super::partitioning::partition_ranges;
 use super::stats::create_add;
-use crate::kernel::models::{Add, ScalarExt};
-use crate::kernel::DeltaTableError;
+use crate::conversion::ScalarExt;
+use crate::spec::{Add, DeltaError as DeltaTableError};
 
 /// Trait for creating hive partition paths from partition values
 pub trait PartitionsExt {
@@ -47,7 +47,7 @@ pub trait PartitionsExt {
     fn hive_partition_segments(&self) -> Vec<String>;
 }
 
-impl PartitionsExt for IndexMap<String, Scalar> {
+impl PartitionsExt for IndexMap<String, ScalarValue> {
     fn hive_partition_path(&self) -> String {
         self.hive_partition_segments().join("/")
     }
@@ -210,7 +210,7 @@ impl DeltaWriter {
     async fn switch_partition_if_needed(
         &mut self,
         partition_key: String,
-        partition_values: IndexMap<String, Scalar>,
+        partition_values: IndexMap<String, ScalarValue>,
     ) -> Result<(), DeltaTableError> {
         if self.current_partition_key.as_deref() == Some(partition_key.as_str())
             && self.current_writer.is_some()
@@ -281,7 +281,7 @@ pub struct PartitionWriterConfig {
     /// Partition path segments
     pub partition_segments: Vec<String>,
     /// Values for all partition columns
-    pub partition_values: IndexMap<String, Scalar>,
+    pub partition_values: IndexMap<String, ScalarValue>,
     /// Properties passed to underlying parquet writer
     pub writer_properties: WriterProperties,
     /// Size above which we will write a buffered parquet file to disk
@@ -294,7 +294,7 @@ impl PartitionWriterConfig {
     pub fn new(
         table_path: Path,
         file_schema: ArrowSchemaRef,
-        partition_values: IndexMap<String, Scalar>,
+        partition_values: IndexMap<String, ScalarValue>,
         writer_properties: WriterProperties,
         target_file_size: u64,
         write_batch_size: usize,
@@ -553,7 +553,7 @@ mod tests {
     use object_store::ObjectStore;
 
     use super::{DeltaWriter, WriterConfig};
-    use crate::kernel::DeltaTableError;
+    use crate::spec::DeltaError as DeltaTableError;
 
     fn make_batch(values: Vec<i32>, parts: Vec<&str>) -> Result<RecordBatch, DeltaTableError> {
         let schema = Arc::new(Schema::new(vec![

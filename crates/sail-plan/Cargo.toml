@@ -12,6 +12,7 @@ sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-python-udf = { path = "../sail-python-udf" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 sail-catalog = { path = "../sail-catalog" }
+sail-catalog-memory = { path = "../sail-catalog-memory" }
 sail-function = { path = "../sail-function" }
 sail-logical-plan = { path = "../sail-logical-plan" }
 sail-physical-plan = { path = "../sail-physical-plan" }
@@ -34,12 +35,12 @@ ryu = { workspace = true }
 either = { workspace = true }
 tokio = { workspace = true }
 rand = { workspace = true }
+uuid = { workspace = true }
 object_store = { workspace = true }
 half = { workspace = true }
 arrow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-uuid = { workspace = true }
 indexmap = { workspace = true }
 log = { workspace = true }
 regex = { workspace = true }

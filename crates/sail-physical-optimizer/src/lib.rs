@@ -18,9 +18,13 @@ use datafusion::physical_optimizer::topk_aggregation::TopKAggregation;
 use datafusion::physical_optimizer::update_aggr_exprs::OptimizeAggregateOrder;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 
+use crate::barrier::EnforceBarrierPartitioning;
+use crate::collect_left::RewriteCollectLeftHashJoin;
 use crate::explicit_repartition::RewriteExplicitRepartition;
 use crate::join_reorder::JoinReorder;
 
+mod barrier;
+mod collect_left;
 mod explicit_repartition;
 mod join_reorder;
 
@@ -56,6 +60,8 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(EnsureCooperative::new()));
     rules.push(Arc::new(FilterPushdown::new_post_optimization()));
     rules.push(Arc::new(RewriteExplicitRepartition::new()));
+    rules.push(Arc::new(RewriteCollectLeftHashJoin::new()));
+    rules.push(Arc::new(EnforceBarrierPartitioning::new()));
     rules.push(Arc::new(SanityCheckPlan::new()));
 
     rules

@@ -51,6 +51,8 @@ message ExtendedPhysicalPlanNode {
     MonotonicIdExecNode monotonic_id = 36;
     PythonDataSourceWriteExecNode python_data_source_write = 37;
     PythonDataSourceWriteCommitExecNode python_data_source_write_commit = 38;
+    CatalogCommandExecNode catalog_command = 39;
+    BarrierExecNode barrier = 40;
   }
 }
 
@@ -455,6 +457,14 @@ message DeltaScanByAddsExecNode {
   bytes input = 1;
   string table_url = 2;
   bytes table_schema = 3;
+  optional bytes output_schema = 4;
+  string scan_config_json = 5;
+  optional PhysicalProjection projection = 6;
+  optional uint64 limit = 7;
+  optional bytes pushdown_filter = 8;
+  int64 version = 9;
+  optional bytes statistics = 10;
+  // TODO: Consider snapshot hints (partition columns, kernel schema) to avoid worker log reads.
 }
 
 message DeltaDiscoveryExecNode {
@@ -580,12 +590,16 @@ message IcebergCommitExecNode {
 }
 
 message DeltaLogReplayExecNode {
+  // Legacy single-input encoding for sort replay mode.
   bytes input = 1;
   string table_url = 2;
   int64 version = 3;
   repeated string partition_columns = 4;
   repeated string checkpoint_files = 5;
   repeated string commit_files = 6;
+  // Preferred encoding for hash replay mode.
+  optional bytes checkpoint_input = 7;
+  optional bytes commits_input = 8;
 }
 
 message PythonDataSourceInputPartition {
@@ -620,4 +634,19 @@ message PythonDataSourceWriteCommitExecNode {
   uint64 expected_partitions = 2;
   // Input plan that yields per-partition write results.
   bytes input = 3;
+}
+
+message CatalogCommandExecNode {
+  // Schema for the command output.
+  bytes schema = 1;
+  // JSON-encoded CatalogCommand.
+  string command = 2;
+}
+
+message BarrierExecNode {
+  // Precondition plans to be exhausted before the main plan starts.
+  // Each element is a DataFusion PhysicalPlanNode encoded as bytes.
+  repeated bytes preconditions = 1;
+  // The main plan to execute after all preconditions are exhausted.
+  bytes plan = 2;
 }

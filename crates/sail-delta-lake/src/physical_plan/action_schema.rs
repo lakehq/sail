@@ -1,129 +1,193 @@
-use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, LazyLock};
 
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
-use crate::kernel::models::{Action, Add, Metadata, Protocol, Remove};
+use crate::kernel::transaction::OperationMetrics;
 use crate::kernel::DeltaOperation;
+use crate::spec::{
+    add_struct_type, metadata_struct_type, protocol_struct_type, remove_struct_type, Action, Add,
+    Metadata, Protocol, Remove,
+};
 
 pub const COL_ACTION: &str = "action";
-const COL_PARTITION_VALUES: &str = "partition_values";
 
-static ACTION_FIELDS: LazyLock<Vec<datafusion::arrow::datatypes::FieldRef>> = LazyLock::new(|| {
-    #[expect(
-        clippy::unwrap_used,
-        reason = "ACTION_FIELDS is a process-global constant."
-    )]
-    let fields = delta_action_fields_build()
-        .map_err(|msg| format!("delta action fields initialization failed: {msg}"))
-        .unwrap();
-    fields
-});
+static ACTION_FIELDS: LazyLock<Vec<datafusion::arrow::datatypes::FieldRef>> =
+    LazyLock::new(delta_action_fields_build);
 static ACTION_SCHEMA: LazyLock<SchemaRef> =
     LazyLock::new(|| Arc::new(Schema::new((*ACTION_FIELDS).clone())));
 
 #[derive(Debug, Clone, Default)]
-pub struct CommitMeta {
+pub struct ExecCommitMeta {
     pub row_count: u64,
     pub operation: Option<DeltaOperation>,
-    pub operation_metrics: HashMap<String, Value>,
+    pub operation_metrics: OperationMetrics,
 }
 
-fn partition_values_type() -> DataType {
-    // Arrow Map is represented as `Map<entries: Struct<keys: Utf8, values: Utf8?>>`.
-    let entries_struct = DataType::Struct(
+fn action_field(name: &str, data_type: ArrowDataType, nullable: bool) -> Arc<Field> {
+    Arc::new(Field::new(name, data_type, nullable))
+}
+
+fn action_struct_field(name: &str, schema: crate::spec::StructType, nullable: bool) -> Arc<Field> {
+    #[expect(clippy::expect_used)]
+    let data_type = ArrowDataType::try_from(&crate::spec::DataType::from(schema))
+        .expect("action payload schema should convert to Arrow");
+    action_field(name, data_type, nullable)
+}
+
+fn action_union_type() -> ArrowDataType {
+    ArrowDataType::Union(
         vec![
-            Arc::new(Field::new("keys", DataType::Utf8, false)),
-            Arc::new(Field::new("values", DataType::Utf8, true)),
+            (0, action_struct_field("add", add_struct_type(), false)),
+            (
+                1,
+                action_struct_field("remove", remove_struct_type(), false),
+            ),
+            (
+                2,
+                action_struct_field("protocol", protocol_struct_type(), false),
+            ),
+            (
+                3,
+                action_struct_field("metadata", metadata_struct_type(), false),
+            ),
+            (
+                4,
+                action_field("commit_meta", ExecCommitMetaTransport::data_type(), false),
+            ),
         ]
-        .into(),
-    );
-    let entries_field = Arc::new(Field::new("entries", entries_struct, false));
-    DataType::Map(entries_field, false)
+        .into_iter()
+        .collect(),
+        datafusion::arrow::datatypes::UnionMode::Dense,
+    )
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AddAction {
-    path: String,
-    partition_values: BTreeMap<String, Option<String>>,
-    size: i64,
-    modification_time: i64,
-    data_change: bool,
-    stats_json: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RemoveAction {
-    path: String,
-    data_change: bool,
-    deletion_timestamp: Option<i64>,
-    extended_file_metadata: Option<bool>,
-    // Keep non-null in Arrow: Remove.partition_values=None is encoded as empty map (not NULL)
-    partition_values: BTreeMap<String, Option<String>>,
-    size: Option<i64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CommitMetaAction {
+struct ExecCommitMetaTransport {
     commit_row_count: u64,
     operation_json: Option<String>,
-    operation_metrics_json: String,
+    num_files: Option<u64>,
+    num_output_rows: Option<u64>,
+    num_output_bytes: Option<u64>,
+    execution_time_ms: Option<u64>,
+    num_removed_files: Option<u64>,
+    num_added_files: Option<u64>,
+    num_output_files: Option<u64>,
+    num_added_bytes: Option<u64>,
+    num_removed_bytes: Option<u64>,
+    write_time_ms: Option<u64>,
+    operation_metrics_extra_json: Option<String>,
+}
+
+impl ExecCommitMetaTransport {
+    fn data_type() -> ArrowDataType {
+        ArrowDataType::Struct(
+            vec![
+                action_field("commit_row_count", ArrowDataType::UInt64, false),
+                action_field("operation_json", ArrowDataType::Utf8, true),
+                action_field("num_files", ArrowDataType::UInt64, true),
+                action_field("num_output_rows", ArrowDataType::UInt64, true),
+                action_field("num_output_bytes", ArrowDataType::UInt64, true),
+                action_field("execution_time_ms", ArrowDataType::UInt64, true),
+                action_field("num_removed_files", ArrowDataType::UInt64, true),
+                action_field("num_added_files", ArrowDataType::UInt64, true),
+                action_field("num_output_files", ArrowDataType::UInt64, true),
+                action_field("num_added_bytes", ArrowDataType::UInt64, true),
+                action_field("num_removed_bytes", ArrowDataType::UInt64, true),
+                action_field("write_time_ms", ArrowDataType::UInt64, true),
+                action_field("operation_metrics_extra_json", ArrowDataType::Utf8, true),
+            ]
+            .into(),
+        )
+    }
+
+    fn from_exec_meta(meta: ExecCommitMeta) -> Result<Self> {
+        let operation_json = meta
+            .operation
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let operation_metrics_extra_json = (!meta.operation_metrics.extra.is_empty())
+            .then(|| serde_json::to_string(&meta.operation_metrics.extra))
+            .transpose()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        Ok(Self {
+            commit_row_count: meta.row_count,
+            operation_json,
+            num_files: meta.operation_metrics.num_files,
+            num_output_rows: meta.operation_metrics.num_output_rows,
+            num_output_bytes: meta.operation_metrics.num_output_bytes,
+            execution_time_ms: meta.operation_metrics.execution_time_ms,
+            num_removed_files: meta.operation_metrics.num_removed_files,
+            num_added_files: meta.operation_metrics.num_added_files,
+            num_output_files: meta.operation_metrics.num_output_files,
+            num_added_bytes: meta.operation_metrics.num_added_bytes,
+            num_removed_bytes: meta.operation_metrics.num_removed_bytes,
+            write_time_ms: meta.operation_metrics.write_time_ms,
+            operation_metrics_extra_json,
+        })
+    }
+
+    fn into_exec_meta(self) -> Result<ExecCommitMeta> {
+        let operation: Option<DeltaOperation> = self
+            .operation_json
+            .as_deref()
+            .map(serde_json::from_str::<DeltaOperation>)
+            .transpose()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let extra = self
+            .operation_metrics_extra_json
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+            .unwrap_or_default();
+
+        Ok(ExecCommitMeta {
+            row_count: self.commit_row_count,
+            operation,
+            operation_metrics: OperationMetrics {
+                num_files: self.num_files,
+                num_output_rows: self.num_output_rows,
+                num_output_bytes: self.num_output_bytes,
+                execution_time_ms: self.execution_time_ms,
+                num_removed_files: self.num_removed_files,
+                num_added_files: self.num_added_files,
+                num_output_files: self.num_output_files,
+                num_added_bytes: self.num_added_bytes,
+                num_removed_bytes: self.num_removed_bytes,
+                write_time_ms: self.write_time_ms,
+                extra,
+            },
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ExecAction {
+enum PhysicalExecAction {
     #[serde(rename = "add")]
-    Add(AddAction),
+    Add(Add),
     #[serde(rename = "remove")]
-    Remove(RemoveAction),
-    // Protocol / Metadata are relatively rare; we keep them as JSON strings for now.
+    Remove(Remove),
     #[serde(rename = "protocol")]
-    Protocol(String),
+    Protocol(Protocol),
     #[serde(rename = "metadata")]
-    Metadata(String),
+    Metadata(Metadata),
     #[serde(rename = "commit_meta")]
-    CommitMeta(CommitMetaAction),
+    CommitMeta(ExecCommitMetaTransport),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ActionRow {
-    action: ExecAction,
+    action: PhysicalExecAction,
 }
 
-fn delta_action_tracing_options() -> std::result::Result<serde_arrow::schema::TracingOptions, String>
-{
-    use serde_arrow::schema::TracingOptions;
-
-    TracingOptions::default()
-        .map_as_struct(false)
-        .strings_as_large_utf8(false)
-        .sequence_as_large_list(false)
-        // Force MapArray strategy + stable entry field names ("keys"/"values") inside the union variants.
-        .overwrite(
-            "action.add.partition_values",
-            Field::new(COL_PARTITION_VALUES, partition_values_type(), false),
-        )
-        .and_then(|opts| {
-            opts.overwrite(
-                "action.remove.partition_values",
-                Field::new(COL_PARTITION_VALUES, partition_values_type(), false),
-            )
-        })
-        .map_err(|e| format!("failed to overwrite partition_values field: {e}"))
-}
-
-fn delta_action_fields_build(
-) -> std::result::Result<Vec<datafusion::arrow::datatypes::FieldRef>, String> {
-    use serde_arrow::schema::SchemaLike;
-
-    Vec::<datafusion::arrow::datatypes::FieldRef>::from_type::<ActionRow>(
-        delta_action_tracing_options()?,
-    )
-    .map_err(|e| format!("ActionRow schema tracing failed: {e}"))
+fn delta_action_fields_build() -> Vec<datafusion::arrow::datatypes::FieldRef> {
+    vec![action_field(COL_ACTION, action_union_type(), false)]
 }
 
 fn delta_action_fields() -> Result<&'static Vec<datafusion::arrow::datatypes::FieldRef>> {
@@ -134,7 +198,7 @@ pub fn delta_action_schema() -> Result<SchemaRef> {
     Ok(Arc::clone(&*ACTION_SCHEMA))
 }
 
-pub fn encode_actions(actions: Vec<ExecAction>) -> Result<RecordBatch> {
+fn encode_transport_actions(actions: Vec<PhysicalExecAction>) -> Result<RecordBatch> {
     if actions.is_empty() {
         return Ok(RecordBatch::new_empty(delta_action_schema()?));
     }
@@ -148,81 +212,38 @@ pub fn encode_actions(actions: Vec<ExecAction>) -> Result<RecordBatch> {
         .map_err(|e| DataFusionError::External(Box::new(e)))
 }
 
-pub fn encode_add_actions(adds: Vec<Add>) -> Result<RecordBatch> {
-    let actions: Vec<ExecAction> = adds.into_iter().map(ExecAction::from).collect();
-    encode_actions(actions)
-}
-
-impl From<Add> for ExecAction {
-    fn from(add: Add) -> Self {
-        ExecAction::Add(AddAction {
-            path: add.path,
-            partition_values: add.partition_values.into_iter().collect(),
-            size: add.size,
-            modification_time: add.modification_time,
-            data_change: add.data_change,
-            stats_json: add.stats,
-        })
-    }
-}
-
-impl From<Remove> for ExecAction {
-    fn from(remove: Remove) -> Self {
-        ExecAction::Remove(RemoveAction {
-            path: remove.path,
-            data_change: remove.data_change,
-            deletion_timestamp: remove.deletion_timestamp,
-            extended_file_metadata: remove.extended_file_metadata,
-            partition_values: remove
-                .partition_values
-                .unwrap_or_default()
-                .into_iter()
-                .collect(),
-            size: remove.size,
-        })
-    }
-}
-
-impl TryFrom<Protocol> for ExecAction {
+impl TryFrom<Action> for PhysicalExecAction {
     type Error = DataFusionError;
 
-    fn try_from(protocol: Protocol) -> Result<Self> {
-        let protocol_json =
-            serde_json::to_string(&protocol).map_err(|e| DataFusionError::External(Box::new(e)))?;
-        Ok(ExecAction::Protocol(protocol_json))
+    fn try_from(action: Action) -> Result<Self> {
+        match action {
+            Action::Add(add) => Ok(Self::Add(add)),
+            Action::Remove(remove) => Ok(Self::Remove(remove)),
+            Action::Protocol(protocol) => Ok(Self::Protocol(protocol)),
+            Action::Metadata(metadata) => Ok(Self::Metadata(metadata)),
+            unsupported => Err(DataFusionError::Plan(format!(
+                "unsupported physical action transport variant: {unsupported:?}"
+            ))),
+        }
     }
 }
 
-impl TryFrom<Metadata> for ExecAction {
-    type Error = DataFusionError;
+pub fn encode_actions(
+    actions: Vec<Action>,
+    exec_meta: Option<ExecCommitMeta>,
+) -> Result<RecordBatch> {
+    let mut transport_actions = actions
+        .into_iter()
+        .map(PhysicalExecAction::try_from)
+        .collect::<Result<Vec<_>>>()?;
 
-    fn try_from(metadata: Metadata) -> Result<Self> {
-        let metadata_json =
-            serde_json::to_string(&metadata).map_err(|e| DataFusionError::External(Box::new(e)))?;
-        Ok(ExecAction::Metadata(metadata_json))
+    if let Some(exec_meta) = exec_meta {
+        transport_actions.push(PhysicalExecAction::CommitMeta(
+            ExecCommitMetaTransport::from_exec_meta(exec_meta)?,
+        ));
     }
-}
 
-impl TryFrom<CommitMeta> for ExecAction {
-    type Error = DataFusionError;
-
-    fn try_from(meta: CommitMeta) -> Result<Self> {
-        let operation_json = meta
-            .operation
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        let operation_metrics_json = serde_json::to_string(&meta.operation_metrics)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        Ok(ExecAction::CommitMeta(CommitMetaAction {
-            commit_row_count: meta.row_count,
-            operation_json,
-            operation_metrics_json,
-        }))
-    }
+    encode_transport_actions(transport_actions)
 }
 
 pub fn decode_adds_from_batch(batch: &RecordBatch) -> Result<Vec<Add>> {
@@ -238,71 +259,21 @@ pub fn decode_adds_from_batch(batch: &RecordBatch) -> Result<Vec<Add>> {
 
 pub fn decode_actions_and_meta_from_batch(
     batch: &RecordBatch,
-) -> Result<(Vec<Action>, Option<CommitMeta>)> {
+) -> Result<(Vec<Action>, Option<ExecCommitMeta>)> {
     let mut out_actions: Vec<Action> = Vec::new();
-    let mut out_meta: Option<CommitMeta> = None;
+    let mut out_meta: Option<ExecCommitMeta> = None;
 
     let rows: Vec<ActionRow> = serde_arrow::from_record_batch(batch)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     for row in rows {
         match row.action {
-            ExecAction::Add(a) => {
-                out_actions.push(Action::Add(Add {
-                    path: a.path,
-                    partition_values: a.partition_values.into_iter().collect(),
-                    size: a.size,
-                    modification_time: a.modification_time,
-                    data_change: a.data_change,
-                    stats: a.stats_json,
-                    tags: None,
-                    deletion_vector: None,
-                    base_row_id: None,
-                    default_row_commit_version: None,
-                    clustering_provider: None,
-                    commit_version: None,
-                    commit_timestamp: None,
-                }));
-            }
-            ExecAction::Remove(r) => {
-                out_actions.push(Action::Remove(Remove {
-                    path: r.path,
-                    data_change: r.data_change,
-                    deletion_timestamp: r.deletion_timestamp,
-                    extended_file_metadata: r.extended_file_metadata,
-                    partition_values: Some(r.partition_values.into_iter().collect()),
-                    size: r.size,
-                    tags: None,
-                    deletion_vector: None,
-                    base_row_id: None,
-                    default_row_commit_version: None,
-                }));
-            }
-            ExecAction::Protocol(s) => {
-                let p: Protocol =
-                    serde_json::from_str(&s).map_err(|e| DataFusionError::External(Box::new(e)))?;
-                out_actions.push(Action::Protocol(p));
-            }
-            ExecAction::Metadata(s) => {
-                let m: Metadata =
-                    serde_json::from_str(&s).map_err(|e| DataFusionError::External(Box::new(e)))?;
-                out_actions.push(Action::Metadata(m));
-            }
-            ExecAction::CommitMeta(cm) => {
-                let operation: Option<DeltaOperation> = cm
-                    .operation_json
-                    .as_deref()
-                    .map(serde_json::from_str::<DeltaOperation>)
-                    .transpose()
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let operation_metrics: HashMap<String, Value> =
-                    serde_json::from_str::<HashMap<String, Value>>(&cm.operation_metrics_json)
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                out_meta = Some(CommitMeta {
-                    row_count: cm.commit_row_count,
-                    operation,
-                    operation_metrics,
-                });
+            PhysicalExecAction::Add(add) => out_actions.push(Action::Add(add)),
+            PhysicalExecAction::Remove(remove) => out_actions.push(Action::Remove(remove)),
+            PhysicalExecAction::Protocol(protocol) => out_actions.push(Action::Protocol(protocol)),
+            PhysicalExecAction::Metadata(metadata) => out_actions.push(Action::Metadata(metadata)),
+            PhysicalExecAction::CommitMeta(cm) => {
+                out_meta = Some(cm.into_exec_meta()?);
             }
         }
     }
@@ -312,7 +283,13 @@ pub fn decode_actions_and_meta_from_batch(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
+    use datafusion::arrow::datatypes::DataType as ArrowDataType;
+
     use super::*;
+    use crate::kernel::transaction::OperationMetrics;
+    use crate::spec::{DeletionVectorDescriptor, StorageType, StructType};
 
     #[test]
     fn encode_actions_produces_action_column() -> Result<()> {
@@ -332,8 +309,7 @@ mod tests {
             commit_timestamp: None,
         }];
 
-        let exec_actions: Vec<ExecAction> = adds.into_iter().map(|add| add.into()).collect();
-        let rb = encode_actions(exec_actions)?;
+        let rb = encode_actions(adds.into_iter().map(Action::Add).collect(), None)?;
         assert_eq!(rb.schema(), delta_action_schema()?);
         assert_eq!(rb.num_rows(), 1);
         assert!(rb.column_by_name(COL_ACTION).is_some());
@@ -364,27 +340,24 @@ mod tests {
             extended_file_metadata: Some(true),
             partition_values: None,
             size: Some(1),
+            stats: None,
             tags: None,
             deletion_vector: None,
             base_row_id: None,
             default_row_commit_version: None,
         }];
-        let meta = CommitMeta {
+        let meta = ExecCommitMeta {
             row_count: 10,
             operation: None,
-            operation_metrics: HashMap::new(),
+            operation_metrics: OperationMetrics::default(),
         };
-
-        let mut exec_actions: Vec<ExecAction> = Vec::new();
-        for add in adds {
-            exec_actions.push(add.into());
-        }
-        for remove in removes {
-            exec_actions.push(remove.into());
-        }
-        exec_actions.push(meta.try_into()?);
-
-        let batch = encode_actions(exec_actions)?;
+        let batch = encode_actions(
+            adds.into_iter()
+                .map(Action::Add)
+                .chain(removes.into_iter().map(Action::Remove))
+                .collect(),
+            Some(meta),
+        )?;
 
         let (actions, decoded_meta) = decode_actions_and_meta_from_batch(&batch)?;
         assert_eq!(actions.len(), 2);
@@ -394,6 +367,120 @@ mod tests {
             DataFusionError::Internal("expected CommitMeta to be present in roundtrip batch".into())
         })?;
         assert_eq!(decoded_meta.row_count, 10);
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_and_metadata_roundtrip_as_typed_actions() -> Result<()> {
+        let protocol = Protocol::new(3, 7, None, None);
+        let metadata = Metadata::try_new(
+            Some("tbl".to_string()),
+            Some("desc".to_string()),
+            StructType::try_new([]).map_err(|e| DataFusionError::External(Box::new(e)))?,
+            vec!["p".to_string()],
+            0,
+            HashMap::from([("k".to_string(), "v".to_string())]),
+        )
+        .map_err(|e| DataFusionError::External(Box::new(e)))?
+        .with_table_id("table-id".to_string());
+
+        let batch = encode_actions(
+            vec![
+                Action::Protocol(protocol.clone()),
+                Action::Metadata(metadata.clone()),
+            ],
+            None,
+        )?;
+        let (actions, decoded_meta) = decode_actions_and_meta_from_batch(&batch)?;
+
+        assert!(decoded_meta.is_none());
+        assert_eq!(actions.len(), 2);
+        assert!(matches!(&actions[0], Action::Protocol(value) if value == &protocol));
+        assert!(matches!(&actions[1], Action::Metadata(value) if value == &metadata));
+        Ok(())
+    }
+
+    #[test]
+    fn add_and_remove_roundtrip_preserve_extended_fields() -> Result<()> {
+        let add = Add {
+            path: "part-000.parquet".to_string(),
+            partition_values: HashMap::from([("p".to_string(), Some("1".to_string()))]),
+            size: 10,
+            modification_time: 20,
+            data_change: true,
+            stats: Some("{\"numRecords\":1}".to_string()),
+            tags: Some(HashMap::from([("k".to_string(), Some("v".to_string()))])),
+            deletion_vector: Some(DeletionVectorDescriptor {
+                storage_type: StorageType::Inline,
+                path_or_inline_dv: "encoded-dv".to_string(),
+                offset: Some(12),
+                size_in_bytes: 34,
+                cardinality: 56,
+            }),
+            base_row_id: Some(1),
+            default_row_commit_version: Some(2),
+            clustering_provider: Some("liquid".to_string()),
+            commit_version: None,
+            commit_timestamp: None,
+        };
+        let remove = Remove {
+            path: "part-000.parquet".to_string(),
+            data_change: true,
+            deletion_timestamp: Some(30),
+            extended_file_metadata: Some(true),
+            partition_values: Some(HashMap::from([("p".to_string(), Some("1".to_string()))])),
+            size: Some(10),
+            stats: Some("{\"numRecords\":1}".to_string()),
+            tags: Some(HashMap::from([("k".to_string(), Some("v".to_string()))])),
+            deletion_vector: add.deletion_vector.clone(),
+            base_row_id: Some(1),
+            default_row_commit_version: Some(2),
+        };
+
+        let batch = encode_actions(
+            vec![Action::Add(add.clone()), Action::Remove(remove.clone())],
+            None,
+        )?;
+        let (actions, decoded_meta) = decode_actions_and_meta_from_batch(&batch)?;
+
+        assert!(decoded_meta.is_none());
+        assert_eq!(actions, vec![Action::Add(add), Action::Remove(remove)]);
+        Ok(())
+    }
+
+    #[test]
+    fn action_union_reuses_shared_payload_types() -> Result<()> {
+        let schema = delta_action_schema()?;
+        let action_field = schema
+            .field_with_name(COL_ACTION)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let ArrowDataType::Union(fields, _) = action_field.data_type() else {
+            return Err(DataFusionError::Internal(
+                "action column should be a dense union".into(),
+            ));
+        };
+
+        let add_type = fields
+            .iter()
+            .find(|(_, field)| field.name() == "add")
+            .map(|(_, field)| field.data_type().clone())
+            .ok_or_else(|| DataFusionError::Internal("missing add union member".into()))?;
+        let remove_type = fields
+            .iter()
+            .find(|(_, field)| field.name() == "remove")
+            .map(|(_, field)| field.data_type().clone())
+            .ok_or_else(|| DataFusionError::Internal("missing remove union member".into()))?;
+
+        let expected_add =
+            ArrowDataType::try_from(&crate::spec::DataType::from(crate::spec::add_struct_type()))
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let expected_remove = ArrowDataType::try_from(&crate::spec::DataType::from(
+            crate::spec::remove_struct_type(),
+        ))
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        assert_eq!(add_type, expected_add);
+        assert_eq!(remove_type, expected_remove);
         Ok(())
     }
 }

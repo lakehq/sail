@@ -10,22 +10,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use datafusion::arrow::datatypes::Schema as ArrowSchema;
-use delta_kernel::schema::StructType;
-use delta_kernel::table_features::ColumnMappingMode;
+use std::collections::HashMap;
 
-use super::converter::get_physical_arrow_schema;
-use super::mapping::{
-    annotate_new_fields_for_column_mapping, annotate_schema_for_column_mapping,
-    compute_max_column_id,
-};
-use crate::kernel::models::{Metadata, MetadataExt};
-use crate::kernel::DeltaResult;
-
-/// Annotate a kernel schema for column mapping (assign ids + physical names).
-pub fn annotate_for_column_mapping(schema: &StructType) -> StructType {
-    annotate_schema_for_column_mapping(schema)
-}
+use super::mapping::{annotate_new_fields_for_column_mapping, compute_max_column_id};
+use crate::spec::{ColumnMappingMode, DeltaResult, Metadata, Protocol, StructType, TableFeature};
 
 /// Evolve table schema and update metadata according to column mapping mode.
 pub fn evolve_schema(
@@ -48,7 +36,7 @@ pub fn evolve_schema(
         let meta_with_max = meta_with_schema.add_config_key(
             "delta.columnMapping.maxColumnId".to_string(),
             last_id.to_string(),
-        )?;
+        );
         (annotated, meta_with_max)
     } else {
         let meta = metadata.clone().with_schema(candidate)?;
@@ -57,8 +45,47 @@ pub fn evolve_schema(
     Ok(updated)
 }
 
-/// Get the Arrow physical schema for reading/writing files, enriched with PARQUET:field_id
-/// when column mapping Name/Id mode is active.
-pub fn get_physical_schema(logical: &StructType, mode: ColumnMappingMode) -> ArrowSchema {
-    get_physical_arrow_schema(logical, mode)
+/// Build Metadata for table creation from an existing kernel StructType.
+pub fn metadata_for_create_with_struct_type(
+    schema: StructType,
+    partition_columns: Vec<String>,
+    created_time: i64,
+    configuration: HashMap<String, String>,
+) -> DeltaResult<Metadata> {
+    Metadata::try_new(
+        None,
+        None,
+        schema,
+        partition_columns,
+        created_time,
+        configuration,
+    )
+}
+
+/// Build Protocol for a create/write path based on required table features.
+pub fn protocol_for_create(
+    enable_column_mapping: bool,
+    enable_timestamp_ntz: bool,
+) -> DeltaResult<Protocol> {
+    if !enable_column_mapping && !enable_timestamp_ntz {
+        return Ok(Protocol::new(1, 2, None, None));
+    }
+
+    let mut reader_features = Vec::new();
+    let mut writer_features = Vec::new();
+    if enable_column_mapping {
+        reader_features.push(TableFeature::ColumnMapping);
+        writer_features.push(TableFeature::ColumnMapping);
+    }
+    if enable_timestamp_ntz {
+        reader_features.push(TableFeature::TimestampWithoutTimezone);
+        writer_features.push(TableFeature::TimestampWithoutTimezone);
+    }
+
+    Ok(Protocol::new(
+        3,
+        7,
+        Some(reader_features),
+        Some(writer_features),
+    ))
 }

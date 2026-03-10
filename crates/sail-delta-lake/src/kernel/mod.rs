@@ -10,26 +10,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod arrow;
-pub mod models;
+pub mod log_segment;
 pub mod snapshot;
-pub mod statistics;
 pub mod transaction;
 
 pub(crate) mod checkpoints;
 mod config;
-mod error;
-mod operation;
-pub(crate) mod store_compat;
-mod table_properties;
-
-use std::sync::LazyLock;
 
 pub use config::DeltaTableConfig;
-use delta_kernel::engine::arrow_expression::ArrowEvaluationHandler;
-pub use error::{DeltaResult, DeltaTableError};
-pub use operation::{DeltaOperation, MergePredicate, SaveMode};
-pub use table_properties::TablePropertiesExt;
 
-pub(crate) static ARROW_HANDLER: LazyLock<ArrowEvaluationHandler> =
-    LazyLock::new(|| ArrowEvaluationHandler {});
+pub use crate::spec::operation::{DeltaOperation, MergePredicate, SaveMode};
+pub use crate::spec::SchemaRef;

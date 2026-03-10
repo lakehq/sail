@@ -9,7 +9,7 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference}
 use k8s_openapi::{DeepMerge, Resource};
 use kube::Api;
 use rand::distr::Uniform;
-use rand::Rng;
+use rand::RngExt;
 use sail_common::config::ClusterConfigEnv;
 use sail_server::RetryStrategy;
 use sail_telemetry::common::ContextPropagationEnv;

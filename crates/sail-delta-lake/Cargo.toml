@@ -20,14 +20,6 @@ sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-data-source = { path = "../sail-data-source" }
 sail-physical-plan = { path = "../sail-physical-plan" }
-# Delta Lake
-delta_kernel = { workspace = true }
-# Arrow 57 is needed for compatibility with delta_kernel's internal Arrow types.
-# delta_kernel 0.18.2 uses arrow 57 internally; we use IPC to convert to/from workspace arrow 58.
-arrow_57 = { package = "arrow", version = "57", features = ["ipc"] }
-# parquet 57 is needed so we write checkpoint files in the same format that delta_kernel (parquet 57)
-# can read back. Writing with the workspace parquet 58 produces files that parquet 57 cannot parse.
-parquet_57 = { package = "parquet", version = "57", features = ["async", "object_store"] }
 
 # DataFusion dependencies
 datafusion = { workspace = true }
@@ -42,8 +34,6 @@ arrow-schema = { workspace = true }
 async-trait = { workspace = true }
 educe = { workspace = true }
 object_store = { workspace = true }
-# object_store 0.12 is needed for delta_kernel compatibility
-object_store_012 = { package = "object_store", version = "0.12.5" }
 thiserror = { workspace = true }
 chrono = { workspace = true }
 serde_json = { workspace = true }
@@ -60,6 +50,8 @@ itertools = { workspace = true }
 percent-encoding = { workspace = true }
 regex = { workspace = true }
 serde_arrow = { workspace = true }
+moka = { workspace = true }
+once_cell = { workspace = true }
 
 [lints]
 workspace = true

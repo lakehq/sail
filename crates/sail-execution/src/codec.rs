@@ -7,6 +7,7 @@ use datafusion::arrow::datatypes::{DataType, Schema, TimeUnit};
 use datafusion::common::parsers::CompressionTypeVariant;
 use datafusion::common::{
     plan_datafusion_err, plan_err, Constraint, Constraints, JoinSide, Result, ScalarValue,
+    Statistics,
 };
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::memory::MemorySourceConfig;
@@ -124,6 +125,9 @@ use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::timestamp_now::TimestampNow;
 use sail_function::scalar::drop_struct_field::DropStructField;
 use sail_function::scalar::explode::{explode_name_to_kind, Explode};
+use sail_function::scalar::geo::st_asbinary::StAsBinary;
+use sail_function::scalar::geo::st_geogfromwkb::StGeogFromWKB;
+use sail_function::scalar::geo::st_geomfromwkb::StGeomFromWKB;
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
 use sail_function::scalar::hash::spark_xxhash64::SparkXxhash64;
 use sail_function::scalar::json::SparkToJson;
@@ -172,6 +176,8 @@ use sail_iceberg::physical_plan::{IcebergCommitExec, IcebergWriterExec};
 use sail_iceberg::TableIcebergOptions;
 use sail_logical_plan::range::Range;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
+use sail_physical_plan::barrier::BarrierExec;
+use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
@@ -633,16 +639,70 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 table_url,
                 table_schema,
+                output_schema,
+                scan_config_json,
+                projection,
+                limit,
+                pushdown_filter,
+                version,
+                statistics,
             }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
                 let table_schema = Arc::new(self.try_decode_schema(&table_schema)?);
-                Ok(Arc::new(DeltaScanByAddsExec::new(
-                    input,
-                    table_url,
-                    table_schema,
-                )))
+                let output_schema = if let Some(schema_bytes) = output_schema {
+                    Arc::new(self.try_decode_schema(&schema_bytes)?)
+                } else {
+                    Arc::clone(&table_schema)
+                };
+                let scan_config: sail_delta_lake::datasource::DeltaScanConfig =
+                    if scan_config_json.is_empty() {
+                        sail_delta_lake::datasource::DeltaScanConfig::default()
+                    } else {
+                        serde_json::from_str(&scan_config_json).map_err(|e| {
+                            plan_datafusion_err!("failed to decode Delta scan config: {e}")
+                        })?
+                    };
+                let projection = projection
+                    .map(|p| self.try_decode_projection(&p.columns))
+                    .transpose()
+                    .map_err(|_| {
+                        plan_datafusion_err!("invalid projection for DeltaScanByAddsExec")
+                    })?;
+                let limit = limit
+                    .map(usize::try_from)
+                    .transpose()
+                    .map_err(|_| plan_datafusion_err!("invalid limit for DeltaScanByAddsExec"))?;
+                let pushdown_filter = if let Some(pred_bytes) = pushdown_filter {
+                    let predicate = parse_physical_expr(
+                        &self.try_decode_message(&pred_bytes)?,
+                        ctx,
+                        &output_schema,
+                        self,
+                    )?;
+                    Some(predicate)
+                } else {
+                    None
+                };
+                let statistics = statistics
+                    .as_ref()
+                    .map(|bytes| self.try_decode_statistics(bytes))
+                    .transpose()?;
+                Ok(Arc::new(
+                    DeltaScanByAddsExec::new(
+                        input,
+                        table_url,
+                        version,
+                        table_schema,
+                        output_schema,
+                        scan_config,
+                        projection,
+                        limit,
+                        pushdown_filter,
+                    )
+                    .with_output_statistics(statistics),
+                ))
             }
             NodeKind::DeltaDiscovery(gen::DeltaDiscoveryExecNode {
                 table_url,
@@ -696,18 +756,40 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 partition_columns,
                 checkpoint_files,
                 commit_files,
+                checkpoint_input,
+                commits_input,
             }) => {
-                let input = self.try_decode_plan(&input, ctx)?;
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
-                Ok(Arc::new(DeltaLogReplayExec::new(
-                    input,
-                    table_url,
-                    version,
-                    partition_columns,
-                    checkpoint_files,
-                    commit_files,
-                )))
+                match (checkpoint_input.as_ref(), commits_input.as_ref()) {
+                    (Some(checkpoint_input), Some(commits_input)) => {
+                        let checkpoint_input = self.try_decode_plan(checkpoint_input, ctx)?;
+                        let commits_input = self.try_decode_plan(commits_input, ctx)?;
+                        Ok(Arc::new(DeltaLogReplayExec::new_hash(
+                            checkpoint_input,
+                            commits_input,
+                            table_url,
+                            version,
+                            partition_columns,
+                            checkpoint_files,
+                            commit_files,
+                        )))
+                    }
+                    (None, None) => {
+                        let input = self.try_decode_plan(&input, ctx)?;
+                        Ok(Arc::new(DeltaLogReplayExec::new(
+                            input,
+                            table_url,
+                            version,
+                            partition_columns,
+                            checkpoint_files,
+                            commit_files,
+                        )))
+                    }
+                    _ => plan_err!(
+                        "DeltaLogReplayExec requires both checkpoint_input and commits_input when hash replay is encoded"
+                    ),
+                }
             }
             NodeKind::ConsoleSink(gen::ConsoleSinkExecNode { input }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
@@ -958,6 +1040,23 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     pickled_writer,
                     expected_partitions as usize,
                 )))
+            }
+            NodeKind::CatalogCommand(gen::CatalogCommandExecNode { schema, command }) => {
+                let schema = Arc::new(self.try_decode_schema(&schema)?);
+                let command: sail_catalog::command::CatalogCommand = serde_json::from_str(&command)
+                    .map_err(|e| plan_datafusion_err!("failed to decode CatalogCommand: {e}"))?;
+                Ok(Arc::new(CatalogCommandExec::new(command, schema)))
+            }
+            NodeKind::Barrier(gen::BarrierExecNode {
+                preconditions,
+                plan,
+            }) => {
+                let preconditions = preconditions
+                    .into_iter()
+                    .map(|i| self.try_decode_plan(&i, ctx))
+                    .collect::<Result<_>>()?;
+                let plan = self.try_decode_plan(&plan, ctx)?;
+                Ok(Arc::new(BarrierExec::new(preconditions, plan)))
             }
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
         }
@@ -1249,10 +1348,41 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         {
             let input = self.try_encode_plan(delta_scan_by_adds_exec.input().clone())?;
             let table_schema = self.try_encode_schema(delta_scan_by_adds_exec.table_schema())?;
+            let output_schema = self.try_encode_schema(delta_scan_by_adds_exec.output_schema())?;
+            let scan_config_json = serde_json::to_string(delta_scan_by_adds_exec.scan_config())
+                .map_err(|e| plan_datafusion_err!("failed to encode Delta scan config: {e}"))?;
+            let projection = delta_scan_by_adds_exec
+                .projection()
+                .map(|p| {
+                    self.try_encode_projection(p)
+                        .map(|columns| gen::PhysicalProjection { columns })
+                })
+                .transpose()
+                .map_err(|_| plan_datafusion_err!("invalid projection for DeltaScanByAddsExec"))?;
+            let limit = delta_scan_by_adds_exec
+                .limit()
+                .map(u64::try_from)
+                .transpose()
+                .map_err(|_| plan_datafusion_err!("invalid limit for DeltaScanByAddsExec"))?;
+            let pushdown_filter = if let Some(pred) = delta_scan_by_adds_exec.pushdown_filter() {
+                let predicate_node = serialize_physical_expr(pred, self)?;
+                Some(self.try_encode_message(predicate_node)?)
+            } else {
+                None
+            };
+            let statistics =
+                Some(self.try_encode_statistics(delta_scan_by_adds_exec.statistics())?);
             NodeKind::DeltaScanByAdds(gen::DeltaScanByAddsExecNode {
                 input,
                 table_url: delta_scan_by_adds_exec.table_url().to_string(),
                 table_schema,
+                output_schema: Some(output_schema),
+                scan_config_json,
+                projection,
+                limit,
+                pushdown_filter,
+                version: delta_scan_by_adds_exec.version(),
+                statistics,
             })
         } else if let Some(delta_discovery_exec) =
             node.as_any().downcast_ref::<DeltaDiscoveryExec>()
@@ -1286,7 +1416,20 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(delta_log_replay_exec) =
             node.as_any().downcast_ref::<DeltaLogReplayExec>()
         {
-            let input = self.try_encode_plan(delta_log_replay_exec.children()[0].clone())?;
+            let children = delta_log_replay_exec.children();
+            let (input, checkpoint_input, commits_input) = match children.as_slice() {
+                [input] => (self.try_encode_plan((*input).clone())?, None, None),
+                [checkpoint_input, commits_input] => (
+                    Vec::new(),
+                    Some(self.try_encode_plan((*checkpoint_input).clone())?),
+                    Some(self.try_encode_plan((*commits_input).clone())?),
+                ),
+                _ => {
+                    return plan_err!(
+                        "DeltaLogReplayExec expects one child for sort replay or two children for hash replay"
+                    )
+                }
+            };
             NodeKind::DeltaLogReplay(gen::DeltaLogReplayExecNode {
                 input,
                 table_url: delta_log_replay_exec.table_url().to_string(),
@@ -1294,6 +1437,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 partition_columns: delta_log_replay_exec.partition_columns().to_vec(),
                 checkpoint_files: delta_log_replay_exec.checkpoint_files().to_vec(),
                 commit_files: delta_log_replay_exec.commit_files().to_vec(),
+                checkpoint_input,
+                commits_input,
             })
         } else if let Some(console_sink) = node.as_any().downcast_ref::<ConsoleSinkExec>() {
             let input = self.try_encode_plan(console_sink.input().clone())?;
@@ -1485,6 +1630,24 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 expected_partitions: python_commit_exec.expected_partitions() as u64,
                 input,
             })
+        } else if let Some(catalog_command_exec) =
+            node.as_any().downcast_ref::<CatalogCommandExec>()
+        {
+            let schema = self.try_encode_schema(catalog_command_exec.schema().as_ref())?;
+            let command = serde_json::to_string(catalog_command_exec.command())
+                .map_err(|e| plan_datafusion_err!("failed to encode CatalogCommand: {e}"))?;
+            NodeKind::CatalogCommand(gen::CatalogCommandExecNode { schema, command })
+        } else if let Some(barrier_exec) = node.as_any().downcast_ref::<BarrierExec>() {
+            let preconditions = barrier_exec
+                .preconditions()
+                .iter()
+                .map(|child| self.try_encode_plan(child.clone()))
+                .collect::<Result<_>>()?;
+            let plan = self.try_encode_plan(barrier_exec.plan().clone())?;
+            NodeKind::Barrier(gen::BarrierExecNode {
+                preconditions,
+                plan,
+            })
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");
         };
@@ -1642,6 +1805,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "randstr" => Ok(Arc::new(ScalarUDF::from(Randstr::new()))),
             "format_number" => Ok(Arc::new(ScalarUDF::from(FormatNumber::new()))),
             "soundex" => Ok(Arc::new(ScalarUDF::from(Soundex::new()))),
+            "st_asbinary" => Ok(Arc::new(ScalarUDF::from(StAsBinary::new()))),
+            "st_geomfromwkb" => Ok(Arc::new(ScalarUDF::from(StGeomFromWKB::new()))),
+            "st_geogfromwkb" => Ok(Arc::new(ScalarUDF::from(StGeogFromWKB::new()))),
             "spark_array" | "spark_make_array" | "array" => {
                 Ok(Arc::new(ScalarUDF::from(SparkArray::new())))
             }
@@ -1785,6 +1951,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<Levenshtein>()
             || node_inner.is::<Randstr>()
             || node_inner.is::<Soundex>()
+            || node_inner.is::<StAsBinary>()
+            || node_inner.is::<StGeomFromWKB>()
+            || node_inner.is::<StGeogFromWKB>()
             || node_inner.is::<MakeValidUtf8>()
             || node_inner.is::<MapFromArrays>()
             || node_inner.is::<MapFromEntries>()
@@ -2883,6 +3052,15 @@ impl RemoteExecutionCodec {
 
     fn try_encode_schema(&self, schema: &Schema) -> Result<Vec<u8>> {
         self.try_encode_message::<gen_datafusion_common::Schema>(schema.try_into()?)
+    }
+
+    fn try_decode_statistics(&self, buf: &[u8]) -> Result<Statistics> {
+        let statistics = self.try_decode_message::<gen_datafusion_common::Statistics>(buf)?;
+        (&statistics).try_into()
+    }
+
+    fn try_encode_statistics(&self, statistics: &Statistics) -> Result<Vec<u8>> {
+        self.try_encode_message::<gen_datafusion_common::Statistics>(statistics.into())
     }
 
     fn try_decode_message<M>(&self, buf: &[u8]) -> Result<M>

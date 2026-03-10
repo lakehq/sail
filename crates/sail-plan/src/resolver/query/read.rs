@@ -4,9 +4,8 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::datasource::{provider_as_source, source_as_provider, TableProvider};
 use datafusion_common::{DFSchema, ScalarValue, TableReference};
-use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::{Expr, LogicalPlan, TableScan, TableSource, UNNAMED_TABLE};
-use rand::{rng, Rng};
+use rand::{rng, RngExt};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::TableKind;
@@ -134,6 +133,34 @@ impl PlanResolver<'_> {
         }
     }
 
+    pub(super) async fn resolve_query_read_dynamic_table(
+        &self,
+        table: spec::ReadDynamicTable,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let spec::ReadDynamicTable {
+            name,
+            sample,
+            options,
+        } = table;
+        let schema = Arc::new(DFSchema::empty());
+        let resolved = self.resolve_expression(name, &schema, state).await?;
+        let name_str = self.evaluate_identifier_expr(resolved, state)?;
+        let name = sail_sql_analyzer::expression::from_ast_object_name(
+            sail_sql_analyzer::parser::parse_object_name(&name_str)?,
+        )?;
+        self.resolve_query_read_named_table(
+            spec::ReadNamedTable {
+                name,
+                temporal: None,
+                sample,
+                options,
+            },
+            state,
+        )
+        .await
+    }
+
     /// Apply TABLESAMPLE clause to a LogicalPlan
     pub(super) async fn apply_table_sample(
         &self,
@@ -245,7 +272,8 @@ impl PlanResolver<'_> {
             });
             self.resolve_query_project(None, vec![expr], state).await
         } else {
-            let udf = self.ctx.udf(&canonical_function_name).ok();
+            let catalog_manager = self.ctx.extension::<CatalogManager>()?;
+            let udf = catalog_manager.get_function(&canonical_function_name)?;
             if let Some(f) = udf
                 .as_ref()
                 .and_then(|x| x.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>())

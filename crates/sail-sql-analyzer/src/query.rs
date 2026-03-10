@@ -508,6 +508,25 @@ fn from_ast_table_factor(table: TableFactor) -> SqlResult<spec::QueryPlan> {
             let plan = from_ast_values(values)?;
             query_plan_with_table_alias(plan, alias)
         }
+        TableFactor::Identifier {
+            identifier: _,
+            left: _,
+            expr,
+            right: _,
+            modifiers,
+            alias,
+        } => {
+            let plan = spec::QueryPlan::new(spec::QueryNode::Read {
+                is_streaming: false,
+                read_type: spec::ReadType::DynamicTable(Box::new(spec::ReadDynamicTable {
+                    name: from_ast_expression(expr)?,
+                    sample: None,
+                    options: Default::default(),
+                })),
+            });
+            let plan = query_plan_with_table_modifiers(plan, modifiers)?;
+            query_plan_with_table_alias(plan, alias)
+        }
     }
 }
 

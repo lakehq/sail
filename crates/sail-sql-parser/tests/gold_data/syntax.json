@@ -809,6 +809,22 @@
                   {
                     "sequence": [
                       {
+                        "nonTerminal": "Keyword(Identifier)"
+                      },
+                      {
+                        "nonTerminal": "Operator(LeftParenthesis)"
+                      },
+                      {
+                        "nonTerminal": "Box(Expression)"
+                      },
+                      {
+                        "nonTerminal": "Operator(RightParenthesis)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
                         "nonTerminal": "Box(FunctionExpr)"
                       }
                     ]
@@ -4752,6 +4768,14 @@
               "node": {
                 "terminal": {
                   "keyword": "HOURS"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Identifier)",
+              "node": {
+                "terminal": {
+                  "keyword": "IDENTIFIER"
                 }
               }
             },
@@ -9058,10 +9082,10 @@
                         "nonTerminal": "Either(Keyword(Database), Keyword(Schema))"
                       },
                       {
-                        "nonTerminal": "ObjectName"
+                        "nonTerminal": "Option(Tuple(Keyword(If), Keyword(Not), Keyword(Exists)))"
                       },
                       {
-                        "nonTerminal": "Option(Tuple(Keyword(If), Keyword(Not), Keyword(Exists)))"
+                        "nonTerminal": "ObjectName"
                       },
                       {
                         "nonTerminal": "Vector(CreateDatabaseClause)"
@@ -9890,6 +9914,28 @@
                       },
                       {
                         "nonTerminal": "Box(TableWithJoins)"
+                      },
+                      {
+                        "nonTerminal": "Operator(RightParenthesis)"
+                      },
+                      {
+                        "nonTerminal": "Vector(TableModifier)"
+                      },
+                      {
+                        "nonTerminal": "Option(AliasClause)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Identifier)"
+                      },
+                      {
+                        "nonTerminal": "Operator(LeftParenthesis)"
+                      },
+                      {
+                        "nonTerminal": "Expression"
                       },
                       {
                         "nonTerminal": "Operator(RightParenthesis)"
