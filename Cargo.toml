@@ -99,7 +99,7 @@ half = { version = "2.7.1", features = ["serde", "num-traits", "zerocopy"] }
 iana-time-zone = "0.1.65"
 chumsky = { version = "0.12.0", default-features = false, features = ["pratt"] }
 num = "0.4.3"
-hf-hub = { version = "0.4.3", default-features = false, features = ["tokio"] }
+hf-hub = { version = "0.5.0", default-features = false, features = ["tokio"] }
 reqwest = { version = "0.12.27", default-features = false, features = ["rustls-tls", "json", "multipart", "stream"] }
 percent-encoding = "2.3.2"
 rustls = "0.23.37"
@@ -113,13 +113,13 @@ ordered-float = { version = "5.1.0", features = ["serde"] }
 apache-avro = { version = "0.21.0" }
 rust_decimal = "1.40.0"
 wiremock = "0.6.5"
-testcontainers = "0.26.2"
-progenitor = "0.11.2"
-progenitor-client = "0.11.2"
+testcontainers = "0.27.1"
+progenitor = "0.13.0"
+progenitor-client = "0.13.0"
 secrecy = { version = "0.10.3", features = ["serde"] }
 tempfile = "3.26.0"
 readonly = "0.2.13"
-toml = "0.8"
+toml = "0.9"
 
 ######
 # The versions of the following dependencies are managed manually.
@@ -164,14 +164,14 @@ arrow-buffer = { version = "57.1.0" }
 arrow-schema = { version = "57.1.0", features = ["serde"] }
 arrow-flight = { version = "57.1.0" }
 arrow-pyarrow = { version = "57.1.0" }
-parquet = { version = "57.3.0" }
-serde_arrow = { version = "0.13.7", features = ["arrow-57"] }
+parquet = { version = "58.0.0" }
+serde_arrow = { version = "0.14.0", features = ["arrow-57"] }
 # The `object_store` version must match the one used in DataFusion.
 object_store = { version = "0.12.4", features = ["aws", "gcp", "azure", "http"] }
-hdfs-native-object-store = "0.15.0"
+hdfs-native-object-store = "0.16.0"
 
 # Lakehouse
-delta_kernel = { version = "0.18.2", features = ["arrow-57", "default-engine-rustls", "internal-api"] }
+delta_kernel = { version = "0.20.0", features = ["arrow-57", "default-engine-rustls", "internal-api"] }
 ######
 # This is the end of the manually managed dependencies.
 # Do not add more dependencies below.
