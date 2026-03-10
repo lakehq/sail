@@ -44,6 +44,18 @@ fn from_spark_json_data_type(data_type: JsonDataType) -> Result<spec::DataType> 
     Ok(match data_type {
         JsonDataType::String => spec::DataType::Utf8,
         JsonDataType::Integer => spec::DataType::Int32,
+        JsonDataType::Float => spec::DataType::Float32,
+        // TODO: whats the proto default?
+        JsonDataType::Decimal => spec::DataType::Decimal128 {
+            precision: 10,
+            scale: 2,
+        },
+        JsonDataType::Boolean => spec::DataType::Boolean,
+        // TODO: whats the proto default?
+        JsonDataType::Timestamp => spec::DataType::Timestamp {
+            time_unit: spec::TimeUnit::Microsecond,
+            timestamp_type: spec::TimestampType::WithoutTimeZone,
+        },
         JsonDataType::Struct { r#type: _, fields } => spec::DataType::Struct {
             fields: fields
                 .into_iter()
@@ -71,6 +83,17 @@ fn from_spark_json_data_type(data_type: JsonDataType) -> Result<spec::DataType> 
             data_type: Box::new(from_spark_json_data_type(*element_type)?),
             nullable: contains_null,
         },
+        JsonDataType::Map {
+            r#type: _,
+            key_type,
+            value_type,
+            value_contains_null,
+        } => spec::DataType::Map {
+            key_type: Box::new(from_spark_json_data_type(*key_type)?),
+            value_type: Box::new(from_spark_json_data_type(*value_type)?),
+            value_type_nullable: value_contains_null,
+            keys_sorted: false,
+        },
     })
 }
 
@@ -78,7 +101,12 @@ fn from_spark_json_data_type(data_type: JsonDataType) -> Result<spec::DataType> 
 #[serde(rename_all = "snake_case")]
 pub enum JsonDataType {
     Integer,
+    Float,
+    Decimal,
     String,
+    Boolean,
+    #[serde(alias = "timestamp_ltz")]
+    Timestamp,
     #[serde(untagged, rename_all = "camelCase")]
     Struct {
         r#type: MustBe!("struct"),
@@ -89,6 +117,13 @@ pub enum JsonDataType {
         r#type: MustBe!("array"),
         element_type: Box<JsonDataType>,
         contains_null: bool,
+    },
+    #[serde(untagged, rename_all = "camelCase")]
+    Map {
+        r#type: MustBe!("map"),
+        key_type: Box<JsonDataType>,
+        value_type: Box<JsonDataType>,
+        value_contains_null: bool,
     },
 }
 

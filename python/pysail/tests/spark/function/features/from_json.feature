@@ -107,12 +107,46 @@ Feature: from_json converts json strings to spark nested types
     Scenario: from_json date as timestamp
       When query
       """
-      select from_json('{"ts": "2026-01-01"}', 'struct<ts: timestamp>', map("timestampFormat", "yyyy-MM-dd")) as result
+      select from_json('{"ts": "01/01/2026"}', 'struct<ts: timestamp>', map("timestampFormat", "dd/MM/yyyy")) as result
       """
       Then query result
         | result |
         | {2026-01-01 00:00:00} |
 
+  Rule: invalid json
+    Scenario: from_json invalid json
+      When query
+      """
+      select from_json('{"a" 1', 'struct<a: int>') as result
+      """
+      Then query error Unable to parse json:
+
   Rule: invalid schema
+    Scenario: from_json invalid top field
+      When query
+      """
+      select from_json('1', 'int') as result
+      """
+      Then query error unsupported
+
+    Scenario: from_json str doesnt match schema
+      When query
+      """
+      select from_json('{"a": "string"}', 'struct<a: int>') as result
+      """
+      Then query error Unsupported conversion of value
+
+    Scenario: from_json unsupported type
+      When query
+      """
+      select from_json('{}', 'a: binary') as result
+      """
+      Then query error Binary not supported
 
   Rule: invalid options
+    Scenario: from_json not supported options
+      When query
+      """
+      select from_json('{"a": 1}', 'a: int', map('key', 'value')) as result
+      """
+      Then query error Found unsupported option type when parsing options: key

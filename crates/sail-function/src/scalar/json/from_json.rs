@@ -6,12 +6,14 @@ use datafusion_expr::function::Hint;
 
 use datafusion::arrow::{
     array::{
-        Array, ArrayRef, BooleanBuilder, Decimal128Builder, Float32Builder, Float64Builder, Int32Builder, Int64Builder, ListArray, MapArray, StringArray, StringBuilder, StructArray, TimestampMicrosecondBuilder
+        downcast_array, Array, ArrayRef, BooleanBuilder, Decimal128Builder, Float32Builder,
+        Float64Builder, Int32Builder, Int64Builder, ListArray, MapArray, StringArray,
+        StringBuilder, StructArray, TimestampMicrosecondBuilder,
     },
     buffer::{NullBuffer, OffsetBuffer, ScalarBuffer},
     datatypes::{DataType, Field, FieldRef, Fields, TimeUnit},
 };
-use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, plan_err};
+use datafusion_common::{plan_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions::utils::make_scalar_function;
 
@@ -20,136 +22,6 @@ use serde_json::Value;
 use super::data_type::parse_spark_data_type;
 use super::SailToArrayDataType;
 use crate::functions_nested_utils::downcast_arg;
-
-#[derive(Debug)]
-enum FieldBuilder {
-    Int32(Int32Builder),
-    Int64(Int64Builder),
-    Float32(Float32Builder),
-    Float64(Float64Builder),
-    Decimal128 {
-        builder: Decimal128Builder,
-        precision: u8,
-        scale: i8,
-    },
-    String(StringBuilder),
-    Boolean(BooleanBuilder),
-    TimestampMicrosecondBuilder(TimestampMicrosecondBuilder),
-    Struct {
-        fields: Fields,
-        nested_builders: Vec<FieldBuilder>,
-        nulls: Vec<bool>,
-    },
-    Map {
-        field: Arc<Field>,
-        offsets: Vec<i32>,
-        struct_builder: Box<FieldBuilder>,
-        nulls: Vec<bool>,
-        ordered: bool,
-    },
-    List {
-        field: Arc<Field>,
-        offsets: Vec<i32>,
-        values: Box<FieldBuilder>,
-        nulls: Vec<bool>,
-    },
-}
-
-#[derive(Debug, Default)]
-enum ModeOptions {
-    #[default]
-    Permissive,
-    FailFast,
-    DropMalformed,
-}
-
-impl ModeOptions {
-    fn from_str(value: String) -> Result<Self, DataFusionError> {
-        match value.as_str() {
-            "PERMISSIVE" => Ok(ModeOptions::Permissive),
-            "FAILFAST" => Ok(ModeOptions::FailFast),
-            "DROPMALFORMED" => Ok(ModeOptions::DropMalformed),
-            other => plan_err!("Invalid mode option: {other}"),
-        }
-    }
-}
-
-// not all options supported yet
-// https://spark.apache.org/docs/latest/sql-data-sources-json.html#data-source-option
-#[derive(Debug)]
-struct SparkFromJsonOptions {
-    mode: ModeOptions,
-    timestamp_format: String,
-}
-
-impl SparkFromJsonOptions {
-    pub fn from_map(mut self, map_array: &MapArray) -> Result<Self> {
-        let inner_struct = map_array.value(0);
-        let keys = inner_struct
-            .column(0)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .expect("Should be string");
-        let values = inner_struct
-            .column(1)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .expect("Should be string");
-        for (key, value) in keys.iter().zip(values.iter()) {
-            let key = key.expect("Should be string");
-            let value = value.expect("Should be string");
-            match key {
-                "mode" => self.mode = ModeOptions::from_str(value.to_string())?,
-                "timestampFormat" => {
-                    self.timestamp_format = SparkFromJsonOptions::convert_format(value)
-                }
-                other => {
-                    return plan_err!("Found unsupported option type when parsing options: {other}")
-                }
-            }
-        }
-        Ok(self)
-    }
-
-    fn convert_format(fmt: &str) -> String {
-        fmt.replace("yyyy", "%Y")
-            .replace("MM", "%m")
-            .replace("dd", "%d")
-            .replace("HH", "%H")
-            .replace("mm", "%M")
-            .replace("ss", "%S")
-    }
-}
-
-impl Default for SparkFromJsonOptions {
-    fn default() -> Self {
-        Self {
-            mode: Default::default(),
-            timestamp_format: SparkFromJsonOptions::convert_format("yyyy-MM-ddTHH:mm:ss"),
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Hash)]
-pub struct SparkFromJson {
-    signature: Signature,
-    aliases: [String; 1],
-}
-
-impl Default for SparkFromJson {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl SparkFromJson {
-    pub fn new() -> Self {
-        Self {
-            signature: Signature::user_defined(Volatility::Immutable),
-            aliases: ["from_json".to_string()],
-        }
-    }
-}
 
 impl ScalarUDFImpl for SparkFromJson {
     fn as_any(&self) -> &dyn std::any::Any {
@@ -268,7 +140,6 @@ impl ScalarUDFImpl for SparkFromJson {
     }
 }
 
-#[allow(dead_code)]
 fn from_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() < 2 || args.len() > 3 {
         return Err(datafusion_common::DataFusionError::Plan(format!(
@@ -324,10 +195,137 @@ fn parse_rows(
     for i in 0..rows.len() {
         let json_str = rows.value(i);
         let value = serde_json::from_str::<serde_json::Value>(json_str)
-            .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+            .map_err(|e| DataFusionError::Execution(format!("Unable to parse json: {e}")))?;
         append_to_builder(&mut builder, &value, &options)?;
     }
     finish_builder(builder)
+}
+
+#[derive(Debug)]
+enum FieldBuilder {
+    Int32(Int32Builder),
+    Int64(Int64Builder),
+    Float32(Float32Builder),
+    Float64(Float64Builder),
+    Decimal128 {
+        builder: Decimal128Builder,
+        scale: i8,
+    },
+    String(StringBuilder),
+    Boolean(BooleanBuilder),
+    TimestampMicrosecondBuilder(TimestampMicrosecondBuilder),
+    Struct {
+        fields: Fields,
+        nested_builders: Vec<FieldBuilder>,
+        nulls: Vec<bool>,
+    },
+    Map {
+        field: Arc<Field>,
+        offsets: Vec<i32>,
+        struct_builder: Box<FieldBuilder>,
+        nulls: Vec<bool>,
+        ordered: bool,
+    },
+    List {
+        field: Arc<Field>,
+        offsets: Vec<i32>,
+        values: Box<FieldBuilder>,
+        nulls: Vec<bool>,
+    },
+}
+
+// not all options supported yet
+// https://spark.apache.org/docs/latest/sql-data-sources-json.html#data-source-option
+#[derive(Debug)]
+struct SparkFromJsonOptions {
+    mode: ModeOptions,
+    timestamp_format: String,
+}
+
+impl SparkFromJsonOptions {
+    pub fn from_map(mut self, map_array: &MapArray) -> Result<Self> {
+        let inner_struct = map_array.value(0);
+        let keys = downcast_array::<StringArray>(inner_struct.column(0));
+        let values = downcast_array::<StringArray>(inner_struct.column(1));
+        for (key, value) in keys.iter().zip(values.iter()) {
+            let (key, value) = match (key, value) {
+                (Some(k), Some(v)) => (k, v),
+                (_, _) => {
+                    return Err(DataFusionError::Plan(
+                        "Bad options most likely because len of keys != len of values".to_string(),
+                    ))
+                }
+            };
+            match key {
+                "mode" => self.mode = ModeOptions::from_str(value.to_string())?,
+                "timestampFormat" => {
+                    self.timestamp_format = SparkFromJsonOptions::convert_format(value)
+                }
+                other => {
+                    return plan_err!("Found unsupported option type when parsing options: {other}")
+                }
+            }
+        }
+        Ok(self)
+    }
+
+    fn convert_format(fmt: &str) -> String {
+        fmt.replace("yyyy", "%Y")
+            .replace("MM", "%m")
+            .replace("dd", "%d")
+            .replace("HH", "%H")
+            .replace("mm", "%M")
+            .replace("ss", "%S")
+    }
+}
+
+impl Default for SparkFromJsonOptions {
+    fn default() -> Self {
+        Self {
+            mode: Default::default(),
+            timestamp_format: SparkFromJsonOptions::convert_format("yyyy-MM-ddTHH:mm:ss"),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct SparkFromJson {
+    signature: Signature,
+    aliases: [String; 1],
+}
+
+impl Default for SparkFromJson {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SparkFromJson {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::user_defined(Volatility::Immutable),
+            aliases: ["from_json".to_string()],
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+enum ModeOptions {
+    #[default]
+    Permissive,
+    FailFast,
+    DropMalformed,
+}
+
+impl ModeOptions {
+    fn from_str(value: String) -> Result<Self, DataFusionError> {
+        match value.as_str() {
+            "PERMISSIVE" => Ok(ModeOptions::Permissive),
+            "FAILFAST" => Ok(ModeOptions::FailFast),
+            "DROPMALFORMED" => Ok(ModeOptions::DropMalformed),
+            other => plan_err!("Invalid mode option: {other}"),
+        }
+    }
 }
 
 fn create_builder(data_type: DataType, capacity: usize) -> Result<FieldBuilder> {
@@ -347,13 +345,11 @@ fn create_builder(data_type: DataType, capacity: usize) -> Result<FieldBuilder> 
         DataType::Decimal128(precision, scale) => {
             let builder = Decimal128Builder::with_capacity(capacity)
                 .with_precision_and_scale(precision, scale)?;
-            Ok(FieldBuilder::Decimal128 {
-                builder,
-                precision,
-                scale
-            })
-        },
-        DataType::Boolean => Ok(FieldBuilder::Boolean(BooleanBuilder::with_capacity(capacity))),
+            Ok(FieldBuilder::Decimal128 { builder, scale })
+        }
+        DataType::Boolean => Ok(FieldBuilder::Boolean(BooleanBuilder::with_capacity(
+            capacity,
+        ))),
         DataType::Timestamp(TimeUnit::Microsecond, _) => {
             Ok(FieldBuilder::TimestampMicrosecondBuilder(
                 TimestampMicrosecondBuilder::with_capacity(capacity),
@@ -411,7 +407,7 @@ fn append_to_builder(
             FieldBuilder::Int64(b) => b.append_null(),
             FieldBuilder::Float32(b) => b.append_null(),
             FieldBuilder::Float64(b) => b.append_null(),
-            FieldBuilder::Decimal128 {builder, ..} => builder.append_null(),
+            FieldBuilder::Decimal128 { builder, .. } => builder.append_null(),
             FieldBuilder::String(b) => b.append_null(),
             FieldBuilder::Boolean(b) => b.append_null(),
             FieldBuilder::TimestampMicrosecondBuilder(b) => b.append_null(),
@@ -424,7 +420,7 @@ fn append_to_builder(
                 for nested_builder in nested_builders.iter_mut() {
                     append_to_builder(nested_builder, value, options)?;
                 }
-            },
+            }
             FieldBuilder::Map {
                 struct_builder,
                 nulls,
@@ -432,7 +428,7 @@ fn append_to_builder(
             } => {
                 nulls.push(false);
                 append_to_builder(struct_builder, value, options)?;
-            },
+            }
             FieldBuilder::List { values, nulls, .. } => {
                 nulls.push(false);
                 append_to_builder(values, value, options)?;
@@ -449,14 +445,14 @@ fn append_to_builder(
                         b.append_null();
                     }
                 }
-            },
+            }
             (FieldBuilder::Int64(b), Value::Number(num)) => {
                 if let Some(n) = num.as_i64() {
                     b.append_value(n);
                 } else {
                     b.append_null();
                 }
-            },
+            }
             (FieldBuilder::Float32(b), Value::Number(num)) => {
                 if let Some(float) = num.as_f64() {
                     if float >= f32::MIN as f64 && float <= f32::MAX as f64 {
@@ -465,46 +461,45 @@ fn append_to_builder(
                         b.append_null();
                     }
                 }
-            },
+            }
             (FieldBuilder::Float64(b), Value::Number(num)) => {
                 if let Some(float) = num.as_f64() {
                     b.append_value(float);
                 } else {
                     b.append_null();
                 }
-            },
-            (FieldBuilder::Decimal128 {
-                builder,
-                precision: _precision,
-                scale
-            },
-            Value::Number(num)) => {
+            }
+            (FieldBuilder::Decimal128 { builder, scale, .. }, Value::Number(num)) => {
                 let scale_factor = 10i128.pow(*scale as u32);
                 if let Some(i) = num.as_i128() {
-                    builder.append_value(i*scale_factor);
+                    builder.append_value(i * scale_factor);
                 } else if let Some(f) = num.as_f64() {
                     let decimal = (f * scale_factor as f64).round() as i128;
                     builder.append_value(decimal);
                 } else {
                     builder.append_null();
                 }
-            },
+            }
             (FieldBuilder::TimestampMicrosecondBuilder(b), Value::String(string)) => {
-                let ts = if let Ok(timestamp) = NaiveDateTime::parse_from_str(string, &options.timestamp_format) {
+                let ts = if let Ok(timestamp) =
+                    NaiveDateTime::parse_from_str(string, &options.timestamp_format)
+                {
                     timestamp
-                } else if let Ok(date) = NaiveDate::parse_from_str(string, &options.timestamp_format) {
+                } else if let Ok(date) =
+                    NaiveDate::parse_from_str(string, &options.timestamp_format)
+                {
                     date.and_hms_opt(0, 0, 0)
                         .expect("Unreachable: only fails on invalid hours/mins/secs")
                 } else {
                     return Err(DataFusionError::Execution(format!(
                         "Timestamp error: can't parse {string:?} to {:?}",
                         options.timestamp_format
-                    )))
+                    )));
                 };
 
                 let micro_seconds = ts.and_utc().timestamp_micros();
                 b.append_value(micro_seconds);
-            },
+            }
             (FieldBuilder::String(b), Value::String(string)) => b.append_value(string),
             (FieldBuilder::Boolean(b), Value::Bool(bool)) => b.append_value(*bool),
             (
@@ -520,10 +515,11 @@ fn append_to_builder(
                     let val = if let Some(v) = obj.get(field.name()) {
                         v
                     } else {
-                        let possible_keys = fields.iter()
+                        let possible_keys = fields
+                            .iter()
                             .map(|f| format!("{:?}", f.name()))
                             .collect::<Vec<_>>()
-                            .join(r#", "#);
+                            .join(", ");
                         return Err(DataFusionError::Execution(format!(
                             "Couldn't find the key {:?} out of specified keys: {possible_keys}",
                             field.name()
@@ -531,7 +527,7 @@ fn append_to_builder(
                     };
                     append_to_builder(nested_builder, val, options)?;
                 }
-            },
+            }
             (
                 FieldBuilder::Map {
                     struct_builder,
@@ -589,9 +585,9 @@ fn append_to_builder(
                 return plan_err!("Unsupported conversion of value {other1:?} to type {other:?}")
             }
         };
-        }
+    }
 
-        Ok(())
+    Ok(())
 }
 
 fn finish_builder(builder: FieldBuilder) -> Result<ArrayRef> {
@@ -600,7 +596,7 @@ fn finish_builder(builder: FieldBuilder) -> Result<ArrayRef> {
         FieldBuilder::Int64(mut b) => Ok(Arc::new(b.finish())),
         FieldBuilder::Float32(mut b) => Ok(Arc::new(b.finish())),
         FieldBuilder::Float64(mut b) => Ok(Arc::new(b.finish())),
-        FieldBuilder::Decimal128 {mut builder, ..} => Ok(Arc::new(builder.finish())),
+        FieldBuilder::Decimal128 { mut builder, .. } => Ok(Arc::new(builder.finish())),
         FieldBuilder::String(mut b) => Ok(Arc::new(b.finish())),
         FieldBuilder::Boolean(mut b) => Ok(Arc::new(b.finish())),
         FieldBuilder::TimestampMicrosecondBuilder(mut b) => Ok(Arc::new(b.finish())),
@@ -628,7 +624,7 @@ fn finish_builder(builder: FieldBuilder) -> Result<ArrayRef> {
         } => {
             let deref_struct_builder = *struct_builder;
             let array_ref = finish_builder(deref_struct_builder)?;
-            let struct_array = array_ref.as_any().downcast_ref::<StructArray>().unwrap();
+            let struct_array = downcast_array::<StructArray>(&*array_ref);
             Ok(Arc::new(MapArray::new(
                 field,
                 OffsetBuffer::new(ScalarBuffer::from(offsets)),
@@ -652,24 +648,5 @@ fn finish_builder(builder: FieldBuilder) -> Result<ArrayRef> {
                 Some(NullBuffer::from(nulls)),
             )))
         }
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn test_tmp() {
-        let rows = StringArray::from(vec![r#"{"a": 1, "b": 2}"#]);
-        let schema = DataType::List(Arc::new(Field::new(
-            "struct",
-            DataType::Struct(Fields::from(vec![
-                Field::new("a", DataType::Int32, true),
-                Field::new("b", DataType::Int32, true),
-            ])),
-            true
-        )));
-        parse_rows(&rows, schema, SparkFromJsonOptions::default()).unwrap();
     }
 }
