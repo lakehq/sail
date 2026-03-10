@@ -13,6 +13,8 @@ from syrupy.exceptions import TaintedSnapshotError
 from syrupy.extensions.base import AbstractSyrupyExtension
 
 if TYPE_CHECKING:
+    from syrupy.extensions.base import SnapshotIndex
+    from syrupy.location import PyTestLocation
     from syrupy.types import SerializableData
 
 
@@ -267,10 +269,38 @@ class YamlDataSerializer:
 class YamlSnapshotExtension(AbstractSyrupyExtension):
     """
     Syrupy extension that stores snapshots as YAML multi-document files.
+
+    When used with pytest-bdd scenarios, each feature file gets its own snapshot
+    file named after the feature file (e.g., ``explain.yaml`` for ``explain.feature``).
+    For regular tests, the snapshot file is named after the test module.
     """
 
     file_extension = "yaml"
     serializer_class: type[YamlDataSerializer] = YamlDataSerializer
+
+    @classmethod
+    def get_file_basename(
+        cls,
+        *,
+        test_location: PyTestLocation,
+        index: SnapshotIndex,
+    ) -> str:
+        """Return the snapshot file basename.
+
+        For pytest-bdd scenarios, use the feature file stem so that each feature
+        file gets its own snapshot file.  For all other tests fall back to the
+        default behaviour (the test-module stem).
+        """
+        _ = index
+        item = test_location.item
+        obj = getattr(item, "obj", None)
+        scenario = getattr(obj, "__scenario__", None)
+        if scenario is not None:
+            feature = getattr(scenario, "feature", None)
+            feature_filename = getattr(feature, "filename", None)
+            if feature_filename is not None:
+                return Path(feature_filename).stem
+        return test_location.basename
 
     def serialize(self, data: SerializableData, **kwargs: Any) -> str:
         return self.serializer_class.serialize(data, **kwargs)
