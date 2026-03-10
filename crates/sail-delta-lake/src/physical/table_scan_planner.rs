@@ -7,7 +7,6 @@ use datafusion::logical_expr::{LogicalPlan, UserDefinedLogicalNode};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 
-use crate::kernel::models::Add;
 use crate::logical::DeltaTableScanNode;
 use crate::physical::scan_planner::plan_delta_scan;
 
@@ -32,17 +31,12 @@ impl ExtensionPlanner for DeltaTablePhysicalPlanner {
         let handle = node.handle().inner();
         let filters = unnormalize_cols(node.filters().clone());
         let projection = node.projection().map(|p| p.to_vec());
-        let files = if handle.snapshot.log_data().num_files() > 0 {
-            let adds: Vec<Add> = handle
-                .snapshot
-                .log_data()
-                .iter()
-                .map(|v| v.add_action())
-                .collect();
-            Some(Arc::new(adds))
-        } else {
-            None
-        };
+        let files =
+            if !handle.snapshot.load_config().require_files || handle.snapshot.adds().is_empty() {
+                None
+            } else {
+                Some(Arc::new(handle.snapshot.adds().to_vec()))
+            };
         let plan = plan_delta_scan(
             session_state,
             &handle.snapshot,

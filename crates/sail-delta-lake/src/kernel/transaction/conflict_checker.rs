@@ -22,55 +22,13 @@
 
 use std::collections::HashSet;
 
-use delta_kernel::table_properties::IsolationLevel;
-use delta_kernel::Error as KernelError;
-use thiserror::Error;
-
-use crate::kernel::models::{Action, Add, CommitInfo, Metadata, Protocol, Remove, Transaction};
-use crate::kernel::snapshot::LogDataHandler;
-use crate::kernel::{DeltaOperation, DeltaResult, TablePropertiesExt};
+use crate::kernel::DeltaOperation;
+use crate::spec::{
+    Action, Add, CommitConflictError, CommitInfo, DeltaError, DeltaResult, IsolationLevel,
+    Metadata, Protocol, Remove, Transaction,
+};
 use crate::storage::{get_actions, LogStore};
-
-/// Exceptions raised during commit conflict resolution.
-#[derive(Error, Debug)]
-pub enum CommitConflictError {
-    #[error("Commit failed: a concurrent transactions added new data.\nHelp: This transaction's query must be rerun to include the new data. Also, if you don't care to require this check to pass in the future, the isolation level can be set to Snapshot Isolation.")]
-    ConcurrentAppend,
-
-    #[error("Commit failed: a concurrent transaction deleted data this operation read.\nHelp: This transaction's query must be rerun to exclude the removed data. Also, if you don't care to require this check to pass in the future, the isolation level can be set to Snapshot Isolation.")]
-    ConcurrentDeleteRead,
-
-    #[error("Commit failed: a concurrent transaction deleted the same data your transaction deletes.\nHelp: you should retry this write operation. If it was based on data contained in the table, you should rerun the query generating the data.")]
-    ConcurrentDeleteDelete,
-
-    #[error("Metadata changed since last commit.")]
-    MetadataChanged,
-
-    #[error("Concurrent transaction failed.")]
-    ConcurrentTransaction,
-
-    #[error("Protocol changed since last commit: {0}")]
-    ProtocolChanged(String),
-
-    #[error("Delta-rs does not support writer version {0}")]
-    UnsupportedWriterVersion(i32),
-
-    #[error("Delta-rs does not support reader version {0}")]
-    UnsupportedReaderVersion(i32),
-
-    #[error("Snapshot is corrupted: {source}")]
-    CorruptedState {
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
-    },
-
-    #[error("Error evaluating predicate: {source}")]
-    Predicate {
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
-    },
-
-    #[error("No metadata found, please make sure table is loaded.")]
-    NoMetadata,
-}
+use crate::table::DeltaSnapshot;
 
 /// A struct representing different attributes of current transaction needed for conflict detection.
 #[expect(unused)]
@@ -80,15 +38,15 @@ pub(crate) struct TransactionInfo<'a> {
     read_app_ids: HashSet<String>,
     /// delta log actions that the transaction wants to commit
     actions: &'a [Action],
-    /// read [`DeltaTableState`] used for the transaction
-    read_snapshot: LogDataHandler<'a>,
+    /// read snapshot used for the transaction
+    read_snapshot: &'a DeltaSnapshot,
     /// Whether the transaction tainted the whole table
     read_whole_table: bool,
 }
 
 impl<'a> TransactionInfo<'a> {
     pub fn try_new(
-        read_snapshot: LogDataHandler<'a>,
+        read_snapshot: &'a DeltaSnapshot,
         actions: &'a [Action],
         read_whole_table: bool,
     ) -> DeltaResult<Self> {
@@ -103,7 +61,7 @@ impl<'a> TransactionInfo<'a> {
     }
 
     pub fn new(
-        read_snapshot: LogDataHandler<'a>,
+        read_snapshot: &'a DeltaSnapshot,
         actions: &'a [Action],
         read_whole_table: bool,
     ) -> Self {
@@ -149,7 +107,7 @@ impl<'a> TransactionInfo<'a> {
 
     /// Files read by the transaction
     pub fn read_files(&self) -> Result<impl Iterator<Item = Add> + '_, CommitConflictError> {
-        Ok(self.read_snapshot.iter().map(|f| f.add_action()))
+        Ok(self.read_snapshot.adds().iter().cloned())
     }
 
     /// Whether the whole table was read during the transaction
@@ -207,7 +165,7 @@ impl WinningCommitSummary {
                     commit_info,
                 })
             }
-            None => Err(KernelError::MissingVersion.into()),
+            None => Err(DeltaError::MissingVersion),
         }
     }
 

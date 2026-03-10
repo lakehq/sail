@@ -28,10 +28,10 @@ use datafusion::datasource::object_store::ObjectStoreUrl;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::kernel::snapshot::LogDataHandler;
-use crate::kernel::{DeltaResult, DeltaTableError};
+use crate::kernel::snapshot::SnapshotPruningStats;
 use crate::options::{default_delta_log_replay_hash_threshold, DeltaLogReplayStrategyOption};
-use crate::table::DeltaTableState;
+use crate::spec::{DeltaError as DeltaTableError, DeltaResult};
+use crate::table::DeltaSnapshot;
 pub const PATH_COLUMN: &str = "__sail_file_path";
 pub const COMMIT_VERSION_COLUMN: &str = "_commit_version";
 pub const COMMIT_TIMESTAMP_COLUMN: &str = "_commit_timestamp";
@@ -51,7 +51,7 @@ pub use expressions::{
 pub use provider::DeltaTableProvider;
 pub use pruning::{prune_files, PruningResult};
 pub use scan::build_file_scan_config;
-pub use schema::{df_logical_schema, DataFusionMixins};
+pub use schema::df_logical_schema;
 
 pub(crate) fn create_object_store_url(location: &Url) -> DeltaResult<ObjectStoreUrl> {
     Ok(ObjectStoreUrl::parse(
@@ -59,20 +59,17 @@ pub(crate) fn create_object_store_url(location: &Url) -> DeltaResult<ObjectStore
     )?)
 }
 
-// Extension trait to add datafusion_table_statistics method to DeltaTableState
-pub(crate) trait DeltaTableStateExt {
-    fn datafusion_table_statistics(&self, mask: Option<&[bool]>) -> Option<Statistics>;
-}
-
-impl DeltaTableStateExt for DeltaTableState {
-    fn datafusion_table_statistics(&self, mask: Option<&[bool]>) -> Option<Statistics> {
+impl DeltaSnapshot {
+    pub(crate) fn datafusion_table_statistics(&self, mask: Option<&[bool]>) -> Option<Statistics> {
         if let Some(mask) = mask {
-            let es = self.snapshot();
+            let files = self.files_batch().ok()?;
             let boolean_array = BooleanArray::from(mask.to_vec());
-            let pruned_files = filter_record_batch(&es.files, &boolean_array).ok()?;
-            LogDataHandler::new(&pruned_files, es.table_configuration()).statistics()
+            let pruned_files = filter_record_batch(files, &boolean_array).ok()?;
+            SnapshotPruningStats::try_new(&pruned_files, self)
+                .ok()?
+                .statistics()
         } else {
-            self.snapshot().log_data().statistics()
+            self.pruning_stats().ok()?.statistics()
         }
     }
 }
@@ -164,7 +161,7 @@ impl DeltaScanConfigBuilder {
     }
 
     /// Build a DeltaScanConfig and ensure no column name conflicts occur during downstream processing
-    pub fn build(&self, snapshot: &DeltaTableState) -> DeltaResult<DeltaScanConfig> {
+    pub fn build(&self, snapshot: &DeltaSnapshot) -> DeltaResult<DeltaScanConfig> {
         let file_column_name = if self.include_file_column {
             let input_schema = snapshot.input_schema()?;
             let mut column_names: HashSet<&String> = HashSet::new();

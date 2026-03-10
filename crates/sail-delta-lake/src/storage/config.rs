@@ -23,7 +23,7 @@ use object_store::prefix::PrefixStore;
 use object_store::ObjectStore;
 use url::Url;
 
-use crate::kernel::DeltaResult;
+use crate::spec::DeltaResult;
 
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/logstore/config.rs>
 /// Minimal storage configuration used to decorate object stores with table prefixes.

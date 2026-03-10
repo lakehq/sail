@@ -1,8 +1,8 @@
 // https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
 //
 // Copyright (2020) QP Hou and a number of other contributors.
-// Portions Copyright (2025) LakeSail, Inc.
-// Modified in 2025 by LakeSail, Inc.
+// Portions Copyright 2025-2026 LakeSail, Inc.
+// Modified in 2026 by LakeSail, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,10 +16,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/actions.rs>
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/mod.rs>
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/protocol/mod.rs>
-
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::fmt;
@@ -27,14 +23,15 @@ use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
 use chrono::DateTime;
-use delta_kernel::actions::{Metadata, Protocol};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
 
-use crate::kernel::statistics::Stats;
-use crate::kernel::{DeltaResult, DeltaTableError};
+use crate::spec::statistics::Stats;
+use crate::spec::{DeltaError as DeltaTableError, DeltaResult, IsolationLevel, Metadata, Protocol};
 
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/actions.rs#L694-L1065>
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/mod.rs#L18-L27>
 #[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum StorageType {
     #[serde(rename = "u")]
@@ -77,7 +74,7 @@ impl fmt::Display for StorageType {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct DeletionVectorDescriptor {
     pub storage_type: StorageType,
@@ -92,7 +89,7 @@ pub struct DeletionVectorDescriptor {
 #[derive(Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Action {
-    #[serde(rename = "metaData")]
+    #[serde(rename = "metaData", alias = "metadata")]
     Metadata(Metadata),
     Protocol(Protocol),
     Add(Add),
@@ -187,6 +184,7 @@ impl Add {
             extended_file_metadata: options.extended_file_metadata,
             partition_values: Some(self.partition_values),
             size: Some(self.size),
+            stats: None,
             tags,
             deletion_vector: self.deletion_vector,
             base_row_id: self.base_row_id,
@@ -210,7 +208,7 @@ impl Borrow<str> for Remove {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Add {
-    #[serde(with = "serde_path")]
+    #[serde(with = "crate::spec::utils::serde_path")]
     pub path: String,
     pub partition_values: HashMap<String, Option<String>>,
     pub size: i64,
@@ -236,7 +234,7 @@ pub struct Add {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Remove {
-    #[serde(with = "serde_path")]
+    #[serde(with = "crate::spec::utils::serde_path")]
     pub path: String,
     pub data_change: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -247,6 +245,8 @@ pub struct Remove {
     pub partition_values: Option<HashMap<String, Option<String>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stats: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<HashMap<String, Option<String>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -276,7 +276,7 @@ impl Default for RemoveOptions {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AddCDCFile {
-    #[serde(with = "serde_path")]
+    #[serde(with = "crate::spec::utils::serde_path")]
     pub path: String,
     pub partition_values: HashMap<String, Option<String>>,
     pub size: i64,
@@ -293,40 +293,6 @@ pub struct Transaction {
     pub version: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_updated: Option<i64>,
-}
-
-/// The isolation level applied during a transaction.
-#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Default)]
-pub enum IsolationLevel {
-    #[default]
-    Serializable,
-    WriteSerializable,
-    SnapshotIsolation,
-}
-
-impl AsRef<str> for IsolationLevel {
-    fn as_ref(&self) -> &str {
-        match self {
-            Self::Serializable => "Serializable",
-            Self::WriteSerializable => "WriteSerializable",
-            Self::SnapshotIsolation => "SnapshotIsolation",
-        }
-    }
-}
-
-impl FromStr for IsolationLevel {
-    type Err = DeltaTableError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "serializable" => Ok(Self::Serializable),
-            "writeserializable" | "write_serializable" => Ok(Self::WriteSerializable),
-            "snapshotisolation" | "snapshot_isolation" => Ok(Self::SnapshotIsolation),
-            _ => Err(DeltaTableError::generic(format!(
-                "Invalid string for IsolationLevel: {s}"
-            ))),
-        }
-    }
 }
 
 /// Commit metadata action.
@@ -415,56 +381,5 @@ impl TryFrom<&Add> for ObjectMeta {
             e_tag: None,
             version: None,
         })
-    }
-}
-
-/// Serde helpers for encoding/decoding log paths.
-pub(crate) mod serde_path {
-    use std::str::Utf8Error;
-
-    use percent_encoding::{percent_decode_str, percent_encode, AsciiSet, CONTROLS};
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<String, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        decode_path(&s).map_err(serde::de::Error::custom)
-    }
-
-    pub fn serialize<S>(value: &str, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let encoded = encode_path(value);
-        String::serialize(&encoded, serializer)
-    }
-
-    const INVALID: &AsciiSet = &CONTROLS
-        .add(b'\\')
-        .add(b'{')
-        .add(b'^')
-        .add(b'}')
-        .add(b'%')
-        .add(b'`')
-        .add(b']')
-        .add(b'"')
-        .add(b'>')
-        .add(b'[')
-        .add(b'<')
-        .add(b'#')
-        .add(b'|')
-        .add(b'\r')
-        .add(b'\n')
-        .add(b'*')
-        .add(b'?');
-
-    fn encode_path(path: &str) -> String {
-        percent_encode(path.as_bytes(), INVALID).to_string()
-    }
-
-    pub fn decode_path(path: &str) -> Result<String, Utf8Error> {
-        Ok(percent_decode_str(path).decode_utf8()?.to_string())
     }
 }

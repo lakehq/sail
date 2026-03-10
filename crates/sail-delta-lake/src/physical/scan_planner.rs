@@ -12,25 +12,22 @@ use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
-use delta_kernel::table_features::ColumnMappingMode;
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
 
 use crate::datasource::scan::{build_file_scan_config, FileScanParams, TableStatsMode};
-use crate::datasource::{
-    df_logical_schema, simplify_expr, DataFusionMixins, DeltaScanConfig, DeltaTableStateExt,
-};
-use crate::kernel::models::Add;
+use crate::datasource::{df_logical_schema, simplify_expr, DeltaScanConfig};
 use crate::options::TableDeltaOptions;
 use crate::physical_plan::planner::utils::{LogReplayFilter, LogReplayOptions};
 use crate::physical_plan::planner::{DeltaTableConfig as PlannerTableConfig, PlannerContext};
 use crate::physical_plan::{DeltaDiscoveryExec, DeltaScanByAddsExec};
 use crate::schema::get_physical_schema;
+use crate::spec::{Add, ColumnMappingMode, StructType};
 use crate::storage::LogStoreRef;
-use crate::table::DeltaTableState;
+use crate::table::DeltaSnapshot;
 
 pub(crate) async fn plan_delta_scan(
     session: &dyn Session,
-    snapshot: &DeltaTableState,
+    snapshot: &DeltaSnapshot,
     log_store: &LogStoreRef,
     config: &DeltaScanConfig,
     files: Option<Arc<Vec<Add>>>,
@@ -170,16 +167,13 @@ pub(crate) async fn plan_delta_scan(
 
     // Build physical file schema (non-partition columns)
     let kmode: ColumnMappingMode = snapshot.effective_column_mapping_mode();
-    let kschema_arc = snapshot.snapshot().table_configuration().schema();
-    let physical_arrow: ArrowSchema = get_physical_schema(&kschema_arc, kmode);
-    let physical_partition_cols: HashSet<String> = table_partition_cols
-        .iter()
-        .map(|col| {
-            kschema_arc
-                .field(col)
-                .map(|f| f.physical_name(kmode).to_string())
-                .unwrap_or_else(|| col.clone())
-        })
+    let kschema_arc = snapshot.schema();
+    let logical_kernel = StructType::try_from(kschema_arc)?;
+    let physical_arrow: ArrowSchema = get_physical_schema(&logical_kernel, kmode);
+    let physical_partition_cols: HashSet<String> = snapshot
+        .physical_partition_columns()
+        .into_iter()
+        .map(|(_, physical)| physical)
         .collect();
 
     let file_fields = physical_arrow
@@ -239,18 +233,6 @@ pub(crate) async fn plan_delta_scan(
 
     // Metadata-as-data path: log scan -> replay -> discovery -> scan by adds.
     let table_url = log_store.config().location.clone();
-    let kernel_snapshot = snapshot.snapshot().snapshot().inner.clone();
-    let log_segment = kernel_snapshot.log_segment();
-    let checkpoint_files = log_segment
-        .checkpoint_parts
-        .iter()
-        .map(|p| p.filename.clone())
-        .collect::<Vec<_>>();
-    let commit_files = log_segment
-        .ascending_commit_files
-        .iter()
-        .map(|p| p.filename.clone())
-        .collect::<Vec<_>>();
 
     let planner_options = TableDeltaOptions {
         delta_log_replay_strategy: config.delta_log_replay_strategy,
@@ -268,7 +250,6 @@ pub(crate) async fn plan_delta_scan(
             true,
         ),
     );
-
     let mut log_replay_options = LogReplayOptions::default();
     if let Some(predicate) = pruning_predicate.as_ref() {
         let mut expr_props =
@@ -287,25 +268,10 @@ pub(crate) async fn plan_delta_scan(
         log_replay_options.include_stats_json = false;
     }
 
-    let partition_columns_map = table_partition_cols
-        .iter()
-        .map(|col| {
-            let physical = kschema_arc
-                .field(col)
-                .map(|f| f.physical_name(kmode).to_string())
-                .unwrap_or_else(|| col.clone());
-            (col.clone(), physical)
-        })
-        .collect::<Vec<_>>();
-
     let meta_scan: Arc<dyn ExecutionPlan> =
         crate::physical_plan::planner::utils::build_log_replay_pipeline_with_options(
             &planner_ctx,
-            table_url.clone(),
-            snapshot.version(),
-            partition_columns_map,
-            checkpoint_files,
-            commit_files,
+            snapshot,
             log_replay_options,
         )
         .await
