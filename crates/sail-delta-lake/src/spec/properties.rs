@@ -120,6 +120,7 @@ where
 
 const DEFAULT_LOG_RETENTION_SECS: u64 = 30 * 24 * 60 * 60;
 const DEFAULT_DELETED_FILE_RETENTION_SECS: u64 = 7 * 24 * 60 * 60;
+// Sail aligns with Spark/Delta's default of checkpointing every 10 committed versions.
 const DEFAULT_CHECKPOINT_INTERVAL: NonZeroU64 =
     NonZeroU64::new(10).expect("non-zero checkpoint interval");
 
@@ -169,6 +170,10 @@ where
     Ok(canonicalized)
 }
 
+/// Map supported property aliases to their canonical Delta table property key.
+///
+/// Returns `Some(canonical_key)` for recognized modeled properties and aliases, and `None`
+/// for unrecognized keys that should be preserved as-is.
 fn canonicalize_table_property_key(key: &str) -> Option<&'static str> {
     match key.to_ascii_lowercase().as_str() {
         "delta.appendonly" => Some("delta.appendOnly"),
@@ -191,6 +196,11 @@ fn canonicalize_table_property_key(key: &str) -> Option<&'static str> {
     }
 }
 
+/// Validate modeled Delta table property values while allowing unknown properties through.
+///
+/// Known properties are parsed using the same type-specific rules Delta snapshots rely on
+/// (boolean, positive integer, interval, column mapping mode, etc.). Unknown properties are
+/// accepted so they can still be persisted in `metaData.configuration`.
 fn validate_table_property(key: &str, value: &str) -> DeltaResult<()> {
     match key {
         "delta.appendOnly"
