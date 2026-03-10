@@ -858,6 +858,7 @@ mod tests {
     use futures::TryStreamExt;
 
     use super::*;
+    use crate::spec::fields::{FIELD_NAME_MODIFICATION_TIME, FIELD_NAME_PATH, FIELD_NAME_SIZE};
 
     #[derive(Debug)]
     struct OneBatchExec {
@@ -953,9 +954,13 @@ mod tests {
         // Row2: add b
 
         let add_fields: Fields = vec![
-            Arc::new(Field::new("path", DataType::Utf8, true)),
-            Arc::new(Field::new("size", DataType::Int64, true)),
-            Arc::new(Field::new("modificationTime", DataType::Int64, true)),
+            Arc::new(Field::new(FIELD_NAME_PATH, DataType::Utf8, true)),
+            Arc::new(Field::new(FIELD_NAME_SIZE, DataType::Int64, true)),
+            Arc::new(Field::new(
+                FIELD_NAME_MODIFICATION_TIME,
+                DataType::Int64,
+                true,
+            )),
         ]
         .into();
 
@@ -1012,7 +1017,7 @@ mod tests {
             .unwrap();
         #[expect(clippy::unwrap_used)]
         let path_col = add
-            .column_by_name("path")
+            .column_by_name(FIELD_NAME_PATH)
             .unwrap()
             .as_any()
             .downcast_ref::<StringArray>()
@@ -1029,9 +1034,13 @@ mod tests {
         // Row1: remove a (v1) -> must be ignored (older)
 
         let add_fields: Fields = vec![
-            Arc::new(Field::new("path", DataType::Utf8, true)),
-            Arc::new(Field::new("size", DataType::Int64, true)),
-            Arc::new(Field::new("modificationTime", DataType::Int64, true)),
+            Arc::new(Field::new(FIELD_NAME_PATH, DataType::Utf8, true)),
+            Arc::new(Field::new(FIELD_NAME_SIZE, DataType::Int64, true)),
+            Arc::new(Field::new(
+                FIELD_NAME_MODIFICATION_TIME,
+                DataType::Int64,
+                true,
+            )),
         ]
         .into();
 
@@ -1087,7 +1096,7 @@ mod tests {
             .unwrap();
         #[expect(clippy::unwrap_used)]
         let path_col = add
-            .column_by_name("path")
+            .column_by_name(FIELD_NAME_PATH)
             .unwrap()
             .as_any()
             .downcast_ref::<StringArray>()
@@ -1103,8 +1112,8 @@ mod tests {
         // Commits: remove a (v1) -> should hide checkpoint a
 
         let add_fields: Fields = vec![
-            Arc::new(Field::new("path", DataType::Utf8, true)),
-            Arc::new(Field::new("size", DataType::Int64, true)),
+            Arc::new(Field::new(FIELD_NAME_PATH, DataType::Utf8, true)),
+            Arc::new(Field::new(FIELD_NAME_SIZE, DataType::Int64, true)),
         ]
         .into();
 
@@ -1179,7 +1188,7 @@ mod tests {
             .unwrap();
         #[expect(clippy::unwrap_used)]
         let path_col = add
-            .column_by_name("path")
+            .column_by_name(FIELD_NAME_PATH)
             .unwrap()
             .as_any()
             .downcast_ref::<StringArray>()
@@ -1194,7 +1203,8 @@ mod tests {
         // Checkpoint: add a
         // Commits: empty
 
-        let add_fields: Fields = vec![Arc::new(Field::new("path", DataType::Utf8, true))].into();
+        let add_fields: Fields =
+            vec![Arc::new(Field::new(FIELD_NAME_PATH, DataType::Utf8, true))].into();
         let add_struct = struct_array_with_validity(
             add_fields,
             vec![Arc::new(StringArray::from(vec![Some("a")])) as ArrayRef],
@@ -1246,7 +1256,7 @@ mod tests {
             .unwrap();
         #[expect(clippy::unwrap_used)]
         let path_col = add
-            .column_by_name("path")
+            .column_by_name(FIELD_NAME_PATH)
             .unwrap()
             .as_any()
             .downcast_ref::<StringArray>()
@@ -1261,7 +1271,8 @@ mod tests {
         // Checkpoint: add a
         // Commits: add c (newer)
 
-        let add_fields: Fields = vec![Arc::new(Field::new("path", DataType::Utf8, true))].into();
+        let add_fields: Fields =
+            vec![Arc::new(Field::new(FIELD_NAME_PATH, DataType::Utf8, true))].into();
         let schema = Arc::new(Schema::new(vec![
             Field::new("add", DataType::Struct(add_fields.clone()), true),
             Field::new(COL_REPLAY_PATH, DataType::Utf8, false),
@@ -1329,7 +1340,7 @@ mod tests {
             .unwrap();
         #[expect(clippy::unwrap_used)]
         let path_col = add
-            .column_by_name("path")
+            .column_by_name(FIELD_NAME_PATH)
             .unwrap()
             .as_any()
             .downcast_ref::<StringArray>()
@@ -1347,7 +1358,8 @@ mod tests {
         // - add a (v1)
         // Add should still win even without commit-side ordering.
 
-        let add_fields: Fields = vec![Arc::new(Field::new("path", DataType::Utf8, true))].into();
+        let add_fields: Fields =
+            vec![Arc::new(Field::new(FIELD_NAME_PATH, DataType::Utf8, true))].into();
         let schema = Arc::new(Schema::new(vec![
             Field::new("add", DataType::Struct(add_fields.clone()), true),
             Field::new(COL_REPLAY_PATH, DataType::Utf8, false),
@@ -1400,7 +1412,7 @@ mod tests {
             .unwrap();
         #[expect(clippy::unwrap_used)]
         let path_col = add
-            .column_by_name("path")
+            .column_by_name(FIELD_NAME_PATH)
             .unwrap()
             .as_any()
             .downcast_ref::<StringArray>()
@@ -1412,7 +1424,8 @@ mod tests {
     #[tokio::test]
     #[expect(clippy::unwrap_used)]
     async fn hash_replay_unordered_same_version_remove_then_add_add_wins() -> Result<()> {
-        let add_fields: Fields = vec![Arc::new(Field::new("path", DataType::Utf8, true))].into();
+        let add_fields: Fields =
+            vec![Arc::new(Field::new(FIELD_NAME_PATH, DataType::Utf8, true))].into();
         let schema = Arc::new(Schema::new(vec![
             Field::new("add", DataType::Struct(add_fields.clone()), true),
             Field::new(COL_REPLAY_PATH, DataType::Utf8, false),
@@ -1460,7 +1473,7 @@ mod tests {
             .downcast_ref::<StructArray>()
             .unwrap();
         let path_col = add
-            .column_by_name("path")
+            .column_by_name(FIELD_NAME_PATH)
             .unwrap()
             .as_any()
             .downcast_ref::<StringArray>()
@@ -1472,7 +1485,8 @@ mod tests {
     #[tokio::test]
     #[expect(clippy::unwrap_used)]
     async fn hash_replay_unordered_higher_version_overrides_lower() -> Result<()> {
-        let add_fields: Fields = vec![Arc::new(Field::new("path", DataType::Utf8, true))].into();
+        let add_fields: Fields =
+            vec![Arc::new(Field::new(FIELD_NAME_PATH, DataType::Utf8, true))].into();
         let schema = Arc::new(Schema::new(vec![
             Field::new("add", DataType::Struct(add_fields.clone()), true),
             Field::new(COL_REPLAY_PATH, DataType::Utf8, false),
@@ -1519,7 +1533,8 @@ mod tests {
     #[tokio::test]
     #[expect(clippy::unwrap_used)]
     async fn hash_replay_unordered_lower_version_cannot_override() -> Result<()> {
-        let add_fields: Fields = vec![Arc::new(Field::new("path", DataType::Utf8, true))].into();
+        let add_fields: Fields =
+            vec![Arc::new(Field::new(FIELD_NAME_PATH, DataType::Utf8, true))].into();
         let schema = Arc::new(Schema::new(vec![
             Field::new("add", DataType::Struct(add_fields.clone()), true),
             Field::new(COL_REPLAY_PATH, DataType::Utf8, false),
@@ -1567,7 +1582,7 @@ mod tests {
             .downcast_ref::<StructArray>()
             .unwrap();
         let path_col = add
-            .column_by_name("path")
+            .column_by_name(FIELD_NAME_PATH)
             .unwrap()
             .as_any()
             .downcast_ref::<StringArray>()
@@ -1579,7 +1594,8 @@ mod tests {
     #[tokio::test]
     #[expect(clippy::unwrap_used)]
     async fn hash_replay_required_input_ordering_is_none_for_hash_mode() -> Result<()> {
-        let add_fields: Fields = vec![Arc::new(Field::new("path", DataType::Utf8, true))].into();
+        let add_fields: Fields =
+            vec![Arc::new(Field::new(FIELD_NAME_PATH, DataType::Utf8, true))].into();
         let schema = Arc::new(Schema::new(vec![
             Field::new("add", DataType::Struct(add_fields), true),
             Field::new(COL_REPLAY_PATH, DataType::Utf8, false),
