@@ -17,6 +17,7 @@ def test_compatibility_json_files_are_sorted():
         assert isinstance(data, list), f"{json_file} does not contain a JSON array"
 
         for item in data:
+            assert isinstance(item, dict), f"Item {item!r} in {json_file} is not a dict"
             missing_keys = {k for k in EXPECTED_KEYS if k not in item}
             assert not missing_keys, f"Item {item} in {json_file} is missing keys: {missing_keys}"
 
