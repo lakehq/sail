@@ -10,7 +10,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::str::FromStr;
+
 use serde::{Deserialize, Serialize};
+
+use crate::spec::ColumnMappingMode;
 
 /// Options that control the behavior of Delta Lake tables.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -77,4 +81,46 @@ pub enum ColumnMappingModeOption {
     None,
     Name,
     Id,
+}
+
+impl ColumnMappingModeOption {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Name => "name",
+            Self::Id => "id",
+        }
+    }
+
+    pub const fn is_enabled(self) -> bool {
+        matches!(self, Self::Name | Self::Id)
+    }
+}
+
+impl FromStr for ColumnMappingModeOption {
+    type Err = <ColumnMappingMode as FromStr>::Err;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        ColumnMappingMode::from_str(s).map(Into::into)
+    }
+}
+
+impl From<ColumnMappingModeOption> for ColumnMappingMode {
+    fn from(value: ColumnMappingModeOption) -> Self {
+        match value {
+            ColumnMappingModeOption::Name => Self::Name,
+            ColumnMappingModeOption::Id => Self::Id,
+            ColumnMappingModeOption::None => Self::None,
+        }
+    }
+}
+
+impl From<ColumnMappingMode> for ColumnMappingModeOption {
+    fn from(value: ColumnMappingMode) -> Self {
+        match value {
+            ColumnMappingMode::Name => Self::Name,
+            ColumnMappingMode::Id => Self::Id,
+            ColumnMappingMode::None => Self::None,
+        }
+    }
 }

@@ -174,6 +174,8 @@ use sail_iceberg::physical_plan::{IcebergCommitExec, IcebergWriterExec};
 use sail_iceberg::TableIcebergOptions;
 use sail_logical_plan::range::Range;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
+use sail_physical_plan::barrier::BarrierExec;
+use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
@@ -1027,6 +1029,23 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     expected_partitions as usize,
                 )))
             }
+            NodeKind::CatalogCommand(gen::CatalogCommandExecNode { schema, command }) => {
+                let schema = Arc::new(self.try_decode_schema(&schema)?);
+                let command: sail_catalog::command::CatalogCommand = serde_json::from_str(&command)
+                    .map_err(|e| plan_datafusion_err!("failed to decode CatalogCommand: {e}"))?;
+                Ok(Arc::new(CatalogCommandExec::new(command, schema)))
+            }
+            NodeKind::Barrier(gen::BarrierExecNode {
+                preconditions,
+                plan,
+            }) => {
+                let preconditions = preconditions
+                    .into_iter()
+                    .map(|i| self.try_decode_plan(&i, ctx))
+                    .collect::<Result<_>>()?;
+                let plan = self.try_decode_plan(&plan, ctx)?;
+                Ok(Arc::new(BarrierExec::new(preconditions, plan)))
+            }
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
         }
     }
@@ -1583,6 +1602,24 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 pickled_writer: python_commit_exec.pickled_writer().to_vec(),
                 expected_partitions: python_commit_exec.expected_partitions() as u64,
                 input,
+            })
+        } else if let Some(catalog_command_exec) =
+            node.as_any().downcast_ref::<CatalogCommandExec>()
+        {
+            let schema = self.try_encode_schema(catalog_command_exec.schema().as_ref())?;
+            let command = serde_json::to_string(catalog_command_exec.command())
+                .map_err(|e| plan_datafusion_err!("failed to encode CatalogCommand: {e}"))?;
+            NodeKind::CatalogCommand(gen::CatalogCommandExecNode { schema, command })
+        } else if let Some(barrier_exec) = node.as_any().downcast_ref::<BarrierExec>() {
+            let preconditions = barrier_exec
+                .preconditions()
+                .iter()
+                .map(|child| self.try_encode_plan(child.clone()))
+                .collect::<Result<_>>()?;
+            let plan = self.try_encode_plan(barrier_exec.plan().clone())?;
+            NodeKind::Barrier(gen::BarrierExecNode {
+                preconditions,
+                plan,
             })
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");

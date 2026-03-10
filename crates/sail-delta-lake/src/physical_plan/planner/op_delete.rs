@@ -25,7 +25,6 @@ use sail_common_datafusion::logical_expr::ExprWithSource;
 
 use super::context::PlannerContext;
 use super::utils::{build_log_replay_pipeline_with_options, LogReplayFilter, LogReplayOptions};
-use crate::datasource::schema::DataFusionMixins;
 use crate::datasource::PredicateProperties;
 use crate::kernel::DeltaOperation;
 use crate::physical_plan::{
@@ -62,19 +61,6 @@ pub async fn build_delete_plan(
         .analyze_predicate(&physical_condition)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-    let kernel_snapshot = snapshot_state.snapshot().snapshot().inner.clone();
-    let log_segment = kernel_snapshot.log_segment();
-    let checkpoint_files = log_segment
-        .checkpoint_parts
-        .iter()
-        .map(|p| p.filename.clone())
-        .collect::<Vec<_>>();
-    let commit_files = log_segment
-        .ascending_commit_files
-        .iter()
-        .map(|p| p.filename.clone())
-        .collect::<Vec<_>>();
-
     // Build a visible metadata pipeline over the Delta log.
     let mut log_replay_options = LogReplayOptions::default();
     if expr_props.partition_only {
@@ -84,29 +70,8 @@ pub async fn build_delete_plan(
         });
     }
 
-    let kschema_arc = snapshot_state.snapshot().table_configuration().schema();
-    let kmode = snapshot_state.effective_column_mapping_mode();
-    let partition_columns_map = partition_columns
-        .iter()
-        .map(|col| {
-            let physical = kschema_arc
-                .field(col)
-                .map(|f| f.physical_name(kmode).to_string())
-                .unwrap_or_else(|| col.clone());
-            (col.clone(), physical)
-        })
-        .collect::<Vec<_>>();
-
-    let meta_scan: Arc<dyn ExecutionPlan> = build_log_replay_pipeline_with_options(
-        ctx,
-        ctx.table_url().clone(),
-        version,
-        partition_columns_map,
-        checkpoint_files,
-        commit_files,
-        log_replay_options,
-    )
-    .await?;
+    let meta_scan: Arc<dyn ExecutionPlan> =
+        build_log_replay_pipeline_with_options(ctx, snapshot_state, log_replay_options).await?;
 
     // Always wrap with DeltaDiscoveryExec so EXPLAIN shows the metadata pipeline.
     let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(

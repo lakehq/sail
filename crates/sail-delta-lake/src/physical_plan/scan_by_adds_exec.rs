@@ -35,12 +35,11 @@ use sail_common_datafusion::rename::physical_plan::rename_projected_physical_pla
 use url::Url;
 
 use crate::datasource::scan::{FileScanParams, TableStatsMode};
-use crate::datasource::{
-    build_file_scan_config, df_logical_schema, DataFusionMixins, DeltaScanConfig,
-};
+use crate::datasource::{build_file_scan_config, df_logical_schema, DeltaScanConfig};
 use crate::physical_plan::{decode_adds_from_batch, meta_adds, COL_ACTION};
-use crate::schema::get_physical_schema;
+use crate::schema::{arrow_field_physical_name, get_physical_schema};
 use crate::session_extension::{load_table_uncached, DeltaTableCache};
+use crate::spec::StructType;
 
 // TODO(dynamic-file-scheduling): Replace fixed file-count chunking with byte-aware chunking
 // and optional work-stealing so executors pull remaining file work dynamically under skew.
@@ -59,7 +58,7 @@ struct ScanByAddsStreamState {
 
     // Lazy init
     table_opened: bool,
-    snapshot: Option<crate::table::DeltaTableState>,
+    snapshot: Option<Arc<crate::table::DeltaSnapshot>>,
     log_store: Option<crate::storage::LogStoreRef>,
     session_state: Option<datafusion::execution::SessionState>,
     file_schema: Option<SchemaRef>,
@@ -69,7 +68,7 @@ struct ScanByAddsStreamState {
     // control
     partition_scan: Option<bool>,
     emitted_partition_empty: bool,
-    pending_adds: Vec<crate::kernel::models::Add>,
+    pending_adds: Vec<crate::spec::Add>,
     current_scan: Option<SendableRecordBatchStream>,
     input_done: bool,
 }
@@ -149,7 +148,7 @@ impl ScanByAddsStreamState {
         }
 
         let logical_schema = df_logical_schema(
-            &snapshot_state,
+            snapshot_state.as_ref(),
             &scan_config.file_column_name,
             &scan_config.commit_version_column_name,
             &scan_config.commit_timestamp_column_name,
@@ -165,15 +164,17 @@ impl ScanByAddsStreamState {
 
         let table_partition_cols = snapshot_state.metadata().partition_columns();
         let kmode = snapshot_state.effective_column_mapping_mode();
-        let kschema_arc = snapshot_state.snapshot().table_configuration().schema();
-        let physical_arrow = get_physical_schema(&kschema_arc, kmode);
+        let kschema_arc = snapshot_state.schema();
+        let logical_kernel = StructType::try_from(kschema_arc)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let physical_arrow = get_physical_schema(&logical_kernel, kmode);
         let physical_partition_cols: std::collections::HashSet<String> = table_partition_cols
             .iter()
             .map(|col| {
                 kschema_arc
-                    .field(col)
-                    .map(|f| f.physical_name(kmode).to_string())
-                    .unwrap_or_else(|| col.clone())
+                    .field_with_name(col)
+                    .map(|f| arrow_field_physical_name(f, kmode).to_string())
+                    .unwrap_or_else(|_| col.clone())
             })
             .collect();
 
@@ -221,7 +222,7 @@ impl ScanByAddsStreamState {
 
         let snapshot = self
             .snapshot
-            .as_ref()
+            .as_deref()
             .ok_or_else(|| DataFusionError::Internal("missing snapshot".into()))?;
         let log_store = self
             .log_store
@@ -295,7 +296,8 @@ impl ScanByAddsStreamState {
     async fn decode_adds_from_meta_batch(
         &mut self,
         batch: &RecordBatch,
-    ) -> Result<Vec<crate::kernel::models::Add>> {
+    ) -> Result<Vec<crate::spec::Add>> {
+        self.ensure_table().await?;
         let partition_columns = self
             .partition_columns
             .clone()

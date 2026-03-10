@@ -35,14 +35,13 @@ use datafusion::datasource::table_schema::TableSchema;
 use datafusion::physical_expr::{LexOrdering, PhysicalExpr};
 use object_store::path::Path;
 
-use crate::datasource::{
-    create_object_store_url, partitioned_file_from_action, DataFusionMixins, DeltaScanConfig,
-    DeltaTableStateExt,
-};
-use crate::kernel::models::Add;
+use crate::conversion::ScalarConverter;
+use crate::datasource::{create_object_store_url, partitioned_file_from_action, DeltaScanConfig};
 use crate::physical_plan::DeltaPhysicalExprAdapterFactory;
+use crate::schema::arrow_field_physical_name;
+use crate::spec::Add;
 use crate::storage::LogStoreRef;
-use crate::table::DeltaTableState;
+use crate::table::DeltaSnapshot;
 
 /// Parameters for building file scan configuration
 pub struct FileScanParams<'a> {
@@ -70,7 +69,7 @@ pub enum TableStatsMode {
 
 /// Build a FileScanConfig from pruned files and scan configuration
 pub fn build_file_scan_config(
-    snapshot: &DeltaTableState,
+    snapshot: &DeltaSnapshot,
     log_store: &LogStoreRef,
     files: &[Add],
     scan_config: &DeltaScanConfig,
@@ -86,24 +85,15 @@ pub fn build_file_scan_config(
     let config = scan_config.clone();
     let table_partition_cols = snapshot.metadata().partition_columns();
     let column_mapping_mode = snapshot.effective_column_mapping_mode();
-    let kernel_schema = snapshot.snapshot().schema();
-    let partition_columns_mapped: Vec<(String, String)> = table_partition_cols
-        .iter()
-        .map(|logical| {
-            let physical = kernel_schema
-                .field(logical)
-                .map(|f| f.physical_name(column_mapping_mode).to_string())
-                .unwrap_or_else(|| logical.clone());
-            (logical.clone(), physical)
-        })
-        .collect();
+    let kernel_schema = snapshot.schema();
+    let partition_columns_mapped = snapshot.physical_partition_columns();
     let mut physical_to_logical = HashMap::new();
     for field in complete_schema.fields() {
         let logical = field.name().clone();
         let physical = kernel_schema
-            .field(&logical)
-            .map(|f| f.physical_name(column_mapping_mode).to_string())
-            .unwrap_or_else(|| logical.clone());
+            .field_with_name(&logical)
+            .map(|f| arrow_field_physical_name(f, column_mapping_mode).to_string())
+            .unwrap_or_else(|_| logical.clone());
         physical_to_logical.entry(physical).or_insert(logical);
     }
 
@@ -159,12 +149,10 @@ pub fn build_file_scan_config(
     // Rewrite file paths with table location prefix
     file_groups.iter_mut().for_each(|(_, files)| {
         files.iter_mut().for_each(|file| {
-            file.object_meta.location = Path::from(format!(
-                "{}{}{}",
-                log_store.config().location.path(),
-                object_store::path::DELIMITER,
-                file.object_meta.location
-            ));
+            file.object_meta.location = rewrite_data_file_location(
+                Path::from(log_store.config().location.path()),
+                file.object_meta.location.clone(),
+            );
         });
     });
 
@@ -448,6 +436,31 @@ fn bounds_have_mismatched_types(a: &Precision<ScalarValue>, b: &Precision<Scalar
     }
 }
 
+fn rewrite_data_file_location(table_root: Path, location: Path) -> Path {
+    let raw = location.as_ref();
+    if looks_like_absolute_uri(raw) {
+        return location;
+    }
+
+    Path::from(format!(
+        "{}{}{}",
+        table_root,
+        object_store::path::DELIMITER,
+        location
+    ))
+}
+
+fn looks_like_absolute_uri(path: &str) -> bool {
+    let Some((scheme, rest)) = path.split_once(':') else {
+        return false;
+    };
+    !scheme.is_empty()
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+        && rest.starts_with('/')
+}
+
 fn stats_for_add(
     action: &Add,
     file_schema: &SchemaRef,
@@ -474,25 +487,29 @@ fn stats_for_add(
 
         for name in name_candidates {
             if min_value == Precision::Absent {
-                if let Some(value) = lookup_value_stat(&stats.min_values, name)
-                    .and_then(|v| scalar_from_json(field.data_type(), v))
-                {
+                if let Some(value) = stats.min_value(name).and_then(|v| {
+                    ScalarConverter::stat_value_to_arrow_scalar_value(v, field.data_type())
+                        .ok()
+                        .flatten()
+                }) {
                     if !value.is_null() {
                         min_value = Precision::Exact(value);
                     }
                 }
             }
             if max_value == Precision::Absent {
-                if let Some(value) = lookup_value_stat(&stats.max_values, name)
-                    .and_then(|v| scalar_from_json(field.data_type(), v))
-                {
+                if let Some(value) = stats.max_value(name).and_then(|v| {
+                    ScalarConverter::stat_value_to_arrow_scalar_value(v, field.data_type())
+                        .ok()
+                        .flatten()
+                }) {
                     if !value.is_null() {
                         max_value = Precision::Exact(value);
                     }
                 }
             }
             if null_count == Precision::Absent {
-                if let Some(value) = lookup_count_stat(&stats.null_count, name) {
+                if let Some(value) = stats.null_count_value(name) {
                     null_count = Precision::Exact(value.max(0) as usize);
                 }
             }
@@ -521,45 +538,6 @@ fn stats_for_add(
     })))
 }
 
-fn lookup_value_stat<'a>(
-    map: &'a std::collections::HashMap<String, crate::kernel::statistics::ColumnValueStat>,
-    name: &str,
-) -> Option<&'a serde_json::Value> {
-    let mut parts = name.split('.');
-    let first = parts.next()?;
-    let mut cur = map.get(first)?;
-    for p in parts {
-        cur = cur.as_column()?.get(p)?;
-    }
-    cur.as_value()
-}
-
-fn lookup_count_stat(
-    map: &std::collections::HashMap<String, crate::kernel::statistics::ColumnCountStat>,
-    name: &str,
-) -> Option<i64> {
-    let mut parts = name.split('.');
-    let first = parts.next()?;
-    let mut cur = map.get(first)?;
-    for p in parts {
-        cur = cur.as_column()?.get(p)?;
-    }
-    cur.as_value()
-}
-
-fn scalar_from_json(
-    dt: &datafusion::arrow::datatypes::DataType,
-    v: &serde_json::Value,
-) -> Option<ScalarValue> {
-    match v {
-        serde_json::Value::Null => ScalarValue::try_new_null(dt).ok(),
-        serde_json::Value::Bool(b) => ScalarValue::try_from_string(b.to_string(), dt).ok(),
-        serde_json::Value::Number(n) => ScalarValue::try_from_string(n.to_string(), dt).ok(),
-        serde_json::Value::String(s) => ScalarValue::try_from_string(s.clone(), dt).ok(),
-        other => ScalarValue::try_from_string(other.to_string(), dt).ok(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -567,12 +545,19 @@ mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
     use datafusion::common::ScalarValue;
+    use object_store::path::Path;
 
-    use super::{add_column_statistics, sanitize_statistics_for_schema, scalar_from_json};
+    use super::{
+        add_column_statistics, rewrite_data_file_location, sanitize_statistics_for_schema,
+    };
+    use crate::conversion::ScalarConverter;
 
     #[test]
     fn test_scalar_from_json_null_returns_typed_null() {
-        let value = scalar_from_json(&DataType::Int64, &serde_json::Value::Null);
+        #[expect(clippy::unwrap_used)]
+        let value =
+            ScalarConverter::json_to_arrow_scalar_value(&serde_json::Value::Null, &DataType::Int64)
+                .unwrap();
         assert_eq!(value, Some(ScalarValue::Int64(None)));
     }
 
@@ -623,5 +608,28 @@ mod tests {
             Precision::Exact(ScalarValue::Int64(Some(5)))
         );
         assert_eq!(stats.column_statistics[0].min_value, Precision::Absent);
+    }
+
+    #[test]
+    fn test_rewrite_data_file_location_preserves_absolute_uri_paths() {
+        let table_root = Path::from("bucket/table");
+        let absolute = Path::from("s3://other-bucket/path/part-000.parquet");
+
+        let rewritten = rewrite_data_file_location(table_root, absolute.clone());
+
+        assert_eq!(rewritten, absolute);
+    }
+
+    #[test]
+    fn test_rewrite_data_file_location_prefixes_relative_paths() {
+        let rewritten = rewrite_data_file_location(
+            Path::from("bucket/table"),
+            Path::from("part=1/part-000.parquet"),
+        );
+
+        assert_eq!(
+            rewritten,
+            Path::from("bucket/table/part=1/part-000.parquet")
+        );
     }
 }
