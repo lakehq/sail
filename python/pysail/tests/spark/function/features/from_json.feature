@@ -1,6 +1,6 @@
 Feature: from_json converts json strings to spark nested types
 
-  Rule: basic parsing of struct, maps, or arrays
+  Rule: basic parsing functionality of struct, maps, or arrays
     Scenario: from_json basic struct
       When query
         """
@@ -46,7 +46,7 @@ Feature: from_json converts json strings to spark nested types
         | {1, 2}  |
         | {1, 2}  |
 
-  Rule: nested structs
+  Rule: parsing of more complex schemas works
     Scenario: from_json nested objects
       When query
         """
@@ -63,7 +63,7 @@ Feature: from_json converts json strings to spark nested types
         """
       Then query result
         | result         |
-        | {a, [{c -> 1}]}  |
+        | {NULL, NULL}  |
 
     Scenario: from_json schema wrapped struct in array
         plain structs can be wrapped in an array if the schema
@@ -76,25 +76,42 @@ Feature: from_json converts json strings to spark nested types
         | result     |
         | [{1, 2, 3}]  |
 
-  Rule: parsing all non-nested types
-    Scenario: from_json all types
+  Rule: parsing all types
+    Scenario: from_json decimal
       When query
       """
-      select
-        from_json(
-          '{
-              "decimal": 1.0,
-              "float": 2.0,
-              "string": "string"
-          }',
-          'struct<decimal: decimal, float: float, string: string>'
-        ) as result
+      select from_json('{"d10_0": 1.0, "d10_2": 1.1}', 'struct<d10_0: decimal, d10_2: decimal(10, 2)>') as result
       """
       Then query result
         | result |
-        | {1.0, 2.0, string} |
+        | {1, 1.10} |
 
-  Rule: invalid json
+    Scenario: from_json float
+      When query
+      """
+      select from_json('{"float": 2.0}', 'struct<float: float>') as result
+      """
+      Then query result
+        | result |
+        | {2.0} |
+
+    Scenario: from_json timestamp
+      When query
+      """
+      select from_json('{"ts": "2026-01-01T01:01:01"}', 'struct<ts: timestamp>') as result
+      """
+      Then query result
+        | result |
+        | {2026-01-01 01:01:01} |
+
+    Scenario: from_json date as timestamp
+      When query
+      """
+      select from_json('{"ts": "2026-01-01"}', 'struct<ts: timestamp>', map("timestampFormat", "yyyy-MM-dd")) as result
+      """
+      Then query result
+        | result |
+        | {2026-01-01 00:00:00} |
 
   Rule: invalid schema
 

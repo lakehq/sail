@@ -1,12 +1,12 @@
 use core::any::type_name;
 use std::sync::Arc;
 
-use chrono::NaiveDate;
+use chrono::{NaiveDate, NaiveDateTime};
 use datafusion_expr::function::Hint;
 
 use datafusion::arrow::{
     array::{
-        Array, ArrayRef, Float32Builder, Float64Builder, Int32Builder, Int64Builder, ListArray, MapArray, StringArray, StringBuilder, StructArray, TimestampMicrosecondBuilder, BooleanBuilder
+        Array, ArrayRef, BooleanBuilder, Decimal128Builder, Float32Builder, Float64Builder, Int32Builder, Int64Builder, ListArray, MapArray, StringArray, StringBuilder, StructArray, TimestampMicrosecondBuilder
     },
     buffer::{NullBuffer, OffsetBuffer, ScalarBuffer},
     datatypes::{DataType, Field, FieldRef, Fields, TimeUnit},
@@ -27,6 +27,11 @@ enum FieldBuilder {
     Int64(Int64Builder),
     Float32(Float32Builder),
     Float64(Float64Builder),
+    Decimal128 {
+        builder: Decimal128Builder,
+        precision: u8,
+        scale: i8,
+    },
     String(StringBuilder),
     Boolean(BooleanBuilder),
     TimestampMicrosecondBuilder(TimestampMicrosecondBuilder),
@@ -120,7 +125,7 @@ impl Default for SparkFromJsonOptions {
     fn default() -> Self {
         Self {
             mode: Default::default(),
-            timestamp_format: SparkFromJsonOptions::convert_format("yyyy-MM-dd'T'HH:mm:ss"),
+            timestamp_format: SparkFromJsonOptions::convert_format("yyyy-MM-ddTHH:mm:ss"),
         }
     }
 }
@@ -169,6 +174,13 @@ impl ScalarUDFImpl for SparkFromJson {
     }
 
     fn return_field_from_args(&self, args: datafusion_expr::ReturnFieldArgs) -> Result<FieldRef> {
+        if args.arg_fields.len() < 2 || args.arg_fields.len() > 3 {
+            return Err(datafusion_common::DataFusionError::Plan(format!(
+                "from_json requires 2 or 3 arguments but got {}",
+                args.arg_fields.len()
+            )));
+        };
+
         let schema_scalar_value = match args.scalar_arguments[1] {
             Some(value) => Ok(value),
             None => plan_err!(
@@ -225,6 +237,13 @@ impl ScalarUDFImpl for SparkFromJson {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() < 2 || arg_types.len() > 3 {
+            return Err(datafusion_common::DataFusionError::Plan(format!(
+                "from_json requires 2 or 3 arguments but got {}",
+                arg_types.len()
+            )));
+        };
+
         match arg_types {
             [DataType::Utf8 | DataType::LargeUtf8, DataType::Utf8 | DataType::Struct(_) | DataType::Map(_, _) | DataType::List(_)] => {
                 Ok(vec![arg_types[0].clone(), arg_types[1].clone()])
@@ -325,6 +344,15 @@ fn create_builder(data_type: DataType, capacity: usize) -> Result<FieldBuilder> 
         DataType::Float64 => Ok(FieldBuilder::Float64(Float64Builder::with_capacity(
             capacity,
         ))),
+        DataType::Decimal128(precision, scale) => {
+            let builder = Decimal128Builder::with_capacity(capacity)
+                .with_precision_and_scale(precision, scale)?;
+            Ok(FieldBuilder::Decimal128 {
+                builder,
+                precision,
+                scale
+            })
+        },
         DataType::Boolean => Ok(FieldBuilder::Boolean(BooleanBuilder::with_capacity(capacity))),
         DataType::Timestamp(TimeUnit::Microsecond, _) => {
             Ok(FieldBuilder::TimestampMicrosecondBuilder(
@@ -383,6 +411,7 @@ fn append_to_builder(
             FieldBuilder::Int64(b) => b.append_null(),
             FieldBuilder::Float32(b) => b.append_null(),
             FieldBuilder::Float64(b) => b.append_null(),
+            FieldBuilder::Decimal128 {builder, ..} => builder.append_null(),
             FieldBuilder::String(b) => b.append_null(),
             FieldBuilder::Boolean(b) => b.append_null(),
             FieldBuilder::TimestampMicrosecondBuilder(b) => b.append_null(),
@@ -443,15 +472,37 @@ fn append_to_builder(
                 } else {
                     b.append_null();
                 }
-            }
+            },
+            (FieldBuilder::Decimal128 {
+                builder,
+                precision: _precision,
+                scale
+            },
+            Value::Number(num)) => {
+                let scale_factor = 10i128.pow(*scale as u32);
+                if let Some(i) = num.as_i128() {
+                    builder.append_value(i*scale_factor);
+                } else if let Some(f) = num.as_f64() {
+                    let decimal = (f * scale_factor as f64).round() as i128;
+                    builder.append_value(decimal);
+                } else {
+                    builder.append_null();
+                }
+            },
             (FieldBuilder::TimestampMicrosecondBuilder(b), Value::String(string)) => {
-                // TODO: partly hardcoded for sail-spark-connect tests
-                let micro_seconds = NaiveDate::parse_from_str(string, &options.timestamp_format)
-                    .unwrap()
-                    .and_hms_opt(0, 0, 0)
-                    .unwrap()
-                    .and_utc()
-                    .timestamp_micros();
+                let ts = if let Ok(timestamp) = NaiveDateTime::parse_from_str(string, &options.timestamp_format) {
+                    timestamp
+                } else if let Ok(date) = NaiveDate::parse_from_str(string, &options.timestamp_format) {
+                    date.and_hms_opt(0, 0, 0)
+                        .expect("Unreachable: only fails on invalid hours/mins/secs")
+                } else {
+                    return Err(DataFusionError::Execution(format!(
+                        "Timestamp error: can't parse {string:?} to {:?}",
+                        options.timestamp_format
+                    )))
+                };
+
+                let micro_seconds = ts.and_utc().timestamp_micros();
                 b.append_value(micro_seconds);
             },
             (FieldBuilder::String(b), Value::String(string)) => b.append_value(string),
@@ -549,6 +600,7 @@ fn finish_builder(builder: FieldBuilder) -> Result<ArrayRef> {
         FieldBuilder::Int64(mut b) => Ok(Arc::new(b.finish())),
         FieldBuilder::Float32(mut b) => Ok(Arc::new(b.finish())),
         FieldBuilder::Float64(mut b) => Ok(Arc::new(b.finish())),
+        FieldBuilder::Decimal128 {mut builder, ..} => Ok(Arc::new(builder.finish())),
         FieldBuilder::String(mut b) => Ok(Arc::new(b.finish())),
         FieldBuilder::Boolean(mut b) => Ok(Arc::new(b.finish())),
         FieldBuilder::TimestampMicrosecondBuilder(mut b) => Ok(Arc::new(b.finish())),
