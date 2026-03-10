@@ -8,12 +8,12 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 3180
-    numAddedFiles: 3
-    numFiles: 3
-    numOutputBytes: 3180
-    numOutputFiles: 3
-    numOutputRows: 4
+    numAddedBytes: 2122
+    numAddedFiles: 2
+    numFiles: 2
+    numOutputBytes: 2122
+    numOutputFiles: 2
+    numOutputRows: 2
     numRemovedBytes: 1070
     numRemovedFiles: 1
     writeTimeMs: <time_ms>
