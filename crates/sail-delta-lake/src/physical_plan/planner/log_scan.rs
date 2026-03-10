@@ -1,8 +1,7 @@
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
-use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::common::{DataFusionError, Result, ScalarValue};
-use datafusion::datasource::file_format::json::JsonFormat;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::PartitionedFile;
@@ -19,7 +18,30 @@ use object_store::{ObjectMeta, ObjectStore};
 use super::context::PlannerContext;
 use crate::datasource::create_object_store_url;
 use crate::physical_plan::COL_LOG_VERSION;
-use crate::spec::{delta_log_file_path, parse_version_prefix};
+use crate::spec::{
+    add_struct_type, delta_log_file_path, metadata_struct_type, parse_version_prefix,
+    protocol_struct_type, remove_struct_type, transaction_struct_type,
+};
+
+/// The canonical Delta log file schema with proper Map types for fields like `partitionValues`.
+///
+/// JSON schema inference gives `partitionValues` as a Struct, which breaks `map_extract`.
+/// By using this fixed schema for JSON-only log reads (when no parquet checkpoint exists),
+/// we ensure consistent Map types regardless of whether a checkpoint is present.
+static DELTA_LOG_FILE_SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
+    fn to_arrow(st: crate::spec::StructType) -> DataType {
+        #[expect(clippy::expect_used)]
+        DataType::try_from(&crate::spec::DataType::from(st))
+            .expect("spec struct type should convert to Arrow DataType")
+    }
+    Arc::new(Schema::new(vec![
+        Field::new("add", to_arrow(add_struct_type()), true),
+        Field::new("remove", to_arrow(remove_struct_type()), true),
+        Field::new("metaData", to_arrow(metadata_struct_type()), true),
+        Field::new("protocol", to_arrow(protocol_struct_type()), true),
+        Field::new("txn", to_arrow(transaction_struct_type()), true),
+    ]))
+});
 
 #[derive(Debug, Clone, Default)]
 pub struct LogScanOptions {
@@ -149,8 +171,9 @@ pub async fn build_delta_log_datasource_scans_with_options(
         head_many(&store, table_root_path, &commit_files)
     )?;
 
-    // Infer schemas (best-effort). If there are no files for either side, we still build an empty
-    // scan of the other side.
+    // Infer schemas for parquet checkpoint files only. JSON commit files use the canonical
+    // Delta log file schema (see `DELTA_LOG_FILE_SCHEMA`) to avoid type mismatches for
+    // map-like fields (e.g. `add.partitionValues`).
     let parquet_schema = if checkpoint_metas.is_empty() {
         None
     } else {
@@ -160,29 +183,22 @@ pub async fn build_delta_log_datasource_scans_with_options(
                 .await?,
         )
     };
-    let json_schema = if commit_metas.is_empty() {
-        None
-    } else {
-        Some(
-            JsonFormat::default()
-                .infer_schema(ctx.session(), &store, &commit_metas)
-                .await?,
-        )
-    };
+    let has_commit_files = !commit_metas.is_empty();
 
-    let merged = match (parquet_schema, json_schema) {
-        (Some(p), Some(j)) => {
-            // The inferred JSON schema may disagree with the checkpoint parquet schema for
-            // map-like fields (e.g. `add.partitionValues`). Prefer a stable schema to avoid
-            // planning failures during EXPLAIN.
-            match Schema::try_merge(vec![p.as_ref().clone(), j.as_ref().clone()]) {
-                Ok(merged) => Arc::new(merged),
-                Err(_) => p,
-            }
+    let merged = match (parquet_schema, has_commit_files) {
+        (Some(p), _) => {
+            // When a checkpoint (parquet) file is present, prefer its schema. The parquet
+            // checkpoint schema has proper Map types for fields like `add.partitionValues`,
+            // while JSON inference yields Struct types which are incompatible with `map_extract`.
+            p
         }
-        (Some(p), None) => p,
-        (None, Some(j)) => j,
-        (None, None) => {
+        (None, true) => {
+            // No parquet checkpoint exists (e.g. before the first checkpoint interval fires).
+            // Use the canonical Delta log file schema so that `partitionValues` and other
+            // map-like fields have the correct Map Arrow type instead of an inferred Struct.
+            Arc::clone(&*DELTA_LOG_FILE_SCHEMA)
+        }
+        (None, false) => {
             return Err(DataFusionError::Plan(
                 "no _delta_log files found to build log scan".to_string(),
             ))
