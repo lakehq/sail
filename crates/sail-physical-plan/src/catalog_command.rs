@@ -275,8 +275,15 @@ fn collect_partitions<'a>(
                 format!("{current_path}/{dir_name}")
             };
 
-            collect_partitions(store, dir, remaining_depth - 1, expected_keys, next_path, result)
-                .await?;
+            collect_partitions(
+                store,
+                dir,
+                remaining_depth - 1,
+                expected_keys,
+                next_path,
+                result,
+            )
+            .await?;
         }
 
         Ok(())
