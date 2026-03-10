@@ -223,7 +223,9 @@ class YamlDataSerializer:
             if not line.strip():
                 if current_name is None and not collecting_data:
                     continue
-                if collecting_data:
+                if collecting_data and line.startswith(cls._indent):
+                    # Indented blank line is a blank line within the data block.
+                    data_lines.append(line[len(cls._indent) :])
                     continue
                 continue
 
