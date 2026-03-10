@@ -64,7 +64,8 @@ pub async fn plan_merge(
 
 pub async fn plan_update(
     ctx: &PlannerContext<'_>,
-    input: Arc<dyn ExecutionPlan>,
+    condition: Option<ExprWithSource>,
+    assignments: Vec<(String, ExprWithSource)>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    op_update::build_update_plan(ctx, input).await
+    op_update::build_update_plan(ctx, condition, assignments).await
 }

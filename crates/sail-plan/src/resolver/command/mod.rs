@@ -17,6 +17,7 @@ mod function;
 mod insert;
 mod merge;
 mod show;
+mod update;
 mod variable;
 mod write;
 mod write_stream;
@@ -244,7 +245,15 @@ impl PlanResolver<'_> {
             CommandNode::SetVariable { variable, value } => {
                 self.resolve_command_set_variable(variable, value).await
             }
-            CommandNode::Update { .. } => Err(PlanError::todo("CommandNode::Update")),
+            CommandNode::Update {
+                table,
+                table_alias,
+                assignments,
+                condition,
+            } => {
+                self.resolve_command_update(table, table_alias, assignments, condition, state)
+                    .await
+            }
             CommandNode::Delete {
                 table,
                 table_alias,

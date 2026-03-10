@@ -8,7 +8,8 @@ use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::datasource::{
-    DeleteInfo, MergeInfo, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
+    DeleteInfo, MergeInfo, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat,
+    TableFormatRegistry, UpdateInfo,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_data_source::options::{
@@ -19,7 +20,7 @@ use url::Url;
 
 use crate::options::{ColumnMappingModeOption, DeltaLogReplayStrategyOption, TableDeltaOptions};
 use crate::physical_plan::planner::{
-    plan_delete, plan_merge, DeltaPhysicalPlanner, DeltaTableConfig, PlannerContext,
+    plan_delete, plan_merge, plan_update, DeltaPhysicalPlanner, DeltaTableConfig, PlannerContext,
 };
 use crate::table::open_table_with_object_store;
 use crate::{create_delta_provider, create_delta_source, DeltaTableError, KernelError};
@@ -232,6 +233,28 @@ impl TableFormat for DeltaTableFormat {
         let delete_exec = plan_delete(&delete_ctx, condition).await?;
 
         Ok(delete_exec)
+    }
+
+    async fn create_updater(
+        &self,
+        ctx: &dyn Session,
+        info: UpdateInfo,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let UpdateInfo {
+            path,
+            condition,
+            assignments,
+            options,
+        } = info;
+
+        let table_url = Self::parse_table_url(ctx, vec![path]).await?;
+        let delta_options = resolve_delta_write_options(options)?;
+
+        let update_config = DeltaTableConfig::new(table_url, delta_options, Vec::new(), None, true);
+        let update_ctx = PlannerContext::new(ctx, update_config);
+        let update_exec = plan_update(&update_ctx, condition, assignments).await?;
+
+        Ok(update_exec)
     }
 
     async fn create_merger(

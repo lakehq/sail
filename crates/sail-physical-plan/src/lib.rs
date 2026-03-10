@@ -1,6 +1,7 @@
 pub mod barrier;
 pub mod catalog_command;
 pub mod file_delete;
+pub mod file_update;
 pub mod file_write;
 pub mod format_tag;
 pub mod map_partitions;

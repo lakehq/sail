@@ -24,6 +24,7 @@ use sail_common_datafusion::streaming::event::schema::{
 use sail_delta_lake::logical::RewriteDeltaTableSource;
 use sail_logical_plan::barrier::BarrierNode;
 use sail_logical_plan::file_delete::FileDeleteNode;
+use sail_logical_plan::file_update::FileUpdateNode;
 use sail_logical_plan::file_write::FileWriteNode;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_logical_plan::merge::MergeIntoNode;
@@ -41,6 +42,7 @@ use sail_logical_plan::streaming::source_wrapper::StreamSourceWrapperNode;
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::file_delete::create_file_delete_physical_plan;
+use sail_physical_plan::file_update::create_file_update_physical_plan;
 use sail_physical_plan::file_write::create_file_write_physical_plan;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
@@ -225,6 +227,14 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 _ => internal_err!("Expected a table for DELETE"),
             }?;
             create_file_delete_physical_plan(session_state, planner, schema, node.options().clone())
+                .await?
+        } else if let Some(node) = node.as_any().downcast_ref::<FileUpdateNode>() {
+            if !logical_inputs.is_empty() || !physical_inputs.is_empty() {
+                return internal_err!("FileUpdateNode should have no inputs");
+            }
+            let schema =
+                Arc::new(datafusion::arrow::datatypes::Schema::empty()).to_dfschema_ref()?;
+            create_file_update_physical_plan(session_state, planner, schema, node.options().clone())
                 .await?
         } else if let Some(node) = node.as_any().downcast_ref::<MergeIntoNode>() {
             let _ = (
