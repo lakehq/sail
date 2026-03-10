@@ -360,7 +360,7 @@ fn min_max_stats_schema(schema: &StructType) -> Option<StructType> {
                     DataType::from(inner_schema)
                 }
                 DataType::Primitive(p) => {
-                    if is_skipping_eligeble_datatype(p) {
+                    if is_skipping_eligible_datatype(p) {
                         field.data_type.clone()
                     } else {
                         return None;
@@ -389,7 +389,7 @@ fn should_include_column(column_name: &ColumnName, column_names: &[ColumnName]) 
     })
 }
 
-fn is_skipping_eligeble_datatype(data_type: &PrimitiveType) -> bool {
+fn is_skipping_eligible_datatype(data_type: &PrimitiveType) -> bool {
     matches!(
         data_type,
         &PrimitiveType::Byte
