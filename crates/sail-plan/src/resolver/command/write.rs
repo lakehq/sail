@@ -291,7 +291,7 @@ impl PlanResolver<'_> {
                 } else if let Some(path) = options_map.get("path") {
                     file_write_options.path = path.to_string();
                 } else {
-                    file_write_options.path = self.resolve_default_table_location(&table)?;
+                    file_write_options.path = self.resolve_default_table_location(&table).await?;
                 }
                 if !table_properties.is_empty() {
                     file_write_options
