@@ -9076,10 +9076,10 @@
                         "nonTerminal": "Either(Keyword(Database), Keyword(Schema))"
                       },
                       {
-                        "nonTerminal": "ObjectName"
+                        "nonTerminal": "Option(Tuple(Keyword(If), Keyword(Not), Keyword(Exists)))"
                       },
                       {
-                        "nonTerminal": "Option(Tuple(Keyword(If), Keyword(Not), Keyword(Exists)))"
+                        "nonTerminal": "ObjectName"
                       },
                       {
                         "nonTerminal": "Vector(CreateDatabaseClause)"

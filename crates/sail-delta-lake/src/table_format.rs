@@ -17,7 +17,7 @@ use sail_data_source::options::{
 use sail_data_source::resolve_listing_urls;
 use url::Url;
 
-use crate::options::{ColumnMappingModeOption, TableDeltaOptions};
+use crate::options::{ColumnMappingModeOption, DeltaLogReplayStrategyOption, TableDeltaOptions};
 use crate::physical_plan::planner::{
     plan_delete, plan_merge, DeltaPhysicalPlanner, DeltaTableConfig, PlannerContext,
 };
@@ -271,6 +271,29 @@ fn apply_delta_read_options(from: DeltaReadOptions, to: &mut TableDeltaOptions) 
     if let Some(version_as_of) = from.version_as_of {
         to.version_as_of = Some(version_as_of)
     }
+    if let Some(metadata_as_data_read) = from.metadata_as_data_read {
+        to.metadata_as_data_read = metadata_as_data_read;
+    }
+    if let Some(ref raw) = from.delta_log_replay_strategy {
+        to.delta_log_replay_strategy = match raw.to_ascii_lowercase().as_str() {
+            "auto" => DeltaLogReplayStrategyOption::Auto,
+            "sort" => DeltaLogReplayStrategyOption::Sort,
+            "hash" => DeltaLogReplayStrategyOption::Hash,
+            other => {
+                return plan_err!(
+                    "invalid value for deltaLogReplayStrategy: {other}, expected auto/sort/hash"
+                )
+            }
+        };
+    }
+    if let Some(threshold) = from.delta_log_replay_hash_threshold {
+        if threshold == 0 {
+            return plan_err!(
+                "invalid value for deltaLogReplayHashThreshold: expected positive integer"
+            );
+        }
+        to.delta_log_replay_hash_threshold = threshold;
+    }
     Ok(())
 }
 
@@ -296,6 +319,26 @@ fn apply_delta_write_options(from: DeltaWriteOptions, to: &mut TableDeltaOptions
             "id" => to.column_mapping_mode = ColumnMappingModeOption::Id,
             _ => to.column_mapping_mode = ColumnMappingModeOption::None,
         }
+    }
+    if let Some(ref raw) = from.delta_log_replay_strategy {
+        to.delta_log_replay_strategy = match raw.to_ascii_lowercase().as_str() {
+            "auto" => DeltaLogReplayStrategyOption::Auto,
+            "sort" => DeltaLogReplayStrategyOption::Sort,
+            "hash" => DeltaLogReplayStrategyOption::Hash,
+            other => {
+                return plan_err!(
+                    "invalid value for deltaLogReplayStrategy: {other}, expected auto/sort/hash"
+                )
+            }
+        };
+    }
+    if let Some(threshold) = from.delta_log_replay_hash_threshold {
+        if threshold == 0 {
+            return plan_err!(
+                "invalid value for deltaLogReplayHashThreshold: expected positive integer"
+            );
+        }
+        to.delta_log_replay_hash_threshold = threshold;
     }
     Ok(())
 }

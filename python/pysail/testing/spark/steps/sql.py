@@ -55,9 +55,19 @@ def variable_for_temporary_directory(name, directory, tmp_path, variables):
 
 
 @given(parsers.parse("config {key} = {value}"))
-def config_set(key, value, spark):
-    """Sets a Spark configuration value using spark.conf.set()."""
-    spark.conf.set(key, value)
+def spark_config_override(key, value, spark, variables):
+    """Sets a Spark configuration value. Restores the original value or unsets the value after the scenario."""
+    rendered_value = Template(value).render(**variables)
+    try:
+        old_value = spark.conf.get(key)
+    except Exception:  # noqa: BLE001
+        old_value = None
+    spark.conf.set(key, rendered_value)
+    yield
+    if old_value is None:
+        spark.conf.unset(key)
+    else:
+        spark.conf.set(key, old_value)
 
 
 @given(parsers.re("statement(?P<template>( template)?)"))

@@ -21,12 +21,11 @@ def pytest_configure(config):
         "sail-only: mark test as Sail-only (skipped when running against Spark JVM)",
     )
     # Load all pytest-bdd step modules.
-    config.pluginmanager.import_plugin("pysail.tests.spark.steps.file_tree")
-    config.pluginmanager.import_plugin("pysail.tests.spark.steps.sql")
-    config.pluginmanager.import_plugin("pysail.tests.spark.steps.plan")
-    config.pluginmanager.import_plugin("pysail.tests.spark.steps.delta_log")
+    config.pluginmanager.import_plugin("pysail.testing.spark.steps.file_tree")
+    config.pluginmanager.import_plugin("pysail.testing.spark.steps.sql")
+    config.pluginmanager.import_plugin("pysail.testing.spark.steps.plan")
+    config.pluginmanager.import_plugin("pysail.testing.spark.steps.delta_log")
     config.pluginmanager.import_plugin("pysail.tests.spark.steps.iceberg.metadata")
-    config.pluginmanager.import_plugin("pysail.tests.spark.steps.dataframe")
 
 
 if TYPE_CHECKING:
