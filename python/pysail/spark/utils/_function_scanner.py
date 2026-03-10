@@ -69,7 +69,7 @@ class CallSiteLocator(ast.NodeVisitor):
         self.generic_visit(node)
 
 
-def _resolve_calls_with_jedi(source: str, file_path: Path | None = None) -> Counter[tuple[str, str]]:
+def resolve_calls_with_jedi(source: str, file_path: Path | None = None) -> Counter[tuple[str, str]]:
     """
     1. Parse code with AST to find where functions are called.
     2. Ask Jedi to infer what is being called at those locations.
@@ -125,7 +125,7 @@ def _resolve_calls_with_jedi(source: str, file_path: Path | None = None) -> Coun
     return counts
 
 
-def _extract_notebook_code(content: str) -> str:
+def extract_notebook_code(content: str) -> str:
     """Extract Python code from Jupyter notebook JSON."""
     try:
         nb = json.loads(content)
@@ -154,25 +154,25 @@ def _extract_notebook_code(content: str) -> str:
     return "".join(lines)
 
 
-def _scan_file(path: Path) -> Counter[tuple[str, str]]:
+def scan_file(path: Path) -> Counter[tuple[str, str]]:
     """Scan a single .py or .ipynb file."""
     try:
         content = path.read_text(encoding="utf-8")
 
         if path.suffix == ".ipynb":
-            content = _extract_notebook_code(content)
+            content = extract_notebook_code(content)
 
         if not content.strip():
             return Counter()
 
-        return _resolve_calls_with_jedi(content, path)
+        return resolve_calls_with_jedi(content, path)
 
     except OSError:
         logger.exception("Failed to read %s", path)
         return Counter()
 
 
-def _scan_directory(base: Path) -> Counter[tuple[str, str]]:
+def scan_directory(base: Path) -> Counter[tuple[str, str]]:
     """Recursively scan directory for .py and .ipynb files."""
     total: Counter[tuple[str, str]] = Counter()
 
@@ -194,6 +194,6 @@ def _scan_directory(base: Path) -> Counter[tuple[str, str]]:
     for i, path in enumerate(files, 1):
         if i % 10 == 0:
             logger.info("Scanning file %d/%d ...", i, total_files)
-        total.update(_scan_file(path))
+        total.update(scan_file(path))
 
     return total
