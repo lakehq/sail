@@ -49,8 +49,8 @@ def main() -> None:
 
     base_dir = Path(args.directory)
     if not base_dir.exists():
-        msg = "Directory not found: %s"
-        raise SystemExit(msg, args.directory)
+        msg = f"Directory not found: {args.directory}"
+        raise SystemExit(msg)
 
     logger.info("Scanning: %s", base_dir)
 
