@@ -25,7 +25,7 @@ Feature: Delta Lake read path (driver vs metadata-as-data)
     Scenario: EXPLAIN SELECT with default options uses driver file scan
       When query
         """
-        EXPLAIN SELECT * FROM delta_read_driver_path
+        SELECT * FROM delta_read_driver_path
         """
       Then query plan matches snapshot
 
@@ -55,7 +55,7 @@ Feature: Delta Lake read path (driver vs metadata-as-data)
     Scenario: EXPLAIN SELECT with metadataAsDataRead true uses discovery and log replay
       When query
         """
-        EXPLAIN SELECT * FROM delta_read_metadata_path
+        SELECT * FROM delta_read_metadata_path
         """
       Then query plan matches snapshot
 
@@ -86,7 +86,7 @@ Feature: Delta Lake read path (driver vs metadata-as-data)
     Scenario: EXPLAIN SELECT with default options and partition filter prunes driver file scan
       When query
         """
-        EXPLAIN SELECT * FROM delta_read_driver_partitioned_path WHERE year = 2024
+        SELECT * FROM delta_read_driver_partitioned_path WHERE year = 2024
         """
       Then query plan matches snapshot
 

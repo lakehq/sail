@@ -4,7 +4,7 @@ import re
 import textwrap
 from typing import TYPE_CHECKING
 
-from pytest_bdd import then
+from pytest_bdd import parsers, then
 
 if TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
@@ -115,18 +115,19 @@ def normalize_plan_text(plan_text: str) -> str:
     return re.sub(r"Bytes=Inexact\(\d+\)", r"Bytes=Inexact(<bytes>)", text)
 
 
-def _collect_plan(query: str, spark) -> str:
-    df = spark.sql(query)
-    rows = df.collect()
-    assert len(rows) == 1, f"expected single row, got {len(rows)}"
-    plan = rows[0][0]
-    assert isinstance(plan, str), "expected string plan output"
-    assert plan, "expected non-empty plan output"
-    return plan
-
-
-@then("query plan matches snapshot")
-def query_plan_matches_snapshot(query, spark, snapshot: SnapshotAssertion):
+@then(parsers.re("(?P<mode>(simple |extended |codegen |cost |formatted )?)query plan matches snapshot"))
+def query_plan_matches_snapshot(mode, query, spark, snapshot: SnapshotAssertion):
     """Executes the SQL query and only asserts against the stored snapshot."""
-    plan = _collect_plan(query, spark)
+    stripped = query.strip()
+    if re.match(r"(?i)^explain\b", stripped):
+        # For EXPLAIN SQL statements (e.g., write operations like DELETE, MERGE).
+        # The plan is returned as a single-row result set.
+        rows = spark.sql(stripped).collect()
+        assert len(rows) == 1, f"expected single row, got {len(rows)}"
+        plan = rows[0][0]
+        assert isinstance(plan, str), "expected string plan output"
+        assert plan, "expected non-empty plan output"
+    else:
+        # For regular queries, use _explain_string() to get the plan.
+        plan = spark.sql(stripped)._explain_string(mode.strip() or None)  # noqa: SLF001
     assert snapshot == normalize_plan_text(plan)
