@@ -6,7 +6,7 @@ import pytest
 from jinja2 import Template
 from pytest_bdd import given, parsers, then, when
 
-from pysail.tests.spark.utils import escape_sql_string_literal, parse_show_string
+from pysail.testing.spark.utils.sql import escape_sql_string_literal, parse_show_string
 
 
 @pytest.fixture

@@ -5,7 +5,7 @@ import pytest
 from pyspark.sql.functions import lit
 from pyspark.sql.types import Row
 
-from pysail.tests.spark.utils import strict
+from pysail.testing.spark.utils.sql import strict
 
 
 @pytest.mark.parametrize(
