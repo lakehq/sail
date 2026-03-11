@@ -289,9 +289,11 @@ class YamlSnapshotExtension(AbstractSyrupyExtension):
     ) -> str:
         """Return the snapshot file basename.
 
-        For pytest-bdd scenarios, use the feature file stem so that each feature
-        file gets its own snapshot file.  For all other tests fall back to the
-        default behaviour (the test-module stem).
+        For pytest-bdd scenarios, use the feature file path relative to the test module
+        directory (without extension), so that each feature file gets its own snapshot
+        file at the path ``__snapshots__/<relative_feature_path>.yaml``.
+        For example, ``features/a/b/c.feature`` gets snapshot ``__snapshots__/features/a/b/c.yaml``.
+        For regular tests, fall back to the default behaviour (the test-module stem).
         """
         _ = index
         item = test_location.item
@@ -301,7 +303,13 @@ class YamlSnapshotExtension(AbstractSyrupyExtension):
             feature = getattr(scenario, "feature", None)
             feature_filename = getattr(feature, "filename", None)
             if feature_filename is not None:
-                return Path(feature_filename).stem
+                feature_path = Path(feature_filename)
+                test_dir = Path(test_location.filepath).parent
+                try:
+                    rel = feature_path.relative_to(test_dir)
+                    return str(rel.with_suffix(""))
+                except ValueError:
+                    return feature_path.stem
         return test_location.basename
 
     def serialize(self, data: SerializableData, **kwargs: Any) -> str:
