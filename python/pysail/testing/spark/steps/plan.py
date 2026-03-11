@@ -5,11 +5,9 @@ import textwrap
 from typing import TYPE_CHECKING
 
 from pytest_bdd import then
-from syrupy.extensions.single_file import SingleFileSnapshotExtension
 
 if TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
-    from syrupy.types import SerializableData
 
 
 def normalize_plan_text(plan_text: str) -> str:
@@ -18,7 +16,7 @@ def normalize_plan_text(plan_text: str) -> str:
     # Make Windows paths match the regexes and snapshots early, so the
     # raw-text substitutions below also work cross-platform.
     text = text.replace("\\", "/")
-    text = re.sub(r"([A-Za-z][A-Za-z0-9+.\-]*:)//", r"\1__SCHEME_SLASHSLASH__", text)
+    text = re.sub(r"([A-Za-z][A-Za-z0-9+.\-]+:)//", r"\1__SCHEME_SLASHSLASH__", text)
     text = re.sub(r"/{2,}", "/", text)
     text = text.replace("__SCHEME_SLASHSLASH__", "//")
 
@@ -127,17 +125,8 @@ def _collect_plan(query: str, spark) -> str:
     return plan
 
 
-class PlanSnapshotExtension(SingleFileSnapshotExtension):
-    """Snapshot extension that stores normalized plan text."""
-
-    file_extension = "plan"
-
-    def serialize(self, data: SerializableData, **_: object) -> bytes:
-        return normalize_plan_text(str(data)).encode()
-
-
 @then("query plan matches snapshot")
 def query_plan_matches_snapshot(query, spark, snapshot: SnapshotAssertion):
     """Executes the SQL query and only asserts against the stored snapshot."""
     plan = _collect_plan(query, spark)
-    assert snapshot(extension_class=PlanSnapshotExtension) == plan
+    assert snapshot == normalize_plan_text(plan)

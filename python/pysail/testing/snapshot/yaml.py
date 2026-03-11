@@ -13,6 +13,8 @@ from syrupy.exceptions import TaintedSnapshotError
 from syrupy.extensions.base import AbstractSyrupyExtension
 
 if TYPE_CHECKING:
+    from syrupy.extensions.base import SnapshotIndex
+    from syrupy.location import PyTestLocation
     from syrupy.types import SerializableData
 
 
@@ -221,7 +223,9 @@ class YamlDataSerializer:
             if not line.strip():
                 if current_name is None and not collecting_data:
                     continue
-                if collecting_data:
+                if collecting_data and line.startswith(cls._indent):
+                    # Indented blank line is a blank line within the data block.
+                    data_lines.append(line[len(cls._indent) :])
                     continue
                 continue
 
@@ -267,10 +271,43 @@ class YamlDataSerializer:
 class YamlSnapshotExtension(AbstractSyrupyExtension):
     """
     Syrupy extension that stores snapshots as YAML multi-document files.
+
+    When used with pytest-bdd scenarios, each feature file gets its own snapshot
+    file named after the feature file (e.g., ``explain.yaml`` for ``explain.feature``).
+    For regular tests, the snapshot file is named after the test module.
     """
 
     file_extension = "yaml"
     serializer_class: type[YamlDataSerializer] = YamlDataSerializer
+
+    @classmethod
+    def get_file_basename(
+        cls,
+        *,
+        test_location: PyTestLocation,
+        index: SnapshotIndex,
+    ) -> str:
+        """Return the snapshot file basename.
+
+        For pytest-bdd scenarios, use the feature file path relative to the test module
+        directory (without extension), so that each feature file gets its own snapshot
+        file at the path ``__snapshots__/<relative_feature_path>.yaml``.
+        For example, ``features/a/b/c.feature`` gets snapshot ``__snapshots__/features/a/b/c.yaml``.
+        For regular tests, fall back to the default behaviour (the test-module stem).
+        """
+        _ = index
+        item = test_location.item
+        obj = getattr(item, "obj", None)
+        scenario = getattr(obj, "__scenario__", None)
+        if scenario is not None:
+            feature = getattr(scenario, "feature", None)
+            feature_filename = getattr(feature, "filename", None)
+            if feature_filename is not None:
+                feature_path = Path(feature_filename)
+                test_dir = Path(test_location.filepath).parent
+                rel = feature_path.relative_to(test_dir)
+                return str(rel.with_suffix(""))
+        return test_location.basename
 
     def serialize(self, data: SerializableData, **kwargs: Any) -> str:
         return self.serializer_class.serialize(data, **kwargs)
