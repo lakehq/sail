@@ -55,7 +55,7 @@ pub(crate) fn build_metadata_filter(
 
 pub(crate) fn build_metadata_stats_schema(snapshot: &DeltaSnapshot) -> Result<SchemaRef> {
     let partition_columns = snapshot.metadata().partition_columns();
-    let mode = snapshot.column_mapping_mode();
+    let mode = snapshot.effective_column_mapping_mode();
     let non_partition_fields = snapshot
         .schema()
         .fields()
@@ -139,7 +139,9 @@ impl MetadataPredicateRewriter {
                 Expr::IsNotNull(expr) => self
                     .rewrite_null_check(*expr, false)
                     .unwrap_or_else(literal_true),
-                other => Expr::Not(Box::new(self.rewrite(other))),
+                // Any other NOT is not safe to negate over rewritten stats bounds –
+                // fall back to keeping all files (literal_true = no pruning).
+                _ => literal_true(),
             },
             Expr::Alias(alias) => self.rewrite(*alias.expr),
             Expr::Literal(..) => expr,

@@ -20,7 +20,10 @@ use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use futures::TryStreamExt;
 
-use crate::spec::fields::{FIELD_NAME_STATS, FIELD_NAME_STATS_PARSED};
+use crate::spec::fields::FIELD_NAME_STATS_PARSED;
+
+/// The column name used by the replay pipeline for the raw JSON stats string.
+const REPLAY_STATS_JSON_COLUMN: &str = "stats_json";
 
 #[derive(Debug)]
 pub struct DeltaMetadataStatsExec {
@@ -62,7 +65,16 @@ impl DeltaMetadataStatsExec {
     }
 
     fn parse_stats_array(&self, batch: &RecordBatch) -> Result<ArrayRef> {
-        let Some(stats_json_col) = batch.column_by_name(FIELD_NAME_STATS) else {
+        // Priority 1: if the batch already has a typed `stats_parsed` struct column
+        // (e.g. read from a checkpoint that persists stats in struct form), use it directly.
+        if let Some(existing) = batch.column_by_name(FIELD_NAME_STATS_PARSED) {
+            if matches!(existing.data_type(), DataType::Struct(_)) {
+                return Ok(Arc::clone(existing));
+            }
+        }
+
+        // Priority 2: parse from the replay pipeline's `stats_json` column.
+        let Some(stats_json_col) = batch.column_by_name(REPLAY_STATS_JSON_COLUMN) else {
             return Ok(new_null_array(
                 &DataType::Struct(self.stats_schema.fields().clone()),
                 batch.num_rows(),
@@ -199,7 +211,7 @@ impl Clone for DeltaMetadataStatsExec {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::arrow::array::{Int32Array, Int64Array};
+    use datafusion::arrow::array::{Array, Int32Array, Int64Array};
     use datafusion::physical_plan::empty::EmptyExec;
 
     use super::*;
@@ -228,7 +240,7 @@ mod tests {
     fn parses_stats_json_into_typed_struct_column() -> Result<()> {
         let input_schema = Arc::new(Schema::new(vec![
             Field::new(PATH_COLUMN, DataType::Utf8, false),
-            Field::new(FIELD_NAME_STATS, DataType::Utf8, true),
+            Field::new(REPLAY_STATS_JSON_COLUMN, DataType::Utf8, true),
         ]));
         let batch = RecordBatch::try_new(
             Arc::clone(&input_schema),
@@ -273,6 +285,50 @@ mod tests {
 
         assert_eq!(num_records.value(0), 3);
         assert_eq!(min_value.value(0), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn reuses_existing_stats_parsed_struct_without_json_parse() -> Result<()> {
+        let typed_stats = StructArray::from(vec![(
+            Arc::new(Field::new(STATS_FIELD_NUM_RECORDS, DataType::Int64, true)),
+            Arc::new(Int64Array::from(vec![Some(42)])) as Arc<_>,
+        )]);
+
+        let input_schema = Arc::new(Schema::new(vec![
+            Field::new(PATH_COLUMN, DataType::Utf8, false),
+            Field::new(
+                FIELD_NAME_STATS_PARSED,
+                typed_stats.data_type().clone(),
+                true,
+            ),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&input_schema),
+            vec![
+                Arc::new(StringArray::from(vec![Some("file.parquet")])),
+                Arc::new(typed_stats),
+            ],
+        )
+        .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+
+        // The exec's stats_schema only has numRecords; no stats_json column exists.
+        let exec = DeltaMetadataStatsExec::new(
+            Arc::new(EmptyExec::new(Arc::clone(&input_schema))),
+            stats_schema(),
+        );
+        let parsed = exec.parse_stats_array(&batch)?;
+        let stats = parsed
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| DataFusionError::Internal("expected struct array".to_string()))?;
+        let num_records = stats
+            .column_by_name(STATS_FIELD_NUM_RECORDS)
+            .and_then(|col| col.as_any().downcast_ref::<Int64Array>())
+            .ok_or_else(|| {
+                DataFusionError::Internal("expected numRecords Int64 array".to_string())
+            })?;
+        assert_eq!(num_records.value(0), 42);
         Ok(())
     }
 }
