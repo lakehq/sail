@@ -24,15 +24,4 @@ mod tests {
             "expand_merge should run before built-in optimizers"
         );
     }
-
-    #[test]
-    fn default_rules_include_reconstruct_simple_case_expr() {
-        let rules = default_optimizer_rules();
-        assert!(
-            rules
-                .iter()
-                .any(|r| r.name() == "reconstruct_simple_case_expr"),
-            "reconstruct_simple_case_expr must be registered in the optimizer pipeline"
-        );
-    }
 }

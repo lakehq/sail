@@ -6,7 +6,7 @@
         "success": {
           "unresolvedFunction": {
             "functionName": [
-              "when"
+              "case"
             ],
             "arguments": [
               {
@@ -16,39 +16,16 @@
                   ],
                   "arguments": [
                     {
-                      "unresolvedFunction": {
-                        "functionName": [
-                          "=="
-                        ],
-                        "arguments": [
-                          {
-                            "literal": {
-                              "utf8": {
-                                "value": "a"
-                              }
-                            }
-                          },
-                          {
-                            "literal": {
-                              "utf8": {
-                                "value": "a"
-                              }
-                            }
-                          }
-                        ],
-                        "namedArguments": [],
-                        "isDistinct": false,
-                        "isUserDefinedFunction": false,
-                        "isInternal": null,
-                        "ignoreNulls": null,
-                        "filter": null,
-                        "orderBy": null
+                      "literal": {
+                        "utf8": {
+                          "value": "a"
+                        }
                       }
                     },
                     {
                       "literal": {
-                        "boolean": {
-                          "value": true
+                        "utf8": {
+                          "value": "a"
                         }
                       }
                     }
@@ -60,6 +37,13 @@
                   "ignoreNulls": null,
                   "filter": null,
                   "orderBy": null
+                }
+              },
+              {
+                "literal": {
+                  "boolean": {
+                    "value": true
+                  }
                 }
               },
               {
@@ -87,54 +71,31 @@
         "success": {
           "unresolvedFunction": {
             "functionName": [
-              "when"
+              "case"
             ],
             "arguments": [
               {
                 "unresolvedFunction": {
                   "functionName": [
-                    "=="
+                    "or"
                   ],
                   "arguments": [
                     {
-                      "unresolvedFunction": {
-                        "functionName": [
-                          "or"
+                      "unresolvedAttribute": {
+                        "name": [
+                          "a"
                         ],
-                        "arguments": [
-                          {
-                            "unresolvedAttribute": {
-                              "name": [
-                                "a"
-                              ],
-                              "planId": null,
-                              "isMetadataColumn": false
-                            }
-                          },
-                          {
-                            "unresolvedAttribute": {
-                              "name": [
-                                "b"
-                              ],
-                              "planId": null,
-                              "isMetadataColumn": false
-                            }
-                          }
-                        ],
-                        "namedArguments": [],
-                        "isDistinct": false,
-                        "isUserDefinedFunction": false,
-                        "isInternal": null,
-                        "ignoreNulls": null,
-                        "filter": null,
-                        "orderBy": null
+                        "planId": null,
+                        "isMetadataColumn": false
                       }
                     },
                     {
-                      "literal": {
-                        "boolean": {
-                          "value": true
-                        }
+                      "unresolvedAttribute": {
+                        "name": [
+                          "b"
+                        ],
+                        "planId": null,
+                        "isMetadataColumn": false
                       }
                     }
                   ],
@@ -145,6 +106,13 @@
                   "ignoreNulls": null,
                   "filter": null,
                   "orderBy": null
+                }
+              },
+              {
+                "literal": {
+                  "boolean": {
+                    "value": true
+                  }
                 }
               },
               {
@@ -157,60 +125,10 @@
                 }
               },
               {
-                "unresolvedFunction": {
-                  "functionName": [
-                    "=="
-                  ],
-                  "arguments": [
-                    {
-                      "unresolvedFunction": {
-                        "functionName": [
-                          "or"
-                        ],
-                        "arguments": [
-                          {
-                            "unresolvedAttribute": {
-                              "name": [
-                                "a"
-                              ],
-                              "planId": null,
-                              "isMetadataColumn": false
-                            }
-                          },
-                          {
-                            "unresolvedAttribute": {
-                              "name": [
-                                "b"
-                              ],
-                              "planId": null,
-                              "isMetadataColumn": false
-                            }
-                          }
-                        ],
-                        "namedArguments": [],
-                        "isDistinct": false,
-                        "isUserDefinedFunction": false,
-                        "isInternal": null,
-                        "ignoreNulls": null,
-                        "filter": null,
-                        "orderBy": null
-                      }
-                    },
-                    {
-                      "literal": {
-                        "boolean": {
-                          "value": false
-                        }
-                      }
-                    }
-                  ],
-                  "namedArguments": [],
-                  "isDistinct": false,
-                  "isUserDefinedFunction": false,
-                  "isInternal": null,
-                  "ignoreNulls": null,
-                  "filter": null,
-                  "orderBy": null
+                "literal": {
+                  "boolean": {
+                    "value": false
+                  }
                 }
               },
               {
@@ -249,39 +167,23 @@
         "success": {
           "unresolvedFunction": {
             "functionName": [
-              "when"
+              "case"
             ],
             "arguments": [
               {
-                "unresolvedFunction": {
-                  "functionName": [
-                    "=="
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
                   ],
-                  "arguments": [
-                    {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "a"
-                        ],
-                        "planId": null,
-                        "isMetadataColumn": false
-                      }
-                    },
-                    {
-                      "literal": {
-                        "int32": {
-                          "value": 1
-                        }
-                      }
-                    }
-                  ],
-                  "namedArguments": [],
-                  "isDistinct": false,
-                  "isUserDefinedFunction": false,
-                  "isInternal": null,
-                  "ignoreNulls": null,
-                  "filter": null,
-                  "orderBy": null
+                  "planId": null,
+                  "isMetadataColumn": false
+                }
+              },
+              {
+                "literal": {
+                  "int32": {
+                    "value": 1
+                  }
                 }
               },
               {
@@ -294,35 +196,10 @@
                 }
               },
               {
-                "unresolvedFunction": {
-                  "functionName": [
-                    "=="
-                  ],
-                  "arguments": [
-                    {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "a"
-                        ],
-                        "planId": null,
-                        "isMetadataColumn": false
-                      }
-                    },
-                    {
-                      "literal": {
-                        "int32": {
-                          "value": 2
-                        }
-                      }
-                    }
-                  ],
-                  "namedArguments": [],
-                  "isDistinct": false,
-                  "isUserDefinedFunction": false,
-                  "isInternal": null,
-                  "ignoreNulls": null,
-                  "filter": null,
-                  "orderBy": null
+                "literal": {
+                  "int32": {
+                    "value": 2
+                  }
                 }
               },
               {

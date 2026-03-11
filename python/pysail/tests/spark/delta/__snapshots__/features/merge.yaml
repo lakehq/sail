@@ -318,9 +318,6 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
   
-    logical_plan after reconstruct_simple_case_expr:
-    SAME TEXT AS ABOVE
-  
     logical_plan after expand_merge:
     SAME TEXT AS ABOVE
   
@@ -385,9 +382,6 @@ data:
     SAME TEXT AS ABOVE
   
     logical_plan after optimize_projections:
-    SAME TEXT AS ABOVE
-  
-    logical_plan after reconstruct_simple_case_expr:
     SAME TEXT AS ABOVE
   
     logical_plan:

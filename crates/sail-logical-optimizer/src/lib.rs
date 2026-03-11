@@ -25,10 +25,6 @@ use datafusion::optimizer::simplify_expressions::SimplifyExpressions;
 use datafusion::optimizer::single_distinct_to_groupby::SingleDistinctToGroupBy;
 use datafusion::optimizer::{AnalyzerRule, OptimizerRule};
 
-use crate::case_expr::ReconstructSimpleCaseExpr;
-
-pub mod case_expr;
-
 pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
     vec![
         Arc::new(ResolveGroupingFunction::new()),
@@ -63,8 +59,6 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
         Arc::new(EliminateGroupByConstant::new()),
         Arc::new(CommonSubexprEliminate::new()),
         Arc::new(OptimizeProjections::new()),
-        // Sail custom rules
-        Arc::new(ReconstructSimpleCaseExpr),
     ]
 }
 
