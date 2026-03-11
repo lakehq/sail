@@ -5,11 +5,9 @@ import textwrap
 from typing import TYPE_CHECKING
 
 from pytest_bdd import then
-from syrupy.extensions.single_file import SingleFileSnapshotExtension
 
 if TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
-    from syrupy.types import SerializableData
 
 
 def normalize_plan_text(plan_text: str) -> str:
@@ -127,17 +125,8 @@ def _collect_plan(query: str, spark) -> str:
     return plan
 
 
-class PlanSnapshotExtension(SingleFileSnapshotExtension):
-    """Snapshot extension that stores normalized plan text."""
-
-    file_extension = "plan"
-
-    def serialize(self, data: SerializableData, **_: object) -> bytes:
-        return normalize_plan_text(str(data)).encode()
-
-
 @then("query plan matches snapshot")
 def query_plan_matches_snapshot(query, spark, snapshot: SnapshotAssertion):
     """Executes the SQL query and only asserts against the stored snapshot."""
     plan = _collect_plan(query, spark)
-    assert snapshot(extension_class=PlanSnapshotExtension) == plan
+    assert snapshot == normalize_plan_text(plan)

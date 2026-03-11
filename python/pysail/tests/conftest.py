@@ -25,7 +25,7 @@ def pytest_configure(config):
     # Default Syrupy format is Amber (`.ambr`), but we prefer standard YAML multi-doc files.
     default_ext = getattr(config.option, "default_extension", None)
     if default_ext is None:
-        config.option.default_extension = "pysail.tests.snapshot_yaml.YamlSnapshotExtension"
+        config.option.default_extension = "pysail.testing.snapshot.yaml.YamlSnapshotExtension"
     # Store snapshots in `snapshots` directories instead of the default `__snapshots__`.
     # We set both `config.option.snapshot_dirname` (for Syrupy's `pytest_sessionstart` hook) and
     # the class attribute directly (in case this conftest is loaded lazily after `pytest_sessionstart`
