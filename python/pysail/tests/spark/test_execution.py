@@ -8,7 +8,7 @@ from pyspark.sql.types import Row
 from pyspark.sql.window import Window
 
 from pysail.spark import SparkConnectServer
-from pysail.tests.spark.utils import is_jvm_spark
+from pysail.testing.spark.utils.common import is_jvm_spark
 
 
 @pytest.fixture(scope="session")

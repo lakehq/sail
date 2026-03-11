@@ -1,6 +1,6 @@
 import pytest
 
-from pysail.tests.spark.utils import is_jvm_spark
+from pysail.testing.spark.utils.common import is_jvm_spark
 
 if is_jvm_spark():
     pytest.skip("Sail streaming tests", allow_module_level=True)
