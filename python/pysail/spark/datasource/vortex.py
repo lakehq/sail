@@ -5,7 +5,7 @@ zero-copy Arrow RecordBatch yield.
 
 Install the optional dependency before use::
 
-    pip install vortex
+    pip install pysail[vortex]
 
 Usage::
 
@@ -25,7 +25,7 @@ try:
     import vortex
     from vortex.expr import and_, column, not_
 except ImportError as e:
-    msg = "vortex is required for the Vortex data source. Install it with: pip install vortex"
+    msg = "pyvortex is required for the Vortex data source. Install it with: pip install pysail[vortex]"
     raise ImportError(msg) from e
 
 from pyspark.sql.datasource import (
@@ -123,11 +123,10 @@ def _tuple_to_vortex_expr(t: tuple):
     if op.startswith("__"):
         return getattr(col, op)(t[2])
 
-    # Null checks
-    if op == "is_null":
-        return col == None  # noqa: E711  (vortex uses == None for is_null)
-    if op == "is_not_null":
-        return not_(col == None)  # noqa: E711
+    # Null checks — Vortex doesn't support null comparison expressions,
+    # so we reject these and let Sail post-filter.
+    if op in ("is_null", "is_not_null"):
+        return None
 
     # In: (col, "in", (v1, v2, ...))
     if op == "in":
@@ -147,17 +146,35 @@ def _tuple_to_vortex_expr(t: tuple):
 # ============================================================================
 
 
-def _cast_string_views(table: pa.Table) -> pa.Table:
-    """Cast Utf8View columns to Utf8 (Vortex returns string_view, Sail expects string)."""
-    columns = []
-    for i, field in enumerate(table.schema):
-        col = table.column(i)
+def _normalize_schema(schema: pa.Schema) -> pa.Schema:
+    """Normalize Arrow schema types for Sail compatibility.
+
+    Vortex may report Utf8View in the schema but produce Utf8/BinaryView
+    as Binary in batches. Normalize view types to their non-view equivalents
+    to avoid schema mismatch errors.
+    """
+    fields = []
+    for field in schema:
         if field.type == pa.string_view():
-            col = col.cast(pa.string())
-        columns.append(col)
-    if all(table.column(i) is columns[i] for i in range(len(columns))):
+            fields.append(pa.field(field.name, pa.utf8(), nullable=field.nullable))
+        elif field.type == pa.binary_view():
+            fields.append(pa.field(field.name, pa.binary(), nullable=field.nullable))
+        else:
+            fields.append(field)
+    return pa.schema(fields)
+
+
+def _cast_view_types(table: pa.Table) -> pa.Table:
+    """Cast view types (Utf8View, BinaryView) to their non-view equivalents."""
+    needs_cast = False
+    for field in table.schema:
+        if field.type in (pa.string_view(), pa.binary_view()):
+            needs_cast = True
+            break
+    if not needs_cast:
         return table
-    return pa.table({field.name: col for field, col in zip(table.schema, columns, strict=False)})
+    target = _normalize_schema(table.schema)
+    return table.cast(target)
 
 
 def _read_schema(path: str) -> pa.Schema:
@@ -171,7 +188,7 @@ def _read_schema(path: str) -> pa.Schema:
     if first is None:
         msg = f"Cannot infer schema from empty Vortex file: {path!r}"
         raise ValueError(msg)
-    return first.to_arrow_table().schema
+    return _normalize_schema(first.to_arrow_table().schema)
 
 
 # ============================================================================
@@ -198,9 +215,6 @@ class VortexReader(DataSourceReader):
     def __init__(self, path: str) -> None:
         self.path = path
         self._filters: list[tuple] = []
-        # Detect once whether we need to cast string_view columns.
-        schema = _read_schema(path)
-        self._needs_string_view_cast = any(f.type == pa.string_view() for f in schema)
 
     def pushFilters(self, filters: list[Filter]) -> Iterator[Filter]:  # noqa: N802
         accepted: list[tuple] = []
@@ -232,9 +246,7 @@ class VortexReader(DataSourceReader):
             scan_expr = expr if scan_expr is None else and_(scan_expr, expr)
 
         for batch in vf.scan(expr=scan_expr):
-            table = batch.to_arrow_table()
-            if self._needs_string_view_cast:
-                table = _cast_string_views(table)
+            table = _cast_view_types(batch.to_arrow_table())
             yield from table.to_batches()
 
 
