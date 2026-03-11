@@ -10,7 +10,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
@@ -18,6 +19,7 @@ use datafusion::common::{DataFusionError, Result};
 use object_store::ObjectStore;
 use url::Url;
 
+use super::log_segment::LogSegmentFiles;
 use crate::kernel::DeltaTableConfig as KernelDeltaTableConfig;
 use crate::options::TableDeltaOptions;
 use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
@@ -55,11 +57,18 @@ impl DeltaTableConfig {
 pub struct PlannerContext<'a> {
     session: &'a dyn Session,
     config: DeltaTableConfig,
+    // Planner-local memoization cache used to avoid repeated `_delta_log` listings when
+    // one planning request builds multiple log-replay branches (e.g. overwrite-if old/new).
+    log_segment_files_cache: Arc<Mutex<HashMap<i64, LogSegmentFiles>>>,
 }
 
 impl<'a> PlannerContext<'a> {
     pub fn new(session: &'a dyn Session, config: DeltaTableConfig) -> Self {
-        Self { session, config }
+        Self {
+            session,
+            config,
+            log_segment_files_cache: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     pub fn session(&self) -> &'a dyn Session {
@@ -94,6 +103,19 @@ impl<'a> PlannerContext<'a> {
         self.config
     }
 
+    pub(crate) fn get_cached_log_segment_files(&self, version: i64) -> Option<LogSegmentFiles> {
+        self.log_segment_files_cache
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get(&version).cloned())
+    }
+
+    pub(crate) fn set_cached_log_segment_files(&self, version: i64, files: LogSegmentFiles) {
+        if let Ok(mut cache) = self.log_segment_files_cache.lock() {
+            cache.insert(version, files);
+        }
+    }
+
     pub fn object_store(&self) -> Result<Arc<dyn ObjectStore>> {
         self.session
             .runtime_env()
@@ -105,8 +127,11 @@ impl<'a> PlannerContext<'a> {
     pub fn log_store(&self) -> Result<LogStoreRef> {
         let storage_config = StorageConfig;
         let object_store = self.object_store()?;
+        let prefixed_store = storage_config
+            .decorate_store(Arc::clone(&object_store), &self.config.table_url)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
         Ok(default_logstore(
-            Arc::clone(&object_store),
+            prefixed_store,
             object_store,
             &self.config.table_url,
             &storage_config,

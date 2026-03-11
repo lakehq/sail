@@ -129,11 +129,15 @@ fn ensure_file_column(plan: LogicalPlan) -> Result<LogicalPlan> {
                         let mut new_config = delta_source.config().clone();
                         new_config.file_column_name = Some(PATH_COLUMN.to_string());
 
-                        let new_source = Arc::new(delta_source.try_with_config(new_config)?);
+                        let new_source = Arc::new(DeltaTableSource::try_new(
+                            Arc::clone(delta_source.snapshot()),
+                            delta_source.log_store().clone(),
+                            new_config,
+                        )?);
                         let schema = new_source.schema();
                         let file_idx = schema.column_with_name(PATH_COLUMN).map(|(idx, _)| idx);
 
-                        let mut projection = scan.projection.clone();
+                        let mut projection: Option<Vec<usize>> = scan.projection.clone();
                         if projection.is_none() {
                             projection = Some((0..schema.fields().len()).collect::<Vec<usize>>());
                         }

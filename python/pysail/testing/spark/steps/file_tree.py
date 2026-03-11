@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pytest_bdd import given, parsers, then
 
-from pysail.tests.spark.utils import assert_file_lifecycle, get_data_files
+from pysail.testing.spark.utils.files import assert_file_lifecycle, get_data_files
 
 _SPARK_PART_FILE_RE = re.compile(
     r"^part-\d+-"

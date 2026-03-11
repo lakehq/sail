@@ -5,7 +5,8 @@ from decimal import Decimal
 import pytest
 from pyspark.sql.types import Row
 
-from pysail.tests.spark.utils import any_of, is_jvm_spark
+from pysail.testing.spark.utils.common import is_jvm_spark
+from pysail.testing.spark.utils.sql import any_of
 
 
 @pytest.mark.parametrize(
