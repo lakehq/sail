@@ -29,7 +29,7 @@ pub fn format_partition_expr(source_column: &str, transform: Transform) -> Strin
         Transform::Day => format!("days({source_column})"),
         Transform::Hour => format!("hours({source_column})"),
         Transform::Bucket(n) => format!("bucket({n}, {source_column})"),
-        Transform::Truncate(w) => format!("truncate({source_column}, {w})"),
+        Transform::Truncate(w) => format!("truncate({w}, {source_column})"),
         // keep a reasonable fallback for uncommon transforms
         other => format!("{other}({source_column})"),
     }
@@ -165,11 +165,19 @@ pub fn parse_partition_field_expr(raw: &str) -> Result<PartitionFieldSpec, Strin
                     args.len()
                 ));
             }
-            let w: u32 = args[1]
-                .trim()
-                .parse()
-                .map_err(|e| format!("truncate() expects integer width as second arg: {e}"))?;
-            (Transform::Truncate(w), normalize_object_name(&args[0]))
+            match args[0].trim().parse::<u32>() {
+                Ok(w) => (Transform::Truncate(w), normalize_object_name(&args[1])),
+                Err(first_err) => match args[1].trim().parse::<u32>() {
+                    // Accept the legacy column-first ordering for compatibility with
+                    // older internal partition expression strings.
+                    Ok(w) => (Transform::Truncate(w), normalize_object_name(&args[0])),
+                    Err(_) => {
+                        return Err(format!(
+                            "truncate() expects integer width as first arg: {first_err}"
+                        ));
+                    }
+                },
+            }
         }
         "identity" => {
             if args.len() != 1 {
@@ -245,10 +253,27 @@ mod tests {
 
     #[test]
     fn parse_truncate() -> Result<(), String> {
+        let f = parse_partition_field_expr("truncate(8, user_id)")?;
+        assert_eq!(f.source_column, "user_id");
+        assert_eq!(f.transform, Transform::Truncate(8));
+        assert_eq!(f.field_name, "user_id_trunc");
+        Ok(())
+    }
+
+    #[test]
+    fn parse_truncate_legacy_column_first() -> Result<(), String> {
         let f = parse_partition_field_expr("truncate(user_id, 8)")?;
         assert_eq!(f.source_column, "user_id");
         assert_eq!(f.transform, Transform::Truncate(8));
         assert_eq!(f.field_name, "user_id_trunc");
         Ok(())
+    }
+
+    #[test]
+    fn format_truncate() {
+        assert_eq!(
+            format_partition_expr("user_id", Transform::Truncate(8)),
+            "truncate(8, user_id)"
+        );
     }
 }
