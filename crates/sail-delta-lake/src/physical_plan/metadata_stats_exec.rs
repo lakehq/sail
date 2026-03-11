@@ -20,7 +20,7 @@ use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use futures::TryStreamExt;
 
-use crate::spec::fields::FIELD_NAME_STATS_PARSED;
+use crate::spec::fields::{FIELD_NAME_STATS_PARSED, STATS_FIELD_MIN_VALUES};
 
 /// The column name used by the replay pipeline for the raw JSON stats string.
 const REPLAY_STATS_JSON_COLUMN: &str = "stats_json";
@@ -62,6 +62,23 @@ impl DeltaMetadataStatsExec {
 
     pub fn stats_schema(&self) -> &SchemaRef {
         &self.stats_schema
+    }
+
+    /// Returns the data column names tracked in the stats schema.
+    /// These are extracted from the `minValues` sub-struct (if present),
+    /// which lists all non-partition columns for which stats are collected.
+    fn tracked_column_names(&self) -> Vec<&str> {
+        self.stats_schema
+            .field_with_name(STATS_FIELD_MIN_VALUES)
+            .ok()
+            .and_then(|f| {
+                if let DataType::Struct(fields) = f.data_type() {
+                    Some(fields.iter().map(|f| f.name().as_str()).collect())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default()
     }
 
     fn parse_stats_array(&self, batch: &RecordBatch) -> Result<ArrayRef> {
@@ -189,11 +206,17 @@ impl ExecutionPlan for DeltaMetadataStatsExec {
 
 impl DisplayAs for DeltaMetadataStatsExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+        let columns = self.tracked_column_names().join(", ");
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "DeltaMetadataStatsExec")
+                write!(
+                    f,
+                    "DeltaMetadataStatsExec(output={FIELD_NAME_STATS_PARSED}, columns=[{columns}])"
+                )
             }
-            DisplayFormatType::TreeRender => write!(f, "stats_column={FIELD_NAME_STATS_PARSED}"),
+            DisplayFormatType::TreeRender => {
+                write!(f, "output={FIELD_NAME_STATS_PARSED}, columns=[{columns}]")
+            }
         }
     }
 }
