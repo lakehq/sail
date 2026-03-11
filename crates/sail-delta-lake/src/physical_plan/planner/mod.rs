@@ -15,11 +15,11 @@ use std::sync::Arc;
 use datafusion::common::Result;
 use datafusion::physical_expr::LexRequirement;
 use datafusion::physical_plan::ExecutionPlan;
-use sail_common_datafusion::datasource::{MergeInfo, PhysicalSinkMode};
-use sail_common_datafusion::logical_expr::ExprWithSource;
+use sail_common_datafusion::datasource::PhysicalSinkMode;
 
 pub mod context;
 mod log_scan;
+mod log_segment;
 pub mod utils;
 
 mod op_delete;
@@ -28,6 +28,9 @@ mod op_update;
 mod op_write;
 
 pub use context::{DeltaTableConfig, PlannerContext};
+pub use op_delete::build_delete_plan as plan_delete;
+pub use op_merge::build_merge_plan as plan_merge;
+pub use op_update::build_update_plan as plan_update;
 
 pub struct DeltaPhysicalPlanner<'a> {
     ctx: PlannerContext<'a>,
@@ -46,25 +49,4 @@ impl<'a> DeltaPhysicalPlanner<'a> {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         op_write::build_write_plan(&self.ctx, input, sink_mode, sort_order).await
     }
-}
-
-pub async fn plan_delete(
-    ctx: &PlannerContext<'_>,
-    condition: ExprWithSource,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    op_delete::build_delete_plan(ctx, condition).await
-}
-
-pub async fn plan_merge(
-    ctx: &PlannerContext<'_>,
-    merge_info: MergeInfo,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    op_merge::build_merge_plan(ctx, merge_info).await
-}
-
-pub async fn plan_update(
-    ctx: &PlannerContext<'_>,
-    input: Arc<dyn ExecutionPlan>,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    op_update::build_update_plan(ctx, input).await
 }
