@@ -20,6 +20,7 @@ use sail_common_datafusion::datasource::PhysicalSinkMode;
 pub mod context;
 mod log_scan;
 mod log_segment;
+pub(crate) mod metadata_predicate;
 pub mod utils;
 
 mod op_delete;

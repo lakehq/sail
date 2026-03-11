@@ -17,7 +17,10 @@ use sail_common_datafusion::rename::physical_plan::rename_projected_physical_pla
 use crate::datasource::scan::{build_file_scan_config, FileScanParams, TableStatsMode};
 use crate::datasource::{df_logical_schema, simplify_expr, DeltaScanConfig};
 use crate::options::TableDeltaOptions;
-use crate::physical_plan::planner::utils::{LogReplayFilter, LogReplayOptions};
+use crate::physical_plan::planner::metadata_predicate::{
+    build_metadata_filter, predicate_requires_stats,
+};
+use crate::physical_plan::planner::utils::LogReplayOptions;
 use crate::physical_plan::planner::{DeltaTableConfig as PlannerTableConfig, PlannerContext};
 use crate::physical_plan::{DeltaDiscoveryExec, DeltaScanByAddsExec};
 use crate::schema::get_physical_schema;
@@ -132,13 +135,15 @@ pub(crate) async fn plan_delta_scan(
         .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
 
     let pruning_expr = conjunction(pruning_filters);
-    let pruning_predicate = if let Some(expr) = pruning_expr {
+    let pruning_predicate = if let Some(expr) = pruning_expr.as_ref() {
         let df_schema = logical_schema.clone().to_dfschema()?;
-        Some(simplify_expr(session, &df_schema, expr).map_err(|e| {
-            datafusion::common::DataFusionError::Plan(format!(
-                "failed to simplify scan pruning filter: {e}"
-            ))
-        })?)
+        Some(
+            simplify_expr(session, &df_schema, expr.clone()).map_err(|e| {
+                datafusion::common::DataFusionError::Plan(format!(
+                    "failed to simplify scan pruning filter: {e}"
+                ))
+            })?,
+        )
     } else {
         None
     };
@@ -250,23 +255,12 @@ pub(crate) async fn plan_delta_scan(
             true,
         ),
     );
-    let mut log_replay_options = LogReplayOptions::default();
-    if let Some(predicate) = pruning_predicate.as_ref() {
-        let mut expr_props =
-            crate::datasource::PredicateProperties::new(table_partition_cols.clone());
-        expr_props
-            .analyze_predicate(predicate)
-            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
-        log_replay_options.include_stats_json = !expr_props.partition_only;
-        if expr_props.partition_only {
-            log_replay_options.log_filter = Some(LogReplayFilter {
-                predicate: Arc::clone(predicate),
-                table_schema: table_schema.clone(),
-            });
-        }
-    } else {
-        log_replay_options.include_stats_json = false;
-    }
+    let log_replay_options = LogReplayOptions {
+        include_stats_json: pruning_expr
+            .as_ref()
+            .is_some_and(|expr| predicate_requires_stats(expr, &table_partition_cols)),
+        ..Default::default()
+    };
 
     let meta_scan: Arc<dyn ExecutionPlan> =
         crate::physical_plan::planner::utils::build_log_replay_pipeline_with_options(
@@ -280,6 +274,11 @@ pub(crate) async fn plan_delta_scan(
                 "failed to build log replay pipeline: {e}"
             ))
         })?;
+    let meta_scan: Arc<dyn ExecutionPlan> = if let Some(predicate) = pruning_expr {
+        build_metadata_filter(session, meta_scan, snapshot, predicate)?
+    } else {
+        meta_scan
+    };
     // TODO(metadata-as-data-aqe): This path intentionally prioritizes metadata scalability and
     // low TTFB over perfect static CBO. Add a runtime re-optimization hook after replay/discovery
     // so downstream repartitioning and join strategy can react to exact file cardinality/bytes.
@@ -287,8 +286,8 @@ pub(crate) async fn plan_delta_scan(
     let find_files: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
         meta_scan,
         table_url.clone(),
-        pruning_predicate.clone(),
-        Some(table_schema.clone()),
+        None,
+        None,
         snapshot.version(),
         table_partition_cols.clone(),
         false,
