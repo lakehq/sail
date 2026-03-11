@@ -17,10 +17,9 @@ Feature: Iceberg Partition Transforms
           action STRING
         )
         USING iceberg
+        PARTITIONED BY (bucket(4, user_id))
         LOCATION {{ location.uri }}
         """
-      # Note: Bucket partitioning in Iceberg is typically configured via table properties
-      # This is a simplified example
       Given statement
         """
         INSERT INTO bucket_test VALUES 
@@ -59,6 +58,7 @@ Feature: Iceberg Partition Transforms
           value DOUBLE
         )
         USING iceberg
+        PARTITIONED BY (truncate(3, code))
         LOCATION {{ location.uri }}
         """
       Given statement

@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 # Normalize temp paths created by pytest (`.../pytest-of-*/pytest-<run>/<case>/...`)
 _PYTEST_TMP_PREFIX = re.compile(
     r"(?:(?:[A-Za-z]:)?/|private/|tmp/)"
-    r"(?:[^ \t\r\n\),\]]+/)*"
+    r"(?:[^ \t\r\n\),\]/]+/)*"
     r"pytest-of-[^/]+/pytest-\d+/[^/]+/",
     re.IGNORECASE,
 )
@@ -148,15 +148,18 @@ def _sanitize_iceberg_metadata(metadata: dict) -> dict:
 
 
 def _sanitize_schema(schema: dict) -> dict:
-    """Sanitize an Iceberg schema, preserving field IDs and structure."""
-    # schema-id is usually stable across same schema versions, keep it
-    # fields structure should be preserved with field-id intact
+    """Preserve an Iceberg schema for snapshot comparison.
+
+    Field IDs and structure are kept intact for validation.
+    """
     return dict(schema)
 
 
 def _sanitize_partition_spec(spec: dict) -> dict:
-    """Sanitize a partition spec, preserving spec-id and field structure."""
-    # spec-id and fields should be preserved for validation
+    """Preserve a partition spec for snapshot comparison.
+
+    Spec-id and fields are kept intact for validation.
+    """
     return dict(spec)
 
 
