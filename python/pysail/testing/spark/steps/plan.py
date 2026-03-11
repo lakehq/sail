@@ -129,5 +129,5 @@ def query_plan_matches_snapshot(mode, query, spark, snapshot: SnapshotAssertion)
         assert plan, "expected non-empty plan output"
     else:
         # For regular queries, use _explain_string() to get the plan.
-        plan = spark.sql(stripped)._explain_string(mode.strip() or None)  # noqa: SLF001
+        plan = spark.sql(stripped)._explain_string(mode.strip() if mode.strip() else None)  # noqa: SLF001
     assert snapshot == normalize_plan_text(plan)
