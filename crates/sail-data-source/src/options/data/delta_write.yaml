@@ -127,16 +127,6 @@
   rust_type: usize
   rust_deserialize_with: crate::options::serde::deserialize_non_zero_usize
 
-- key: checkpoint_interval
-  aliases:
-    - checkpointInterval
-    - delta.checkpointInterval
-  description: |
-    Interval, in committed versions, between Delta checkpoint creation attempts for new tables.
-  supported: true
-  rust_type: u64
-  rust_deserialize_with: crate::options::serde::deserialize_positive_u64
-
 - key: column_mapping_mode
   aliases:
     - columnMappingMode

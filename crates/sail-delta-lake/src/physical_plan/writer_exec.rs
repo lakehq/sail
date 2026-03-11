@@ -442,7 +442,12 @@ impl DeltaWriterExec {
                         .effective_column_mapping_mode(),
                 )
             } else {
-                options.column_mapping_mode
+                // For new tables: prefer mode from table properties (metadata_configuration),
+                // then fall back to the write-time option.
+                metadata_configuration
+                    .get("delta.columnMapping.mode")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(options.column_mapping_mode)
             };
 
             // Determine the kernel column mapping mode once for downstream conversions

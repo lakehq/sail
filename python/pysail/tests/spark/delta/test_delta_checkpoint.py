@@ -75,21 +75,6 @@ def test_delta_checkpoint_created_and_metrics_exposed(spark, tmp_path: Path):
     )
 
 
-def test_delta_path_writer_option_materializes_checkpoint_interval(spark, tmp_path: Path):
-    if is_jvm_spark():
-        pytest.skip("Sail-only: Delta writer option metadata materialization is Sail-specific")
-
-    base = tmp_path / "delta_path_writer_checkpoint"
-
-    spark.createDataFrame([Row(id=1), Row(id=2)]).write.format("delta").mode("overwrite").option(
-        "checkpointInterval",
-        "2",
-    ).save(str(base))
-
-    metadata = _first_commit_metadata(base)
-    assert metadata.get("configuration", {}).get("delta.checkpointInterval") == "2"
-
-
 @pytest.mark.skipif(is_jvm_spark(), reason="Spark does not handle v1 and v2 tables properly")
 def test_delta_write_to_table_properties_materialize_metadata(spark, tmp_path: Path):
     base = tmp_path / "delta_write_to_checkpoint"

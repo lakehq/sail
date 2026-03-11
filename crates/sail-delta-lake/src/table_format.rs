@@ -106,16 +106,9 @@ impl TableFormat for DeltaTableFormat {
         }
 
         let table_url = Self::parse_table_url(ctx, vec![path]).await?;
-        let metadata_configuration =
-            resolve_delta_metadata_configuration(&table_properties, &options)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let mut effective_options =
-            Vec::with_capacity(options.len() + usize::from(!table_properties.is_empty()));
-        if !table_properties.is_empty() {
-            effective_options.push(table_properties.clone());
-        }
-        effective_options.extend(options.clone());
-        let delta_options = resolve_delta_write_options(effective_options)?;
+        let metadata_configuration = resolve_delta_metadata_configuration(&table_properties)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let delta_options = resolve_delta_write_options(options)?;
 
         let object_store = ctx
             .runtime_env()
@@ -333,9 +326,6 @@ fn apply_delta_write_options(from: DeltaWriteOptions, to: &mut TableDeltaOptions
     if let Some(write_batch_size) = from.write_batch_size {
         to.write_batch_size = write_batch_size;
     }
-    if let Some(checkpoint_interval) = from.checkpoint_interval {
-        to.checkpoint_interval = Some(checkpoint_interval);
-    }
     if let Some(column_mapping_mode) = from.column_mapping_mode {
         to.column_mapping_mode = column_mapping_mode.parse().map_err(|e| {
             DataFusionError::Plan(format!("invalid value for delta.columnMapping.mode: {e}"))
@@ -388,30 +378,10 @@ pub fn resolve_delta_write_options(
 
 fn resolve_delta_metadata_configuration(
     table_properties: &HashMap<String, String>,
-    options: &[HashMap<String, String>],
 ) -> crate::spec::DeltaResult<HashMap<String, String>> {
-    let mut properties: Vec<(String, String)> = table_properties
-        .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
-
-    for layer in options {
-        for (key, value) in layer {
-            let key_lower = key.to_ascii_lowercase();
-            if key_lower.starts_with("delta.")
-                || matches!(
-                    key_lower.as_str(),
-                    "checkpoint_interval"
-                        | "checkpointinterval"
-                        | "column_mapping_mode"
-                        | "columnmappingmode"
-                        | "column_mapping"
-                )
-            {
-                properties.push((key.clone(), value.clone()));
-            }
-        }
-    }
-
-    canonicalize_and_validate_table_properties(properties)
+    canonicalize_and_validate_table_properties(
+        table_properties
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str())),
+    )
 }
