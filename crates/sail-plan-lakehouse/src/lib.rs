@@ -8,7 +8,6 @@ use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::{internal_err, plan_err, DFSchemaRef, DataFusionError, Result, ToDFSchema};
 use datafusion_expr::{LogicalPlan, UserDefinedLogicalNode};
 use sail_data_source::resolve_listing_urls;
-use sail_delta_lake::datasource::schema::DataFusionMixins;
 use sail_delta_lake::table::open_table_with_object_store;
 use sail_logical_plan::file_delete::FileDeleteNode;
 use sail_logical_plan::file_write::FileWriteNode;
@@ -147,7 +146,10 @@ impl ExtensionPlanner for DeltaExtensionPlanner {
 }
 
 pub fn new_lakehouse_extension_planners() -> Vec<Arc<dyn ExtensionPlanner + Send + Sync>> {
-    vec![Arc::new(DeltaExtensionPlanner)]
+    vec![
+        Arc::new(sail_delta_lake::planner::DeltaTablePhysicalPlanner),
+        Arc::new(DeltaExtensionPlanner),
+    ]
 }
 
 pub fn new_delta_extension_planner() -> Arc<dyn ExtensionPlanner + Send + Sync> {

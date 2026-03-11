@@ -1,19 +1,17 @@
 use std::sync::Arc;
 
-use datafusion::common::DFSchemaRef;
 use datafusion::execution::SessionState;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::PhysicalPlanner;
 use datafusion_common::Result;
 use sail_common_datafusion::datasource::{DeleteInfo, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::physical_expr::PhysicalExprWithSource;
 use sail_logical_plan::file_delete::FileDeleteOptions;
 
 pub async fn create_file_delete_physical_plan(
     ctx: &SessionState,
-    planner: &dyn PhysicalPlanner,
-    schema: DFSchemaRef,
+    _planner: &dyn PhysicalPlanner,
+    _schema: datafusion::common::DFSchemaRef,
     options: FileDeleteOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let FileDeleteOptions {
@@ -23,15 +21,6 @@ pub async fn create_file_delete_physical_plan(
         condition,
         options,
     } = options;
-
-    let condition = if let Some(condition) = condition {
-        Some(PhysicalExprWithSource::new(
-            planner.create_physical_expr(&condition.expr, &schema, ctx)?,
-            condition.source,
-        ))
-    } else {
-        None
-    };
 
     let info = DeleteInfo {
         path,

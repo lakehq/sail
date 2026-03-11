@@ -27,13 +27,14 @@ use sail_common_datafusion::datasource::{
 use url::Url;
 
 use super::context::PlannerContext;
-use super::utils::build_log_replay_pipeline;
-use crate::datasource::{DataFusionMixins, PATH_COLUMN};
+use super::utils::{build_log_replay_pipeline_with_options, LogReplayOptions};
+use crate::datasource::PATH_COLUMN;
 use crate::kernel::{DeltaOperation, MergePredicate};
 use crate::options::TableDeltaOptions;
 use crate::physical_plan::{
     DeltaCommitExec, DeltaDiscoveryExec, DeltaRemoveActionsExec, DeltaWriterExec,
 };
+use crate::table::DeltaSnapshot;
 
 /// Entry point for MERGE execution. Expects the logical MERGE to be fully
 /// expanded (handled by ExpandMergeRule) and passed down as pre-expanded plans.
@@ -54,23 +55,9 @@ pub async fn build_merge_plan(
         .clone();
     let version = snapshot_state.version();
     let table_schema = snapshot_state
-        .snapshot()
-        .arrow_schema()
+        .input_schema()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let partition_columns = snapshot_state.metadata().partition_columns().clone();
-
-    let kernel_snapshot = snapshot_state.snapshot().snapshot().inner.clone();
-    let log_segment = kernel_snapshot.log_segment();
-    let checkpoint_files = log_segment
-        .checkpoint_parts
-        .iter()
-        .map(|p| p.filename.clone())
-        .collect::<Vec<_>>();
-    let commit_files = log_segment
-        .ascending_commit_files
-        .iter()
-        .map(|p| p.filename.clone())
-        .collect::<Vec<_>>();
 
     let mut options = ctx.options().clone();
     if merge_info.with_schema_evolution {
@@ -111,31 +98,29 @@ pub async fn build_merge_plan(
     finalize_merge(
         ctx,
         expanded,
+        &snapshot_state,
         ctx.table_url().clone(),
         version,
         options,
         partition_columns,
         table_schema,
         merge_info.touched_file_plan.clone(),
-        checkpoint_files,
-        commit_files,
         merge_operation,
     )
     .await
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 async fn finalize_merge(
     ctx: &PlannerContext<'_>,
     projected: Arc<dyn ExecutionPlan>,
+    snapshot: &DeltaSnapshot,
     table_url: Url,
     version: i64,
     options: TableDeltaOptions,
     partition_columns: Vec<String>,
     table_schema: datafusion::arrow::datatypes::SchemaRef,
     touched_file_plan: Option<Arc<dyn ExecutionPlan>>,
-    checkpoint_files: Vec<String>,
-    commit_files: Vec<String>,
     operation_override: Option<DeltaOperation>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let touched_plan_opt = touched_file_plan;
@@ -256,15 +241,9 @@ async fn finalize_merge(
     if let Some(touched_plan) = &touched_plan_opt {
         // Build a log-side stream of active Add rows using a visible log replay pipeline:
         // Union(DataSourceExec parquet/json) -> DeltaLogReplayExec -> ... -> DeltaDiscoveryExec.
-        let meta_scan: Arc<dyn ExecutionPlan> = build_log_replay_pipeline(
-            ctx,
-            table_url.clone(),
-            version,
-            partition_columns.clone(),
-            checkpoint_files,
-            commit_files,
-        )
-        .await?;
+        let meta_scan: Arc<dyn ExecutionPlan> =
+            build_log_replay_pipeline_with_options(ctx, snapshot, LogReplayOptions::default())
+                .await?;
 
         // Restrict to touched file paths by joining touched_paths with the metadata stream.
         let touched_schema = touched_plan.schema();

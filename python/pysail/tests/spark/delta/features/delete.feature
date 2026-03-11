@@ -367,3 +367,178 @@ Feature: Delta Lake Delete
           AND active IS NOT NULL
         """
       Then query plan matches snapshot
+
+  Rule: Metadata pruning via data-column predicates
+
+    Background:
+      Given variable location for temporary directory x
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_delete_meta_pruning
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_delete_meta_pruning (
+          id INT,
+          name STRING,
+          year INT,
+          score INT
+        )
+        USING DELTA LOCATION {{ location.sql }}
+        PARTITIONED BY (year)
+        """
+      Given statement
+        """
+        INSERT INTO delta_delete_meta_pruning
+        SELECT * FROM VALUES
+          (1, 'Alice', 2023, 10),
+          (2, 'Bob',   2023, 20),
+          (3, 'Carol', 2023, 30),
+          (4, 'Dan',   2024, 40),
+          (5, 'Eve',   2024, 50),
+          (6, 'Frank', 2024, 60)
+        """
+
+    Scenario: Partition-only delete uses partition_scan fast path in EXPLAIN
+      When query
+        """
+        EXPLAIN
+        DELETE FROM delta_delete_meta_pruning
+        WHERE year = 2023
+        """
+      Then query plan matches snapshot
+
+    Scenario: Partition-only delete removes correct rows
+      Given statement
+        """
+        DELETE FROM delta_delete_meta_pruning WHERE year = 2023
+        """
+      When query
+        """
+        SELECT id, name, year, score FROM delta_delete_meta_pruning ORDER BY id
+        """
+      Then query result ordered
+        | id | name  | year | score |
+        | 4  | Dan   | 2024 | 40    |
+        | 5  | Eve   | 2024 | 50    |
+        | 6  | Frank | 2024 | 60    |
+
+    Scenario: Data-column delete with NOT predicate removes correct rows
+      Given statement
+        """
+        DELETE FROM delta_delete_meta_pruning WHERE NOT (score > 50)
+        """
+      When query
+        """
+        SELECT id, name, year, score FROM delta_delete_meta_pruning ORDER BY id
+        """
+      Then query result ordered
+        | id | name  | year | score |
+        | 6  | Frank | 2024 | 60    |
+
+    Scenario: Data-column delete with BETWEEN predicate removes correct rows
+      Given statement
+        """
+        DELETE FROM delta_delete_meta_pruning WHERE score BETWEEN 20 AND 40
+        """
+      When query
+        """
+        SELECT id, name, year, score FROM delta_delete_meta_pruning ORDER BY id
+        """
+      Then query result ordered
+        | id | name  | year | score |
+        | 1  | Alice | 2023 | 10    |
+        | 5  | Eve   | 2024 | 50    |
+        | 6  | Frank | 2024 | 60    |
+
+    Scenario: Data-column delete with IN predicate removes correct rows
+      Given statement
+        """
+        DELETE FROM delta_delete_meta_pruning WHERE score IN (10, 30, 50)
+        """
+      When query
+        """
+        SELECT id, name, year, score FROM delta_delete_meta_pruning ORDER BY id
+        """
+      Then query result ordered
+        | id | name  | year | score |
+        | 2  | Bob   | 2023 | 20    |
+        | 4  | Dan   | 2024 | 40    |
+        | 6  | Frank | 2024 | 60    |
+
+    Scenario: Data-column delete with missing stats does not skip a file conservatively
+      Given statement
+        """
+        INSERT INTO delta_delete_meta_pruning
+        SELECT * FROM VALUES
+          (7, 'Grace', 2024, 5)
+        """
+      Given statement
+        """
+        DELETE FROM delta_delete_meta_pruning WHERE score > 55
+        """
+      When query
+        """
+        SELECT id, name, year, score FROM delta_delete_meta_pruning ORDER BY id
+        """
+      Then query result ordered
+        | id | name  | year | score |
+        | 1  | Alice | 2023 | 10    |
+        | 2  | Bob   | 2023 | 20    |
+        | 3  | Carol | 2023 | 30    |
+        | 4  | Dan   | 2024 | 40    |
+        | 5  | Eve   | 2024 | 50    |
+        | 7  | Grace | 2024 | 5     |
+
+  Rule: Overwrite-if (REPLACE WHERE) with mixed hit/non-hit files
+
+    Background:
+      Given variable location for temporary directory delta_overwrite_mixed
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_overwrite_mixed
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_overwrite_mixed (
+          id INT,
+          category STRING,
+          score INT
+        )
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_overwrite_mixed
+        SELECT * FROM VALUES
+          (1, 'A', 10),
+          (2, 'B', 20)
+        AS tab(id, category, score)
+        """
+      Given statement
+        """
+        INSERT INTO delta_overwrite_mixed
+        SELECT * FROM VALUES
+          (3, 'A', 30),
+          (4, 'C', 40)
+        AS tab(id, category, score)
+        """
+
+    Scenario: REPLACE WHERE keeps non-matching file when condition is stats-based
+      Given statement
+        """
+        INSERT INTO delta_overwrite_mixed
+        REPLACE WHERE score > 25
+        SELECT * FROM VALUES
+          (5, 'A', 99)
+        AS tab(id, category, score)
+        """
+      When query
+        """
+        SELECT id, category, score FROM delta_overwrite_mixed ORDER BY id
+        """
+      Then query result ordered
+        | id | category | score |
+        | 1  | A        | 10    |
+        | 2  | B        | 20    |
+        | 5  | A        | 99    |

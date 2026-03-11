@@ -54,7 +54,6 @@ where
 }
 
 impl<R: Read> Reader<R> {
-    #[allow(unused)]
     pub fn schema(&self) -> SchemaRef {
         match &self.decoder.projection {
             Some(projection) => {
@@ -250,7 +249,6 @@ impl ReaderBuilder {
         self
     }
 
-    #[allow(unused)]
     pub fn with_bounds(mut self, start: usize, end: usize) -> Self {
         self.bounds = Some((start, end));
         self
@@ -590,7 +588,7 @@ mod tests {
 
     use super::*;
 
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     #[test]
     fn test_text() {
         let schema = Arc::new(Schema::new(vec![Field::new(
@@ -614,7 +612,7 @@ mod tests {
         assert_eq!("line5", value.value(4));
     }
 
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     #[test]
     fn test_text_schema_metadata() {
         let mut metadata = std::collections::HashMap::new();
@@ -637,7 +635,7 @@ mod tests {
         assert_eq!(&metadata, batch.schema().metadata());
     }
 
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     #[test]
     fn test_text_builder_with_bounds() {
         let schema = Arc::new(Schema::new(vec![Field::new(
@@ -663,7 +661,7 @@ mod tests {
         );
     }
 
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     #[test]
     fn test_whole_text() {
         let schema = Arc::new(Schema::new(vec![Field::new(
@@ -686,7 +684,7 @@ mod tests {
         assert_eq!(1, batch.num_columns());
     }
 
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     #[test]
     fn test_line_sep() {
         let schema = Arc::new(Schema::new(vec![Field::new(

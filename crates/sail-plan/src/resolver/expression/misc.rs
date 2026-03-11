@@ -11,6 +11,7 @@ use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_functions_nested::expr_fn::{array_element, map_extract};
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::drop_struct_field::DropStructField;
@@ -56,6 +57,81 @@ impl PlanResolver<'_> {
         Ok(NamedExpr::new(vec![name], expr))
     }
 
+    pub(super) async fn resolve_expression_identifier_clause(
+        &self,
+        expr: spec::Expr,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let resolved = self.resolve_expression(expr, schema, state).await?;
+        let name = self.evaluate_identifier_expr(resolved, state)?;
+        let object_name = sail_sql_analyzer::expression::from_ast_object_name(
+            sail_sql_analyzer::parser::parse_object_name(&name)?,
+        )?;
+        self.resolve_expression_attribute(object_name, None, false, schema, state)
+    }
+
+    /// Evaluates a resolved DataFusion expression as an identifier string.
+    ///
+    /// Named parameter placeholders (e.g. `:col`) are substituted from the
+    /// current parameter scope in `state` before constant-folding, which
+    /// allows expressions like `IDENTIFIER(:col)` or
+    /// `IDENTIFIER(:tab || '.' || :col)` to work inside parameterized SQL.
+    pub(in super::super) fn evaluate_identifier_expr(
+        &self,
+        expr: expr::Expr,
+        state: &PlanResolverState,
+    ) -> PlanResult<String> {
+        use datafusion_common::tree_node::{Transformed, TreeNode};
+        let expr = expr
+            .transform(|e| {
+                if let expr::Expr::Placeholder(expr::Placeholder { id, .. }) = &e {
+                    if id.is_empty() {
+                        return Ok(Transformed::no(e));
+                    }
+                    // Strip the leading prefix character (e.g. ':' or '$') from the
+                    // placeholder id to get the param key, mirroring DataFusion's own
+                    // `get_placeholders_with_values` which does `id[1..]`.
+                    let key = &id[1..];
+                    // Try named parameter.
+                    if let Some(scalar) = state.get_param_value(key) {
+                        return Ok(Transformed::yes(expr::Expr::Literal(scalar.clone(), None)));
+                    }
+                    // Try positional parameter (key is a 1-based integer index).
+                    if let Ok(index) = key.parse::<usize>() {
+                        if index > 0 {
+                            if let Some(scalar) = state.get_positional_param_value(index - 1) {
+                                return Ok(Transformed::yes(expr::Expr::Literal(
+                                    scalar.clone(),
+                                    None,
+                                )));
+                            }
+                        }
+                    }
+                }
+                Ok(Transformed::no(e))
+            })
+            .map_err(|e| {
+                PlanError::invalid(format!("IDENTIFIER placeholder substitution failed: {e}"))
+            })?
+            .data;
+        let evaluator = LiteralEvaluator::new();
+        // Any placeholder that was not substituted above (e.g. because it had no
+        // matching parameter) will cause the evaluation to fail here, since the
+        // LiteralEvaluator cannot constant-fold an unresolved placeholder expression.
+        let scalar = evaluator.evaluate(&expr).map_err(|e| {
+            PlanError::invalid(format!("IDENTIFIER expression must be a constant: {e}"))
+        })?;
+        match scalar {
+            ScalarValue::Utf8(Some(s))
+            | ScalarValue::LargeUtf8(Some(s))
+            | ScalarValue::Utf8View(Some(s)) => Ok(s),
+            _ => Err(PlanError::invalid(
+                "IDENTIFIER expression must evaluate to a string",
+            )),
+        }
+    }
+
     pub(super) async fn resolve_expression_table(
         &self,
         expr: spec::Expr,
@@ -68,12 +144,12 @@ impl PlanResolver<'_> {
                 plan_id: None,
                 is_metadata_column: false,
             } => spec::QueryPlan::new(spec::QueryNode::Read {
-                read_type: spec::ReadType::NamedTable(spec::ReadNamedTable {
+                read_type: spec::ReadType::NamedTable(Box::new(spec::ReadNamedTable {
                     name,
                     temporal: None,
                     sample: None,
                     options: vec![],
-                }),
+                })),
                 is_streaming: false,
             }),
             _ => {
@@ -181,9 +257,18 @@ impl PlanResolver<'_> {
             return Ok(NamedExpr::new(vec![result_name], result_expr));
         }
 
-        // For other types (List, Struct), extraction must be a literal
-        let spec::Expr::Literal(extraction) = extraction else {
-            return Err(PlanError::invalid("extraction must be a literal"));
+        // For other types (List, Struct), extraction must be a literal.
+        // An UnresolvedAttribute from dot notation (e.g. `a.b`) is treated as a
+        // literal field name so that the spec can keep the attribute unresolved.
+        let extraction = match extraction {
+            spec::Expr::Literal(lit) => lit,
+            spec::Expr::UnresolvedAttribute { name, .. } => {
+                let name: Vec<String> = name.into();
+                spec::Literal::Utf8 {
+                    value: Some(name.one()?),
+                }
+            }
+            _ => return Err(PlanError::invalid("extraction must be a literal")),
         };
         let extraction = self.resolve_literal(extraction, state)?;
         let service = self.ctx.extension::<PlanService>()?;

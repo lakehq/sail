@@ -2,10 +2,13 @@ use figment::providers::Env;
 use figment::value::{Dict, Empty, Map, Tag, Value};
 use figment::{Error, Figment, Metadata, Profile, Provider};
 use secrecy::SecretString;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::config::loader::{
     deserialize_non_empty_string, deserialize_non_zero, deserialize_unknown_unit, ConfigDefinition,
+};
+use crate::config::observer::{
+    serialize_non_empty_string, serialize_non_zero, serialize_optional_secret,
 };
 use crate::error::{CommonError, CommonResult};
 
@@ -13,7 +16,7 @@ const APP_CONFIG: &str = include_str!("application.yaml");
 
 pub const SAIL_ENV_VAR_PREFIX: &str = "SAIL_";
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub mode: ExecutionMode,
     pub runtime: RuntimeConfig,
@@ -24,12 +27,13 @@ pub struct AppConfig {
     pub catalog: CatalogConfig,
     pub optimizer: OptimizerConfig,
     pub spark: SparkConfig,
+    pub python: PythonConfig,
     pub telemetry: TelemetryConfig,
     /// Reserved for internal use.
     /// This field ensures that environment variables with prefix `SAIL_INTERNAL_`
     /// can only be used for internal configuration.
     /// Such environment variables are ignored by application configuration.
-    #[serde(deserialize_with = "deserialize_unknown_unit")]
+    #[serde(skip_serializing, deserialize_with = "deserialize_unknown_unit")]
     pub internal: (),
 }
 
@@ -64,7 +68,7 @@ impl AppConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionMode {
     Local,
@@ -80,7 +84,7 @@ pub enum ExecutionMode {
     KubernetesCluster,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeConfig {
     pub stack_size: usize,
@@ -89,30 +93,30 @@ pub struct RuntimeConfig {
     pub temporary_files: TemporaryFilesConfig,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(from = "memory_pool::MemoryPool")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(into = "memory_pool::MemoryPool", from = "memory_pool::MemoryPool")]
 pub enum MemoryPoolConfig {
     Unbounded,
     Greedy(GreedyMemoryPoolConfig),
     Fair(FairMemoryPoolConfig),
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GreedyMemoryPoolConfig {
     pub max_size: usize,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FairMemoryPoolConfig {
     pub max_size: usize,
 }
 
 mod memory_pool {
-    use serde::Deserialize;
+    use serde::{Deserialize, Serialize};
 
-    #[derive(Debug, Clone, Deserialize)]
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(rename_all = "snake_case")]
     pub enum Type {
         Unbounded,
@@ -120,12 +124,12 @@ mod memory_pool {
         Fair,
     }
 
-    #[derive(Debug, Clone, Deserialize)]
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub struct MemoryPool {
-        r#type: Type,
-        greedy: super::GreedyMemoryPoolConfig,
-        fair: super::FairMemoryPoolConfig,
+        pub r#type: Type,
+        pub greedy: super::GreedyMemoryPoolConfig,
+        pub fair: super::FairMemoryPoolConfig,
     }
 
     impl From<MemoryPool> for super::MemoryPoolConfig {
@@ -137,16 +141,38 @@ mod memory_pool {
             }
         }
     }
+
+    impl From<super::MemoryPoolConfig> for MemoryPool {
+        fn from(value: super::MemoryPoolConfig) -> Self {
+            match value {
+                super::MemoryPoolConfig::Unbounded => MemoryPool {
+                    r#type: Type::Unbounded,
+                    greedy: super::GreedyMemoryPoolConfig { max_size: 0 },
+                    fair: super::FairMemoryPoolConfig { max_size: 0 },
+                },
+                super::MemoryPoolConfig::Greedy(g) => MemoryPool {
+                    r#type: Type::Greedy,
+                    greedy: g,
+                    fair: super::FairMemoryPoolConfig { max_size: 0 },
+                },
+                super::MemoryPoolConfig::Fair(f) => MemoryPool {
+                    r#type: Type::Fair,
+                    greedy: super::GreedyMemoryPoolConfig { max_size: 0 },
+                    fair: f,
+                },
+            }
+        }
+    }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TemporaryFilesConfig {
     pub paths: Vec<String>,
     pub max_size: usize,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClusterConfig {
     pub enable_tls: bool,
@@ -154,6 +180,7 @@ pub struct ClusterConfig {
     pub driver_listen_port: u16,
     pub driver_external_host: String,
     pub driver_external_port: u16,
+    #[serde(skip_serializing)]
     pub worker_id: u64,
     pub worker_listen_host: String,
     pub worker_listen_port: u16,
@@ -173,21 +200,24 @@ pub struct ClusterConfig {
     pub rpc_retry_strategy: RetryStrategy,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(from = "retry_strategy::RetryStrategy")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(
+    into = "retry_strategy::RetryStrategy",
+    from = "retry_strategy::RetryStrategy"
+)]
 pub enum RetryStrategy {
     Fixed(FixedRetryStrategy),
     ExponentialBackoff(ExponentialBackoffRetryStrategy),
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FixedRetryStrategy {
     pub max_count: usize,
     pub delay_secs: u64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExponentialBackoffRetryStrategy {
     pub max_count: usize,
@@ -197,9 +227,9 @@ pub struct ExponentialBackoffRetryStrategy {
 }
 
 mod retry_strategy {
-    use serde::Deserialize;
+    use serde::{Deserialize, Serialize};
 
-    #[derive(Debug, Clone, Deserialize)]
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(rename_all = "snake_case")]
     pub enum Type {
         Fixed,
@@ -207,12 +237,12 @@ mod retry_strategy {
         ExponentialBackoff,
     }
 
-    #[derive(Debug, Clone, Deserialize)]
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub struct RetryStrategy {
-        r#type: Type,
-        fixed: super::FixedRetryStrategy,
-        exponential_backoff: super::ExponentialBackoffRetryStrategy,
+        pub r#type: Type,
+        pub fixed: super::FixedRetryStrategy,
+        pub exponential_backoff: super::ExponentialBackoffRetryStrategy,
     }
 
     impl From<RetryStrategy> for super::RetryStrategy {
@@ -225,9 +255,34 @@ mod retry_strategy {
             }
         }
     }
+
+    impl From<super::RetryStrategy> for RetryStrategy {
+        fn from(value: super::RetryStrategy) -> Self {
+            match value {
+                super::RetryStrategy::Fixed(f) => RetryStrategy {
+                    r#type: Type::Fixed,
+                    fixed: f,
+                    exponential_backoff: super::ExponentialBackoffRetryStrategy {
+                        max_count: 0,
+                        initial_delay_secs: 0,
+                        max_delay_secs: 0,
+                        factor: 0,
+                    },
+                },
+                super::RetryStrategy::ExponentialBackoff(e) => RetryStrategy {
+                    r#type: Type::ExponentialBackoff,
+                    fixed: super::FixedRetryStrategy {
+                        max_count: 0,
+                        delay_secs: 0,
+                    },
+                    exponential_backoff: e,
+                },
+            }
+        }
+    }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExecutionConfig {
     pub batch_size: usize,
@@ -237,17 +292,23 @@ pub struct ExecutionConfig {
     pub file_listing_cache: FileListingCacheConfig,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FileListingCacheConfig {
     pub r#type: CacheType,
-    #[serde(deserialize_with = "deserialize_non_zero")]
+    #[serde(
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
     pub ttl: Option<u64>,
-    #[serde(deserialize_with = "deserialize_non_zero")]
+    #[serde(
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
     pub max_entries: Option<u64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct KubernetesConfig {
     pub image: String,
@@ -259,13 +320,16 @@ pub struct KubernetesConfig {
     pub worker_pod_template: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ParquetConfig {
     pub enable_page_index: bool,
     pub pruning: bool,
     pub skip_metadata: bool,
-    #[serde(deserialize_with = "deserialize_non_zero")]
+    #[serde(
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
     pub metadata_size_hint: Option<usize>,
     pub pushdown_filters: bool,
     pub reorder_filters: bool,
@@ -281,12 +345,21 @@ pub struct ParquetConfig {
     pub dictionary_page_size_limit: usize,
     pub statistics_enabled: String,
     pub max_row_group_size: usize,
-    #[serde(deserialize_with = "deserialize_non_zero")]
+    #[serde(
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
     pub column_index_truncate_length: Option<usize>,
-    #[serde(deserialize_with = "deserialize_non_zero")]
+    #[serde(
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
     pub statistics_truncate_length: Option<usize>,
     pub data_page_row_count_limit: usize,
-    #[serde(deserialize_with = "deserialize_non_empty_string")]
+    #[serde(
+        serialize_with = "serialize_non_empty_string",
+        deserialize_with = "deserialize_non_empty_string"
+    )]
     pub encoding: Option<String>,
     pub bloom_filter_on_read: bool,
     pub bloom_filter_on_write: bool,
@@ -299,27 +372,39 @@ pub struct ParquetConfig {
     pub file_metadata_cache: FileMetadataCacheConfig,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FileStatisticsCacheConfig {
     pub r#type: CacheType,
-    #[serde(deserialize_with = "deserialize_non_zero")]
+    #[serde(
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
     pub ttl: Option<u64>,
-    #[serde(deserialize_with = "deserialize_non_zero")]
+    #[serde(
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
     pub max_entries: Option<u64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FileMetadataCacheConfig {
     pub r#type: CacheType,
-    #[serde(deserialize_with = "deserialize_non_zero")]
+    #[serde(
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
     pub ttl: Option<u64>,
-    #[serde(deserialize_with = "deserialize_non_zero")]
+    #[serde(
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
     pub size_limit: Option<u64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CacheType {
     None,
@@ -327,29 +412,33 @@ pub enum CacheType {
     Session,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CatalogConfig {
-    #[serde(deserialize_with = "deserialize_non_empty_string")]
+    #[serde(
+        serialize_with = "serialize_non_empty_string",
+        deserialize_with = "deserialize_non_empty_string"
+    )]
     pub default_catalog: Option<String>,
     pub default_database: Vec<String>,
     pub global_temporary_database: Vec<String>,
     pub list: Vec<CatalogType>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OptimizerConfig {
     pub enable_join_reorder: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CatalogType {
     Memory {
         name: String,
         initial_database: Vec<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         initial_database_comment: Option<String>,
     },
     #[serde(alias = "iceberg-rest")]
@@ -358,38 +447,68 @@ pub enum CatalogType {
         //  https://iceberg.apache.org/docs/nightly/spark-configuration/#catalog-configuration
         name: String,
         uri: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
         warehouse: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         prefix: Option<String>,
+        #[serde(
+            skip_serializing_if = "Option::is_none",
+            serialize_with = "serialize_optional_secret"
+        )]
         oauth_access_token: Option<SecretString>,
+        #[serde(
+            skip_serializing_if = "Option::is_none",
+            serialize_with = "serialize_optional_secret"
+        )]
         bearer_access_token: Option<SecretString>,
     },
     Unity {
         name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
         uri: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         default_catalog: Option<String>,
+        #[serde(
+            skip_serializing_if = "Option::is_none",
+            serialize_with = "serialize_optional_secret"
+        )]
         token: Option<SecretString>,
     },
     #[serde(alias = "onelake")]
     OneLake {
         name: String,
         url: String,
+        #[serde(
+            skip_serializing_if = "Option::is_none",
+            serialize_with = "serialize_optional_secret"
+        )]
         bearer_token: Option<SecretString>,
     },
     Glue {
         name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
         region: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         endpoint_url: Option<String>,
     },
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SparkConfig {
     pub session_timeout_secs: u64,
     pub execution_heartbeat_interval_secs: u64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PythonConfig {
+    pub data_source_write_channel_capacity: usize,
+    pub data_source_slow_write_warn_ms: u64,
+    pub data_source_slow_read_warn_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TelemetryConfig {
     pub export_traces: bool,
@@ -400,12 +519,13 @@ pub struct TelemetryConfig {
     pub otlp_timeout_secs: u64,
     pub traces_export_interval_secs: u64,
     pub metrics_export_interval_secs: u64,
+    pub metrics_collection_interval_secs: u64,
     pub logs_export_interval_secs: u64,
     pub logs_export_max_queue_size: u64,
     pub logs_export_batch_size: u64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OtlpProtocol {
     Grpc,

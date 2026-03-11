@@ -130,9 +130,15 @@ pub enum Expr {
     UnresolvedDate {
         value: String,
     },
+    UnresolvedTime {
+        value: String,
+    },
     UnresolvedTimestamp {
         value: String,
         timestamp_type: TimestampType,
+    },
+    IdentifierClause {
+        expr: Box<Expr>,
     },
 }
 
@@ -293,7 +299,7 @@ pub struct CommonInlineUserDefinedFunction {
     pub function: FunctionDefinition,
 }
 
-#[allow(clippy::enum_variant_names)]
+#[expect(clippy::enum_variant_names)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum FunctionDefinition {

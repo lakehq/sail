@@ -20,7 +20,7 @@ use reqwest::StatusCode;
 use tonic::codegen::http;
 
 fn create_regex(regex: Result<Regex, regex::Error>) -> Regex {
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     regex.unwrap()
 }
 

@@ -40,6 +40,7 @@ impl TableSource for SystemTableSource {
             SystemTable::Jobs | SystemTable::Stages | SystemTable::Tasks => {
                 &["session_id", "job_id"]
             }
+            SystemTable::Options => &["key"],
             SystemTable::Sessions => &["session_id"],
             SystemTable::Workers => &["session_id", "worker_id"],
         };

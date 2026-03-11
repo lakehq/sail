@@ -24,7 +24,7 @@ use std::ops::{AddAssign, Not};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use delta_kernel::expressions::Scalar;
+use datafusion::common::scalar::ScalarValue;
 use indexmap::IndexMap;
 use log::warn;
 use parquet::basic::{LogicalType, TimeUnit, Type};
@@ -33,12 +33,14 @@ use parquet::file::statistics::Statistics;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
 
-use crate::kernel::models::{Add, ColumnCountStat, ColumnValueStat, ScalarExt, Stats};
-use crate::kernel::DeltaTableError;
+use crate::conversion::ScalarExt;
+use crate::spec::{
+    Add, ColumnCountStat, ColumnValueStat, DeltaError as DeltaTableError, StatValue, Stats,
+};
 
 /// Creates an [`Add`] log action struct with statistics.
 pub fn create_add(
-    partition_values: &IndexMap<String, Scalar>,
+    partition_values: &IndexMap<String, ScalarValue>,
     path: String,
     size: i64,
     file_metadata: &ParquetMetaData,
@@ -89,10 +91,9 @@ pub fn create_add(
         commit_timestamp: None,
     })
 }
-#[allow(dead_code)]
 /// Creates stats from parquet metadata already in memory
 pub fn stats_from_parquet_metadata(
-    partition_values: &IndexMap<String, Scalar>,
+    partition_values: &IndexMap<String, ScalarValue>,
     parquet_metadata: &ParquetMetaData,
     num_indexed_cols: i32,
     stats_columns: &Option<Vec<String>>,
@@ -112,7 +113,7 @@ pub fn stats_from_parquet_metadata(
 }
 
 fn stats_from_file_metadata(
-    partition_values: &IndexMap<String, Scalar>,
+    partition_values: &IndexMap<String, ScalarValue>,
     file_metadata: &ParquetMetaData,
     num_indexed_cols: i32,
     stats_columns: &Option<Vec<String>>,
@@ -131,7 +132,7 @@ fn stats_from_file_metadata(
 }
 
 fn stats_from_metadata(
-    partition_values: &IndexMap<String, Scalar>,
+    partition_values: &IndexMap<String, ScalarValue>,
     schema_descriptor: Arc<SchemaDescriptor>,
     row_group_metadata: Vec<RowGroupMetaData>,
     num_rows: i64,
@@ -394,23 +395,29 @@ pub fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
     result
 }
 
-impl From<StatsScalar> for serde_json::Value {
+impl From<StatsScalar> for StatValue {
     fn from(scalar: StatsScalar) -> Self {
         match scalar {
-            StatsScalar::Boolean(v) => serde_json::Value::Bool(v),
-            StatsScalar::Int32(v) => serde_json::Value::from(v),
-            StatsScalar::Int64(v) => serde_json::Value::from(v),
-            StatsScalar::Float32(v) => serde_json::Value::from(v),
-            StatsScalar::Float64(v) => serde_json::Value::from(v),
-            StatsScalar::Date(v) => serde_json::Value::from(v.format("%Y-%m-%d").to_string()),
+            StatsScalar::Boolean(v) => StatValue::Boolean(v),
+            StatsScalar::Int32(v) => StatValue::Number(v.into()),
+            StatsScalar::Int64(v) => StatValue::Number(v.into()),
+            StatsScalar::Float32(v) => serde_json::Number::from_f64(v as f64)
+                .map(StatValue::Number)
+                .unwrap_or_else(|| StatValue::String(v.to_string())),
+            StatsScalar::Float64(v) => serde_json::Number::from_f64(v)
+                .map(StatValue::Number)
+                .unwrap_or_else(|| StatValue::String(v.to_string())),
+            StatsScalar::Date(v) => StatValue::String(v.format("%Y-%m-%d").to_string()),
             StatsScalar::Timestamp(v) => {
-                serde_json::Value::from(v.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string())
+                StatValue::String(v.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string())
             }
             StatsScalar::TimestampNtz(v) => {
-                serde_json::Value::from(v.format("%Y-%m-%dT%H:%M:%S%.f").to_string())
+                StatValue::String(v.format("%Y-%m-%dT%H:%M:%S%.f").to_string())
             }
-            StatsScalar::Decimal(v) => serde_json::Value::from(v),
-            StatsScalar::String(v) => serde_json::Value::from(v),
+            StatsScalar::Decimal(v) => serde_json::Number::from_f64(v)
+                .map(StatValue::Number)
+                .unwrap_or_else(|| StatValue::String(v.to_string())),
+            StatsScalar::String(v) => StatValue::String(v),
             StatsScalar::Bytes(v) => {
                 let escaped_bytes = v
                     .into_iter()
@@ -418,10 +425,16 @@ impl From<StatsScalar> for serde_json::Value {
                     .collect::<Vec<u8>>();
                 // escape_default always produces valid ASCII so we can use from_utf8_lossy here
                 let escaped_string = String::from_utf8_lossy(escaped_bytes.as_slice()).into_owned();
-                serde_json::Value::from(escaped_string)
+                StatValue::String(escaped_string)
             }
-            StatsScalar::Uuid(v) => serde_json::Value::from(v.hyphenated().to_string()),
+            StatsScalar::Uuid(v) => StatValue::String(v.hyphenated().to_string()),
         }
+    }
+}
+
+impl From<StatsScalar> for serde_json::Value {
+    fn from(scalar: StatsScalar) -> Self {
+        StatValue::from(scalar).into()
     }
 }
 
@@ -590,7 +603,7 @@ fn apply_min_max_for_column(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+    #![expect(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
     use parquet::file::statistics::Statistics;
 

@@ -820,7 +820,7 @@ impl SchemaEvolver {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+    #![expect(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
     use std::collections::HashMap;
 

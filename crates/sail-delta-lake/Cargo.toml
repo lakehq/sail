@@ -20,8 +20,6 @@ sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-data-source = { path = "../sail-data-source" }
 sail-physical-plan = { path = "../sail-physical-plan" }
-# Delta Lake
-delta_kernel = { workspace = true }
 
 # DataFusion dependencies
 datafusion = { workspace = true }
@@ -34,6 +32,7 @@ arrow-schema = { workspace = true }
 
 # Essential utilities
 async-trait = { workspace = true }
+educe = { workspace = true }
 object_store = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
@@ -51,6 +50,8 @@ itertools = { workspace = true }
 percent-encoding = { workspace = true }
 regex = { workspace = true }
 serde_arrow = { workspace = true }
+moka = { workspace = true }
+once_cell = { workspace = true }
 
 [lints]
 workspace = true

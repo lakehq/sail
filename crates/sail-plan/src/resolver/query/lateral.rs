@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
-use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::{Expr, LogicalPlan, Projection};
+use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
@@ -15,7 +16,7 @@ use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(super) async fn resolve_query_lateral_view(
         &self,
         input: Option<spec::QueryPlan>,
@@ -33,9 +34,10 @@ impl PlanResolver<'_> {
             ));
         };
         let canonical_function_name = function_name.to_ascii_lowercase();
+        let catalog_manager = self.ctx.extension::<CatalogManager>()?;
         let mut scope = state.enter_config_scope();
         let state = scope.state();
-        if let Ok(f) = self.ctx.udf(&canonical_function_name) {
+        if let Some(f) = catalog_manager.get_function(&canonical_function_name)? {
             if f.inner().as_any().is::<PySparkUnresolvedUDF>() {
                 state.config_mut().arrow_allow_large_var_types = true;
             }
@@ -46,7 +48,7 @@ impl PlanResolver<'_> {
         };
         let schema = input.schema().clone();
 
-        if let Ok(f) = self.ctx.udf(&canonical_function_name) {
+        if let Some(f) = catalog_manager.get_function(&canonical_function_name)? {
             if let Some(f) = f.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>() {
                 if !f.eval_type().is_table_function() {
                     return Err(PlanError::invalid(format!(

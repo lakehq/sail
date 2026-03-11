@@ -12,6 +12,7 @@ use crate::error::ExecutionResult;
 use crate::id::JobId;
 use crate::job_graph::JobGraph;
 
+/// Tracks graph/topology and runtime state for a single job.
 pub struct JobDescriptor {
     pub graph: JobGraph,
     pub topology: JobTopology,

@@ -293,17 +293,17 @@
   {
     "module": "pyspark.sql.functions",
     "function": "try_make_timestamp",
-    "status": "planned"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "try_make_timestamp_ltz",
-    "status": "planned"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "try_make_timestamp_ntz",
-    "status": "planned"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",

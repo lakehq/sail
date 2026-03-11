@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion::datasource::listing::ListingTableUrl;
+use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::datasource::{
     DeleteInfo, MergeInfo, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
@@ -16,12 +17,12 @@ use sail_data_source::options::{
 use sail_data_source::resolve_listing_urls;
 use url::Url;
 
-use crate::options::{ColumnMappingModeOption, TableDeltaOptions};
+use crate::options::{DeltaLogReplayStrategyOption, TableDeltaOptions};
 use crate::physical_plan::planner::{
     plan_delete, plan_merge, DeltaPhysicalPlanner, DeltaTableConfig, PlannerContext,
 };
 use crate::table::open_table_with_object_store;
-use crate::{create_delta_provider, DeltaTableError, KernelError};
+use crate::{create_delta_provider, create_delta_source, DeltaTableError};
 
 /// Delta Lake implementation of [`TableFormat`].
 #[derive(Debug)]
@@ -40,6 +41,25 @@ impl DeltaTableFormat {
 impl TableFormat for DeltaTableFormat {
     fn name(&self) -> &str {
         "delta"
+    }
+
+    async fn create_source(
+        &self,
+        ctx: &dyn Session,
+        info: SourceInfo,
+    ) -> Result<Arc<dyn TableSource>> {
+        let SourceInfo {
+            paths,
+            schema,
+            constraints: _,
+            partition_by: _,
+            bucket_by: _,
+            sort_order: _,
+            options,
+        } = info;
+        let table_url = Self::parse_table_url(ctx, paths).await?;
+        let options = resolve_delta_read_options(options)?;
+        create_delta_source(ctx, table_url, schema, options).await
     }
 
     async fn create_provider(
@@ -96,8 +116,8 @@ impl TableFormat for DeltaTableFormat {
                 .await
             {
                 Ok(table) => Some(table),
-                Err(DeltaTableError::Kernel(KernelError::InvalidTableLocation(_)))
-                | Err(DeltaTableError::Kernel(KernelError::FileNotFound(_))) => None,
+                Err(DeltaTableError::InvalidTableLocation(_))
+                | Err(DeltaTableError::FileNotFound(_)) => None,
                 Err(err) => return Err(DataFusionError::External(Box::new(err))),
             };
         let table_exists = table.is_some();
@@ -251,6 +271,29 @@ fn apply_delta_read_options(from: DeltaReadOptions, to: &mut TableDeltaOptions) 
     if let Some(version_as_of) = from.version_as_of {
         to.version_as_of = Some(version_as_of)
     }
+    if let Some(metadata_as_data_read) = from.metadata_as_data_read {
+        to.metadata_as_data_read = metadata_as_data_read;
+    }
+    if let Some(ref raw) = from.delta_log_replay_strategy {
+        to.delta_log_replay_strategy = match raw.to_ascii_lowercase().as_str() {
+            "auto" => DeltaLogReplayStrategyOption::Auto,
+            "sort" => DeltaLogReplayStrategyOption::Sort,
+            "hash" => DeltaLogReplayStrategyOption::Hash,
+            other => {
+                return plan_err!(
+                    "invalid value for deltaLogReplayStrategy: {other}, expected auto/sort/hash"
+                )
+            }
+        };
+    }
+    if let Some(threshold) = from.delta_log_replay_hash_threshold {
+        if threshold == 0 {
+            return plan_err!(
+                "invalid value for deltaLogReplayHashThreshold: expected positive integer"
+            );
+        }
+        to.delta_log_replay_hash_threshold = threshold;
+    }
     Ok(())
 }
 
@@ -271,11 +314,27 @@ fn apply_delta_write_options(from: DeltaWriteOptions, to: &mut TableDeltaOptions
         to.write_batch_size = write_batch_size;
     }
     if let Some(column_mapping_mode) = from.column_mapping_mode {
-        match column_mapping_mode.to_ascii_lowercase().as_str() {
-            "name" => to.column_mapping_mode = ColumnMappingModeOption::Name,
-            "id" => to.column_mapping_mode = ColumnMappingModeOption::Id,
-            _ => to.column_mapping_mode = ColumnMappingModeOption::None,
+        to.column_mapping_mode = column_mapping_mode.parse().unwrap_or_default();
+    }
+    if let Some(ref raw) = from.delta_log_replay_strategy {
+        to.delta_log_replay_strategy = match raw.to_ascii_lowercase().as_str() {
+            "auto" => DeltaLogReplayStrategyOption::Auto,
+            "sort" => DeltaLogReplayStrategyOption::Sort,
+            "hash" => DeltaLogReplayStrategyOption::Hash,
+            other => {
+                return plan_err!(
+                    "invalid value for deltaLogReplayStrategy: {other}, expected auto/sort/hash"
+                )
+            }
+        };
+    }
+    if let Some(threshold) = from.delta_log_replay_hash_threshold {
+        if threshold == 0 {
+            return plan_err!(
+                "invalid value for deltaLogReplayHashThreshold: expected positive integer"
+            );
         }
+        to.delta_log_replay_hash_threshold = threshold;
     }
     Ok(())
 }

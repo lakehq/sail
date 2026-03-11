@@ -319,6 +319,11 @@ impl PlanResolver<'_> {
                 value,
                 timestamp_type,
             } => self.resolve_expression_timestamp(value, timestamp_type, state),
+            Expr::UnresolvedTime { value } => self.resolve_expression_time(value, state),
+            Expr::IdentifierClause { expr } => {
+                self.resolve_expression_identifier_clause(*expr, schema, state)
+                    .await
+            }
         }
     }
 
@@ -385,6 +390,7 @@ impl PlanResolver<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use datafusion::execution::SessionStateBuilder;
@@ -392,6 +398,9 @@ mod tests {
     use datafusion_common::{DFSchema, ScalarValue};
     use datafusion_expr::expr::{Alias, Expr};
     use datafusion_expr::{BinaryExpr, Operator};
+    use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
+    use sail_catalog::provider::CatalogProvider;
+    use sail_catalog_memory::MemoryCatalogProvider;
     use sail_common::spec;
     use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
     use sail_common_datafusion::session::plan::PlanService;
@@ -404,14 +413,33 @@ mod tests {
     use crate::resolver::state::PlanResolverState;
     use crate::resolver::PlanResolver;
 
-    #[tokio::test]
-    async fn test_resolve_expression_with_name() -> PlanResult<()> {
+    fn create_session() -> PlanResult<SessionContext> {
         let mut state = SessionStateBuilder::new().build();
-        state.config_mut().set_extension(Arc::new(PlanService::new(
+        let catalog_manager = CatalogManager::try_new(CatalogManagerOptions {
+            catalogs: HashMap::from([(
+                "sail".to_string(),
+                Arc::new(MemoryCatalogProvider::new(
+                    "sail".to_string(),
+                    vec![Arc::from("default")].try_into()?,
+                    None,
+                )) as Arc<dyn CatalogProvider>,
+            )]),
+            default_catalog: "sail".to_string(),
+            default_database: vec!["default".to_string()],
+            global_temporary_database: vec!["global_temp".to_string()],
+        })?;
+        let plan_service = PlanService::new(
             Box::new(DefaultCatalogDisplay::<SparkCatalogObjectDisplay>::default()),
             Box::new(SparkPlanFormatter),
-        )));
-        let ctx = SessionContext::new_with_state(state);
+        );
+        state.config_mut().set_extension(Arc::new(catalog_manager));
+        state.config_mut().set_extension(Arc::new(plan_service));
+        Ok(SessionContext::new_with_state(state))
+    }
+
+    #[tokio::test]
+    async fn test_resolve_expression_with_name() -> PlanResult<()> {
+        let ctx = create_session()?;
         let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
 
         async fn resolve(resolver: &PlanResolver<'_>, expr: spec::Expr) -> PlanResult<NamedExpr> {
@@ -515,6 +543,100 @@ mod tests {
                 }),
                 metadata: Default::default(),
             },
+        );
+
+        Ok(())
+    }
+
+    fn assert_metadata_value(
+        metadata_map: &HashMap<String, String>,
+        key: &str,
+        expected_value: &str,
+    ) {
+        assert_eq!(
+            metadata_map.get(key),
+            Some(&expected_value.to_string()),
+            "Expected {} in metadata, got: {:?}",
+            key,
+            metadata_map
+        );
+    }
+
+    #[tokio::test]
+    async fn test_st_geomfromwkb_returns_geometry_metadata() -> PlanResult<()> {
+        let ctx = create_session()?;
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+
+        let result = resolver
+            .resolve_named_expression(
+                spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                    function_name: spec::ObjectName::bare("st_geomfromwkb"),
+                    arguments: vec![spec::Expr::Literal(spec::Literal::Binary {
+                        value: Some(vec![
+                            1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 240, 255, 63, 0, 0, 0, 0, 0, 0, 64,
+                        ]),
+                    })],
+                    named_arguments: vec![],
+                    is_distinct: false,
+                    is_user_defined_function: false,
+                    is_internal: None,
+                    ignore_nulls: None,
+                    filter: None,
+                    order_by: None,
+                }),
+                &Arc::new(DFSchema::empty()),
+                &mut PlanResolverState::new(),
+            )
+            .await?;
+
+        let metadata: Vec<(String, String)> = result.metadata.iter().as_slice().to_vec();
+        let metadata_map: HashMap<_, _> = metadata.clone().into_iter().collect();
+
+        assert_metadata_value(&metadata_map, "ARROW:extension:name", "geoarrow.wkb");
+        assert_metadata_value(
+            &metadata_map,
+            "ARROW:extension:metadata",
+            r#"{"crs":"SRID:0"}"#,
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_st_geogfromwkb_returns_geography_metadata() -> PlanResult<()> {
+        let ctx = create_session()?;
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+
+        let result = resolver
+            .resolve_named_expression(
+                spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                    function_name: spec::ObjectName::bare("st_geogfromwkb"),
+                    arguments: vec![spec::Expr::Literal(spec::Literal::Binary {
+                        value: Some(vec![
+                            1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 240, 255, 63, 0, 0, 0, 0, 0, 0, 64,
+                        ]),
+                    })],
+                    named_arguments: vec![],
+                    is_distinct: false,
+                    is_user_defined_function: false,
+                    is_internal: None,
+                    ignore_nulls: None,
+                    filter: None,
+                    order_by: None,
+                }),
+                &Arc::new(DFSchema::empty()),
+                &mut PlanResolverState::new(),
+            )
+            .await?;
+
+        let metadata: Vec<(String, String)> = result.metadata.iter().as_slice().to_vec();
+        let metadata_map: HashMap<_, _> = metadata.clone().into_iter().collect();
+
+        assert_metadata_value(&metadata_map, "ARROW:extension:name", "geoarrow.wkb");
+        assert_metadata_value(
+            &metadata_map,
+            "ARROW:extension:metadata",
+            r#"{"crs":"OGC:CRS84","edges":"spherical"}"#,
         );
 
         Ok(())
