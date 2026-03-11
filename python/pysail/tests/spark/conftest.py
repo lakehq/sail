@@ -10,7 +10,7 @@ import pytest
 from _pytest.doctest import DoctestItem
 from pyspark.sql import SparkSession
 
-from pysail.tests.spark.utils import SAIL_ONLY, is_jvm_spark, pyspark_version
+from pysail.testing.spark.utils.common import SAIL_ONLY, is_jvm_spark, pyspark_version
 
 
 def pytest_configure(config):
