@@ -37,16 +37,17 @@ pub(crate) fn build_metadata_filter(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let partition_columns = snapshot.metadata().partition_columns().clone();
     let needs_stats = predicate_requires_stats(&predicate, &partition_columns);
-    let input: Arc<dyn ExecutionPlan> = if needs_stats {
-        Arc::new(DeltaMetadataStatsExec::new(
-            input,
-            build_metadata_stats_schema(snapshot)?,
-        ))
-    } else {
-        input
-    };
-
     let rewritten = rewrite_predicate_for_metadata(predicate, &partition_columns);
+    if !needs_stats {
+        let df_schema = input.schema().to_dfschema()?;
+        let physical_expr = simplify_expr(session, &df_schema, rewritten)?;
+        return Ok(Arc::new(FilterExec::try_new(physical_expr, input)?));
+    }
+
+    let input: Arc<dyn ExecutionPlan> = Arc::new(DeltaMetadataStatsExec::new(
+        input,
+        build_metadata_stats_schema(snapshot)?,
+    ));
     let df_schema = input.schema().to_dfschema()?;
     let physical_expr = simplify_expr(session, &df_schema, rewritten)?;
     Ok(Arc::new(FilterExec::try_new(physical_expr, input)?))

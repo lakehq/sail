@@ -80,7 +80,11 @@ impl DeltaMetadataStatsExec {
                 )
             })?;
 
-        let mut json_lines = String::new();
+        let estimated_json_bytes = stats_json
+            .iter()
+            .map(|value| value.map_or(2, str::len) + 1)
+            .sum();
+        let mut json_lines = String::with_capacity(estimated_json_bytes);
         for value in stats_json.iter() {
             if let Some(value) = value {
                 json_lines.push_str(value);
