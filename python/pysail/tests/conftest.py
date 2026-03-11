@@ -27,6 +27,11 @@ def pytest_configure(config):
     if default_ext is None:
         config.option.default_extension = "pysail.testing.snapshot.yaml.YamlSnapshotExtension"
 
+    config.addinivalue_line(
+        "markers",
+        "yamlsnapshot: add metadata to customize the YAML snapshot",
+    )
+
     configure_sail_environment()
 
 

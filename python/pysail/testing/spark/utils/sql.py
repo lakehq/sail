@@ -1,4 +1,6 @@
 import itertools
+import re
+from decimal import Decimal
 from typing import Any
 
 import pandas as pd
@@ -112,3 +114,69 @@ def parse_show_string(text) -> list[list[str]]:
             row.append(line[start + 1 : end].strip())
         result.append(row)
     return result
+
+
+def format_show_string(rows: list[list[str]], normalizer=None):
+    """
+    Formats the show string result as a simple table.
+    This is useful to save the result as a string in the snapshot.
+
+    The optional `normalizer` function can be used to normalize the cell values before formatting.
+    """
+    header, *values = rows
+    if normalizer is not None:
+        values = [[normalizer(cell) for cell in row] for row in values]
+        rows = [header, *values]
+    widths = [max(len(row[i]) for row in rows) for i in range(len(header))]
+    output = [" | ".join(f"{cell:{widths[i]}}" for i, cell in enumerate(row)) for row in rows]
+    return "\n".join(f"| {x} |" for x in output)
+
+
+def normalize_floating_point_string(s: str, d: int = 6) -> str:
+    """Normalizes a string representation of a floating-point number.
+    For example, it can convert "1.230000001" to "1.23" and "1.2339999991" to "1.234".
+    It detects noisy fractions of `d` or more consecutive 0s or 9s close to the end of the number
+    and rounds the number to remove them.
+    This is useful to make test assertions more stable against minor floating-point differences.
+    """
+    if d < 1:
+        msg = f"number of consecutive digits to detect must be at least 1 but got {d}"
+        raise ValueError(msg)
+
+    number = s.lower()
+    if "e" in number:
+        i = number.index("e")
+        mantissa, exponent = s[:i], s[i:]
+    else:
+        mantissa, exponent = s, ""
+
+    try:
+        if exponent:
+            _ = int(exponent[1:])
+        integer, fraction = mantissa.split(".", 1)
+        _ = int(integer)
+        _ = int(fraction)
+    except ValueError:
+        return s
+
+    match = re.search(f"(0{{{d},}}[0-9]+$)|(9{{{d},}}[0-9]+$)", fraction)
+    if not match:
+        return s
+
+    start = match.start()
+
+    # handle the case of consecutive 0s
+    if match.group().startswith("0"):
+        if start == 0:
+            return f"{integer}{exponent}"
+        return f"{integer}.{fraction[:start]}{exponent}"
+
+    # handle the case of consecutive 9s
+    prefix = f"{integer}.{fraction[:start]}" if start > 0 else f"{integer}."
+    val = Decimal(prefix)
+    increment = Decimal(f"1e-{start}")
+    if integer.startswith("-"):
+        val -= increment
+    else:
+        val += increment
+    return f"{val!s}{exponent}"

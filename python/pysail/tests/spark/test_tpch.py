@@ -3,7 +3,9 @@ from pathlib import Path
 import duckdb
 import pytest
 
+from pysail.testing.spark.steps.plan import normalize_plan_text
 from pysail.testing.spark.utils.common import is_jvm_spark
+from pysail.testing.spark.utils.sql import format_show_string, parse_show_string
 
 
 @pytest.fixture(scope="module")
@@ -24,12 +26,25 @@ def data(spark, duck):
         spark.catalog.dropTempView(table)
 
 
-@pytest.mark.parametrize("query", [f"q{x + 1}" for x in range(22)])
+@pytest.mark.parametrize("query", [f"q{x + 1}" for x in range(22)], ids=[f"{x + 1:02}" for x in range(22)])
 @pytest.mark.skipif(is_jvm_spark(), reason="slow tests in JVM Spark")
-def test_derived_tpch_query_execution(spark, query):
-    # TODO: add tests for result parity
+@pytest.mark.yamlsnapshot(group="result")
+def test_derived_tpch_query_result(spark, query, snapshot):
     for sql in read_sql(query):
-        spark.sql(sql).toPandas()
+        result = spark.sql(sql)._show_string(n=0x7FFFFFFF, truncate=False)  # noqa: SLF001
+        table = format_show_string(parse_show_string(result))
+        assert table == snapshot
+
+
+@pytest.mark.parametrize("query", [f"q{x + 1}" for x in range(22)], ids=[f"{x + 1:02}" for x in range(22)])
+@pytest.mark.skipif(is_jvm_spark(), reason="different plans in JVM Spark")
+@pytest.mark.yamlsnapshot(group="plan")
+def test_derived_tpch_query_plan(spark, query, snapshot):
+    for sql in read_sql(query):
+        # `spark.sql` will have the side effect for DDL statements.
+        # This is needed so that the temporary view is created for subsequent queries.
+        plan = normalize_plan_text(spark.sql(sql)._explain_string())  # noqa: SLF001
+        assert plan == snapshot
 
 
 def read_sql(query):

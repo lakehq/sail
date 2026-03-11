@@ -1,0 +1,282 @@
+# serializer version: 1
+---
+name: "test_derived_tpch_query_result[01]"
+data:
+  |-
+    | l_returnflag | l_linestatus | sum_qty  | sum_base_price | sum_disc_price | sum_charge      | avg_qty   | avg_price    | avg_disc | count_order |
+    | A            | F            | 37474.00 | 37569624.64    | 35676192.0970  | 37101416.222424 | 25.354533 | 25419.231826 | 0.050866 | 1478        |
+    | N            | F            | 1041.00  | 1041301.07     | 999060.8980    | 1036450.802280  | 27.394736 | 27402.659736 | 0.042894 | 38          |
+    | N            | O            | 75945.00 | 76167583.51    | 72391193.5932  | 75267016.126367 | 25.562100 | 25637.019020 | 0.049831 | 2971        |
+    | R            | F            | 36511.00 | 36570841.24    | 34738472.8758  | 36169060.112193 | 25.059025 | 25100.096938 | 0.050027 | 1457        |
+---
+name: "test_derived_tpch_query_result[02]"
+data:
+  '| s_acctbal | s_name | n_name | p_partkey | p_mfgr | s_address | s_phone | s_comment |'
+---
+name: "test_derived_tpch_query_result[03]"
+data:
+  |-
+    | l_orderkey | revenue     | o_orderdate | o_shippriority |
+    | 1637       | 164224.9253 | 1995-02-08  | 0              |
+    | 5191       | 49378.3094  | 1994-12-11  | 0              |
+    | 742        | 43728.0480  | 1994-12-23  | 0              |
+    | 3492       | 43716.0724  | 1994-11-24  | 0              |
+    | 2883       | 36666.9612  | 1995-01-23  | 0              |
+    | 998        | 11785.5486  | 1994-11-26  | 0              |
+    | 3430       | 4726.6775   | 1994-12-12  | 0              |
+    | 4423       | 3055.9365   | 1995-02-17  | 0              |
+---
+name: "test_derived_tpch_query_result[04]"
+data:
+  |-
+    | o_orderpriority | order_count |
+    | 1-URGENT        | 10          |
+    | 2-HIGH          | 14          |
+    | 3-MEDIUM        | 8           |
+    | 4-NOT SPECIFIED | 11          |
+    | 5-LOW           | 6           |
+---
+name: "test_derived_tpch_query_result[05]"
+data:
+  |-
+    | n_name   | revenue     |
+    | MOROCCO  | 220457.0142 |
+    | ETHIOPIA | 115183.8546 |
+---
+name: "test_derived_tpch_query_result[06]"
+data:
+  |-
+    | revenue    |
+    | 56730.7757 |
+---
+name: "test_derived_tpch_query_result[07]"
+data:
+  |-
+    | supp_nation | cust_nation | l_year | revenue    |
+    | IRAQ        | GERMANY     | 1995   | 66380.2488 |
+---
+name: "test_derived_tpch_query_result[08]"
+data:
+  '| o_year | mkt_share |'
+---
+name: "test_derived_tpch_query_result[09]"
+data:
+  |-
+    | nation         | o_year | sum_profit  |
+    | ARGENTINA      | 1998   | 198.5515    |
+    | ARGENTINA      | 1997   | 1091.2413   |
+    | ARGENTINA      | 1996   | -502.3758   |
+    | ARGENTINA      | 1995   | -763.2490   |
+    | ARGENTINA      | 1994   | 760.5785    |
+    | ARGENTINA      | 1993   | 1186.1496   |
+    | ETHIOPIA       | 1998   | 277390.7917 |
+    | ETHIOPIA       | 1997   | 51681.0694  |
+    | ETHIOPIA       | 1996   | 143970.4070 |
+    | ETHIOPIA       | 1995   | 319641.0307 |
+    | ETHIOPIA       | 1994   | 320387.2329 |
+    | ETHIOPIA       | 1993   | 134227.9984 |
+    | ETHIOPIA       | 1992   | 103804.7380 |
+    | IRAN           | 1998   | 44434.6546  |
+    | IRAN           | 1997   | 157487.0894 |
+    | IRAN           | 1996   | 218566.4644 |
+    | IRAN           | 1995   | 99607.2732  |
+    | IRAN           | 1994   | 77153.6512  |
+    | IRAN           | 1993   | 235496.5914 |
+    | IRAN           | 1992   | 57523.4016  |
+    | IRAQ           | 1998   | 18594.2338  |
+    | IRAQ           | 1997   | 52008.2457  |
+    | IRAQ           | 1996   | 8552.1740   |
+    | IRAQ           | 1995   | 23395.4532  |
+    | IRAQ           | 1994   | 27761.3885  |
+    | IRAQ           | 1993   | 16323.7329  |
+    | IRAQ           | 1992   | 20183.4766  |
+    | KENYA          | 1998   | 18810.6185  |
+    | KENYA          | 1996   | 16902.6672  |
+    | KENYA          | 1995   | 41116.6400  |
+    | KENYA          | 1994   | 11628.2418  |
+    | KENYA          | 1993   | 15096.8876  |
+    | KENYA          | 1992   | 101751.8572 |
+    | MOROCCO        | 1998   | 31006.3470  |
+    | MOROCCO        | 1997   | 76695.2944  |
+    | MOROCCO        | 1996   | 6586.6388   |
+    | MOROCCO        | 1995   | 39677.8036  |
+    | MOROCCO        | 1994   | 27666.8904  |
+    | MOROCCO        | 1993   | 52568.7673  |
+    | MOROCCO        | 1992   | 18516.9511  |
+    | PERU           | 1997   | 56258.2032  |
+    | PERU           | 1996   | 61387.7258  |
+    | PERU           | 1995   | 45136.1716  |
+    | PERU           | 1994   | 824.9718    |
+    | PERU           | 1993   | 113124.5714 |
+    | UNITED KINGDOM | 1998   | 40131.3857  |
+    | UNITED KINGDOM | 1997   | 138637.7030 |
+    | UNITED KINGDOM | 1996   | 203407.9765 |
+    | UNITED KINGDOM | 1995   | 123116.5256 |
+    | UNITED KINGDOM | 1994   | 85252.4870  |
+    | UNITED KINGDOM | 1993   | 103977.5623 |
+    | UNITED KINGDOM | 1992   | 149221.7342 |
+    | UNITED STATES  | 1998   | 96116.0240  |
+    | UNITED STATES  | 1997   | 296427.4808 |
+    | UNITED STATES  | 1996   | 95174.5848  |
+    | UNITED STATES  | 1995   | 213579.3864 |
+    | UNITED STATES  | 1994   | 260644.1836 |
+    | UNITED STATES  | 1993   | 169318.0092 |
+    | UNITED STATES  | 1992   | 295927.6088 |
+---
+name: "test_derived_tpch_query_result[10]"
+data:
+  |-
+    | c_custkey | c_name             | revenue     | c_acctbal | n_name     | c_address                               | c_phone         | c_comment                                                                                                           |
+    | 13        | Customer#000000013 | 243842.4906 | 3857.34   | CANADA     | Ez3ax0D5HnUbeUVSxoX8a8B                 | 13-761-547-5974 | quickly brave foxes. blithely even packages against the pinto beans boost furiously against the re                  |
+    | 133       | Customer#000000133 | 219295.3794 | 2314.67   | PERU       | jeox3OBiwNH2cRYHKnkxujKCHP6zSSC         | 27-408-997-8430 | ress requests use. carefully regular ideas sleep slyly. final pinto beans across the regular instruction            |
+    | 97        | Customer#000000097 | 207680.0516 | 2164.48   | PERU       | dqBtMIPJhk1,ivXIr NZf                   | 27-588-919-5638 | cial instructions. dependencies boost furiously; quickly final requests w                                           |
+    | 61        | Customer#000000061 | 131278.0031 | 1536.24   | PERU       | SGDNwNWmqhvJKXwNlrpL4 TqAdz7XRDrKyAIQ2m | 27-626-559-8599 | slyly. quickly unusual deposits haggle furiousl                                                                     |
+    | 115       | Customer#000000115 | 117130.5324 | 7508.92   | INDIA      | 05lyZj3mdE77YpKQzp,8K5gh1z,joppPlF,RjO  | 18-971-699-1843 | uffily special pinto beans cajole. ironic, unusua                                                                   |
+    | 124       | Customer#000000124 | 116740.4706 | 1842.49   | CHINA      | R7Pt5r4VyoO0w,Rd                        | 28-183-750-7809 | ing requests haggle. quickly regular dep                                                                            |
+    | 79        | Customer#000000079 | 112530.7860 | 5121.28   | MOROCCO    | EVJjYMyG59w4SINzn0pEfY                  | 25-147-850-4166 | iously even pinto beans hinder final deposits. carefully final accounts along the final theodolites integrate caref |
+    | 142       | Customer#000000142 | 100021.1324 | 2209.81   | INDONESIA  | rDhVFvyfHIDoF YHJFRBQSdfulY0            | 19-407-425-2584 | lyly carefully final grouches.                                                                                      |
+    | 104       | Customer#000000104 | 97904.9922  | -588.38   | IRAN       | SEOogsfT y09vI2z PcSTnI18U6rNTf         | 20-966-284-8065 | efully bold deposits. carefully                                                                                     |
+    | 143       | Customer#000000143 | 95577.1406  | 2186.50   | MOZAMBIQUE | VSZ YZxfWVZsAGrTptTiSCRMDbLu,           | 26-314-406-7725 | ithely bold requests. regular, special accounts wa                                                                  |
+    | 118       | Customer#000000118 | 72098.2548  | 3582.37   | CHINA      | d5DlxktKgRwuXuBLS                       | 28-639-943-7051 | accounts wake. blithely special accounts boost alongside of the carefully express asymptotes. unusual requests af   |
+    | 44        | Customer#000000044 | 59324.8016  | 7315.94   | MOZAMBIQUE | dI0Nc9bvnxXHCWu10bSVn,NEJ2kwdyqvI       | 26-190-260-5375 | fily regular asymptotes. ironic, pend                                                                               |
+    | 52        | Customer#000000052 | 59064.8616  | 5630.28   | IRAQ       | UracAlAA8tSHL5V,poTZIOjh8o,             | 21-186-284-5998 | ts boost. carefully express waters across the blithely regular foxes inte                                           |
+    | 64        | Customer#000000064 | 54263.8334  | -646.64   | CANADA     | fPoMk3Y,GQhgXCQGhn0c8                   | 13-558-731-7204 | hely unusual deposits sleep furiously express requests. c                                                           |
+    | 4         | Customer#000000004 | 49524.5828  | 2866.83   | EGYPT      | 4u58h fqkyE                             | 14-128-190-5944 | sublate. fluffily even instructions are about th                                                                    |
+    | 92        | Customer#000000092 | 46227.6940  | 1182.91   | BRAZIL     | DPbrb7fGYfkrfAdm0gRJPPdADgqGh5 FVuA9 20 | 12-446-416-8471 | sy theodolites. furiously ironic packages a                                                                         |
+    | 41        | Customer#000000041 | 45017.6805  | 270.95    | IRAN       | jeREsFtCuMqEwdvTFqTkY2NzGRYDG1m         | 20-917-711-4011 | uctions wake carefully pending deposits: pinto beans along the carefully final deposits sleep blithely a            |
+    | 101       | Customer#000000101 | 40493.1930  | 7470.96   | BRAZIL     | eEfYAdMjnGyCw8Fr2                       | 12-514-298-3699 | pending deposits sleep slyly carefully regular re                                                                   |
+    | 82        | Customer#000000082 | 39053.5166  | 9468.34   | CHINA      | tJkXm2PQBWPRRYkIXPg0YdM03E              | 28-159-442-5305 | old requests. slyly bold courts sleep carefully packag                                                              |
+    | 109       | Customer#000000109 | 29111.5950  | -716.10   | MOZAMBIQUE | dccG2qKoesLea36FGCOCgPVU M N4BZdmYO     | 26-992-422-8153 | osits; blithely special braids across the slyly unusual foxes haggle carefully regularly regular deposits. furiou   |
+---
+name: "test_derived_tpch_query_result[11]"
+data:
+  '| ps_partkey | value |'
+---
+name: "test_derived_tpch_query_result[12]"
+data:
+  |-
+    | l_shipmode | high_line_count | low_line_count |
+    | FOB        | 6               | 6              |
+    | SHIP       | 8               | 8              |
+---
+name: "test_derived_tpch_query_result[13]"
+data:
+  |-
+    | c_count | custdist |
+    | 0       | 50       |
+    | 16      | 10       |
+    | 14      | 6        |
+    | 23      | 5        |
+    | 18      | 5        |
+    | 17      | 5        |
+    | 13      | 5        |
+    | 12      | 5        |
+    | 11      | 5        |
+    | 9       | 5        |
+    | 6       | 5        |
+    | 26      | 4        |
+    | 21      | 4        |
+    | 19      | 4        |
+    | 10      | 4        |
+    | 8       | 4        |
+    | 7       | 4        |
+    | 22      | 3        |
+    | 20      | 3        |
+    | 15      | 3        |
+    | 4       | 3        |
+    | 28      | 2        |
+    | 24      | 2        |
+    | 5       | 2        |
+    | 30      | 1        |
+    | 3       | 1        |
+---
+name: "test_derived_tpch_query_result[14]"
+data:
+  |-
+    | promo_revenue |
+    | 14.5856344411 |
+---
+name: "test_derived_tpch_query_result[15]"
+data:
+  |-
+    | value |
+    | true  |
+---
+name: "test_derived_tpch_query_result[15].1"
+data:
+  |-
+    | s_suppkey | s_name             | s_address         | s_phone         | total_revenue |
+    | 5         | Supplier#000000005 | lONEYAh9sFWAF75tO | 21-151-690-3663 | 848847.9622   |
+---
+name: "test_derived_tpch_query_result[15].2"
+data:
+  |-
+    | value |
+    | true  |
+---
+name: "test_derived_tpch_query_result[16]"
+data:
+  |-
+    | p_brand  | p_type                   | p_size | supplier_cnt |
+    | Brand#12 | PROMO PLATED NICKEL      | 41     | 4            |
+    | Brand#12 | SMALL BURNISHED TIN      | 31     | 4            |
+    | Brand#21 | SMALL BRUSHED TIN        | 31     | 4            |
+    | Brand#22 | PROMO PLATED TIN         | 5      | 4            |
+    | Brand#24 | MEDIUM BURNISHED NICKEL  | 6      | 4            |
+    | Brand#24 | SMALL BURNISHED TIN      | 31     | 4            |
+    | Brand#25 | PROMO ANODIZED TIN       | 31     | 4            |
+    | Brand#32 | MEDIUM BURNISHED BRASS   | 49     | 4            |
+    | Brand#32 | STANDARD POLISHED TIN    | 15     | 4            |
+    | Brand#33 | MEDIUM POLISHED BRASS    | 49     | 4            |
+    | Brand#33 | SMALL BURNISHED TIN      | 31     | 4            |
+    | Brand#44 | PROMO BURNISHED TIN      | 41     | 4            |
+    | Brand#44 | PROMO POLISHED STEEL     | 5      | 4            |
+    | Brand#45 | ECONOMY BURNISHED BRASS  | 31     | 4            |
+    | Brand#45 | LARGE BURNISHED BRASS    | 14     | 4            |
+    | Brand#45 | MEDIUM BURNISHED COPPER  | 47     | 4            |
+    | Brand#51 | MEDIUM POLISHED NICKEL   | 41     | 4            |
+    | Brand#52 | SMALL BURNISHED NICKEL   | 14     | 4            |
+    | Brand#55 | STANDARD POLISHED COPPER | 47     | 4            |
+    | Brand#42 | ECONOMY PLATED BRASS     | 31     | 2            |
+    | Brand#43 | MEDIUM ANODIZED BRASS    | 14     | 2            |
+    | Brand#12 | PROMO BURNISHED NICKEL   | 47     | 1            |
+    | Brand#23 | ECONOMY BRUSHED TIN      | 15     | 1            |
+    | Brand#41 | LARGE PLATED STEEL       | 41     | 1            |
+    | Brand#51 | ECONOMY POLISHED STEEL   | 49     | 1            |
+---
+name: "test_derived_tpch_query_result[17]"
+data:
+  |-
+    | avg_yearly |
+    | NULL       |
+---
+name: "test_derived_tpch_query_result[18]"
+data:
+  '| c_name | c_custkey | o_orderkey | o_orderdate | o_totalprice | sum(l_quantity) |'
+---
+name: "test_derived_tpch_query_result[19]"
+data:
+  |-
+    | revenue |
+    | NULL    |
+---
+name: "test_derived_tpch_query_result[20]"
+data:
+  |-
+    | s_name             | s_address    |
+    | Supplier#000000006 | zaux5FTzToEg |
+---
+name: "test_derived_tpch_query_result[21]"
+data:
+  |-
+    | s_name             | numwait |
+    | Supplier#000000003 | 13      |
+---
+name: "test_derived_tpch_query_result[22]"
+data:
+  |-
+    | cntrycode | numcust | totacctbal |
+    | 13        | 1       | 5679.84    |
+    | 16        | 1       | 5494.43    |
+    | 30        | 1       | 7638.57    |
+    | 33        | 1       | 6327.54    |
