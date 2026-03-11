@@ -42,6 +42,7 @@ pub fn init_delta_types() {
         let _ = register_format_type::<physical_plan::DeltaCommitExec>(FormatTag::Delta);
         let _ = register_format_type::<physical_plan::DeltaWriterExec>(FormatTag::Delta);
         let _ = register_format_type::<physical_plan::DeltaDiscoveryExec>(FormatTag::Delta);
+        let _ = register_format_type::<physical_plan::DeltaMetadataStatsExec>(FormatTag::Delta);
         let _ = register_format_type::<physical_plan::DeltaScanByAddsExec>(FormatTag::Delta);
         let _ = register_format_type::<physical_plan::DeltaRemoveActionsExec>(FormatTag::Delta);
         let _ = register_format_type::<physical_plan::DeltaLogReplayExec>(FormatTag::Delta);

@@ -53,6 +53,7 @@ message ExtendedPhysicalPlanNode {
     PythonDataSourceWriteCommitExecNode python_data_source_write_commit = 38;
     CatalogCommandExecNode catalog_command = 39;
     BarrierExecNode barrier = 40;
+    DeltaMetadataStatsExecNode delta_metadata_stats = 41;
   }
 }
 
@@ -475,6 +476,11 @@ message DeltaDiscoveryExecNode {
   optional bytes input = 5;
   repeated string input_partition_columns = 6;
   bool input_partition_scan = 7;
+}
+
+message DeltaMetadataStatsExecNode {
+  bytes input = 1;
+  bytes stats_schema = 2;
 }
 
 message DeltaRemoveActionsExecNode {

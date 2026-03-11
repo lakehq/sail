@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::array::BooleanArray;
-use datafusion::arrow::compute::filter_record_batch;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
@@ -18,8 +17,6 @@ use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::TryStreamExt;
 use url::Url;
-
-use crate::physical_plan::meta_adds;
 
 #[derive(Debug)]
 pub struct DeltaDiscoveryExec {
@@ -146,22 +143,6 @@ impl DeltaDiscoveryExec {
         self.input_partition_scan
     }
 
-    fn prune_mask_for_meta_batch(
-        batch: &RecordBatch,
-        predicate: &Arc<dyn PhysicalExpr>,
-        table_schema: &SchemaRef,
-        partition_columns: &[String],
-    ) -> Result<Vec<bool>> {
-        let adds = meta_adds::decode_adds_from_meta_batch(batch, Some(partition_columns))?;
-        if adds.is_empty() {
-            return Ok(vec![]);
-        }
-        crate::datasource::pruning::prune_adds_by_physical_predicate(
-            adds,
-            table_schema.clone(),
-            Arc::clone(predicate),
-        )
-    }
 }
 
 #[async_trait]
@@ -208,45 +189,20 @@ impl ExecutionPlan for DeltaDiscoveryExec {
         let schema = self.schema();
         let input_stream = self.input.execute(partition, context)?;
         let schema_for_stream = schema.clone();
-        let predicate_for_stream = self.predicate.clone();
-        let table_schema_for_stream = self.table_schema.clone();
-        let partition_columns_for_stream = self.input_partition_columns.clone();
         let partition_scan = self.input_partition_scan;
 
         let s = input_stream.try_filter_map(move |batch| {
             let schema = schema_for_stream.clone();
-            let predicate = predicate_for_stream.clone();
-            let table_schema = table_schema_for_stream.clone();
-            let partition_columns = partition_columns_for_stream.clone();
             async move {
                 if batch.num_rows() == 0 {
                     return Ok(None);
                 }
 
-                let filtered = match (&predicate, &table_schema) {
-                    (Some(pred), Some(ts)) => {
-                        let mask = DeltaDiscoveryExec::prune_mask_for_meta_batch(
-                            &batch,
-                            pred,
-                            ts,
-                            &partition_columns,
-                        )?;
-                        if mask.is_empty() {
-                            batch.clone()
-                        } else {
-                            let b = BooleanArray::from(mask);
-                            filter_record_batch(&batch, &b)
-                                .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?
-                        }
-                    }
-                    _ => batch.clone(),
-                };
-
                 let scan_array = Arc::new(BooleanArray::from(vec![
                     partition_scan;
-                    filtered.num_rows()
+                    batch.num_rows()
                 ]));
-                let mut cols = filtered.columns().to_vec();
+                let mut cols = batch.columns().to_vec();
                 cols.push(scan_array);
                 let out = RecordBatch::try_new(schema, cols)
                     .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
