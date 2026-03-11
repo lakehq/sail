@@ -305,11 +305,8 @@ class YamlSnapshotExtension(AbstractSyrupyExtension):
             if feature_filename is not None:
                 feature_path = Path(feature_filename)
                 test_dir = Path(test_location.filepath).parent
-                try:
-                    rel = feature_path.relative_to(test_dir)
-                    return str(rel.with_suffix(""))
-                except ValueError:
-                    return feature_path.stem
+                rel = feature_path.relative_to(test_dir)
+                return str(rel.with_suffix(""))
         return test_location.basename
 
     def serialize(self, data: SerializableData, **kwargs: Any) -> str:
