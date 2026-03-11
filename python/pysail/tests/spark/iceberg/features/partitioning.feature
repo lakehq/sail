@@ -146,7 +146,7 @@ Feature: Iceberg Partitioning
         CREATE TABLE part_truncate (id INT, code STRING, value INT)
         USING iceberg
         LOCATION {{ location.uri }}
-        TBLPROPERTIES ('write.partitioning'='truncate[3](name)')
+        TBLPROPERTIES ('write.partitioning'='truncate[3](code)')
         """
       Given statement
         """

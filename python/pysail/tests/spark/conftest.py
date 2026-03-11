@@ -25,7 +25,7 @@ def pytest_configure(config):
     config.pluginmanager.import_plugin("pysail.testing.spark.steps.sql")
     config.pluginmanager.import_plugin("pysail.testing.spark.steps.plan")
     config.pluginmanager.import_plugin("pysail.testing.spark.steps.delta_log")
-    config.pluginmanager.import_plugin("pysail.tests.spark.steps.iceberg.metadata")
+    config.pluginmanager.import_plugin("pysail.testing.spark.steps.iceberg_metadata")
 
 
 if TYPE_CHECKING:

@@ -10,8 +10,6 @@ try:
 except ImportError:
     HAS_PYICEBERG = False
 
-PYICEBERG_REQUIRED_MSG = "PyIceberg is required for this operation"
-
 
 def pyiceberg_local_location(path: Path) -> str:
     """Return a local location string that PyIceberg can use across platforms."""
