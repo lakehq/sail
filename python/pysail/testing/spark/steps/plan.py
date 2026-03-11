@@ -16,7 +16,7 @@ def normalize_plan_text(plan_text: str) -> str:
     # Make Windows paths match the regexes and snapshots early, so the
     # raw-text substitutions below also work cross-platform.
     text = text.replace("\\", "/")
-    text = re.sub(r"([A-Za-z][A-Za-z0-9+.\-]*:)//", r"\1__SCHEME_SLASHSLASH__", text)
+    text = re.sub(r"([A-Za-z][A-Za-z0-9+.\-]+:)//", r"\1__SCHEME_SLASHSLASH__", text)
     text = re.sub(r"/{2,}", "/", text)
     text = text.replace("__SCHEME_SLASHSLASH__", "//")
 

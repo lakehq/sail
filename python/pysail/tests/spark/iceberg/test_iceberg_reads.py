@@ -5,7 +5,7 @@ import pyarrow as pa
 from pyiceberg.schema import Schema
 from pyiceberg.types import BooleanType, DoubleType, LongType, NestedField, StringType, TimestampType
 
-from .utils import create_sql_catalog  # noqa: TID252
+from pysail.tests.spark.iceberg.utils import create_sql_catalog
 
 
 def test_nan_reads(spark, tmp_path):
