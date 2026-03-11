@@ -16,7 +16,7 @@ from pyiceberg.partitioning import (
 from pyiceberg.schema import Schema
 from pyiceberg.types import DateType, IntegerType, NestedField, StringType, TimestampType
 
-from .utils import create_sql_catalog  # noqa: TID252
+from pysail.tests.spark.iceberg.utils import create_sql_catalog
 
 
 def _make_common_schema():

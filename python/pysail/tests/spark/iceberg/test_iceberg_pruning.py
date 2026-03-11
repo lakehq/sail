@@ -3,7 +3,7 @@ import pandas as pd
 import pyarrow as pa
 from pyiceberg.schema import Schema
 from pyiceberg.types import BooleanType, DoubleType, IntegerType, LongType, NestedField, StringType
-from .utils import create_sql_catalog
+from pysail.tests.spark.iceberg.utils import create_sql_catalog
 
 
 def _make_eq_in_table(catalog, ident):
