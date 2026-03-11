@@ -57,9 +57,11 @@ pub async fn build_delete_plan(
 
     // Partition-only predicates can delete entire files without scanning data. In that case,
     // build a visible metadata pipeline over a log-derived meta table.
-    let mut log_replay_options = LogReplayOptions::default();
     let partition_only = !predicate_requires_stats(&condition_expr, &partition_columns);
-    log_replay_options.include_stats_json = !partition_only;
+    let log_replay_options = LogReplayOptions {
+        include_stats_json: !partition_only,
+        ..Default::default()
+    };
 
     let meta_scan: Arc<dyn ExecutionPlan> =
         build_log_replay_pipeline_with_options(ctx, snapshot_state, log_replay_options).await?;

@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, SchemaRef};
 use datafusion::catalog::Session;
-use datafusion::common::{Column as LogicalColumn, DataFusionError, Result, ScalarValue, ToDFSchema};
+use datafusion::common::{
+    Column as LogicalColumn, DataFusionError, Result, ScalarValue, ToDFSchema,
+};
 use datafusion::logical_expr::expr::{Between, BinaryExpr, Cast, InList};
 use datafusion::logical_expr::utils::{conjunction, disjunction};
 use datafusion::logical_expr::{Expr, Operator};
@@ -160,11 +162,7 @@ impl MetadataPredicateRewriter {
             if !left.column_refs().is_empty() {
                 return None;
             }
-            return Some(self.rewrite_template_comparison(
-                template,
-                reverse_comparison(op)?,
-                left,
-            ));
+            return Some(self.rewrite_template_comparison(template, reverse_comparison(op)?, left));
         }
 
         None
@@ -213,7 +211,11 @@ impl MetadataPredicateRewriter {
         }
         let mut rewritten = Vec::with_capacity(list.len());
         for value in list {
-            let op = if negated { Operator::NotEq } else { Operator::Eq };
+            let op = if negated {
+                Operator::NotEq
+            } else {
+                Operator::Eq
+            };
             rewritten.push(self.rewrite_template_comparison(template.clone(), op, value));
         }
         if negated {
@@ -236,24 +238,37 @@ impl MetadataPredicateRewriter {
         let null_count = template.apply(self.stats_null_count_expr(template.column_name()));
         if is_not_null {
             let num_records = self.stats_num_records_expr();
-            Some(disjunction(vec![
-                null_count.clone().is_null(),
-                num_records.clone().is_null(),
-                binary(null_count, Operator::Lt, num_records),
-            ])
-            .unwrap_or_else(literal_true))
+            Some(
+                disjunction(vec![
+                    null_count.clone().is_null(),
+                    num_records.clone().is_null(),
+                    binary(null_count, Operator::Lt, num_records),
+                ])
+                .unwrap_or_else(literal_true),
+            )
         } else {
-            Some(disjunction(vec![
-                null_count.clone().is_null(),
-                binary(null_count, Operator::Gt, literal_i64(0)),
-            ])
-            .unwrap_or_else(literal_true))
+            Some(
+                disjunction(vec![
+                    null_count.clone().is_null(),
+                    binary(null_count, Operator::Gt, literal_i64(0)),
+                ])
+                .unwrap_or_else(literal_true),
+            )
         }
     }
 
-    fn rewrite_template_comparison(&self, template: ExprTemplate, op: Operator, value: Expr) -> Expr {
+    fn rewrite_template_comparison(
+        &self,
+        template: ExprTemplate,
+        op: Operator,
+        value: Expr,
+    ) -> Expr {
         if self.is_partition_column(template.column_name()) {
-            return binary(template.apply(column_expr(template.column_name())), op, value);
+            return binary(
+                template.apply(column_expr(template.column_name())),
+                op,
+                value,
+            );
         }
 
         let min_expr = template.apply(self.stats_bound_expr(template.column_name(), true));
@@ -299,7 +314,10 @@ impl MetadataPredicateRewriter {
     }
 
     fn stats_num_records_expr(&self) -> Expr {
-        get_field(column_expr(FIELD_NAME_STATS_PARSED), STATS_FIELD_NUM_RECORDS)
+        get_field(
+            column_expr(FIELD_NAME_STATS_PARSED),
+            STATS_FIELD_NUM_RECORDS,
+        )
     }
 
     fn stats_null_count_expr(&self, name: &str) -> Expr {
@@ -376,7 +394,10 @@ fn column_expr(name: &str) -> Expr {
 fn get_field(struct_expr: Expr, field_name: &str) -> Expr {
     Expr::ScalarFunction(datafusion::logical_expr::expr::ScalarFunction::new_udf(
         datafusion::functions::core::get_field(),
-        vec![struct_expr, Expr::Literal(ScalarValue::Utf8(Some(field_name.to_string())), None)],
+        vec![
+            struct_expr,
+            Expr::Literal(ScalarValue::Utf8(Some(field_name.to_string())), None),
+        ],
     ))
 }
 
@@ -401,7 +422,10 @@ fn or(left: Expr, right: Expr) -> Expr {
 }
 
 fn any_null(exprs: impl IntoIterator<Item = Expr>) -> Expr {
-    let checks = exprs.into_iter().map(|expr| expr.is_null()).collect::<Vec<_>>();
+    let checks = exprs
+        .into_iter()
+        .map(|expr| expr.is_null())
+        .collect::<Vec<_>>();
     disjunction(checks).unwrap_or_else(literal_true)
 }
 
@@ -421,7 +445,11 @@ mod tests {
     fn metadata_batch() -> Result<(SchemaRef, RecordBatch)> {
         let stats = StructArray::from(vec![
             (
-                Arc::new(Field::new(STATS_FIELD_NUM_RECORDS, ArrowDataType::Int64, true)),
+                Arc::new(Field::new(
+                    STATS_FIELD_NUM_RECORDS,
+                    ArrowDataType::Int64,
+                    true,
+                )),
                 Arc::new(Int64Array::from(vec![Some(3), Some(1), Some(1)])) as Arc<_>,
             ),
             (
@@ -509,9 +537,9 @@ mod tests {
                 DataFusionError::Internal("expected boolean predicate output".to_string())
             })?;
 
-        assert_eq!(values.value(0), false);
-        assert_eq!(values.value(1), true);
-        assert_eq!(values.value(2), true);
+        assert!(!values.value(0));
+        assert!(values.value(1));
+        assert!(values.value(2));
         Ok(())
     }
 }

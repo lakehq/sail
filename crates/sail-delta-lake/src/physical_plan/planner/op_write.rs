@@ -208,13 +208,19 @@ async fn build_overwrite_if_plan(
         operation_override,
     )?);
 
-    let mut log_replay_options = LogReplayOptions::default();
     let partition_only = !predicate_requires_stats(&condition_expr, &partition_columns);
-    log_replay_options.include_stats_json = !partition_only;
+    let log_replay_options = LogReplayOptions {
+        include_stats_json: !partition_only,
+        ..Default::default()
+    };
     let meta_scan: Arc<dyn ExecutionPlan> =
         build_log_replay_pipeline_with_options(ctx, &snapshot_state, log_replay_options).await?;
-    let meta_scan: Arc<dyn ExecutionPlan> =
-        build_metadata_filter(ctx.session(), meta_scan, &snapshot_state, condition_expr.clone())?;
+    let meta_scan: Arc<dyn ExecutionPlan> = build_metadata_filter(
+        ctx.session(),
+        meta_scan,
+        &snapshot_state,
+        condition_expr.clone(),
+    )?;
 
     let find_files_plan: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
         meta_scan,
@@ -250,9 +256,11 @@ async fn build_old_data_plan(
     table_schema: SchemaRef,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let version = snapshot_state.version();
-    let mut log_replay_options = LogReplayOptions::default();
     let partition_only = !predicate_requires_stats(&condition_expr, ctx.partition_columns());
-    log_replay_options.include_stats_json = !partition_only;
+    let log_replay_options = LogReplayOptions {
+        include_stats_json: !partition_only,
+        ..Default::default()
+    };
     let meta_scan: Arc<dyn ExecutionPlan> =
         build_log_replay_pipeline_with_options(ctx, snapshot_state, log_replay_options).await?;
     let meta_scan: Arc<dyn ExecutionPlan> = build_metadata_filter(

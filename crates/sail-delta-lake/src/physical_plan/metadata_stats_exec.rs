@@ -20,7 +20,7 @@ use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use futures::TryStreamExt;
 
-use crate::spec::fields::{FIELD_NAME_STATS_PARSED, FIELD_NAME_STATS};
+use crate::spec::fields::{FIELD_NAME_STATS, FIELD_NAME_STATS_PARSED};
 
 #[derive(Debug)]
 pub struct DeltaMetadataStatsExec {
@@ -195,28 +195,26 @@ impl Clone for DeltaMetadataStatsExec {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::arrow::array::{Int64Array, Int32Array};
+    use datafusion::arrow::array::{Int32Array, Int64Array};
     use datafusion::physical_plan::empty::EmptyExec;
 
     use super::*;
     use crate::datasource::PATH_COLUMN;
-    use crate::spec::fields::{STATS_FIELD_MAX_VALUES, STATS_FIELD_MIN_VALUES, STATS_FIELD_NUM_RECORDS};
+    use crate::spec::fields::{
+        STATS_FIELD_MAX_VALUES, STATS_FIELD_MIN_VALUES, STATS_FIELD_NUM_RECORDS,
+    };
 
     fn stats_schema() -> SchemaRef {
         Arc::new(Schema::new(vec![
             Field::new(STATS_FIELD_NUM_RECORDS, DataType::Int64, true),
             Field::new(
                 STATS_FIELD_MIN_VALUES,
-                DataType::Struct(
-                    vec![Arc::new(Field::new("value", DataType::Int32, true))].into(),
-                ),
+                DataType::Struct(vec![Arc::new(Field::new("value", DataType::Int32, true))].into()),
                 true,
             ),
             Field::new(
                 STATS_FIELD_MAX_VALUES,
-                DataType::Struct(
-                    vec![Arc::new(Field::new("value", DataType::Int32, true))].into(),
-                ),
+                DataType::Struct(vec![Arc::new(Field::new("value", DataType::Int32, true))].into()),
                 true,
             ),
         ]))

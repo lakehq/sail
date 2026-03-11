@@ -137,11 +137,13 @@ pub(crate) async fn plan_delta_scan(
     let pruning_expr = conjunction(pruning_filters);
     let pruning_predicate = if let Some(expr) = pruning_expr.as_ref() {
         let df_schema = logical_schema.clone().to_dfschema()?;
-        Some(simplify_expr(session, &df_schema, expr.clone()).map_err(|e| {
-            datafusion::common::DataFusionError::Plan(format!(
-                "failed to simplify scan pruning filter: {e}"
-            ))
-        })?)
+        Some(
+            simplify_expr(session, &df_schema, expr.clone()).map_err(|e| {
+                datafusion::common::DataFusionError::Plan(format!(
+                    "failed to simplify scan pruning filter: {e}"
+                ))
+            })?,
+        )
     } else {
         None
     };
@@ -253,10 +255,12 @@ pub(crate) async fn plan_delta_scan(
             true,
         ),
     );
-    let mut log_replay_options = LogReplayOptions::default();
-    log_replay_options.include_stats_json = pruning_expr
-        .as_ref()
-        .is_some_and(|expr| predicate_requires_stats(expr, &table_partition_cols));
+    let log_replay_options = LogReplayOptions {
+        include_stats_json: pruning_expr
+            .as_ref()
+            .is_some_and(|expr| predicate_requires_stats(expr, &table_partition_cols)),
+        ..Default::default()
+    };
 
     let meta_scan: Arc<dyn ExecutionPlan> =
         crate::physical_plan::planner::utils::build_log_replay_pipeline_with_options(

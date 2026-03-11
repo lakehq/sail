@@ -142,7 +142,6 @@ impl DeltaDiscoveryExec {
     pub fn input_partition_scan(&self) -> bool {
         self.input_partition_scan
     }
-
 }
 
 #[async_trait]
@@ -198,10 +197,8 @@ impl ExecutionPlan for DeltaDiscoveryExec {
                     return Ok(None);
                 }
 
-                let scan_array = Arc::new(BooleanArray::from(vec![
-                    partition_scan;
-                    batch.num_rows()
-                ]));
+                let scan_array =
+                    Arc::new(BooleanArray::from(vec![partition_scan; batch.num_rows()]));
                 let mut cols = batch.columns().to_vec();
                 cols.push(scan_array);
                 let out = RecordBatch::try_new(schema, cols)
