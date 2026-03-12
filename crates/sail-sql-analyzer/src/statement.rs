@@ -1828,7 +1828,11 @@ fn from_ast_alter_table_operation(
 ) -> SqlResult<spec::AlterTableOperation> {
     // TODO: implement the conversion properly
     match operation {
-        AlterTableOperation::RenameTable { .. } => {}
+        AlterTableOperation::RenameTable { name, .. } => {
+            return Ok(spec::AlterTableOperation::RenameTable {
+                new_name: from_ast_object_name(name)?,
+            });
+        }
         AlterTableOperation::RenamePartition { .. } => {}
         AlterTableOperation::AddColumns { items, .. } => {
             from_ast_column_alteration_list(items)?;

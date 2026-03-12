@@ -65,6 +65,23 @@ impl CatalogManager {
         provider.drop_table(&database, &table, options).await
     }
 
+    pub async fn rename_table<T: AsRef<str>>(
+        &self,
+        old_table: &[T],
+        new_table: &[T],
+    ) -> CatalogResult<()> {
+        let (old_provider, old_database, old_name) = self.resolve_object(old_table)?;
+        let (new_provider, new_database, new_name) = self.resolve_object(new_table)?;
+        if old_provider.get_name() != new_provider.get_name() {
+            return Err(CatalogError::External(
+                "cannot rename table across catalogs".to_string(),
+            ));
+        }
+        old_provider
+            .rename_table(&old_database, &old_name, &new_database, &new_name)
+            .await
+    }
+
     pub async fn get_table_or_view<T: AsRef<str>>(
         &self,
         reference: &[T],

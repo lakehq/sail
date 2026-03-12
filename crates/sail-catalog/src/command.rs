@@ -116,6 +116,10 @@ pub enum CatalogCommand {
         table: Vec<String>,
         extended: bool,
     },
+    RenameTable {
+        old_table: Vec<String>,
+        new_table: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
@@ -155,6 +159,7 @@ impl CatalogCommand {
             CatalogCommand::CreateTemporaryView { .. } => "CreateTemporaryView",
             CatalogCommand::CreateView { .. } => "CreateView",
             CatalogCommand::DescribeTable { .. } => "DescribeTable",
+            CatalogCommand::RenameTable { .. } => "RenameTable",
         }
     }
 
@@ -194,7 +199,8 @@ impl CatalogCommand {
             | CatalogCommand::DropTable { .. }
             | CatalogCommand::DropFunction { .. }
             | CatalogCommand::DropTemporaryView { .. }
-            | CatalogCommand::DropView { .. } => display.bools().schema()?,
+            | CatalogCommand::DropView { .. }
+            | CatalogCommand::RenameTable { .. } => display.bools().schema()?,
         };
         Ok(schema)
     }
@@ -432,6 +438,13 @@ impl CatalogCommand {
             }
             CatalogCommand::CreateView { view, options } => {
                 manager.create_view(&view, options).await?;
+                display.bools().to_record_batch(vec![true])?
+            }
+            CatalogCommand::RenameTable {
+                old_table,
+                new_table,
+            } => {
+                manager.rename_table(&old_table, &new_table).await?;
                 display.bools().to_record_batch(vec![true])?
             }
         };
