@@ -1,31 +1,27 @@
-import tempfile
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
-from pyiceberg.catalog.sql import SqlCatalog
+from pyiceberg.table import Table
 
-from pysail.tests.spark.iceberg.utils import pyiceberg_local_location
+from pysail.tests.spark.iceberg.utils import create_sql_catalog
 
 if TYPE_CHECKING:
-    from pyiceberg.catalog import Catalog
+    from pyiceberg.schema import Schema
 
 
 @pytest.fixture
-def sql_catalog() -> "Catalog":
-    """Create a SQL catalog for Iceberg tests using a temporary directory."""
+def sql_catalog(tmp_path):
+    return create_sql_catalog(tmp_path)
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmp_path = Path(tmpdir)
-        catalog = SqlCatalog(
-            "test_catalog",
-            uri=f"sqlite:///{tmp_path.as_posix()}/pyiceberg_catalog.db",
-            warehouse=pyiceberg_local_location(tmp_path.joinpath("warehouse")),
-        )
-        # Create default namespace
-        catalog.create_namespace("default")
-        yield catalog
 
-        # Release SQLite file handle before TemporaryDirectory cleanup on Windows.
-        if hasattr(catalog, "engine"):
-            catalog.engine.dispose()
+@pytest.fixture
+def iceberg_table(sql_catalog, request) -> Table:
+    params = request.param
+    schema: Schema = params["schema"]
+    identifier: str = params["identifier"]
+    partition_spec = params.get("partition_spec")
+    table = sql_catalog.create_table(identifier=identifier, schema=schema, partition_spec=partition_spec)
+    try:
+        yield table
+    finally:
+        sql_catalog.drop_table(identifier)

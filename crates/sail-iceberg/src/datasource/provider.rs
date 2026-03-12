@@ -385,23 +385,7 @@ impl IcebergTableProvider {
                 .push(file);
         }
 
-        // Sort by partition values to ensure stable output order
-        let mut sorted_groups: Vec<_> = file_groups.into_iter().collect();
-        sorted_groups.sort_by(|(a, _), (b, _)| {
-            for (val_a, val_b) in a.iter().zip(b.iter()) {
-                match val_a.partial_cmp(val_b) {
-                    Some(std::cmp::Ordering::Equal) => continue,
-                    Some(ordering) => return ordering,
-                    None => continue,
-                }
-            }
-            a.len().cmp(&b.len())
-        });
-
-        sorted_groups
-            .into_iter()
-            .map(|(_, files)| FileGroup::from(files))
-            .collect()
+        file_groups.into_values().map(FileGroup::from).collect()
     }
 
     /// Aggregate table-level statistics from a list of Iceberg data files

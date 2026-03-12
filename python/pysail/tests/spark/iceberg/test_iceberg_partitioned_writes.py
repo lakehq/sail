@@ -199,7 +199,7 @@ def test_partitioned_write_then_pyiceberg_read_all(spark, tmp_path, table_name, 
 def test_iceberg_partition_writes_sql(spark, tmp_path):
     warehouse = tmp_path / "warehouse"
     warehouse.mkdir(parents=True, exist_ok=True)
-    path_single = (warehouse / "ice_single").as_uri()
+    path_single = f"file://{warehouse / 'ice_single'}"
     spark.sql(
         f"""
         CREATE TABLE tmp_ice_single (
@@ -221,7 +221,7 @@ def test_iceberg_partition_writes_sql(spark, tmp_path):
     finally:
         spark.sql("DROP TABLE IF EXISTS tmp_ice_single")
 
-    path_multi = (warehouse / "ice_multi").as_uri()
+    path_multi = f"file://{warehouse / 'ice_multi'}"
     spark.sql(
         f"""
         CREATE TABLE tmp_ice_multi (
@@ -281,10 +281,7 @@ def test_partitioned_append_infers_spec_from_metadata(spark, tmp_path):
         }
         assert result == {(1, "A", 10), (2, "B", 20), (3, "A", 30), (4, "C", 40)}
 
-        from urllib.parse import urlparse
-        from urllib.request import url2pathname
-
-        table_path = Path(url2pathname(urlparse(table.location()).path))
+        table_path = Path(table.location().removeprefix("file://"))
         data_dir = table_path / "data"
         partition_dirs = {p.name for p in data_dir.iterdir() if p.is_dir()}
         assert partition_dirs == {"category=A", "category=B", "category=C"}
