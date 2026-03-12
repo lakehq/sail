@@ -29,43 +29,47 @@ use crate::table::DeltaSnapshot;
 
 static READER_V2: LazyLock<HashSet<TableFeature>> =
     LazyLock::new(|| HashSet::from_iter([TableFeature::ColumnMapping]));
-static WRITER_V2: LazyLock<HashSet<TableFeature>> =
-    LazyLock::new(|| HashSet::from_iter([TableFeature::AppendOnly, TableFeature::Invariants]));
+static WRITER_V2: LazyLock<HashSet<TableFeature>> = LazyLock::new(|| {
+    HashSet::from_iter([
+        TableFeature::AppendOnly,
+        // TableFeature::Invariants,
+    ])
+});
 static WRITER_V3: LazyLock<HashSet<TableFeature>> = LazyLock::new(|| {
     HashSet::from_iter([
         TableFeature::AppendOnly,
-        TableFeature::Invariants,
-        TableFeature::CheckConstraints,
+        // TableFeature::Invariants,
+        // TableFeature::CheckConstraints,
     ])
 });
 static WRITER_V4: LazyLock<HashSet<TableFeature>> = LazyLock::new(|| {
     HashSet::from_iter([
         TableFeature::AppendOnly,
-        TableFeature::Invariants,
-        TableFeature::CheckConstraints,
+        // TableFeature::Invariants,
+        // TableFeature::CheckConstraints,
         TableFeature::ChangeDataFeed,
-        TableFeature::GeneratedColumns,
+        // TableFeature::GeneratedColumns,
     ])
 });
 static WRITER_V5: LazyLock<HashSet<TableFeature>> = LazyLock::new(|| {
     HashSet::from_iter([
         TableFeature::AppendOnly,
-        TableFeature::Invariants,
-        TableFeature::CheckConstraints,
+        // TableFeature::Invariants,
+        // TableFeature::CheckConstraints,
         TableFeature::ChangeDataFeed,
-        TableFeature::GeneratedColumns,
+        // TableFeature::GeneratedColumns,
         TableFeature::ColumnMapping,
     ])
 });
 static WRITER_V6: LazyLock<HashSet<TableFeature>> = LazyLock::new(|| {
     HashSet::from_iter([
         TableFeature::AppendOnly,
-        TableFeature::Invariants,
-        TableFeature::CheckConstraints,
+        // TableFeature::Invariants,
+        // TableFeature::CheckConstraints,
         TableFeature::ChangeDataFeed,
-        TableFeature::GeneratedColumns,
+        // TableFeature::GeneratedColumns,
         TableFeature::ColumnMapping,
-        TableFeature::IdentityColumns,
+        // TableFeature::IdentityColumns,
     ])
 });
 
@@ -240,12 +244,10 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     let mut writer_features = HashSet::new();
     writer_features.insert(TableFeature::AppendOnly);
     writer_features.insert(TableFeature::TimestampWithoutTimezone);
-    {
-        writer_features.insert(TableFeature::ChangeDataFeed);
-        writer_features.insert(TableFeature::Invariants);
-        writer_features.insert(TableFeature::CheckConstraints);
-        writer_features.insert(TableFeature::GeneratedColumns);
-    }
+    writer_features.insert(TableFeature::ChangeDataFeed);
+    // writer_features.insert(TableFeature::Invariants);
+    // writer_features.insert(TableFeature::CheckConstraints);
+    // writer_features.insert(TableFeature::GeneratedColumns);
     writer_features.insert(TableFeature::ColumnMapping);
     // writer_features.insert(TableFeature::IdentityColumns);
 
