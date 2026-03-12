@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from jinja2 import Template
@@ -46,6 +47,15 @@ def variable_for_temporary_directory(name, directory, tmp_path, variables):
     This step does not create the directory, it only stores its absolute path.
     """
     variables[name] = PathWrapper(tmp_path / directory)
+    return variables
+
+
+@given(parsers.parse("variable {name} for delta log of {location_var}"), target_fixture="variables")
+def variable_for_delta_log(name: str, location_var: str, variables: dict) -> dict:
+    """Defines a variable pointing to the _delta_log subdirectory of a Delta table location."""
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    variables[name] = PathWrapper(Path(location.path) / "_delta_log")
     return variables
 
 

@@ -115,6 +115,16 @@ def file_tree_matches_docstring(location_var: str, variables: dict, docstring: s
     assert actual == expected
 
 
+@given(parsers.parse("file {filename} in {location_var} is deleted"))
+def file_in_location_is_deleted(filename: str, location_var: str, variables: dict) -> None:
+    """Deletes a named file from the given location directory."""
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    file_path = Path(location.path) / filename
+    assert file_path.exists(), f"File {file_path} does not exist"
+    file_path.unlink()
+
+
 @then(parsers.parse("data files in {location_var} count is {n:d}"))
 def data_files_count_is(location_var: str, n: int, variables: dict) -> None:
     location = variables.get(location_var)

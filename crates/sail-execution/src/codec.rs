@@ -89,6 +89,7 @@ use sail_delta_lake::physical_plan::{
     DeltaCastColumnExpr, DeltaCommitExec, DeltaDiscoveryExec, DeltaLogReplayExec,
     DeltaMetadataStatsExec, DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
 };
+use sail_delta_lake::spec::DeltaOperation;
 use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
@@ -569,6 +570,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_exists,
                 sink_mode,
                 operation_override_json,
+                metadata_configuration,
             }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let sink_schema = self.try_decode_schema(&sink_schema)?;
@@ -583,9 +585,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
                 let options =
                     serde_json::from_str(&options).map_err(|e| plan_datafusion_err!("{e}"))?;
+                let metadata_configuration = serde_json::from_str(&metadata_configuration)
+                    .map_err(|e| plan_datafusion_err!("{e}"))?;
 
                 let operation_override = if let Some(s) = operation_override_json.as_ref() {
-                    Some(serde_json::from_str(s).map_err(|e| plan_datafusion_err!("{e}"))?)
+                    Some(
+                        serde_json::from_str::<DeltaOperation>(s)
+                            .map_err(|e| plan_datafusion_err!("{e}"))?,
+                    )
                 } else {
                     None
                 };
@@ -593,6 +600,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     input,
                     table_url,
                     options,
+                    metadata_configuration,
                     partition_columns,
                     sink_mode,
                     table_exists,
@@ -1312,6 +1320,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_exists: delta_writer_exec.table_exists(),
                 sink_mode: Some(sink_mode),
                 operation_override_json,
+                metadata_configuration: serde_json::to_string(
+                    delta_writer_exec.metadata_configuration(),
+                )
+                .map_err(|e| plan_datafusion_err!("{e}"))?,
             })
         } else if let Some(delta_commit_exec) = node.as_any().downcast_ref::<DeltaCommitExec>() {
             let input = self.try_encode_plan(delta_commit_exec.input().clone())?;

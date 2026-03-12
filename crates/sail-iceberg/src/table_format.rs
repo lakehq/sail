@@ -81,6 +81,7 @@ impl TableFormat for IcebergTableFormat {
             partition_by,
             bucket_by,
             sort_order,
+            table_properties: _,
             options,
         } = info;
 

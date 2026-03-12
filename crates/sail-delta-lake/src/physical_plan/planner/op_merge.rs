@@ -229,6 +229,7 @@ async fn finalize_merge(
         writer_input,
         table_url.clone(),
         options,
+        ctx.metadata_configuration().clone(),
         partition_columns.clone(),
         PhysicalSinkMode::Append,
         true,
