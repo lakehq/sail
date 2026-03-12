@@ -5,7 +5,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from pysail.tests.spark.utils import escape_sql_string_literal, is_jvm_spark
+from pysail.testing.spark.utils.common import is_jvm_spark
+from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 if TYPE_CHECKING:
     from pathlib import Path

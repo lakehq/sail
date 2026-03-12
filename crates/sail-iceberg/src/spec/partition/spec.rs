@@ -25,7 +25,7 @@ use crate::spec::schema::Schema;
 use crate::spec::transform::Transform;
 use crate::spec::types::{NestedField, StructType};
 
-#[allow(unused)]
+#[expect(unused)]
 pub(crate) const UNPARTITIONED_LAST_ASSIGNED_ID: i32 = 999;
 pub(crate) const DEFAULT_PARTITION_SPEC_ID: i32 = 0;
 

@@ -3,27 +3,38 @@ from __future__ import annotations
 import doctest
 import os
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import pytest
 from _pytest.doctest import DoctestItem
 from pyspark.sql import SparkSession
 
-from pysail.spark import SparkConnectServer
-from pysail.tests.spark.utils import SAIL_ONLY, is_jvm_spark
+from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
+
+# This doctest option flag is used to annotate tests involving
+# extended Spark features supported by Sail.
+# The test will be skipped when running on JVM Spark.
+SAIL_ONLY = doctest.register_optionflag("SAIL_ONLY")
 
 
 def pytest_configure(config):
+    # Register custom markers.
+    # Note: pytest-bdd converts @sail-only tag to "sail-only" marker (preserves hyphen)
+    config.addinivalue_line(
+        "markers",
+        "sail-only: mark test as Sail-only (skipped when running against Spark JVM)",
+    )
     # Load all pytest-bdd step modules.
-    config.pluginmanager.import_plugin("pysail.tests.spark.steps.file_tree")
-    config.pluginmanager.import_plugin("pysail.tests.spark.steps.sql")
-    config.pluginmanager.import_plugin("pysail.tests.spark.steps.plan")
-    config.pluginmanager.import_plugin("pysail.tests.spark.steps.delta_log")
-    config.pluginmanager.import_plugin("pysail.tests.spark.steps.dataframe")
+    config.pluginmanager.import_plugin("pysail.testing.spark.steps.file_tree")
+    config.pluginmanager.import_plugin("pysail.testing.spark.steps.sql")
+    config.pluginmanager.import_plugin("pysail.testing.spark.steps.plan")
+    config.pluginmanager.import_plugin("pysail.testing.spark.steps.delta_log")
 
 
 if TYPE_CHECKING:
     import pyspark.sql.connect.session
+    from _pytest.mark import MarkDecorator
 
 
 @pytest.fixture(scope="session")
@@ -36,6 +47,8 @@ def remote():
     if r := os.environ.get("SPARK_REMOTE"):
         yield r
     else:
+        from pysail.spark import SparkConnectServer
+
         server = SparkConnectServer("127.0.0.1", 0)
         server.start(background=True)
         _, port = server.listening_address
@@ -56,6 +69,42 @@ def spark(remote):
     patch_spark_connect_session(spark)
     yield spark
     spark.stop()
+
+
+@pytest.fixture
+def spark_session_factory(remote):
+    """Factory for creating independent SparkSessions.
+
+    Each call to the factory creates a new SparkSession with a unique session ID,
+    allowing tests to verify session isolation behavior.
+
+    :param remote: The remote address of the Spark Connect server.
+    :yields: A factory function that creates new SparkSessions.
+    """
+    import contextlib
+    import uuid
+
+    sessions = []
+
+    def create_session():
+        # Use a unique app name to ensure we get a fresh session
+        # The session ID is generated internally by Spark Connect
+        unique_app = f"test_session_{uuid.uuid4().hex[:8]}"
+        session = (
+            SparkSession.builder.appName(unique_app).remote(remote).create()
+        )  # Use create() instead of getOrCreate() to force new session
+        configure_spark_session(session)
+        patch_spark_connect_session(session)
+        sessions.append(session)
+        return session
+
+    yield create_session
+
+    # Cleanup all created sessions
+    for session in sessions:
+        # Best-effort cleanup: ignore errors while stopping Spark sessions during test teardown.
+        with contextlib.suppress(Exception):
+            session.stop()
 
 
 def configure_spark_session(session):
@@ -110,10 +159,40 @@ def local_timezone(request):
     time.tzset()
 
 
+@dataclass
+class DoctestMarker:
+    keywords: list[str]
+    markers: list[str | MarkDecorator]
+
+
+DOCTEST_MARKERS = [
+    DoctestMarker(
+        keywords=["test_python_datasource_read.txt"],
+        markers=[pytest.mark.skipif(pyspark_version() < (4,), reason="Python data source requires Spark 4+")],
+    ),
+    DoctestMarker(
+        keywords=["test_python_datasource_read_arrow.txt"],
+        markers=[pytest.mark.skipif(pyspark_version() < (4,), reason="Python data source requires Spark 4+")],
+    ),
+]
+
+
 def pytest_collection_modifyitems(session, config, items):  # noqa: ARG001
+    for item in items:
+        if isinstance(item, DoctestItem):
+            for test in DOCTEST_MARKERS:
+                if all(k in item.keywords for k in test.keywords):
+                    for marker in test.markers:
+                        item.add_marker(marker)
+
     if is_jvm_spark():
+        skip_sail_only = pytest.mark.skip(reason="Sail-only feature, not supported by Spark")
         for item in items:
             if isinstance(item, DoctestItem):
                 for example in item.dtest.examples:
                     if example.options.get(SAIL_ONLY):
                         example.options[doctest.SKIP] = True
+            # Skip pytest-bdd scenarios with @sail-only tag
+            # Note: pytest-bdd preserves the hyphen in marker names
+            elif item.get_closest_marker("sail-only"):
+                item.add_marker(skip_sail_only)

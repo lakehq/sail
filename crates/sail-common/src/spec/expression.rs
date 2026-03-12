@@ -80,6 +80,16 @@ pub enum Expr {
         subquery: Box<QueryPlan>,
         negated: bool,
     },
+    /// Subquery reference from WithRelations.
+    Subquery {
+        /// The plan_id referencing a plan in WithRelations.references.
+        plan_id: i64,
+        /// The subquery type.
+        subquery_type: SubqueryType,
+        /// Values for IN subquery (the left-side expressions).
+        in_subquery_values: Vec<Expr>,
+        negated: bool,
+    },
     InList {
         expr: Box<Expr>,
         list: Vec<Expr>,
@@ -120,9 +130,15 @@ pub enum Expr {
     UnresolvedDate {
         value: String,
     },
+    UnresolvedTime {
+        value: String,
+    },
     UnresolvedTimestamp {
         value: String,
         timestamp_type: TimestampType,
+    },
+    IdentifierClause {
+        expr: Box<Expr>,
     },
 }
 
@@ -283,7 +299,7 @@ pub struct CommonInlineUserDefinedFunction {
     pub function: FunctionDefinition,
 }
 
-#[allow(clippy::enum_variant_names)]
+#[expect(clippy::enum_variant_names)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum FunctionDefinition {
@@ -403,4 +419,13 @@ pub struct WildcardReplaceColumn {
 pub struct IdentifierWithAlias {
     pub identifier: Identifier,
     pub alias: Identifier,
+}
+
+/// The type of subquery expression.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SubqueryType {
+    In,
+    Scalar,
+    Exists,
 }

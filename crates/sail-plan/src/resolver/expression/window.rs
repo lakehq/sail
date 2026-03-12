@@ -2,13 +2,17 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
+use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
+use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::WindowFunctionParams;
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
     expr, AggregateUDF, ExprSchemable, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
@@ -52,7 +56,8 @@ impl PlanResolver<'_> {
             .resolve_sort_orders(order_by, false, schema, state)
             .await?;
         let window_frame = if let Some(frame) = frame {
-            self.resolve_window_frame(frame, &sorts, schema, state)?
+            self.resolve_window_frame(frame, &sorts, schema, state)
+                .await?
         } else {
             WindowFrame::new(if sorts.is_empty() {
                 None
@@ -184,7 +189,7 @@ impl PlanResolver<'_> {
         Ok(NamedExpr::new(vec![name], window))
     }
 
-    fn resolve_window_frame(
+    async fn resolve_window_frame(
         &self,
         frame: spec::WindowFrame,
         order_by: &[expr::Sort],
@@ -205,31 +210,56 @@ impl PlanResolver<'_> {
         };
         let (start, end) = match units {
             WindowFrameUnits::Rows | WindowFrameUnits::Groups => (
-                self.resolve_window_boundary_offset(lower, state)?,
-                self.resolve_window_boundary_offset(upper, state)?,
+                self.resolve_window_boundary_offset(lower, schema, state)
+                    .await?,
+                self.resolve_window_boundary_offset(upper, schema, state)
+                    .await?,
             ),
             WindowFrameUnits::Range => (
-                self.resolve_window_boundary_value(lower, order_by, schema, state)?,
-                self.resolve_window_boundary_value(upper, order_by, schema, state)?,
+                self.resolve_window_boundary_value(lower, order_by, schema, state)
+                    .await?,
+                self.resolve_window_boundary_value(upper, order_by, schema, state)
+                    .await?,
             ),
         };
         Ok(WindowFrame::new_bounds(units, start, end))
     }
 
-    fn resolve_window_boundary(
+    async fn resolve_window_boundary(
         &self,
         expr: spec::Expr,
+        schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<ScalarValue> {
-        let spec::Expr::Literal(value) = expr else {
-            return Err(PlanError::invalid("window boundary must be a literal"));
-        };
-        self.resolve_literal(value, state)
+        if let spec::Expr::Literal(value) = expr {
+            return self.resolve_literal(value, state);
+        }
+        let resolved = self.resolve_expression(expr, schema, state).await?;
+        if let datafusion_expr::Expr::Literal(scalar, _) = resolved {
+            return Ok(scalar);
+        }
+        // Apply type coercion so that expressions like `CAST(0 AS INTERVAL SECOND)`
+        // have compatible types before physical evaluation.
+        let props = ExecutionProps::new();
+        let context = SimplifyContext::new(&props).with_schema(schema.clone());
+        let simplifier = ExprSimplifier::new(context);
+        let coerced = simplifier.coerce(resolved, schema).map_err(|e| {
+            PlanError::invalid(format!(
+                "window boundary must be a constant expression: {e}"
+            ))
+        })?;
+        let evaluator = LiteralEvaluator::new();
+        evaluator.evaluate(&coerced).map_err(|e| {
+            PlanError::invalid(format!(
+                "window boundary must be a constant expression: {e}"
+            ))
+        })
     }
 
-    fn resolve_window_boundary_offset(
+    async fn resolve_window_boundary_offset(
         &self,
         value: spec::WindowFrameBoundary,
+        schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<WindowFrameBound> {
         match value {
@@ -241,19 +271,19 @@ impl PlanResolver<'_> {
                 Ok(WindowFrameBound::Following(ScalarValue::UInt64(None)))
             }
             spec::WindowFrameBoundary::Preceding(expr) => {
-                let value = self.resolve_window_boundary(*expr, state)?;
+                let value = self.resolve_window_boundary(*expr, schema, state).await?;
                 Ok(WindowFrameBound::Preceding(
                     value.cast_to(&DataType::UInt64)?,
                 ))
             }
             spec::WindowFrameBoundary::Following(expr) => {
-                let value = self.resolve_window_boundary(*expr, state)?;
+                let value = self.resolve_window_boundary(*expr, schema, state).await?;
                 Ok(WindowFrameBound::Following(
                     value.cast_to(&DataType::UInt64)?,
                 ))
             }
             spec::WindowFrameBoundary::Value(expr) => {
-                let value = self.resolve_window_boundary(*expr, state)?;
+                let value = self.resolve_window_boundary(*expr, schema, state).await?;
                 let ScalarValue::Int64(Some(value)) = value.cast_to(&DataType::Int64)? else {
                     return Err(PlanError::invalid("invalid window boundary offset"));
                 };
@@ -272,13 +302,23 @@ impl PlanResolver<'_> {
         }
     }
 
-    fn resolve_window_boundary_value(
+    async fn resolve_window_boundary_value(
         &self,
         value: spec::WindowFrameBoundary,
         order_by: &[expr::Sort],
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<WindowFrameBound> {
+        // Helper to get the data type from the order_by expression for casting
+        let get_order_by_type = || -> PlanResult<DataType> {
+            let [order_by] = order_by else {
+                return Err(PlanError::invalid(
+                    "range window frame requires exactly one order by expression",
+                ));
+            };
+            Ok(order_by.expr.to_field(schema)?.1.data_type().clone())
+        };
+
         match value {
             spec::WindowFrameBoundary::CurrentRow => Ok(WindowFrameBound::CurrentRow),
             spec::WindowFrameBoundary::UnboundedPreceding => {
@@ -288,25 +328,39 @@ impl PlanResolver<'_> {
                 Ok(WindowFrameBound::Following(ScalarValue::Null))
             }
             spec::WindowFrameBoundary::Preceding(expr) => {
-                let value = self.resolve_window_boundary(*expr, state)?;
+                let value = self.resolve_window_boundary(*expr, schema, state).await?;
+                // Cast numeric boundaries to match the ORDER BY type.
+                // Non-numeric boundaries (e.g. INTERVAL for TIMESTAMP ORDER BY) are left as-is
+                // since DataFusion handles interval arithmetic directly.
+                let data_type = get_order_by_type()?;
+                let value = if data_type.is_numeric() {
+                    value.cast_to(&data_type)?
+                } else {
+                    value
+                };
                 Ok(WindowFrameBound::Preceding(value))
             }
             spec::WindowFrameBoundary::Following(expr) => {
-                let value = self.resolve_window_boundary(*expr, state)?;
+                let value = self.resolve_window_boundary(*expr, schema, state).await?;
+                let data_type = get_order_by_type()?;
+                let value = if data_type.is_numeric() {
+                    value.cast_to(&data_type)?
+                } else {
+                    value
+                };
                 Ok(WindowFrameBound::Following(value))
             }
             spec::WindowFrameBoundary::Value(expr) => {
-                let value = self.resolve_window_boundary(*expr, state)?;
+                let value = self.resolve_window_boundary(*expr, schema, state).await?;
                 if value.is_null() {
                     Err(PlanError::invalid("window boundary value cannot be null"))
                 } else {
-                    let [order_by] = order_by else {
-                        return Err(PlanError::invalid(
-                            "range window frame requires exactly one order by expression",
-                        ));
+                    let data_type = get_order_by_type()?;
+                    let value = if data_type.is_numeric() {
+                        value.cast_to(&data_type)?
+                    } else {
+                        value
                     };
-                    let data_type = order_by.expr.to_field(schema)?.1.data_type().clone();
-                    let value = value.cast_to(&data_type)?;
                     let zero = ScalarValue::new_zero(&data_type)?;
                     match value.partial_cmp(&zero) {
                         None => Err(PlanError::invalid(

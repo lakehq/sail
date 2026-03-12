@@ -34,19 +34,26 @@ message ExtendedPhysicalPlanNode {
     DeltaDiscoveryExecNode delta_discovery = 19;
     DeltaRemoveActionsExecNode delta_remove_actions = 20;
     DeltaLogReplayExecNode delta_log_replay = 21;
-    AvroExecNode avro = 22;
-    ConsoleSinkExecNode console_sink = 23;
-    SocketSourceExecNode socket_source = 24;
-    RateSourceExecNode rate_source = 25;
-    TextSinkExecNode text_sink = 26;
-    BinarySourceExecNode binary_source = 27;
-    StreamCollectorExecNode stream_collector = 28;
-    StreamLimitExecNode stream_limit = 29;
-    StreamFilterExecNode stream_filter = 30;
-    StreamSourceAdapterExecNode stream_source_adapter = 31;
-    IcebergWriterExecNode iceberg_writer = 32;
-    IcebergCommitExecNode iceberg_commit = 33;
-    MergeCardinalityCheckExecNode merge_cardinality_check = 34;
+    DeltaMetadataStatsExecNode delta_metadata_stats = 22;
+    AvroExecNode avro = 23;
+    ConsoleSinkExecNode console_sink = 24;
+    SocketSourceExecNode socket_source = 25;
+    RateSourceExecNode rate_source = 26;
+    TextSinkExecNode text_sink = 27;
+    BinarySourceExecNode binary_source = 28;
+    StreamCollectorExecNode stream_collector = 29;
+    StreamLimitExecNode stream_limit = 30;
+    StreamFilterExecNode stream_filter = 31;
+    StreamSourceAdapterExecNode stream_source_adapter = 32;
+    IcebergWriterExecNode iceberg_writer = 33;
+    IcebergCommitExecNode iceberg_commit = 34;
+    MergeCardinalityCheckExecNode merge_cardinality_check = 35;
+    PythonDataSourceExecNode python_data_source = 36;
+    MonotonicIdExecNode monotonic_id = 37;
+    PythonDataSourceWriteExecNode python_data_source_write = 38;
+    PythonDataSourceWriteCommitExecNode python_data_source_write_commit = 39;
+    CatalogCommandExecNode catalog_command = 40;
+    BarrierExecNode barrier = 41;
   }
 }
 
@@ -74,6 +81,7 @@ message ExtendedScalarUdf {
     TimestampNowUdf timestamp_now = 9;
     SparkTimestampUdf spark_timestamp = 10;
     SparkDateUdf spark_date = 11;
+    SparkFromCsvUdf spark_from_csv = 12;
   }
 }
 
@@ -150,6 +158,10 @@ message SparkTimestampUdf {
 
 message SparkDateUdf {
   bool is_try = 1;
+}
+
+message SparkFromCsvUdf {
+  string session_timezone = 1;
 }
 
 message StandardUdaf {}
@@ -283,6 +295,7 @@ message RangeExecNode {
   int64 step = 3;
   uint64 num_partitions = 4;
   bytes schema = 5;
+  repeated uint64 projection = 6;
 }
 
 message ShowStringExecNode {
@@ -404,8 +417,7 @@ message PartialSortExecNode {
 message AppendMode {}
 message OverwriteMode {}
 message OverwriteIfMode {
-  bytes condition = 1;
-  optional string source = 2;
+  optional string source = 1;
 }
 message ErrorIfExistsMode {}
 message IgnoreIfExistsMode {}
@@ -446,6 +458,14 @@ message DeltaScanByAddsExecNode {
   bytes input = 1;
   string table_url = 2;
   bytes table_schema = 3;
+  optional bytes output_schema = 4;
+  string scan_config_json = 5;
+  optional PhysicalProjection projection = 6;
+  optional uint64 limit = 7;
+  optional bytes pushdown_filter = 8;
+  int64 version = 9;
+  optional bytes statistics = 10;
+  // TODO: Consider snapshot hints (partition columns, kernel schema) to avoid worker log reads.
 }
 
 message DeltaDiscoveryExecNode {
@@ -456,6 +476,11 @@ message DeltaDiscoveryExecNode {
   optional bytes input = 5;
   repeated string input_partition_columns = 6;
   bool input_partition_scan = 7;
+}
+
+message DeltaMetadataStatsExecNode {
+  bytes input = 1;
+  bytes stats_schema = 2;
 }
 
 message DeltaRemoveActionsExecNode {
@@ -517,6 +542,12 @@ message MergeCardinalityCheckExecNode {
   string source_present_col = 4;
 }
 
+message MonotonicIdExecNode {
+  bytes input = 1;
+  string column_name = 2;
+  bytes schema = 3;
+}
+
 message JoinOn {
   bytes left = 1;
   bytes right = 2;
@@ -565,10 +596,63 @@ message IcebergCommitExecNode {
 }
 
 message DeltaLogReplayExecNode {
+  // Legacy single-input encoding for sort replay mode.
   bytes input = 1;
   string table_url = 2;
   int64 version = 3;
   repeated string partition_columns = 4;
   repeated string checkpoint_files = 5;
   repeated string commit_files = 6;
+  // Preferred encoding for hash replay mode.
+  optional bytes checkpoint_input = 7;
+  optional bytes commits_input = 8;
+}
+
+message PythonDataSourceInputPartition {
+  uint64 partition_id = 1;
+  bytes data = 2;
+}
+
+message PythonDataSourceExecNode {
+  // Pickled Python DataSourceReader instance (with filters already applied)
+  bytes pickled_reader = 1;
+  bytes schema = 2;
+  repeated PythonDataSourceInputPartition partitions = 3;
+}
+
+message PythonDataSourceWriteExecNode {
+  // Pickled Python DataSourceWriter instance obtained from
+  // DataSource.writer(schema, overwrite), ready for write(), commit(),
+  // and abort() calls (stateless boundary matches write_exec.rs).
+  bytes pickled_writer = 1;
+  // Schema of the data being written
+  bytes schema = 2;
+  // Whether writer is DataSourceArrowWriter (true) or DataSourceWriter (false)
+  bool is_arrow = 3;
+  // Input plan that generates data to write
+  bytes input = 4;
+}
+
+message PythonDataSourceWriteCommitExecNode {
+  // Pickled Python DataSourceWriter instance used for commit()/abort().
+  bytes pickled_writer = 1;
+  // Number of partition-level write results expected from the write stage.
+  uint64 expected_partitions = 2;
+  // Input plan that yields per-partition write results.
+  bytes input = 3;
+}
+
+message CatalogCommandExecNode {
+  // Schema for the command output.
+  bytes schema = 1;
+  // JSON-encoded CatalogCommand.
+  string command = 2;
+}
+
+message BarrierExecNode {
+  // Precondition plans to be exhausted before the main plan starts.
+  // Each element is a DataFusion PhysicalPlanNode encoded as bytes.
+  repeated bytes preconditions = 1;
+  // The main plan to execute after all preconditions are exhausted.
+  bytes plan = 2;
 }

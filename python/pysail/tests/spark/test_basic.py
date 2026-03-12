@@ -4,7 +4,7 @@ import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql.types import IntegerType, Row, StringType, StructField, StructType
 
-from pysail.tests.spark.utils import is_jvm_spark
+from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
 
 @pytest.fixture(scope="module")
@@ -386,6 +386,22 @@ def test_sql_parameters(spark):
     assert_frame_equal(actual, expected)
     actual = spark.sql("SELECT 1 AS text WHERE $foo > 'a'", {"foo": "b"}).toPandas()
     expected = pd.DataFrame({"text": [1]}).astype({"text": "int32"})
+    assert_frame_equal(actual, expected)
+
+
+@pytest.mark.skipif(
+    pyspark_version() < (4,),
+    reason="DataFrame arguments in spark.sql() require Spark 4+",
+)
+def test_sql_dataframe_argument(spark):
+    df = spark.range(10)
+    actual = spark.sql(
+        "SELECT * FROM {df} WHERE id > {bound1} AND id < :bound2",
+        df=df,
+        bound1=7,
+        args={"bound2": 9},
+    ).toPandas()
+    expected = pd.DataFrame({"id": [8]}, dtype="int64")
     assert_frame_equal(actual, expected)
 
 

@@ -10,7 +10,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::collections::HashMap;
 
@@ -255,7 +255,7 @@ async fn test_get_namespace() {
     }
 
     let get_db = rest_catalog.get_database(&namespace).await.unwrap();
-    assert_eq!(get_db.database, vec![namespace.to_string()]);
+    assert_eq!(get_db.database, Vec::<String>::from(namespace));
     for (key, value) in &properties {
         assert!(get_db
             .properties
@@ -657,7 +657,7 @@ async fn test_create_table() {
     assert_eq!(properties.len(), 15);
     assert_eq!(static_properties, expected_properties);
     assert!(properties.iter().any(|(k, v)| k == "metadata-location"
-        && v.starts_with("s3://icebergdata/demo/test_create_table.apple.ios/t1/metadata/")));
+        && v.starts_with("s3://icebergdata/demo/test_create_table/apple/ios/t1/metadata/")));
     assert!(properties
         .iter()
         .any(|(k, v)| k == "metadata.last-updated-ms" && !v.is_empty()));
@@ -672,7 +672,7 @@ async fn test_create_table() {
     assert_eq!(constraints, vec![]);
     assert_eq!(
         location,
-        Some("s3://icebergdata/demo/test_create_table.apple.ios/t1".to_string())
+        Some("s3://icebergdata/demo/test_create_table/apple/ios/t1".to_string())
     );
     assert_eq!(format, "iceberg".to_string());
     assert_eq!(partition_by, Vec::<String>::new());

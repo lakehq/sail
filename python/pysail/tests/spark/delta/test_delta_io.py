@@ -6,12 +6,9 @@ from pandas.testing import assert_frame_equal
 from pyspark.sql import functions as F  # noqa: N812
 from pyspark.sql.types import Row
 
-from ..utils import (  # noqa: TID252
-    assert_file_lifecycle,
-    escape_sql_string_literal,
-    get_data_files,
-    is_jvm_spark,
-)
+from pysail.testing.spark.utils.common import is_jvm_spark
+from pysail.testing.spark.utils.files import assert_file_lifecycle, get_data_files
+from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 
 class TestDeltaIO:

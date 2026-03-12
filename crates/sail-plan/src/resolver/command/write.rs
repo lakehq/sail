@@ -12,14 +12,14 @@ use sail_common::spec;
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableSort, TableColumnStatus, TableKind,
 };
-use sail_common_datafusion::datasource::{BucketBy, SinkMode};
+use sail_common_datafusion::datasource::{BucketBy, SinkMode, SourceInfo, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_common_datafusion::rename::schema::rename_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_logical_plan::barrier::BarrierNode;
 use sail_logical_plan::file_write::{FileWriteNode, FileWriteOptions};
-use sail_logical_plan::precondition::WithPreconditionsNode;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
@@ -71,7 +71,7 @@ pub(super) struct WritePlanBuilder {
     mode: Option<WriteMode>,
     format: Option<String>,
     partition: Vec<(spec::Identifier, Option<spec::Expr>)>,
-    partition_by: Vec<spec::Identifier>,
+    partition_by: Vec<CatalogPartitionField>,
     bucket_by: Option<spec::SaveBucketBy>,
     sort_by: Vec<spec::SortOrder>,
     cluster_by: Vec<spec::ObjectName>,
@@ -118,7 +118,7 @@ impl WritePlanBuilder {
         self
     }
 
-    pub fn with_partition_by(mut self, partition_by: Vec<spec::Identifier>) -> Self {
+    pub fn with_partition_by(mut self, partition_by: Vec<CatalogPartitionField>) -> Self {
         self.partition_by = partition_by;
         self
     }
@@ -291,7 +291,7 @@ impl PlanResolver<'_> {
                 } else if let Some(path) = options_map.get("path") {
                     file_write_options.path = path.to_string();
                 } else {
-                    file_write_options.path = self.resolve_default_table_location(&table)?;
+                    file_write_options.path = self.resolve_default_table_location(&table).await?;
                 }
                 if !table_properties.is_empty() {
                     file_write_options
@@ -323,13 +323,6 @@ impl PlanResolver<'_> {
                         comment: None,
                         default: None,
                         generated_always_as: None,
-                    })
-                    .collect();
-                let partition_by = partition_by
-                    .into_iter()
-                    .map(|x| CatalogPartitionField {
-                        column: x.into(),
-                        transform: None,
                     })
                     .collect();
                 let sort_by = self.resolve_catalog_table_sort(sort_by)?;
@@ -364,7 +357,7 @@ impl PlanResolver<'_> {
             node: Arc::new(FileWriteNode::new(Arc::new(input), file_write_options)),
         });
         Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(WithPreconditionsNode::new(preconditions, Arc::new(plan))),
+            node: Arc::new(BarrierNode::new(preconditions, Arc::new(plan))),
         }))
     }
 
@@ -432,7 +425,7 @@ impl PlanResolver<'_> {
         };
         match status.kind {
             TableKind::Table {
-                columns,
+                mut columns,
                 comment: _,
                 constraints: _,
                 location,
@@ -442,16 +435,67 @@ impl PlanResolver<'_> {
                 bucket_by,
                 options,
                 properties,
-            } => Ok(Some(TableInfo {
-                columns,
-                location,
-                format,
-                partition_by,
-                sort_by,
-                bucket_by,
-                options,
-                properties,
-            })),
+            } => {
+                // When a table is created without column definitions
+                // (e.g. `CREATE TABLE t USING fmt`), the catalog stores an empty column list.
+                // Discover the schema from the table format so that write operations
+                // (INSERT INTO) can validate the input schema correctly.
+                if columns.is_empty() {
+                    let registry = self.ctx.extension::<TableFormatRegistry>().map_err(|e| {
+                        PlanError::invalid(format!(
+                            "failed to access table format registry for table `{table:?}`: {e}",
+                        ))
+                    })?;
+                    let table_format = registry.get(&format).map_err(|e| {
+                        PlanError::invalid(format!(
+                            "failed to resolve table format `{format}` for table `{table:?}`: {e}",
+                        ))
+                    })?;
+                    let info = SourceInfo {
+                        paths: location.iter().cloned().collect(),
+                        schema: None,
+                        constraints: Default::default(),
+                        partition_by: vec![],
+                        bucket_by: None,
+                        sort_order: vec![],
+                        options: vec![options.iter().cloned().collect()],
+                    };
+                    let provider = table_format
+                        .create_provider(&self.ctx.state(), info)
+                        .await
+                        .map_err(|e| {
+                            PlanError::invalid(format!(
+                                "failed to infer schema for table `{table:?}` from format `{format}`: {e}",
+                            ))
+                        })?;
+                    columns = provider
+                        .schema()
+                        .fields()
+                        .iter()
+                        .map(|f| TableColumnStatus {
+                            name: f.name().clone(),
+                            data_type: f.data_type().clone(),
+                            nullable: f.is_nullable(),
+                            comment: None,
+                            default: None,
+                            generated_always_as: None,
+                            is_partition: false,
+                            is_bucket: false,
+                            is_cluster: false,
+                        })
+                        .collect();
+                }
+                Ok(Some(TableInfo {
+                    columns,
+                    location,
+                    format,
+                    partition_by,
+                    sort_by,
+                    bucket_by,
+                    options,
+                    properties,
+                }))
+            }
             _ => Ok(None),
         }
     }
@@ -536,9 +580,9 @@ impl PlanResolver<'_> {
 
     fn resolve_write_partition_by(
         &self,
-        partition_by: Vec<spec::Identifier>,
+        partition_by: Vec<CatalogPartitionField>,
     ) -> PlanResult<Vec<String>> {
-        Ok(partition_by.into_iter().map(|x| x.into()).collect())
+        Ok(partition_by.into_iter().map(|x| x.column).collect())
     }
 
     fn resolve_write_bucket_by(

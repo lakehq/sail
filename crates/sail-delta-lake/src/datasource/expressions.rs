@@ -29,7 +29,7 @@ use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::expressions::Column as PhysicalColumn;
 
-use crate::kernel::DeltaResult;
+use crate::spec::DeltaResult;
 
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
 

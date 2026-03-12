@@ -24,25 +24,19 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::Utc;
-use delta_kernel::table_features::TableFeature;
-use delta_kernel::table_properties::TableProperties;
 use futures::future::BoxFuture;
 use log::*;
-use object_store::path::Path;
-use object_store::Error as ObjectStoreError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use thiserror::Error;
 use uuid::Uuid;
 
-use crate::error::{DeltaError, KernelError};
 use crate::kernel::checkpoints::{cleanup_expired_logs_for, create_checkpoint_for};
-use crate::kernel::models::{Action, Metadata, Protocol, Transaction};
-use crate::kernel::snapshot::EagerSnapshot;
 use crate::kernel::transaction::conflict_checker::{TransactionInfo, WinningCommitSummary};
-use crate::kernel::{DeltaOperation, DeltaResult, TablePropertiesExt};
+use crate::kernel::DeltaOperation;
+use crate::spec::{temp_commit_path, Action, DeltaError, DeltaResult, Transaction};
+pub use crate::spec::{CommitConflictError, TransactionError};
 use crate::storage::{CommitOrBytes, LogStoreRef, ObjectStoreRef};
-use crate::table::DeltaTableState;
+use crate::table::DeltaSnapshot;
 
 mod conflict_checker;
 mod protocol;
@@ -50,7 +44,6 @@ mod protocol;
 use conflict_checker::ConflictChecker;
 pub use protocol::INSTANCE as PROTOCOL;
 
-const DELTA_LOG_FOLDER: &str = "_delta_log";
 pub(crate) const DEFAULT_RETRIES: usize = 15;
 
 #[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
@@ -74,7 +67,7 @@ pub struct Metrics {
     pub num_log_files_cleaned_up: u64,
 }
 
-#[derive(Default, Debug, PartialEq, Clone)]
+#[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub struct OperationMetrics {
     pub num_files: Option<u64>,
     pub num_output_rows: Option<u64>,
@@ -82,6 +75,10 @@ pub struct OperationMetrics {
     pub execution_time_ms: Option<u64>,
     pub num_removed_files: Option<u64>,
     pub num_added_files: Option<u64>,
+    pub num_output_files: Option<u64>,
+    pub num_added_bytes: Option<u64>,
+    pub num_removed_bytes: Option<u64>,
+    pub write_time_ms: Option<u64>,
     pub extra: HashMap<String, Value>,
 }
 
@@ -106,7 +103,41 @@ impl OperationMetrics {
         if let Some(v) = self.num_added_files {
             out.insert("numAddedFiles".to_string(), Value::from(v));
         }
+        if let Some(v) = self.num_output_files {
+            out.insert("numOutputFiles".to_string(), Value::from(v));
+        }
+        if let Some(v) = self.num_added_bytes {
+            out.insert("numAddedBytes".to_string(), Value::from(v));
+        }
+        if let Some(v) = self.num_removed_bytes {
+            out.insert("numRemovedBytes".to_string(), Value::from(v));
+        }
+        if let Some(v) = self.write_time_ms {
+            out.insert("writeTimeMs".to_string(), Value::from(v));
+        }
         out
+    }
+
+    pub fn merge(&mut self, other: Self) {
+        fn merge_opt(target: &mut Option<u64>, source: Option<u64>) {
+            if let Some(source) = source {
+                let merged = target.unwrap_or_default().saturating_add(source);
+                *target = Some(merged);
+            }
+        }
+
+        merge_opt(&mut self.num_files, other.num_files);
+        merge_opt(&mut self.num_output_rows, other.num_output_rows);
+        merge_opt(&mut self.num_output_bytes, other.num_output_bytes);
+        merge_opt(&mut self.execution_time_ms, other.execution_time_ms);
+        merge_opt(&mut self.num_removed_files, other.num_removed_files);
+        merge_opt(&mut self.num_added_files, other.num_added_files);
+        merge_opt(&mut self.num_output_files, other.num_output_files);
+        merge_opt(&mut self.num_added_bytes, other.num_added_bytes);
+        merge_opt(&mut self.num_removed_bytes, other.num_removed_bytes);
+        merge_opt(&mut self.write_time_ms, other.write_time_ms);
+
+        self.extra.extend(other.extra);
     }
 }
 
@@ -129,6 +160,10 @@ impl From<HashMap<String, Value>> for OperationMetrics {
         let execution_time_ms = take_u64(&mut value, "executionTimeMs");
         let num_removed_files = take_u64(&mut value, "numRemovedFiles");
         let num_added_files = take_u64(&mut value, "numAddedFiles");
+        let num_output_files = take_u64(&mut value, "numOutputFiles");
+        let num_added_bytes = take_u64(&mut value, "numAddedBytes");
+        let num_removed_bytes = take_u64(&mut value, "numRemovedBytes");
+        let write_time_ms = take_u64(&mut value, "writeTimeMs");
 
         Self {
             num_files,
@@ -137,48 +172,25 @@ impl From<HashMap<String, Value>> for OperationMetrics {
             execution_time_ms,
             num_removed_files,
             num_added_files,
+            num_output_files,
+            num_added_bytes,
+            num_removed_bytes,
+            write_time_ms,
             extra: value,
         }
     }
 }
 
-#[derive(Error, Debug)]
-pub enum TransactionError {
-    #[error("Tried committing existing table version: {0}")]
-    VersionAlreadyExists(i64),
-
-    #[error("Error serializing commit log to json: {json_err}")]
-    SerializeLogJson { json_err: serde_json::error::Error },
-
-    #[error("Log storage error: {source}")]
-    ObjectStore {
-        #[from]
-        source: ObjectStoreError,
-    },
-
-    #[error("Failed to commit transaction: {0}")]
-    CommitConflict(#[from] conflict_checker::CommitConflictError),
-
-    #[error("Failed to commit transaction: {0}")]
-    MaxCommitAttempts(i32),
-
-    #[error(
-        "The transaction includes Remove action with data change but Delta table is append-only"
-    )]
-    DeltaTableAppendOnly,
-
-    #[error("Unsupported table features required: {0:?}")]
-    UnsupportedTableFeatures(Vec<TableFeature>),
-
-    #[error("Table features must be specified, please specify: {0:?}")]
-    TableFeaturesRequired(TableFeature),
-
-    #[error("Transaction failed: {msg}")]
-    LogStoreError {
-        msg: String,
-        #[source]
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
-    },
+fn actions_to_log_bytes(actions: &[Action]) -> Result<Bytes, TransactionError> {
+    let mut buf: Vec<u8> = Vec::new();
+    for (index, action) in actions.iter().enumerate() {
+        if index > 0 {
+            buf.push(b'\n');
+        }
+        serde_json::to_writer(&mut buf, action)
+            .map_err(|e| TransactionError::SerializeLogJson { json_err: e })?;
+    }
+    Ok(Bytes::from(buf))
 }
 
 #[derive(Debug)]
@@ -245,16 +257,7 @@ impl CommitData {
     }
 
     pub fn get_bytes(&self) -> Result<Bytes, TransactionError> {
-        // Write newline-delimited JSON without building intermediate Strings.
-        let mut buf: Vec<u8> = Vec::new();
-        for (i, action) in self.actions.iter().enumerate() {
-            if i > 0 {
-                buf.push(b'\n');
-            }
-            serde_json::to_writer(&mut buf, action)
-                .map_err(|e| TransactionError::SerializeLogJson { json_err: e })?;
-        }
-        Ok(Bytes::from(buf))
+        actions_to_log_bytes(&self.actions)
     }
 
     fn is_blind_append(actions: &[Action], operation: &DeltaOperation) -> bool {
@@ -282,58 +285,6 @@ pub trait CustomExecuteHandler: Send + Sync {
         file_operation: bool,
         operation_id: Uuid,
     ) -> DeltaResult<()>;
-}
-
-/// Reference to some structure that contains mandatory attributes for performing a commit.
-pub trait TableReference: Send + Sync {
-    /// Well known table configuration
-    fn config(&self) -> &TableProperties;
-
-    /// Get the table protocol of the snapshot
-    fn protocol(&self) -> &Protocol;
-
-    /// Get the table metadata of the snapshot
-    #[allow(dead_code)]
-    fn metadata(&self) -> &Metadata;
-
-    /// Try to cast this table reference to a `EagerSnapshot`
-    fn eager_snapshot(&self) -> &EagerSnapshot;
-}
-
-impl TableReference for EagerSnapshot {
-    fn protocol(&self) -> &Protocol {
-        EagerSnapshot::protocol(self)
-    }
-
-    fn metadata(&self) -> &Metadata {
-        EagerSnapshot::metadata(self)
-    }
-
-    fn config(&self) -> &TableProperties {
-        self.table_properties()
-    }
-
-    fn eager_snapshot(&self) -> &EagerSnapshot {
-        self
-    }
-}
-
-impl TableReference for DeltaTableState {
-    fn config(&self) -> &TableProperties {
-        self.table_properties()
-    }
-
-    fn protocol(&self) -> &Protocol {
-        EagerSnapshot::protocol(self)
-    }
-
-    fn metadata(&self) -> &Metadata {
-        EagerSnapshot::metadata(self)
-    }
-
-    fn eager_snapshot(&self) -> &EagerSnapshot {
-        self
-    }
 }
 
 #[derive(Clone, Debug, Copy)]
@@ -465,7 +416,7 @@ impl Default for CommitBuilder {
     }
 }
 
-impl<'a> CommitBuilder {
+impl CommitBuilder {
     /// Actions to be included in the commit
     pub fn with_actions(mut self, actions: Vec<Action>) -> Self {
         self.actions = actions;
@@ -508,10 +459,10 @@ impl<'a> CommitBuilder {
     /// Prepare a Commit operation using the configured builder
     pub fn build(
         self,
-        table_data: Option<&'a dyn TableReference>,
+        table_data: Option<Arc<DeltaSnapshot>>,
         log_store: LogStoreRef,
         operation: DeltaOperation,
-    ) -> PreCommit<'a> {
+    ) -> PreCommit {
         let data = CommitData::new(
             self.actions,
             operation,
@@ -532,9 +483,9 @@ impl<'a> CommitBuilder {
 }
 
 /// Represents a commit that has not yet started but all details are finalized
-pub struct PreCommit<'a> {
+pub struct PreCommit {
     log_store: LogStoreRef,
-    table_data: Option<&'a dyn TableReference>,
+    table_data: Option<Arc<DeltaSnapshot>>,
     data: CommitData,
     max_retries: usize,
     post_commit_hook: Option<PostCommitHookProperties>,
@@ -542,18 +493,18 @@ pub struct PreCommit<'a> {
     operation_id: Uuid,
 }
 
-impl<'a> std::future::IntoFuture for PreCommit<'a> {
+impl std::future::IntoFuture for PreCommit {
     type Output = DeltaResult<FinalizedCommit>;
-    type IntoFuture = BoxFuture<'a, Self::Output>;
+    type IntoFuture = BoxFuture<'static, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move { self.into_prepared_commit_future().await?.await?.await })
     }
 }
 
-impl<'a> PreCommit<'a> {
+impl PreCommit {
     /// Prepare the commit but do not finalize it
-    pub fn into_prepared_commit_future(self) -> BoxFuture<'a, DeltaResult<PreparedCommit<'a>>> {
+    pub fn into_prepared_commit_future(self) -> BoxFuture<'static, DeltaResult<PreparedCommit>> {
         let this = self;
 
         // Write delta log entry as temporary file to storage. For the actual commit,
@@ -563,15 +514,19 @@ impl<'a> PreCommit<'a> {
             store: ObjectStoreRef,
         ) -> DeltaResult<CommitOrBytes> {
             let token = uuid::Uuid::new_v4().to_string();
-            let path = Path::from_iter([DELTA_LOG_FOLDER, &format!("_commit_{token}.json.tmp")]);
+            let path = temp_commit_path(&token);
             store.put(&path, log_entry.into()).await?;
             Ok(CommitOrBytes::TmpCommit(path))
         }
 
         Box::pin(async move {
             let local_actions: Vec<_> = this.data.actions.to_vec();
-            if let Some(table_reference) = this.table_data {
-                PROTOCOL.can_commit(table_reference, &local_actions, &this.data.operation)?;
+            if let Some(table_reference) = &this.table_data {
+                PROTOCOL.can_commit(
+                    table_reference.as_ref(),
+                    &local_actions,
+                    &this.data.operation,
+                )?;
             }
             let log_entry = this.data.get_bytes()?;
 
@@ -604,11 +559,11 @@ impl<'a> PreCommit<'a> {
 }
 
 /// Represents a inflight commit
-pub struct PreparedCommit<'a> {
+pub struct PreparedCommit {
     commit_or_bytes: CommitOrBytes,
     log_store: LogStoreRef,
     data: CommitData,
-    table_data: Option<&'a dyn TableReference>,
+    table_data: Option<Arc<DeltaSnapshot>>,
     max_retries: usize,
     post_commit: Option<PostCommitHookProperties>,
     post_commit_hook_handler: Option<Arc<dyn CustomExecuteHandler>>,
@@ -622,9 +577,9 @@ pub struct PreparedCommit<'a> {
 //     }
 // }
 
-impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
+impl std::future::IntoFuture for PreparedCommit {
     type Output = DeltaResult<PostCommit>;
-    type IntoFuture = BoxFuture<'a, Self::Output>;
+    type IntoFuture = BoxFuture<'static, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
         let this = self;
@@ -655,34 +610,26 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
             };
             let total_retries = effective_max_retries + 1;
 
-            let mut read_snapshot: Option<EagerSnapshot> = this
-                .table_data
-                .map(|table_ref| table_ref.eager_snapshot().clone());
+            let mut read_snapshot: Option<Arc<DeltaSnapshot>> = this.table_data.clone();
             let mut creation_actions_stripped = false;
             for attempt_number in 1..=total_retries {
                 let snapshot_version = read_snapshot.as_ref().map(|s| s.version()).unwrap_or(-1);
                 let latest_version = match this.log_store.get_latest_version(snapshot_version).await
                 {
                     Ok(v) => Some(v),
-                    Err(DeltaError::Kernel(KernelError::MissingVersion)) => None,
+                    Err(DeltaError::MissingVersion) => None,
                     Err(err) => return Err(err),
                 };
 
                 if let Some(latest_version) = latest_version {
-                    // Ensure we have a snapshot aligned to the latest version.
-                    if read_snapshot
-                        .as_ref()
-                        .map(|s| s.version() < latest_version)
-                        .unwrap_or(true)
-                    {
-                        let snapshot = EagerSnapshot::try_new(
+                    if read_snapshot.is_none() {
+                        let snapshot = DeltaSnapshot::try_new(
                             this.log_store.as_ref(),
                             Default::default(),
                             Some(latest_version),
                         )
                         .await?;
-
-                        read_snapshot = Some(snapshot);
+                        read_snapshot = Some(Arc::new(snapshot));
                     }
 
                     if let Some(snapshot) = &read_snapshot {
@@ -692,7 +639,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                             if let Some(txn_protocol) = creation_protocol.as_ref() {
                                 if txn_protocol != snapshot.protocol() {
                                     return Err(TransactionError::CommitConflict(
-                                        conflict_checker::CommitConflictError::ProtocolChanged(
+                                        CommitConflictError::ProtocolChanged(
                                             "protocol changed".into(),
                                         ),
                                     )
@@ -712,7 +659,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                                 });
                             if !metadata_compatible {
                                 return Err(TransactionError::CommitConflict(
-                                    conflict_checker::CommitConflictError::MetadataChanged,
+                                    CommitConflictError::MetadataChanged,
                                 )
                                 .into());
                             }
@@ -732,15 +679,8 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                                     }
                                 }
 
-                                let mut jsons = Vec::<String>::new();
-                                for action in &local_actions {
-                                    let json = serde_json::to_string(action).map_err(|e| {
-                                        TransactionError::SerializeLogJson { json_err: e }
-                                    })?;
-                                    jsons.push(json);
-                                }
                                 commit_or_bytes =
-                                    CommitOrBytes::LogBytes(Bytes::from(jsons.join("\n")));
+                                    CommitOrBytes::LogBytes(actions_to_log_bytes(&local_actions)?);
                                 creation_actions_stripped = true;
                             }
                         }
@@ -768,7 +708,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                                 )
                                 .await?;
                                 let transaction_info = TransactionInfo::try_new(
-                                    snapshot.log_data(),
+                                    snapshot,
                                     &local_actions,
                                     this.data.operation.read_whole_table(),
                                 )?;
@@ -787,7 +727,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                             }
                             // Update snapshot to latest version after successful conflict check
                             if let Some(snapshot) = &mut read_snapshot {
-                                snapshot
+                                Arc::make_mut(snapshot)
                                     .update(this.log_store.as_ref(), Some(latest_version as u64))
                                     .await?;
                             }
@@ -814,8 +754,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                                 .map(|v| v.cleanup_expired_logs)
                                 .unwrap_or_default(),
                             log_store: this.log_store,
-                            table_data: read_snapshot
-                                .map(|snapshot| Box::new(snapshot) as Box<dyn TableReference>),
+                            table_data: read_snapshot,
                             custom_execute_handler: this.post_commit_hook_handler,
                             metrics: CommitMetrics {
                                 num_retries: attempt_number as u64 - 1,
@@ -845,38 +784,40 @@ pub struct PostCommit {
     /// The winning version number of the commit
     pub version: i64,
     /// The data that was committed to the log store
-    #[allow(unused)]
+    #[expect(unused)]
     pub data: CommitData,
     create_checkpoint: bool,
     cleanup_expired_logs: Option<bool>,
     log_store: LogStoreRef,
-    table_data: Option<Box<dyn TableReference>>,
+    table_data: Option<Arc<DeltaSnapshot>>,
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
     metrics: CommitMetrics,
 }
 
 impl PostCommit {
     /// Runs the post commit activities
-    async fn run_post_commit_hook(&self) -> DeltaResult<(DeltaTableState, PostCommitMetrics)> {
+    async fn run_post_commit_hook(&self) -> DeltaResult<(Arc<DeltaSnapshot>, PostCommitMetrics)> {
         let post_commit_operation_id = Uuid::new_v4();
 
         // Always construct a state for the committed version so checkpoint + cleanup can run
         // even when `table_data` isn't available (e.g. planner didn't provide a snapshot).
-        let mut state = if let Some(table) = &self.table_data {
-            let mut snapshot = table.eager_snapshot().clone();
+        let mut state = if let Some(snapshot) = &self.table_data {
+            let mut snapshot = Arc::clone(snapshot);
             if self.version != snapshot.version() {
-                snapshot
+                Arc::make_mut(&mut snapshot)
                     .update(self.log_store.as_ref(), Some(self.version as u64))
                     .await?;
             }
-            DeltaTableState { snapshot }
+            snapshot
         } else {
-            DeltaTableState::try_new(
-                self.log_store.as_ref(),
-                Default::default(),
-                Some(self.version),
+            Arc::new(
+                DeltaSnapshot::try_new(
+                    self.log_store.as_ref(),
+                    Default::default(),
+                    Some(self.version),
+                )
+                .await?,
             )
-            .await?
         };
 
         let cleanup_logs = if let Some(cleanup_logs) = self.cleanup_expired_logs {
@@ -901,7 +842,7 @@ impl PostCommit {
             // Execute create checkpoint hook
             new_checkpoint_created = self
                 .create_checkpoint(
-                    &state,
+                    state.as_ref(),
                     &self.log_store,
                     self.version,
                     post_commit_operation_id,
@@ -924,12 +865,14 @@ impl PostCommit {
             )
             .await? as u64;
             if num_log_files_cleaned_up > 0 {
-                state = DeltaTableState::try_new(
-                    self.log_store.as_ref(),
-                    state.load_config().clone(),
-                    Some(self.version),
-                )
-                .await?;
+                state = Arc::new(
+                    DeltaSnapshot::try_new(
+                        self.log_store.as_ref(),
+                        state.load_config().clone(),
+                        Some(self.version),
+                    )
+                    .await?,
+                );
             }
         }
 
@@ -954,7 +897,7 @@ impl PostCommit {
     }
     async fn create_checkpoint(
         &self,
-        table_state: &DeltaTableState,
+        table_state: &DeltaSnapshot,
         log_store: &LogStoreRef,
         version: i64,
         operation_id: Uuid,
@@ -966,7 +909,7 @@ impl PostCommit {
             debug!("table_state.load_config().require_files=false; creating checkpoint via kernel snapshot anyway");
         }
 
-        let checkpoint_interval = table_state.config().checkpoint_interval().get() as i64;
+        let checkpoint_interval = table_state.table_properties().checkpoint_interval().get() as i64;
         // TODO: SQL `TBLPROPERTIES(delta.checkpointInterval)` isn't plumbed into `metaData.configuration` yet.
         if version >= 0 && (version % checkpoint_interval) == 0 {
             info!("Creating checkpoint for version {version}");
@@ -979,10 +922,9 @@ impl PostCommit {
 }
 
 /// A commit that successfully completed
-#[allow(unused)]
 pub struct FinalizedCommit {
     /// The new table state after a commit
-    pub snapshot: DeltaTableState,
+    pub snapshot: Arc<DeltaSnapshot>,
 
     /// Version of the finalized commit
     pub version: i64,
@@ -990,13 +932,14 @@ pub struct FinalizedCommit {
     /// Metrics associated with the commit operation
     pub metrics: Metrics,
 }
-#[allow(unused)]
 impl FinalizedCommit {
     /// The new table state after a commit
-    pub fn snapshot(&self) -> DeltaTableState {
+    #[expect(dead_code)]
+    pub fn snapshot(&self) -> Arc<DeltaSnapshot> {
         self.snapshot.clone()
     }
     /// Version of the finalized commit
+    #[expect(dead_code)]
     pub fn version(&self) -> i64 {
         self.version
     }

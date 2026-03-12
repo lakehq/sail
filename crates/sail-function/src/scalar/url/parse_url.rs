@@ -57,13 +57,12 @@ impl ParseUrl {
     /// * `Err(DataFusionError)` - If the URL is malformed and cannot be parsed
     ///
     fn parse(value: &str, part: &str, key: Option<&str>) -> Result<Option<String>> {
-        Url::parse(value)
-            .map_err(|e| exec_datafusion_err!("{e:?}"))
-            .map(|url| match part {
+        match Url::parse(value) {
+            Ok(url) => Ok(match part {
                 "HOST" => url.host_str().map(String::from),
                 "PATH" => {
-                    let path: String = url.path().to_string();
-                    let path: String = if path == "/" { "".to_string() } else { path };
+                    let path = url.path().to_string();
+                    let path = if path == "/" { "".to_string() } else { path };
                     Some(path)
                 }
                 "QUERY" => match key {
@@ -86,7 +85,7 @@ impl ParseUrl {
                 "USERINFO" => {
                     let username = url.username();
                     if username.is_empty() {
-                        return None;
+                        return Ok(None);
                     }
                     match url.password() {
                         Some(password) => Some(format!("{username}:{password}")),
@@ -94,7 +93,42 @@ impl ParseUrl {
                     }
                 }
                 _ => None,
-            })
+            }),
+            Err(url::ParseError::RelativeUrlWithoutBase) => {
+                // Spark's java.net.URI treats schemeless strings as relative URIs.
+                // Parse the components manually: path?query#fragment
+                let (without_fragment, fragment) = match value.find('#') {
+                    Some(i) => (&value[..i], Some(&value[i + 1..])),
+                    None => (value, None),
+                };
+                let (path, query) = match without_fragment.find('?') {
+                    Some(i) => (&without_fragment[..i], Some(&without_fragment[i + 1..])),
+                    None => (without_fragment, None),
+                };
+                Ok(match part {
+                    "PATH" => Some(path.to_string()),
+                    "QUERY" => match key {
+                        None => query.map(String::from),
+                        Some(key) => query.and_then(|q| {
+                            q.split('&')
+                                .filter_map(|pair| pair.split_once('='))
+                                .find(|(k, _)| *k == key)
+                                .map(|(_, v)| v.to_string())
+                        }),
+                    },
+                    "REF" => fragment.map(String::from),
+                    "FILE" => {
+                        let file = match query {
+                            Some(q) => format!("{path}?{q}"),
+                            None => path.to_string(),
+                        };
+                        Some(file)
+                    }
+                    _ => None,
+                })
+            }
+            Err(e) => Err(exec_datafusion_err!("{e:?}")),
+        }
     }
 }
 
@@ -146,7 +180,22 @@ impl ScalarUDFImpl for ParseUrl {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         match arg_types.len() {
-            2 | 3 if arg_types.iter().all(is_string_type) => Ok(arg_types.to_vec()),
+            2 | 3
+                if arg_types
+                    .iter()
+                    .all(|dt| is_string_type(dt) || dt == &DataType::Null) =>
+            {
+                Ok(arg_types
+                    .iter()
+                    .map(|dt| {
+                        if matches!(dt, DataType::Null) {
+                            DataType::Utf8
+                        } else {
+                            dt.clone()
+                        }
+                    })
+                    .collect())
+            }
             2 | 3 => plan_err!(
                 "`{}` expects STRING arguments, got {:?}",
                 &self.name(),
