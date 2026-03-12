@@ -68,13 +68,8 @@ pub fn url_to_object_path(url: &Url) -> Result<object_store::path::Path> {
     // object_store::path::Path requires slash-delimited paths.
     let p = p.replace('\\', "/");
     let path_no_leading = p.strip_prefix('/').unwrap_or(&p);
-    if is_file {
-        object_store::path::Path::parse(path_no_leading)
-            .map_err(|e| DataFusionError::External(Box::new(e)))
-    } else {
-        object_store::path::Path::parse(path_no_leading)
-            .map_err(|e| DataFusionError::External(Box::new(e)))
-    }
+    object_store::path::Path::parse(path_no_leading)
+        .map_err(|e| DataFusionError::External(Box::new(e)))
 }
 
 pub fn get_object_store_from_context(
