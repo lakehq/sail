@@ -34,25 +34,26 @@ message ExtendedPhysicalPlanNode {
     DeltaDiscoveryExecNode delta_discovery = 19;
     DeltaRemoveActionsExecNode delta_remove_actions = 20;
     DeltaLogReplayExecNode delta_log_replay = 21;
-    AvroExecNode avro = 22;
-    ConsoleSinkExecNode console_sink = 23;
-    SocketSourceExecNode socket_source = 24;
-    RateSourceExecNode rate_source = 25;
-    TextSinkExecNode text_sink = 26;
-    BinarySourceExecNode binary_source = 27;
-    StreamCollectorExecNode stream_collector = 28;
-    StreamLimitExecNode stream_limit = 29;
-    StreamFilterExecNode stream_filter = 30;
-    StreamSourceAdapterExecNode stream_source_adapter = 31;
-    IcebergWriterExecNode iceberg_writer = 32;
-    IcebergCommitExecNode iceberg_commit = 33;
-    MergeCardinalityCheckExecNode merge_cardinality_check = 34;
-    PythonDataSourceExecNode python_data_source = 35;
-    MonotonicIdExecNode monotonic_id = 36;
-    PythonDataSourceWriteExecNode python_data_source_write = 37;
-    PythonDataSourceWriteCommitExecNode python_data_source_write_commit = 38;
-    CatalogCommandExecNode catalog_command = 39;
-    BarrierExecNode barrier = 40;
+    DeltaMetadataStatsExecNode delta_metadata_stats = 22;
+    AvroExecNode avro = 23;
+    ConsoleSinkExecNode console_sink = 24;
+    SocketSourceExecNode socket_source = 25;
+    RateSourceExecNode rate_source = 26;
+    TextSinkExecNode text_sink = 27;
+    BinarySourceExecNode binary_source = 28;
+    StreamCollectorExecNode stream_collector = 29;
+    StreamLimitExecNode stream_limit = 30;
+    StreamFilterExecNode stream_filter = 31;
+    StreamSourceAdapterExecNode stream_source_adapter = 32;
+    IcebergWriterExecNode iceberg_writer = 33;
+    IcebergCommitExecNode iceberg_commit = 34;
+    MergeCardinalityCheckExecNode merge_cardinality_check = 35;
+    PythonDataSourceExecNode python_data_source = 36;
+    MonotonicIdExecNode monotonic_id = 37;
+    PythonDataSourceWriteExecNode python_data_source_write = 38;
+    PythonDataSourceWriteCommitExecNode python_data_source_write_commit = 39;
+    CatalogCommandExecNode catalog_command = 40;
+    BarrierExecNode barrier = 41;
   }
 }
 
@@ -475,6 +476,11 @@ message DeltaDiscoveryExecNode {
   optional bytes input = 5;
   repeated string input_partition_columns = 6;
   bool input_partition_scan = 7;
+}
+
+message DeltaMetadataStatsExecNode {
+  bytes input = 1;
+  bytes stats_schema = 2;
 }
 
 message DeltaRemoveActionsExecNode {

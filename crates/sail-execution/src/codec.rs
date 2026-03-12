@@ -87,7 +87,7 @@ use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
 use sail_delta_lake::physical_plan::{
     DeltaCastColumnExpr, DeltaCommitExec, DeltaDiscoveryExec, DeltaLogReplayExec,
-    DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
+    DeltaMetadataStatsExec, DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
 };
 use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
 use sail_function::aggregate::kurtosis::KurtosisFunction;
@@ -738,6 +738,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     input_partition_scan,
                 )?))
             }
+            NodeKind::DeltaMetadataStats(gen::DeltaMetadataStatsExecNode {
+                input,
+                stats_schema,
+            }) => {
+                let input = self.try_decode_plan(&input, ctx)?;
+                let stats_schema = Arc::new(self.try_decode_schema(&stats_schema)?);
+                Ok(Arc::new(DeltaMetadataStatsExec::new(input, stats_schema)))
+            }
             NodeKind::DeltaRemoveActions(gen::DeltaRemoveActionsExecNode { input }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 Ok(Arc::new(DeltaRemoveActionsExec::new(input)?))
@@ -1380,6 +1388,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 input_partition_columns: delta_discovery_exec.input_partition_columns().to_vec(),
                 input_partition_scan: delta_discovery_exec.input_partition_scan(),
+            })
+        } else if let Some(delta_metadata_stats_exec) =
+            node.as_any().downcast_ref::<DeltaMetadataStatsExec>()
+        {
+            NodeKind::DeltaMetadataStats(gen::DeltaMetadataStatsExecNode {
+                input: self.try_encode_plan(delta_metadata_stats_exec.input().clone())?,
+                stats_schema: self.try_encode_schema(delta_metadata_stats_exec.stats_schema())?,
             })
         } else if let Some(delta_remove_actions_exec) =
             node.as_any().downcast_ref::<DeltaRemoveActionsExec>()
