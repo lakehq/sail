@@ -508,79 +508,78 @@ impl DeltaWriterExec {
 
             // Build physical writer schema (use physical names and set parquet field ids)
             // Prefer schema from pending Metadata action (schema evolution) if present
-            let (writer_schema, physical_partition_columns, logical_kernel_for_mapping) = if !matches!(
-                effective_mode,
-                ColumnMappingMode::None
-            ) {
-                // Determine logical kernel schema (annotated for new tables; from snapshot for existing tables)
-                let logical_kernel: StructType = if let Some(meta_action_schema) = schema_actions
-                    .iter()
-                    .find_map(|a| match a {
-                        Action::Metadata(m) => Some(
-                            m.parse_schema()
-                                .map_err(|e| DataFusionError::External(Box::new(e))),
-                        ),
-                        _ => None,
-                    })
-                    .transpose()?
-                {
-                    meta_action_schema
-                } else if table_exists {
-                    let table = table.as_ref().ok_or_else(|| {
-                        DataFusionError::Internal(
-                            "table exists but was not loaded for column-mapped write planning"
-                                .to_string(),
+            let (writer_schema, physical_partition_columns, logical_kernel_for_mapping) =
+                if !matches!(effective_mode, ColumnMappingMode::None) {
+                    // Determine logical kernel schema (annotated for new tables; from snapshot for existing tables)
+                    let logical_kernel: StructType = if let Some(meta_action_schema) =
+                        schema_actions
+                            .iter()
+                            .find_map(|a| match a {
+                                Action::Metadata(m) => Some(
+                                    m.parse_schema()
+                                        .map_err(|e| DataFusionError::External(Box::new(e))),
+                                ),
+                                _ => None,
+                            })
+                            .transpose()?
+                    {
+                        meta_action_schema
+                    } else if table_exists {
+                        let table = table.as_ref().ok_or_else(|| {
+                            DataFusionError::Internal(
+                                "table exists but was not loaded for column-mapped write planning"
+                                    .to_string(),
+                            )
+                        })?;
+                        StructType::try_from(
+                            table
+                                .snapshot()
+                                .map_err(|e| DataFusionError::External(Box::new(e)))?
+                                .schema(),
                         )
-                    })?;
-                    StructType::try_from(
-                        table
-                            .snapshot()
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?
-                            .schema(),
-                    )
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?
-                } else {
-                    annotated_schema_opt.clone().ok_or_else(|| {
-                        DataFusionError::Plan(
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?
+                    } else {
+                        annotated_schema_opt.clone().ok_or_else(|| {
+                            DataFusionError::Plan(
                             "Annotated schema should be present for new table with column mapping"
                                 .to_string(),
                         )
-                    })?
+                        })?
+                    };
+
+                    // Build physical Arrow schema enriched with PARQUET:field_id
+                    let enriched_arrow = get_physical_schema(&logical_kernel, kernel_mode);
+                    let arc_schema = Arc::new(enriched_arrow);
+                    let writer_field_names: Vec<String> = arc_schema
+                        .fields()
+                        .iter()
+                        .map(|f| f.name().clone())
+                        .collect();
+                    log::trace!(
+                        "effective_mode: {:?}, writer_schema_fields: {:?}",
+                        effective_mode,
+                        &writer_field_names
+                    );
+
+                    // Resolve logical partition columns to their physical names so that the
+                    // writer can locate them in the batch when column mapping is enabled.
+                    let resolved_partitions = partition_columns
+                        .iter()
+                        .map(|logical_name| {
+                            let field = logical_kernel.field(logical_name).ok_or_else(|| {
+                                DataFusionError::Plan(format!(
+                                    "Partition column '{}' not found in logical schema",
+                                    logical_name
+                                ))
+                            })?;
+                            Ok(field.physical_name(kernel_mode).to_string())
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+
+                    (arc_schema, resolved_partitions, Some(logical_kernel))
+                } else {
+                    (final_schema.clone(), partition_columns.clone(), None)
                 };
-
-                // Build physical Arrow schema enriched with PARQUET:field_id
-                let enriched_arrow = get_physical_schema(&logical_kernel, kernel_mode);
-                let arc_schema = Arc::new(enriched_arrow);
-                let writer_field_names: Vec<String> = arc_schema
-                    .fields()
-                    .iter()
-                    .map(|f| f.name().clone())
-                    .collect();
-                log::trace!(
-                    "effective_mode: {:?}, writer_schema_fields: {:?}",
-                    effective_mode,
-                    &writer_field_names
-                );
-
-                // Resolve logical partition columns to their physical names so that the
-                // writer can locate them in the batch when column mapping is enabled.
-                let resolved_partitions = partition_columns
-                    .iter()
-                    .map(|logical_name| {
-                        let field = logical_kernel.field(logical_name).ok_or_else(|| {
-                            DataFusionError::Plan(format!(
-                                "Partition column '{}' not found in logical schema",
-                                logical_name
-                            ))
-                        })?;
-                        Ok(field.physical_name(kernel_mode).to_string())
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
-                (arc_schema, resolved_partitions, Some(logical_kernel))
-            } else {
-                (final_schema.clone(), partition_columns.clone(), None)
-            };
 
             let writer_config = WriterConfig::new(
                 writer_schema.clone(),

@@ -60,12 +60,7 @@ def test_delta_write_option_routes_table_property_to_metadata(spark, tmp_path: P
     base = tmp_path / "delta_write_option_checkpoint"
 
     df = spark.createDataFrame([Row(id=1), Row(id=2)])
-    (
-        df.write.format("delta")
-        .mode("overwrite")
-        .option("delta.checkpointInterval", "3")
-        .save(str(base))
-    )
+    (df.write.format("delta").mode("overwrite").option("delta.checkpointInterval", "3").save(str(base)))
 
     actual = spark.read.format("delta").load(str(base)).orderBy("id").collect()
     assert [row.id for row in actual] == [1, 2]
