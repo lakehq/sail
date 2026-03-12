@@ -195,3 +195,62 @@ Feature: Delta Lake Checkpoint
         EXPLAIN SELECT * FROM delta_checkpoint_explain_test ORDER BY id
         """
       Then query plan matches snapshot
+
+  @sail-only
+  Rule: EXPLAIN shows checkpoint parquet together with later JSON log commits
+
+    Background:
+      Given variable location for temporary directory delta_checkpoint_and_json_explain
+      Given variable delta_log for delta log of location
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_checkpoint_and_json_explain_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_checkpoint_and_json_explain_test (id INT)
+        USING DELTA
+        LOCATION {{ location.sql }}
+        OPTIONS (metadataAsDataRead 'true')
+        TBLPROPERTIES ('delta.checkpointInterval' = '3')
+        """
+      Given statement
+        """
+        INSERT INTO delta_checkpoint_and_json_explain_test VALUES (1)
+        """
+      Given statement
+        """
+        INSERT INTO delta_checkpoint_and_json_explain_test VALUES (2)
+        """
+      Given statement
+        """
+        INSERT INTO delta_checkpoint_and_json_explain_test VALUES (3)
+        """
+      Given statement
+        """
+        INSERT INTO delta_checkpoint_and_json_explain_test VALUES (4)
+        """
+      Given statement
+        """
+        INSERT INTO delta_checkpoint_and_json_explain_test VALUES (5)
+        """
+
+    Scenario: EXPLAIN SELECT references checkpoint parquet and later JSON commits in log replay
+      When query
+        """
+        EXPLAIN SELECT * FROM delta_checkpoint_and_json_explain_test ORDER BY id
+        """
+      Then delta log first commit protocol and metadata contains
+        | path                                                | value |
+        | metaData.configuration['delta.checkpointInterval'] | "3"   |
+      Then file tree in delta_log matches
+        """
+        📄 00000000000000000000.json
+        📄 00000000000000000001.json
+        📄 00000000000000000002.json
+        📄 00000000000000000003.checkpoint.parquet
+        📄 00000000000000000003.json
+        📄 00000000000000000004.json
+        📄 _last_checkpoint
+        """
+      Then query plan matches snapshot
