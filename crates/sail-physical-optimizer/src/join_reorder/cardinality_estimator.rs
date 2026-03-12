@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use datafusion::common::NullEquality;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::Operator;
 use datafusion::physical_expr::expressions::BinaryExpr;
@@ -61,6 +62,8 @@ pub struct CardinalityEstimator {
     column_to_equiv_set: HashMap<StableColumn, usize>,
     /// Mapping from (relation_id, column_index) to initial distinct_count
     initial_distinct_counts: HashMap<StableColumn, f64>,
+    /// Null fraction (0.0 to 1.0) for each column.
+    null_fractions: HashMap<StableColumn, f64>,
 }
 
 impl CardinalityEstimator {
@@ -71,9 +74,10 @@ impl CardinalityEstimator {
             equivalence_sets: vec![],
             column_to_equiv_set: HashMap::new(),
             initial_distinct_counts: HashMap::new(),
+            null_fractions: HashMap::new(),
         };
 
-        estimator.populate_initial_distinct_counts();
+        estimator.populate_column_statistics();
         estimator.init_equivalence_sets();
 
         trace!(
@@ -95,25 +99,50 @@ impl CardinalityEstimator {
         estimator
     }
 
-    /// Populate initial distinct counts from query graph statistics.
-    fn populate_initial_distinct_counts(&mut self) {
+    /// Populate column statistics from query graph: distinct counts and null fractions.
+    fn populate_column_statistics(&mut self) {
         for relation in &self.graph.relations {
             let relation_id = relation.relation_id;
+            // Use base_cardinality as denominator for null fraction: column stats
+            // (including null_count) reflect the pre-filter table, not the post-filter
+            // initial_cardinality. Using initial_cardinality after FilterExec would
+            // inflate null fractions (often clamping to 1.0).
+            let row_count = relation.base_cardinality;
+            let schema = relation.plan.schema();
             let column_stats = &relation.statistics.column_statistics;
             for (column_index, stats) in column_stats.iter().enumerate() {
-                let distinct_count = stats.distinct_count;
+                let name = schema
+                    .fields()
+                    .get(column_index)
+                    .map(|f| f.name().clone())
+                    .unwrap_or_else(|| format!("col_{}", column_index));
                 let stable_col = StableColumn {
                     relation_id,
                     column_index,
-                    name: format!("col_{}", column_index),
+                    name,
                 };
-                // DataFusion's distinct_count is a Precision enum
-                let count_val = match distinct_count {
-                    datafusion::common::stats::Precision::Exact(c) => c as f64,
-                    datafusion::common::stats::Precision::Inexact(c) => c as f64,
-                    datafusion::common::stats::Precision::Absent => continue, // Skip if absent
-                };
-                self.initial_distinct_counts.insert(stable_col, count_val);
+
+                // Extract distinct_count
+                match stats.distinct_count {
+                    datafusion::common::stats::Precision::Exact(c)
+                    | datafusion::common::stats::Precision::Inexact(c) => {
+                        self.initial_distinct_counts
+                            .insert(stable_col.clone(), c as f64);
+                    }
+                    datafusion::common::stats::Precision::Absent => {}
+                }
+
+                // Extract null fraction
+                if row_count > 0.0 {
+                    match stats.null_count {
+                        datafusion::common::stats::Precision::Exact(n)
+                        | datafusion::common::stats::Precision::Inexact(n) => {
+                            let fraction = (n as f64 / row_count).min(1.0);
+                            self.null_fractions.insert(stable_col, fraction);
+                        }
+                        datafusion::common::stats::Precision::Absent => {}
+                    }
+                }
             }
         }
     }
@@ -289,7 +318,7 @@ impl CardinalityEstimator {
         let mut denominator = 1.0;
         let contained_edges = self.get_edges_contained_in_set(join_set);
 
-        for edge in contained_edges {
+        for edge in &contained_edges {
             // For each edge, find TDom of its join keys
             let tdom = self.get_tdom_for_edge(edge);
             if tdom > 1.0 {
@@ -297,7 +326,12 @@ impl CardinalityEstimator {
             }
         }
 
-        numerator / denominator
+        // Compute null adjustment by collecting unique columns across all contained edges.
+        // A column that appears in multiple edges (e.g., a fact key joined to several
+        // dimensions) should only contribute its (1 - null_fraction) factor once.
+        let null_adjustment = self.null_adjustment_for_edges(contained_edges.iter().copied());
+
+        numerator / denominator * null_adjustment
     }
 
     /// Get all edges that are completely contained within the given join_set.
@@ -307,6 +341,33 @@ impl CardinalityEstimator {
             .iter()
             .filter(|edge| edge.join_set.is_subset(&join_set))
             .collect()
+    }
+
+    /// Compute the null adjustment factor for a set of join edges.
+    ///
+    /// Each unique column contributes its `(1 - null_fraction)` factor exactly once,
+    /// even when the same column appears in multiple edges (e.g., a fact key joined to
+    /// several dimension tables). Edges with `NullEqualsNull` semantics are skipped
+    /// because NULLs can match in those joins.
+    fn null_adjustment_for_edges<'a>(&self, edges: impl IntoIterator<Item = &'a JoinEdge>) -> f64 {
+        let mut seen = std::collections::HashSet::new();
+        let mut adjustment = 1.0;
+        for edge in edges {
+            if edge.null_equality == NullEquality::NullEqualsNull {
+                continue;
+            }
+            for (left_col, right_col) in &edge.equi_pairs {
+                if seen.insert(left_col) {
+                    let non_null = 1.0 - self.null_fractions.get(left_col).copied().unwrap_or(0.0);
+                    adjustment *= non_null;
+                }
+                if seen.insert(right_col) {
+                    let non_null = 1.0 - self.null_fractions.get(right_col).copied().unwrap_or(0.0);
+                    adjustment *= non_null;
+                }
+            }
+        }
+        adjustment
     }
 
     /// Get a domain cardinality (TDom) for a join edge.
@@ -409,7 +470,14 @@ impl CardinalityEstimator {
             }
         }
 
-        left_card * right_card * selectivity
+        // Null-aware adjustment: each column contributes (1 - null_fraction) once.
+        let null_adjustment = self.null_adjustment_for_edges(
+            connecting_edge_indices
+                .iter()
+                .map(|&idx| &self.graph.edges[idx]),
+        );
+
+        left_card * right_card * selectivity * null_adjustment
     }
 
     /// Helper function to determine if an edge contains non-equi filter conditions.
@@ -724,6 +792,71 @@ mod tests {
             .unwrap()
             .union(&JoinSet::new_singleton(2).unwrap());
         assert_eq!(estimator.get_edges_contained_in_set(s02).len(), 0);
+    }
+
+    /// Helper to create a graph with two relations that have specific null counts.
+    fn create_graph_with_null_stats(
+        r0_rows: usize,
+        r0_null_count: usize,
+        r1_rows: usize,
+        r1_null_count: usize,
+    ) -> QueryGraph {
+        use datafusion::common::stats::{ColumnStatistics, Precision};
+
+        let mut graph = QueryGraph::new();
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, true)]));
+
+        for (id, rows, nulls) in [(0, r0_rows, r0_null_count), (1, r1_rows, r1_null_count)] {
+            let plan = Arc::new(EmptyExec::new(schema.clone()));
+            let stats = Statistics {
+                num_rows: Precision::Exact(rows),
+                total_byte_size: Precision::Absent,
+                column_statistics: vec![ColumnStatistics {
+                    null_count: Precision::Exact(nulls),
+                    max_value: Precision::Absent,
+                    min_value: Precision::Absent,
+                    distinct_count: Precision::Exact(rows.saturating_sub(nulls)),
+                    sum_value: Precision::Absent,
+                    byte_size: Precision::Absent,
+                }],
+            };
+            let relation = RelationNode::new(plan, id, rows as f64, rows as f64, stats);
+            graph.add_relation(relation);
+        }
+
+        graph
+    }
+
+    /// Helper to add an equi-join edge between R0.col0 and R1.col0.
+    fn add_equi_edge(graph: &mut QueryGraph) {
+        use datafusion::logical_expr::JoinType;
+        use datafusion::physical_expr::expressions::{BinaryExpr, Column};
+        use datafusion::physical_expr::PhysicalExpr;
+
+        let l: Arc<dyn PhysicalExpr> = Arc::new(Column::new("id", 0));
+        let r: Arc<dyn PhysicalExpr> = Arc::new(Column::new("id", 0));
+        let filter = Arc::new(BinaryExpr::new(l, Operator::Eq, r)) as Arc<dyn PhysicalExpr>;
+        let js = JoinSet::new_singleton(0)
+            .unwrap()
+            .union(&JoinSet::new_singleton(1).unwrap());
+        let edge = JoinEdge::new(
+            js,
+            filter,
+            JoinType::Inner,
+            vec![(
+                StableColumn {
+                    relation_id: 0,
+                    column_index: 0,
+                    name: "id".into(),
+                },
+                StableColumn {
+                    relation_id: 1,
+                    column_index: 0,
+                    name: "id".into(),
+                },
+            )],
+        );
+        let _ = graph.add_edge(edge);
     }
 
     #[test]
@@ -1076,5 +1209,213 @@ mod tests {
         // the smaller input (R0 has 1000 rows).
         assert!((estimator.get_tdom_for_edge(edges[0]) - 1000.0).abs() < 1e-9);
         Ok(())
+    }
+
+    #[test]
+    fn test_null_fraction_reduces_join_cardinality() {
+        // R0: 1000 rows, 200 nulls (20% null)
+        // R1: 1000 rows, 500 nulls (50% null)
+        let mut graph = create_graph_with_null_stats(1000, 200, 1000, 500);
+        add_equi_edge(&mut graph);
+        let estimator = CardinalityEstimator::new(graph);
+
+        // Without nulls: 1000 * 1000 / tdom * 1.0
+        // With nulls: ... * (0.8 * 0.5) = ... * 0.4
+        let card = estimator.estimate_join_cardinality(1000.0, 1000.0, &[0]);
+
+        // Without null adjustment: 1000 * 1000 / 800 = 1250
+        // With null adjustment: 1250 * 0.8 * 0.5 = 500
+        assert!((card - 500.0).abs() < 1.0, "expected ~500, got {card}");
+    }
+
+    #[test]
+    fn test_no_nulls_no_adjustment() {
+        // R0: 1000 rows, 0 nulls
+        // R1: 2000 rows, 0 nulls
+        let mut graph = create_graph_with_null_stats(1000, 0, 2000, 0);
+        add_equi_edge(&mut graph);
+        let estimator = CardinalityEstimator::new(graph);
+
+        let card = estimator.estimate_join_cardinality(1000.0, 2000.0, &[0]);
+
+        // distinct_count: R0=1000, R1=2000 → max_known_distinct = 2000
+        // But TDom is capped by min_base_card = min(1000, 2000) = 1000
+        // card = 1000 * 2000 / 1000 * 1.0 = 2000
+        assert!((card - 2000.0).abs() < 1.0, "expected ~2000, got {card}");
+    }
+
+    #[test]
+    fn test_absent_null_stats_no_adjustment() {
+        // When null_count is Absent, null_fractions map is empty,
+        // unwrap_or(0.0) means no adjustment — same as before.
+        let graph = create_test_graph(); // uses Statistics::new_unknown
+        let estimator = CardinalityEstimator::new(graph);
+
+        // No edges, so null_fractions won't affect anything.
+        // But verify the map is empty for unknown stats.
+        assert!(
+            estimator.null_fractions.is_empty(),
+            "null_fractions should be empty for unknown stats"
+        );
+    }
+
+    #[test]
+    fn test_all_nulls_minimal_cardinality() {
+        // R0: 1000 rows, 1000 nulls (100% null)
+        // R1: 1000 rows, 0 nulls
+        let mut graph = create_graph_with_null_stats(1000, 1000, 1000, 0);
+        add_equi_edge(&mut graph);
+        let estimator = CardinalityEstimator::new(graph);
+
+        let card = estimator.estimate_join_cardinality(1000.0, 1000.0, &[0]);
+
+        // null_adjustment = (1 - 1.0) * (1 - 0.0) = 0.0
+        // card = ... * 0.0 = 0.0
+        assert!(card.abs() < 0.01, "expected 0.0, got {card}");
+    }
+
+    #[test]
+    fn test_null_equals_null_skips_adjustment() {
+        // R0: 1000 rows, 500 nulls (50%)
+        // R1: 1000 rows, 500 nulls (50%)
+        // With NullEqualsNothing: adjustment = (1-0.5)*(1-0.5) = 0.25
+        // With NullEqualsNull: adjustment = 1.0 (no penalty)
+        let mut graph = create_graph_with_null_stats(1000, 500, 1000, 500);
+        add_equi_edge(&mut graph);
+        // Override null_equality to NullEqualsNull
+        graph.edges[0].null_equality = NullEquality::NullEqualsNull;
+        let estimator = CardinalityEstimator::new(graph);
+
+        let card = estimator.estimate_join_cardinality(1000.0, 1000.0, &[0]);
+
+        // TDom = max(500, 500) = 500
+        // card = 1000 * 1000 / 500 * 1.0 = 2000 (no null penalty)
+        assert!(
+            (card - 2000.0).abs() < 1.0,
+            "expected ~2000 with NullEqualsNull, got {card}"
+        );
+    }
+
+    #[test]
+    fn test_shared_column_deduplication_in_null_adjustment() {
+        // Star schema: fact(fk) joins dim1(pk) and dim2(pk) on the same fact.fk column.
+        // fact.fk has 20% nulls. Without dedup, (1-0.2) is applied twice = 0.64.
+        // With dedup, (1-0.2) is applied once for fact.fk = 0.8 (times dim non-null factors).
+        use datafusion::common::stats::{ColumnStatistics, Precision};
+        use datafusion::logical_expr::JoinType;
+        use datafusion::physical_expr::expressions::{BinaryExpr, Column};
+        use datafusion::physical_expr::PhysicalExpr;
+
+        let mut graph = QueryGraph::new();
+        let schema = Arc::new(Schema::new(vec![Field::new("fk", DataType::Int32, true)]));
+
+        // Fact table: 1000 rows, 200 nulls on fk
+        let fact_stats = Statistics {
+            num_rows: Precision::Exact(1000),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Exact(200),
+                distinct_count: Precision::Exact(800),
+                ..ColumnStatistics::default()
+            }],
+        };
+        graph.add_relation(RelationNode::new(
+            Arc::new(EmptyExec::new(schema.clone())),
+            0,
+            1000.0,
+            1000.0,
+            fact_stats,
+        ));
+
+        // dim1: 100 rows, 0 nulls
+        let dim1_stats = Statistics {
+            num_rows: Precision::Exact(100),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Exact(0),
+                distinct_count: Precision::Exact(100),
+                ..ColumnStatistics::default()
+            }],
+        };
+        graph.add_relation(RelationNode::new(
+            Arc::new(EmptyExec::new(schema.clone())),
+            1,
+            100.0,
+            100.0,
+            dim1_stats,
+        ));
+
+        // dim2: 50 rows, 0 nulls
+        let dim2_stats = Statistics {
+            num_rows: Precision::Exact(50),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Exact(0),
+                distinct_count: Precision::Exact(50),
+                ..ColumnStatistics::default()
+            }],
+        };
+        graph.add_relation(RelationNode::new(
+            Arc::new(EmptyExec::new(schema.clone())),
+            2,
+            50.0,
+            50.0,
+            dim2_stats,
+        ));
+
+        let fact_col = StableColumn {
+            relation_id: 0,
+            column_index: 0,
+            name: "fk".into(),
+        };
+        let dim1_col = StableColumn {
+            relation_id: 1,
+            column_index: 0,
+            name: "fk".into(),
+        };
+        let dim2_col = StableColumn {
+            relation_id: 2,
+            column_index: 0,
+            name: "fk".into(),
+        };
+
+        // Edge 0: fact.fk = dim1.fk
+        let l0: Arc<dyn PhysicalExpr> = Arc::new(Column::new("fk", 0));
+        let r0: Arc<dyn PhysicalExpr> = Arc::new(Column::new("fk", 0));
+        let filter0 = Arc::new(BinaryExpr::new(l0, Operator::Eq, r0)) as Arc<dyn PhysicalExpr>;
+        let js0 = JoinSet::new_singleton(0)
+            .unwrap()
+            .union(&JoinSet::new_singleton(1).unwrap());
+        let _ = graph.add_edge(JoinEdge::new(
+            js0,
+            filter0,
+            JoinType::Inner,
+            vec![(fact_col.clone(), dim1_col)],
+        ));
+
+        // Edge 1: fact.fk = dim2.fk
+        let l1: Arc<dyn PhysicalExpr> = Arc::new(Column::new("fk", 0));
+        let r1: Arc<dyn PhysicalExpr> = Arc::new(Column::new("fk", 0));
+        let filter1 = Arc::new(BinaryExpr::new(l1, Operator::Eq, r1)) as Arc<dyn PhysicalExpr>;
+        let js1 = JoinSet::new_singleton(0)
+            .unwrap()
+            .union(&JoinSet::new_singleton(2).unwrap());
+        let _ = graph.add_edge(JoinEdge::new(
+            js1,
+            filter1,
+            JoinType::Inner,
+            vec![(fact_col, dim2_col)],
+        ));
+
+        let estimator = CardinalityEstimator::new(graph);
+
+        // Both edges connect to fact.fk — it should only contribute (1-0.2)=0.8 once.
+        // dim1.fk and dim2.fk have 0 nulls → factor = 1.0 each.
+        // Total null_adjustment = 0.8 * 1.0 * 1.0 = 0.8
+        let adj = estimator.null_adjustment_for_edges(&estimator.graph.edges);
+        assert!(
+            (adj - 0.8).abs() < 1e-9,
+            "expected 0.8 with dedup, got {adj}"
+        );
     }
 }
