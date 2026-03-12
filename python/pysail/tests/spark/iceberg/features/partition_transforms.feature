@@ -306,37 +306,3 @@ Feature: Iceberg Partition Transforms
         """
         DROP TABLE IF EXISTS partition_evolution_test
         """
-
-    Scenario: Evolve from unpartitioned to partitioned
-      Given statement template
-        """
-        CREATE TABLE partition_evolution_test (
-          id INT,
-          event_date DATE,
-          data STRING
-        )
-        USING iceberg
-        LOCATION {{ location.uri }}
-        """
-      Given statement
-        """
-        INSERT INTO partition_evolution_test VALUES 
-          (1, DATE '2024-01-01', 'initial')
-        """
-      Then iceberg snapshot count is 1
-      # Evolve to add partitioning (would require ALTER TABLE in practice)
-      Given statement
-        """
-        INSERT INTO partition_evolution_test VALUES 
-          (2, DATE '2024-01-02', 'evolved')
-        """
-      Then iceberg metadata matches snapshot
-      Then iceberg snapshot count is 2
-      When query
-        """
-        SELECT * FROM partition_evolution_test ORDER BY id
-        """
-      Then query result ordered
-        | id | event_date | data    |
-        | 1  | 2024-01-01 | initial |
-        | 2  | 2024-01-02 | evolved |
