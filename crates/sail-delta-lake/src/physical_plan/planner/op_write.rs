@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result, ToDFSchema};
+use datafusion::logical_expr::Expr;
 use datafusion::physical_expr::expressions::NotExpr;
 use datafusion::physical_expr::{LexRequirement, PhysicalExpr};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -25,11 +26,11 @@ use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 
 use super::context::PlannerContext;
+use super::metadata_predicate::{build_metadata_filter, predicate_requires_stats};
 use super::utils::{
     align_schemas_for_union, build_log_replay_pipeline_with_options, build_standard_write_layers,
-    LogReplayFilter, LogReplayOptions,
+    LogReplayOptions,
 };
-use crate::datasource::PredicateProperties;
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::physical_plan::{
     create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaDiscoveryExec,
@@ -159,13 +160,15 @@ async fn build_overwrite_if_plan(
         .clone()
         .to_dfschema()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let condition_expr = condition.expr.clone();
     let physical_condition = ctx
         .session()
-        .create_physical_expr(condition.expr, &table_df_schema)?;
+        .create_physical_expr(condition_expr.clone(), &table_df_schema)?;
     let predicate_source = source.or(condition.source);
 
     let old_data_plan = build_old_data_plan(
         ctx,
+        condition_expr.clone(),
         physical_condition.clone(),
         &snapshot_state,
         table_schema.clone(),
@@ -207,29 +210,28 @@ async fn build_overwrite_if_plan(
         operation_override,
     )?);
 
-    let mut expr_props = PredicateProperties::new(partition_columns.clone());
-    expr_props
-        .analyze_predicate(&physical_condition)
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-    let mut log_replay_options = LogReplayOptions::default();
-    if expr_props.partition_only {
-        log_replay_options.log_filter = Some(LogReplayFilter {
-            predicate: physical_condition.clone(),
-            table_schema: table_schema.clone(),
-        });
-    }
+    let partition_only = !predicate_requires_stats(&condition_expr, &partition_columns);
+    let log_replay_options = LogReplayOptions {
+        include_stats_json: !partition_only,
+        ..Default::default()
+    };
     let meta_scan: Arc<dyn ExecutionPlan> =
         build_log_replay_pipeline_with_options(ctx, &snapshot_state, log_replay_options).await?;
+    let meta_scan: Arc<dyn ExecutionPlan> = build_metadata_filter(
+        ctx.session(),
+        meta_scan,
+        &snapshot_state,
+        condition_expr.clone(),
+    )?;
 
     let find_files_plan: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
         meta_scan,
         ctx.table_url().clone(),
-        Some(physical_condition.clone()),
-        Some(table_schema.clone()),
+        None,
+        None,
         version,
         partition_columns.clone(),
-        expr_props.partition_only,
+        partition_only,
     )?);
     let remove_plan = Arc::new(DeltaRemoveActionsExec::new(find_files_plan)?);
 
@@ -250,36 +252,34 @@ async fn build_overwrite_if_plan(
 
 async fn build_old_data_plan(
     ctx: &PlannerContext<'_>,
+    condition_expr: Expr,
     condition: Arc<dyn PhysicalExpr>,
     snapshot_state: &DeltaSnapshot,
     table_schema: SchemaRef,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    // For partition-only predicates, the scan-by-adds stage will be a no-op (partition_scan=true),
-    // so build the same log-derived metadata path as the main find-files plan.
-    let mut expr_props = PredicateProperties::new(ctx.partition_columns().to_vec());
-    expr_props
-        .analyze_predicate(&condition)
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
     let version = snapshot_state.version();
-    let mut log_replay_options = LogReplayOptions::default();
-    if expr_props.partition_only {
-        log_replay_options.log_filter = Some(LogReplayFilter {
-            predicate: condition.clone(),
-            table_schema: table_schema.clone(),
-        });
-    }
+    let partition_only = !predicate_requires_stats(&condition_expr, ctx.partition_columns());
+    let log_replay_options = LogReplayOptions {
+        include_stats_json: !partition_only,
+        ..Default::default()
+    };
     let meta_scan: Arc<dyn ExecutionPlan> =
         build_log_replay_pipeline_with_options(ctx, snapshot_state, log_replay_options).await?;
+    let meta_scan: Arc<dyn ExecutionPlan> = build_metadata_filter(
+        ctx.session(),
+        meta_scan,
+        snapshot_state,
+        condition_expr.clone(),
+    )?;
 
     let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
         meta_scan,
         ctx.table_url().clone(),
-        Some(condition.clone()),
-        Some(table_schema.clone()),
+        None,
+        None,
         version,
         ctx.partition_columns().to_vec(),
-        expr_props.partition_only,
+        partition_only,
     )?);
 
     // Spread Add actions across partitions so `DeltaScanByAddsExec` can scan files in parallel.
