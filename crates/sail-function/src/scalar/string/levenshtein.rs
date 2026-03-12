@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, Int32Array, Int64Array, OffsetSizeTrait};
+use datafusion::arrow::array::{Array, ArrayRef, Int32Array, Int64Array, OffsetSizeTrait};
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::cast::{as_generic_string_array, as_int64_array};
 use datafusion_common::types::{
@@ -9,7 +9,7 @@ use datafusion_common::types::{
     logical_uint32, logical_uint64, logical_uint8, NativeType,
 };
 use datafusion_common::utils::datafusion_strsim;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_expr_common::signature::{Coercion, TypeSignature, TypeSignatureClass};
 
@@ -88,6 +88,25 @@ impl ScalarUDFImpl for Levenshtein {
                 args.len()
             );
         };
+        // Spark returns NULL when any argument is a scalar NULL (constant folding).
+        // For columnar NULL threshold, Spark treats it as 0 — handled in levenshtein().
+        let null_int = |dt: &DataType| match dt {
+            DataType::LargeUtf8 => ColumnarValue::Scalar(ScalarValue::Int64(None)),
+            _ => ColumnarValue::Scalar(ScalarValue::Int32(None)),
+        };
+        if matches!(first, ColumnarValue::Scalar(s) if s.is_null()) {
+            return Ok(null_int(&first.data_type()));
+        }
+        if let Some(ColumnarValue::Scalar(s)) = args.get(1) {
+            if s.is_null() {
+                return Ok(null_int(&first.data_type()));
+            }
+        }
+        if let Some(ColumnarValue::Scalar(s)) = args.get(2) {
+            if s.is_null() {
+                return Ok(null_int(&first.data_type()));
+            }
+        }
         match first.data_type() {
             DataType::Utf8 | DataType::Utf8View => {
                 make_scalar_function(levenshtein::<i32>, vec![])(&args)
@@ -115,9 +134,8 @@ pub fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let str1_array = as_generic_string_array::<T>(&args[0])?;
     let str2_array = as_generic_string_array::<T>(&args[1])?;
 
-    let max_distance = if args.len() == 3 {
-        let max_dist_array = as_int64_array(&args[2])?;
-        Some(max_dist_array.value(0))
+    let max_dist_array = if args.len() == 3 {
+        Some(as_int64_array(&args[2])?)
     } else {
         None
     };
@@ -127,11 +145,12 @@ pub fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             let result = str1_array
                 .iter()
                 .zip(str2_array.iter())
-                .map(|(string1, string2)| match (string1, string2) {
+                .enumerate()
+                .map(|(i, (string1, string2))| match (string1, string2) {
                     (Some(string1), Some(string2)) => {
                         let distance = datafusion_strsim::levenshtein(string1, string2) as i32;
-                        match max_distance {
-                            Some(max_dist) if distance as i64 > max_dist => Some(-1),
+                        match &max_dist_array {
+                            Some(arr) if distance as i64 > arr.value(i) => Some(-1),
                             _ => Some(distance),
                         }
                     }
@@ -144,11 +163,12 @@ pub fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             let result = str1_array
                 .iter()
                 .zip(str2_array.iter())
-                .map(|(string1, string2)| match (string1, string2) {
+                .enumerate()
+                .map(|(i, (string1, string2))| match (string1, string2) {
                     (Some(string1), Some(string2)) => {
                         let distance = datafusion_strsim::levenshtein(string1, string2) as i64;
-                        match max_distance {
-                            Some(max_dist) if distance > max_dist => Some(-1),
+                        match &max_dist_array {
+                            Some(arr) if distance > arr.value(i) => Some(-1),
                             _ => Some(distance),
                         }
                     }
@@ -182,31 +202,56 @@ mod tests {
         let expected = Int32Array::from(vec![2, 3, 2, 3]);
         assert_eq!(&expected, result);
 
+        // Per-row threshold: [2, 2, 2, 2]
         let res = levenshtein::<i32>(&[
             string1_array.clone(),
             string2_array.clone(),
-            Arc::new(Int64Array::from(vec![2])),
+            Arc::new(Int64Array::from(vec![2, 2, 2, 2])),
         ])?;
         let result = as_int32_array(&res)?;
         let expected = Int32Array::from(vec![2, -1, 2, -1]);
         assert_eq!(&expected, result);
 
+        // Per-row threshold: [3, 3, 3, 3]
         let res = levenshtein::<i32>(&[
             string1_array.clone(),
             string2_array.clone(),
-            Arc::new(Int64Array::from(vec![3])),
+            Arc::new(Int64Array::from(vec![3, 3, 3, 3])),
         ])?;
         let result = as_int32_array(&res)?;
         let expected = Int32Array::from(vec![2, 3, 2, 3]);
         assert_eq!(&expected, result);
 
+        // Per-row threshold: [4, 4, 4, 4]
         let res = levenshtein::<i32>(&[
             string1_array.clone(),
             string2_array.clone(),
-            Arc::new(Int64Array::from(vec![4])),
+            Arc::new(Int64Array::from(vec![4, 4, 4, 4])),
         ])?;
         let result = as_int32_array(&res)?;
         let expected = Int32Array::from(vec![2, 3, 2, 3]);
+        assert_eq!(&expected, result);
+
+        // Different threshold per row
+        let res = levenshtein::<i32>(&[
+            string1_array.clone(),
+            string2_array.clone(),
+            Arc::new(Int64Array::from(vec![1, 5, 1, 3])),
+        ])?;
+        let result = as_int32_array(&res)?;
+        // dist=[2,3,2,3], thresh=[1,5,1,3] → [-1,3,-1,3]
+        let expected = Int32Array::from(vec![-1, 3, -1, 3]);
+        assert_eq!(&expected, result);
+
+        // Null threshold per row — Spark treats null threshold as 0 (distance > 0 → -1)
+        let res = levenshtein::<i32>(&[
+            string1_array.clone(),
+            string2_array.clone(),
+            Arc::new(Int64Array::from(vec![Some(2), None, Some(2), None])),
+        ])?;
+        let result = as_int32_array(&res)?;
+        // dist=[2,3,2,3], thresh=[2,0,2,0] → [2,-1,2,-1]
+        let expected = Int32Array::from(vec![2, -1, 2, -1]);
         assert_eq!(&expected, result);
 
         Ok(())
