@@ -4,7 +4,6 @@ use std::sync::Arc;
 use arrow::datatypes::DataType;
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
-use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::WindowFunctionParams;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
@@ -240,8 +239,7 @@ impl PlanResolver<'_> {
         }
         // Apply type coercion so that expressions like `CAST(0 AS INTERVAL SECOND)`
         // have compatible types before physical evaluation.
-        let props = ExecutionProps::new();
-        let context = SimplifyContext::new(&props).with_schema(schema.clone());
+        let context = SimplifyContext::default().with_schema(schema.clone());
         let simplifier = ExprSimplifier::new(context);
         let coerced = simplifier.coerce(resolved, schema).map_err(|e| {
             PlanError::invalid(format!(

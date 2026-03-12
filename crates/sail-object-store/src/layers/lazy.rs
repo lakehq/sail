@@ -8,8 +8,8 @@ use futures::stream::BoxStream;
 use futures::StreamExt;
 use object_store::path::Path;
 use object_store::{
-    GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
-    PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
+    CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+    PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions, Result,
 };
 use tokio::sync::OnceCell;
 use tonic::codegen::Bytes;
@@ -91,14 +91,6 @@ where
     F: Fn() -> Fut + Send + Sync + 'static,
     Fut: Future<Output = Result<S>> + Send,
 {
-    async fn put(&self, location: &Path, payload: PutPayload) -> Result<PutResult> {
-        self.inner
-            .get_or_try_init()
-            .await?
-            .put(location, payload)
-            .await
-    }
-
     async fn put_opts(
         &self,
         location: &Path,
@@ -109,14 +101,6 @@ where
             .get_or_try_init()
             .await?
             .put_opts(location, payload, opts)
-            .await
-    }
-
-    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
-        self.inner
-            .get_or_try_init()
-            .await?
-            .put_multipart(location)
             .await
     }
 
@@ -132,23 +116,11 @@ where
             .await
     }
 
-    async fn get(&self, location: &Path) -> Result<GetResult> {
-        self.inner.get_or_try_init().await?.get(location).await
-    }
-
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         self.inner
             .get_or_try_init()
             .await?
             .get_opts(location, options)
-            .await
-    }
-
-    async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
-        self.inner
-            .get_or_try_init()
-            .await?
-            .get_range(location, range)
             .await
     }
 
@@ -160,20 +132,13 @@ where
             .await
     }
 
-    async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        self.inner.get_or_try_init().await?.head(location).await
-    }
-
-    async fn delete(&self, location: &Path) -> Result<()> {
-        self.inner.get_or_try_init().await?.delete(location).await
-    }
-
-    fn delete_stream<'a>(
-        &'a self,
-        locations: BoxStream<'a, Result<Path>>,
-    ) -> BoxStream<'a, Result<Path>> {
-        futures::stream::once(async {
-            match self.inner.get_or_try_init().await {
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, Result<Path>>,
+    ) -> BoxStream<'static, Result<Path>> {
+        let inner = self.inner.clone();
+        futures::stream::once(async move {
+            match inner.get_or_try_init().await {
                 Ok(inner) => inner.delete_stream(locations),
                 Err(e) => futures::stream::once(async { Err(e) }).boxed(),
             }
@@ -221,27 +186,19 @@ where
             .await
     }
 
-    async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
-        self.inner.get_or_try_init().await?.copy(from, to).await
-    }
-
-    async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
-        self.inner.get_or_try_init().await?.rename(from, to).await
-    }
-
-    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
+    async fn copy_opts(&self, from: &Path, to: &Path, options: CopyOptions) -> Result<()> {
         self.inner
             .get_or_try_init()
             .await?
-            .copy_if_not_exists(from, to)
+            .copy_opts(from, to, options)
             .await
     }
 
-    async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
+    async fn rename_opts(&self, from: &Path, to: &Path, options: RenameOptions) -> Result<()> {
         self.inner
             .get_or_try_init()
             .await?
-            .rename_if_not_exists(from, to)
+            .rename_opts(from, to, options)
             .await
     }
 }

@@ -470,6 +470,7 @@ mod tests {
             None,
             PartitionMode::Auto,
             NullEquality::NullEqualsNothing,
+            false,
         )?);
 
         // Create second join: (table1 ⋈ table2) ⋈ table3
@@ -488,6 +489,7 @@ mod tests {
             None,
             PartitionMode::Auto,
             NullEquality::NullEqualsNothing,
+            false,
         )?);
 
         // Create an AggregateExec on top of the joins
@@ -565,6 +567,7 @@ mod tests {
             None,
             PartitionMode::Auto,
             NullEquality::NullEqualsNothing,
+            false,
         )?);
 
         // Create lower aggregate
@@ -593,6 +596,7 @@ mod tests {
             None,
             PartitionMode::Auto,
             NullEquality::NullEqualsNothing,
+            false,
         )?);
 
         let upper_join2 = Arc::new(HashJoinExec::try_new(
@@ -604,6 +608,7 @@ mod tests {
             None,
             PartitionMode::Auto,
             NullEquality::NullEqualsNothing,
+            false,
         )?);
 
         // Create upper aggregate
@@ -656,6 +661,7 @@ mod tests {
             None,
             PartitionMode::Auto,
             NullEquality::NullEqualsNothing,
+            false, // null_aware
         )?);
         let join123 = Arc::new(HashJoinExec::try_new(
             join12,
@@ -666,6 +672,7 @@ mod tests {
             None,
             PartitionMode::Auto,
             NullEquality::NullEqualsNothing,
+            false, // null_aware
         )?);
 
         // Wrap the nested joins in a boundary node that GraphBuilder treats as a leaf.
@@ -687,6 +694,7 @@ mod tests {
             None,
             PartitionMode::Auto,
             NullEquality::NullEqualsNothing,
+            false, // null_aware
         )?);
         let root = Arc::new(HashJoinExec::try_new(
             join4,
@@ -697,6 +705,7 @@ mod tests {
             None,
             PartitionMode::Auto,
             NullEquality::NullEqualsNothing,
+            false, // null_aware
         )?);
 
         let join_reorder = JoinReorder::new();
@@ -753,6 +762,7 @@ mod tests {
             None,
             PartitionMode::Auto,
             NullEquality::NullEqualsNothing,
+            false,
         )?);
 
         let join_abc_on = vec![(
@@ -769,6 +779,7 @@ mod tests {
             None,
             PartitionMode::Auto,
             NullEquality::NullEqualsNothing,
+            false,
         )?);
 
         // 3. Create a ProjectionExec on top with a complex expression

@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use datafusion_common::{DataFusionError, Result};
+use object_store::ObjectStoreExt;
 use url::Url;
 
 use crate::io::StoreContext;

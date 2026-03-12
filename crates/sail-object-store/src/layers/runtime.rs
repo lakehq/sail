@@ -8,8 +8,9 @@ use futures::stream::BoxStream;
 use futures::{Stream, StreamExt};
 use object_store::path::Path;
 use object_store::{
-    GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
-    PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, UploadPart,
+    CopyOptions, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
+    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions, Result,
+    UploadPart,
 };
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, Mutex};
@@ -78,14 +79,6 @@ impl fmt::Display for RuntimeAwareObjectStore {
 #[async_trait::async_trait]
 #[warn(clippy::missing_trait_methods)]
 impl ObjectStore for RuntimeAwareObjectStore {
-    async fn put(&self, location: &Path, payload: PutPayload) -> Result<PutResult> {
-        let inner = self.inner.clone();
-        let location = location.clone();
-        self.handle
-            .spawn(async move { inner.put(&location, payload).await })
-            .await?
-    }
-
     async fn put_opts(
         &self,
         location: &Path,
@@ -97,16 +90,6 @@ impl ObjectStore for RuntimeAwareObjectStore {
         self.handle
             .spawn(async move { inner.put_opts(&location, payload, opts).await })
             .await?
-    }
-
-    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
-        let inner = self.inner.clone();
-        let location = location.clone();
-        let multipart = self
-            .handle
-            .spawn(async move { inner.put_multipart(&location).await })
-            .await??;
-        Ok(self.wrap_multipart_upload(multipart))
     }
 
     async fn put_multipart_opts(
@@ -123,16 +106,6 @@ impl ObjectStore for RuntimeAwareObjectStore {
         Ok(self.wrap_multipart_upload(multipart))
     }
 
-    async fn get(&self, location: &Path) -> Result<GetResult> {
-        let inner = self.inner.clone();
-        let location = location.clone();
-        let result = self
-            .handle
-            .spawn(async move { inner.get(&location).await })
-            .await??;
-        Ok(self.wrap_get_result(result))
-    }
-
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         let inner = self.inner.clone();
         let location = location.clone();
@@ -141,14 +114,6 @@ impl ObjectStore for RuntimeAwareObjectStore {
             .spawn(async move { inner.get_opts(&location, options).await })
             .await??;
         Ok(self.wrap_get_result(result))
-    }
-
-    async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
-        let inner = self.inner.clone();
-        let location = location.clone();
-        self.handle
-            .spawn(async move { inner.get_range(&location, range).await })
-            .await?
     }
 
     async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
@@ -160,30 +125,17 @@ impl ObjectStore for RuntimeAwareObjectStore {
             .await?
     }
 
-    async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        let inner = self.inner.clone();
-        let location = location.clone();
-        self.handle
-            .spawn(async move { inner.head(&location).await })
-            .await?
-    }
-
-    async fn delete(&self, location: &Path) -> Result<()> {
-        let inner = self.inner.clone();
-        let location = location.clone();
-        self.handle
-            .spawn(async move { inner.delete(&location).await })
-            .await?
-    }
-
-    fn delete_stream<'a>(
-        &'a self,
-        _locations: BoxStream<'a, Result<Path>>,
-    ) -> BoxStream<'a, Result<Path>> {
+    fn delete_stream(
+        &self,
+        _locations: BoxStream<'static, Result<Path>>,
+    ) -> BoxStream<'static, Result<Path>> {
         // FIXME: We cannot run `delete_stream` in a runtime-aware manner because
-        //  the input and output streams are expected to have the lifetime `'a`,
-        //  while tasks spawned by the runtime handle must be `'static`.
-        once(Err(object_store::Error::NotImplemented)).boxed()
+        //  tasks spawned by the runtime handle must be `'static`.
+        once(Err(object_store::Error::NotImplemented {
+            operation: "delete_stream".to_string(),
+            implementer: "RuntimeAwareObjectStore".to_string(),
+        }))
+        .boxed()
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
@@ -219,39 +171,21 @@ impl ObjectStore for RuntimeAwareObjectStore {
             .await?
     }
 
-    async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
+    async fn copy_opts(&self, from: &Path, to: &Path, options: CopyOptions) -> Result<()> {
         let inner = self.inner.clone();
         let from = from.clone();
         let to = to.clone();
         self.handle
-            .spawn(async move { inner.copy(&from, &to).await })
+            .spawn(async move { inner.copy_opts(&from, &to, options).await })
             .await?
     }
 
-    async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
+    async fn rename_opts(&self, from: &Path, to: &Path, options: RenameOptions) -> Result<()> {
         let inner = self.inner.clone();
         let from = from.clone();
         let to = to.clone();
         self.handle
-            .spawn(async move { inner.rename(&from, &to).await })
-            .await?
-    }
-
-    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        let inner = self.inner.clone();
-        let from = from.clone();
-        let to = to.clone();
-        self.handle
-            .spawn(async move { inner.copy_if_not_exists(&from, &to).await })
-            .await?
-    }
-
-    async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        let inner = self.inner.clone();
-        let from = from.clone();
-        let to = to.clone();
-        self.handle
-            .spawn(async move { inner.rename_if_not_exists(&from, &to).await })
+            .spawn(async move { inner.rename_opts(&from, &to, options).await })
             .await?
     }
 }

@@ -26,6 +26,7 @@ use bytes::Bytes;
 use chrono::Utc;
 use futures::future::BoxFuture;
 use log::*;
+use object_store::ObjectStoreExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;

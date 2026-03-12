@@ -27,7 +27,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, error};
 use object_store::path::Path;
-use object_store::{ObjectMeta, ObjectStore};
+use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::async_writer::ParquetObjectWriter;
 use parquet::arrow::AsyncArrowWriter;
@@ -752,7 +752,7 @@ pub async fn cleanup_expired_logs_for(
     debug!("safe_checkpoint_version: {safe_checkpoint_version}");
 
     let locations = futures::stream::iter(log_entries.into_iter())
-        .filter_map(|meta| async move {
+        .filter_map(move |meta| async move {
             let meta = match meta {
                 Ok(m) => m,
                 Err(err) => {

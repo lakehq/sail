@@ -468,6 +468,7 @@ impl<'a> PlanReconstructor<'a> {
             projection.clone(),  // projection
             PartitionMode::Auto, // partition_mode
             null_equality,
+            false, // null_aware
         )?);
 
         if let Some(projection) = projection {

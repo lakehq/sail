@@ -66,19 +66,19 @@ pub struct PythonDataSourceWriteExec {
     /// Whether writer is DataSourceArrowWriter (true) or DataSourceWriter (false)
     is_arrow: bool,
     /// Execution plan properties
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl PythonDataSourceWriteExec {
     /// Create a new distributed write execution plan.
     pub fn new(input: Arc<dyn ExecutionPlan>, pickled_writer: Vec<u8>, is_arrow: bool) -> Self {
         let output_partition_count = input.properties().partitioning.partition_count();
-        let properties = PlanProperties::new(
+        let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(write_result_schema()),
             Partitioning::UnknownPartitioning(output_partition_count),
             EmissionType::Final,
             Boundedness::Bounded,
-        );
+        ));
 
         Self {
             input,
@@ -124,7 +124,7 @@ impl ExecutionPlan for PythonDataSourceWriteExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 

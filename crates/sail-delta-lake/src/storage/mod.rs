@@ -29,7 +29,9 @@ use datafusion_common::{DataFusionError, Result as DataFusionResult};
 use futures::TryStreamExt;
 use log::{debug, error};
 use object_store::path::Path;
-use object_store::{Error as ObjectStoreError, ObjectMeta, ObjectStore, PutMode, PutOptions};
+use object_store::{
+    Error as ObjectStoreError, ObjectMeta, ObjectStore, ObjectStoreExt, PutMode, PutOptions,
+};
 use serde_json::Deserializer as JsonDeserializer;
 use url::Url;
 use uuid::Uuid;

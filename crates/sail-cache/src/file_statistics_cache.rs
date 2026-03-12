@@ -1,17 +1,16 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
 
-use datafusion::common::Statistics;
-use datafusion::execution::cache::cache_manager::{FileStatisticsCache, FileStatisticsCacheEntry};
+use datafusion::execution::cache::cache_manager::{
+    CachedFileMetadata, FileStatisticsCache, FileStatisticsCacheEntry,
+};
 use datafusion::execution::cache::CacheAccessor;
-use log::{debug, error};
+use log::debug;
 use moka::sync::Cache;
 use object_store::path::Path;
-use object_store::ObjectMeta;
 
 pub struct MokaFileStatisticsCache {
-    statistics: Cache<Path, (ObjectMeta, Arc<Statistics>)>,
+    statistics: Cache<Path, CachedFileMetadata>,
 }
 
 impl MokaFileStatisticsCache {
@@ -39,42 +38,18 @@ impl MokaFileStatisticsCache {
     }
 }
 
-impl CacheAccessor<Path, Arc<Statistics>> for MokaFileStatisticsCache {
-    type Extra = ObjectMeta;
-
-    fn get(&self, k: &Path) -> Option<Arc<Statistics>> {
-        self.statistics
-            .get(k)
-            .map(|(_saved_meta, statistics)| statistics)
+impl CacheAccessor<Path, CachedFileMetadata> for MokaFileStatisticsCache {
+    fn get(&self, k: &Path) -> Option<CachedFileMetadata> {
+        self.statistics.get(k)
     }
 
-    fn get_with_extra(&self, k: &Path, e: &Self::Extra) -> Option<Arc<Statistics>> {
-        self.statistics.get(k).and_then(|(saved_meta, statistics)| {
-            if saved_meta.size == e.size && saved_meta.last_modified == e.last_modified {
-                Some(Arc::clone(&statistics))
-            } else {
-                None
-            }
-        })
-    }
-
-    fn put(&self, _key: &Path, _value: Arc<Statistics>) -> Option<Arc<Statistics>> {
-        error!("Put cache in {} without Extra is not supported", Self::NAME);
+    fn put(&self, key: &Path, value: CachedFileMetadata) -> Option<CachedFileMetadata> {
+        self.statistics.insert(key.clone(), value);
         None
     }
 
-    fn put_with_extra(
-        &self,
-        key: &Path,
-        value: Arc<Statistics>,
-        e: &Self::Extra,
-    ) -> Option<Arc<Statistics>> {
-        self.statistics.insert(key.clone(), (e.clone(), value));
-        None
-    }
-
-    fn remove(&self, k: &Path) -> Option<Arc<Statistics>> {
-        self.statistics.remove(k).map(|(_, statistics)| statistics)
+    fn remove(&self, k: &Path) -> Option<CachedFileMetadata> {
+        self.statistics.remove(k)
     }
 
     fn contains_key(&self, k: &Path) -> bool {
@@ -88,6 +63,7 @@ impl CacheAccessor<Path, Arc<Statistics>> for MokaFileStatisticsCache {
     fn clear(&self) {
         self.statistics.invalidate_all();
     }
+
     fn name(&self) -> String {
         Self::NAME.to_string()
     }
@@ -97,15 +73,16 @@ impl FileStatisticsCache for MokaFileStatisticsCache {
     fn list_entries(&self) -> HashMap<Path, FileStatisticsCacheEntry> {
         self.statistics
             .iter()
-            .map(|(path, (object_meta, stats))| {
+            .map(|(path, cached)| {
                 (
                     path.as_ref().clone(),
                     FileStatisticsCacheEntry {
-                        object_meta,
-                        num_rows: stats.num_rows,
-                        num_columns: stats.column_statistics.len(),
-                        table_size_bytes: stats.total_byte_size,
+                        object_meta: cached.meta.clone(),
+                        num_rows: cached.statistics.num_rows,
+                        num_columns: cached.statistics.column_statistics.len(),
+                        table_size_bytes: cached.statistics.total_byte_size,
                         statistics_size_bytes: 0, // TODO: set to the real size in the future
+                        has_ordering: cached.ordering.is_some(),
                     },
                 )
             })
@@ -116,8 +93,11 @@ impl FileStatisticsCache for MokaFileStatisticsCache {
 #[expect(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use chrono::DateTime;
     use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+    use datafusion::common::Statistics;
     use object_store::path::Path;
     use object_store::ObjectMeta;
 
@@ -135,35 +115,30 @@ mod tests {
             version: None,
         };
         let cache = MokaFileStatisticsCache::new(None, None);
-        assert!(cache.get_with_extra(&meta.location, &meta).is_none());
+        assert!(cache.get(&meta.location).is_none());
 
-        cache.put_with_extra(
-            &meta.location,
-            Statistics::new_unknown(&Schema::new(vec![Field::new(
-                "test_column",
-                DataType::Timestamp(TimeUnit::Second, None),
-                false,
-            )]))
-            .into(),
-            &meta,
-        );
-        assert!(cache.get_with_extra(&meta.location, &meta).is_some());
+        let stats = Arc::new(Statistics::new_unknown(&Schema::new(vec![Field::new(
+            "test_column",
+            DataType::Timestamp(TimeUnit::Second, None),
+            false,
+        )])));
+        let cached = CachedFileMetadata::new(meta.clone(), Arc::clone(&stats), None);
+        cache.put(&meta.location, cached);
+        let cached = cache.get(&meta.location);
+        assert!(cached.is_some());
+        assert!(cached.unwrap().is_valid_for(&meta));
 
         // file size changed
         let mut meta2 = meta.clone();
         meta2.size = 2048;
-        assert!(cache.get_with_extra(&meta2.location, &meta2).is_none());
-
-        // file last_modified changed
-        let mut meta2 = meta.clone();
-        meta2.last_modified = DateTime::parse_from_rfc3339("2022-09-27T22:40:00+02:00")
-            .unwrap()
-            .into();
-        assert!(cache.get_with_extra(&meta2.location, &meta2).is_none());
+        assert!(!cache
+            .get(&meta2.location)
+            .map(|c| c.is_valid_for(&meta2))
+            .unwrap_or(false));
 
         // different file
         let mut meta2 = meta;
         meta2.location = Path::from("test2");
-        assert!(cache.get_with_extra(&meta2.location, &meta2).is_none());
+        assert!(cache.get(&meta2.location).is_none());
     }
 }

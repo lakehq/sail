@@ -11,6 +11,7 @@
 // limitations under the License.
 
 use bytes::Bytes;
+use object_store::ObjectStoreExt;
 
 use super::{ActionCommit, Transaction};
 use crate::io::StoreContext;

@@ -1,20 +1,18 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
 
 use datafusion::execution::cache::cache_manager::{
-    FileMetadata, FileMetadataCache, FileMetadataCacheEntry,
+    CachedFileMetadataEntry, FileMetadataCache, FileMetadataCacheEntry,
 };
 use datafusion::execution::cache::CacheAccessor;
 use log::debug;
 use moka::policy::EvictionPolicy;
 use moka::sync::Cache;
 use object_store::path::Path;
-use object_store::ObjectMeta;
 
 pub struct MokaFileMetadataCache {
     size_limit: Option<u64>,
-    metadata: Cache<Path, (ObjectMeta, Arc<dyn FileMetadata>)>,
+    metadata: Cache<Path, CachedFileMetadataEntry>,
 }
 
 impl MokaFileMetadataCache {
@@ -34,11 +32,9 @@ impl MokaFileMetadataCache {
                 Self::NAME
             );
             builder = builder
-                .weigher(
-                    |_key: &Path, (_, meta): &(ObjectMeta, Arc<dyn FileMetadata>)| -> u32 {
-                        meta.memory_size() as u32
-                    },
-                )
+                .weigher(|_key: &Path, entry: &CachedFileMetadataEntry| -> u32 {
+                    entry.file_metadata.memory_size() as u32
+                })
                 .max_capacity(size_limit);
         } else {
             debug!("No size limit set for {}", Self::NAME);
@@ -65,15 +61,15 @@ impl FileMetadataCache for MokaFileMetadataCache {
     fn list_entries(&self) -> HashMap<Path, FileMetadataCacheEntry> {
         self.metadata
             .iter()
-            .map(|(path, (object_meta, meta))| {
+            .map(|(path, entry)| {
                 (
                     path.as_ref().clone(),
                     FileMetadataCacheEntry {
-                        object_meta,
-                        size_bytes: meta.memory_size(),
+                        object_meta: entry.meta.clone(),
+                        size_bytes: entry.file_metadata.memory_size(),
                         // TODO: get hits from the cache
                         hits: 0,
-                        extra: meta.extra_info(),
+                        extra: entry.file_metadata.extra_info(),
                     },
                 )
             })
@@ -81,51 +77,22 @@ impl FileMetadataCache for MokaFileMetadataCache {
     }
 }
 
-impl CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>> for MokaFileMetadataCache {
-    type Extra = ObjectMeta;
-
-    fn get(&self, k: &ObjectMeta) -> Option<Arc<dyn FileMetadata>> {
-        self.metadata
-            .get(&k.location)
-            .and_then(|(extra, metadata)| {
-                if extra.size == k.size && extra.last_modified == k.last_modified {
-                    Some(Arc::clone(&metadata))
-                } else {
-                    None
-                }
-            })
+impl CacheAccessor<Path, CachedFileMetadataEntry> for MokaFileMetadataCache {
+    fn get(&self, k: &Path) -> Option<CachedFileMetadataEntry> {
+        self.metadata.get(k)
     }
 
-    fn get_with_extra(&self, k: &ObjectMeta, _e: &Self::Extra) -> Option<Arc<dyn FileMetadata>> {
-        self.get(k)
-    }
-
-    fn put(&self, key: &ObjectMeta, value: Arc<dyn FileMetadata>) -> Option<Arc<dyn FileMetadata>> {
-        self.metadata
-            .insert(key.location.clone(), (key.clone(), value));
+    fn put(&self, key: &Path, value: CachedFileMetadataEntry) -> Option<CachedFileMetadataEntry> {
+        self.metadata.insert(key.clone(), value);
         None
     }
 
-    fn put_with_extra(
-        &self,
-        key: &ObjectMeta,
-        value: Arc<dyn FileMetadata>,
-        _e: &Self::Extra,
-    ) -> Option<Arc<dyn FileMetadata>> {
-        self.put(key, value)
+    fn remove(&self, k: &Path) -> Option<CachedFileMetadataEntry> {
+        self.metadata.remove(k)
     }
 
-    fn remove(&self, k: &ObjectMeta) -> Option<Arc<dyn FileMetadata>> {
-        self.metadata
-            .remove(&k.location)
-            .map(|(_, metadata)| metadata)
-    }
-
-    fn contains_key(&self, k: &ObjectMeta) -> bool {
-        self.metadata
-            .get(&k.location)
-            .map(|(extra, _)| extra.size == k.size && extra.last_modified == k.last_modified)
-            .unwrap_or(false)
+    fn contains_key(&self, k: &Path) -> bool {
+        self.metadata.contains_key(k)
     }
 
     fn len(&self) -> usize {
@@ -184,47 +151,36 @@ mod tests {
             version: None,
         };
 
-        let metadata: Arc<dyn FileMetadata> = Arc::new(TestFileMetadata {
+        let file_metadata: Arc<dyn FileMetadata> = Arc::new(TestFileMetadata {
             metadata: "retrieved_metadata".to_owned(),
         });
+        let entry = CachedFileMetadataEntry::new(object_meta.clone(), Arc::clone(&file_metadata));
 
         let cache = MokaFileMetadataCache::new(None, None);
-        assert!(cache.get(&object_meta).is_none());
+        assert!(cache.get(&object_meta.location).is_none());
 
         // put
-        cache.put(&object_meta, metadata);
+        cache.put(&object_meta.location, entry.clone());
 
         // get and contains of a valid entry
-        assert!(cache.contains_key(&object_meta));
-        let value = cache.get(&object_meta);
+        assert!(cache.contains_key(&object_meta.location));
+        let value = cache.get(&object_meta.location);
         assert!(value.is_some());
-        let test_file_metadata = Arc::downcast::<TestFileMetadata>(value.unwrap());
-        assert!(test_file_metadata.is_ok());
-        assert_eq!(test_file_metadata.unwrap().metadata, "retrieved_metadata");
-
-        // file size changed
-        let mut object_meta2 = object_meta.clone();
-        object_meta2.size = 2048;
-        assert!(cache.get(&object_meta2).is_none());
-        assert!(!cache.contains_key(&object_meta2));
-
-        // file last_modified changed
-        let mut object_meta2 = object_meta.clone();
-        object_meta2.last_modified = DateTime::parse_from_rfc3339("2025-07-29T13:13:13+00:00")
-            .unwrap()
-            .into();
-        assert!(cache.get(&object_meta2).is_none());
-        assert!(!cache.contains_key(&object_meta2));
+        let cached_entry = value.unwrap();
+        assert!(cached_entry.is_valid_for(&object_meta));
+        let test_meta = Arc::downcast::<TestFileMetadata>(cached_entry.file_metadata);
+        assert!(test_meta.is_ok());
+        assert_eq!(test_meta.unwrap().metadata, "retrieved_metadata");
 
         // different file
         let mut object_meta2 = object_meta.clone();
         object_meta2.location = Path::from("test2");
-        assert!(cache.get(&object_meta2).is_none());
-        assert!(!cache.contains_key(&object_meta2));
+        assert!(cache.get(&object_meta2.location).is_none());
+        assert!(!cache.contains_key(&object_meta2.location));
 
         // remove
-        cache.remove(&object_meta);
-        assert!(cache.get(&object_meta).is_none());
-        assert!(!cache.contains_key(&object_meta));
+        cache.remove(&object_meta.location);
+        assert!(cache.get(&object_meta.location).is_none());
+        assert!(!cache.contains_key(&object_meta.location));
     }
 }

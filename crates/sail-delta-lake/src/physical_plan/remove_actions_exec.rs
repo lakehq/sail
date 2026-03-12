@@ -40,19 +40,19 @@ use crate::spec::{Action, Add, Remove, RemoveOptions};
 pub struct DeltaRemoveActionsExec {
     input: Arc<dyn ExecutionPlan>,
     metrics: ExecutionPlanMetricsSet,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl DeltaRemoveActionsExec {
     pub fn new(input: Arc<dyn ExecutionPlan>) -> Result<Self> {
         // Output schema must match DeltaWriterExec output schema (row-per-action).
         let schema = delta_action_schema()?;
-        let cache = PlanProperties::new(
+        let cache = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(1),
             EmissionType::Final,
             Boundedness::Bounded,
-        );
+        ));
         Ok(Self {
             input,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -101,7 +101,7 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 

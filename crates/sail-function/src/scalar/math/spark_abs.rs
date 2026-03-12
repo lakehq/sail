@@ -13,7 +13,7 @@ use datafusion::arrow::datatypes::{
 use datafusion::functions::math::expr_fn::abs;
 use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -167,7 +167,7 @@ impl ScalarUDFImpl for SparkAbs {
         }
     }
 
-    fn simplify(&self, args: Vec<Expr>, info: &dyn SimplifyInfo) -> Result<ExprSimplifyResult> {
+    fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
         match info.get_data_type(&args[0])? {
             DataType::Interval(_) | DataType::Duration(_) => Ok(ExprSimplifyResult::Original(args)),
             _ => Ok(ExprSimplifyResult::Simplified(abs(args.one()?))),

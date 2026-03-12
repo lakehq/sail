@@ -21,7 +21,7 @@ pub struct MergeCardinalityCheckExec {
     target_present_col: String,
     source_present_col: String,
     schema: SchemaRef,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl MergeCardinalityCheckExec {
@@ -79,7 +79,7 @@ impl ExecutionPlan for MergeCardinalityCheckExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 

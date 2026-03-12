@@ -26,7 +26,7 @@ use datafusion::arrow::datatypes::Schema;
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::Result;
-use object_store::ObjectStore;
+use object_store::{ObjectStore, ObjectStoreExt};
 use url::Url;
 
 use crate::datasource::{DeltaScanConfig, DeltaTableProvider};

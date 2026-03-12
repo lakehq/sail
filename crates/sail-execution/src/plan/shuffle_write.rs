@@ -30,7 +30,7 @@ pub struct ShuffleWriteExec {
     shuffle_partitioning: Partitioning,
     /// For each input partition, a list of locations to write to.
     locations: Vec<Vec<TaskWriteLocation>>,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
     writer: Arc<dyn TaskStreamWriter>,
 }
 
@@ -54,7 +54,7 @@ impl ShuffleWriteExec {
             }
             _ => partitioning,
         };
-        let properties = PlanProperties::new(
+        let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(Arc::new(Schema::empty())),
             // The shuffle write plan has the same number of partitions as the input plan.
             // For each partition that are executed, the data is further partitioned according to
@@ -66,7 +66,7 @@ impl ShuffleWriteExec {
             Boundedness::Unbounded {
                 requires_infinite_memory: false,
             },
-        );
+        ));
         Self {
             plan,
             shuffle_partitioning: partitioning,
@@ -97,7 +97,7 @@ impl ExecutionPlan for ShuffleWriteExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 

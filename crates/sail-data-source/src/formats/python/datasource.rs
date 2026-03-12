@@ -268,10 +268,9 @@ impl PythonDataSource {
                     .map_err(|e| ctx.wrap_py_error(e))?;
 
                 // Convert to list
-                let partitions_list =
-                    partitions.downcast::<pyo3::types::PyList>().map_err(|e| {
-                        ctx.wrap_error(format!("partitioning() must return a list: {}", e))
-                    })?;
+                let partitions_list = partitions.cast::<pyo3::types::PyList>().map_err(|e| {
+                    ctx.wrap_error(format!("partitioning() must return a list: {}", e))
+                })?;
 
                 Ok(partitions_list.len())
             })

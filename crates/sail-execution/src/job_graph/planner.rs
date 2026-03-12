@@ -138,9 +138,10 @@ fn ensure_partitioned_hash_join_if_build_side_emits_unmatched_rows(
             join.on.clone(),
             join.filter.clone(),
             &join.join_type,
-            join.projection.clone(),
+            join.projection.as_deref().map(|p| p.to_vec()),
             PartitionMode::Partitioned,
             join.null_equality,
+            false,
         )?)))
     })?;
 
@@ -237,7 +238,12 @@ fn build_job_graph(
         match &properties.partitioning {
             Partitioning::UnknownPartitioning(n) => {
                 let n = *n;
-                let properties = properties.with_partitioning(Partitioning::RoundRobinBatch(n));
+                let properties = Arc::new(
+                    properties
+                        .as_ref()
+                        .clone()
+                        .with_partitioning(Partitioning::RoundRobinBatch(n)),
+                );
                 create_shuffle(child, graph, properties, consumption)?
             }
             Partitioning::RoundRobinBatch(_) | Partitioning::Hash(_, _) => {
@@ -297,7 +303,7 @@ fn create_shuffle(
     graph: &mut JobGraph,
     // These are the properties after repartition/coalesce,
     // which are different from the properties of the input plan.
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
     consumption: ShuffleConsumption,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
     let distribution = match properties.partitioning.clone() {

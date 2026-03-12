@@ -88,6 +88,10 @@ impl MetricEmitter for BuildProbeJoinMetricEmitter {
                     .emit();
                 MetricHandled::Yes
             }
+            MetricValue::Count { name, .. } if name == "array_map_created_count" => {
+                // Internal implementation metric of the hash join; not surfaced externally.
+                MetricHandled::Yes
+            }
             MetricValue::Count { name, count } if name == "input_rows" => {
                 registry
                     .execution_join_probe_side_row_count
@@ -397,6 +401,7 @@ mod tests {
             None,
             PartitionMode::CollectLeft,
             NullEquality::NullEqualsNothing,
+            false,
         )?);
 
         MetricEmitterTester::new()

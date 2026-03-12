@@ -131,6 +131,15 @@ async fn finalize_merge(
     //
     // Untouched files remain as-is (not removed, not rewritten).
     let writer_input: Arc<dyn ExecutionPlan> = if let Some(touched_plan) = &touched_plan_opt {
+        // Coalesce projected to a single partition before the targeted-rewrite filtering.
+        // Without this, hash repartitioning from MergeCardinalityCheckExec's
+        // required_input_distribution distributes rows across N partitions. When
+        // projected is then used in both the insert filter (path IS NULL) and the
+        // touched-file join, rows in certain partitions can be silently dropped,
+        // causing data loss for NOT MATCHED BY SOURCE rows that share a file with
+        // matched rows.
+        let projected: Arc<dyn ExecutionPlan> =
+            Arc::new(CoalescePartitionsExec::new(Arc::clone(&projected)));
         let projected_schema = projected.schema();
         if projected_schema.column_with_name(PATH_COLUMN).is_none() {
             return internal_err!(
@@ -175,6 +184,7 @@ async fn finalize_merge(
             None,
             PartitionMode::CollectLeft,
             NullEquality::NullEqualsNothing,
+            false,
         )?);
 
         // Keep only the right side columns (original writer input schema) after join.
@@ -268,6 +278,7 @@ async fn finalize_merge(
             None,
             PartitionMode::CollectLeft,
             NullEquality::NullEqualsNothing,
+            false,
         )?);
 
         // Keep only the right side columns (metadata stream schema).

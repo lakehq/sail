@@ -11,6 +11,7 @@
 // limitations under the License.
 
 use futures::TryStreamExt;
+use object_store::ObjectStoreExt;
 
 use crate::spec::{
     delta_log_prefix_path, delta_log_root_path, last_checkpoint_path, parse_checkpoint_version,

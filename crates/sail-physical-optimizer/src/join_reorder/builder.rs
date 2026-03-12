@@ -995,6 +995,7 @@ mod tests {
             None, // projection
             PartitionMode::Auto,
             NullEquality::NullEqualsNothing,
+            false, // null_aware
         )?);
 
         // Test that visit_inner_join correctly handles HashJoinExec
@@ -1049,6 +1050,7 @@ mod tests {
             None,
             PartitionMode::Partitioned,
             NullEquality::NullEqualsNothing,
+            false, // null_aware
         )?);
 
         // Trivial projection over AB: identity (same indices) but with renamed aliases.
@@ -1079,6 +1081,7 @@ mod tests {
             None,
             PartitionMode::Partitioned,
             NullEquality::NullEqualsNothing,
+            false, // null_aware
         )?) as Arc<dyn ExecutionPlan>;
 
         let Some((graph, _col_map)) = builder.build(top)? else {
@@ -1132,6 +1135,7 @@ mod tests {
             None,
             PartitionMode::Partitioned,
             NullEquality::NullEqualsNothing,
+            false, // null_aware
         )?);
 
         // Trivial projection over AB: pure permutation of columns (no prune/dup/exprs).
@@ -1162,6 +1166,7 @@ mod tests {
             None,
             PartitionMode::Partitioned,
             NullEquality::NullEqualsNothing,
+            false, // null_aware
         )?) as Arc<dyn ExecutionPlan>;
 
         let Some((graph, _col_map)) = builder.build(top)? else {
@@ -1215,6 +1220,7 @@ mod tests {
             None,
             PartitionMode::Partitioned,
             NullEquality::NullEqualsNothing,
+            false, // null_aware
         )?);
 
         // Non-trivial projection: contains a computed expression.
@@ -1245,6 +1251,7 @@ mod tests {
             None,
             PartitionMode::Partitioned,
             NullEquality::NullEqualsNothing,
+            false, // null_aware
         )?) as Arc<dyn ExecutionPlan>;
 
         let Some((graph, _col_map)) = builder.build(top)? else {
@@ -1298,6 +1305,7 @@ mod tests {
             None,
             PartitionMode::Partitioned,
             NullEquality::NullEqualsNothing,
+            false, // null_aware
         )?);
 
         // Column-only projection with pruning (drops b_id).
@@ -1322,6 +1330,7 @@ mod tests {
             None,
             PartitionMode::Partitioned,
             NullEquality::NullEqualsNothing,
+            false, // null_aware
         )?) as Arc<dyn ExecutionPlan>;
 
         let Some((graph, _col_map)) = builder.build(top)? else {
@@ -1431,6 +1440,7 @@ mod tests {
             None,
             PartitionMode::Auto,
             NullEquality::NullEqualsNothing,
+            false, // null_aware
         )?);
 
         // Create second join: (table1 ⋈ table2) ⋈ table3
@@ -1447,6 +1457,7 @@ mod tests {
             None,
             PartitionMode::Auto,
             NullEquality::NullEqualsNothing,
+            false, // null_aware
         )?);
 
         // Test that our enhanced visit_plan can find the joins directly
@@ -1501,6 +1512,7 @@ mod tests {
             None,
             PartitionMode::Auto,
             NullEquality::NullEqualsNothing,
+            false, // null_aware
         )?);
 
         // Join t3 ⋈ t4 on id = id
@@ -1516,6 +1528,7 @@ mod tests {
             None,
             PartitionMode::Auto,
             NullEquality::NullEqualsNothing,
+            false, // null_aware
         )?);
 
         // Root join: (t1 ⋈ t2) ⋈ (t3 ⋈ t4) with two independent equi predicates:
@@ -1542,6 +1555,7 @@ mod tests {
             None,
             PartitionMode::Auto,
             NullEquality::NullEqualsNothing,
+            false, // null_aware
         )?);
 
         let (graph, _map) = builder
@@ -1605,6 +1619,7 @@ mod tests {
             None,
             PartitionMode::Auto,
             NullEquality::NullEqualsNothing,
+            false, // null_aware
         )?);
 
         // Root join: (t1 ⋈ t2) ⋈ t3 on a = c, plus a filter that truly depends on all 3 relations:
@@ -1657,6 +1672,7 @@ mod tests {
             None,
             PartitionMode::Auto,
             NullEquality::NullEqualsNothing,
+            false, // null_aware
         )?);
 
         let (graph, _map) = builder
@@ -1714,6 +1730,7 @@ mod tests {
             projection,
             PartitionMode::Auto,
             NullEquality::NullEqualsNothing,
+            false, // null_aware
         )?);
 
         let output_map = builder.visit_inner_join(&join_plan)?;
