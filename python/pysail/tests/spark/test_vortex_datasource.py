@@ -10,6 +10,11 @@ import pyarrow as pa
 import pytest
 
 try:
+    from pyspark.sql import datasource as _pyspark_datasource  # noqa: F401
+except ImportError:
+    pytest.skip("Python DataSource API not available", allow_module_level=True)
+
+try:
     import vortex
 
     HAS_VORTEX = True

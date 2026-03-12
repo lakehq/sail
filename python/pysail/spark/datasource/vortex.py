@@ -28,23 +28,31 @@ except ImportError as e:
     msg = "pyvortex is required for the Vortex data source. Install it with: pip install pysail[vortex]"
     raise ImportError(msg) from e
 
-from pyspark.sql.datasource import (
-    DataSource,
-    DataSourceReader,
-    EqualTo,
-    GreaterThan,
-    GreaterThanOrEqual,
-    In,
-    InputPartition,
-    IsNotNull,
-    IsNull,
-    LessThan,
-    LessThanOrEqual,
-    Not,
-    StringContains,
-    StringEndsWith,
-    StringStartsWith,
-)
+try:
+    from pyspark.sql.datasource import (
+        DataSource,
+        DataSourceReader,
+        EqualTo,
+        GreaterThan,
+        GreaterThanOrEqual,
+        In,
+        InputPartition,
+        IsNotNull,
+        IsNull,
+        LessThan,
+        LessThanOrEqual,
+        Not,
+        StringContains,
+        StringEndsWith,
+        StringStartsWith,
+    )
+except ImportError as e:
+    msg = (
+        "The Vortex data source requires PySpark 4.0+ with the Python "
+        "DataSource API (pyspark.sql.datasource). Please upgrade PySpark or "
+        "disable this data source."
+    )
+    raise ImportError(msg) from e
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -274,9 +282,9 @@ class VortexDataSource(DataSource):
     +--------+----------+------------------------------------------+
 
     Supported filter pushdown: EqualTo, GreaterThan, GreaterThanOrEqual,
-    LessThan, LessThanOrEqual, IsNull, IsNotNull, In, Not.
-    String predicates (StartsWith, EndsWith, Contains) are rejected and
-    applied by Sail post-read.
+    LessThan, LessThanOrEqual, In, Not.
+    String predicates (StartsWith, EndsWith, Contains) and null predicates
+    (IsNull, IsNotNull) are rejected and applied by Sail post-read.
     """
 
     @classmethod
