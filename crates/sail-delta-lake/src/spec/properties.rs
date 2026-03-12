@@ -176,24 +176,60 @@ where
 /// for unrecognized keys that should be preserved as-is.
 fn canonicalize_table_property_key(key: &str) -> Option<&'static str> {
     match key.to_ascii_lowercase().as_str() {
-        "delta.appendonly" => Some("delta.appendOnly"),
+        "delta.appendonly" | "append_only" | "appendonly" => Some("delta.appendOnly"),
         "delta.checkpointinterval" | "checkpoint_interval" | "checkpointinterval" => {
             Some("delta.checkpointInterval")
         }
-        "delta.checkpoint.writestatsasjson" => Some("delta.checkpoint.writeStatsAsJson"),
-        "delta.checkpoint.writestatsasstruct" => Some("delta.checkpoint.writeStatsAsStruct"),
+        "delta.checkpoint.writestatsasjson"
+        | "checkpoint_write_stats_as_json"
+        | "checkpointwritestatsasjson" => Some("delta.checkpoint.writeStatsAsJson"),
+        "delta.checkpoint.writestatsasstruct"
+        | "checkpoint_write_stats_as_struct"
+        | "checkpointwritestatsasstruct" => Some("delta.checkpoint.writeStatsAsStruct"),
         "delta.columnmapping.mode"
         | "column_mapping_mode"
         | "columnmappingmode"
         | "column_mapping" => Some("delta.columnMapping.mode"),
-        "delta.dataskippingnumindexedcols" => Some("delta.dataSkippingNumIndexedCols"),
-        "delta.dataskippingstatscolumns" => Some("delta.dataSkippingStatsColumns"),
-        "delta.deletedfileretentionduration" => Some("delta.deletedFileRetentionDuration"),
-        "delta.isolationlevel" => Some("delta.isolationLevel"),
-        "delta.logretentionduration" => Some("delta.logRetentionDuration"),
-        "delta.enableexpiredlogcleanup" => Some("delta.enableExpiredLogCleanup"),
+        "delta.dataskippingnumindexedcols"
+        | "data_skipping_num_indexed_cols"
+        | "dataskippingnumindexedcols" => Some("delta.dataSkippingNumIndexedCols"),
+        "delta.dataskippingstatscolumns"
+        | "data_skipping_stats_columns"
+        | "dataskippingstatscolumns" => Some("delta.dataSkippingStatsColumns"),
+        "delta.deletedfileretentionduration"
+        | "deleted_file_retention_duration"
+        | "deletedfileretentionduration" => Some("delta.deletedFileRetentionDuration"),
+        "delta.isolationlevel" | "isolation_level" | "isolationlevel" => {
+            Some("delta.isolationLevel")
+        }
+        "delta.logretentionduration" | "log_retention_duration" | "logretentionduration" => {
+            Some("delta.logRetentionDuration")
+        }
+        "delta.enableexpiredlogcleanup"
+        | "enable_expired_log_cleanup"
+        | "enableexpiredlogcleanup" => Some("delta.enableExpiredLogCleanup"),
         _ => None,
     }
+}
+
+/// Resolve whether an external option key should be routed into Delta table properties.
+///
+/// Known modeled aliases are canonicalized to the exact Delta table property name. Any other key
+/// with a `delta.` prefix is treated as a pass-through table property so newer protocol features
+/// can still be persisted without first teaching Sail about them.
+pub fn route_table_property_key(key: &str) -> Option<String> {
+    if let Some(canonical) = canonicalize_table_property_key(key) {
+        return Some(canonical.to_string());
+    }
+
+    if key.len() >= 6 && key[..6].eq_ignore_ascii_case("delta.") {
+        if key.starts_with("delta.") {
+            return Some(key.to_string());
+        }
+        return Some(format!("delta.{}", &key[6..]));
+    }
+
+    None
 }
 
 /// Validate modeled Delta table property values while allowing unknown properties through.
@@ -361,5 +397,22 @@ mod tests {
                 .to_string()
                 .contains("invalid value for delta.checkpointInterval"));
         }
+    }
+
+    #[test]
+    fn test_route_table_property_key() {
+        assert_eq!(
+            route_table_property_key("column_mapping_mode"),
+            Some("delta.columnMapping.mode".to_string())
+        );
+        assert_eq!(
+            route_table_property_key("append_only"),
+            Some("delta.appendOnly".to_string())
+        );
+        assert_eq!(
+            route_table_property_key("Delta.featureFlag"),
+            Some("delta.featureFlag".to_string())
+        );
+        assert_eq!(route_table_property_key("mergeSchema"), None);
     }
 }

@@ -21,7 +21,7 @@ use crate::options::{DeltaLogReplayStrategyOption, TableDeltaOptions};
 use crate::physical_plan::planner::{
     plan_delete, plan_merge, DeltaPhysicalPlanner, DeltaTableConfig, PlannerContext,
 };
-use crate::spec::canonicalize_and_validate_table_properties;
+use crate::spec::{canonicalize_and_validate_table_properties, route_table_property_key};
 use crate::table::open_table_with_object_store;
 use crate::{create_delta_provider, create_delta_source, DeltaTableError};
 
@@ -106,8 +106,8 @@ impl TableFormat for DeltaTableFormat {
         }
 
         let table_url = Self::parse_table_url(ctx, vec![path]).await?;
-        let metadata_configuration = resolve_delta_metadata_configuration(&table_properties)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let (options, routed_table_properties) =
+            split_delta_write_options_and_table_properties(options);
         let delta_options = resolve_delta_write_options(options)?;
 
         let object_store = ctx
@@ -125,6 +125,24 @@ impl TableFormat for DeltaTableFormat {
                 Err(err) => return Err(DataFusionError::External(Box::new(err))),
             };
         let table_exists = table.is_some();
+        let mut metadata_configuration = resolve_delta_metadata_configuration(&table_properties)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        if table_exists {
+            if !routed_table_properties.is_empty() {
+                let mut keys: Vec<_> = routed_table_properties.keys().cloned().collect();
+                keys.sort();
+                log::warn!(
+                    "ignoring write-time Delta table properties for existing table at {table_url}: {}",
+                    keys.join(", ")
+                );
+            }
+        } else {
+            let routed_metadata_configuration =
+                resolve_delta_metadata_configuration(&routed_table_properties)
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            metadata_configuration.extend(routed_metadata_configuration);
+        }
 
         match mode {
             PhysicalSinkMode::ErrorIfExists => {
@@ -326,11 +344,6 @@ fn apply_delta_write_options(from: DeltaWriteOptions, to: &mut TableDeltaOptions
     if let Some(write_batch_size) = from.write_batch_size {
         to.write_batch_size = write_batch_size;
     }
-    if let Some(column_mapping_mode) = from.column_mapping_mode {
-        to.column_mapping_mode = column_mapping_mode.parse().map_err(|e| {
-            DataFusionError::Plan(format!("invalid value for delta.columnMapping.mode: {e}"))
-        })?;
-    }
     if let Some(ref raw) = from.delta_log_replay_strategy {
         to.delta_log_replay_strategy = match raw.to_ascii_lowercase().as_str() {
             "auto" => DeltaLogReplayStrategyOption::Auto,
@@ -384,4 +397,65 @@ fn resolve_delta_metadata_configuration(
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str())),
     )
+}
+
+fn split_delta_write_options_and_table_properties(
+    options: Vec<HashMap<String, String>>,
+) -> (Vec<HashMap<String, String>>, HashMap<String, String>) {
+    let mut clean_options = Vec::with_capacity(options.len());
+    let mut table_properties = HashMap::new();
+
+    for layer in options {
+        let mut clean_layer = HashMap::with_capacity(layer.len());
+        for (key, value) in layer {
+            if let Some(property_key) = route_table_property_key(&key) {
+                table_properties.insert(property_key, value);
+            } else {
+                clean_layer.insert(key, value);
+            }
+        }
+        clean_options.push(clean_layer);
+    }
+
+    (clean_options, table_properties)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_split_delta_write_options_and_table_properties() {
+        let options = vec![
+            HashMap::from([
+                ("mergeSchema".to_string(), "true".to_string()),
+                ("column_mapping_mode".to_string(), "name".to_string()),
+            ]),
+            HashMap::from([
+                ("delta.appendOnly".to_string(), "true".to_string()),
+                ("targetFileSize".to_string(), "10".to_string()),
+            ]),
+        ];
+
+        let (clean_options, table_properties) =
+            split_delta_write_options_and_table_properties(options);
+
+        assert_eq!(clean_options.len(), 2);
+        assert_eq!(
+            clean_options[0],
+            HashMap::from([("mergeSchema".to_string(), "true".to_string())])
+        );
+        assert_eq!(
+            clean_options[1],
+            HashMap::from([("targetFileSize".to_string(), "10".to_string())])
+        );
+        assert_eq!(
+            table_properties.get("delta.columnMapping.mode"),
+            Some(&"name".to_string())
+        );
+        assert_eq!(
+            table_properties.get("delta.appendOnly"),
+            Some(&"true".to_string())
+        );
+    }
 }

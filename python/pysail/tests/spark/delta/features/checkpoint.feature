@@ -48,6 +48,83 @@ Feature: Delta Lake Checkpoint
         """
 
   @sail-only
+  Rule: Multiple checkpoints are created after repeated writes with interval three
+
+    Background:
+      Given variable location for temporary directory delta_checkpoint_interval_three
+      Given variable delta_log for delta log of location
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_checkpoint_interval_three_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_checkpoint_interval_three_test (id INT)
+        USING DELTA
+        LOCATION {{ location.sql }}
+        TBLPROPERTIES ('delta.checkpointInterval' = '3')
+        """
+      Given statement
+        """
+        INSERT INTO delta_checkpoint_interval_three_test VALUES (1)
+        """
+      Given statement
+        """
+        INSERT INTO delta_checkpoint_interval_three_test VALUES (2)
+        """
+      Given statement
+        """
+        INSERT INTO delta_checkpoint_interval_three_test VALUES (3)
+        """
+      Given statement
+        """
+        INSERT INTO delta_checkpoint_interval_three_test VALUES (4)
+        """
+      Given statement
+        """
+        INSERT INTO delta_checkpoint_interval_three_test VALUES (5)
+        """
+      Given statement
+        """
+        INSERT INTO delta_checkpoint_interval_three_test VALUES (6)
+        """
+      Given statement
+        """
+        INSERT INTO delta_checkpoint_interval_three_test VALUES (7)
+        """
+
+    Scenario: Delta log directory contains two checkpoint parquet files after enough inserts
+      When query
+        """
+        SELECT * FROM delta_checkpoint_interval_three_test ORDER BY id
+        """
+      Then query result ordered
+        | id |
+        | 1  |
+        | 2  |
+        | 3  |
+        | 4  |
+        | 5  |
+        | 6  |
+        | 7  |
+      Then delta log first commit protocol and metadata contains
+        | path                                                | value |
+        | metaData.configuration['delta.checkpointInterval'] | "3"   |
+      Then file tree in delta_log matches
+        """
+        📄 00000000000000000000.json
+        📄 00000000000000000001.json
+        📄 00000000000000000002.json
+        📄 00000000000000000003.checkpoint.parquet
+        📄 00000000000000000003.json
+        📄 00000000000000000004.json
+        📄 00000000000000000005.json
+        📄 00000000000000000006.checkpoint.parquet
+        📄 00000000000000000006.json
+        📄 _last_checkpoint
+        """
+
+  @sail-only
   Rule: Table remains readable from checkpoint when a JSON commit log is deleted
 
     Background:

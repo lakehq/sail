@@ -30,8 +30,8 @@ pub use log::{
 pub use metadata::{Format, Metadata};
 pub use operation::{DeltaOperation, MergePredicate, SaveMode};
 pub use properties::{
-    canonicalize_and_validate_table_properties, DataSkippingNumIndexedCols, IsolationLevel,
-    TableProperties,
+    canonicalize_and_validate_table_properties, route_table_property_key,
+    DataSkippingNumIndexedCols, IsolationLevel, TableProperties,
 };
 pub use protocol::{Protocol, TableFeature};
 pub use schema::{

@@ -20,8 +20,13 @@ class TestDeltaColumnMapping:
             ]
         )
 
-        # Write new table with column mapping name mode
-        df.write.format("delta").mode("overwrite").option("column_mapping_mode", "name").save(str(base))
+        # Write new table with the official Delta table property name.
+        (
+            df.write.format("delta")
+            .mode("overwrite")
+            .option("delta.columnMapping.mode", "name")
+            .save(str(base))
+        )
 
         # Basic read should succeed
         out = spark.read.format("delta").load(str(base)).orderBy("id").collect()
