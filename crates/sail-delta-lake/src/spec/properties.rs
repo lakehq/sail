@@ -120,8 +120,9 @@ where
 
 const DEFAULT_LOG_RETENTION_SECS: u64 = 30 * 24 * 60 * 60;
 const DEFAULT_DELETED_FILE_RETENTION_SECS: u64 = 7 * 24 * 60 * 60;
+// Sail aligns with Spark/Delta's default of checkpointing every 10 committed versions.
 const DEFAULT_CHECKPOINT_INTERVAL: NonZeroU64 =
-    NonZeroU64::new(100).expect("non-zero checkpoint interval");
+    NonZeroU64::new(10).expect("non-zero checkpoint interval");
 
 impl TableProperties {
     pub fn append_only(&self) -> bool {
@@ -149,6 +150,120 @@ impl TableProperties {
 
     pub fn isolation_level(&self) -> IsolationLevel {
         self.isolation_level.unwrap_or_default()
+    }
+}
+
+pub fn canonicalize_and_validate_table_properties<K, V, I>(
+    properties: I,
+) -> DeltaResult<HashMap<String, String>>
+where
+    I: IntoIterator<Item = (K, V)>,
+    K: AsRef<str>,
+    V: AsRef<str>,
+{
+    let mut canonicalized = HashMap::new();
+    for (key, value) in properties {
+        let key = canonicalize_table_property_key(key.as_ref()).unwrap_or_else(|| key.as_ref());
+        validate_table_property(key, value.as_ref())?;
+        canonicalized.insert(key.to_string(), value.as_ref().to_string());
+    }
+    Ok(canonicalized)
+}
+
+/// Map supported property aliases to their canonical Delta table property key.
+///
+/// Returns `Some(canonical_key)` for recognized modeled properties and aliases, and `None`
+/// for unrecognized keys that should be preserved as-is.
+fn canonicalize_table_property_key(key: &str) -> Option<&'static str> {
+    match key.to_ascii_lowercase().as_str() {
+        "delta.appendonly" | "append_only" | "appendonly" => Some("delta.appendOnly"),
+        "delta.checkpointinterval" | "checkpoint_interval" | "checkpointinterval" => {
+            Some("delta.checkpointInterval")
+        }
+        "delta.checkpoint.writestatsasjson"
+        | "checkpoint_write_stats_as_json"
+        | "checkpointwritestatsasjson" => Some("delta.checkpoint.writeStatsAsJson"),
+        "delta.checkpoint.writestatsasstruct"
+        | "checkpoint_write_stats_as_struct"
+        | "checkpointwritestatsasstruct" => Some("delta.checkpoint.writeStatsAsStruct"),
+        "delta.columnmapping.mode"
+        | "column_mapping_mode"
+        | "columnmappingmode"
+        | "column_mapping" => Some("delta.columnMapping.mode"),
+        "delta.dataskippingnumindexedcols"
+        | "data_skipping_num_indexed_cols"
+        | "dataskippingnumindexedcols" => Some("delta.dataSkippingNumIndexedCols"),
+        "delta.dataskippingstatscolumns"
+        | "data_skipping_stats_columns"
+        | "dataskippingstatscolumns" => Some("delta.dataSkippingStatsColumns"),
+        "delta.deletedfileretentionduration"
+        | "deleted_file_retention_duration"
+        | "deletedfileretentionduration" => Some("delta.deletedFileRetentionDuration"),
+        "delta.isolationlevel" | "isolation_level" | "isolationlevel" => {
+            Some("delta.isolationLevel")
+        }
+        "delta.logretentionduration" | "log_retention_duration" | "logretentionduration" => {
+            Some("delta.logRetentionDuration")
+        }
+        "delta.enableexpiredlogcleanup"
+        | "enable_expired_log_cleanup"
+        | "enableexpiredlogcleanup" => Some("delta.enableExpiredLogCleanup"),
+        _ => None,
+    }
+}
+
+/// Resolve whether an external option key should be routed into Delta table properties.
+///
+/// Known modeled aliases are canonicalized to the exact Delta table property name. Any other key
+/// with a `delta.` prefix is treated as a pass-through table property so newer protocol features
+/// can still be persisted without first teaching Sail about them.
+pub fn route_table_property_key(key: &str) -> Option<String> {
+    if let Some(canonical) = canonicalize_table_property_key(key) {
+        return Some(canonical.to_string());
+    }
+
+    if key.len() >= 6 && key[..6].eq_ignore_ascii_case("delta.") {
+        if key.starts_with("delta.") {
+            return Some(key.to_string());
+        }
+        return Some(format!("delta.{}", &key[6..]));
+    }
+
+    None
+}
+
+/// Validate modeled Delta table property values while allowing unknown properties through.
+///
+/// Known properties are parsed using the same type-specific rules Delta snapshots rely on
+/// (boolean, positive integer, interval, column mapping mode, etc.). Unknown properties are
+/// accepted so they can still be persisted in `metaData.configuration`.
+fn validate_table_property(key: &str, value: &str) -> DeltaResult<()> {
+    match key {
+        "delta.appendOnly"
+        | "delta.checkpoint.writeStatsAsJson"
+        | "delta.checkpoint.writeStatsAsStruct"
+        | "delta.enableExpiredLogCleanup" => parse_bool(value).map(|_| ()).ok_or_else(|| {
+            DeltaTableError::generic(format!("invalid boolean value for {key}: {value}"))
+        }),
+        "delta.checkpointInterval" => parse_positive_int(value).map(|_| ()).ok_or_else(|| {
+            DeltaTableError::generic(format!(
+                "invalid value for {key}: expected positive integer"
+            ))
+        }),
+        "delta.columnMapping.mode" => ColumnMappingMode::try_from(value).map(|_| ()),
+        "delta.dataSkippingNumIndexedCols" => {
+            DataSkippingNumIndexedCols::try_from(value).map(|_| ())
+        }
+        "delta.dataSkippingStatsColumns" => ColumnName::parse_column_name_list(value).map(|_| ()),
+        "delta.deletedFileRetentionDuration" | "delta.logRetentionDuration" => {
+            parse_interval(value).map(|_| ()).ok_or_else(|| {
+                DeltaTableError::generic(format!(
+                    "invalid value for {key}: expected Delta interval literal"
+                ))
+            })
+        }
+        "delta.isolationLevel" => IsolationLevel::from_str(value).map(|_| ()),
+        _ => Ok(()),
     }
 }
 
@@ -241,4 +356,63 @@ pub fn resolve_data_skipping_num_indexed_cols(
     Ok(props
         .data_skipping_num_indexed_cols
         .unwrap_or(DataSkippingNumIndexedCols::AllColumns))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_checkpoint_interval_default_is_ten() {
+        assert_eq!(TableProperties::default().checkpoint_interval().get(), 10);
+    }
+
+    #[test]
+    fn test_canonicalize_table_property_aliases() -> DeltaResult<()> {
+        let props = canonicalize_and_validate_table_properties([
+            ("column_mapping_mode", "name"),
+            ("checkpoint_interval", "7"),
+            ("custom.key", "value"),
+        ])?;
+
+        assert_eq!(
+            props.get("delta.columnMapping.mode"),
+            Some(&"name".to_string())
+        );
+        assert_eq!(
+            props.get("delta.checkpointInterval"),
+            Some(&"7".to_string())
+        );
+        assert_eq!(props.get("custom.key"), Some(&"value".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn test_invalid_modeled_property_is_rejected() {
+        let result =
+            canonicalize_and_validate_table_properties([("delta.checkpointInterval", "0")]);
+        assert!(result.is_err());
+        if let Err(err) = result {
+            assert!(err
+                .to_string()
+                .contains("invalid value for delta.checkpointInterval"));
+        }
+    }
+
+    #[test]
+    fn test_route_table_property_key() {
+        assert_eq!(
+            route_table_property_key("column_mapping_mode"),
+            Some("delta.columnMapping.mode".to_string())
+        );
+        assert_eq!(
+            route_table_property_key("append_only"),
+            Some("delta.appendOnly".to_string())
+        );
+        assert_eq!(
+            route_table_property_key("Delta.featureFlag"),
+            Some("delta.featureFlag".to_string())
+        );
+        assert_eq!(route_table_property_key("mergeSchema"), None);
+    }
 }

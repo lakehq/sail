@@ -25,6 +25,7 @@ pub async fn create_file_write_physical_plan(
         partition_by,
         sort_by,
         bucket_by,
+        table_properties,
         options,
     } = options;
     let mode = match mode {
@@ -49,6 +50,7 @@ pub async fn create_file_write_physical_plan(
         partition_by,
         bucket_by,
         sort_order,
+        table_properties: table_properties.into_iter().collect(),
         // TODO: detect duplicated keys in each set of options
         options: options
             .into_iter()

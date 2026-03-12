@@ -41,6 +41,7 @@ impl TableFormat for ConsoleTableFormat {
             partition_by,
             bucket_by,
             sort_order,
+            table_properties: _,
             options,
         } = info;
         if !is_flow_event_schema(&input.schema()) {

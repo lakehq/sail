@@ -121,12 +121,6 @@ impl PlanResolver<'_> {
                 "REPLACE in CREATE TABLE AS SELECT statement",
             ));
         }
-        if !properties.is_empty() {
-            return Err(PlanError::todo(
-                "PROPERTIES in CREATE TABLE AS SELECT statement",
-            ));
-        }
-
         if !sort_by.is_empty() {
             return Err(PlanError::todo(
                 "SORT_BY in CREATE TABLE AS SELECT statement",
@@ -190,6 +184,7 @@ impl PlanResolver<'_> {
             .with_mode(write_mode)
             .with_format(format)
             .with_partition_by(partition_by)
+            .with_table_properties(properties)
             .with_options(write_options);
 
         self.resolve_write_with_builder(input, builder, state).await

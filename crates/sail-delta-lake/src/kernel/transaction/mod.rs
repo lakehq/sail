@@ -910,8 +910,7 @@ impl PostCommit {
         }
 
         let checkpoint_interval = table_state.table_properties().checkpoint_interval().get() as i64;
-        // TODO: SQL `TBLPROPERTIES(delta.checkpointInterval)` isn't plumbed into `metaData.configuration` yet.
-        if version >= 0 && (version % checkpoint_interval) == 0 {
+        if should_create_checkpoint(version, checkpoint_interval) {
             info!("Creating checkpoint for version {version}");
             create_checkpoint_for(version, log_store.as_ref(), operation_id).await?;
             Ok(true)
@@ -919,6 +918,10 @@ impl PostCommit {
             Ok(false)
         }
     }
+}
+
+fn should_create_checkpoint(version: i64, checkpoint_interval: i64) -> bool {
+    version != 0 && version % checkpoint_interval == 0
 }
 
 /// A commit that successfully completed
@@ -966,5 +969,17 @@ impl std::future::IntoFuture for PostCommit {
                 Err(err) => Err(err),
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_create_checkpoint;
+
+    #[test]
+    fn test_should_create_checkpoint_skips_version_zero() {
+        assert!(!should_create_checkpoint(0, 10));
+        assert!(!should_create_checkpoint(1, 10));
+        assert!(should_create_checkpoint(10, 10));
     }
 }
