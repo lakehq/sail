@@ -1,3 +1,4 @@
+@levenshtein
 Feature: levenshtein() returns edit distance between two strings
 
   Rule: Basic usage
