@@ -131,13 +131,14 @@ def normalize_plan_text(plan_text: str) -> str:
                 continue
             normalized_entries: list[str] = []
             for entry in sorted(part.strip() for part in inner.split(", ")):
-                if "part-<uuid>.parquet" in entry:
-                    entry = entry.replace(
+                normalized_entry = entry
+                if "part-<uuid>.parquet" in normalized_entry:
+                    normalized_entry = normalized_entry.replace(
                         "part-<uuid>.parquet",
                         f"part-<uuid>-{next_seq:020d}.parquet",
                     )
                     next_seq += 1
-                normalized_entries.append(entry)
+                normalized_entries.append(normalized_entry)
             normalized_groups.append("[" + ", ".join(normalized_entries) + "]")
 
         normalized_groups_list = "[" + ", ".join(normalized_groups) + "]"
