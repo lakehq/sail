@@ -1,0 +1,180 @@
+{
+  description = "Sail – Spark-compatible compute engine (dev shell + package)";
+
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    flake-utils.url = "github:numtide/flake-utils";
+    fenix.url = "github:nix-community/fenix";
+  };
+
+  outputs = { self, nixpkgs, flake-utils, fenix }:
+    flake-utils.lib.eachDefaultSystem (system:
+      let
+        pkgs = import nixpkgs { inherit system; };
+
+        lib = pkgs.lib;
+        isLinux = pkgs.stdenv.isLinux;
+
+        rustStable = fenix.packages.${system}.stable.toolchain;
+        rustNightly = fenix.packages.${system}.latest.toolchain;
+
+        py = pkgs.python313.withPackages (ps: with ps; [
+          pip
+          setuptools
+          wheel
+        ]);
+
+        protobuf3 = pkgs.protobuf_21;
+
+      in {
+        # ── Dev shell ─────────────────────────────────────────────────
+        devShells.default = pkgs.mkShell {
+          buildInputs =
+            (with pkgs; [
+              fzf
+              bashInteractive
+              coreutils
+              findutils
+              gnugrep
+              gnused
+              gawk
+              which
+              procps
+              ripgrep
+
+              nodejs_22
+              pnpm
+              zig
+              maturin
+
+              rustStable
+              rustNightly
+              cargo-nextest
+              pkg-config
+
+              jdk17
+              maven
+
+              py
+
+              hatch
+              uv
+
+              mold
+              sccache
+            ])
+            ++ [ protobuf3 ]
+            ++ lib.optionals isLinux [
+              pkgs.stdenv.cc.cc.lib
+            ];
+
+          shellHook =
+            ''
+            if ! nixos-option programs.nix-ld.enable >/dev/null 2>&1; then
+              echo "⚠️ No estás en NixOS o nixos-option no está disponible."
+            elif [ "$(nixos-option programs.nix-ld.enable | awk '/Value:/ {getline; print $1}')" != "true" ]; then
+              echo ""
+              echo "⚠️  nix-ld no está habilitado."
+              echo "   Añade en configuration.nix:"
+              echo "     programs.nix-ld.enable = true;"
+              echo "   y ejecuta: sudo nixos-rebuild switch"
+              echo ""
+            fi
+
+              # Auto-update fenix to latest nightly (once per day, like CI)
+              _fenix_date=$(python3 -c "import json,datetime;d=json.load(open('$PWD/flake.lock'));print(datetime.datetime.utcfromtimestamp(d['nodes']['fenix']['locked']['lastModified']).strftime('%Y-%m-%d'))" 2>/dev/null)
+              _today=$(date +%Y-%m-%d)
+              if [ "$_fenix_date" != "$_today" ]; then
+                echo -e "\033[1;33m⛵ Updating fenix toolchain ($_fenix_date → $_today)...\033[0m"
+                if nix flake update fenix 2>&1; then
+                  echo ""
+                  echo -e "\033[1;32m✓ fenix updated. Please restart the shell:\033[0m"
+                  echo -e "\033[1;36m  exit && nix develop\033[0m"
+                  echo ""
+                  return 0 2>/dev/null || exit 0
+                else
+                  echo -e "\033[1;31m⚠ Could not update fenix (no network?). Continuing with current toolchain.\033[0m"
+                fi
+              fi
+
+              export RUST_BACKTRACE=1
+              export JAVA_HOME=${pkgs.jdk17}/lib/openjdk
+
+              # 🔥 Forzamos el protoc correcto
+              export PROTOC="${protobuf3}/bin/protoc"
+              export PATH="${protobuf3}/bin:$PATH"
+
+              unset PYTHONHOME
+              unset PYTHONPATH
+
+              # Force PyO3 to exact interpreter
+              export PYO3_PYTHON="${py}/bin/python"
+              export PYTHON_SYS_EXECUTABLE="${py}/bin/python"
+              export PYO3_USE_ABI3=0
+              export PKG_CONFIG_PATH="${py}/lib/pkgconfig:$PKG_CONFIG_PATH"
+
+              export PYTHONPATH="$PWD/python"
+
+              # Accept `cargo +<toolchain> ...` even without rustup (toolchains managed by Nix)
+              cargo() {
+                if [[ "''${1:-}" == +* ]]; then
+                  shift
+                fi
+                command cargo "$@"
+              }
+
+              if [ -z "$_NIX_OLD_PS1" ]; then
+                export _NIX_OLD_PS1="$PS1"
+              fi
+              export PS1="\[\e[48;5;24m\]\[\e[38;5;231m\]  ⛵ sail  \[\e[0m\] \[\e[38;5;75m\]\w\[\e[0m\] \$ "
+
+              # Enable fzf keybindings (Ctrl-R, Ctrl-T, Alt-C)
+              if [ -e "${pkgs.fzf}/share/fzf/key-bindings.bash" ]; then
+                source "${pkgs.fzf}/share/fzf/key-bindings.bash"
+              fi
+              if [ -e "${pkgs.fzf}/share/fzf/completion.bash" ]; then
+                source "${pkgs.fzf}/share/fzf/completion.bash"
+              fi
+
+              echo ""
+              echo -e "\033[1;36m=== Sail Development Commands ===\033[0m"
+              echo ""
+              echo "hatch run maturin develop"
+              echo "hatch run test-spark.spark-4.1.1:pip install 'pyspark[connect]==4.1.1' 'pandas'"
+              echo "hatch run test-spark.spark-4.1.1:bash scripts/spark-tests/run-tests.sh"
+              echo "export SPARK_REMOTE=\"sc://localhost:50051\" && hatch run pytest --pyargs pysail"
+              echo ""
+              echo "env RUST_LOG=\"DEBUG\" SAIL_EXECUTION__DEFAULT_PARALLELISM=4 cargo run -p sail-cli -- spark server"
+              echo ""
+              echo -e "\033[1;32m✓ Ibis test data ready at opt/ibis-testing-data\033[0m"
+              echo ""
+              echo -e "\033[1;33m1. Run Sail server (port 50051):\033[0m"
+              echo "   hatch run test-ibis:scripts/spark-tests/run-server.sh"
+              echo ""
+              echo -e "\033[1;33m2. Run Ibis tests (against Sail server on localhost:50051):\033[0m"
+              echo "   hatch run test-ibis:env SPARK_REMOTE=\"sc://localhost:50051\" scripts/spark-tests/run-tests.sh"
+              echo ""
+              echo -e "\033[1;33m3. Run feature tests (BDD with pytest-bdd):\033[0m"
+              echo "   hatch run pytest python/pysail/tests/spark/*/test_features.py"
+              echo ""
+              echo -e "\033[1;33m4. Run all tests (against Sail server on localhost:50051):\033[0m"
+              echo "   env SPARK_REMOTE=\"sc://localhost:50051\" hatch run pytest --pyargs pysail"
+              echo ""
+              echo -e "\033[1;33m5. Run tests with Spark local (not Sail):\033[0m"
+              echo "   env SPARK_REMOTE=\"local\" hatch run pytest --pyargs pysail"
+              echo ""
+              echo -e "\033[1;33m6. Run only function feature tests:\033[0m"
+              echo "   export SPARK_REMOTE=\"sc://localhost:50051\" && hatch run pytest python/pysail/tests/spark/function/test_features.py"
+              echo ""
+            ''
+            + lib.optionalString isLinux ''
+              export LD_LIBRARY_PATH=${py}/lib:${pkgs.stdenv.cc.cc.lib}/lib:''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+
+              # Use mold linker (faster) and sccache to cache compilations
+              export RUSTFLAGS="-C link-arg=-fuse-ld=mold"
+              export RUSTC_WRAPPER="${pkgs.sccache}/bin/sccache"
+            '';
+        };
+      }
+    );
+}
