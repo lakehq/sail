@@ -26,10 +26,13 @@ use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
 fn integer_part(expr: Expr, part: &str) -> Expr {
-    cast(
-        expr_fn::date_part(lit(part.to_uppercase()), expr),
-        DataType::Int32,
-    )
+    // Guard against Null type input — DataFusion's date_part rejects Null.
+    when(expr.clone().is_null(), lit(ScalarValue::Int32(None)))
+        .otherwise(cast(
+            expr_fn::date_part(lit(part.to_uppercase()), expr),
+            DataType::Int32,
+        ))
+        .unwrap_or_else(|_| lit(ScalarValue::Int32(None)))
 }
 
 fn trunc_part_conversion(part: Expr) -> Expr {
@@ -787,7 +790,16 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             F::custom(|input| unix_time_unit(input, TimeUnit::Second)),
         ),
         ("unix_timestamp", F::custom(unix_timestamp)),
-        ("weekday", F::unary(|arg| integer_part(arg, "DOW") - lit(1))),
+        (
+            "weekday",
+            F::unary(|arg| {
+                Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(integer_part(arg, "DOW") + lit(6)),
+                    op: Operator::Modulo,
+                    right: Box::new(lit(7)),
+                })
+            }),
+        ),
         (
             "weekofyear",
             F::unary(|arg| cast(expr_fn::to_char(arg, lit("%V")), DataType::Int32)),
