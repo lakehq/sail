@@ -44,6 +44,7 @@ impl PySparkUdtfPayload {
         eval_type: spec::PySparkUdfType,
         num_args: usize,
         return_type: &DataType,
+        name: &str,
         config: &PySparkUdfConfig,
     ) -> PyUdfResult<Vec<u8>> {
         check_python_udf_version(python_version)?;
@@ -96,8 +97,8 @@ impl PySparkUdtfPayload {
         data.extend(type_string.as_bytes());
 
         if matches!(pyspark_version, PySparkVersion::V4) {
-            // TODO: support UDTF name
-            data.extend(0u32.to_be_bytes()); // length of UDTF name
+            data.extend((name.len() as u32).to_be_bytes()); // length of UDTF name
+            data.extend(name.as_bytes());
         }
 
         Ok(data)

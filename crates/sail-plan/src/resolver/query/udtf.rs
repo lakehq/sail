@@ -72,6 +72,7 @@ impl PlanResolver<'_> {
             function.eval_type,
             arguments.len(),
             &function.return_type,
+            name,
             &self.config.pyspark_udf_config,
         )?;
         let kind = match function.eval_type {
