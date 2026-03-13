@@ -261,6 +261,17 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
         Statement::ShowCreateTable { .. } => Err(SqlError::todo("SHOW CREATE TABLE")),
+        Statement::ShowTblProperties {
+            show: _,
+            tblproperties: _,
+            name,
+            key,
+        } => {
+            let table = from_ast_object_name(name)?;
+            let key = key.map(|(_, k, _)| from_ast_string(k)).transpose()?;
+            let node = spec::CommandNode::ShowTableProperties { table, key };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::ShowColumns {
             show: _,
             columns: _,

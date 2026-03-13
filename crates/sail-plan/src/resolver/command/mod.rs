@@ -289,6 +289,12 @@ impl PlanResolver<'_> {
                     extended,
                 })
             }
+            CommandNode::ShowTableProperties { table, key } => {
+                self.resolve_catalog_command(CatalogCommand::ShowTableProperties {
+                    table: table.into(),
+                    key,
+                })
+            }
             CommandNode::CommentOnCatalog { .. } => {
                 Err(PlanError::todo("CommandNode::CommentOnCatalog"))
             }
