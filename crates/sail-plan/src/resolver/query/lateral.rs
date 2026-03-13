@@ -74,6 +74,10 @@ impl PlanResolver<'_> {
                     &function_name,
                     input,
                     arguments,
+                    // No kwargs extraction needed: lateral view arguments come from SQL
+                    // parsing, which uses the `named_arguments` field for named parameters
+                    // instead of `NamedArgument` expressions.
+                    &[],
                     output_names,
                     output_qualifier,
                     f.deterministic(),

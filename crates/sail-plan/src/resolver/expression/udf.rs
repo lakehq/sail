@@ -36,6 +36,7 @@ impl PlanResolver<'_> {
             function,
         } = function;
         let function_name: String = function_name.into();
+        let (arguments, kwargs) = Self::extract_kwargs(arguments);
         let (argument_display_names, arguments) = self
             .resolve_expressions_and_names(arguments, schema, state)
             .await?;
@@ -45,6 +46,7 @@ impl PlanResolver<'_> {
             &function_name,
             arguments,
             &argument_display_names,
+            &kwargs,
             schema,
             deterministic,
             is_distinct,
@@ -66,6 +68,7 @@ impl PlanResolver<'_> {
         name: &str,
         arguments: Vec<Expr>,
         argument_display_names: &[String],
+        kwargs: &[Option<String>],
         schema: &DFSchemaRef,
         deterministic: bool,
         distinct: bool,
@@ -87,6 +90,7 @@ impl PlanResolver<'_> {
             &function.command,
             function.eval_type,
             &((0..arguments.len()).collect::<Vec<_>>()),
+            kwargs,
             &self.config.pyspark_udf_config,
         )?;
 
@@ -187,5 +191,27 @@ impl PlanResolver<'_> {
                 }))
             }
         }
+    }
+
+    /// Extracts keyword argument names from a list of spec expressions.
+    /// Returns the unwrapped expressions and a parallel vector of optional keyword names.
+    pub(crate) fn extract_kwargs(
+        arguments: Vec<spec::Expr>,
+    ) -> (Vec<spec::Expr>, Vec<Option<String>>) {
+        let mut exprs = Vec::with_capacity(arguments.len());
+        let mut kwargs = Vec::with_capacity(arguments.len());
+        for arg in arguments {
+            match arg {
+                spec::Expr::NamedArgument { key, value } => {
+                    kwargs.push(Some(key));
+                    exprs.push(*value);
+                }
+                other => {
+                    kwargs.push(None);
+                    exprs.push(other);
+                }
+            }
+        }
+        (exprs, kwargs)
     }
 }

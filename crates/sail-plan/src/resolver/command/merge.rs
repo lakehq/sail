@@ -881,6 +881,15 @@ fn merge_disambiguate_unqualified_plan_ids(
                 source_schema,
             )),
         },
+        Expr::NamedArgument { key, value } => Expr::NamedArgument {
+            key,
+            value: Box::new(merge_disambiguate_unqualified_plan_ids(
+                *value,
+                state,
+                target_schema,
+                source_schema,
+            )),
+        },
         Expr::UnresolvedDate { .. } => expr,
         Expr::UnresolvedTimestamp { .. } => expr,
         Expr::IdentifierClause { expr: inner } => Expr::IdentifierClause {

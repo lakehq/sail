@@ -124,6 +124,7 @@ impl PlanResolver<'_> {
                     function,
                 } = function;
                 let function_name: String = function_name.into();
+                let (arguments, kwargs) = Self::extract_kwargs(arguments);
                 let (argument_display_names, arguments) = self
                     .resolve_expressions_and_names(arguments, schema, state)
                     .await?;
@@ -138,6 +139,7 @@ impl PlanResolver<'_> {
                     &function.command,
                     function.eval_type,
                     &((0..arguments.len()).collect::<Vec<_>>()),
+                    &kwargs,
                     &self.config.pyspark_udf_config,
                 )?;
                 let function = match function.eval_type {

@@ -313,6 +313,9 @@ impl PlanResolver<'_> {
                 )
                 .await
             }
+            Expr::NamedArgument { value, .. } => {
+                self.resolve_named_expression(*value, schema, state).await
+            }
             Expr::Table { expr } => self.resolve_expression_table(*expr, state).await,
             Expr::UnresolvedDate { value } => self.resolve_expression_date(value, state),
             Expr::UnresolvedTimestamp {

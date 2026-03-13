@@ -294,6 +294,10 @@ impl PlanResolver<'_> {
                         &function_name,
                         input,
                         arguments,
+                        // No kwargs extraction needed: `ReadUdtf` arguments come from SQL
+                        // parsing, which uses the `named_arguments` field for named
+                        // parameters instead of `NamedArgument` expressions.
+                        &[],
                         None,
                         None,
                         f.deterministic(),

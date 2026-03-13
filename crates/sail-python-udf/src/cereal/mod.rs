@@ -53,10 +53,10 @@ fn supports_kwargs(eval_type: spec::PySparkUdfType) -> bool {
         | PySparkUdfType::CogroupedMapPandas
         | PySparkUdfType::CogroupedMapArrow
         | PySparkUdfType::MapArrowIter
-        | PySparkUdfType::GroupedMapPandasWithState
-        | PySparkUdfType::Table
-        | PySparkUdfType::ArrowTable => false,
-        PySparkUdfType::Batched
+        | PySparkUdfType::GroupedMapPandasWithState => false,
+        PySparkUdfType::Table
+        | PySparkUdfType::ArrowTable
+        | PySparkUdfType::Batched
         | PySparkUdfType::ArrowBatched
         | PySparkUdfType::ScalarPandas
         | PySparkUdfType::GroupedAggPandas
@@ -82,5 +82,19 @@ fn should_write_config(eval_type: spec::PySparkUdfType) -> bool {
         | PySparkUdfType::MapArrowIter
         | PySparkUdfType::GroupedMapPandasWithState
         | PySparkUdfType::ArrowTable => true,
+    }
+}
+
+/// Writes the keyword argument flag and name for a single argument.
+/// If the argument is a keyword argument, writes `1u8` followed by the
+/// length-prefixed keyword name. Otherwise, writes `0u8`.
+fn write_kwarg(data: &mut Vec<u8>, kwargs: &[Option<String>], index: usize) {
+    if let Some(name) = kwargs.get(index).and_then(|k| k.as_deref()) {
+        data.extend(1u8.to_be_bytes()); // keyword argument
+        let name_bytes = name.as_bytes();
+        data.extend((name_bytes.len() as i32).to_be_bytes());
+        data.extend(name_bytes);
+    } else {
+        data.extend(0u8.to_be_bytes()); // not a keyword argument
     }
 }
