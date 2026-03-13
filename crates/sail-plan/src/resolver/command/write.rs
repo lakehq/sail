@@ -256,7 +256,7 @@ impl PlanResolver<'_> {
                 file_write_options.mode = self
                     .resolve_write_mode(mode, Some(&info.schema()), state)
                     .await?;
-                file_write_options.partition_by = info.partition_by_fields.clone();
+                file_write_options.partition_by = info.partition_by.clone();
                 file_write_options.sort_by = info.sort_by.into_iter().map(|x| x.into()).collect();
                 file_write_options.bucket_by = info.bucket_by.map(|x| x.into());
                 file_write_options.path = info.location.ok_or_else(|| {
@@ -442,7 +442,6 @@ impl PlanResolver<'_> {
                 location,
                 format,
                 partition_by,
-                partition_by_fields,
                 sort_by,
                 bucket_by,
                 options,
@@ -502,7 +501,6 @@ impl PlanResolver<'_> {
                     location,
                     format,
                     partition_by,
-                    partition_by_fields,
                     sort_by,
                     bucket_by,
                     options,
@@ -757,8 +755,7 @@ struct TableInfo {
     columns: Vec<TableColumnStatus>,
     location: Option<String>,
     format: String,
-    partition_by: Vec<String>,
-    partition_by_fields: Vec<CatalogPartitionField>,
+    partition_by: Vec<CatalogPartitionField>,
     sort_by: Vec<CatalogTableSort>,
     bucket_by: Option<CatalogTableBucketBy>,
     options: Vec<(String, String)>,
@@ -803,7 +800,21 @@ impl TableInfo {
                 && partition_by
                     .iter()
                     .zip(self.partition_by.iter())
-                    .all(|(a, b)| a.transform.is_none() && a.column.eq_ignore_ascii_case(b)))
+                    .all(|(a, b)| Self::partition_fields_match(a, b)))
+    }
+
+    fn partition_fields_match(a: &CatalogPartitionField, b: &CatalogPartitionField) -> bool {
+        fn normalize_transform(
+            transform: Option<PartitionTransform>,
+        ) -> Option<PartitionTransform> {
+            match transform {
+                None | Some(PartitionTransform::Identity) => None,
+                Some(transform) => Some(transform),
+            }
+        }
+
+        a.column.eq_ignore_ascii_case(&b.column)
+            && normalize_transform(a.transform) == normalize_transform(b.transform)
     }
 
     fn is_empty_or_equivalent_bucketing(

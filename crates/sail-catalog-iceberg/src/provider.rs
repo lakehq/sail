@@ -21,9 +21,10 @@ use sail_catalog::provider::{
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
 use sail_common_datafusion::catalog::{
-    identity_partition_fields, CatalogTableConstraint, CatalogTableSort, DatabaseStatus,
-    TableColumnStatus, TableKind, TableStatus,
+    CatalogTableConstraint, CatalogTableSort, DatabaseStatus, TableColumnStatus, TableKind,
+    TableStatus,
 };
+use sail_iceberg::utils::partition_transform::catalog_partition_field_from_iceberg;
 use sail_iceberg::{arrow_type_to_iceberg, iceberg_type_to_arrow, NestedField, StructType};
 use tokio::sync::OnceCell;
 
@@ -217,9 +218,30 @@ impl IcebergRestCatalogProvider {
             })
             .unwrap_or_default();
 
-        let partition_by: Vec<String> = default_partition_spec
-            .map(|spec| spec.fields.iter().map(|f| f.name.clone()).collect())
-            .unwrap_or_default();
+        let partition_by = match (current_schema, default_partition_spec) {
+            (Some(schema), Some(spec)) => spec
+                .fields
+                .iter()
+                .map(|field| {
+                    let source_column = schema
+                        .fields
+                        .iter()
+                        .find(|f| f.id == field.source_id)
+                        .ok_or_else(|| {
+                            CatalogError::External(format!(
+                                "Partition field source id {} not found in schema",
+                                field.source_id
+                            ))
+                        })?
+                        .name
+                        .clone();
+                    let transform = field.transform.parse().map_err(CatalogError::External)?;
+                    catalog_partition_field_from_iceberg(source_column, transform)
+                        .map_err(CatalogError::External)
+                })
+                .collect::<CatalogResult<Vec<_>>>()?,
+            _ => Vec::new(),
+        };
 
         let columns = if let Some(schema) = current_schema {
             let mut cols = Vec::new();
@@ -389,7 +411,6 @@ impl IcebergRestCatalogProvider {
                 constraints,
                 location,
                 format: "iceberg".to_string(),
-                partition_by_fields: identity_partition_fields(&partition_by),
                 partition_by,
                 sort_by,
                 bucket_by: None,
@@ -879,7 +900,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                     location: None,
                     format: "iceberg".to_string(),
                     partition_by: Vec::new(),
-                    partition_by_fields: Vec::new(),
                     sort_by: Vec::new(),
                     bucket_by: None,
                     options: Vec::new(),
@@ -1891,7 +1911,13 @@ mod tests {
                 assert_eq!(location, Some("s3://bucket/table".to_string()));
                 assert_eq!(format, "iceberg");
 
-                assert_eq!(partition_by, vec!["category".to_string()]);
+                assert_eq!(
+                    partition_by,
+                    vec![CatalogPartitionField {
+                        column: "category".to_string(),
+                        transform: None,
+                    }]
+                );
 
                 assert_eq!(sort_by.len(), 1);
                 assert_eq!(sort_by[0].column, "id");

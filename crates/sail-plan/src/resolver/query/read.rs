@@ -85,7 +85,6 @@ impl PlanResolver<'_> {
                 format,
                 location,
                 partition_by,
-                partition_by_fields: _,
                 sort_by,
                 bucket_by,
                 options: table_options,
@@ -97,7 +96,7 @@ impl PlanResolver<'_> {
                     paths: location.map(|x| vec![x]).unwrap_or_default(),
                     schema: Some(schema),
                     constraints,
-                    partition_by,
+                    partition_by: partition_by.into_iter().map(|field| field.column).collect(),
                     bucket_by: bucket_by.map(|x| x.into()),
                     sort_order: sort_by.into_iter().map(|x| x.into()).collect(),
                     // TODO: detect duplicated keys in each set of options

@@ -606,7 +606,6 @@ async fn test_create_table() {
         location,
         format,
         partition_by,
-        partition_by_fields,
         sort_by,
         bucket_by,
         options,
@@ -676,8 +675,7 @@ async fn test_create_table() {
         Some("s3://icebergdata/demo/test_create_table/apple/ios/t1".to_string())
     );
     assert_eq!(format, "iceberg".to_string());
-    assert_eq!(partition_by, Vec::<String>::new());
-    assert_eq!(partition_by_fields, Vec::<CatalogPartitionField>::new());
+    assert_eq!(partition_by, Vec::<CatalogPartitionField>::new());
     assert_eq!(sort_by, vec![]);
     assert_eq!(bucket_by, None);
     assert_eq!(options, Vec::<(String, String)>::new());
@@ -813,7 +811,6 @@ async fn test_create_table() {
         location,
         format,
         partition_by,
-        partition_by_fields,
         sort_by,
         bucket_by,
         options,
@@ -837,9 +834,8 @@ async fn test_create_table() {
         Some("s3://icebergdata/custom/path/meow".to_string())
     );
     assert_eq!(format, "iceberg".to_string());
-    assert_eq!(partition_by, vec!["baz".to_string()]);
     assert_eq!(
-        partition_by_fields,
+        partition_by,
         vec![CatalogPartitionField {
             column: "baz".to_string(),
             transform: None,
@@ -1005,7 +1001,6 @@ async fn test_get_table() {
         location,
         format,
         partition_by,
-        partition_by_fields,
         sort_by,
         bucket_by,
         options,
@@ -1081,9 +1076,8 @@ async fn test_get_table() {
         Some("s3://icebergdata/custom/path/meow".to_string())
     );
     assert_eq!(format, "iceberg".to_string());
-    assert_eq!(partition_by, vec!["baz".to_string()]);
     assert_eq!(
-        partition_by_fields,
+        partition_by,
         vec![CatalogPartitionField {
             column: "baz".to_string(),
             transform: None,
@@ -1911,7 +1905,13 @@ async fn test_create_table_partition_identity() {
     match kind {
         TableKind::Table { partition_by, .. } => {
             assert_eq!(partition_by.len(), 1);
-            assert_eq!(partition_by[0], "id");
+            assert_eq!(
+                partition_by[0],
+                CatalogPartitionField {
+                    column: "id".to_string(),
+                    transform: None,
+                }
+            );
         }
         _ => panic!("Expected Table kind"),
     }
@@ -1950,7 +1950,13 @@ async fn test_create_table_partition_year() {
     match kind {
         TableKind::Table { partition_by, .. } => {
             assert_eq!(partition_by.len(), 1);
-            assert_eq!(partition_by[0], "ts_year");
+            assert_eq!(
+                partition_by[0],
+                CatalogPartitionField {
+                    column: "ts".to_string(),
+                    transform: Some(PartitionTransform::Year),
+                }
+            );
         }
         _ => panic!("Expected Table kind"),
     }
@@ -1989,7 +1995,13 @@ async fn test_create_table_partition_bucket() {
     match kind {
         TableKind::Table { partition_by, .. } => {
             assert_eq!(partition_by.len(), 1);
-            assert_eq!(partition_by[0], "id_bucket");
+            assert_eq!(
+                partition_by[0],
+                CatalogPartitionField {
+                    column: "id".to_string(),
+                    transform: Some(PartitionTransform::Bucket(16)),
+                }
+            );
         }
         _ => panic!("Expected Table kind"),
     }
@@ -2028,7 +2040,13 @@ async fn test_create_table_partition_truncate() {
     match kind {
         TableKind::Table { partition_by, .. } => {
             assert_eq!(partition_by.len(), 1);
-            assert_eq!(partition_by[0], "name_trunc");
+            assert_eq!(
+                partition_by[0],
+                CatalogPartitionField {
+                    column: "name".to_string(),
+                    transform: Some(PartitionTransform::Truncate(10)),
+                }
+            );
         }
         _ => panic!("Expected Table kind"),
     }
