@@ -52,7 +52,7 @@ impl LocationGenerator for DefaultLocationGenerator {
     fn with_partition_dir(&self, partition_dir: Option<&str>) -> (String, ObjectPath) {
         let id = self.counter.fetch_add(1, Ordering::Relaxed);
         let file = format!("part-{}-{:020}.parquet", Uuid::new_v4(), id);
-        let rel = match partition_dir {
+        let rel_unencoded = match partition_dir {
             Some(dir) if !dir.is_empty() => {
                 format!("{}/{}/{}", self.data_dir, dir.trim_matches('/'), file)
             }
@@ -60,9 +60,16 @@ impl LocationGenerator for DefaultLocationGenerator {
         };
         // Join each component to avoid encoding '/' into '%2F'
         let mut full = self.base.clone();
-        for comp in rel.split('/').filter(|s| !s.is_empty()) {
+        for comp in rel_unencoded.split('/').filter(|s| !s.is_empty()) {
             full = full.child(comp);
         }
+        // Derive relative path from encoded ObjectPath so manifest file_path matches actual object keys.
+        let rel = full
+            .as_ref()
+            .strip_prefix(self.base.as_ref())
+            .unwrap_or(full.as_ref())
+            .trim_start_matches('/')
+            .to_string();
         (rel, full)
     }
 }

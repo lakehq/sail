@@ -1167,12 +1167,6 @@
               }
             },
             {
-              "name": "Box(ColumnTypeDefinition)",
-              "node": {
-                "nonTerminal": "ColumnTypeDefinition"
-              }
-            },
-            {
               "name": "Box(DataType)",
               "node": {
                 "nonTerminal": "DataType"
@@ -1650,7 +1644,7 @@
                         "nonTerminal": "Keyword(By)"
                       },
                       {
-                        "nonTerminal": "PartitionColumnList"
+                        "nonTerminal": "PartitionByList"
                       }
                     ]
                   },
@@ -7788,6 +7782,43 @@
               }
             },
             {
+              "name": "PartitionByItem",
+              "node": {
+                "choice": [
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "ColumnTypeDefinition"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Expression"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "name": "PartitionByList",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Operator(LeftParenthesis)"
+                  },
+                  {
+                    "nonTerminal": "Sequence(PartitionByItem, Operator(Comma))"
+                  },
+                  {
+                    "nonTerminal": "Operator(RightParenthesis)"
+                  }
+                ]
+              }
+            },
+            {
               "name": "PartitionClause",
               "node": {
                 "sequence": [
@@ -7796,43 +7827,6 @@
                   },
                   {
                     "nonTerminal": "PartitionValueList"
-                  }
-                ]
-              }
-            },
-            {
-              "name": "PartitionColumn",
-              "node": {
-                "choice": [
-                  {
-                    "sequence": [
-                      {
-                        "nonTerminal": "Box(ColumnTypeDefinition)"
-                      }
-                    ]
-                  },
-                  {
-                    "sequence": [
-                      {
-                        "nonTerminal": "Identifier"
-                      }
-                    ]
-                  }
-                ]
-              }
-            },
-            {
-              "name": "PartitionColumnList",
-              "node": {
-                "sequence": [
-                  {
-                    "nonTerminal": "Operator(LeftParenthesis)"
-                  },
-                  {
-                    "nonTerminal": "Sequence(PartitionColumn, Operator(Comma))"
-                  },
-                  {
-                    "nonTerminal": "Operator(RightParenthesis)"
                   }
                 ]
               }
@@ -8657,11 +8651,11 @@
               }
             },
             {
-              "name": "Sequence(PartitionColumn, Operator(Comma))",
+              "name": "Sequence(PartitionByItem, Operator(Comma))",
               "node": {
                 "sequence": [
                   {
-                    "nonTerminal": "PartitionColumn"
+                    "nonTerminal": "PartitionByItem"
                   },
                   {
                     "oneOrMore": {
@@ -8670,7 +8664,7 @@
                           "nonTerminal": "Operator(Comma)"
                         },
                         {
-                          "nonTerminal": "PartitionColumn"
+                          "nonTerminal": "PartitionByItem"
                         }
                       ]
                     }
