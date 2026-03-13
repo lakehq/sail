@@ -92,19 +92,23 @@ impl ScalarUDFImpl for Levenshtein {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
 
-        // Spark returns NULL when any scalar argument is NULL (constant folding).
+        // Determine the coerced string type (handles mixed Utf8 + LargeUtf8)
+        let coerced_type = string_coercion(&args[0].data_type(), &args[1].data_type())
+            .or_else(|| binary_to_string_coercion(&args[0].data_type(), &args[1].data_type()))
+            .unwrap_or(DataType::Utf8);
+
+        // Spark returns NULL when any scalar argument is NULL.
         let null_int = |dt: &DataType| match dt {
             DataType::LargeUtf8 => ColumnarValue::Scalar(ScalarValue::Int64(None)),
             _ => ColumnarValue::Scalar(ScalarValue::Int32(None)),
         };
-        let first_dt = args[0].data_type();
         for arg in &args {
             if matches!(arg, ColumnarValue::Scalar(s) if s.is_null()) {
-                return Ok(null_int(&first_dt));
+                return Ok(null_int(&coerced_type));
             }
         }
 
-        match first_dt {
+        match coerced_type {
             DataType::Utf8View | DataType::Utf8 => {
                 make_scalar_function(spark_levenshtein::<i32>, vec![])(&args)
             }
