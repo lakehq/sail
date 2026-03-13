@@ -478,7 +478,7 @@ impl PlanResolver<'_> {
                     table_name: table.clone().into(),
                     format,
                     location,
-                    partition_by,
+                    partition_by: partition_by.into_iter().map(|field| field.column).collect(),
                     options: vec![options],
                 })
             }

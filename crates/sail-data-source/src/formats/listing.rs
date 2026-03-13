@@ -207,6 +207,9 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for writing listing table format");
         }
+        if partition_by.iter().any(|field| field.transform.is_some()) {
+            return not_impl_err!("partition transforms for writing listing table format");
+        }
         // always write multi-file output
         let path = if path.ends_with(object_store::path::DELIMITER) {
             path
@@ -224,7 +227,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         // This is how DataFusion handles physical planning for `LogicalPlan::Copy`.
         let table_partition_cols = partition_by
             .iter()
-            .map(|s| (s.clone(), DataType::Null))
+            .map(|field| (field.column.clone(), DataType::Null))
             .collect::<Vec<_>>();
         let (format, compression) = self.inner.create_write_format(ctx, options)?;
         let file_extension = if let Some(file_compression_type) = format.compression_type() {

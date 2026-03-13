@@ -676,7 +676,7 @@ async fn test_create_table() {
         Some("s3://deltadata/custom/path/meow".to_string())
     );
     assert_eq!(format, "delta".to_string());
-    assert_eq!(partition_by, Vec::<String>::new());
+    assert_eq!(partition_by, Vec::<CatalogPartitionField>::new());
     assert_eq!(sort_by, vec![]);
     assert_eq!(bucket_by, None);
     assert_eq!(options, Vec::<(String, String)>::new());
@@ -878,7 +878,13 @@ async fn test_create_table() {
         Some("s3://deltadata/custom/path/meow2".to_string())
     );
     assert_eq!(format, "delta".to_string());
-    assert_eq!(partition_by, vec!["baz".to_string()]);
+    assert_eq!(
+        partition_by,
+        vec![CatalogPartitionField {
+            column: "baz".to_string(),
+            transform: None,
+        }]
+    );
     assert!(sort_by.is_empty());
     assert_eq!(bucket_by, None);
     assert_eq!(options, vec![("key1".to_string(), "value1".to_string())]);
@@ -1051,7 +1057,13 @@ async fn test_get_table() {
         Some("s3://deltadata/custom/path/meow2".to_string())
     );
     assert_eq!(format, "delta".to_string());
-    assert_eq!(partition_by, vec!["baz".to_string()]);
+    assert_eq!(
+        partition_by,
+        vec![CatalogPartitionField {
+            column: "baz".to_string(),
+            transform: None,
+        }]
+    );
     assert!(sort_by.is_empty());
     assert_eq!(bucket_by, None);
     assert_eq!(options, vec![("key1".to_string(), "value1".to_string())]);
