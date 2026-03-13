@@ -35,7 +35,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: from_json"
+        "success": "ok"
       }
     },
     {
@@ -93,7 +93,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: from_json"
+        "success": "ok"
       }
     },
     {
@@ -125,7 +125,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: from_json"
+        "success": "ok"
       }
     },
     {
