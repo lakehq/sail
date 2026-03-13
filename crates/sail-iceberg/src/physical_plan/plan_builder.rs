@@ -19,16 +19,17 @@ use datafusion::physical_expr::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
+use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
 use crate::options::TableIcebergOptions;
 use crate::physical_plan::writer_exec::IcebergWriterExec;
-use crate::utils::partition_transform::parse_partition_field_expr;
+use crate::utils::partition_transform::format_partition_expr;
 
 pub struct IcebergTableConfig {
     pub table_url: Url,
-    pub partition_columns: Vec<String>,
+    pub partition_columns: Vec<CatalogPartitionField>,
     pub table_exists: bool,
     pub options: TableIcebergOptions,
 }
@@ -72,17 +73,11 @@ impl<'a> IcebergPlanBuilder<'a> {
         // Do not reorder columns here: BDD "query result ordered" checks expect the original
         // table column order from `SELECT *`.
         let schema = input.schema();
-        for raw in &self.table_config.partition_columns {
-            let pf = parse_partition_field_expr(raw).map_err(|e| {
-                datafusion::common::DataFusionError::Plan(format!(
-                    "Invalid partition transform expression '{}': {e}",
-                    raw
-                ))
-            })?;
-            if schema.index_of(&pf.source_column).is_err() {
+        for field in &self.table_config.partition_columns {
+            if schema.index_of(&field.column).is_err() {
                 return Err(datafusion::common::DataFusionError::Plan(format!(
                     "Partition column '{}' not found in schema",
-                    pf.source_column
+                    format_partition_expr(field)
                 )));
             }
         }
@@ -97,25 +92,14 @@ impl<'a> IcebergPlanBuilder<'a> {
             Partitioning::RoundRobinBatch(4)
         } else {
             let schema = input.schema();
-            let partition_specs = self
+            let mut seen = std::collections::HashSet::new();
+            let partition_source_columns = self
                 .table_config
                 .partition_columns
                 .iter()
-                .map(|s| {
-                    parse_partition_field_expr(s).map_err(|e| {
-                        datafusion::common::DataFusionError::Plan(format!(
-                            "Invalid partition transform expression '{}': {e}",
-                            s
-                        ))
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let mut seen = std::collections::HashSet::new();
-            let partition_source_columns = partition_specs
-                .iter()
-                .filter_map(|p| {
-                    if seen.insert(p.source_column.clone()) {
-                        Some(p.source_column.clone())
+                .filter_map(|field| {
+                    if seen.insert(field.column.clone()) {
+                        Some(field.column.clone())
                     } else {
                         None
                     }

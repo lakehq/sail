@@ -1153,11 +1153,14 @@ fn from_ast_table_definition(
         .into_iter()
         .flatten()
         .map(|x| match x {
-            PartitionByItem::ColumnDefinition(column) => column.name.value,
-            PartitionByItem::Expression(expr) => expr.text().trim().to_string(),
+            PartitionByItem::ColumnDefinition(column) => Ok(spec::Expr::UnresolvedAttribute {
+                name: spec::ObjectName::bare(column.name.value),
+                plan_id: None,
+                is_metadata_column: false,
+            }),
+            PartitionByItem::Expression(expr) => from_ast_expression(expr),
         })
-        .map(Into::into)
-        .collect();
+        .collect::<SqlResult<Vec<_>>>()?;
     let (sort_by, bucket_by) = if let Some(bucket_by) = bucket_by {
         let CreateTableBucketBy {
             columns,

@@ -104,6 +104,13 @@ impl TableFormat for DeltaTableFormat {
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for Delta format");
         }
+        if partition_by.iter().any(|field| field.transform.is_some()) {
+            return not_impl_err!("partition transforms for Delta format");
+        }
+        let partition_by = partition_by
+            .into_iter()
+            .map(|field| field.column)
+            .collect::<Vec<_>>();
 
         let table_url = Self::parse_table_url(ctx, vec![path]).await?;
         let (options, routed_table_properties) =

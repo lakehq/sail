@@ -582,10 +582,27 @@ enum CompressionTypeVariant {
   COMPRESSION_TYPE_VARIANT_UNCOMPRESSED = 4;
 }
 
+enum PartitionTransformKind {
+  PARTITION_TRANSFORM_KIND_UNSPECIFIED = 0;
+  PARTITION_TRANSFORM_KIND_IDENTITY = 1;
+  PARTITION_TRANSFORM_KIND_YEAR = 2;
+  PARTITION_TRANSFORM_KIND_MONTH = 3;
+  PARTITION_TRANSFORM_KIND_DAY = 4;
+  PARTITION_TRANSFORM_KIND_HOUR = 5;
+  PARTITION_TRANSFORM_KIND_BUCKET = 6;
+  PARTITION_TRANSFORM_KIND_TRUNCATE = 7;
+}
+
+message CatalogPartitionFieldNode {
+  string column = 1;
+  PartitionTransformKind transform_kind = 2;
+  uint32 transform_value = 3;
+}
+
 message IcebergWriterExecNode {
   bytes input = 1;
   string table_url = 2;
-  repeated string partition_columns = 3;
+  repeated CatalogPartitionFieldNode partition_columns = 3;
   PhysicalSinkMode sink_mode = 4;
   bool table_exists = 5;
   string options = 6;

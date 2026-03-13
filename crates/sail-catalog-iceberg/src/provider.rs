@@ -21,8 +21,8 @@ use sail_catalog::provider::{
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
 use sail_common_datafusion::catalog::{
-    CatalogTableConstraint, CatalogTableSort, DatabaseStatus, TableColumnStatus, TableKind,
-    TableStatus,
+    identity_partition_fields, CatalogTableConstraint, CatalogTableSort, DatabaseStatus,
+    TableColumnStatus, TableKind, TableStatus,
 };
 use sail_iceberg::{arrow_type_to_iceberg, iceberg_type_to_arrow, NestedField, StructType};
 use tokio::sync::OnceCell;
@@ -389,6 +389,7 @@ impl IcebergRestCatalogProvider {
                 constraints,
                 location,
                 format: "iceberg".to_string(),
+                partition_by_fields: identity_partition_fields(&partition_by),
                 partition_by,
                 sort_by,
                 bucket_by: None,
@@ -878,6 +879,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                     location: None,
                     format: "iceberg".to_string(),
                     partition_by: Vec::new(),
+                    partition_by_fields: Vec::new(),
                     sort_by: Vec::new(),
                     bucket_by: None,
                     options: Vec::new(),

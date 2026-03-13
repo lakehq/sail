@@ -17,6 +17,7 @@ use datafusion::catalog::Session;
 use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion::datasource::TableProvider;
 use datafusion::physical_plan::ExecutionPlan;
+use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::datasource::{
     PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
 };
@@ -29,7 +30,9 @@ use crate::options::TableIcebergOptions;
 use crate::physical_plan::plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
 use crate::spec::{PartitionSpec, Schema, Snapshot};
 use crate::table::{find_latest_metadata_file, Table};
-use crate::utils::partition_transform::format_partition_expr;
+use crate::utils::partition_transform::{
+    catalog_partition_field_from_iceberg, format_partition_exprs,
+};
 
 /// Iceberg implementation of [`TableFormat`].
 #[derive(Debug, Default)]
@@ -135,8 +138,8 @@ impl TableFormat for IcebergTableFormat {
                         return plan_err!(
                             "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
                             Cannot change partitioning on append.",
-                            existing_partitions,
-                            partition_by
+                            format_partition_exprs(existing_partitions),
+                            format_partition_exprs(&partition_by)
                         );
                     }
                     PhysicalSinkMode::Overwrite => {
@@ -145,8 +148,8 @@ impl TableFormat for IcebergTableFormat {
                             return plan_err!(
                                 "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
                                 Set overwriteSchema=true to change partitioning.",
-                                existing_partitions,
-                                partition_by
+                                format_partition_exprs(existing_partitions),
+                                format_partition_exprs(&partition_by)
                             );
                         }
                     }
@@ -228,7 +231,7 @@ impl IcebergTableFormat {
         Ok(table_url)
     }
 
-    fn partition_columns_from_metadata(table: &Table) -> Result<Vec<String>> {
+    fn partition_columns_from_metadata(table: &Table) -> Result<Vec<CatalogPartitionField>> {
         let metadata = table.metadata();
         let spec = match metadata.default_partition_spec() {
             Some(spec) => spec,
@@ -253,7 +256,10 @@ impl IcebergTableFormat {
                         field.source_id
                     ))
                 })?;
-            columns.push(format_partition_expr(&col_name, field.transform));
+            columns.push(
+                catalog_partition_field_from_iceberg(col_name, field.transform)
+                    .map_err(DataFusionError::Plan)?,
+            );
         }
 
         Ok(columns)

@@ -85,6 +85,7 @@ impl PlanResolver<'_> {
                 format,
                 location,
                 partition_by,
+                partition_by_fields: _,
                 sort_by,
                 bucket_by,
                 options: table_options,

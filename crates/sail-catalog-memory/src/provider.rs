@@ -167,7 +167,9 @@ impl CatalogProvider for MemoryCatalogProvider {
             options,
             properties,
         } = options;
-        if partition_by.iter().any(|f| f.transform.is_some()) {
+        if !format.eq_ignore_ascii_case("iceberg")
+            && partition_by.iter().any(|f| f.transform.is_some())
+        {
             return Err(CatalogError::NotSupported(
                 "partition transforms are not supported by memory catalog".to_string(),
             ));
@@ -224,7 +226,8 @@ impl CatalogProvider for MemoryCatalogProvider {
                 constraints,
                 location,
                 format,
-                partition_by: partition_by.into_iter().map(|f| f.column).collect(),
+                partition_by: partition_by.iter().map(|f| f.column.clone()).collect(),
+                partition_by_fields: partition_by,
                 sort_by,
                 bucket_by,
                 options,

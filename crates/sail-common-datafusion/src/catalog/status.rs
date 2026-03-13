@@ -3,7 +3,9 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_expr::LogicalPlan;
 
-use crate::catalog::{CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort};
+use crate::catalog::{
+    CatalogPartitionField, CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
+};
 
 #[derive(Debug, Clone)]
 pub struct DatabaseStatus {
@@ -31,6 +33,7 @@ pub enum TableKind {
         location: Option<String>,
         format: String,
         partition_by: Vec<String>,
+        partition_by_fields: Vec<CatalogPartitionField>,
         sort_by: Vec<CatalogTableSort>,
         bucket_by: Option<CatalogTableBucketBy>,
         options: Vec<(String, String)>,
@@ -186,4 +189,15 @@ impl TableColumnStatus {
     pub fn field(&self) -> Field {
         Field::new(self.name.clone(), self.data_type.clone(), self.nullable)
     }
+}
+
+pub fn identity_partition_fields(columns: &[String]) -> Vec<CatalogPartitionField> {
+    columns
+        .iter()
+        .cloned()
+        .map(|column| CatalogPartitionField {
+            column,
+            transform: None,
+        })
+        .collect()
 }

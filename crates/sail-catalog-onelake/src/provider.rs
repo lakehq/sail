@@ -7,7 +7,9 @@ use sail_catalog::provider::{
     DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
 };
 use sail_catalog::utils::quote_namespace_if_needed;
-use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
+use sail_common_datafusion::catalog::{
+    identity_partition_fields, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
+};
 use serde::Deserialize;
 use tokio::sync::OnceCell;
 
@@ -269,6 +271,7 @@ impl OneLakeCatalogProvider {
                 location,
                 format,
                 partition_by: vec![],
+                partition_by_fields: identity_partition_fields(&[]),
                 sort_by: vec![],
                 bucket_by: None,
                 options: vec![],
