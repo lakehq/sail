@@ -503,6 +503,10 @@ pub enum CommandNode {
         partition: Vec<(Identifier, Option<Expr>)>,
         column: Option<ObjectName>,
     },
+    ShowTableProperties {
+        table: ObjectName,
+        key: Option<String>,
+    },
     CommentOnCatalog {
         catalog: ObjectName,
         value: Option<String>,

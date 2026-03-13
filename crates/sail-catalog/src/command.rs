@@ -116,6 +116,10 @@ pub enum CatalogCommand {
         table: Vec<String>,
         extended: bool,
     },
+    ShowTableProperties {
+        table: Vec<String>,
+        key: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
@@ -155,6 +159,7 @@ impl CatalogCommand {
             CatalogCommand::CreateTemporaryView { .. } => "CreateTemporaryView",
             CatalogCommand::CreateView { .. } => "CreateView",
             CatalogCommand::DescribeTable { .. } => "DescribeTable",
+            CatalogCommand::ShowTableProperties { .. } => "ShowTableProperties",
         }
     }
 
@@ -182,6 +187,9 @@ impl CatalogCommand {
             }
             CatalogCommand::DescribeTable { .. } => {
                 ArrowSerializer::default().schema::<DescribeTableRow>()?
+            }
+            CatalogCommand::ShowTableProperties { .. } => {
+                ArrowSerializer::default().schema::<ShowTablePropertiesRow>()?
             }
             CatalogCommand::DatabaseExists { .. }
             | CatalogCommand::TableExists { .. }
@@ -434,6 +442,39 @@ impl CatalogCommand {
                 manager.create_view(&view, options).await?;
                 display.bools().to_record_batch(vec![true])?
             }
+            CatalogCommand::ShowTableProperties { table, key } => {
+                let table_status = manager.get_table_or_view(&table).await?;
+                let properties = table_status.kind.properties();
+                let serializer = ArrowSerializer::default();
+                let rows: Vec<ShowTablePropertiesRow> = if let Some(key) = key {
+                    let value = properties
+                        .iter()
+                        .find(|(k, _)| k == &key)
+                        .map(|(_, v)| v.clone())
+                        .unwrap_or_else(|| {
+                            let mut parts = Vec::new();
+                            if let Some(catalog) = &table_status.catalog {
+                                parts.push(catalog.as_str());
+                            }
+                            for db in &table_status.database {
+                                parts.push(db.as_str());
+                            }
+                            parts.push(table_status.name.as_str());
+                            let qualified_name = parts.join(".");
+                            format!("Table {qualified_name} does not have property: {key}")
+                        });
+                    vec![ShowTablePropertiesRow { key, value }]
+                } else {
+                    properties
+                        .iter()
+                        .map(|(k, v)| ShowTablePropertiesRow {
+                            key: k.clone(),
+                            value: v.clone(),
+                        })
+                        .collect()
+                };
+                serializer.build_record_batch(&rows)?
+            }
         };
         Ok(batch)
     }
@@ -444,4 +485,10 @@ struct DescribeTableRow {
     col_name: String,
     data_type: String,
     comment: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ShowTablePropertiesRow {
+    key: String,
+    value: String,
 }

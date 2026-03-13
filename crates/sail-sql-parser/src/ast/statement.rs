@@ -197,6 +197,12 @@ pub enum Statement {
         show: Show,
         functions: Functions,
     },
+    ShowTblProperties {
+        show: Show,
+        tblproperties: Tblproperties,
+        name: ObjectName,
+        key: Option<(LeftParenthesis, StringLiteral, RightParenthesis)>,
+    },
     Explain {
         explain: Explain,
         format: Option<ExplainFormat>,
