@@ -95,9 +95,6 @@ runs:
         restore-keys: |
           ${{ inputs.cache-key }}-${{ steps.config.outputs.label }}-
 
-    - name: Restore Git mtimes
-      uses: chetan/git-restore-mtime-action@v2
-
     # Incremental compilation is not beneficial for CI builds.
     # So we turn it off to speed up the build and reduce the cache size.
     # This step is skipped for Claude Code setup.
