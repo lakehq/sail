@@ -193,7 +193,7 @@ impl PlanResolver<'_> {
             // The mode will be set later so the value here is just a placeholder.
             mode: SinkMode::ErrorIfExists,
             format: format.unwrap_or_default(),
-            partition_by: self.resolve_write_partition_by(partition_by.clone()),
+            partition_by: partition_by.clone(),
             sort_by: self
                 .resolve_sort_orders(sort_by.clone(), true, input.schema(), state)
                 .await?,
@@ -256,7 +256,11 @@ impl PlanResolver<'_> {
                 file_write_options.mode = self
                     .resolve_write_mode(mode, Some(&info.schema()), state)
                     .await?;
-                file_write_options.partition_by = info.partition_by.clone();
+                if file_write_options.partition_by.is_empty()
+                    || !info.format.eq_ignore_ascii_case("iceberg")
+                {
+                    file_write_options.partition_by = info.partition_by.clone();
+                }
                 file_write_options.sort_by = info.sort_by.into_iter().map(|x| x.into()).collect();
                 file_write_options.bucket_by = info.bucket_by.map(|x| x.into());
                 file_write_options.path = info.location.ok_or_else(|| {
@@ -301,14 +305,10 @@ impl PlanResolver<'_> {
                     && !file_write_options.format.eq_ignore_ascii_case("iceberg")
                 {
                     return Err(PlanError::unsupported(
-                        "partition transforms are not supported by memory catalog",
+                        "partition transforms are only supported for Iceberg tables",
                     ));
                 }
-                if !table_properties.is_empty() {
-                    file_write_options
-                        .options
-                        .insert(0, table_properties.clone());
-                }
+                file_write_options.table_properties = table_properties.clone();
                 let (if_not_exists, replace) = match action {
                     WriteTableAction::Create => (false, false),
                     WriteTableAction::CreateIfNotExists => (true, false),
@@ -607,131 +607,12 @@ impl PlanResolver<'_> {
                         transform: None,
                     })
                 }
-                spec::Expr::UnresolvedFunction(f) => self.resolve_partition_transform_function(f),
+                spec::Expr::UnresolvedFunction(f) => resolve_partition_transform_function(f),
                 _ => Err(PlanError::invalid(
                     "partitioning column must be a column reference or transform function",
                 )),
             })
             .collect()
-    }
-
-    fn resolve_partition_transform_function(
-        &self,
-        func: spec::UnresolvedFunction,
-    ) -> PlanResult<CatalogPartitionField> {
-        let function_name: Vec<String> = func.function_name.into();
-        let function_name = function_name.one()?;
-        let function_name_lower = function_name.to_lowercase();
-
-        match function_name_lower.as_str() {
-            "years" | "months" | "days" | "hours" => {
-                let transform = match function_name_lower.as_str() {
-                    "years" => PartitionTransform::Year,
-                    "months" => PartitionTransform::Month,
-                    "days" => PartitionTransform::Day,
-                    "hours" => PartitionTransform::Hour,
-                    _ => unreachable!(),
-                };
-                let column = self.extract_partition_column_from_args(&func.arguments, 0)?;
-                Ok(CatalogPartitionField {
-                    column,
-                    transform: Some(transform),
-                })
-            }
-            "bucket" => {
-                let num_buckets =
-                    self.extract_partition_int_arg(&func.arguments, 0, "bucket count")?;
-                let column = self.extract_partition_column_from_args(&func.arguments, 1)?;
-                Ok(CatalogPartitionField {
-                    column,
-                    transform: Some(PartitionTransform::Bucket(num_buckets)),
-                })
-            }
-            "truncate" => {
-                let width = self.extract_partition_int_arg(&func.arguments, 0, "truncate width")?;
-                let column = self.extract_partition_column_from_args(&func.arguments, 1)?;
-                Ok(CatalogPartitionField {
-                    column,
-                    transform: Some(PartitionTransform::Truncate(width)),
-                })
-            }
-            _ => Err(PlanError::invalid(format!(
-                "unsupported partition transform function: {function_name}"
-            ))),
-        }
-    }
-
-    fn extract_partition_column_from_args(
-        &self,
-        args: &[spec::Expr],
-        index: usize,
-    ) -> PlanResult<String> {
-        let arg = args.get(index).ok_or_else(|| {
-            PlanError::invalid(format!(
-                "partition transform function requires argument at index {index}"
-            ))
-        })?;
-        match arg {
-            spec::Expr::UnresolvedAttribute {
-                name,
-                plan_id: None,
-                is_metadata_column: false,
-            } => {
-                let name: Vec<String> = name.clone().into();
-                Ok(name.one()?)
-            }
-            _ => Err(PlanError::invalid(
-                "partition transform function argument must be a column reference",
-            )),
-        }
-    }
-
-    fn extract_partition_int_arg(
-        &self,
-        args: &[spec::Expr],
-        index: usize,
-        description: &str,
-    ) -> PlanResult<u32> {
-        let arg = args.get(index).ok_or_else(|| {
-            PlanError::invalid(format!(
-                "partition transform function requires {description} at index {index}"
-            ))
-        })?;
-        match arg {
-            spec::Expr::Literal(lit) => match lit {
-                spec::Literal::Int8 { value: Some(v) } => u32::try_from(*v).map_err(|_| {
-                    PlanError::invalid(format!("{description} must be a positive integer"))
-                }),
-                spec::Literal::Int16 { value: Some(v) } => u32::try_from(*v).map_err(|_| {
-                    PlanError::invalid(format!("{description} must be a positive integer"))
-                }),
-                spec::Literal::Int32 { value: Some(v) } => u32::try_from(*v).map_err(|_| {
-                    PlanError::invalid(format!("{description} must be a positive integer"))
-                }),
-                spec::Literal::Int64 { value: Some(v) } => u32::try_from(*v).map_err(|_| {
-                    PlanError::invalid(format!("{description} must be a positive integer"))
-                }),
-                spec::Literal::UInt8 { value: Some(v) } => Ok(u32::from(*v)),
-                spec::Literal::UInt16 { value: Some(v) } => Ok(u32::from(*v)),
-                spec::Literal::UInt32 { value: Some(v) } => Ok(*v),
-                spec::Literal::UInt64 { value: Some(v) } => u32::try_from(*v).map_err(|_| {
-                    PlanError::invalid(format!("{description} must fit in a 32-bit integer"))
-                }),
-                _ => Err(PlanError::invalid(format!(
-                    "{description} must be an integer literal"
-                ))),
-            },
-            _ => Err(PlanError::invalid(format!(
-                "{description} must be an integer literal"
-            ))),
-        }
-    }
-
-    fn resolve_write_partition_by(
-        &self,
-        partition_by: Vec<CatalogPartitionField>,
-    ) -> Vec<CatalogPartitionField> {
-        partition_by
     }
 
     fn resolve_write_bucket_by(
@@ -748,6 +629,128 @@ impl PlanResolver<'_> {
                 num_buckets,
             }
         }))
+    }
+}
+
+fn resolve_partition_transform_function(
+    func: spec::UnresolvedFunction,
+) -> PlanResult<CatalogPartitionField> {
+    let function_name: Vec<String> = func.function_name.into();
+    let function_name = function_name.one()?;
+    let function_name_lower = function_name.to_lowercase();
+
+    match function_name_lower.as_str() {
+        "years" | "months" | "days" | "hours" => {
+            let transform = match function_name_lower.as_str() {
+                "years" => PartitionTransform::Year,
+                "months" => PartitionTransform::Month,
+                "days" => PartitionTransform::Day,
+                "hours" => PartitionTransform::Hour,
+                _ => unreachable!(),
+            };
+            let column = extract_partition_column_from_args(&func.arguments, 0)?;
+            Ok(CatalogPartitionField {
+                column,
+                transform: Some(transform),
+            })
+        }
+        "bucket" => {
+            let num_buckets = extract_partition_int_arg(&func.arguments, 0, "bucket count")?;
+            let column = extract_partition_column_from_args(&func.arguments, 1)?;
+            Ok(CatalogPartitionField {
+                column,
+                transform: Some(PartitionTransform::Bucket(num_buckets)),
+            })
+        }
+        "truncate" => {
+            let (column, width) = extract_partition_truncate_args(&func.arguments)?;
+            Ok(CatalogPartitionField {
+                column,
+                transform: Some(PartitionTransform::Truncate(width)),
+            })
+        }
+        _ => Err(PlanError::invalid(format!(
+            "unsupported partition transform function: {function_name}"
+        ))),
+    }
+}
+
+fn extract_partition_truncate_args(args: &[spec::Expr]) -> PlanResult<(String, u32)> {
+    if let (Ok(column), Ok(width)) = (
+        extract_partition_column_from_args(args, 0),
+        extract_partition_int_arg(args, 1, "truncate width"),
+    ) {
+        return Ok((column, width));
+    }
+    if let (Ok(width), Ok(column)) = (
+        extract_partition_int_arg(args, 0, "truncate width"),
+        extract_partition_column_from_args(args, 1),
+    ) {
+        return Ok((column, width));
+    }
+    Err(PlanError::invalid(
+        "truncate() expects a column reference and an integer literal width",
+    ))
+}
+
+fn extract_partition_column_from_args(args: &[spec::Expr], index: usize) -> PlanResult<String> {
+    let arg = args.get(index).ok_or_else(|| {
+        PlanError::invalid(format!(
+            "partition transform function requires argument at index {index}"
+        ))
+    })?;
+    match arg {
+        spec::Expr::UnresolvedAttribute {
+            name,
+            plan_id: None,
+            is_metadata_column: false,
+        } => {
+            let name: Vec<String> = name.clone().into();
+            Ok(name.one()?)
+        }
+        _ => Err(PlanError::invalid(
+            "partition transform function argument must be a column reference",
+        )),
+    }
+}
+
+fn extract_partition_int_arg(
+    args: &[spec::Expr],
+    index: usize,
+    description: &str,
+) -> PlanResult<u32> {
+    let arg = args.get(index).ok_or_else(|| {
+        PlanError::invalid(format!(
+            "partition transform function requires {description} at index {index}"
+        ))
+    })?;
+    match arg {
+        spec::Expr::Literal(lit) => match lit {
+            spec::Literal::Int8 { value: Some(v) } => u32::try_from(*v).map_err(|_| {
+                PlanError::invalid(format!("{description} must be a positive integer"))
+            }),
+            spec::Literal::Int16 { value: Some(v) } => u32::try_from(*v).map_err(|_| {
+                PlanError::invalid(format!("{description} must be a positive integer"))
+            }),
+            spec::Literal::Int32 { value: Some(v) } => u32::try_from(*v).map_err(|_| {
+                PlanError::invalid(format!("{description} must be a positive integer"))
+            }),
+            spec::Literal::Int64 { value: Some(v) } => u32::try_from(*v).map_err(|_| {
+                PlanError::invalid(format!("{description} must be a positive integer"))
+            }),
+            spec::Literal::UInt8 { value: Some(v) } => Ok(u32::from(*v)),
+            spec::Literal::UInt16 { value: Some(v) } => Ok(u32::from(*v)),
+            spec::Literal::UInt32 { value: Some(v) } => Ok(*v),
+            spec::Literal::UInt64 { value: Some(v) } => u32::try_from(*v).map_err(|_| {
+                PlanError::invalid(format!("{description} must fit in a 32-bit integer"))
+            }),
+            _ => Err(PlanError::invalid(format!(
+                "{description} must be an integer literal"
+            ))),
+        },
+        _ => Err(PlanError::invalid(format!(
+            "{description} must be an integer literal"
+        ))),
     }
 }
 
