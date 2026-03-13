@@ -30,6 +30,7 @@ fastrace = { workspace = true }
 tower = { workspace = true }
 prost = { workspace = true }
 datafusion = { workspace = true }
+datafusion-datasource-avro = { workspace = true }
 datafusion-proto = { workspace = true }
 datafusion-spark = { workspace = true }
 arrow-flight = { workspace = true }
