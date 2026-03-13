@@ -205,3 +205,14 @@ Feature: levenshtein() returns edit distance between two strings
         | result |
         | -1     |
         | -1     |
+
+    Scenario: null threshold per row with identical strings returns zero
+      When query
+        """
+        SELECT levenshtein(s1, s2, t) AS result
+        FROM VALUES ('abc', 'abc', CAST(NULL AS INT)) AS t(s1, s2, t)
+        """
+      Then query result
+        | result |
+        | 0      |
+

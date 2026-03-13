@@ -2,57 +2,9 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::ArrayRef;
-use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
-
-/// Creates a function to identify the optimal return type of a string function given
-/// the type of its first argument.
-///
-/// If the input type is `LargeUtf8` or `LargeBinary` the return type is
-/// `$largeUtf8Type`,
-///
-/// If the input type is `Utf8` or `Binary` the return type is `$utf8Type`,
-///
-/// If the input type is `Utf8View` the return type is $utf8Type,
-macro_rules! get_optimal_return_type {
-    ($FUNC:ident, $largeUtf8Type:expr, $utf8Type:expr) => {
-        pub(crate) fn $FUNC(arg_type: &DataType, name: &str) -> Result<DataType> {
-            Ok(match arg_type {
-                // LargeBinary inputs are automatically coerced to Utf8
-                DataType::LargeUtf8 | DataType::LargeBinary => $largeUtf8Type,
-                // Binary inputs are automatically coerced to Utf8
-                DataType::Utf8 | DataType::Binary => $utf8Type,
-                // Utf8View max offset size is u32::MAX, the same as UTF8
-                DataType::Utf8View | DataType::BinaryView => $utf8Type,
-                DataType::Null => DataType::Null,
-                DataType::Dictionary(_, value_type) => match **value_type {
-                    DataType::LargeUtf8 | DataType::LargeBinary => $largeUtf8Type,
-                    DataType::Utf8 | DataType::Binary => $utf8Type,
-                    DataType::Null => DataType::Null,
-                    _ => {
-                        return datafusion_common::exec_err!(
-                            "The {} function can only accept strings, but got {:?}.",
-                            name.to_uppercase(),
-                            **value_type
-                        );
-                    }
-                },
-                data_type => {
-                    return datafusion_common::exec_err!(
-                        "The {} function can only accept strings, but got {:?}.",
-                        name.to_uppercase(),
-                        data_type
-                    );
-                }
-            })
-        }
-    };
-}
-
-// `utf8_to_int_type`: returns either a Int32 or Int64 based on the input type size.
-get_optimal_return_type!(utf8_to_int_type, DataType::Int64, DataType::Int32);
 
 /// Creates a scalar function implementation for the given function.
 /// * `inner` - the function to be executed
@@ -97,24 +49,4 @@ where
             result.map(ColumnarValue::Array)
         }
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use datafusion::arrow::datatypes::DataType;
-
-    use super::*;
-
-    #[expect(clippy::unwrap_used)]
-    #[test]
-    fn string_to_int_type() {
-        let v = utf8_to_int_type(&DataType::Utf8, "test").unwrap();
-        assert_eq!(v, DataType::Int32);
-
-        let v = utf8_to_int_type(&DataType::Utf8View, "test").unwrap();
-        assert_eq!(v, DataType::Int32);
-
-        let v = utf8_to_int_type(&DataType::LargeUtf8, "test").unwrap();
-        assert_eq!(v, DataType::Int64);
-    }
 }
