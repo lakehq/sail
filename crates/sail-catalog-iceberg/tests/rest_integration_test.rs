@@ -606,6 +606,7 @@ async fn test_create_table() {
         location,
         format,
         partition_by,
+        partition_by_fields,
         sort_by,
         bucket_by,
         options,
@@ -676,6 +677,7 @@ async fn test_create_table() {
     );
     assert_eq!(format, "iceberg".to_string());
     assert_eq!(partition_by, Vec::<String>::new());
+    assert_eq!(partition_by_fields, Vec::<CatalogPartitionField>::new());
     assert_eq!(sort_by, vec![]);
     assert_eq!(bucket_by, None);
     assert_eq!(options, Vec::<(String, String)>::new());
@@ -811,6 +813,7 @@ async fn test_create_table() {
         location,
         format,
         partition_by,
+        partition_by_fields,
         sort_by,
         bucket_by,
         options,
@@ -835,6 +838,13 @@ async fn test_create_table() {
     );
     assert_eq!(format, "iceberg".to_string());
     assert_eq!(partition_by, vec!["baz".to_string()]);
+    assert_eq!(
+        partition_by_fields,
+        vec![CatalogPartitionField {
+            column: "baz".to_string(),
+            transform: None,
+        }]
+    );
     assert_eq!(sort_by.len(), 2);
     assert!(sort_by.contains(&CatalogTableSort {
         column: "bar".to_string(),
@@ -995,6 +1005,7 @@ async fn test_get_table() {
         location,
         format,
         partition_by,
+        partition_by_fields,
         sort_by,
         bucket_by,
         options,
@@ -1071,6 +1082,13 @@ async fn test_get_table() {
     );
     assert_eq!(format, "iceberg".to_string());
     assert_eq!(partition_by, vec!["baz".to_string()]);
+    assert_eq!(
+        partition_by_fields,
+        vec![CatalogPartitionField {
+            column: "baz".to_string(),
+            transform: None,
+        }]
+    );
     assert_eq!(sort_by.len(), 2);
     assert!(sort_by.contains(&CatalogTableSort {
         column: "bar".to_string(),
