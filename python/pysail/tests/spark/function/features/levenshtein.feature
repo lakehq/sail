@@ -216,3 +216,81 @@ Feature: levenshtein() returns edit distance between two strings
         | result |
         | 0      |
 
+    Scenario: null strings with threshold in columns
+      When query
+        """
+        SELECT levenshtein(s1, s2, t) AS result
+        FROM VALUES
+          (CAST(NULL AS STRING), 'hello', 5),
+          ('hello', CAST(NULL AS STRING), 5),
+          (CAST(NULL AS STRING), CAST(NULL AS STRING), 5),
+          ('abc', 'abc', CAST(NULL AS INT)),
+          ('abc', 'def', CAST(NULL AS INT))
+        AS t(s1, s2, t)
+        """
+      Then query result
+        | result |
+        | NULL   |
+        | NULL   |
+        | NULL   |
+        | 0      |
+        | -1     |
+
+  Rule: Threshold edge cases
+
+    Scenario: negative threshold returns minus one
+      When query
+        """
+        SELECT levenshtein('kitten', 'sitting', -1) AS result
+        """
+      Then query result
+        | result |
+        | -1     |
+
+    Scenario: negative threshold with identical strings returns minus one
+      When query
+        """
+        SELECT levenshtein('abc', 'abc', -1) AS result
+        """
+      Then query result
+        | result |
+        | -1     |
+
+    Scenario: very large threshold returns actual distance
+      When query
+        """
+        SELECT levenshtein('abc', 'def', 1000) AS result
+        """
+      Then query result
+        | result |
+        | 3      |
+
+    Scenario: threshold equals one at boundary
+      When query
+        """
+        SELECT levenshtein('abc', 'adc', 1) AS result
+        """
+      Then query result
+        | result |
+        | 1      |
+
+  Rule: Case sensitivity and long strings
+
+    Scenario: case sensitive comparison
+      When query
+        """
+        SELECT levenshtein('ABC', 'abc') AS result
+        """
+      Then query result
+        | result |
+        | 3      |
+
+    Scenario: long strings
+      When query
+        """
+        SELECT levenshtein(REPEAT('a', 100), REPEAT('b', 100)) AS result
+        """
+      Then query result
+        | result |
+        | 100    |
+
