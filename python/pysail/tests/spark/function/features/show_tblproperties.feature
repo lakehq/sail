@@ -56,6 +56,24 @@ Feature: SHOW TBLPROPERTIES
         | key   | value |
         | mykey | myval |
 
+    @sail-only
+    Scenario: show a specific property that does not exist
+      Given statement
+        """
+        CREATE TABLE test_show_props4 (id INT) USING parquet TBLPROPERTIES ('mykey' = 'myval')
+        """
+      And final statement
+        """
+        DROP TABLE IF EXISTS test_show_props4
+        """
+      When query
+        """
+        SHOW TBLPROPERTIES test_show_props4 ('nonexistent')
+        """
+      Then query result
+        | key         | value                                                                              |
+        | nonexistent | Table sail.default.test_show_props4 does not have property: nonexistent |
+
   Rule: Error cases
 
     Scenario: show properties on nonexistent table errors
