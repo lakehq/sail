@@ -186,6 +186,7 @@ Feature: levenshtein() returns edit distance between two strings
         """
         SELECT levenshtein(s1, s2, t) AS result
         FROM VALUES ('abc', 'def', 2), ('abc', 'def', 5), ('abc', 'def', 3) AS t(s1, s2, t)
+        ORDER BY t
         """
       Then query result ordered
         | result |
@@ -198,6 +199,7 @@ Feature: levenshtein() returns edit distance between two strings
         """
         SELECT levenshtein(s1, s2, t) AS result
         FROM VALUES ('kitten', 'sitting', CAST(NULL AS INT)), ('abc', 'def', 1) AS t(s1, s2, t)
+        ORDER BY t NULLS FIRST
         """
       Then query result ordered
         | result |

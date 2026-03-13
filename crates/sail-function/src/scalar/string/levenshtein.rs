@@ -150,8 +150,15 @@ pub fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                     (Some(string1), Some(string2)) => {
                         let distance = datafusion_strsim::levenshtein(string1, string2) as i32;
                         match &max_dist_array {
-                            Some(arr) if distance as i64 > arr.value(i) => Some(-1),
-                            _ => Some(distance),
+                            Some(arr) => {
+                                let threshold = if arr.is_null(i) { 0 } else { arr.value(i) };
+                                if distance as i64 > threshold {
+                                    Some(-1)
+                                } else {
+                                    Some(distance)
+                                }
+                            }
+                            None => Some(distance),
                         }
                     }
                     _ => None,
@@ -168,8 +175,15 @@ pub fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                     (Some(string1), Some(string2)) => {
                         let distance = datafusion_strsim::levenshtein(string1, string2) as i64;
                         match &max_dist_array {
-                            Some(arr) if distance > arr.value(i) => Some(-1),
-                            _ => Some(distance),
+                            Some(arr) => {
+                                let threshold = if arr.is_null(i) { 0 } else { arr.value(i) };
+                                if distance > threshold {
+                                    Some(-1)
+                                } else {
+                                    Some(distance)
+                                }
+                            }
+                            None => Some(distance),
                         }
                     }
                     _ => None,
