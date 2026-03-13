@@ -63,37 +63,58 @@ runs:
       # while the inner heredoc is interpreted by the `GITHUB_OUTPUT` file.
       run: |
         cat <<EOF >> "$GITHUB_OUTPUT"
-        path<<TEXT
+        dependency_path<<TEXT
         ~/.cargo/bin/
         ~/.cargo/registry/index/
         ~/.cargo/registry/cache/
         ~/.cargo/git/
+        TEXT
+        workspace_path<<TEXT
         target/**/build/
         target/**/deps/
         target/**/.fingerprint/
         TEXT
         EOF
         echo "label=${{ steps.versions.outputs.rust_release }}-${{ runner.os }}-${{ runner.arch }}" >> "$GITHUB_OUTPUT"
-        echo "hash=${{ hashFiles('**/Cargo.toml', 'Cargo.lock') }}" >> "$GITHUB_OUTPUT"
+        echo "dependency_hash=${{ hashFiles('**/Cargo.toml', 'Cargo.lock') }}" >> "$GITHUB_OUTPUT"
+        echo "workspace_hash=${{ hashFiles('Cargo.toml', 'Cargo.lock', 'pyproject.toml', '.cargo/**', 'crates/**', '.github/scripts/rustc-workspace-wrapper.sh') }}" >> "$GITHUB_OUTPUT"
       shell: bash
 
-    - uses: actions/cache@v4
+    - name: Save dependency cache
+      uses: actions/cache@v4
       if: ${{ github.event_name == 'push' }}
       with:
-        path: ${{ steps.config.outputs.path }}
-        key: ${{ inputs.cache-key }}-${{ steps.config.outputs.label }}-${{ steps.config.outputs.hash }}
+        path: ${{ steps.config.outputs.dependency_path }}
+        key: ${{ inputs.cache-key }}-dependencies-v1-${{ steps.config.outputs.label }}-${{ steps.config.outputs.dependency_hash }}
 
     # We save the cache only for push events, so that more cache space can be reserved
     # for the default branch and cache eviction is less likely to happen.
     # We always use caches of the default branch for pull requests. The cache is still useful
     # if the dependencies do not differ too much between the default branch and the feature branch.
-    - uses: actions/cache/restore@v4
+    - name: Restore dependency cache
       if: ${{ github.event_name != 'push' }}
+      uses: actions/cache/restore@v4
       with:
-        path: ${{ steps.config.outputs.path }}
-        key: ${{ inputs.cache-key }}-${{ steps.config.outputs.label }}-${{ steps.config.outputs.hash }}
+        path: ${{ steps.config.outputs.dependency_path }}
+        key: ${{ inputs.cache-key }}-dependencies-v1-${{ steps.config.outputs.label }}-${{ steps.config.outputs.dependency_hash }}
         restore-keys: |
-          ${{ inputs.cache-key }}-${{ steps.config.outputs.label }}-
+          ${{ inputs.cache-key }}-dependencies-v1-${{ steps.config.outputs.label }}-
+
+    - name: Save workspace target cache
+      uses: actions/cache@v4
+      if: ${{ github.event_name == 'push' }}
+      with:
+        path: ${{ steps.config.outputs.workspace_path }}
+        key: ${{ inputs.cache-key }}-workspace-v2-${{ steps.config.outputs.label }}-${{ steps.config.outputs.workspace_hash }}
+
+    - name: Restore workspace target cache
+      if: ${{ github.event_name != 'push' }}
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.config.outputs.workspace_path }}
+        key: ${{ inputs.cache-key }}-workspace-v2-${{ steps.config.outputs.label }}-${{ steps.config.outputs.workspace_hash }}
+        restore-keys: |
+          ${{ inputs.cache-key }}-workspace-v2-${{ steps.config.outputs.label }}-
 
     - name: Restore Git mtimes
       uses: chetan/git-restore-mtime-action@v2
