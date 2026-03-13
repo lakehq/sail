@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use datafusion::common::{NullEquality, ScalarValue};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::Operator;
 use datafusion::physical_expr::expressions::BinaryExpr;
@@ -50,6 +51,42 @@ impl EquivalenceSet {
     }
 }
 
+/// Returns true if the [`ScalarValue`] represents a discrete (integer) domain.
+fn is_discrete_scalar(value: &ScalarValue) -> bool {
+    matches!(
+        value,
+        ScalarValue::Int8(_)
+            | ScalarValue::Int16(_)
+            | ScalarValue::Int32(_)
+            | ScalarValue::Int64(_)
+            | ScalarValue::UInt8(_)
+            | ScalarValue::UInt16(_)
+            | ScalarValue::UInt32(_)
+            | ScalarValue::UInt64(_)
+            | ScalarValue::Decimal128(_, _, 0)
+    )
+}
+
+/// Convert a [`ScalarValue`] to `f64` for numeric types used in range estimation.
+fn scalar_to_f64(value: &ScalarValue) -> Option<f64> {
+    match value {
+        ScalarValue::Int8(Some(v)) => Some(*v as f64),
+        ScalarValue::Int16(Some(v)) => Some(*v as f64),
+        ScalarValue::Int32(Some(v)) => Some(*v as f64),
+        ScalarValue::Int64(Some(v)) => Some(*v as f64),
+        ScalarValue::UInt8(Some(v)) => Some(*v as f64),
+        ScalarValue::UInt16(Some(v)) => Some(*v as f64),
+        ScalarValue::UInt32(Some(v)) => Some(*v as f64),
+        ScalarValue::UInt64(Some(v)) => Some(*v as f64),
+        ScalarValue::Float32(Some(v)) => Some(*v as f64),
+        ScalarValue::Float64(Some(v)) => Some(*v),
+        ScalarValue::Decimal128(Some(v), _precision, scale) => {
+            Some(*v as f64 / 10f64.powi(*scale as i32))
+        }
+        _ => None,
+    }
+}
+
 /// Cardinality estimator.
 pub struct CardinalityEstimator {
     graph: QueryGraph,
@@ -61,6 +98,11 @@ pub struct CardinalityEstimator {
     column_to_equiv_set: HashMap<StableColumn, usize>,
     /// Mapping from (relation_id, column_index) to initial distinct_count
     initial_distinct_counts: HashMap<StableColumn, f64>,
+    /// Null fraction (0.0 to 1.0) for each column.
+    null_fractions: HashMap<StableColumn, f64>,
+    /// Value range (min, max, discrete) for each column.
+    /// `discrete` is true for integer types where NDV = max - min + 1.
+    column_ranges: HashMap<StableColumn, (f64, f64, bool)>,
 }
 
 impl CardinalityEstimator {
@@ -71,9 +113,11 @@ impl CardinalityEstimator {
             equivalence_sets: vec![],
             column_to_equiv_set: HashMap::new(),
             initial_distinct_counts: HashMap::new(),
+            null_fractions: HashMap::new(),
+            column_ranges: HashMap::new(),
         };
 
-        estimator.populate_initial_distinct_counts();
+        estimator.populate_column_statistics();
         estimator.init_equivalence_sets();
 
         trace!(
@@ -95,25 +139,66 @@ impl CardinalityEstimator {
         estimator
     }
 
-    /// Populate initial distinct counts from query graph statistics.
-    fn populate_initial_distinct_counts(&mut self) {
+    /// Populate column statistics from query graph: distinct counts, null fractions, and value ranges.
+    fn populate_column_statistics(&mut self) {
         for relation in &self.graph.relations {
             let relation_id = relation.relation_id;
+            let row_count = relation.initial_cardinality;
             let column_stats = &relation.statistics.column_statistics;
             for (column_index, stats) in column_stats.iter().enumerate() {
-                let distinct_count = stats.distinct_count;
                 let stable_col = StableColumn {
                     relation_id,
                     column_index,
                     name: format!("col_{}", column_index),
                 };
-                // DataFusion's distinct_count is a Precision enum
-                let count_val = match distinct_count {
-                    datafusion::common::stats::Precision::Exact(c) => c as f64,
-                    datafusion::common::stats::Precision::Inexact(c) => c as f64,
-                    datafusion::common::stats::Precision::Absent => continue, // Skip if absent
+
+                // Extract distinct_count
+                match stats.distinct_count {
+                    datafusion::common::stats::Precision::Exact(c)
+                    | datafusion::common::stats::Precision::Inexact(c) => {
+                        self.initial_distinct_counts
+                            .insert(stable_col.clone(), c as f64);
+                    }
+                    datafusion::common::stats::Precision::Absent => {}
+                }
+
+                // Extract null fraction.
+                // Prefer statistics.num_rows as denominator (same source as null_count)
+                // to avoid mismatch when initial_cardinality is post-filter.
+                let stats_row_count = match relation.statistics.num_rows {
+                    datafusion::common::stats::Precision::Exact(c)
+                    | datafusion::common::stats::Precision::Inexact(c) => c as f64,
+                    datafusion::common::stats::Precision::Absent => row_count,
                 };
-                self.initial_distinct_counts.insert(stable_col, count_val);
+                if stats_row_count > 0.0 {
+                    match stats.null_count {
+                        datafusion::common::stats::Precision::Exact(n)
+                        | datafusion::common::stats::Precision::Inexact(n) => {
+                            let fraction = (n as f64 / stats_row_count).min(1.0);
+                            self.null_fractions.insert(stable_col.clone(), fraction);
+                        }
+                        datafusion::common::stats::Precision::Absent => {}
+                    }
+                }
+
+                // Extract min/max value range and whether the domain is discrete (integer).
+                let (min_val, discrete) = match &stats.min_value {
+                    datafusion::common::stats::Precision::Exact(v)
+                    | datafusion::common::stats::Precision::Inexact(v) => {
+                        (scalar_to_f64(v), is_discrete_scalar(v))
+                    }
+                    datafusion::common::stats::Precision::Absent => (None, true),
+                };
+                let max_val = match &stats.max_value {
+                    datafusion::common::stats::Precision::Exact(v)
+                    | datafusion::common::stats::Precision::Inexact(v) => scalar_to_f64(v),
+                    datafusion::common::stats::Precision::Absent => None,
+                };
+                if let (Some(min), Some(max)) = (min_val, max_val) {
+                    if min <= max {
+                        self.column_ranges.insert(stable_col, (min, max, discrete));
+                    }
+                }
             }
         }
     }
@@ -207,7 +292,9 @@ impl CardinalityEstimator {
     fn estimate_tdom_for_set(&self, set: &mut EquivalenceSet) {
         let mut max_known_distinct: f64 = 0.0;
         let mut min_base_card: f64 = f64::INFINITY;
+        let mut max_range_ndv: f64 = 0.0;
         let mut has_known_stats = false;
+        let mut has_range_stats = false;
 
         for stable_col in &set.columns {
             if let Some(distinct_count) = self.initial_distinct_counts.get(stable_col) {
@@ -215,21 +302,27 @@ impl CardinalityEstimator {
                 has_known_stats = true;
             }
 
+            // Use min/max range to estimate NDV when distinct_count is absent.
+            if let Some(&(min, max, discrete)) = self.column_ranges.get(stable_col) {
+                let offset = if discrete { 1.0 } else { 0.0 };
+                let range_ndv = max - min + offset;
+                max_range_ndv = max_range_ndv.max(range_ndv);
+                has_range_stats = true;
+            }
+
             if let Some(relation) = self.graph.get_relation(stable_col.relation_id) {
                 min_base_card = min_base_card.min(relation.base_cardinality);
             }
         }
 
-        // If we have any usable distinct-count statistics, prefer them. Importantly we must NOT
-        // "inflate" TDom to a table cardinality just because some columns in the equivalence set
-        // lack column stats, as that would make join selectivity unrealistically tiny and
-        // underestimate join sizes.
-        //
-        // If no stats exist, use a conservative upper bound: the smallest relation cardinality in
-        // the equivalence set. Domain cardinality cannot exceed any participating relation's row
-        // count, and using `min` avoids the pathological underestimation caused by `max`.
+        // Priority:
+        // 1. distinct_count (best) — direct measurement
+        // 2. min/max range NDV (good) — (max - min + 1) as upper-bound estimate
+        // 3. min_base_card (fallback) — smallest relation cardinality
         let mut tdom = if has_known_stats {
             max_known_distinct.max(1.0)
+        } else if has_range_stats {
+            max_range_ndv.max(1.0)
         } else if min_base_card.is_finite() {
             min_base_card.max(1.0)
         } else {
@@ -287,6 +380,8 @@ impl CardinalityEstimator {
 
         // Denominator: Find all JoinEdges completely contained in join_set
         let mut denominator = 1.0;
+        let mut null_adjustment = 1.0;
+        let mut range_adjustment = 1.0;
         let contained_edges = self.get_edges_contained_in_set(join_set);
 
         for edge in contained_edges {
@@ -295,9 +390,11 @@ impl CardinalityEstimator {
             if tdom > 1.0 {
                 denominator *= tdom;
             }
+            null_adjustment *= self.null_adjustment_for_edge(edge);
+            range_adjustment *= self.range_overlap_factor(edge);
         }
 
-        numerator / denominator
+        (numerator / denominator * null_adjustment * range_adjustment).max(1.0)
     }
 
     /// Get all edges that are completely contained within the given join_set.
@@ -382,6 +479,8 @@ impl CardinalityEstimator {
         connecting_edge_indices: &[usize],
     ) -> f64 {
         let mut selectivity = 1.0;
+        let mut null_adjustment = 1.0;
+        let mut range_adjustment = 1.0;
 
         for &index in connecting_edge_indices {
             let edge = &self.graph.edges[index];
@@ -399,6 +498,12 @@ impl CardinalityEstimator {
                 selectivity *= HEURISTIC_THETA_JOIN_SELECTIVITY;
             }
 
+            // Null-aware adjustment: NULLs don't match in equi-joins.
+            null_adjustment *= self.null_adjustment_for_edge(edge);
+
+            // Range overlap: non-overlapping ranges produce near-empty joins.
+            range_adjustment *= self.range_overlap_factor(edge);
+
             // Non-equi residual predicates: do NOT apply an extra aggressive heuristic here.
             // A fixed 0.1 factor can severely under-estimate output and cause greedy ordering
             // to pick NLJ-like joins too early (`... filter=... != ...`).
@@ -409,7 +514,56 @@ impl CardinalityEstimator {
             }
         }
 
-        left_card * right_card * selectivity
+        (left_card * right_card * selectivity * null_adjustment * range_adjustment).max(1.0)
+    }
+
+    /// Compute the null adjustment factor for a join edge.
+    /// Returns the product of `(1 - null_fraction)` for each side of each equi-pair,
+    /// since NULLs don't match in equi-joins.
+    /// For `NullEqualsNull` semantics, NULLs can match so no adjustment is applied.
+    fn null_adjustment_for_edge(&self, edge: &JoinEdge) -> f64 {
+        if edge.null_equality == NullEquality::NullEqualsNull {
+            return 1.0;
+        }
+        edge.equi_pairs
+            .iter()
+            .fold(1.0, |acc, (left_col, right_col)| {
+                let left_non_null = 1.0 - self.null_fractions.get(left_col).copied().unwrap_or(0.0);
+                let right_non_null =
+                    1.0 - self.null_fractions.get(right_col).copied().unwrap_or(0.0);
+                acc * left_non_null * right_non_null
+            })
+    }
+
+    /// Compute the range overlap factor for a join edge.
+    /// If both sides of an equi-pair have known min/max ranges, the overlap fraction
+    /// indicates what proportion of the smaller domain can participate in the join.
+    /// Returns 1.0 when ranges are unknown (no adjustment).
+    fn range_overlap_factor(&self, edge: &JoinEdge) -> f64 {
+        edge.equi_pairs
+            .iter()
+            .fold(1.0, |acc, (left_col, right_col)| {
+                match (
+                    self.column_ranges.get(left_col),
+                    self.column_ranges.get(right_col),
+                ) {
+                    (Some(&(min_l, max_l, disc_l)), Some(&(min_r, max_r, disc_r))) => {
+                        let offset = if disc_l && disc_r { 1.0 } else { 0.0 };
+                        let smaller_range = (max_l - min_l + offset).min(max_r - min_r + offset);
+                        let overlap = (max_l.min(max_r)) - (min_l.max(min_r)) + offset;
+                        if overlap < 0.0 {
+                            // Disjoint ranges: join is effectively empty.
+                            return acc * 0.0;
+                        }
+                        // Point ranges (min == max) that are not disjoint are fully overlapping.
+                        if smaller_range == 0.0 {
+                            return acc;
+                        }
+                        acc * (overlap / smaller_range).min(1.0)
+                    }
+                    _ => acc, // Unknown ranges: no adjustment.
+                }
+            })
     }
 
     /// Helper function to determine if an edge contains non-equi filter conditions.
@@ -1076,5 +1230,286 @@ mod tests {
         // the smaller input (R0 has 1000 rows).
         assert!((estimator.get_tdom_for_edge(edges[0]) - 1000.0).abs() < 1e-9);
         Ok(())
+    }
+
+    /// Helper: create a graph with two relations that have specific null counts and optional min/max.
+    fn create_graph_with_stats(
+        r0_rows: usize,
+        r0_null_count: usize,
+        r0_min_max: Option<(ScalarValue, ScalarValue)>,
+        r1_rows: usize,
+        r1_null_count: usize,
+        r1_min_max: Option<(ScalarValue, ScalarValue)>,
+    ) -> QueryGraph {
+        use datafusion::common::stats::ColumnStatistics;
+
+        let mut graph = QueryGraph::new();
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, true)]));
+
+        for (id, rows, nulls, min_max) in [
+            (0, r0_rows, r0_null_count, r0_min_max),
+            (1, r1_rows, r1_null_count, r1_min_max),
+        ] {
+            let plan = Arc::new(EmptyExec::new(schema.clone()));
+            let (min_value, max_value) = match min_max {
+                Some((min, max)) => (Precision::Exact(min), Precision::Exact(max)),
+                None => (Precision::Absent, Precision::Absent),
+            };
+            let stats = Statistics {
+                num_rows: Precision::Exact(rows),
+                total_byte_size: Precision::Absent,
+                column_statistics: vec![ColumnStatistics {
+                    null_count: Precision::Exact(nulls),
+                    max_value,
+                    min_value,
+                    distinct_count: Precision::Absent,
+                    sum_value: Precision::Absent,
+                    byte_size: Precision::Absent,
+                }],
+            };
+            let relation = RelationNode::new(plan, id, rows as f64, rows as f64, stats);
+            graph.add_relation(relation);
+        }
+
+        graph
+    }
+
+    /// Helper: add an equi-join edge between R0.col0 and R1.col0.
+    fn add_equi_edge(graph: &mut QueryGraph) {
+        let l: Arc<dyn PhysicalExpr> = Arc::new(Column::new("id", 0));
+        let r: Arc<dyn PhysicalExpr> = Arc::new(Column::new("id", 0));
+        let filter = Arc::new(BinaryExpr::new(l, Operator::Eq, r)) as Arc<dyn PhysicalExpr>;
+        let js = JoinSet::new_singleton(0)
+            .unwrap()
+            .union(&JoinSet::new_singleton(1).unwrap());
+        let edge = JoinEdge::new(
+            js,
+            filter,
+            JoinType::Inner,
+            vec![(
+                StableColumn {
+                    relation_id: 0,
+                    column_index: 0,
+                    name: "id".into(),
+                },
+                StableColumn {
+                    relation_id: 1,
+                    column_index: 0,
+                    name: "id".into(),
+                },
+            )],
+        );
+        graph.add_edge(edge).unwrap();
+    }
+
+    #[test]
+    fn test_null_fraction_reduces_join_cardinality() {
+        // R0: 1000 rows, 200 nulls (20% null), no min/max
+        // R1: 1000 rows, 500 nulls (50% null), no min/max
+        let mut graph = create_graph_with_stats(1000, 200, None, 1000, 500, None);
+        add_equi_edge(&mut graph);
+        let estimator = CardinalityEstimator::new(graph);
+
+        let card = estimator.estimate_join_cardinality(1000.0, 1000.0, &[0]);
+
+        // TDom fallback = min(1000, 1000) = 1000
+        // selectivity = 1/1000
+        // null_adjustment = 0.8 * 0.5 = 0.4
+        // card = max(1000 * 1000 / 1000 * 0.4, 1.0) = 400
+        assert!((card - 400.0).abs() < 1.0, "expected ~400, got {card}");
+    }
+
+    #[test]
+    fn test_no_nulls_no_adjustment() {
+        // R0: 1000 rows, 0 nulls, no min/max
+        // R1: 2000 rows, 0 nulls, no min/max
+        let mut graph = create_graph_with_stats(1000, 0, None, 2000, 0, None);
+        add_equi_edge(&mut graph);
+        let estimator = CardinalityEstimator::new(graph);
+
+        let card = estimator.estimate_join_cardinality(1000.0, 2000.0, &[0]);
+
+        // TDom fallback = min(1000, 2000) = 1000
+        // null_adjustment = 1.0
+        // card = 1000 * 2000 / 1000 * 1.0 = 2000
+        assert!((card - 2000.0).abs() < 1.0, "expected ~2000, got {card}");
+    }
+
+    #[test]
+    fn test_absent_stats_no_adjustment() {
+        // When null_count and min/max are Absent, no adjustments apply.
+        let graph = create_test_graph(); // uses Statistics::new_unknown
+        let estimator = CardinalityEstimator::new(graph);
+
+        assert!(
+            estimator.null_fractions.is_empty(),
+            "null_fractions should be empty for unknown stats"
+        );
+        assert!(
+            estimator.column_ranges.is_empty(),
+            "column_ranges should be empty for unknown stats"
+        );
+    }
+
+    #[test]
+    fn test_all_nulls_minimal_cardinality() {
+        // R0: 1000 rows, 1000 nulls (100% null)
+        // R1: 1000 rows, 0 nulls
+        let mut graph = create_graph_with_stats(1000, 1000, None, 1000, 0, None);
+        add_equi_edge(&mut graph);
+        let estimator = CardinalityEstimator::new(graph);
+
+        let card = estimator.estimate_join_cardinality(1000.0, 1000.0, &[0]);
+
+        // null_adjustment = (1 - 1.0) * (1 - 0.0) = 0.0
+        // card = max(... * 0.0, 1.0) = 1.0
+        assert!((card - 1.0).abs() < 0.01, "expected 1.0, got {card}");
+    }
+
+    #[test]
+    fn test_tdom_uses_min_max_fallback() {
+        // No distinct_count but min/max = [1, 100] for both.
+        // Without min/max: TDom = min(10000, 10000) = 10000
+        // With min/max: TDom = max - min + 1 = 100
+        let mut graph = create_graph_with_stats(
+            10000,
+            0,
+            Some((ScalarValue::Int32(Some(1)), ScalarValue::Int32(Some(100)))),
+            10000,
+            0,
+            Some((ScalarValue::Int32(Some(1)), ScalarValue::Int32(Some(100)))),
+        );
+        add_equi_edge(&mut graph);
+        let estimator = CardinalityEstimator::new(graph);
+
+        let card = estimator.estimate_join_cardinality(10000.0, 10000.0, &[0]);
+
+        // TDom from min/max = 100
+        // card = 10000 * 10000 / 100 = 1_000_000
+        assert!(
+            (card - 1_000_000.0).abs() < 1.0,
+            "expected ~1_000_000, got {card}"
+        );
+    }
+
+    #[test]
+    fn test_zero_range_overlap_minimal_cardinality() {
+        // R0 range [1, 100], R1 range [200, 300] — no overlap.
+        let mut graph = create_graph_with_stats(
+            1000,
+            0,
+            Some((ScalarValue::Int32(Some(1)), ScalarValue::Int32(Some(100)))),
+            1000,
+            0,
+            Some((ScalarValue::Int32(Some(200)), ScalarValue::Int32(Some(300)))),
+        );
+        add_equi_edge(&mut graph);
+        let estimator = CardinalityEstimator::new(graph);
+
+        let card = estimator.estimate_join_cardinality(1000.0, 1000.0, &[0]);
+
+        // range_overlap = 0 → card = max(... * 0.0, 1.0) = 1.0
+        assert!((card - 1.0).abs() < 0.01, "expected 1.0, got {card}");
+    }
+
+    #[test]
+    fn test_partial_range_overlap() {
+        // R0 range [1, 100], R1 range [51, 200].
+        // overlap = min(100,200) - max(1,51) + 1 = 100 - 51 + 1 = 50
+        // smaller_range = min(100, 150) = 100
+        // overlap_factor = 50 / 100 = 0.5
+        let mut graph = create_graph_with_stats(
+            1000,
+            0,
+            Some((ScalarValue::Int32(Some(1)), ScalarValue::Int32(Some(100)))),
+            1000,
+            0,
+            Some((ScalarValue::Int32(Some(51)), ScalarValue::Int32(Some(200)))),
+        );
+        add_equi_edge(&mut graph);
+        let estimator = CardinalityEstimator::new(graph);
+
+        let card_partial = estimator.estimate_join_cardinality(1000.0, 1000.0, &[0]);
+
+        // TDom = max(range_ndv_R0, range_ndv_R1) = max(100, 150) = 150
+        // selectivity = 1/150
+        // overlap_factor = 50/100 = 0.5
+        // card = 1000 * 1000 / 150 * 0.5 ≈ 3333.33
+        assert!(
+            (card_partial - 3333.33).abs() < 1.0,
+            "expected ~3333.33, got {card_partial}"
+        );
+    }
+
+    #[test]
+    fn test_range_overlap_float_point_range() {
+        // Both sides have min=max=5.0 (Float64 point range).
+        // This should NOT be treated as "no overlap" — the single matching value overlaps.
+        let mut graph = create_graph_with_stats(
+            1000,
+            0,
+            Some((
+                ScalarValue::Float64(Some(5.0)),
+                ScalarValue::Float64(Some(5.0)),
+            )),
+            1000,
+            0,
+            Some((
+                ScalarValue::Float64(Some(5.0)),
+                ScalarValue::Float64(Some(5.0)),
+            )),
+        );
+        add_equi_edge(&mut graph);
+        let estimator = CardinalityEstimator::new(graph);
+        let card = estimator.estimate_join_cardinality(1000.0, 1000.0, &[0]);
+        // Point ranges that overlap should not drive cardinality to 0.
+        assert!(
+            card > 1.0,
+            "expected card > 1.0 for matching point ranges, got {card}"
+        );
+    }
+
+    #[test]
+    fn test_range_overlap_float_disjoint() {
+        // L: [1.0, 3.0], R: [5.0, 7.0] — fully disjoint.
+        let mut graph = create_graph_with_stats(
+            1000,
+            0,
+            Some((
+                ScalarValue::Float64(Some(1.0)),
+                ScalarValue::Float64(Some(3.0)),
+            )),
+            1000,
+            0,
+            Some((
+                ScalarValue::Float64(Some(5.0)),
+                ScalarValue::Float64(Some(7.0)),
+            )),
+        );
+        add_equi_edge(&mut graph);
+        let estimator = CardinalityEstimator::new(graph);
+        let card = estimator.estimate_join_cardinality(1000.0, 1000.0, &[0]);
+        // Disjoint ranges should yield minimal cardinality (clamped to 1.0).
+        assert!(
+            (card - 1.0).abs() < 0.01,
+            "expected 1.0 for disjoint ranges, got {card}"
+        );
+    }
+
+    #[test]
+    fn test_scalar_to_f64_conversions() {
+        assert_eq!(scalar_to_f64(&ScalarValue::Int32(Some(42))), Some(42.0));
+        assert_eq!(scalar_to_f64(&ScalarValue::Int64(Some(-100))), Some(-100.0));
+        assert_eq!(scalar_to_f64(&ScalarValue::UInt64(Some(999))), Some(999.0));
+        assert_eq!(scalar_to_f64(&ScalarValue::Float64(Some(2.72))), Some(2.72));
+        assert_eq!(
+            scalar_to_f64(&ScalarValue::Decimal128(Some(12345), 10, 2)),
+            Some(123.45)
+        );
+        assert_eq!(scalar_to_f64(&ScalarValue::Int32(None)), None);
+        assert_eq!(
+            scalar_to_f64(&ScalarValue::Utf8(Some("hello".into()))),
+            None
+        );
     }
 }
