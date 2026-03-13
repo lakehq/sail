@@ -30,6 +30,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - uses: ./.github/actions/adjust-swap-space
 

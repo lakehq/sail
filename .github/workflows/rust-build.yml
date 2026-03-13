@@ -14,6 +14,8 @@ jobs:
       RUSTC_WORKSPACE_WRAPPER: ${{ github.workspace }}/.github/scripts/rustc-workspace-wrapper.sh
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: ./.github/actions/adjust-swap-space
 
