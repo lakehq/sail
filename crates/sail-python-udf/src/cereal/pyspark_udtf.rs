@@ -7,7 +7,7 @@ use pyo3::{intern, Bound, IntoPyObject, PyAny, PyResult, Python};
 use sail_common::spec;
 
 use crate::cereal::{
-    check_python_udf_version, get_pyspark_version, should_write_config, PySparkVersion,
+    check_python_udf_version, get_pyspark_version, input_types_to_schema_json, should_write_config,
 };
 use crate::config::PySparkUdfConfig;
 use crate::error::{PyUdfError, PyUdfResult};
@@ -43,6 +43,7 @@ impl PySparkUdtfPayload {
         command: &[u8],
         eval_type: spec::PySparkUdfType,
         num_args: usize,
+        input_types: &[DataType],
         return_type: &DataType,
         config: &PySparkUdfConfig,
     ) -> PyUdfResult<Vec<u8>> {
@@ -63,6 +64,12 @@ impl PySparkUdtfPayload {
             }
         }
 
+        if pyspark_version.is_v4_1() && matches!(eval_type, spec::PySparkUdfType::ArrowTable) {
+            let schema_json = input_types_to_schema_json(input_types)?;
+            data.extend((schema_json.len() as i32).to_be_bytes());
+            data.extend(schema_json.as_bytes());
+        }
+
         let num_args: i32 = num_args
             .try_into()
             .map_err(|e| PyUdfError::invalid(format!("num_args: {e}")))?;
@@ -70,12 +77,12 @@ impl PySparkUdtfPayload {
         for index in 0..num_args {
             // TODO: support keyword arguments
             data.extend(index.to_be_bytes()); // argument offset
-            if matches!(pyspark_version, PySparkVersion::V4) {
+            if pyspark_version.is_v4() {
                 data.extend(0u8.to_be_bytes()); // not a keyword argument
             }
         }
 
-        if matches!(pyspark_version, PySparkVersion::V4) {
+        if pyspark_version.is_v4() {
             data.extend(0i32.to_be_bytes()); // number of partition child indexes
             data.extend(0u8.to_be_bytes()); // pickled analyze result is not present
         }
@@ -95,7 +102,7 @@ impl PySparkUdtfPayload {
         data.extend((type_string.len() as u32).to_be_bytes());
         data.extend(type_string.as_bytes());
 
-        if matches!(pyspark_version, PySparkVersion::V4) {
+        if pyspark_version.is_v4() {
             // TODO: support UDTF name
             data.extend(0u32.to_be_bytes()); // length of UDTF name
         }

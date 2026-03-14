@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::DataType;
 use datafusion_common::TableReference;
 use datafusion_expr::{Expr, ExprSchemable, Extension, LogicalPlan, Projection};
 use sail_common::spec;
@@ -66,11 +67,16 @@ impl PlanResolver<'_> {
         let state = scope.state();
         state.config_mut().arrow_allow_large_var_types = true;
 
+        let arg_types: Vec<DataType> = arguments
+            .iter()
+            .map(|a| a.expr.get_type(plan.schema()))
+            .collect::<datafusion_common::Result<_>>()?;
         let payload = PySparkUdtfPayload::build(
             &function.python_version,
             &function.command,
             function.eval_type,
             arguments.len(),
+            &arg_types,
             &function.return_type,
             &self.config.pyspark_udf_config,
         )?;

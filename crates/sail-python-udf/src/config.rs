@@ -57,6 +57,14 @@ impl PySparkUdfConfig {
             "spark.sql.execution.arrow.maxRecordsPerBatch".to_string(),
             self.arrow_max_records_per_batch.to_string(),
         ));
+        out.push((
+            "spark.sql.legacy.execution.pythonUDF.pandas.conversion.enabled".to_string(),
+            "true".to_string(),
+        ));
+        out.push((
+            "spark.sql.legacy.execution.pythonUDTF.pandas.conversion.enabled".to_string(),
+            "true".to_string(),
+        ));
         out
     }
 }
