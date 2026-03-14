@@ -236,7 +236,7 @@ impl TryFrom<DataType> for spec::DataType {
                     keys_sorted: false,
                 })
             }
-            Kind::Variant(_) => Err(SparkError::todo("variant data type")),
+            Kind::Variant(_) => Ok(spec::DataType::Variant),
             Kind::Udt(udt) => {
                 let sdt::Udt {
                     r#type: _,
@@ -340,6 +340,20 @@ mod tests {
 
         let spec_type = spec::DataType::try_from(proto_type)?;
         assert_eq!(spec_type, spec::DataType::Geometry { srid: 4326 });
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_variant_proto_conversion() -> SparkResult<()> {
+        use crate::spark::connect::data_type::{Kind, Variant};
+
+        let proto_type = crate::spark::connect::DataType {
+            kind: Some(Kind::Variant(Variant::default())),
+        };
+
+        let spec_type = spec::DataType::try_from(proto_type)?;
+        assert_eq!(spec_type, spec::DataType::Variant);
 
         Ok(())
     }

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use datafusion::arrow::datatypes as adt;
+use sail_common::spec::{SAIL_VARIANT_METADATA_FIELD_NAME, SAIL_VARIANT_VALUE_FIELD_NAME};
 use serde::Deserialize;
 
 use crate::error::{SparkError, SparkResult};
@@ -122,6 +123,7 @@ impl TryFrom<adt::Field> for sdt::StructField {
     fn try_from(field: adt::Field) -> SparkResult<sdt::StructField> {
         let is_udt = field.metadata().keys().any(|k| k.starts_with("udt."));
         let is_geoarrow = field.extension_type_name() == Some("geoarrow.wkb");
+        let is_variant = field.extension_type_name() == Some("spark.variant");
 
         let data_type = if is_udt {
             DataType {
@@ -160,6 +162,11 @@ impl TryFrom<adt::Field> for sdt::StructField {
                     })),
                 }
             }
+        } else if is_variant {
+            // Variant types are detected by the spark.variant extension name
+            DataType {
+                kind: Some(sdt::Kind::Variant(sdt::Variant::default())),
+            }
         } else {
             field.data_type().clone().try_into()?
         };
@@ -183,6 +190,27 @@ impl TryFrom<adt::Field> for sdt::StructField {
             metadata: Some(metadata),
         })
     }
+}
+
+/// Check if an Arrow Struct type matches the Variant pattern.
+///
+/// Spark's VariantType is stored as a Struct with exactly two Binary fields:
+/// "metadata" (not nullable) and "value" (not nullable).
+/// This pattern detection serves as a fallback when the `spark.variant` extension
+/// metadata is lost through DataFusion operations.
+fn is_variant_struct(fields: &adt::Fields) -> bool {
+    if fields.len() != 2 {
+        return false;
+    }
+    let is_variant_field = |f: &adt::Field, name: &str| -> bool {
+        f.name() == name && *f.data_type() == adt::DataType::Binary && !f.is_nullable()
+    };
+    fields.iter().all(|f| {
+        is_variant_field(f, SAIL_VARIANT_METADATA_FIELD_NAME)
+            || is_variant_field(f, SAIL_VARIANT_VALUE_FIELD_NAME)
+    }) && fields
+        .iter()
+        .any(|f| f.name() == SAIL_VARIANT_METADATA_FIELD_NAME)
 }
 
 /// Reference: https://github.com/apache/spark/blob/bb17665955ad536d8c81605da9a59fb94b6e0162/sql/api/src/main/scala/org/apache/spark/sql/util/ArrowUtils.scala
@@ -288,13 +316,19 @@ impl TryFrom<adt::DataType> for DataType {
                     type_variation_reference: 0,
                 }))
             }
-            adt::DataType::Struct(fields) => Kind::Struct(sdt::Struct {
-                fields: fields
-                    .into_iter()
-                    .map(|f| f.as_ref().clone().try_into())
-                    .collect::<SparkResult<Vec<sdt::StructField>>>()?,
-                type_variation_reference: 0,
-            }),
+            adt::DataType::Struct(fields) => {
+                if is_variant_struct(&fields) {
+                    Kind::Variant(sdt::Variant::default())
+                } else {
+                    Kind::Struct(sdt::Struct {
+                        fields: fields
+                            .into_iter()
+                            .map(|f| f.as_ref().clone().try_into())
+                            .collect::<SparkResult<Vec<sdt::StructField>>>()?,
+                        type_variation_reference: 0,
+                    })
+                }
+            }
             adt::DataType::Map(ref field, ref _keys_sorted) => {
                 let field = sdt::StructField::try_from(field.as_ref().clone())?;
                 let Some(DataType {
@@ -567,5 +601,90 @@ mod tests {
         // Time64 Nanosecond - valid Arrow but rejected by Spark (only precision 0, 3, 6 supported)
         let arrow_type = adt::DataType::Time64(adt::TimeUnit::Nanosecond);
         assert!(DataType::try_from(arrow_type).is_err());
+    }
+
+    #[test]
+    fn test_variant_field_to_proto() -> SparkResult<()> {
+        // Create an Arrow field with spark.variant extension metadata for Variant
+        let metadata: HashMap<String, String> = [(
+            "ARROW:extension:name".to_string(),
+            "spark.variant".to_string(),
+        )]
+        .into_iter()
+        .collect();
+        let field = adt::Field::new(
+            "v",
+            adt::DataType::Struct(adt::Fields::from(vec![
+                adt::Field::new("metadata", adt::DataType::Binary, false),
+                adt::Field::new("value", adt::DataType::Binary, false),
+            ])),
+            true,
+        )
+        .with_metadata(metadata);
+
+        let proto_field: sdt::StructField = field.try_into()?;
+
+        assert_eq!(proto_field.name, "v");
+        assert_eq!(
+            proto_field.data_type,
+            Some(DataType {
+                kind: Some(sdt::Kind::Variant(sdt::Variant::default())),
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_variant_struct_pattern_detection() -> SparkResult<()> {
+        // A Struct matching the Variant pattern (metadata + value, both Binary, not nullable)
+        // should be detected as Variant even without extension metadata
+        let arrow_type = adt::DataType::Struct(adt::Fields::from(vec![
+            adt::Field::new("metadata", adt::DataType::Binary, false),
+            adt::Field::new("value", adt::DataType::Binary, false),
+        ]));
+        let proto_type = DataType::try_from(arrow_type)?;
+        assert_eq!(
+            proto_type,
+            DataType {
+                kind: Some(sdt::Kind::Variant(sdt::Variant::default())),
+            }
+        );
+
+        // A Struct that does NOT match the Variant pattern should remain a Struct
+        let arrow_type = adt::DataType::Struct(adt::Fields::from(vec![
+            adt::Field::new("metadata", adt::DataType::Binary, false),
+            adt::Field::new("value", adt::DataType::Utf8, false),
+        ]));
+        let proto_type = DataType::try_from(arrow_type)?;
+        assert!(matches!(
+            proto_type.kind,
+            Some(sdt::Kind::Struct(sdt::Struct { .. }))
+        ));
+
+        // A Struct with extra fields should NOT be detected as Variant
+        let arrow_type = adt::DataType::Struct(adt::Fields::from(vec![
+            adt::Field::new("metadata", adt::DataType::Binary, false),
+            adt::Field::new("value", adt::DataType::Binary, false),
+            adt::Field::new("extra", adt::DataType::Binary, false),
+        ]));
+        let proto_type = DataType::try_from(arrow_type)?;
+        assert!(matches!(
+            proto_type.kind,
+            Some(sdt::Kind::Struct(sdt::Struct { .. }))
+        ));
+
+        // A Struct with nullable fields should NOT be detected as Variant
+        let arrow_type = adt::DataType::Struct(adt::Fields::from(vec![
+            adt::Field::new("metadata", adt::DataType::Binary, true),
+            adt::Field::new("value", adt::DataType::Binary, false),
+        ]));
+        let proto_type = DataType::try_from(arrow_type)?;
+        assert!(matches!(
+            proto_type.kind,
+            Some(sdt::Kind::Struct(sdt::Struct { .. }))
+        ));
+
+        Ok(())
     }
 }
