@@ -271,7 +271,7 @@ pub enum DataType {
         algorithm: EdgeInterpolationAlgorithm,
     },
     /// Variant type for semi-structured data (Spark 4.1).
-    /// Stored as an Arrow Struct with two Binary fields: `value` and `metadata`.
+    /// Stored as an Arrow Struct with two Binary fields: `metadata` and `value`.
     /// Extension type metadata (`ARROW:extension:name` = `spark.variant`) is used
     /// to distinguish Variant structs from regular structs.
     Variant,
