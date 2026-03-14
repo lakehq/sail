@@ -2867,6 +2867,8 @@ impl RemoteExecutionCodec {
             gen::PySparkUdfKind::ArrowBatch => PySparkUdfKind::ArrowBatch,
             gen::PySparkUdfKind::ScalarPandas => PySparkUdfKind::ScalarPandas,
             gen::PySparkUdfKind::ScalarPandasIter => PySparkUdfKind::ScalarPandasIter,
+            gen::PySparkUdfKind::ScalarArrow => PySparkUdfKind::ScalarArrow,
+            gen::PySparkUdfKind::ScalarArrowIter => PySparkUdfKind::ScalarArrowIter,
         };
         Ok(kind)
     }
@@ -2877,6 +2879,8 @@ impl RemoteExecutionCodec {
             PySparkUdfKind::ArrowBatch => gen::PySparkUdfKind::ArrowBatch,
             PySparkUdfKind::ScalarPandas => gen::PySparkUdfKind::ScalarPandas,
             PySparkUdfKind::ScalarPandasIter => gen::PySparkUdfKind::ScalarPandasIter,
+            PySparkUdfKind::ScalarArrow => gen::PySparkUdfKind::ScalarArrow,
+            PySparkUdfKind::ScalarArrowIter => gen::PySparkUdfKind::ScalarArrowIter,
         };
         Ok(kind as i32)
     }

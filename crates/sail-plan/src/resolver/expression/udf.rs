@@ -95,13 +95,21 @@ impl PlanResolver<'_> {
             | PySparkUdfType::GroupedMapPandas
             | PySparkUdfType::GroupedMapArrow
             | PySparkUdfType::WindowAggPandas
+            | PySparkUdfType::WindowAggArrow
             | PySparkUdfType::MapPandasIter
             | PySparkUdfType::CogroupedMapPandas
             | PySparkUdfType::CogroupedMapArrow
             | PySparkUdfType::MapArrowIter
             | PySparkUdfType::GroupedMapPandasWithState
+            | PySparkUdfType::TransformWithStatePandas
+            | PySparkUdfType::TransformWithStatePandasInitState
+            | PySparkUdfType::TransformWithStatePythonRow
+            | PySparkUdfType::TransformWithStatePythonRowInitState
+            | PySparkUdfType::GroupedMapArrowIter
+            | PySparkUdfType::GroupedMapPandasIter
             | PySparkUdfType::Table
-            | PySparkUdfType::ArrowTable => Err(PlanError::invalid(format!(
+            | PySparkUdfType::ArrowTable
+            | PySparkUdfType::ArrowUdtf => Err(PlanError::invalid(format!(
                 "unsupported Python UDF type for common inline UDF: {:?}",
                 function.eval_type
             ))),
@@ -165,7 +173,10 @@ impl PlanResolver<'_> {
                     args: arguments,
                 }))
             }
-            PySparkUdfType::GroupedAggPandas => {
+            PySparkUdfType::GroupedAggPandas
+            | PySparkUdfType::GroupedAggPandasIter
+            | PySparkUdfType::GroupedAggArrow
+            | PySparkUdfType::GroupedAggArrowIter => {
                 let udaf = PySparkGroupAggregateUDF::new(
                     get_udf_name(name, &payload),
                     payload,
@@ -184,6 +195,36 @@ impl PlanResolver<'_> {
                         order_by: vec![],
                         null_treatment: None,
                     },
+                }))
+            }
+            PySparkUdfType::ScalarArrow => {
+                let udf = PySparkUDF::new(
+                    PySparkUdfKind::ScalarArrow,
+                    get_udf_name(name, &payload),
+                    payload,
+                    deterministic,
+                    input_types,
+                    function.output_type,
+                    self.config.pyspark_udf_config.clone(),
+                );
+                Ok(Expr::ScalarFunction(expr::ScalarFunction {
+                    func: Arc::new(ScalarUDF::from(udf)),
+                    args: arguments,
+                }))
+            }
+            PySparkUdfType::ScalarArrowIter => {
+                let udf = PySparkUDF::new(
+                    PySparkUdfKind::ScalarArrowIter,
+                    get_udf_name(name, &payload),
+                    payload,
+                    deterministic,
+                    input_types,
+                    function.output_type,
+                    self.config.pyspark_udf_config.clone(),
+                );
+                Ok(Expr::ScalarFunction(expr::ScalarFunction {
+                    func: Arc::new(ScalarUDF::from(udf)),
+                    args: arguments,
                 }))
             }
         }

@@ -76,7 +76,9 @@ impl PlanResolver<'_> {
         )?;
         let kind = match function.eval_type {
             spec::PySparkUdfType::Table => PySparkUdtfKind::Table,
-            spec::PySparkUdfType::ArrowTable => PySparkUdtfKind::ArrowTable,
+            spec::PySparkUdfType::ArrowTable | spec::PySparkUdfType::ArrowUdtf => {
+                PySparkUdtfKind::ArrowTable
+            }
             _ => {
                 return Err(PlanError::invalid(format!(
                     "PySpark UDTF type: {:?}",

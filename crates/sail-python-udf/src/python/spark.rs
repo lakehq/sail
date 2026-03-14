@@ -83,6 +83,30 @@ impl PySpark {
         )
     }
 
+    pub fn scalar_arrow_udf<'py>(
+        py: Python<'py>,
+        udf: Bound<'py, PyAny>,
+        config: &PySparkUdfConfig,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        py_init_object(
+            Self::module(py)?,
+            intern!(py, "PySparkScalarArrowUdf"),
+            (udf, config.clone()),
+        )
+    }
+
+    pub fn scalar_arrow_iter_udf<'py>(
+        py: Python<'py>,
+        udf: Bound<'py, PyAny>,
+        config: &PySparkUdfConfig,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        py_init_object(
+            Self::module(py)?,
+            intern!(py, "PySparkScalarArrowIterUdf"),
+            (udf, config.clone()),
+        )
+    }
+
     pub fn group_agg_udf<'py>(
         py: Python<'py>,
         udf: Bound<'py, PyAny>,
