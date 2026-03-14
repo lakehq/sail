@@ -122,6 +122,7 @@ impl TryFrom<adt::Field> for sdt::StructField {
     fn try_from(field: adt::Field) -> SparkResult<sdt::StructField> {
         let is_udt = field.metadata().keys().any(|k| k.starts_with("udt."));
         let is_geoarrow = field.extension_type_name() == Some("geoarrow.wkb");
+        let is_variant = field.extension_type_name() == Some("spark.variant");
 
         let data_type = if is_udt {
             DataType {
@@ -159,6 +160,11 @@ impl TryFrom<adt::Field> for sdt::StructField {
                         type_variation_reference: 0,
                     })),
                 }
+            }
+        } else if is_variant {
+            // Variant types are detected by the spark.variant extension name
+            DataType {
+                kind: Some(sdt::Kind::Variant(sdt::Variant::default())),
             }
         } else {
             field.data_type().clone().try_into()?
@@ -567,5 +573,37 @@ mod tests {
         // Time64 Nanosecond - valid Arrow but rejected by Spark (only precision 0, 3, 6 supported)
         let arrow_type = adt::DataType::Time64(adt::TimeUnit::Nanosecond);
         assert!(DataType::try_from(arrow_type).is_err());
+    }
+
+    #[test]
+    fn test_variant_field_to_proto() -> SparkResult<()> {
+        // Create an Arrow field with spark.variant extension metadata for Variant
+        let metadata: HashMap<String, String> = [(
+            "ARROW:extension:name".to_string(),
+            "spark.variant".to_string(),
+        )]
+        .into_iter()
+        .collect();
+        let field = adt::Field::new(
+            "v",
+            adt::DataType::Struct(adt::Fields::from(vec![
+                adt::Field::new("metadata", adt::DataType::Binary, false),
+                adt::Field::new("value", adt::DataType::Binary, false),
+            ])),
+            true,
+        )
+        .with_metadata(metadata);
+
+        let proto_field: sdt::StructField = field.try_into()?;
+
+        assert_eq!(proto_field.name, "v");
+        assert_eq!(
+            proto_field.data_type,
+            Some(DataType {
+                kind: Some(sdt::Kind::Variant(sdt::Variant::default())),
+            })
+        );
+
+        Ok(())
     }
 }

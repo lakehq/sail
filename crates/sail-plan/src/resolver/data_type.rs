@@ -5,6 +5,7 @@ use datafusion::arrow::datatypes as adt;
 use sail_common::spec;
 use sail_common::spec::{
     SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME,
+    SAIL_VARIANT_METADATA_FIELD_NAME, SAIL_VARIANT_VALUE_FIELD_NAME,
 };
 use serde_json::json;
 
@@ -267,6 +268,23 @@ impl PlanResolver<'_> {
                 // See resolve_field() for metadata handling
                 Ok(adt::DataType::Binary)
             }
+            DataType::Variant => {
+                // Variant types are stored as a Struct with two Binary fields: metadata and value.
+                // Extension type metadata is added at the Field level, not DataType level.
+                // See resolve_field() for metadata handling.
+                Ok(adt::DataType::Struct(adt::Fields::from(vec![
+                    adt::Field::new(
+                        SAIL_VARIANT_METADATA_FIELD_NAME,
+                        adt::DataType::Binary,
+                        false,
+                    ),
+                    adt::Field::new(
+                        SAIL_VARIANT_VALUE_FIELD_NAME,
+                        adt::DataType::Binary,
+                        false,
+                    ),
+                ])))
+            }
             DataType::ConfiguredUtf8 { utf8_type: _ } => {
                 // FIXME: Currently `length` and `utf8_type` is lost in translation.
                 //  This impacts accuracy if `spec::ConfiguredUtf8Type` is `VarChar` or `Char`.
@@ -346,6 +364,16 @@ impl PlanResolver<'_> {
                     ext["crs"] = serde_json::Value::String(crs);
                 }
                 metadata.insert("ARROW:extension:metadata".to_string(), ext.to_string());
+                data_type
+            }
+            spec::DataType::Variant => {
+                // Add extension type metadata for Variant.
+                // The spark.variant extension name distinguishes Variant structs from
+                // regular structs during Arrow → proto conversion.
+                metadata.insert(
+                    "ARROW:extension:name".to_string(),
+                    "spark.variant".to_string(),
+                );
                 data_type
             }
             x => x,

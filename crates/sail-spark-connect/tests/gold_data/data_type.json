@@ -866,6 +866,12 @@
       "output": {
         "success": "null"
       }
+    },
+    {
+      "input": "variant",
+      "output": {
+        "success": "variant"
+      }
     }
   ]
 }

@@ -20,6 +20,10 @@ pub const SAIL_MAP_FIELD_NAME: &str = "entries";
 pub const SAIL_MAP_KEY_FIELD_NAME: &str = "key";
 /// Field name for map type's value.
 pub const SAIL_MAP_VALUE_FIELD_NAME: &str = "value";
+/// Field name for variant type's value.
+pub const SAIL_VARIANT_VALUE_FIELD_NAME: &str = "value";
+/// Field name for variant type's metadata.
+pub const SAIL_VARIANT_METADATA_FIELD_NAME: &str = "metadata";
 
 /// Default SRID for Geometry and Geography types (Spark 4.1 default: 4326 / WGS84).
 pub const GEOSPATIAL_DEFAULT_SRID: i32 = 4326;
@@ -266,6 +270,11 @@ pub enum DataType {
         /// Edge interpolation algorithm. Spark 4.1 only supports Spherical.
         algorithm: EdgeInterpolationAlgorithm,
     },
+    /// Variant type for semi-structured data (Spark 4.1).
+    /// Stored as an Arrow Struct with two Binary fields: `value` and `metadata`.
+    /// Extension type metadata (`ARROW:extension:name` = `spark.variant`) is used
+    /// to distinguish Variant structs from regular structs.
+    Variant,
     //
     // Everything below this line is not part of the Arrow specification.
     //

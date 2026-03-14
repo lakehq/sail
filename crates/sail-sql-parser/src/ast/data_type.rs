@@ -6,8 +6,8 @@ use crate::ast::keywords::{
     Date64, Day, Dec, Decimal, Double, Float, Float32, Float64, Geography, Geometry, Hour, Int,
     Int16, Int32, Int64, Int8, Integer, Interval, Local, Long, Map, Minute, Month, Not, Null,
     Numeric, Real, Second, Short, Smallint, Struct, Text, Time, Timestamp, TimestampLtz,
-    TimestampNtz, Tinyint, To, Uint16, Uint32, Uint64, Uint8, Unsigned, Varchar, Void, With,
-    Without, Year, Zone,
+    TimestampNtz, Tinyint, To, Uint16, Uint32, Uint64, Uint8, Unsigned, Varchar, Variant, Void,
+    With, Without, Year, Zone,
 };
 use crate::ast::literal::{IntegerLiteral, StringLiteral};
 use crate::ast::operator::{
@@ -112,6 +112,7 @@ pub enum DataType {
     ),
     Geometry(Geometry, LeftParenthesis, GeometrySrid, RightParenthesis),
     Geography(Geography, LeftParenthesis, GeographySrid, RightParenthesis),
+    Variant(Variant),
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
