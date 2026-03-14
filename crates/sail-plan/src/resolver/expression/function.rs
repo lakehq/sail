@@ -29,7 +29,7 @@ impl PlanResolver<'_> {
         let state = scope.state();
         let spec::UnresolvedFunction {
             function_name,
-            arguments,
+            mut arguments,
             named_arguments,
             is_distinct,
             is_user_defined_function: _,
@@ -42,9 +42,30 @@ impl PlanResolver<'_> {
         let Ok(function_name) = <Vec<String>>::from(function_name).one() else {
             return Err(PlanError::unsupported("qualified function name"));
         };
-        if !named_arguments.is_empty() {
-            return Err(PlanError::todo("named function arguments"));
+        // Merge named_arguments into positional arguments, tracking kwarg keys.
+        // PySpark sends kwargs as named_arguments on UnresolvedFunction for registered UDFs.
+        let mut kwarg_names: Vec<Option<String>> = arguments.iter().map(|_| None).collect();
+        for (key, value) in named_arguments {
+            kwarg_names.push(Some(key.into()));
+            arguments.push(value);
         }
+
+        // Validate named arguments: reject duplicate kwarg names early so we surface
+        // a proper AnalysisException instead of letting it crash in the Python worker.
+        {
+            let mut seen_kwarg_names = std::collections::HashSet::new();
+            for kwarg in &kwarg_names {
+                if let Some(name) = kwarg {
+                    if !seen_kwarg_names.insert(name.as_str()) {
+                        return Err(PlanError::AnalysisError(format!(
+                            "[DUPLICATE_ROUTINE_PARAMETER_ASSIGNMENT.DOUBLE_NAMED_ARGUMENT_REFERENCE] \
+                             Duplicate named argument: '{name}' is assigned more than once."
+                        )));
+                    }
+                }
+            }
+        }
+
         let canonical_function_name = function_name.to_ascii_lowercase();
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
         if let Some(udf) = catalog_manager.get_function(&canonical_function_name)? {
@@ -84,6 +105,7 @@ impl PlanResolver<'_> {
                     &function_name,
                     arguments,
                     &argument_display_names,
+                    &kwarg_names, // pass kwargs from named_arguments
                     schema,
                     f.deterministic(),
                     is_distinct,

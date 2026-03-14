@@ -166,6 +166,12 @@ message SparkFromCsvUdf {
 
 message StandardUdaf {}
 
+// Distinguishes Pandas (202) vs Arrow-native (252) grouped aggregate UDFs
+enum PySparkGroupAggKind {
+  PY_SPARK_GROUP_AGG_KIND_PANDAS = 0;
+  PY_SPARK_GROUP_AGG_KIND_ARROW = 1;
+}
+
 message PySparkGroupAggUdaf {
   string name = 1;
   bytes payload = 2;
@@ -174,6 +180,11 @@ message PySparkGroupAggUdaf {
   repeated bytes input_types = 5;
   bytes output_type = 6;
   PySparkUdfConfig config = 7;
+  PySparkGroupAggKind kind = 8;
+  // Number of arguments the Python function actually accepts.
+  // Absent for backward compatibility: if not set, defaults to input_types.len().
+  // When a dummy Int64 argument has been injected (0-arg UDF), this is 0.
+  optional uint64 actual_arg_count = 9;
 }
 
 message PySparkGroupMapUdaf {
@@ -219,6 +230,9 @@ enum PySparkUdfKind {
   PY_SPARK_UDF_KIND_ARROW_BATCH = 1;
   PY_SPARK_UDF_KIND_SCALAR_PANDAS = 2;
   PY_SPARK_UDF_KIND_SCALAR_PANDAS_ITER = 3;
+  // Spark 4.0 Arrow-native scalar UDF kinds
+  PY_SPARK_UDF_KIND_SCALAR_ARROW = 4;
+  PY_SPARK_UDF_KIND_SCALAR_ARROW_ITER = 5;
 }
 
 enum PySparkMapIterKind {

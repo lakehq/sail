@@ -507,6 +507,54 @@ class PySparkScalarPandasIterUdf:
         return _pandas_to_arrow_array(output, output_type, self._serializer)
 
 
+class PySparkScalarArrowUdf:
+    """Arrow-native scalar UDF (eval_type 250).
+
+    Unlike ScalarPandas (200), the user function receives pyarrow.Array columns
+    directly and returns a pyarrow.Array — no Pandas conversion overhead.
+    """
+
+    def __init__(
+        self,
+        udf: Callable[..., Any],
+        config,
+    ):
+        self._udf = udf
+        # No ArrowStreamPandasUDFSerializer needed — data stays in Arrow format
+
+    def __call__(self, args: list[pa.Array], _num_rows: int) -> pa.Array:
+        # Pass Arrow arrays directly to the user function (no Pandas conversion)
+        inputs = tuple(args)
+        [(output, output_type)] = list(self._udf(None, (inputs,)))
+        # output is already a pyarrow.Array; cast to declared return type
+        if output.type != output_type:
+            output = output.cast(output_type)
+        return output
+
+
+class PySparkScalarArrowIterUdf:
+    """Arrow-native scalar iterator UDF (eval_type 251).
+
+    Like ScalarPandasIter (204) but the user function receives and returns
+    Iterator[pyarrow.Array] — no Pandas conversion.
+    """
+
+    def __init__(
+        self,
+        udf: Callable[..., Any],
+        config,
+    ):
+        self._udf = udf
+
+    def __call__(self, args: list[pa.Array], _num_rows: int) -> pa.Array:
+        # Pass as single-element iterator (one batch), Arrow arrays directly
+        inputs = tuple(args)
+        [(output, output_type)] = list(self._udf(None, [inputs]))
+        if output.type != output_type:
+            output = output.cast(output_type)
+        return output
+
+
 class PySparkGroupAggUdf:
     def __init__(
         self,
@@ -530,6 +578,31 @@ class PySparkGroupAggUdf:
         inputs = _named_arrays_to_pandas(args, self._input_names, self._serializer)
         [(output, output_type)] = list(self._udf(None, (inputs,)))
         return _pandas_to_arrow_array(output, output_type, self._serializer)
+
+
+class PySparkGroupAggArrowUdf:
+    """Arrow-native grouped aggregate UDF (eval_type 252).
+
+    Like GroupedAggPandas (202) but the user function receives pyarrow.Array
+    columns directly and returns a scalar value. PySpark's wrapper wraps
+    the scalar in pa.array([result]) before returning.
+    """
+
+    def __init__(
+        self,
+        udf: Callable[..., Any],
+        config,
+    ):
+        self._udf = udf
+        # No Pandas serializer — data stays in Arrow format
+
+    def __call__(self, args: list[pa.Array]) -> pa.Array:
+        # Pass Arrow arrays directly (no Pandas conversion)
+        [(output, output_type)] = list(self._udf(None, (args,)))
+        # output is pa.array([scalar_result]) from PySpark's wrapper
+        if output.type != output_type:
+            output = output.cast(output_type)
+        return output
 
 
 class PySparkGroupMapUdf:

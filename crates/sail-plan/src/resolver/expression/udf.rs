@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 use datafusion_common::{DFSchemaRef, DataFusionError};
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_expr::expr::AggregateFunctionParams;
 use datafusion_expr::{expr, AggregateUDF, Expr, ExprSchemable, ScalarUDF};
 use sail_common::spec;
@@ -9,7 +10,7 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;
-use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
+use sail_python_udf::udf::pyspark_udaf::{PySparkGroupAggKind, PySparkGroupAggregateUDF};
 use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
 
 use crate::error::{PlanError, PlanResult};
@@ -17,6 +18,20 @@ use crate::resolver::expression::NamedExpr;
 use crate::resolver::function::PythonUdf;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+
+/// If `expr` contains (or is) an `AggregateFunction`, return its name.
+/// Used to detect illegal nesting of aggregate functions as UDAF arguments.
+fn find_aggregate_in_expr(expr: &Expr) -> Option<String> {
+    let mut found: Option<String> = None;
+    let _ = expr.apply(|e| {
+        if let Expr::AggregateFunction(agg) = e {
+            found = Some(agg.func.name().to_string());
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    });
+    found
+}
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_expression_common_inline_udf(
@@ -36,8 +51,55 @@ impl PlanResolver<'_> {
             function,
         } = function;
         let function_name: String = function_name.into();
+
+        // Separate positional args from named (keyword) args before resolution
+        let mut positional_args = Vec::new();
+        let mut kwarg_names: Vec<Option<String>> = Vec::new();
+        for arg in arguments {
+            match arg {
+                spec::Expr::NamedArgument { key, value } => {
+                    positional_args.push(*value);
+                    kwarg_names.push(Some(key));
+                }
+                other => {
+                    positional_args.push(other);
+                    kwarg_names.push(None);
+                }
+            }
+        }
+
+        // Validate named arguments before building the payload:
+        // 1. No duplicate kwarg names → DUPLICATE_ROUTINE_PARAMETER_ASSIGNMENT.DOUBLE_NAMED_ARGUMENT_REFERENCE
+        // 2. No positional argument after a named argument → UNEXPECTED_POSITIONAL_ARGUMENT
+        {
+            let mut seen_kwarg_names = std::collections::HashSet::new();
+            let mut seen_named = false;
+            for kwarg in &kwarg_names {
+                match kwarg {
+                    Some(name) => {
+                        if !seen_kwarg_names.insert(name.as_str()) {
+                            return Err(PlanError::AnalysisError(format!(
+                                "[DUPLICATE_ROUTINE_PARAMETER_ASSIGNMENT.DOUBLE_NAMED_ARGUMENT_REFERENCE] \
+                                 Duplicate named argument: '{name}' is assigned more than once."
+                            )));
+                        }
+                        seen_named = true;
+                    }
+                    None => {
+                        if seen_named {
+                            return Err(PlanError::AnalysisError(
+                                "[UNEXPECTED_POSITIONAL_ARGUMENT] \
+                                 Positional argument follows a named (keyword) argument."
+                                    .to_string(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
         let (argument_display_names, arguments) = self
-            .resolve_expressions_and_names(arguments, schema, state)
+            .resolve_expressions_and_names(positional_args, schema, state)
             .await?;
         let function = self.resolve_python_udf(function, state)?;
         let func = self.resolve_python_udf_expr(
@@ -45,6 +107,7 @@ impl PlanResolver<'_> {
             &function_name,
             arguments,
             &argument_display_names,
+            &kwarg_names,
             schema,
             deterministic,
             is_distinct,
@@ -66,6 +129,8 @@ impl PlanResolver<'_> {
         name: &str,
         arguments: Vec<Expr>,
         argument_display_names: &[String],
+        // Per-argument kwarg name: None for positional, Some(key) for keyword
+        kwarg_names: &[Option<String>],
         schema: &DFSchemaRef,
         deterministic: bool,
         distinct: bool,
@@ -87,6 +152,7 @@ impl PlanResolver<'_> {
             &function.command,
             function.eval_type,
             &((0..arguments.len()).collect::<Vec<_>>()),
+            kwarg_names,
             &self.config.pyspark_udf_config,
         )?;
 
@@ -166,7 +232,33 @@ impl PlanResolver<'_> {
                 }))
             }
             PySparkUdfType::GroupedAggPandas => {
+                // Spark CheckAnalysis: aggregate functions cannot be nested inside another
+                // aggregate function's arguments.
+                for arg in &arguments {
+                    if let Some(inner) = find_aggregate_in_expr(arg) {
+                        return Err(PlanError::AnalysisError(format!(
+                            "The aggregate function '{name}' cannot take an argument containing \
+                             another aggregate function: '{inner}'."
+                        )));
+                    }
+                }
+                // DataFusion requires at least one input to an aggregate function.
+                // For 0-arg UDFs inject a dummy Int64 literal; the accumulator will
+                // strip it before calling Python.
+                let actual_arg_count = arguments.len();
+                let (arguments, input_types) = if arguments.is_empty() {
+                    (
+                        vec![Expr::Literal(
+                            datafusion_common::ScalarValue::Int64(Some(0)),
+                            None,
+                        )],
+                        vec![arrow::datatypes::DataType::Int64],
+                    )
+                } else {
+                    (arguments, input_types)
+                };
                 let udaf = PySparkGroupAggregateUDF::new(
+                    PySparkGroupAggKind::Pandas, // Pandas path: Arrow → Pandas → user func → Arrow
                     get_udf_name(name, &payload),
                     payload,
                     deterministic,
@@ -174,6 +266,88 @@ impl PlanResolver<'_> {
                     input_types,
                     function.output_type,
                     self.config.pyspark_udf_config.clone(),
+                    actual_arg_count,
+                );
+                Ok(Expr::AggregateFunction(expr::AggregateFunction {
+                    func: Arc::new(AggregateUDF::from(udaf)),
+                    params: AggregateFunctionParams {
+                        args: arguments,
+                        distinct,
+                        filter: None,
+                        order_by: vec![],
+                        null_treatment: None,
+                    },
+                }))
+            }
+            // Arrow-native scalar UDF (250): user func receives/returns pyarrow.Array directly
+            PySparkUdfType::ScalarArrow => {
+                let udf = PySparkUDF::new(
+                    PySparkUdfKind::ScalarArrow,
+                    get_udf_name(name, &payload),
+                    payload,
+                    deterministic,
+                    input_types,
+                    function.output_type,
+                    self.config.pyspark_udf_config.clone(),
+                );
+                Ok(Expr::ScalarFunction(expr::ScalarFunction {
+                    func: Arc::new(ScalarUDF::from(udf)),
+                    args: arguments,
+                }))
+            }
+            // Arrow-native scalar iterator UDF (251): user func is Iterator[pa.Array] → Iterator[pa.Array]
+            PySparkUdfType::ScalarArrowIter => {
+                let udf = PySparkUDF::new(
+                    PySparkUdfKind::ScalarArrowIter,
+                    get_udf_name(name, &payload),
+                    payload,
+                    deterministic,
+                    input_types,
+                    function.output_type,
+                    self.config.pyspark_udf_config.clone(),
+                );
+                Ok(Expr::ScalarFunction(expr::ScalarFunction {
+                    func: Arc::new(ScalarUDF::from(udf)),
+                    args: arguments,
+                }))
+            }
+            // Arrow-native grouped aggregate UDF (252): user func receives pa.Arrays, returns scalar
+            PySparkUdfType::GroupedAggArrow => {
+                // Spark CheckAnalysis: aggregate functions cannot be nested inside another
+                // aggregate function's arguments.
+                for arg in &arguments {
+                    if let Some(inner) = find_aggregate_in_expr(arg) {
+                        return Err(PlanError::AnalysisError(format!(
+                            "The aggregate function '{name}' cannot take an argument containing \
+                             another aggregate function: '{inner}'."
+                        )));
+                    }
+                }
+                // DataFusion requires at least one input to an aggregate function.
+                // For 0-arg UDFs inject a dummy Int64 literal; the accumulator will
+                // strip it before calling Python.
+                let actual_arg_count = arguments.len();
+                let (arguments, input_types) = if arguments.is_empty() {
+                    (
+                        vec![Expr::Literal(
+                            datafusion_common::ScalarValue::Int64(Some(0)),
+                            None,
+                        )],
+                        vec![arrow::datatypes::DataType::Int64],
+                    )
+                } else {
+                    (arguments, input_types)
+                };
+                let udaf = PySparkGroupAggregateUDF::new(
+                    PySparkGroupAggKind::Arrow, // Arrow path: no Pandas conversion
+                    get_udf_name(name, &payload),
+                    payload,
+                    deterministic,
+                    argument_display_names.to_vec(),
+                    input_types,
+                    function.output_type,
+                    self.config.pyspark_udf_config.clone(),
+                    actual_arg_count,
                 );
                 Ok(Expr::AggregateFunction(expr::AggregateFunction {
                     func: Arc::new(AggregateUDF::from(udaf)),
