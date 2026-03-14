@@ -278,11 +278,7 @@ impl PlanResolver<'_> {
                         adt::DataType::Binary,
                         false,
                     ),
-                    adt::Field::new(
-                        SAIL_VARIANT_VALUE_FIELD_NAME,
-                        adt::DataType::Binary,
-                        false,
-                    ),
+                    adt::Field::new(SAIL_VARIANT_VALUE_FIELD_NAME, adt::DataType::Binary, false),
                 ])))
             }
             DataType::ConfiguredUtf8 { utf8_type: _ } => {
