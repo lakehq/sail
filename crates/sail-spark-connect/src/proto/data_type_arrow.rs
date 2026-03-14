@@ -202,17 +202,15 @@ fn is_variant_struct(fields: &adt::Fields) -> bool {
     if fields.len() != 2 {
         return false;
     }
-    let has_metadata = fields.iter().any(|f| {
-        f.name() == SAIL_VARIANT_METADATA_FIELD_NAME
-            && *f.data_type() == adt::DataType::Binary
-            && !f.is_nullable()
-    });
-    let has_value = fields.iter().any(|f| {
-        f.name() == SAIL_VARIANT_VALUE_FIELD_NAME
-            && *f.data_type() == adt::DataType::Binary
-            && !f.is_nullable()
-    });
-    has_metadata && has_value
+    let is_variant_field = |f: &adt::Field, name: &str| -> bool {
+        f.name() == name && *f.data_type() == adt::DataType::Binary && !f.is_nullable()
+    };
+    fields.iter().all(|f| {
+        is_variant_field(f, SAIL_VARIANT_METADATA_FIELD_NAME)
+            || is_variant_field(f, SAIL_VARIANT_VALUE_FIELD_NAME)
+    }) && fields
+        .iter()
+        .any(|f| f.name() == SAIL_VARIANT_METADATA_FIELD_NAME)
 }
 
 /// Reference: https://github.com/apache/spark/blob/bb17665955ad536d8c81605da9a59fb94b6e0162/sql/api/src/main/scala/org/apache/spark/sql/util/ArrowUtils.scala

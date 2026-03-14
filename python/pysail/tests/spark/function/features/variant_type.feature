@@ -47,32 +47,32 @@ Feature: VARIANT data type support
       """
       SELECT parse_json('{"a": 1}') AS result
       """
-      Then query error parse_json
+      Then query error function: parse_json
 
     Scenario: try_parse_json is not yet supported
       When query
       """
       SELECT try_parse_json('{"a": 1}') AS result
       """
-      Then query error try_parse_json
+      Then query error function: try_parse_json
 
     Scenario: variant_get is not yet supported
       When query
       """
       SELECT variant_get(CAST(NULL AS VARIANT), '$.key', 'string') AS result
       """
-      Then query error variant_get
+      Then query error function: variant_get
 
     Scenario: is_variant_null is not yet supported
       When query
       """
       SELECT is_variant_null(CAST(NULL AS VARIANT)) AS result
       """
-      Then query error is_variant_null
+      Then query error function: is_variant_null
 
     Scenario: schema_of_variant is not yet supported
       When query
       """
       SELECT schema_of_variant(CAST(NULL AS VARIANT)) AS result
       """
-      Then query error schema_of_variant
+      Then query error function: schema_of_variant
