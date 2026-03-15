@@ -174,9 +174,90 @@ fn common_supertype(a: &str, b: &str) -> String {
         ("NULL", other) | (other, "NULL") => other.to_string(),
         // BIGINT + DOUBLE = DOUBLE
         ("BIGINT", "DOUBLE") | ("DOUBLE", "BIGINT") => "DOUBLE".to_string(),
+        // ARRAY<X> + ARRAY<Y> = ARRAY<common_supertype(X, Y)>
+        (a, b) if a.starts_with("ARRAY<") && b.starts_with("ARRAY<") => {
+            let inner_a = &a[6..a.len() - 1];
+            let inner_b = &b[6..b.len() - 1];
+            format!("ARRAY<{}>", common_supertype(inner_a, inner_b))
+        }
+        // STRUCT + STRUCT = merge fields with common supertypes
+        (a, b) if a.starts_with("STRUCT<") && b.starts_with("STRUCT<") => {
+            merge_struct_types(a, b)
+        }
         // Anything else mixed = STRING
         _ => "STRING".to_string(),
     }
+}
+
+/// Merges two STRUCT DDL types: union of fields, common supertype for shared fields.
+fn merge_struct_types(a: &str, b: &str) -> String {
+    let fields_a = parse_struct_fields(a);
+    let fields_b = parse_struct_fields(b);
+
+    let mut merged: Vec<(String, String)> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // Process fields from a, merging with b if present
+    for (name, type_a) in &fields_a {
+        let merged_type = if let Some((_, type_b)) = fields_b.iter().find(|(n, _)| n == name) {
+            common_supertype(type_a, type_b)
+        } else {
+            type_a.clone()
+        };
+        merged.push((name.clone(), merged_type));
+        seen.insert(name.clone());
+    }
+
+    // Add fields only in b
+    for (name, type_b) in &fields_b {
+        if !seen.contains(name) {
+            merged.push((name.clone(), type_b.clone()));
+        }
+    }
+
+    merged.sort_by(|(a, _), (b, _)| a.cmp(b));
+    let fields_str: Vec<String> = merged
+        .into_iter()
+        .map(|(name, typ)| format!("{name}: {typ}"))
+        .collect();
+    format!("STRUCT<{}>", fields_str.join(", "))
+}
+
+/// Parses `STRUCT<name1: type1, name2: type2>` into vec of (name, type) pairs.
+/// Handles nested angle brackets correctly.
+fn parse_struct_fields(s: &str) -> Vec<(String, String)> {
+    let inner = &s[7..s.len() - 1]; // strip "STRUCT<" and ">"
+    if inner.is_empty() {
+        return Vec::new();
+    }
+
+    let mut fields = Vec::new();
+    let mut depth = 0;
+    let mut start = 0;
+
+    // Split on ", " at depth 0
+    for (i, ch) in inner.char_indices() {
+        match ch {
+            '<' => depth += 1,
+            '>' => depth -= 1,
+            ',' if depth == 0 => {
+                let field = inner[start..i].trim();
+                if let Some((name, typ)) = field.split_once(": ") {
+                    fields.push((name.to_string(), typ.to_string()));
+                }
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+
+    // Last field
+    let field = inner[start..].trim();
+    if let Some((name, typ)) = field.split_once(": ") {
+        fields.push((name.to_string(), typ.to_string()));
+    }
+
+    fields
 }
 
 fn infer_struct_type(jiter: &mut Jiter) -> String {
