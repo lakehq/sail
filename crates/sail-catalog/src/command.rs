@@ -12,7 +12,7 @@ use crate::provider::{
     CreateDatabaseOptions, CreateTableOptions, CreateTemporaryViewOptions, CreateViewOptions,
     DropDatabaseOptions, DropTableOptions, DropTemporaryViewOptions, DropViewOptions,
 };
-use crate::utils::quote_namespace_if_needed;
+use crate::utils::{quote_names_if_needed, quote_namespace_if_needed};
 
 #[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum CatalogCommand {
@@ -116,6 +116,12 @@ pub enum CatalogCommand {
         table: Vec<String>,
         extended: bool,
     },
+    ListPartitions {
+        table: Vec<String>,
+        /// Optional partition filter: `PARTITION (col=value, ...)`.
+        /// Each entry is `(column_name, optional_string_value)`.
+        partition_filter: Vec<(String, Option<String>)>,
+    },
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
@@ -155,6 +161,7 @@ impl CatalogCommand {
             CatalogCommand::CreateTemporaryView { .. } => "CreateTemporaryView",
             CatalogCommand::CreateView { .. } => "CreateView",
             CatalogCommand::DescribeTable { .. } => "DescribeTable",
+            CatalogCommand::ListPartitions { .. } => "ListPartitions",
         }
     }
 
@@ -170,6 +177,9 @@ impl CatalogCommand {
             | CatalogCommand::ListTables { .. }
             | CatalogCommand::ListViews { .. } => display.tables().schema()?,
             CatalogCommand::ListColumns { .. } => display.table_columns().schema()?,
+            CatalogCommand::ListPartitions { .. } => {
+                ArrowSerializer::default().schema::<ShowPartitionRow>()?
+            }
             CatalogCommand::GetFunction { .. } | CatalogCommand::ListFunctions { .. } => {
                 display.functions().schema()?
             }
@@ -434,6 +444,24 @@ impl CatalogCommand {
                 manager.create_view(&view, options).await?;
                 display.bools().to_record_batch(vec![true])?
             }
+            CatalogCommand::ListPartitions {
+                table,
+                partition_filter: _,
+            } => {
+                let table_status = manager.get_table_or_view(&table).await?;
+                let partition_cols = table_status.kind.partition_columns();
+                if partition_cols.is_empty() {
+                    return Err(CatalogError::External(format!(
+                        "[INVALID_PARTITION_OPERATION.PARTITION_SCHEMA_IS_EMPTY] SHOW PARTITIONS is not allowed on a table that is not partitioned: {}",
+                        quote_names_if_needed(&table)
+                    )));
+                }
+                // TODO: list actual partition values from the underlying table format
+                //   This requires object store integration to list partition directories.
+                let serializer = ArrowSerializer::default();
+                let rows: Vec<ShowPartitionRow> = vec![];
+                serializer.build_record_batch(&rows)?
+            }
         };
         Ok(batch)
     }
@@ -444,4 +472,9 @@ struct DescribeTableRow {
     col_name: String,
     data_type: String,
     comment: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ShowPartitionRow {
+    pub partition: String,
 }

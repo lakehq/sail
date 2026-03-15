@@ -448,6 +448,22 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
         Statement::ShowFunctions { .. } => Err(SqlError::todo("SHOW FUNCTIONS")),
+        Statement::ShowPartitions {
+            show: _,
+            partitions: _,
+            name,
+            partition,
+        } => {
+            let partition_filter = partition
+                .map(from_ast_partition)
+                .transpose()?
+                .unwrap_or_default();
+            let node = spec::CommandNode::ListPartitions {
+                table: from_ast_object_name(name)?,
+                partition_filter,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::Explain {
             explain: _,
             format,

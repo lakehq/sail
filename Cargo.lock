@@ -6423,6 +6423,7 @@ dependencies = [
  "datafusion-expr",
  "futures",
  "lazy_static",
+ "object_store",
  "sail-catalog",
  "sail-common-datafusion",
  "sail-logical-plan",

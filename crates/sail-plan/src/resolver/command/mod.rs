@@ -72,6 +72,24 @@ impl PlanResolver<'_> {
                     table: table.into(),
                 })
             }
+            CommandNode::ListPartitions {
+                table,
+                partition_filter,
+            } => {
+                let filter = partition_filter
+                    .into_iter()
+                    .map(|(name, expr)| {
+                        let value = expr
+                            .map(|e| self.partition_expr_to_string(&e))
+                            .transpose()?;
+                        Ok((String::from(name), value))
+                    })
+                    .collect::<PlanResult<Vec<_>>>()?;
+                self.resolve_catalog_command(CatalogCommand::ListPartitions {
+                    table: table.into(),
+                    partition_filter: filter,
+                })
+            }
             CommandNode::GetDatabase { database } => {
                 self.resolve_catalog_command(CatalogCommand::GetDatabase {
                     database: database.into(),
@@ -301,6 +319,24 @@ impl PlanResolver<'_> {
             CommandNode::CommentOnColumn { .. } => {
                 Err(PlanError::todo("CommandNode::CommentOnColumn"))
             }
+        }
+    }
+
+    fn partition_expr_to_string(&self, expr: &spec::Expr) -> PlanResult<String> {
+        match expr {
+            spec::Expr::Literal(lit) => match lit {
+                spec::Literal::Int8 { value: Some(v) } => Ok(v.to_string()),
+                spec::Literal::Int16 { value: Some(v) } => Ok(v.to_string()),
+                spec::Literal::Int32 { value: Some(v) } => Ok(v.to_string()),
+                spec::Literal::Int64 { value: Some(v) } => Ok(v.to_string()),
+                spec::Literal::Utf8 { value: Some(s) } => Ok(s.clone()),
+                other => Err(PlanError::invalid(format!(
+                    "unsupported partition value literal: {other:?}"
+                ))),
+            },
+            other => Err(PlanError::invalid(format!(
+                "partition value must be a literal, got: {other:?}"
+            ))),
         }
     }
 
