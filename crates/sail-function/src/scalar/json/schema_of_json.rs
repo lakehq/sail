@@ -81,7 +81,11 @@ impl ScalarUDFImpl for SparkSchemaOfJson {
 
 /// In Spark's JSON schema inference, a bare `null` resolves to STRING.
 fn null_as_string(t: String) -> String {
-    if t == "NULL" { "STRING".to_string() } else { t }
+    if t == "NULL" {
+        "STRING".to_string()
+    } else {
+        t
+    }
 }
 
 /// Infer the Spark SQL DDL schema from a JSON string.
@@ -181,9 +185,7 @@ fn common_supertype(a: &str, b: &str) -> String {
             format!("ARRAY<{}>", common_supertype(inner_a, inner_b))
         }
         // STRUCT + STRUCT = merge fields with common supertypes
-        (a, b) if a.starts_with("STRUCT<") && b.starts_with("STRUCT<") => {
-            merge_struct_types(a, b)
-        }
+        (a, b) if a.starts_with("STRUCT<") && b.starts_with("STRUCT<") => merge_struct_types(a, b),
         // Anything else mixed = STRING
         _ => "STRING".to_string(),
     }
