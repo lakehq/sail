@@ -1,0 +1,75 @@
+# serializer version: 1
+---
+name: "test_explain_for_andor_predicates"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as id, #4@1 as status, #5@2 as value]
+      ProjectionExec: expr=[id@0 as #3, status@1 as #4, value@2 as #5]
+        FilterExec: status@1 = active AND value@2 > 150 OR id@0 = 2
+          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+            DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_explain_filter/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, status, value], file_type=parquet, predicate=status@1 = active AND value@2 > 150 OR id@0 = 2, pruning_predicate=status_null_count@2 != row_count@3 AND status_min@0 <= active AND active <= status_max@1 AND value_null_count@5 != row_count@3 AND value_max@4 > 150 OR id_null_count@8 != row_count@3 AND id_min@6 <= 2 AND 2 <= id_max@7, required_guarantees=[]
+---
+name: "test_explain_for_count_aggregation"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as category, #4@1 as cnt]
+      ProjectionExec: expr=[#2@0 as #3, count(Int64(1))@1 as #4]
+        AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
+          RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=2
+            AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
+              DataSourceExec: file_groups={2 groups: [[<tmp>/iceberg_explain_agg/data/category=1/part-<uuid>-00000000000000000000.parquet], [<tmp>/iceberg_explain_agg/data/category=2/part-<uuid>-00000000000000000001.parquet]]}, projection=[category@2 as #2], file_type=parquet
+---
+name: "test_explain_for_join_between_two_iceberg_tables"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#4@0 as name, #5@1 as value]
+      ProjectionExec: expr=[#1@1 as #4, #3@0 as #5]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#2@0, #0@0)], projection=[#3@1, #1@3]
+          CoalescePartitionsExec
+            ProjectionExec: expr=[id@0 as #2, value@1 as #3]
+              FilterExec: id@0 > 0
+                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_explain_join_right/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, value], file_type=parquet, predicate=id@0 > 0, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 0, required_guarantees=[]
+          ProjectionExec: expr=[id@0 as #0, name@1 as #1]
+            FilterExec: id@0 > 0
+              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_explain_join_left/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, name], file_type=parquet, predicate=id@0 > 0, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 0, required_guarantees=[]
+---
+name: "test_explain_for_order_by_on_partitioned_table"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as id, #4@1 as name, #5@2 as partition_col]
+      SortPreservingMergeExec: [#5@2 ASC, #3@0 ASC]
+        SortExec: expr=[#5@2 ASC, #3@0 ASC], preserve_partitioning=[true]
+          DataSourceExec: file_groups={2 groups: [[<tmp>/iceberg_explain_sort/data/partition_col=1/part-<uuid>-00000000000000000000.parquet], [<tmp>/iceberg_explain_sort/data/partition_col=2/part-<uuid>-00000000000000000001.parquet]]}, projection=[id@0 as #3, name@1 as #4, partition_col@2 as #5], file_type=parquet
+---
+name: "test_explain_for_unpartitioned_table_scan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as id, #3@1 as name]
+      ProjectionExec: expr=[id@0 as #2, name@1 as #3]
+        FilterExec: id@0 > 0
+          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+            DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_explain_prune/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, name], file_type=parquet, predicate=id@0 > 0, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 0, required_guarantees=[]
+---
+name: "test_explain_shows_column_projection"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#4@0 as name, #5@1 as age]
+      ProjectionExec: expr=[name@0 as #4, age@1 as #5]
+        FilterExec: id@0 < 10, projection=[name@1, age@2]
+          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+            DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_explain_projection/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, name, age], file_type=parquet, predicate=id@0 < 10, pruning_predicate=id_null_count@1 != row_count@2 AND id_min@0 < 10, required_guarantees=[]
+---
+name: "test_explain_shows_partition_pruning_for_identity_partitioning"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as id, #4@1 as value, #5@2 as category]
+      DataSourceExec: file_groups={3 groups: [[<tmp>/iceberg_explain_prune/data/category=1/part-<uuid>-00000000000000000000.parquet], [<tmp>/iceberg_explain_prune/data/category=2/part-<uuid>-00000000000000000001.parquet], [<tmp>/iceberg_explain_prune/data/category=3/part-<uuid>-00000000000000000002.parquet]]}, projection=[id@0 as #3, value@1 as #4, category@2 as #5], file_type=parquet, predicate=category@2 = 1, pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= 1 AND 1 <= category_max@1, required_guarantees=[category in (1)]

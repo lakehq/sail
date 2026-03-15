@@ -122,6 +122,7 @@ pub fn build_standard_write_layers(
         plan,
         ctx.table_url().clone(),
         ctx.options().clone(),
+        ctx.metadata_configuration().clone(),
         ctx.partition_columns().to_vec(),
         sink_mode.clone(),
         ctx.table_exists(),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from jinja2 import Template
@@ -38,6 +39,11 @@ class PathWrapper:
         """The corresponding SQL string literal for the path."""
         return f"'{escape_sql_string_literal(str(self.path))}'"
 
+    @property
+    def uri(self):
+        """The file URI representation of the path."""
+        return f"'{self.path.absolute().as_uri()}'"
+
 
 @given(parsers.parse("variable {name} for temporary directory {directory}"), target_fixture="variables")
 def variable_for_temporary_directory(name, directory, tmp_path, variables):
@@ -46,6 +52,15 @@ def variable_for_temporary_directory(name, directory, tmp_path, variables):
     This step does not create the directory, it only stores its absolute path.
     """
     variables[name] = PathWrapper(tmp_path / directory)
+    return variables
+
+
+@given(parsers.parse("variable {name} for delta log of {location_var}"), target_fixture="variables")
+def variable_for_delta_log(name: str, location_var: str, variables: dict) -> dict:
+    """Defines a variable pointing to the _delta_log subdirectory of a Delta table location."""
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    variables[name] = PathWrapper(Path(location.path) / "_delta_log")
     return variables
 
 

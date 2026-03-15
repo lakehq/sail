@@ -14,6 +14,19 @@ _SPARK_PART_FILE_RE = re.compile(
     r"-c\d+\.(?P<codec>[A-Za-z0-9]+)\.parquet$"
 )
 
+# Iceberg-specific patterns
+_ICEBERG_PART_FILE_RE = re.compile(
+    r"^part-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+    r"-\d+\.parquet$"
+)
+_ICEBERG_METADATA_FILE_RE = re.compile(
+    r"^\d+-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\.metadata\.json$"
+)
+_ICEBERG_MANIFEST_FILE_RE = re.compile(
+    r"^manifest-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\.avro$"
+)
+_ICEBERG_SNAP_FILE_RE = re.compile(r"^snap-\d+\.avro$")
+
 _UUID_SUFFIX_RE = re.compile(r"^(.+)-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 
@@ -41,6 +54,26 @@ def _normalize_name(name: str) -> str | None:
     # Ignore filesystem checksum noise.
     if name.endswith(".crc"):
         return None
+
+    # Ignore Iceberg version-hint.text (internal file)
+    if name == "version-hint.text":
+        return None
+
+    # Normalize Iceberg data file names (part-<uuid>-<seq>.parquet)
+    if _ICEBERG_PART_FILE_RE.match(name):
+        return "*.parquet"
+
+    # Normalize Iceberg metadata files (<seq>-<uuid>.metadata.json)
+    if _ICEBERG_METADATA_FILE_RE.match(name):
+        return "*.metadata.json"
+
+    # Normalize Iceberg manifest files (manifest-<uuid>.avro)
+    if _ICEBERG_MANIFEST_FILE_RE.match(name):
+        return None  # Hide manifest files, they're covered by snap files
+
+    # Normalize Iceberg snapshot files (snap-<id>.avro)
+    if _ICEBERG_SNAP_FILE_RE.match(name):
+        return "snap-*.avro"
 
     # Normalize Spark data file names.
     m = _SPARK_PART_FILE_RE.match(name)
@@ -78,7 +111,7 @@ def render_normalized_file_tree(root_path: Path) -> str:
         entries: list[Path] = sorted(current.iterdir(), key=lambda p: p.name)
 
         dirs: list[tuple[str, Path]] = []
-        files: list[tuple[str, Path]] = []
+        files: list[str] = []  # Changed to list[str] to store normalized names
         for p in entries:
             rendered = _normalize_name(p.name)
             if rendered is None:
@@ -86,14 +119,20 @@ def render_normalized_file_tree(root_path: Path) -> str:
             if p.is_dir():
                 dirs.append((rendered, p))
             else:
-                files.append((rendered, p))
+                files.append(rendered)
 
         for name, p in dirs:
             indent = "  " * depth
             lines.append(f"{indent}📂 {name}")
             render_dir(p, depth=depth + 1)
 
-        for name, _p in files:
+        dedup_names = {"*.parquet", "*.metadata.json", "snap-*.avro"}
+        seen_files = set()
+        for name in files:
+            if name in dedup_names:
+                if name in seen_files:
+                    continue
+                seen_files.add(name)
             indent = "  " * depth
             lines.append(f"{indent}📄 {name}")
 
@@ -113,6 +152,16 @@ def file_tree_matches_docstring(location_var: str, variables: dict, docstring: s
     actual = render_normalized_file_tree(real_path)
     expected = normalize_file_tree_text(docstring)
     assert actual == expected
+
+
+@given(parsers.parse("file {filename} in {location_var} is deleted"))
+def file_in_location_is_deleted(filename: str, location_var: str, variables: dict) -> None:
+    """Deletes a named file from the given location directory."""
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    file_path = Path(location.path) / filename
+    assert file_path.exists(), f"File {file_path} does not exist"
+    file_path.unlink()
 
 
 @then(parsers.parse("data files in {location_var} count is {n:d}"))

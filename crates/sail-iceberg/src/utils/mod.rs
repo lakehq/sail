@@ -11,6 +11,7 @@
 // limitations under the License.
 
 pub mod conversions;
+pub mod partition_transform;
 pub mod snapshot_id;
 pub mod timestamp;
 pub mod transform;
@@ -47,6 +48,28 @@ pub fn join_table_uri(table_uri: &str, rel: &str, mode: &WritePathMode) -> Strin
         WritePathMode::Absolute => format!("{}{}", table_uri, rel),
         WritePathMode::Relative => rel.to_string(),
     }
+}
+
+pub fn url_to_object_path(url: &Url) -> Result<object_store::path::Path> {
+    let is_file = url.scheme() == "file";
+    let p = if is_file {
+        if cfg!(windows) {
+            // On Windows, decode percent-encoding and normalize drive-letter file URLs.
+            url.to_file_path()
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| url.path().to_string())
+        } else {
+            // On Unix, keep raw URL path to avoid decoding partition literals like `%3A`.
+            url.path().to_string()
+        }
+    } else {
+        url.path().to_string()
+    };
+    // object_store::path::Path requires slash-delimited paths.
+    let p = p.replace('\\', "/");
+    let path_no_leading = p.strip_prefix('/').unwrap_or(&p);
+    object_store::path::Path::parse(path_no_leading)
+        .map_err(|e| DataFusionError::External(Box::new(e)))
 }
 
 pub fn get_object_store_from_context(

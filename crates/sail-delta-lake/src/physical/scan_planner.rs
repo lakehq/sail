@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
@@ -250,6 +250,7 @@ pub(crate) async fn plan_delta_scan(
         PlannerTableConfig::new(
             table_url.clone(),
             planner_options,
+            HashMap::new(),
             table_partition_cols.clone(),
             None,
             true,
