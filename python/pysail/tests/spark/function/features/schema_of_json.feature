@@ -364,6 +364,84 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         | STRUCT<age: BIGINT, name: STRING>     |
         | STRUCT<x: DOUBLE, y: BOOLEAN>         |
 
+  Rule: Numeric edge cases
+
+    Scenario: float zero point zero
+      When query
+        """
+        SELECT schema_of_json('{"v":0.0}') AS result
+        """
+      Then query result
+        | result               |
+        | STRUCT<v: DOUBLE>    |
+
+    Scenario: negative zero
+      When query
+        """
+        SELECT schema_of_json('{"v":-0}') AS result
+        """
+      Then query result
+        | result               |
+        | STRUCT<v: BIGINT>    |
+
+  Rule: String edge cases
+
+    Scenario: empty string value
+      When query
+        """
+        SELECT schema_of_json('{"v":""}') AS result
+        """
+      Then query result
+        | result               |
+        | STRUCT<v: STRING>    |
+
+    Scenario: empty string input
+      When query
+        """
+        SELECT schema_of_json('') AS result
+        """
+      Then query result
+        | result |
+        | STRING |
+
+  Rule: Structure edge cases
+
+    Scenario: empty object in array merges with non-empty
+      When query
+        """
+        SELECT schema_of_json('{"v":[{},{"a":1}]}') AS result
+        """
+      Then query result
+        | result                                    |
+        | STRUCT<v: ARRAY<STRUCT<a: BIGINT>>>       |
+
+    Scenario: mixed array element and nested array
+      When query
+        """
+        SELECT schema_of_json('{"v":[1,[2]]}') AS result
+        """
+      Then query result
+        | result                     |
+        | STRUCT<v: ARRAY<STRING>>   |
+
+    Scenario: nested struct with same-named fields at different levels
+      When query
+        """
+        SELECT schema_of_json('{"a":1,"b":{"a":"hello","b":2.5}}') AS result
+        """
+      Then query result
+        | result                                                  |
+        | STRUCT<a: BIGINT, b: STRUCT<a: STRING, b: DOUBLE>>     |
+
+    Scenario: duplicate keys in object
+      When query
+        """
+        SELECT schema_of_json('{"a":1,"a":"x"}') AS result
+        """
+      Then query result
+        | result                          |
+        | STRUCT<a: BIGINT, a: STRING>    |
+
   Rule: Error cases
 
     Scenario: rejects non-foldable column input
