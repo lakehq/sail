@@ -129,7 +129,7 @@ use sail_function::scalar::geo::st_geogfromwkb::StGeogFromWKB;
 use sail_function::scalar::geo::st_geomfromwkb::StGeomFromWKB;
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
 use sail_function::scalar::hash::spark_xxhash64::SparkXxhash64;
-use sail_function::scalar::json::SparkToJson;
+use sail_function::scalar::json::{SparkSchemaOfJson, SparkToJson};
 use sail_function::scalar::map::str_to_map::StrToMap;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
@@ -1832,6 +1832,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "json_object_keys" | "json_keys" => {
                 Ok(sail_function::scalar::json::json_object_keys_udf())
             }
+            "schema_of_json" => Ok(Arc::new(ScalarUDF::from(SparkSchemaOfJson::new()))),
             "spark_base64" | "base64" => Ok(Arc::new(ScalarUDF::from(SparkBase64::new()))),
             "spark_bround" | "bround" => Ok(Arc::new(ScalarUDF::from(SparkBRound::new()))),
             "spark_interval_div" => Ok(Arc::new(ScalarUDF::from(SparkIntervalDiv::new()))),
@@ -2002,6 +2003,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkNextDay>()
             || node_inner.is::<SparkPmod>()
             || node_inner.is::<SparkReverse>()
+            || node_inner.is::<SparkSchemaOfJson>()
             || node_inner.is::<SparkSequence>()
             || node_inner.is::<SparkShuffle>()
             || node_inner.is::<SparkSha1>()
