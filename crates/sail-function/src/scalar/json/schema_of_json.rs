@@ -79,20 +79,26 @@ impl ScalarUDFImpl for SparkSchemaOfJson {
     }
 }
 
+/// In Spark's JSON schema inference, a bare `null` resolves to STRING.
+fn null_as_string(t: String) -> String {
+    if t == "NULL" { "STRING".to_string() } else { t }
+}
+
 /// Infer the Spark SQL DDL schema from a JSON string.
 fn infer_json_schema(json: &str) -> String {
     let mut jiter = Jiter::new(json.as_bytes());
-    match jiter.peek() {
+    let result = match jiter.peek() {
         Ok(peek) => infer_type_from_peek(&mut jiter, peek),
         Err(_) => "STRING".to_string(),
-    }
+    };
+    null_as_string(result)
 }
 
 fn infer_type_from_peek(jiter: &mut Jiter, peek: Peek) -> String {
     match peek {
         Peek::Null => {
             let _ = jiter.known_null();
-            "STRING".to_string()
+            "NULL".to_string()
         }
         Peek::True | Peek::False => {
             let _ = jiter.known_bool(peek);
@@ -146,14 +152,31 @@ fn infer_array_type(jiter: &mut Jiter) -> String {
         return "ARRAY<STRING>".to_string();
     };
 
-    let element_type = infer_type_from_peek(jiter, element_peek);
+    let mut element_type = infer_type_from_peek(jiter, element_peek);
 
-    // Skip remaining elements
+    // Check remaining elements and find common supertype
     while let Ok(Some(peek)) = jiter.array_step() {
-        let _ = jiter.known_skip(peek);
+        let next_type = infer_type_from_peek(jiter, peek);
+        element_type = common_supertype(&element_type, &next_type);
     }
 
-    format!("ARRAY<{element_type}>")
+    format!("ARRAY<{}>", null_as_string(element_type))
+}
+
+/// Returns the common supertype of two Spark DDL type strings.
+/// Follows Spark's type promotion rules for JSON schema inference.
+fn common_supertype(a: &str, b: &str) -> String {
+    if a == b {
+        return a.to_string();
+    }
+    match (a, b) {
+        // NULL is compatible with any type
+        ("NULL", other) | (other, "NULL") => other.to_string(),
+        // BIGINT + DOUBLE = DOUBLE
+        ("BIGINT", "DOUBLE") | ("DOUBLE", "BIGINT") => "DOUBLE".to_string(),
+        // Anything else mixed = STRING
+        _ => "STRING".to_string(),
+    }
 }
 
 fn infer_struct_type(jiter: &mut Jiter) -> String {
@@ -171,7 +194,7 @@ fn infer_struct_type(jiter: &mut Jiter) -> String {
     loop {
         let field_name = current_key.to_string();
         let field_type = match jiter.peek() {
-            Ok(peek) => infer_type_from_peek(jiter, peek),
+            Ok(peek) => null_as_string(infer_type_from_peek(jiter, peek)),
             Err(_) => "STRING".to_string(),
         };
 
