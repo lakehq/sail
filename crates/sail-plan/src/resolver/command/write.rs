@@ -273,6 +273,11 @@ impl PlanResolver<'_> {
                     if let Some(ref info) = info {
                         info.validate_file_write_options(&file_write_options)?;
                         input = Self::rewrite_write_input(input, WriteColumnMatch::ByName, info)?;
+                        file_write_options.partition_by = info.partition_by.clone();
+                        file_write_options.sort_by =
+                            info.sort_by.iter().cloned().map(|x| x.into()).collect();
+                        file_write_options.bucket_by = info.bucket_by.clone().map(|x| x.into());
+                        file_write_options.options.insert(0, info.options.clone());
                     }
                 }
                 file_write_options.mode = self.resolve_write_mode(mode, None, state).await?;

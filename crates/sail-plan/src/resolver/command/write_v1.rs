@@ -125,9 +125,9 @@ impl PlanResolver<'_> {
                 }
                 Some(SaveMode::Append) => {
                     builder = builder
-                        .with_target(WriteTarget::ExistingTable {
+                        .with_target(WriteTarget::NewTable {
                             table,
-                            column_match: WriteColumnMatch::ByName,
+                            action: WriteTableAction::CreateIfNotExists,
                         })
                         .with_mode(WriteMode::Append);
                 }
