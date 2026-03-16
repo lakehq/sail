@@ -25,7 +25,7 @@ impl ScalarUDFImpl for SparkFromJson {
     }
 
     fn name(&self) -> &str {
-        &"from_json"
+        "from_json"
     }
 
     fn aliases(&self) -> &[String] {
@@ -116,23 +116,22 @@ impl ScalarUDFImpl for SparkFromJson {
         };
 
         match arg_types {
-            [
-                DataType::Null | DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
-                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Struct(_) | DataType::Map(_, _) | DataType::List(_),
-            ] => {
-                Ok(vec![arg_types[0].clone(), arg_types[1].clone()])
-            },
-            [
-                DataType::Null | DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
-                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Struct(_) | DataType::Map(_, _) | DataType::List(_),
-                DataType::Map(_, _)
-            ] => {
-                Ok(vec![
-                    arg_types[0].clone(),
-                    arg_types[1].clone(),
-                    arg_types[2].clone(),
-                ])
-            },
+            [DataType::Null | DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Utf8
+            | DataType::Utf8View
+            | DataType::LargeUtf8
+            | DataType::Struct(_)
+            | DataType::Map(_, _)
+            | DataType::List(_)] => Ok(vec![arg_types[0].clone(), arg_types[1].clone()]),
+            [DataType::Null | DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Utf8
+            | DataType::Utf8View
+            | DataType::LargeUtf8
+            | DataType::Struct(_)
+            | DataType::Map(_, _)
+            | DataType::List(_), DataType::Map(_, _)] => Ok(vec![
+                arg_types[0].clone(),
+                arg_types[1].clone(),
+                arg_types[2].clone(),
+            ]),
             [a, b] => {
                 plan_err!(
                     "Unsupported datatypes for function `{}`: found {}, {}",
@@ -140,7 +139,7 @@ impl ScalarUDFImpl for SparkFromJson {
                     a,
                     b
                 )
-            },
+            }
             [a, b, c] => {
                 plan_err!(
                     "Unsupported datatypes for function `{}`: found {}, {}, {}",
@@ -150,7 +149,7 @@ impl ScalarUDFImpl for SparkFromJson {
                     c
                 )
             }
-            _ => unreachable!()
+            _ => unreachable!(),
         }
     }
 }
@@ -168,7 +167,7 @@ fn from_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let options = if let Some(arr) = args.get(2) {
         let map_array = downcast_arg!(arr, MapArray);
-        SparkFromJsonOptions::default().from_map(map_array)?
+        SparkFromJsonOptions::default().map_to_options(map_array)?
     } else {
         SparkFromJsonOptions::default()
     };
@@ -193,8 +192,11 @@ fn get_schema_data_type(schema_arg: ArrayRef) -> Result<DataType> {
 }
 
 fn schema_str_to_data_type(string: &str) -> Result<DataType> {
-    let sail_dtype = parse_spark_data_type(string)
-        .map_err(|e| DataFusionError::Execution(format!("Unable to parse schema, check it's valid. Original reason: {e}.")))?;
+    let sail_dtype = parse_spark_data_type(string).map_err(|e| {
+        DataFusionError::Execution(format!(
+            "Unable to parse schema, check it's valid. Original reason: {e}."
+        ))
+    })?;
     let arrow_dtype = SailToArrayDataType.resolve_data_type(&sail_dtype)?;
     match arrow_dtype {
         DataType::Struct(_) | DataType::Map(_, _) | DataType::List(_) => Ok(arrow_dtype),
@@ -263,7 +265,7 @@ struct SparkFromJsonOptions {
 }
 
 impl SparkFromJsonOptions {
-    pub fn from_map(mut self, map_array: &MapArray) -> Result<Self> {
+    pub fn map_to_options(mut self, map_array: &MapArray) -> Result<Self> {
         let inner_struct = map_array.value(0);
         // validate map is of type map<string, string>
         let (keys, values) = match inner_struct.data_type() {
@@ -438,6 +440,7 @@ fn create_builder(data_type: DataType, capacity: usize) -> Result<FieldBuilder> 
     }
 }
 
+#[allow(clippy::unwrap_used)]
 fn append_to_builder(
     builder: &mut FieldBuilder,
     value: &Value,
@@ -534,7 +537,11 @@ fn append_to_builder(
                     NaiveDate::parse_from_str(string, &options.timestamp_format)
                 {
                     date.and_hms_opt(0, 0, 0)
-                        .expect("Unreachable: only fails on invalid hours/mins/secs")
+                        .ok_or(DataFusionError::Execution(format!(
+                            "Should be unreachable: unable to add HH:mm::ss when parsing date {:?} into format {:?}",
+                            date,
+                            &options.timestamp_format
+                        )))?
                 } else {
                     return Err(DataFusionError::Execution(format!(
                         "Timestamp error: can't parse {string:?} to {:?}",
@@ -623,7 +630,7 @@ fn append_to_builder(
             ) => {
                 nulls.push(true);
                 append_to_builder(nested_builder, value, options)?;
-                let curr_len = offsets.last().unwrap() + 1 as i32; // only need to increment by 1
+                let curr_len = offsets.last().unwrap() + 1_i32; // only need to increment by 1
                 offsets.push(curr_len);
             }
             (other, other1) => {

@@ -276,11 +276,10 @@ impl SailToArrayDataType {
         Ok(adt::Fields::from(fields))
     }
 
-    #[allow(dead_code)]
-    pub fn resolve_schema(&self, schema: spec::Schema) -> Result<adt::Schema> {
-        let fields = self.resolve_fields(&schema.fields)?;
-        Ok(adt::Schema::new(fields))
-    }
+    //pub fn resolve_schema(&self, schema: spec::Schema) -> Result<adt::Schema> {
+    //    let fields = self.resolve_fields(&schema.fields)?;
+    //    Ok(adt::Schema::new(fields))
+    //}
 
     pub fn resolve_time_unit(time_unit: &spec::TimeUnit) -> Result<adt::TimeUnit> {
         match time_unit {
