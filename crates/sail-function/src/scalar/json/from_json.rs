@@ -133,13 +133,21 @@ impl ScalarUDFImpl for SparkFromJson {
                     arg_types[2].clone(),
                 ])
             }
-            other => {
+            [a, b] => {
+                plan_err!(
+                    "Unsupported datatypes for function `{}`: found {}, {}",
+                    self.name(),
+                    a,
+                    b
+                )
+            }
+            [a, b, c] => {
                 plan_err!(
                     "Unsupported datatypes for function `{}`: found {}, {}, {}",
                     self.name(),
-                    other[0],
-                    other[1],
-                    other[2]
+                    a,
+                    b,
+                    c
                 )
             }
         }
