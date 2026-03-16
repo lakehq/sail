@@ -1,5 +1,6 @@
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
+use sail_common::spec::AlterTableOperation;
 use sail_common_datafusion::array::serde::ArrowSerializer;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
@@ -66,6 +67,11 @@ pub enum CatalogCommand {
     DropTable {
         table: Vec<String>,
         options: DropTableOptions,
+    },
+    AlterTable {
+        table: Vec<String>,
+        if_exists: bool,
+        operation: AlterTableOperation,
     },
     ListColumns {
         table: Vec<String>,
@@ -143,6 +149,7 @@ impl CatalogCommand {
             CatalogCommand::ListTables { .. } => "ListTables",
             CatalogCommand::ListViews { .. } => "ListViews",
             CatalogCommand::DropTable { .. } => "DropTable",
+            CatalogCommand::AlterTable { .. } => "AlterTable",
             CatalogCommand::ListColumns { .. } => "ListColumns",
             CatalogCommand::FunctionExists { .. } => "FunctionExists",
             CatalogCommand::GetFunction { .. } => "GetFunction",
@@ -188,6 +195,7 @@ impl CatalogCommand {
             | CatalogCommand::FunctionExists { .. }
             | CatalogCommand::CreateDatabase { .. }
             | CatalogCommand::CreateTable { .. }
+            | CatalogCommand::AlterTable { .. }
             | CatalogCommand::CreateTemporaryView { .. }
             | CatalogCommand::CreateView { .. }
             | CatalogCommand::DropDatabase { .. }
@@ -296,6 +304,18 @@ impl CatalogCommand {
             }
             CatalogCommand::DropTable { table, options } => {
                 manager.drop_table(&table, options).await?;
+                display.bools().to_record_batch(vec![true])?
+            }
+            CatalogCommand::AlterTable {
+                table,
+                if_exists,
+                operation,
+            } => {
+                match manager.alter_table(&table, operation).await {
+                    Ok(_) => {}
+                    Err(CatalogError::NotFound(_, _)) if if_exists => {}
+                    Err(e) => return Err(e),
+                }
                 display.bools().to_record_batch(vec![true])?
             }
             CatalogCommand::ListColumns { table } => {

@@ -21,8 +21,7 @@
  */
 
 use serde::{Deserialize, Serialize};
-
-use crate::models;
+use uuid::Uuid;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -30,23 +29,71 @@ pub enum TableRequirement {
     #[serde(rename = "assert-create")]
     AssertCreate {},
     #[serde(rename = "assert-current-schema-id")]
-    AssertCurrentSchemaId {},
+    AssertCurrentSchemaId {
+        #[serde(rename = "current-schema-id")]
+        current_schema_id: i32,
+    },
     #[serde(rename = "assert-default-sort-order-id")]
-    AssertDefaultSortOrderId {},
+    AssertDefaultSortOrderId {
+        #[serde(rename = "default-sort-order-id")]
+        default_sort_order_id: i64,
+    },
     #[serde(rename = "assert-default-spec-id")]
-    AssertDefaultSpecId {},
+    AssertDefaultSpecId {
+        #[serde(rename = "default-spec-id")]
+        default_spec_id: i32,
+    },
     #[serde(rename = "assert-last-assigned-field-id")]
-    AssertLastAssignedFieldId {},
+    AssertLastAssignedFieldId {
+        #[serde(rename = "last-assigned-field-id")]
+        last_assigned_field_id: i32,
+    },
     #[serde(rename = "assert-last-assigned-partition-id")]
-    AssertLastAssignedPartitionId {},
+    AssertLastAssignedPartitionId {
+        #[serde(rename = "last-assigned-partition-id")]
+        last_assigned_partition_id: i32,
+    },
     #[serde(rename = "assert-ref-snapshot-id")]
-    AssertRefSnapshotId {},
+    AssertRefSnapshotId {
+        #[serde(rename = "ref")]
+        r#ref: String,
+        #[serde(rename = "snapshot-id")]
+        snapshot_id: Option<i64>,
+    },
     #[serde(rename = "assert-table-uuid")]
-    AssertTableUuid {},
+    AssertTableUuid { uuid: Uuid },
 }
 
 impl Default for TableRequirement {
     fn default() -> Self {
         Self::AssertCreate {}
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::expect_used)]
+mod tests {
+    use super::TableRequirement;
+
+    #[test]
+    fn assert_ref_snapshot_id_supports_null_snapshot() {
+        let json = serde_json::json!({
+            "type": "assert-ref-snapshot-id",
+            "ref": "main",
+            "snapshot-id": null
+        });
+        let requirement: TableRequirement =
+            serde_json::from_value(json.clone()).expect("deserialize requirement");
+        assert_eq!(
+            requirement,
+            TableRequirement::AssertRefSnapshotId {
+                r#ref: "main".to_string(),
+                snapshot_id: None,
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(requirement).expect("serialize requirement"),
+            json
+        );
     }
 }

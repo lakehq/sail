@@ -17,15 +17,24 @@ use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::provider::{
     CatalogPartitionField, CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions,
     CreateTableOptions, CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions,
-    DropTableOptions, DropViewOptions, Namespace, PartitionTransform,
+    DropTableOptions, DropViewOptions, Namespace, PartitionTransform, TableCommitOutcome,
+    TableCommitPayload, TableCommitter,
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
+use sail_common::spec::AlterTableOperation;
 use sail_common_datafusion::catalog::{
     CatalogTableConstraint, CatalogTableSort, DatabaseStatus, TableColumnStatus, TableKind,
     TableStatus,
 };
+use sail_iceberg::operations::ActionCommit;
+use sail_iceberg::spec::{
+    SnapshotReference, SnapshotRetention, TableRequirement as IcebergTableRequirement,
+    TableUpdate as IcebergTableUpdate, MAIN_BRANCH,
+};
 use sail_iceberg::{arrow_type_to_iceberg, iceberg_type_to_arrow, NestedField, StructType};
+use serde::de::DeserializeOwned;
 use tokio::sync::OnceCell;
+use uuid::Uuid;
 
 use crate::apis::configuration::Configuration;
 use crate::apis::{self, Api, ApiClient};
@@ -76,7 +85,7 @@ impl IcebergRestCatalogProvider {
         }
     }
 
-    fn init_client(&self, catalog_config: &RestCatalogConfig) -> CatalogResult<ApiClient> {
+    fn init_client(catalog_config: &RestCatalogConfig) -> CatalogResult<ApiClient> {
         let mut client_config = Configuration::new();
         client_config.user_agent = Some("Sail".to_string());
         client_config.base_path = catalog_config.uri.to_string();
@@ -118,7 +127,7 @@ impl IcebergRestCatalogProvider {
         let merged_catalog_config = self
             .merged_catalog_config
             .get_or_try_init(|| async {
-                let temp_client = self.init_client(&self.catalog_config)?;
+                let temp_client = Self::init_client(&self.catalog_config)?;
                 let mut config = self
                     .load_catalog_config(&temp_client, self.catalog_config.warehouse.as_deref())
                     .await?;
@@ -143,7 +152,7 @@ impl IcebergRestCatalogProvider {
 
         let client = self
             .client
-            .get_or_try_init(|| async { self.init_client(merged_catalog_config) })
+            .get_or_try_init(|| async { Self::init_client(merged_catalog_config) })
             .await?;
 
         Ok((client, merged_catalog_config))
@@ -496,10 +505,285 @@ impl IcebergRestCatalogProvider {
     }
 }
 
+#[derive(Clone, Debug)]
+struct IcebergRestTableCommitter {
+    catalog_config: RestCatalogConfig,
+    database: Namespace,
+    table: String,
+}
+
+fn convert_json<T, U>(value: T) -> CatalogResult<U>
+where
+    T: serde::Serialize,
+    U: DeserializeOwned,
+{
+    serde_json::from_value(serde_json::to_value(value).map_err(|e| {
+        CatalogError::External(format!("Failed to serialize Iceberg commit payload: {e}"))
+    })?)
+    .map_err(|e| {
+        CatalogError::External(format!("Failed to deserialize Iceberg commit payload: {e}"))
+    })
+}
+
+fn commit_prefix(catalog_config: &RestCatalogConfig) -> Option<&str> {
+    catalog_config
+        .props
+        .get(REST_CATALOG_PROP_PREFIX)
+        .map(|s| s.as_str())
+}
+
+fn table_ref(database: &Namespace, table: &str) -> String {
+    format!(
+        "{}.{}",
+        quote_namespace_if_needed(database),
+        quote_name_if_needed(table)
+    )
+}
+
+fn map_catalog_api_error<T>(
+    database: &Namespace,
+    table: &str,
+    operation: &str,
+    error: apis::Error<T>,
+) -> CatalogError {
+    match error {
+        apis::Error::ResponseError(apis::ResponseContent { status, .. }) if status == 404 => {
+            CatalogError::NotFound("table", table_ref(database, table))
+        }
+        other => CatalogError::External(format!(
+            "Failed to {operation} {}: {other}",
+            table_ref(database, table)
+        )),
+    }
+}
+
+fn build_commit_request(
+    action_commit: &ActionCommit,
+) -> CatalogResult<crate::models::CommitTableRequest> {
+    let requirements = action_commit
+        .requirements()
+        .iter()
+        .cloned()
+        .map(convert_json)
+        .collect::<CatalogResult<Vec<crate::models::TableRequirement>>>()?;
+    let updates = action_commit
+        .updates()
+        .iter()
+        .cloned()
+        .map(convert_json)
+        .collect::<CatalogResult<Vec<crate::models::TableUpdate>>>()?;
+    Ok(crate::models::CommitTableRequest::new(
+        requirements,
+        updates,
+    ))
+}
+
+async fn load_table_result(
+    client: &ApiClient,
+    catalog_config: &RestCatalogConfig,
+    database: &Namespace,
+    table: &str,
+) -> CatalogResult<crate::models::LoadTableResult> {
+    client
+        .catalog_api_api()
+        .load_table(
+            &IcebergRestCatalogProvider::namespace_string(database),
+            table,
+            None,
+            None,
+            None,
+            commit_prefix(catalog_config),
+        )
+        .await
+        .map_err(|e| map_catalog_api_error(database, table, "load table", e))
+}
+
+async fn commit_action(
+    client: &ApiClient,
+    catalog_config: &RestCatalogConfig,
+    database: &Namespace,
+    table: &str,
+    action_commit: &ActionCommit,
+) -> CatalogResult<TableCommitOutcome> {
+    let request = build_commit_request(action_commit)?;
+    let response = client
+        .catalog_api_api()
+        .update_table(
+            &IcebergRestCatalogProvider::namespace_string(database),
+            table,
+            request,
+            commit_prefix(catalog_config),
+        )
+        .await
+        .map_err(|e| map_catalog_api_error(database, table, "commit table", e))?;
+
+    Ok(TableCommitOutcome {
+        committed_at_ms: response.metadata.last_updated_ms,
+        version: None,
+        snapshot_id: response.metadata.current_snapshot_id,
+        sequence_number: response.metadata.last_sequence_number,
+        metadata_location: Some(response.metadata_location),
+    })
+}
+
+fn build_commit_requirements(
+    metadata: &crate::models::TableMetadata,
+) -> CatalogResult<Vec<IcebergTableRequirement>> {
+    let mut requirements = Vec::new();
+    requirements.push(IcebergTableRequirement::UuidMatch {
+        uuid: Uuid::parse_str(&metadata.table_uuid).map_err(|e| {
+            CatalogError::External(format!(
+                "Invalid Iceberg table UUID '{}': {e}",
+                metadata.table_uuid
+            ))
+        })?,
+    });
+    if let Some(current_schema_id) = metadata.current_schema_id {
+        requirements.push(IcebergTableRequirement::CurrentSchemaIdMatch { current_schema_id });
+    }
+    if let Some(last_assigned_field_id) = metadata.last_column_id {
+        requirements.push(IcebergTableRequirement::LastAssignedFieldIdMatch {
+            last_assigned_field_id,
+        });
+    }
+    if let Some(last_assigned_partition_id) = metadata.last_partition_id {
+        requirements.push(IcebergTableRequirement::LastAssignedPartitionIdMatch {
+            last_assigned_partition_id,
+        });
+    }
+    if let Some(default_spec_id) = metadata.default_spec_id {
+        requirements.push(IcebergTableRequirement::DefaultSpecIdMatch { default_spec_id });
+    }
+    if let Some(default_sort_order_id) = metadata.default_sort_order_id {
+        requirements.push(IcebergTableRequirement::DefaultSortOrderIdMatch {
+            default_sort_order_id: i64::from(default_sort_order_id),
+        });
+    }
+    requirements.push(IcebergTableRequirement::RefSnapshotIdMatch {
+        r#ref: MAIN_BRANCH.to_string(),
+        snapshot_id: metadata.current_snapshot_id,
+    });
+    Ok(requirements)
+}
+
+fn build_alter_action_commit(
+    metadata: &crate::models::TableMetadata,
+    operation: AlterTableOperation,
+) -> CatalogResult<ActionCommit> {
+    let requirements = build_commit_requirements(metadata)?;
+    let updates = match operation {
+        AlterTableOperation::Unknown => {
+            return Err(CatalogError::NotSupported(
+                "unknown ALTER TABLE operation".to_string(),
+            ));
+        }
+        AlterTableOperation::SetProperties { properties } => {
+            vec![IcebergTableUpdate::SetProperties {
+                updates: properties.into_iter().collect(),
+            }]
+        }
+        AlterTableOperation::RemoveProperties { property_keys } => {
+            vec![IcebergTableUpdate::RemoveProperties {
+                removals: property_keys,
+            }]
+        }
+        AlterTableOperation::CreateBranch {
+            name,
+            snapshot_id,
+            max_ref_age_ms,
+            max_snapshot_age_ms,
+            min_snapshots_to_keep,
+        } => {
+            let snapshot_id = snapshot_id
+                .or(metadata.current_snapshot_id)
+                .ok_or_else(|| {
+                    CatalogError::InvalidArgument(format!(
+                        "Cannot create branch '{name}' without a snapshot id"
+                    ))
+                })?;
+            vec![IcebergTableUpdate::SetSnapshotRef {
+                ref_name: name,
+                reference: SnapshotReference {
+                    snapshot_id,
+                    retention: SnapshotRetention::Branch {
+                        min_snapshots_to_keep,
+                        max_snapshot_age_ms,
+                        max_ref_age_ms,
+                    },
+                },
+            }]
+        }
+        AlterTableOperation::CreateTag {
+            name,
+            snapshot_id,
+            max_ref_age_ms,
+        } => {
+            let snapshot_id = snapshot_id
+                .or(metadata.current_snapshot_id)
+                .ok_or_else(|| {
+                    CatalogError::InvalidArgument(format!(
+                        "Cannot create tag '{name}' without a snapshot id"
+                    ))
+                })?;
+            vec![IcebergTableUpdate::SetSnapshotRef {
+                ref_name: name,
+                reference: SnapshotReference {
+                    snapshot_id,
+                    retention: SnapshotRetention::Tag { max_ref_age_ms },
+                },
+            }]
+        }
+        AlterTableOperation::DropBranch { name } | AlterTableOperation::DropTag { name } => {
+            vec![IcebergTableUpdate::RemoveSnapshotRef { ref_name: name }]
+        }
+    };
+    Ok(ActionCommit::new(updates, requirements))
+}
+
+#[async_trait::async_trait]
+impl TableCommitter for IcebergRestTableCommitter {
+    async fn commit(
+        &self,
+        payload: Arc<dyn TableCommitPayload>,
+    ) -> CatalogResult<TableCommitOutcome> {
+        let action_commit = payload
+            .as_ref()
+            .downcast_ref::<ActionCommit>()
+            .ok_or_else(|| {
+                CatalogError::InvalidArgument(format!(
+                    "Iceberg REST catalog expected Iceberg ActionCommit payload, got {:?}",
+                    payload.format()
+                ))
+            })?;
+        let client = IcebergRestCatalogProvider::init_client(&self.catalog_config)?;
+        commit_action(
+            &client,
+            &self.catalog_config,
+            &self.database,
+            &self.table,
+            action_commit,
+        )
+        .await
+    }
+}
+
 #[async_trait::async_trait]
 impl CatalogProvider for IcebergRestCatalogProvider {
     fn get_name(&self) -> &str {
         &self.name
+    }
+
+    async fn begin_table_commit(
+        &self,
+        database: &Namespace,
+        table: &str,
+    ) -> CatalogResult<Arc<dyn TableCommitter>> {
+        let (_, catalog_config) = self.load_client_and_merged_config().await?;
+        Ok(Arc::new(IcebergRestTableCommitter {
+            catalog_config: catalog_config.clone(),
+            database: database.clone(),
+            table: table.to_string(),
+        }))
     }
 
     async fn create_database(
@@ -844,6 +1128,19 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                 )),
             })?;
         self.load_table_result_to_status(table, database, result)
+    }
+
+    async fn alter_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        operation: AlterTableOperation,
+    ) -> CatalogResult<TableStatus> {
+        let (client, catalog_config) = self.load_client_and_merged_config().await?;
+        let table_result = load_table_result(client, catalog_config, database, table).await?;
+        let action_commit = build_alter_action_commit(table_result.metadata.as_ref(), operation)?;
+        commit_action(client, catalog_config, database, table, &action_commit).await?;
+        self.get_table(database, table).await
     }
 
     async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {

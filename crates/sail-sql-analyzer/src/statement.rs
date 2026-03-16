@@ -15,8 +15,9 @@ use sail_sql_parser::ast::statement::{
     ExplainFormat, FileFormat, InsertDirectoryDestination, MergeMatchClause, MergeMatchedAction,
     MergeNotMatchedBySourceAction, MergeNotMatchedByTargetAction, MergeSource, PartitionByItem,
     PartitionByList, PartitionClause, PartitionValue, PartitionValueList, PropertyKey,
-    PropertyKeyValue, PropertyList, PropertyValue, RowFormat, RowFormatDelimitedClause, SetClause,
-    SortColumn, SortColumnList, Statement, UpdateTableAlias, ViewColumn,
+    PropertyKeyList, PropertyKeyValue, PropertyList, PropertyValue, RowFormat,
+    RowFormatDelimitedClause, SetClause, SortColumn, SortColumnList, Statement, UpdateTableAlias,
+    ViewColumn,
 };
 use sail_sql_parser::tree::TreeText;
 
@@ -1660,6 +1661,25 @@ fn from_ast_property_list(properties: PropertyList) -> SqlResult<Vec<(String, St
         .collect::<SqlResult<Vec<_>>>()
 }
 
+fn from_ast_property_key_list(properties: PropertyKeyList) -> SqlResult<Vec<String>> {
+    let PropertyKeyList {
+        left: _,
+        properties,
+        right: _,
+    } = properties;
+    properties
+        .into_items()
+        .map(|key| match key {
+            PropertyKey::Name(ObjectName(parts)) => Ok(parts
+                .into_items()
+                .map(|x| x.value)
+                .collect::<Vec<_>>()
+                .join(".")),
+            PropertyKey::Literal(x) => from_ast_string(x),
+        })
+        .collect::<SqlResult<Vec<_>>>()
+}
+
 fn from_ast_partition(
     partition: PartitionClause,
 ) -> SqlResult<Vec<(spec::Identifier, Option<spec::Expr>)>> {
@@ -1827,7 +1847,6 @@ fn from_ast_merge_assignment_list(
 fn from_ast_alter_table_operation(
     operation: AlterTableOperation,
 ) -> SqlResult<spec::AlterTableOperation> {
-    // TODO: implement the conversion properly
     match operation {
         AlterTableOperation::RenameTable { .. } => {}
         AlterTableOperation::RenamePartition { .. } => {}
@@ -1842,11 +1861,15 @@ fn from_ast_alter_table_operation(
         }
         AlterTableOperation::AddPartitions { .. } => {}
         AlterTableOperation::DropPartition { .. } => {}
-        AlterTableOperation::SetTableProperties { .. } => {
-            // TODO: reuse Delta metadata property canonicalization and apply via metadata-only commit.
+        AlterTableOperation::SetTableProperties { properties, .. } => {
+            return Ok(spec::AlterTableOperation::SetProperties {
+                properties: from_ast_property_list(properties)?,
+            });
         }
-        AlterTableOperation::UnsetTableProperties { .. } => {
-            // TODO: reuse Delta metadata property canonicalization and apply via metadata-only commit.
+        AlterTableOperation::UnsetTableProperties { properties, .. } => {
+            return Ok(spec::AlterTableOperation::RemoveProperties {
+                property_keys: from_ast_property_key_list(properties)?,
+            });
         }
         AlterTableOperation::SetFileFormat { .. } => {}
         AlterTableOperation::SetLocation { .. } => {}

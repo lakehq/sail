@@ -1,13 +1,18 @@
 mod namespace;
 mod options;
 mod runtime;
+mod transaction;
+
+use std::sync::Arc;
 
 pub use namespace::*;
 pub use options::*;
 pub use runtime::*;
+use sail_common::spec::AlterTableOperation;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
+pub use transaction::*;
 
-use crate::error::CatalogResult;
+use crate::error::{CatalogError, CatalogResult};
 
 /// A trait that defines the interface for a catalog.
 /// A catalog contains *databases*, where each database has a multi-level name
@@ -88,4 +93,31 @@ pub trait CatalogProvider: Send + Sync {
         view: &str,
         options: DropViewOptions,
     ) -> CatalogResult<()>;
+
+    /// Opens a catalog-managed table commit.
+    async fn begin_table_commit(
+        &self,
+        database: &Namespace,
+        table: &str,
+    ) -> CatalogResult<Arc<dyn TableCommitter>> {
+        let _ = (database, table);
+        Err(CatalogError::NotSupported(format!(
+            "table commit is not supported for catalog '{}'",
+            self.get_name()
+        )))
+    }
+
+    /// Applies a catalog-managed ALTER TABLE operation and returns the updated table status.
+    async fn alter_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        operation: AlterTableOperation,
+    ) -> CatalogResult<TableStatus> {
+        let _ = (database, table, operation);
+        Err(CatalogError::NotSupported(format!(
+            "ALTER TABLE is not supported for catalog '{}'",
+            self.get_name()
+        )))
+    }
 }

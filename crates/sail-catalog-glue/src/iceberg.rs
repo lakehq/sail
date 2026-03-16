@@ -3,8 +3,9 @@ use std::collections::HashMap;
 
 use aws_sdk_glue::types::{
     CreateIcebergTableInput, IcebergInput, IcebergPartitionField, IcebergPartitionSpec,
-    IcebergSchema, IcebergStructField, IcebergStructTypeEnum, MetadataOperation,
-    OpenTableFormatInput,
+    IcebergSchema, IcebergStructField, IcebergStructTypeEnum, IcebergTableUpdate,
+    IcebergUpdateAction, MetadataOperation, OpenTableFormatInput, UpdateIcebergInput,
+    UpdateIcebergTableInput, UpdateOpenTableFormatInput,
 };
 use aws_sdk_glue::Client;
 use sail_catalog::error::{CatalogError, CatalogResult};
@@ -12,7 +13,8 @@ use sail_catalog::provider::{
     CatalogPartitionField, CatalogProvider, CreateTableColumnOptions, CreateTableOptions,
     Namespace, PartitionTransform,
 };
-use sail_common_datafusion::catalog::TableStatus;
+use sail_common::spec::AlterTableOperation;
+use sail_common_datafusion::catalog::{TableKind, TableStatus};
 
 use crate::data_type::arrow_to_iceberg_type;
 use crate::GlueCatalogProvider;
@@ -110,6 +112,109 @@ pub(crate) async fn create_iceberg_table(
             }
         }
     }
+}
+
+pub(crate) async fn alter_iceberg_table(
+    provider: &GlueCatalogProvider,
+    client: &Client,
+    database: &Namespace,
+    table: &str,
+    operation: AlterTableOperation,
+) -> CatalogResult<TableStatus> {
+    let current = provider.get_table(database, table).await?;
+    let (location, properties) = match &current.kind {
+        TableKind::Table {
+            format,
+            location,
+            properties,
+            ..
+        } if format.eq_ignore_ascii_case("iceberg") => (
+            location.clone().ok_or_else(|| {
+                CatalogError::InvalidArgument(format!(
+                    "Iceberg table {} is missing a location",
+                    table
+                ))
+            })?,
+            properties.iter().cloned().collect::<HashMap<_, _>>(),
+        ),
+        TableKind::Table { format, .. } => {
+            return Err(CatalogError::NotSupported(format!(
+                "ALTER TABLE via Glue open table format is only supported for Iceberg tables, got format '{format}'"
+            )));
+        }
+        _ => {
+            return Err(CatalogError::NotSupported(
+                "ALTER TABLE is only supported for tables".to_string(),
+            ));
+        }
+    };
+
+    let (action, update_location, update_properties) = match operation {
+        AlterTableOperation::Unknown => {
+            return Err(CatalogError::NotSupported(
+                "unknown ALTER TABLE operation".to_string(),
+            ));
+        }
+        AlterTableOperation::SetProperties {
+            properties: updates,
+        } => {
+            let mut merged = properties;
+            merged.extend(updates);
+            (IcebergUpdateAction::SetProperties, location, Some(merged))
+        }
+        AlterTableOperation::RemoveProperties { property_keys } => {
+            let mut merged = properties;
+            for key in property_keys {
+                merged.remove(&key);
+            }
+            (IcebergUpdateAction::SetProperties, location, Some(merged))
+        }
+        AlterTableOperation::CreateBranch { .. }
+        | AlterTableOperation::CreateTag { .. }
+        | AlterTableOperation::DropBranch { .. }
+        | AlterTableOperation::DropTag { .. } => {
+            return Err(CatalogError::NotSupported(
+                "Glue catalog does not support Iceberg branch/tag ALTER TABLE operations"
+                    .to_string(),
+            ));
+        }
+    };
+
+    let update = IcebergTableUpdate::builder()
+        .location(update_location)
+        .action(action)
+        .set_properties(update_properties)
+        .build()
+        .map_err(|e| CatalogError::InvalidArgument(format!("Failed to build Glue update: {e}")))?;
+
+    let update_iceberg_table_input = UpdateIcebergTableInput::builder()
+        .updates(update)
+        .build()
+        .map_err(|e| {
+            CatalogError::InvalidArgument(format!(
+                "Failed to build Glue Iceberg table update input: {e}"
+            ))
+        })?;
+
+    let update_iceberg_input = UpdateIcebergInput::builder()
+        .update_iceberg_table_input(update_iceberg_table_input)
+        .build();
+
+    let update_open_table_format_input = UpdateOpenTableFormatInput::builder()
+        .update_iceberg_input(update_iceberg_input)
+        .build();
+
+    let database_name = GlueCatalogProvider::database_name(database)?;
+    client
+        .update_table()
+        .database_name(database_name)
+        .name(table)
+        .update_open_table_format_input(update_open_table_format_input)
+        .send()
+        .await
+        .map_err(|e| CatalogError::External(format!("Failed to alter Iceberg table: {e}")))?;
+
+    provider.get_table(database, table).await
 }
 
 /// Validates CreateTableOptions for Iceberg tables.

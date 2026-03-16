@@ -1269,10 +1269,34 @@ pub enum ExplainMode {
     Formatted,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AlterTableOperation {
     Unknown,
+    SetProperties {
+        properties: Vec<(String, String)>,
+    },
+    RemoveProperties {
+        property_keys: Vec<String>,
+    },
+    CreateBranch {
+        name: String,
+        snapshot_id: Option<i64>,
+        max_ref_age_ms: Option<i64>,
+        max_snapshot_age_ms: Option<i64>,
+        min_snapshots_to_keep: Option<i32>,
+    },
+    CreateTag {
+        name: String,
+        snapshot_id: Option<i64>,
+        max_ref_age_ms: Option<i64>,
+    },
+    DropBranch {
+        name: String,
+    },
+    DropTag {
+        name: String,
+    },
     // TODO: add all the alter table operations
 }
 

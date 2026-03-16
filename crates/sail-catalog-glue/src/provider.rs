@@ -12,6 +12,7 @@ use sail_catalog::provider::{
     CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
 };
 use sail_catalog::utils::quote_namespace_if_needed;
+use sail_common::spec::AlterTableOperation;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
 use tokio::sync::OnceCell;
 
@@ -525,6 +526,16 @@ impl CatalogProvider for GlueCatalogProvider {
                 }
             }
         }
+    }
+
+    async fn alter_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        operation: AlterTableOperation,
+    ) -> CatalogResult<TableStatus> {
+        let client = self.get_client().await?;
+        iceberg::alter_iceberg_table(self, client, database, table, operation).await
     }
 
     async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {

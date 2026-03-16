@@ -257,7 +257,15 @@ impl PlanResolver<'_> {
                 };
                 self.resolve_command_delete(delete, state).await
             }
-            CommandNode::AlterTable { .. } => Err(PlanError::todo("CommandNode::AlterTable")),
+            CommandNode::AlterTable {
+                table,
+                if_exists,
+                operation,
+            } => self.resolve_catalog_command(CatalogCommand::AlterTable {
+                table: table.into(),
+                if_exists,
+                operation,
+            }),
             CommandNode::AlterView { .. } => Err(PlanError::todo("CommandNode::AlterView")),
             CommandNode::LoadData { .. } => Err(PlanError::todo("CommandNode::LoadData")),
             CommandNode::AnalyzeTable { .. } => Err(PlanError::todo("CommandNode::AnalyzeTable")),

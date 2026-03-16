@@ -1,3 +1,4 @@
+use sail_common::spec::AlterTableOperation;
 use sail_common_datafusion::catalog::TableStatus;
 
 use crate::error::{CatalogError, CatalogResult};
@@ -63,6 +64,15 @@ impl CatalogManager {
     ) -> CatalogResult<()> {
         let (provider, database, table) = self.resolve_object(table)?;
         provider.drop_table(&database, &table, options).await
+    }
+
+    pub async fn alter_table<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        operation: AlterTableOperation,
+    ) -> CatalogResult<TableStatus> {
+        let (provider, database, table) = self.resolve_object(table)?;
+        provider.alter_table(&database, &table, operation).await
     }
 
     pub async fn get_table_or_view<T: AsRef<str>>(

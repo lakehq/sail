@@ -21,141 +21,129 @@
  */
 
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::models;
 
-#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
-pub struct TableUpdate {
-    #[serde(rename = "action")]
-    pub action: String,
-    #[serde(rename = "uuid")]
-    pub uuid: String,
-    #[serde(rename = "format-version")]
-    pub format_version: i32,
-    #[serde(rename = "schema")]
-    pub schema: Box<models::Schema>,
-    /// This optional field is **DEPRECATED for REMOVAL** since it more safe to handle this internally, and shouldn't be exposed to the clients. The highest assigned column ID for the table. This is used to ensure columns are always assigned an unused ID when evolving schemas. When omitted, it will be computed on the server side.
-    #[serde(rename = "last-column-id", skip_serializing_if = "Option::is_none")]
-    pub last_column_id: Option<i32>,
-    /// Schema ID to set as current, or -1 to set last added schema
-    #[serde(rename = "schema-id")]
-    pub schema_id: i32,
-    #[serde(rename = "spec")]
-    pub spec: Box<models::PartitionSpec>,
-    /// Partition spec ID to set as the default, or -1 to set last added spec
-    #[serde(rename = "spec-id")]
-    pub spec_id: i32,
-    #[serde(rename = "sort-order")]
-    pub sort_order: Box<models::SortOrder>,
-    /// Sort order ID to set as the default, or -1 to set last added sort order
-    #[serde(rename = "sort-order-id")]
-    pub sort_order_id: i32,
-    #[serde(rename = "snapshot")]
-    pub snapshot: Box<models::Snapshot>,
-    #[serde(rename = "ref-name")]
-    pub ref_name: String,
-    #[serde(rename = "type")]
-    pub r#type: Type,
-    #[serde(rename = "snapshot-id")]
-    pub snapshot_id: i64,
-    #[serde(rename = "max-ref-age-ms", skip_serializing_if = "Option::is_none")]
-    pub max_ref_age_ms: Option<i64>,
-    #[serde(
-        rename = "max-snapshot-age-ms",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub max_snapshot_age_ms: Option<i64>,
-    #[serde(
-        rename = "min-snapshots-to-keep",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub min_snapshots_to_keep: Option<i32>,
-    #[serde(rename = "snapshot-ids")]
-    pub snapshot_ids: Vec<i64>,
-    #[serde(rename = "location")]
-    pub location: String,
-    #[serde(rename = "updates")]
-    pub updates: std::collections::HashMap<String, String>,
-    #[serde(rename = "removals")]
-    pub removals: Vec<String>,
-    #[serde(rename = "statistics")]
-    pub statistics: Box<models::StatisticsFile>,
-    #[serde(rename = "spec-ids")]
-    pub spec_ids: Vec<i32>,
-    #[serde(rename = "schema-ids")]
-    pub schema_ids: Vec<i32>,
-    #[serde(rename = "encryption-key")]
-    pub encryption_key: Box<models::EncryptedKey>,
-    #[serde(rename = "key-id")]
-    pub key_id: String,
-}
-
-impl TableUpdate {
-    pub fn new(
-        action: String,
-        uuid: String,
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "kebab-case")]
+pub enum TableUpdate {
+    UpgradeFormatVersion {
+        #[serde(rename = "format-version")]
         format_version: i32,
-        schema: models::Schema,
+    },
+    AssignUuid {
+        uuid: Uuid,
+    },
+    AddSchema {
+        schema: Box<models::Schema>,
+        #[serde(rename = "last-column-id", skip_serializing_if = "Option::is_none")]
+        last_column_id: Option<i32>,
+    },
+    SetCurrentSchema {
+        #[serde(rename = "schema-id")]
         schema_id: i32,
-        spec: models::PartitionSpec,
+    },
+    AddSpec {
+        spec: Box<models::PartitionSpec>,
+    },
+    SetDefaultSpec {
+        #[serde(rename = "spec-id")]
         spec_id: i32,
-        sort_order: models::SortOrder,
-        sort_order_id: i32,
-        snapshot: models::Snapshot,
+    },
+    AddSortOrder {
+        #[serde(rename = "sort-order")]
+        sort_order: Box<models::SortOrder>,
+    },
+    SetDefaultSortOrder {
+        #[serde(rename = "sort-order-id")]
+        sort_order_id: i64,
+    },
+    AddSnapshot {
+        snapshot: Box<models::Snapshot>,
+    },
+    SetSnapshotRef {
+        #[serde(rename = "ref-name")]
         ref_name: String,
-        r#type: Type,
-        snapshot_id: i64,
+        #[serde(flatten)]
+        reference: models::SnapshotReference,
+    },
+    RemoveSnapshots {
+        #[serde(rename = "snapshot-ids")]
         snapshot_ids: Vec<i64>,
+    },
+    RemoveSnapshotRef {
+        #[serde(rename = "ref-name")]
+        ref_name: String,
+    },
+    SetLocation {
         location: String,
+    },
+    SetProperties {
         updates: std::collections::HashMap<String, String>,
+    },
+    RemoveProperties {
         removals: Vec<String>,
-        statistics: models::StatisticsFile,
+    },
+    RemovePartitionSpecs {
+        #[serde(rename = "spec-ids")]
         spec_ids: Vec<i32>,
-        schema_ids: Vec<i32>,
-        encryption_key: models::EncryptedKey,
+    },
+    SetStatistics {
+        statistics: Box<models::StatisticsFile>,
+    },
+    RemoveStatistics {
+        #[serde(rename = "snapshot-id")]
+        snapshot_id: i64,
+    },
+    SetPartitionStatistics {
+        #[serde(rename = "partition-statistics")]
+        partition_statistics: Box<models::PartitionStatisticsFile>,
+    },
+    RemovePartitionStatistics {
+        #[serde(rename = "snapshot-id")]
+        snapshot_id: i64,
+    },
+    AddEncryptionKey {
+        #[serde(rename = "encryption-key")]
+        encryption_key: Box<models::EncryptedKey>,
+    },
+    RemoveEncryptionKey {
+        #[serde(rename = "key-id")]
         key_id: String,
-    ) -> TableUpdate {
-        TableUpdate {
-            action,
-            uuid,
-            format_version,
-            schema: Box::new(schema),
-            last_column_id: None,
-            schema_id,
-            spec: Box::new(spec),
-            spec_id,
-            sort_order: Box::new(sort_order),
-            sort_order_id,
-            snapshot: Box::new(snapshot),
-            ref_name,
-            r#type,
-            snapshot_id,
-            max_ref_age_ms: None,
-            max_snapshot_age_ms: None,
-            min_snapshots_to_keep: None,
-            snapshot_ids,
-            location,
-            updates,
-            removals,
-            statistics: Box::new(statistics),
-            spec_ids,
-            schema_ids,
-            encryption_key: Box::new(encryption_key),
-            key_id,
-        }
-    }
-}
-///
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
-pub enum Type {
-    #[serde(rename = "tag")]
-    Tag,
-    #[serde(rename = "branch")]
-    Branch,
+    },
+    RemoveSchemas {
+        #[serde(rename = "schema-ids")]
+        schema_ids: Vec<i32>,
+    },
 }
 
-impl Default for Type {
-    fn default() -> Type {
-        Self::Tag
+#[cfg(test)]
+mod tests {
+    use super::TableUpdate;
+    use crate::models::{snapshot_reference, SnapshotReference};
+
+    #[test]
+    fn set_snapshot_ref_serializes_with_tagged_action() {
+        let update = TableUpdate::SetSnapshotRef {
+            ref_name: "feature".to_string(),
+            reference: SnapshotReference {
+                r#type: snapshot_reference::Type::Branch,
+                snapshot_id: 42,
+                max_ref_age_ms: Some(1000),
+                max_snapshot_age_ms: Some(2000),
+                min_snapshots_to_keep: Some(3),
+            },
+        };
+
+        #[expect(clippy::expect_used)]
+        let json = serde_json::to_value(update).expect("serialize update");
+        assert_eq!(json["action"], "set-snapshot-ref");
+        assert_eq!(json["ref-name"], "feature");
+        assert_eq!(json["type"], "branch");
+        assert_eq!(json["snapshot-id"], 42);
+        assert_eq!(json["max-ref-age-ms"], 1000);
+        assert_eq!(json["max-snapshot-age-ms"], 2000);
+        assert_eq!(json["min-snapshots-to-keep"], 3);
     }
 }

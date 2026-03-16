@@ -32,12 +32,12 @@ pub struct AssertRefSnapshotId {
     #[serde(rename = "ref")]
     pub r#ref: String,
     #[serde(rename = "snapshot-id")]
-    pub snapshot_id: i64,
+    pub snapshot_id: Option<i64>,
 }
 
 impl AssertRefSnapshotId {
     /// The table branch or tag identified by the requirement's `ref` must reference the requirement's `snapshot-id`. The `snapshot-id` field is required in this object, but in the case of a `null` the ref must not already exist.
-    pub fn new(r#ref: String, snapshot_id: i64) -> AssertRefSnapshotId {
+    pub fn new(r#ref: String, snapshot_id: Option<i64>) -> AssertRefSnapshotId {
         AssertRefSnapshotId {
             r#type: None,
             r#ref,

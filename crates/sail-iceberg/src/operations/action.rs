@@ -13,10 +13,12 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use sail_catalog::provider::{TableCommitFormat, TableCommitPayload};
 
 use super::Transaction;
 use crate::spec::{TableRequirement, TableUpdate};
 
+#[derive(Debug, Clone)]
 pub struct ActionCommit {
     updates: Vec<TableUpdate>,
     requirements: Vec<TableRequirement>,
@@ -40,6 +42,16 @@ impl ActionCommit {
 
     pub fn requirements(&self) -> &[TableRequirement] {
         &self.requirements
+    }
+}
+
+impl TableCommitPayload for ActionCommit {
+    fn format(&self) -> TableCommitFormat {
+        TableCommitFormat::Iceberg
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 
