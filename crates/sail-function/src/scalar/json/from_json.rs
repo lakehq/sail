@@ -265,8 +265,31 @@ struct SparkFromJsonOptions {
 impl SparkFromJsonOptions {
     pub fn from_map(mut self, map_array: &MapArray) -> Result<Self> {
         let inner_struct = map_array.value(0);
-        let keys = downcast_array::<StringArray>(inner_struct.column(0));
-        let values = downcast_array::<StringArray>(inner_struct.column(1));
+        // validate map is of type map<string, string>
+        let (keys, values) = match inner_struct.data_type() {
+            DataType::Struct(fields) => {
+                let key_type = fields[0].data_type();
+                let value_type = fields[1].data_type();
+                if key_type == &DataType::Utf8 && value_type == &DataType::Utf8 {
+                    let keys = downcast_array::<StringArray>(inner_struct.column(0));
+                    let values = downcast_array::<StringArray>(inner_struct.column(1));
+                    (keys, values)
+                } else {
+                    return Err(DataFusionError::Plan(format!(
+                        "Expections options to be type map<string, string> but found key type {:?} and value type {:?}",
+                        key_type,
+                        value_type
+                    )))
+                }
+            },
+            other => {
+                return Err(DataFusionError::Plan(format!(
+                    "Should be unreachable: options should be a map with an inner struct but instead got {:?}",
+                    other
+                )))
+            }
+        };
+        // Get each k/v pair
         for (key, value) in keys.iter().zip(values.iter()) {
             let (key, value) = match (key, value) {
                 (Some(k), Some(v)) => (k, v),
@@ -462,6 +485,8 @@ fn append_to_builder(
                     } else {
                         b.append_null();
                     }
+                } else {
+                    b.append_null();
                 }
             }
             (FieldBuilder::Int64(b), Value::Number(num)) => {
@@ -478,6 +503,8 @@ fn append_to_builder(
                     } else {
                         b.append_null();
                     }
+                } else {
+                    b.append_null();
                 }
             }
             (FieldBuilder::Float64(b), Value::Number(num)) => {
