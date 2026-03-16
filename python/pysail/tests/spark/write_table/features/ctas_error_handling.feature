@@ -53,24 +53,6 @@ Feature: CREATE TABLE AS SELECT error handling
       AS t(id, name)
       """
 
-  Scenario: CREATE TABLE AS SELECT fails with TBLPROPERTIES clause
-    Given variable location for temporary directory ctas_error_properties
-    Given final statement
-      """
-      DROP TABLE IF EXISTS ctas_error_properties
-      """
-    Given statement template with error PROPERTIES in CREATE TABLE AS SELECT statement
-      """
-      CREATE TABLE ctas_error_properties
-      USING PARQUET
-      LOCATION {{ location.sql }}
-      TBLPROPERTIES ('p1'='v1', 'p2'='v2')
-      AS SELECT * FROM VALUES
-        (1, 'Alice'),
-        (2, 'Bob')
-      AS t(id, name)
-      """
-
   Scenario: CREATE TABLE AS SELECT fails with SORT BY clause
     Given variable location for temporary directory ctas_error_sort_by
     Given final statement

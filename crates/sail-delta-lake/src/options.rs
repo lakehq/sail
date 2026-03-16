@@ -12,8 +12,8 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Options that control the behavior of Delta Lake tables.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+/// Execution-time options that control a single Delta Lake read or write operation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TableDeltaOptions {
     pub replace_where: Option<String>,
     pub merge_schema: bool,
@@ -24,16 +24,43 @@ pub struct TableDeltaOptions {
     pub version_as_of: Option<i64>,
     pub timestamp_as_of: Option<String>,
 
-    /// Column mapping mode for new tables (dataframe API only)
-    #[serde(default)]
-    pub column_mapping_mode: ColumnMappingModeOption,
+    /// Enable metadata-as-data read path (avoid loading file list on driver; use log replay + discovery).
+    pub metadata_as_data_read: bool,
+
+    /// Strategy for Delta log replay in metadata-as-data path.
+    pub delta_log_replay_strategy: DeltaLogReplayStrategyOption,
+
+    /// Max commit JSON file count to use hash-no-sort replay when strategy is `Auto`.
+    #[serde(default = "default_delta_log_replay_hash_threshold")]
+    pub delta_log_replay_hash_threshold: usize,
+}
+
+impl Default for TableDeltaOptions {
+    fn default() -> Self {
+        Self {
+            replace_where: None,
+            merge_schema: false,
+            overwrite_schema: false,
+            target_file_size: 0,
+            write_batch_size: 0,
+            version_as_of: None,
+            timestamp_as_of: None,
+            metadata_as_data_read: false,
+            delta_log_replay_strategy: DeltaLogReplayStrategyOption::Auto,
+            delta_log_replay_hash_threshold: default_delta_log_replay_hash_threshold(),
+        }
+    }
+}
+
+pub fn default_delta_log_replay_hash_threshold() -> usize {
+    100
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-pub enum ColumnMappingModeOption {
+pub enum DeltaLogReplayStrategyOption {
     #[default]
-    None,
-    Name,
-    Id,
+    Auto,
+    Sort,
+    Hash,
 }

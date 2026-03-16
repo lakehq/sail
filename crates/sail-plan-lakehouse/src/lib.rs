@@ -8,7 +8,6 @@ use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::{internal_err, plan_err, DFSchemaRef, DataFusionError, Result, ToDFSchema};
 use datafusion_expr::{LogicalPlan, UserDefinedLogicalNode};
 use sail_data_source::resolve_listing_urls;
-use sail_delta_lake::datasource::schema::DataFusionMixins;
 use sail_delta_lake::table::open_table_with_object_store;
 use sail_logical_plan::file_delete::FileDeleteNode;
 use sail_logical_plan::file_write::FileWriteNode;

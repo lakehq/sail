@@ -16,6 +16,7 @@ pub struct FileWriteOptions {
     pub partition_by: Vec<String>,
     pub sort_by: Vec<Sort>,
     pub bucket_by: Option<BucketBy>,
+    pub table_properties: Vec<(String, String)>,
     pub options: Vec<Vec<(String, String)>>,
 }
 

@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import pytest
 from pyspark.sql.types import Row
 
-from pysail.tests.spark.utils import is_jvm_spark
+from pysail.testing.spark.utils.common import is_jvm_spark
 
 
 class TestDeltaAdvancedFeatures:

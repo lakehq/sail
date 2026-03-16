@@ -5,6 +5,7 @@ use datafusion::execution::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
+use sail_delta_lake::session_extension::DeltaTableCache;
 
 use crate::runtime::RuntimeEnvFactory;
 use crate::session_factory::SessionFactory;
@@ -23,10 +24,10 @@ impl WorkerSessionFactory {
 impl SessionFactory<()> for WorkerSessionFactory {
     fn create(&mut self, _info: ()) -> Result<SessionContext> {
         let runtime = self.runtime_env.create(Ok)?;
-        let config = SessionConfig::default();
         // We still add default features for the worker session
         // since we need built-in functions to be available for the codec
         // when decoding the execution plan.
+        let config = SessionConfig::default().with_extension(Arc::new(DeltaTableCache::default()));
         let state = SessionStateBuilder::new()
             .with_config(config)
             .with_runtime_env(runtime)

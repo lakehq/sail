@@ -31,12 +31,18 @@ impl ExtensionPlanner for DeltaTablePhysicalPlanner {
         let handle = node.handle().inner();
         let filters = unnormalize_cols(node.filters().clone());
         let projection = node.projection().map(|p| p.to_vec());
+        let files =
+            if !handle.snapshot.load_config().require_files || handle.snapshot.adds().is_empty() {
+                None
+            } else {
+                Some(Arc::new(handle.snapshot.adds().to_vec()))
+            };
         let plan = plan_delta_scan(
             session_state,
             &handle.snapshot,
             &handle.log_store,
             &handle.config,
-            None,
+            files,
             projection.as_ref(),
             &filters,
             node.fetch(),

@@ -72,6 +72,7 @@ pub struct SinkInfo {
     pub partition_by: Vec<String>,
     pub bucket_by: Option<BucketBy>,
     pub sort_order: Option<LexRequirement>,
+    pub table_properties: HashMap<String, String>,
     /// The sets of options for the data sink.
     /// A later set of options can override earlier ones.
     pub options: Vec<HashMap<String, String>>,

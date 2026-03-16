@@ -32,6 +32,10 @@ fn integer_part(expr: Expr, part: &str) -> Expr {
     )
 }
 
+fn years(arg: Expr) -> Expr {
+    integer_part(arg, "YEAR")
+}
+
 fn trunc_part_conversion(part: Expr) -> Expr {
     Expr::Case(expr::Case {
         expr: None,
@@ -795,5 +799,6 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("window", F::unknown("window")),
         ("window_time", F::unknown("window_time")),
         ("year", F::unary(|arg| integer_part(arg, "YEAR"))),
+        ("years", F::unary(years)),
     ]
 }

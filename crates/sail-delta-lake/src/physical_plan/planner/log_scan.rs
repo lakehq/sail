@@ -1,8 +1,7 @@
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
-use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::common::{DataFusionError, Result, ScalarValue};
-use datafusion::datasource::file_format::json::JsonFormat;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::PartitionedFile;
@@ -19,8 +18,30 @@ use object_store::{ObjectMeta, ObjectStore};
 use super::context::PlannerContext;
 use crate::datasource::create_object_store_url;
 use crate::physical_plan::COL_LOG_VERSION;
+use crate::spec::{
+    add_struct_type, delta_log_file_path, metadata_struct_type, parse_version_prefix,
+    protocol_struct_type, remove_struct_type, transaction_struct_type,
+};
 
-const DELTA_LOG_DIR: &str = "_delta_log";
+/// The canonical Delta log file schema with proper Map types for fields like `partitionValues`.
+///
+/// JSON schema inference gives `partitionValues` as a Struct, which breaks `map_extract`.
+/// By using this fixed schema for JSON-only log reads (when no parquet checkpoint exists),
+/// we ensure consistent Map types regardless of whether a checkpoint is present.
+static DELTA_LOG_FILE_SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
+    fn to_arrow(st: crate::spec::StructType) -> DataType {
+        #[expect(clippy::expect_used)]
+        DataType::try_from(&crate::spec::DataType::from(st))
+            .expect("spec struct type should convert to Arrow DataType")
+    }
+    Arc::new(Schema::new(vec![
+        Field::new("add", to_arrow(add_struct_type()), true),
+        Field::new("remove", to_arrow(remove_struct_type()), true),
+        Field::new("metaData", to_arrow(metadata_struct_type()), true),
+        Field::new("protocol", to_arrow(protocol_struct_type()), true),
+        Field::new("txn", to_arrow(transaction_struct_type()), true),
+    ]))
+});
 
 #[derive(Debug, Clone, Default)]
 pub struct LogScanOptions {
@@ -28,32 +49,18 @@ pub struct LogScanOptions {
     ///
     /// When set, the scan will only read these columns plus any required partition columns.
     pub projection: Option<Vec<String>>,
-    /// Optional inclusive log version range for commit JSON files.
-    pub commit_version_range: Option<(i64, i64)>,
     /// Optional pushdown predicate for checkpoint parquet scans.
     pub parquet_predicate: Option<Arc<dyn PhysicalExpr>>,
 }
 
 fn parse_log_version_prefix(filename: &str) -> Option<u64> {
-    // Delta log files are typically named with a 20-digit version prefix:
-    // - commits:     00000000000000000010.json
-    // - checkpoints: 00000000000000000010.checkpoint.parquet
-    //
-    // For multipart checkpoints, we still take the leading version prefix.
-    let prefix = filename.get(0..20)?;
-    if !prefix.as_bytes().iter().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    prefix.parse::<u64>().ok()
+    parse_version_prefix(filename)?.try_into().ok()
 }
 
 fn log_file_path(table_root_path: &str, filename: &str) -> Path {
     // Object store paths are absolute for local filesystem stores in our setup (DataFusion uses
     // `ObjectStoreUrl::local_filesystem()`).
-    Path::from(format!(
-        "{}{}{}{}{}",
-        table_root_path, DELIMITER, DELTA_LOG_DIR, DELIMITER, filename
-    ))
+    delta_log_file_path(table_root_path, filename)
 }
 
 async fn head_many(
@@ -139,58 +146,34 @@ fn to_file_groups(metas: Vec<ObjectMeta>, target_partitions: usize) -> Result<Ve
     Ok(groups)
 }
 
-pub async fn build_delta_log_datasource_union_with_options(
+pub async fn build_delta_log_datasource_scans_with_options(
     ctx: &PlannerContext<'_>,
     checkpoint_files: Vec<String>,
     commit_files: Vec<String>,
     options: LogScanOptions,
-) -> Result<(Arc<dyn ExecutionPlan>, Vec<String>, Vec<String>)> {
+) -> Result<(
+    Option<Arc<dyn ExecutionPlan>>,
+    Option<Arc<dyn ExecutionPlan>>,
+    Vec<String>,
+    Vec<String>,
+)> {
     let store = ctx.object_store()?;
     let log_store = ctx.log_store()?;
     let object_store_url = create_object_store_url(&log_store.config().location).map_err(|e| {
         DataFusionError::External(Box::<dyn std::error::Error + Send + Sync>::from(e))
     })?;
 
-    // Avoid double-counting actions that are already materialized into the checkpoint:
-    // only scan commit JSONs strictly newer than the latest checkpoint version.
-    let latest_checkpoint_version = checkpoint_files
-        .iter()
-        .filter_map(|f| parse_log_version_prefix(f))
-        .max();
-    let commit_files = if let Some(cp_ver) = latest_checkpoint_version {
-        commit_files
-            .into_iter()
-            .filter(|f| {
-                parse_log_version_prefix(f)
-                    .map(|v| v > cp_ver)
-                    .unwrap_or(true)
-            })
-            .collect::<Vec<_>>()
-    } else {
-        commit_files
-    };
-    let commit_files = if let Some((start, end)) = options.commit_version_range {
-        commit_files
-            .into_iter()
-            .filter(|f| {
-                parse_log_version_prefix(f).map(|v| {
-                    let v = i64::try_from(v).unwrap_or(i64::MAX);
-                    v >= start && v <= end
-                }) == Some(true)
-            })
-            .collect::<Vec<_>>()
-    } else {
-        commit_files
-    };
-
+    // Commit/checkpoint lists are expected to be selected by the planner log-segment resolver.
+    // This builder only materializes datasource scans from those resolved filenames.
     let table_root_path = log_store.config().location.path();
     let (checkpoint_metas, commit_metas) = tokio::try_join!(
         head_many(&store, table_root_path, &checkpoint_files),
         head_many(&store, table_root_path, &commit_files)
     )?;
 
-    // Infer schemas (best-effort). If there are no files for either side, we still build an empty
-    // scan of the other side.
+    // Infer schemas for parquet checkpoint files only. JSON commit files use the canonical
+    // Delta log file schema (see `DELTA_LOG_FILE_SCHEMA`) to avoid type mismatches for
+    // map-like fields (e.g. `add.partitionValues`).
     let parquet_schema = if checkpoint_metas.is_empty() {
         None
     } else {
@@ -200,29 +183,22 @@ pub async fn build_delta_log_datasource_union_with_options(
                 .await?,
         )
     };
-    let json_schema = if commit_metas.is_empty() {
-        None
-    } else {
-        Some(
-            JsonFormat::default()
-                .infer_schema(ctx.session(), &store, &commit_metas)
-                .await?,
-        )
-    };
+    let has_commit_files = !commit_metas.is_empty();
 
-    let merged = match (parquet_schema, json_schema) {
-        (Some(p), Some(j)) => {
-            // The inferred JSON schema may disagree with the checkpoint parquet schema for
-            // map-like fields (e.g. `add.partitionValues`). Prefer a stable schema to avoid
-            // planning failures during EXPLAIN.
-            match Schema::try_merge(vec![p.as_ref().clone(), j.as_ref().clone()]) {
-                Ok(merged) => Arc::new(merged),
-                Err(_) => p,
-            }
+    let merged = match (parquet_schema, has_commit_files) {
+        (Some(p), _) => {
+            // When a checkpoint (parquet) file is present, prefer its schema. The parquet
+            // checkpoint schema has proper Map types for fields like `add.partitionValues`,
+            // while JSON inference yields Struct types which are incompatible with `map_extract`.
+            p
         }
-        (Some(p), None) => p,
-        (None, Some(j)) => j,
-        (None, None) => {
+        (None, true) => {
+            // No parquet checkpoint exists (e.g. before the first checkpoint interval fires).
+            // Use the canonical Delta log file schema so that `partitionValues` and other
+            // map-like fields have the correct Map Arrow type instead of an inferred Struct.
+            Arc::clone(&*DELTA_LOG_FILE_SCHEMA)
+        }
+        (None, false) => {
             return Err(DataFusionError::Plan(
                 "no _delta_log files found to build log scan".to_string(),
             ))
@@ -241,19 +217,22 @@ pub async fn build_delta_log_datasource_union_with_options(
                 indices.push(file_schema_len);
                 continue;
             }
-            let idx = merged.index_of(col).map_err(|_| {
-                DataFusionError::Plan(format!(
-                    "log scan projection column '{col}' not found in merged schema"
-                ))
-            })?;
-            indices.push(idx);
+
+            match merged.index_of(col) {
+                Ok(idx) => indices.push(idx),
+                Err(_) => {
+                    // Some Delta writers/checkpoint formats may omit an action column
+                    // (for example, no `remove` records in a newly created table).
+                    // Skip missing projected columns and let downstream replay logic
+                    // treat them as absent.
+                }
+            }
         }
         Some(indices)
     } else {
         None
     };
 
-    let mut inputs: Vec<Arc<dyn ExecutionPlan>> = Vec::new();
     let target_partitions = ctx.session().config().target_partitions();
     let table_schema = TableSchema::new(
         Arc::clone(&merged),
@@ -264,7 +243,9 @@ pub async fn build_delta_log_datasource_union_with_options(
         ))],
     );
 
-    if !checkpoint_metas.is_empty() {
+    let checkpoint_scan: Option<Arc<dyn ExecutionPlan>> = if checkpoint_metas.is_empty() {
+        None
+    } else {
         let mut source =
             datafusion::datasource::physical_plan::ParquetSource::new(table_schema.clone());
         if let Some(predicate) = &options.parquet_predicate {
@@ -276,10 +257,12 @@ pub async fn build_delta_log_datasource_union_with_options(
             .with_file_groups(groups)
             .with_projection_indices(projection_indices.clone())?
             .build();
-        inputs.push(DataSourceExec::from_data_source(conf));
-    }
+        Some(DataSourceExec::from_data_source(conf))
+    };
 
-    if !commit_metas.is_empty() {
+    let commit_scan: Option<Arc<dyn ExecutionPlan>> = if commit_metas.is_empty() {
+        None
+    } else {
         let source: Arc<dyn datafusion::datasource::physical_plan::FileSource> = Arc::new(
             datafusion::datasource::physical_plan::JsonSource::new(table_schema),
         );
@@ -288,7 +271,29 @@ pub async fn build_delta_log_datasource_union_with_options(
             .with_file_groups(groups)
             .with_projection_indices(projection_indices)?
             .build();
-        inputs.push(DataSourceExec::from_data_source(conf));
+        Some(DataSourceExec::from_data_source(conf))
+    };
+
+    Ok((checkpoint_scan, commit_scan, checkpoint_files, commit_files))
+}
+
+#[expect(dead_code)]
+pub async fn build_delta_log_datasource_union_with_options(
+    ctx: &PlannerContext<'_>,
+    checkpoint_files: Vec<String>,
+    commit_files: Vec<String>,
+    options: LogScanOptions,
+) -> Result<(Arc<dyn ExecutionPlan>, Vec<String>, Vec<String>)> {
+    let (checkpoint_scan, commit_scan, checkpoint_files, commit_files) =
+        build_delta_log_datasource_scans_with_options(ctx, checkpoint_files, commit_files, options)
+            .await?;
+
+    let mut inputs: Vec<Arc<dyn ExecutionPlan>> = Vec::new();
+    if let Some(cp) = checkpoint_scan {
+        inputs.push(cp);
+    }
+    if let Some(c) = commit_scan {
+        inputs.push(c);
     }
 
     Ok((UnionExec::try_new(inputs)?, checkpoint_files, commit_files))
