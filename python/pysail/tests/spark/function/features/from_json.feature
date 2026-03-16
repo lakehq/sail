@@ -56,7 +56,7 @@ Feature: from_json converts json strings to spark nested types
         | result         |
         | {a, [{c -> 1}]}  |
 
-    Scenario: from_json nulls
+    Scenario: from_json nulls in struct
       When query
         """
         SELECT from_json('{"a": null, "b": null}', 'struct<a: int, b: int>') AS result
@@ -64,6 +64,66 @@ Feature: from_json converts json strings to spark nested types
       Then query result
         | result         |
         | {NULL, NULL}  |
+
+    Scenario: from_json null row structs
+      When query
+        """
+        with rows as (
+            select null as structs
+            union all
+            select null
+            union all
+            select '{"a": "b"}'
+        )
+
+        select from_json(structs, 'struct<a: string>') as result
+        from rows
+        """
+      Then query result
+        | result         |
+        | NULL |
+        | NULL |
+        | {b} |
+
+    Scenario: from_json null row maps
+      When query
+        """
+        with rows as (
+            select null as structs
+            union all
+            select null
+            union all
+            select '{"a": "b"}'
+        )
+
+        select from_json(structs, 'map<string, string>') as result
+        from rows
+        """
+      Then query result
+        | result         |
+        | NULL |
+        | NULL |
+        | {a -> b} |
+
+    Scenario: from_json null row lists
+      When query
+        """
+        with rows as (
+            select null as lists
+            union all
+            select null
+            union all
+            select '[1, 2]'
+        )
+
+        select from_json(lists, 'array<int>') as result
+        from rows
+        """
+      Then query result
+        | result         |
+        | [1, 2] |
+        | NULL |
+        | NULL |
 
     Scenario: from_json schema wrapped struct in array
         plain structs can be wrapped in an array if the schema

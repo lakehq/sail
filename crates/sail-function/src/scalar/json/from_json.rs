@@ -117,13 +117,13 @@ impl ScalarUDFImpl for SparkFromJson {
 
         match arg_types {
             [
-                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                DataType::Null | DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
                 DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Struct(_) | DataType::Map(_, _) | DataType::List(_),
             ] => {
                 Ok(vec![arg_types[0].clone(), arg_types[1].clone()])
-            }
+            },
             [
-                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                DataType::Null | DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
                 DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Struct(_) | DataType::Map(_, _) | DataType::List(_),
                 DataType::Map(_, _)
             ] => {
@@ -132,7 +132,7 @@ impl ScalarUDFImpl for SparkFromJson {
                     arg_types[1].clone(),
                     arg_types[2].clone(),
                 ])
-            }
+            },
             [a, b] => {
                 plan_err!(
                     "Unsupported datatypes for function `{}`: found {}, {}",
@@ -140,15 +140,7 @@ impl ScalarUDFImpl for SparkFromJson {
                     a,
                     b
                 )
-            }
-            [a, b, c] => {
-                plan_err!(
-                    "Unsupported datatypes for function `{}`: found {}, {}, {}",
-                    self.name(),
-                    a,
-                    b,
-                    c
-            }
+            },
             [a, b, c] => {
                 plan_err!(
                     "Unsupported datatypes for function `{}`: found {}, {}, {}",
@@ -158,6 +150,7 @@ impl ScalarUDFImpl for SparkFromJson {
                     c
                 )
             }
+            _ => unreachable!()
         }
     }
 }
@@ -200,7 +193,8 @@ fn get_schema_data_type(schema_arg: ArrayRef) -> Result<DataType> {
 }
 
 fn schema_str_to_data_type(string: &str) -> Result<DataType> {
-    let sail_dtype = parse_spark_data_type(string)?;
+    let sail_dtype = parse_spark_data_type(string)
+        .map_err(|e| DataFusionError::Execution(format!("Unable to parse schema, check it's valid. Original reason: {e}.")))?;
     let arrow_dtype = SailToArrayDataType.resolve_data_type(&sail_dtype)?;
     match arrow_dtype {
         DataType::Struct(_) | DataType::Map(_, _) | DataType::List(_) => Ok(arrow_dtype),
@@ -215,10 +209,14 @@ fn parse_rows(
 ) -> Result<ArrayRef> {
     let mut builder = create_builder(schema, rows.len())?;
     for i in 0..rows.len() {
-        let json_str = rows.value(i);
-        let value = serde_json::from_str::<serde_json::Value>(json_str)
-            .map_err(|e| DataFusionError::Execution(format!("Unable to parse json: {e}")))?;
-        append_to_builder(&mut builder, &value, &options)?;
+        if rows.is_null(i) {
+            append_to_builder(&mut builder, &Value::Null, &options)?;
+        } else {
+            let json_str = rows.value(i);
+            let value = serde_json::from_str::<serde_json::Value>(json_str)
+                .map_err(|e| DataFusionError::Execution(format!("Unable to parse json: {e}")))?;
+            append_to_builder(&mut builder, &value, &options)?;
+        }
     }
     finish_builder(builder)
 }
@@ -443,17 +441,15 @@ fn append_to_builder(
                     append_to_builder(nested_builder, value, options)?;
                 }
             }
-            FieldBuilder::Map {
-                struct_builder,
-                nulls,
-                ..
-            } => {
+            FieldBuilder::Map { nulls, offsets, .. } => {
                 nulls.push(false);
-                append_to_builder(struct_builder, value, options)?;
+                let curr = *offsets.last().unwrap();
+                offsets.push(curr);
             }
-            FieldBuilder::List { values, nulls, .. } => {
+            FieldBuilder::List { nulls, offsets, .. } => {
                 nulls.push(false);
-                append_to_builder(values, value, options)?;
+                let curr = *offsets.last().unwrap();
+                offsets.push(curr);
             }
         }
     // not null value
