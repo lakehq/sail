@@ -65,7 +65,10 @@ impl ScalarUDFImpl for SparkFromJson {
             ) | (
                 DataType::LargeUtf8,
                 ScalarValue::LargeUtf8(Some(utf8))
-            )=> {
+            ) | (
+                DataType::Utf8View,
+                ScalarValue::Utf8View(Some(utf8))
+            ) => {
                 let dtype = schema_str_to_data_type(utf8)?;
                 Ok(Arc::new(Field::new(
                     "from_utf8",
@@ -113,10 +116,17 @@ impl ScalarUDFImpl for SparkFromJson {
         };
 
         match arg_types {
-            [DataType::Utf8 | DataType::LargeUtf8, DataType::Utf8 | DataType::Struct(_) | DataType::Map(_, _) | DataType::List(_)] => {
+            [
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Struct(_) | DataType::Map(_, _) | DataType::List(_),
+            ] => {
                 Ok(vec![arg_types[0].clone(), arg_types[1].clone()])
             }
-            [DataType::Utf8 | DataType::LargeUtf8, DataType::Utf8 | DataType::Struct(_) | DataType::Map(_, _) | DataType::List(_), DataType::Map(_, _)] => {
+            [
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Struct(_) | DataType::Map(_, _) | DataType::List(_),
+                DataType::Map(_, _)
+            ] => {
                 Ok(vec![
                     arg_types[0].clone(),
                     arg_types[1].clone(),
