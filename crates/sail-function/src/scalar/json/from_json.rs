@@ -440,7 +440,7 @@ fn create_builder(data_type: DataType, capacity: usize) -> Result<FieldBuilder> 
     }
 }
 
-#[allow(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used)]
 fn append_to_builder(
     builder: &mut FieldBuilder,
     value: &Value,
