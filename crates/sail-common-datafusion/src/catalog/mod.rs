@@ -1,8 +1,10 @@
 pub mod display;
+mod handle;
 mod status;
 
 use datafusion_common::Column;
 use datafusion_expr::expr;
+pub use handle::*;
 use serde::{Deserialize, Serialize};
 pub use status::*;
 

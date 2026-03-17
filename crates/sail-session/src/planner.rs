@@ -7,15 +7,11 @@ use datafusion::physical_expr::LexOrdering;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
-use datafusion_common::{internal_datafusion_err, internal_err, DFSchema, ToDFSchema};
+use datafusion_common::{internal_err, DFSchema, ToDFSchema};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
 use datafusion_physical_expr::{create_physical_sort_exprs, Partitioning};
-use sail_catalog::manager::CatalogManager;
 use sail_catalog_system::logical_rewriter::RewriteSystemTableSource;
 use sail_catalog_system::planner::SystemTablePhysicalPlanner;
-use sail_common_datafusion::catalog::TableKind;
-use sail_common_datafusion::datasource::{SourceInfo, TableFormatRegistry};
-use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_rewriter::LogicalRewriter;
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
 use sail_common_datafusion::streaming::event::schema::{
@@ -180,50 +176,7 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
             if !logical_inputs.is_empty() || !physical_inputs.is_empty() {
                 return internal_err!("FileDeleteNode should have no inputs");
             }
-            // Create a dummy logical plan for schema context
-            let catalog_manager = session_state
-                .config()
-                .get_extension::<CatalogManager>()
-                .ok_or_else(|| internal_datafusion_err!("CatalogManager extension not found"))?;
-            let table_status = catalog_manager
-                .get_table_or_view(&node.options().table_name)
-                .await
-                .map_err(|e| internal_datafusion_err!("Failed to get table: {e}"))?;
-
-            let schema = match &table_status.kind {
-                TableKind::Table {
-                    columns,
-                    format,
-                    location,
-                    ..
-                } if columns.is_empty() && format.eq_ignore_ascii_case("DELTA") => {
-                    let Some(location) = location.as_ref() else {
-                        return internal_err!("Table for delete has no location");
-                    };
-                    let source_info = SourceInfo {
-                        paths: vec![location.clone()],
-                        schema: None,
-                        constraints: Default::default(),
-                        partition_by: vec![],
-                        bucket_by: None,
-                        sort_order: vec![],
-                        options: vec![],
-                    };
-                    let registry = session_state.extension::<TableFormatRegistry>()?;
-                    let source = registry
-                        .get(format)?
-                        .create_source(session_state, source_info)
-                        .await?;
-                    Ok(source.schema().to_dfschema_ref()?)
-                }
-                TableKind::Table { columns, .. } => {
-                    let schema = datafusion::arrow::datatypes::Schema::new(
-                        columns.iter().map(|c| c.field()).collect::<Vec<_>>(),
-                    );
-                    Ok(schema.to_dfschema_ref()?)
-                }
-                _ => internal_err!("Expected a table for DELETE"),
-            }?;
+            let schema = node.options().table.schema().to_dfschema_ref()?;
             create_file_delete_physical_plan(session_state, planner, schema, node.options().clone())
                 .await?
         } else if let Some(node) = node.as_any().downcast_ref::<MergeIntoNode>() {

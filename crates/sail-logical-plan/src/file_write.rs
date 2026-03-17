@@ -5,11 +5,13 @@ use datafusion_common::{DFSchema, DFSchemaRef};
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use educe::Educe;
+use sail_common_datafusion::catalog::TableHandle;
 use sail_common_datafusion::datasource::{BucketBy, SinkMode};
 use sail_common_datafusion::utils::items::ItemTaker;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
 pub struct FileWriteOptions {
+    pub table: Option<TableHandle>,
     pub path: String,
     pub format: String,
     pub mode: SinkMode,

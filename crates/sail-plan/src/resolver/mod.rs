@@ -14,6 +14,7 @@ pub mod plan;
 mod query;
 mod schema;
 mod state;
+mod table;
 mod tree;
 
 pub struct PlanResolver<'a> {

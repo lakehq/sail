@@ -1,14 +1,14 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, Schema};
+use datafusion::arrow::datatypes::DataType;
 use datafusion::datasource::{provider_as_source, source_as_provider, TableProvider};
 use datafusion_common::{DFSchema, ScalarValue, TableReference};
 use datafusion_expr::{Expr, LogicalPlan, TableScan, TableSource, UNNAMED_TABLE};
 use rand::{rng, RngExt};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
-use sail_common_datafusion::catalog::TableKind;
+use sail_common_datafusion::catalog::{TableHandle, TableKind};
 use sail_common_datafusion::datasource::{SourceInfo, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
@@ -72,57 +72,43 @@ impl PlanResolver<'_> {
         }
 
         let reference: Vec<String> = name.clone().into();
-        let status = self
-            .ctx
-            .extension::<CatalogManager>()?
-            .get_table_or_view(&reference)
-            .await?;
-        let plan = match status.kind {
-            TableKind::Table {
-                columns,
-                comment: _,
+        let catalog_manager = self.ctx.extension::<CatalogManager>()?;
+        let status = catalog_manager.get_table_or_view(&reference).await?;
+        let plan = if matches!(&status.kind, TableKind::Table { .. }) {
+            let handle = TableHandle::from_status(status)
+                .map_err(|_| PlanError::internal("catalog returned a non-table as a table"))?;
+            let schema = handle.schema();
+            let constraints =
+                self.resolve_catalog_table_constraints(handle.constraints.clone(), &schema)?;
+            let info = handle.to_source_info(
+                Some(schema),
                 constraints,
-                format,
-                location,
-                partition_by,
-                sort_by,
-                bucket_by,
-                options: table_options,
-                properties: _,
-            } => {
-                let schema = Schema::new(columns.iter().map(|x| x.field()).collect::<Vec<_>>());
-                let constraints = self.resolve_catalog_table_constraints(constraints, &schema)?;
-                let info = SourceInfo {
-                    paths: location.map(|x| vec![x]).unwrap_or_default(),
-                    schema: Some(schema),
-                    constraints,
-                    partition_by,
-                    bucket_by: bucket_by.map(|x| x.into()),
-                    sort_order: sort_by.into_iter().map(|x| x.into()).collect(),
-                    // TODO: detect duplicated keys in each set of options
-                    options: vec![
-                        table_options.into_iter().collect(),
-                        options.into_iter().collect(),
-                    ],
-                };
-                let registry = self.ctx.extension::<TableFormatRegistry>()?;
-                let table_source = registry
-                    .get(&format)?
-                    .create_source(&self.ctx.state(), info)
-                    .await?;
-                self.resolve_table_source_with_rename(
-                    table_source,
-                    table_reference,
-                    None,
-                    vec![],
-                    None,
-                    state,
-                )?
-            }
-            TableKind::View { .. } => return Err(PlanError::todo("read view")),
-            TableKind::TemporaryView { plan, .. } | TableKind::GlobalTemporaryView { plan, .. } => {
-                let names = state.register_fields(plan.schema().inner().fields());
-                rename_logical_plan(plan.as_ref().clone(), &names)?
+                vec![options.into_iter().collect()],
+            );
+            let registry = self.ctx.extension::<TableFormatRegistry>()?;
+            let table_source = registry
+                .get(&handle.format)?
+                .create_source(&self.ctx.state(), info)
+                .await?;
+            self.resolve_table_source_with_rename(
+                table_source,
+                table_reference,
+                None,
+                vec![],
+                None,
+                state,
+            )?
+        } else {
+            match status.kind {
+                TableKind::View { .. } => return Err(PlanError::todo("read view")),
+                TableKind::TemporaryView { plan, .. }
+                | TableKind::GlobalTemporaryView { plan, .. } => {
+                    let names = state.register_fields(plan.schema().inner().fields());
+                    rename_logical_plan(plan.as_ref().clone(), &names)?
+                }
+                TableKind::Table { .. } => {
+                    return Err(PlanError::internal("catalog returned a table unexpectedly"));
+                }
             }
         };
 

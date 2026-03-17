@@ -35,6 +35,7 @@ impl TableFormat for ConsoleTableFormat {
         info: SinkInfo,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let SinkInfo {
+            table: _,
             input,
             path,
             mode,

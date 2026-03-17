@@ -4,12 +4,13 @@ use std::sync::Arc;
 use datafusion_common::{DFSchema, DFSchemaRef};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use educe::Educe;
+use sail_common_datafusion::catalog::TableHandle;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
 pub struct FileDeleteOptions {
-    pub table_name: Vec<String>,
+    pub table: TableHandle,
     pub path: String,
     pub format: String,
     pub condition: Option<ExprWithSource>,

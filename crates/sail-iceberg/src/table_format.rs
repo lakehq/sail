@@ -76,6 +76,7 @@ impl TableFormat for IcebergTableFormat {
         use datafusion::physical_plan::empty::EmptyExec;
 
         let SinkInfo {
+            table: _,
             input,
             path,
             mode,

@@ -169,7 +169,7 @@ impl TableStatus {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
 pub struct TableColumnStatus {
     pub name: String,
     pub data_type: DataType,

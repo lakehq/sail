@@ -1,5 +1,5 @@
 use sail_common::spec::AlterTableOperation;
-use sail_common_datafusion::catalog::TableStatus;
+use sail_common_datafusion::catalog::{TableHandle, TableStatus};
 
 use crate::error::{CatalogError, CatalogResult};
 use crate::manager::CatalogManager;
@@ -19,6 +19,23 @@ impl CatalogManager {
     pub async fn get_table<T: AsRef<str>>(&self, table: &[T]) -> CatalogResult<TableStatus> {
         let (provider, database, table) = self.resolve_object(table)?;
         provider.get_table(&database, &table).await
+    }
+
+    pub async fn open_table_handle<T: AsRef<str>>(
+        &self,
+        table: &[T],
+    ) -> CatalogResult<TableHandle> {
+        let (provider, database, table_name) = self.resolve_object(table)?;
+        let mut status = provider.get_table(&database, &table_name).await?;
+        status.catalog = Some(provider.get_name().to_string());
+        status.database = Vec::<String>::from(database.clone());
+        status.name = table_name.to_string();
+        TableHandle::from_status(status).map_err(|status| {
+            CatalogError::Internal(format!(
+                "catalog object '{}' is not a table: {:?}",
+                table_name, status.kind
+            ))
+        })
     }
 
     pub async fn list_tables<T: AsRef<str>>(

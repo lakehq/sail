@@ -1,19 +1,13 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema;
-use datafusion_common::{Column, DFSchema};
-use datafusion_expr::expr::Sort;
-use datafusion_expr::{col, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder};
+use datafusion_common::DFSchema;
+use datafusion_expr::{col, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder};
 use sail_catalog::command::CatalogCommand;
-use sail_catalog::error::CatalogError;
-use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::{CatalogPartitionField, CreateTableColumnOptions, CreateTableOptions};
 use sail_common::spec;
-use sail_common_datafusion::catalog::{
-    CatalogTableBucketBy, CatalogTableSort, TableColumnStatus, TableKind,
-};
-use sail_common_datafusion::datasource::{BucketBy, SinkMode, SourceInfo, TableFormatRegistry};
-use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::catalog::TableHandle;
+use sail_common_datafusion::datasource::{BucketBy, SinkMode};
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_common_datafusion::rename::schema::rename_schema;
@@ -187,6 +181,7 @@ impl PlanResolver<'_> {
             .into_iter()
             .collect::<std::collections::HashMap<_, _>>();
         let mut file_write_options = FileWriteOptions {
+            table: None,
             path: String::new(),
             // The mode will be set later so the value here is just a placeholder.
             mode: SinkMode::ErrorIfExists,
@@ -241,7 +236,7 @@ impl PlanResolver<'_> {
                         "cannot specify table properties when writing to an existing table",
                     ));
                 }
-                let Some(info) = self.resolve_table_info(&table).await? else {
+                let Some(info) = self.resolve_table_handle(&table).await? else {
                     return Err(PlanError::invalid(format!(
                         "table does not exist: {table:?}"
                     )));
@@ -249,11 +244,18 @@ impl PlanResolver<'_> {
                 if matches!(mode, WriteMode::IgnoreIfExists) {
                     return Ok(LogicalPlanBuilder::empty(false).build()?);
                 }
-                info.validate_file_write_options(&file_write_options)?;
+                info.validate_write_layout(
+                    &file_write_options.partition_by,
+                    &file_write_options.bucket_by,
+                    &file_write_options.sort_by,
+                    &file_write_options.format,
+                )
+                .map_err(PlanError::invalid)?;
                 input = Self::rewrite_write_input(input, column_match, &info)?;
                 file_write_options.mode = self
                     .resolve_write_mode(mode, Some(&info.schema()), state)
                     .await?;
+                file_write_options.table = Some(info.clone());
                 file_write_options.partition_by = info.partition_by;
                 file_write_options.sort_by = info.sort_by.into_iter().map(|x| x.into()).collect();
                 file_write_options.bucket_by = info.bucket_by.map(|x| x.into());
@@ -265,13 +267,19 @@ impl PlanResolver<'_> {
                 file_write_options.table_properties = info.properties;
             }
             WriteTarget::NewTable { table, action } => {
-                let info = self.resolve_table_info(&table).await?;
+                let info = self.resolve_table_handle(&table).await?;
                 if matches!(mode, WriteMode::IgnoreIfExists) && info.is_some() {
                     return Ok(LogicalPlanBuilder::empty(false).build()?);
                 }
                 if matches!(action, WriteTableAction::CreateIfNotExists) {
                     if let Some(ref info) = info {
-                        info.validate_file_write_options(&file_write_options)?;
+                        info.validate_write_layout(
+                            &file_write_options.partition_by,
+                            &file_write_options.bucket_by,
+                            &file_write_options.sort_by,
+                            &file_write_options.format,
+                        )
+                        .map_err(PlanError::invalid)?;
                         input = Self::rewrite_write_input(input, WriteColumnMatch::ByName, info)?;
                     }
                 }
@@ -292,6 +300,7 @@ impl PlanResolver<'_> {
                 } else {
                     file_write_options.path = self.resolve_default_table_location(&table).await?;
                 }
+                file_write_options.table = info.clone();
                 file_write_options.table_properties = table_properties.clone();
                 let (if_not_exists, replace) = match action {
                     WriteTableAction::Create => (false, false),
@@ -407,102 +416,14 @@ impl PlanResolver<'_> {
         }
     }
 
-    async fn resolve_table_info(&self, table: &spec::ObjectName) -> PlanResult<Option<TableInfo>> {
-        let status = match self
-            .ctx
-            .extension::<CatalogManager>()?
-            .get_table(table.parts())
-            .await
-        {
-            Ok(x) => x,
-            Err(CatalogError::NotFound(_, _)) => return Ok(None),
-            Err(e) => return Err(e.into()),
-        };
-        match status.kind {
-            TableKind::Table {
-                mut columns,
-                comment: _,
-                constraints: _,
-                location,
-                format,
-                partition_by,
-                sort_by,
-                bucket_by,
-                options,
-                properties,
-            } => {
-                // When a table is created without column definitions
-                // (e.g. `CREATE TABLE t USING fmt`), the catalog stores an empty column list.
-                // Discover the schema from the table format so that write operations
-                // (INSERT INTO) can validate the input schema correctly.
-                if columns.is_empty() {
-                    let registry = self.ctx.extension::<TableFormatRegistry>().map_err(|e| {
-                        PlanError::invalid(format!(
-                            "failed to access table format registry for table `{table:?}`: {e}",
-                        ))
-                    })?;
-                    let table_format = registry.get(&format).map_err(|e| {
-                        PlanError::invalid(format!(
-                            "failed to resolve table format `{format}` for table `{table:?}`: {e}",
-                        ))
-                    })?;
-                    let info = SourceInfo {
-                        paths: location.iter().cloned().collect(),
-                        schema: None,
-                        constraints: Default::default(),
-                        partition_by: vec![],
-                        bucket_by: None,
-                        sort_order: vec![],
-                        options: vec![options.iter().cloned().collect()],
-                    };
-                    let provider = table_format
-                        .create_provider(&self.ctx.state(), info)
-                        .await
-                        .map_err(|e| {
-                            PlanError::invalid(format!(
-                                "failed to infer schema for table `{table:?}` from format `{format}`: {e}",
-                            ))
-                        })?;
-                    columns = provider
-                        .schema()
-                        .fields()
-                        .iter()
-                        .map(|f| TableColumnStatus {
-                            name: f.name().clone(),
-                            data_type: f.data_type().clone(),
-                            nullable: f.is_nullable(),
-                            comment: None,
-                            default: None,
-                            generated_always_as: None,
-                            is_partition: false,
-                            is_bucket: false,
-                            is_cluster: false,
-                        })
-                        .collect();
-                }
-                Ok(Some(TableInfo {
-                    columns,
-                    location,
-                    format,
-                    partition_by,
-                    sort_by,
-                    bucket_by,
-                    options,
-                    properties,
-                }))
-            }
-            _ => Ok(None),
-        }
-    }
-
     fn rewrite_write_input(
         input: LogicalPlan,
         column_match: WriteColumnMatch,
-        info: &TableInfo,
+        info: &TableHandle,
     ) -> PlanResult<LogicalPlan> {
         // TODO: handle table column default values and generated columns
 
-        let table_schema = Schema::new(info.columns.iter().map(|x| x.field()).collect::<Vec<_>>());
+        let table_schema = info.schema();
         if input.schema().fields().len() != table_schema.fields().len() {
             return Err(PlanError::invalid(format!(
                 "input schema for INSERT has {} fields, but table schema has {} fields",
@@ -594,100 +515,5 @@ impl PlanResolver<'_> {
                 num_buckets,
             }
         }))
-    }
-}
-
-struct TableInfo {
-    columns: Vec<TableColumnStatus>,
-    location: Option<String>,
-    format: String,
-    partition_by: Vec<String>,
-    sort_by: Vec<CatalogTableSort>,
-    bucket_by: Option<CatalogTableBucketBy>,
-    options: Vec<(String, String)>,
-    properties: Vec<(String, String)>,
-}
-
-impl TableInfo {
-    fn schema(&self) -> Schema {
-        let fields = self
-            .columns
-            .iter()
-            .map(|col| col.field())
-            .collect::<Vec<_>>();
-        Schema::new(fields)
-    }
-
-    fn validate_file_write_options(&self, options: &FileWriteOptions) -> PlanResult<()> {
-        if !self.is_empty_or_equivalent_partitioning(&options.partition_by) {
-            return Err(PlanError::invalid(
-                "cannot specify a different partitioning when writing to an existing table",
-            ));
-        }
-        if !self.is_empty_or_equivalent_bucketing(&options.bucket_by, &options.sort_by) {
-            return Err(PlanError::invalid(
-                "cannot specify a different bucketing when writing to an existing table",
-            ));
-        }
-        if !options.format.is_empty() && !options.format.eq_ignore_ascii_case(&self.format) {
-            return Err(PlanError::invalid(format!(
-                "the format '{}' does not match the table format '{}'",
-                options.format, self.format
-            )));
-        }
-        Ok(())
-    }
-
-    fn is_empty_or_equivalent_partitioning(&self, partition_by: &[String]) -> bool {
-        partition_by.is_empty()
-            || (partition_by.len() == self.partition_by.len()
-                && partition_by
-                    .iter()
-                    .zip(self.partition_by.iter())
-                    .all(|(a, b)| a.eq_ignore_ascii_case(b)))
-    }
-
-    fn is_empty_or_equivalent_bucketing(
-        &self,
-        bucket_by: &Option<BucketBy>,
-        sort_by: &[Sort],
-    ) -> bool {
-        let bucket_by_match = match (bucket_by, &self.bucket_by) {
-            (None, _) => true,
-            (Some(b1), Some(b2)) => {
-                b1.num_buckets == b2.num_buckets
-                    && b1.columns.len() == b2.columns.len()
-                    && b1
-                        .columns
-                        .iter()
-                        .zip(&b2.columns)
-                        .all(|(a, b)| a.eq_ignore_ascii_case(b))
-            }
-            (Some(_), None) => false,
-        };
-        let sort_by_match = match (sort_by, self.sort_by.as_slice()) {
-            ([], _) => true,
-            (_, []) => false,
-            (s1, s2) => {
-                s1.len() == s2.len()
-                    && s1.iter().zip(s2.iter()).all(|(a, b)| {
-                        let Sort {
-                            expr:
-                                Expr::Column(Column {
-                                    relation: _,
-                                    name,
-                                    spans: _,
-                                }),
-                            asc,
-                            nulls_first: _,
-                        } = a
-                        else {
-                            return false;
-                        };
-                        name.eq_ignore_ascii_case(&b.column) && *asc == b.ascending
-                    })
-            }
-        };
-        bucket_by_match && sort_by_match
     }
 }

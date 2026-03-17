@@ -19,6 +19,7 @@ use datafusion_expr::{
 };
 use educe::Educe;
 use log::trace;
+use sail_common_datafusion::catalog::TableHandle;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::utils::items::ItemTaker;
 
@@ -141,7 +142,7 @@ pub struct MergeIntoOptions {
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
 pub struct MergeTargetInfo {
-    pub table_name: Vec<String>,
+    pub table: TableHandle,
     pub format: String,
     pub location: String,
     pub partition_by: Vec<String>,

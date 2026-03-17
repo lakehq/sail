@@ -28,7 +28,7 @@ pub async fn create_preexpanded_merge_physical_plan(
     };
 
     let target = MergeTargetInfo {
-        table_name: node.options().target.table_name.clone(),
+        table: node.options().target.table.clone(),
         path: node.options().target.location.clone(),
         partition_by: node.options().target.partition_by.clone(),
         options: convert_options(&node.options().target.options),

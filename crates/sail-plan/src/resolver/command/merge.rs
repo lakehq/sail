@@ -3,10 +3,7 @@ use std::sync::Arc;
 use datafusion_common::{JoinType, TableReference};
 use datafusion_expr::utils::{expr_to_columns, split_conjunction};
 use datafusion_expr::{build_join_schema, Expr, Extension, LogicalPlan, SubqueryAlias};
-use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
-use sail_common_datafusion::catalog::TableKind;
-use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_logical_plan::merge::{
     MergeAssignment, MergeIntoNode, MergeIntoOptions, MergeMatchedAction, MergeMatchedClause,
@@ -458,34 +455,17 @@ impl PlanResolver<'_> {
     }
 
     async fn get_merge_target_info(&self, table: &spec::ObjectName) -> PlanResult<MergeTargetInfo> {
-        let catalog_manager = self.ctx.extension::<CatalogManager>()?;
-        let status = catalog_manager
-            .get_table_or_view(table.parts())
-            .await
-            .map_err(PlanError::from)?;
-        match status.kind {
-            TableKind::Table {
-                location,
-                format,
-                partition_by,
-                options,
-                ..
-            } => {
-                let location = location.ok_or_else(|| {
-                    PlanError::invalid(format!("table does not have a location: {table:?}"))
-                })?;
-                Ok(MergeTargetInfo {
-                    table_name: table.clone().into(),
-                    format,
-                    location,
-                    partition_by,
-                    options: vec![options],
-                })
-            }
-            _ => Err(PlanError::unsupported(
-                "MERGE is only supported against tables",
-            )),
-        }
+        let handle = self.require_table_handle(table).await?;
+        let location = handle.location.clone().ok_or_else(|| {
+            PlanError::invalid(format!("table does not have a location: {table:?}"))
+        })?;
+        Ok(MergeTargetInfo {
+            format: handle.format.clone(),
+            table: handle.clone(),
+            location,
+            partition_by: handle.partition_by.clone(),
+            options: vec![handle.options.clone()],
+        })
     }
 }
 

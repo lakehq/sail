@@ -88,6 +88,7 @@ impl TableFormat for DeltaTableFormat {
         info: SinkInfo,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let SinkInfo {
+            table: _,
             input,
             path,
             mode,
@@ -237,6 +238,7 @@ impl TableFormat for DeltaTableFormat {
         info: DeleteInfo,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let DeleteInfo {
+            table: _,
             path,
             condition,
             options,

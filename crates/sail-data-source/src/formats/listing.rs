@@ -191,6 +191,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         info: SinkInfo,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let SinkInfo {
+            table: _,
             input,
             path,
             // TODO: sink mode is ignored since the file formats only support append operation

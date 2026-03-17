@@ -14,6 +14,7 @@ use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, Result};
 use datafusion_expr::expr::Sort;
 use datafusion_expr::TableSource;
 
+use crate::catalog::TableHandle;
 use crate::extension::SessionExtension;
 use crate::logical_expr::ExprWithSource;
 
@@ -66,6 +67,7 @@ pub struct SourceInfo {
 /// Information required to create a data writer.
 #[derive(Debug, Clone)]
 pub struct SinkInfo {
+    pub table: Option<TableHandle>,
     pub input: Arc<dyn ExecutionPlan>,
     pub path: String,
     pub mode: PhysicalSinkMode,
@@ -81,6 +83,7 @@ pub struct SinkInfo {
 /// Information required to create a data deleter.
 #[derive(Debug, Clone)]
 pub struct DeleteInfo {
+    pub table: TableHandle,
     pub path: String,
     pub condition: Option<ExprWithSource>,
     /// The sets of options for the data deletion.
@@ -90,7 +93,7 @@ pub struct DeleteInfo {
 
 #[derive(Debug, Clone)]
 pub struct MergeTargetInfo {
-    pub table_name: Vec<String>,
+    pub table: TableHandle,
     pub path: String,
     pub partition_by: Vec<String>,
     pub options: Vec<HashMap<String, String>>,
