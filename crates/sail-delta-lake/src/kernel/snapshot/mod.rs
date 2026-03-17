@@ -20,8 +20,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use chrono::Utc;
-use datafusion::arrow::array::{ArrayRef, Int64Array, StructArray};
-use datafusion::arrow::compute::sum;
+use datafusion::arrow::array::{ArrayRef, StructArray};
 use datafusion::arrow::datatypes::{
     Field, FieldRef, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
 };
