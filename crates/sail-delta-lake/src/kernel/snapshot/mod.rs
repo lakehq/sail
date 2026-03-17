@@ -287,14 +287,10 @@ impl DeltaSnapshot {
         for add in self.adds() {
             num_files = num_files
                 .checked_add(1)
-                .ok_or_else(|| {
-                    DeltaTableError::generic("Version checksum file count overflow")
-                })?;
+                .ok_or_else(|| DeltaTableError::generic("Version checksum file count overflow"))?;
             table_size_bytes = table_size_bytes
                 .checked_add(add.size)
-                .ok_or_else(|| {
-                    DeltaTableError::generic("Version checksum table size overflow")
-                })?;
+                .ok_or_else(|| DeltaTableError::generic("Version checksum table size overflow"))?;
         }
 
         let mut set_transactions = self.app_txns.values().cloned().collect::<Vec<_>>();
