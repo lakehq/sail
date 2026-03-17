@@ -3,7 +3,8 @@ import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pandas.testing import assert_frame_equal
 
-from pysail.tests.spark.utils import escape_sql_string_literal, is_jvm_spark
+from pysail.testing.spark.utils.common import is_jvm_spark
+from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 
 @pytest.fixture(autouse=True)

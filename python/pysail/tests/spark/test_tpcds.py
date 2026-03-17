@@ -3,7 +3,7 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from .utils import is_jvm_spark  # noqa: TID252
+from pysail.testing.spark.utils.common import is_jvm_spark
 
 
 @pytest.fixture(scope="module")

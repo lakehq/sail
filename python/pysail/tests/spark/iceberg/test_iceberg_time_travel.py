@@ -8,7 +8,7 @@ from pyiceberg.schema import Schema
 from pyiceberg.types import LongType, NestedField, StringType
 from pyspark.sql.types import Row
 
-from .utils import create_sql_catalog  # noqa: TID252
+from pysail.tests.spark.iceberg.utils import create_sql_catalog
 
 
 def test_iceberg_time_travel_by_snapshot_id(spark, tmp_path):

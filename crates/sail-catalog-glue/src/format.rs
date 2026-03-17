@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 /// Storage format information for Glue tables.
 ///
 /// Maps user-friendly format names to Hive/Hadoop Java class names for InputFormat,
@@ -88,5 +90,14 @@ impl GlueStorageFormat {
             Some(lib) if lib.contains("LazySimpleSerde") => "textfile".to_string(),
             _ => "unknown".to_string(),
         }
+    }
+
+    pub fn detect_iceberg_format(properties: Option<&HashMap<String, String>>) -> Option<String> {
+        if let Some(properties) = properties {
+            if properties.get("table_type").is_some_and(|x| x == "iceberg") {
+                return Some("iceberg".to_string());
+            }
+        }
+        None
     }
 }

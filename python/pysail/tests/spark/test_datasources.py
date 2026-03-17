@@ -14,7 +14,7 @@ from pyspark.sql.types import (
     StructType,
 )
 
-from pysail.tests.spark.utils import escape_sql_identifier
+from pysail.testing.spark.utils.sql import escape_sql_identifier
 
 
 def safe_sort_key(row):

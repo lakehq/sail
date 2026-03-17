@@ -10,7 +10,12 @@ import pytest
 from _pytest.doctest import DoctestItem
 from pyspark.sql import SparkSession
 
-from pysail.tests.spark.utils import SAIL_ONLY, is_jvm_spark, pyspark_version
+from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
+
+# This doctest option flag is used to annotate tests involving
+# extended Spark features supported by Sail.
+# The test will be skipped when running on JVM Spark.
+SAIL_ONLY = doctest.register_optionflag("SAIL_ONLY")
 
 
 def pytest_configure(config):
@@ -21,11 +26,11 @@ def pytest_configure(config):
         "sail-only: mark test as Sail-only (skipped when running against Spark JVM)",
     )
     # Load all pytest-bdd step modules.
-    config.pluginmanager.import_plugin("pysail.tests.spark.steps.file_tree")
-    config.pluginmanager.import_plugin("pysail.tests.spark.steps.sql")
-    config.pluginmanager.import_plugin("pysail.tests.spark.steps.plan")
-    config.pluginmanager.import_plugin("pysail.tests.spark.steps.delta_log")
-    config.pluginmanager.import_plugin("pysail.tests.spark.steps.dataframe")
+    config.pluginmanager.import_plugin("pysail.testing.spark.steps.file_tree")
+    config.pluginmanager.import_plugin("pysail.testing.spark.steps.sql")
+    config.pluginmanager.import_plugin("pysail.testing.spark.steps.plan")
+    config.pluginmanager.import_plugin("pysail.testing.spark.steps.delta_log")
+    config.pluginmanager.import_plugin("pysail.testing.spark.steps.iceberg_metadata")
 
 
 if TYPE_CHECKING:

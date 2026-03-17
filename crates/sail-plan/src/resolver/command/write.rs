@@ -18,8 +18,8 @@ use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_common_datafusion::rename::schema::rename_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_logical_plan::barrier::BarrierNode;
 use sail_logical_plan::file_write::{FileWriteNode, FileWriteOptions};
-use sail_logical_plan::precondition::WithPreconditionsNode;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
@@ -196,6 +196,7 @@ impl PlanResolver<'_> {
                 .resolve_sort_orders(sort_by.clone(), true, input.schema(), state)
                 .await?,
             bucket_by: self.resolve_write_bucket_by(bucket_by.clone())?,
+            table_properties: vec![],
             options: vec![options],
         };
         let mut preconditions = vec![];
@@ -261,9 +262,7 @@ impl PlanResolver<'_> {
                 })?;
                 file_write_options.format = info.format;
                 file_write_options.options.insert(0, info.options);
-                if !info.properties.is_empty() {
-                    file_write_options.options.insert(0, info.properties);
-                }
+                file_write_options.table_properties = info.properties;
             }
             WriteTarget::NewTable { table, action } => {
                 let info = self.resolve_table_info(&table).await?;
@@ -291,13 +290,9 @@ impl PlanResolver<'_> {
                 } else if let Some(path) = options_map.get("path") {
                     file_write_options.path = path.to_string();
                 } else {
-                    file_write_options.path = self.resolve_default_table_location(&table)?;
+                    file_write_options.path = self.resolve_default_table_location(&table).await?;
                 }
-                if !table_properties.is_empty() {
-                    file_write_options
-                        .options
-                        .insert(0, table_properties.clone());
-                }
+                file_write_options.table_properties = table_properties.clone();
                 let (if_not_exists, replace) = match action {
                     WriteTableAction::Create => (false, false),
                     WriteTableAction::CreateIfNotExists => (true, false),
@@ -357,7 +352,7 @@ impl PlanResolver<'_> {
             node: Arc::new(FileWriteNode::new(Arc::new(input), file_write_options)),
         });
         Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(WithPreconditionsNode::new(preconditions, Arc::new(plan))),
+            node: Arc::new(BarrierNode::new(preconditions, Arc::new(plan))),
         }))
     }
 

@@ -21,7 +21,7 @@ from pyiceberg.partitioning import (
     YearTransform,
 )
 
-from pysail.tests.spark.utils import is_jvm_spark
+from pysail.testing.spark.utils.common import is_jvm_spark
 
 try:
     from pyspark.sql.functions import partitioning

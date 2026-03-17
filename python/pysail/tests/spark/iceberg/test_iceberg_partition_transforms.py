@@ -7,7 +7,7 @@ partition transforms, so these tests verify parsing by checking the error messag
 
 import pytest
 
-from pysail.tests.spark.utils import is_jvm_spark
+from pysail.testing.spark.utils.common import is_jvm_spark
 
 try:
     from pyspark.sql.functions import partitioning

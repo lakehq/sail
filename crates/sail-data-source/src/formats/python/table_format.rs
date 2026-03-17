@@ -203,6 +203,7 @@ impl TableFormat for PythonTableFormat {
             path,
             mode,
             partition_by,
+            table_properties: _,
             mut options,
             ..
         } = info;

@@ -1,0 +1,102 @@
+# serializer version: 1
+---
+name: "test_filter_and_limit_pushdown_for_system_tables"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#5@0 as session_id, #6@1 as user_id, #7@2 as status, #8@3 as created_at, #9@4 as deleted_at]
+      ProjectionExec: expr=[session_id@0 as #5, user_id@1 as #6, status@2 as #7, created_at@3 as #8, deleted_at@4 as #9]
+        GlobalLimitExec: skip=0, fetch=1
+          CooperativeExec
+            SystemTableExec: table=sessions, projection=Some([0, 1, 2, 3, 4]), filters=[BinaryExpr { left: Column { name: "session_id", index: 0 }, op: Eq, right: Literal { value: Utf8(""), field: Field { name: "lit", data_type: Utf8 } }, fail_on_overflow: false }], fetch=Some(1)
+---
+name: "test_filter_and_limit_pushdown_for_system_tables.1"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#5@0 as session_id, #6@1 as user_id, #7@2 as status, #8@3 as created_at, #9@4 as deleted_at]
+      ProjectionExec: expr=[session_id@0 as #5, user_id@1 as #6, status@2 as #7, created_at@3 as #8, deleted_at@4 as #9]
+        GlobalLimitExec: skip=0, fetch=1
+          CooperativeExec
+            SystemTableExec: table=sessions, projection=Some([0, 1, 2, 3, 4]), filters=[BinaryExpr { left: Column { name: "session_id", index: 0 }, op: NotEq, right: Literal { value: Utf8(""), field: Field { name: "lit", data_type: Utf8 } }, fail_on_overflow: false }, BinaryExpr { left: Column { name: "session_id", index: 0 }, op: NotEq, right: Literal { value: Utf8("x"), field: Field { name: "lit", data_type: Utf8 } }, fail_on_overflow: false }], fetch=Some(1)
+---
+name: "test_filter_and_limit_pushdown_for_system_tables.2"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#5@0 as session_id, #6@1 as job_id, #7@2 as status, #8@3 as created_at, #9@4 as stopped_at]
+      ProjectionExec: expr=[session_id@0 as #5, job_id@1 as #6, status@2 as #7, created_at@3 as #8, stopped_at@4 as #9]
+        GlobalLimitExec: skip=0, fetch=1
+          CooperativeExec
+            SystemTableExec: table=jobs, projection=Some([0, 1, 2, 3, 4]), filters=[BinaryExpr { left: Column { name: "session_id", index: 0 }, op: Eq, right: Literal { value: Utf8(""), field: Field { name: "lit", data_type: Utf8 } }, fail_on_overflow: false }, BinaryExpr { left: Column { name: "job_id", index: 1 }, op: Eq, right: Literal { value: UInt64(0), field: Field { name: "lit", data_type: UInt64 } }, fail_on_overflow: false }], fetch=Some(1)
+---
+name: "test_filter_and_limit_pushdown_for_system_tables.3"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#12@0 as session_id, #13@1 as job_id, #14@2 as stage, #15@3 as partitions, #16@4 as inputs, #17@5 as group, #18@6 as mode, #19@7 as distribution, #20@8 as placement, #21@9 as status, #22@10 as created_at, #23@11 as stopped_at]
+      ProjectionExec: expr=[session_id@0 as #12, job_id@1 as #13, stage@2 as #14, partitions@3 as #15, inputs@4 as #16, group@5 as #17, mode@6 as #18, distribution@7 as #19, placement@8 as #20, status@9 as #21, created_at@10 as #22, stopped_at@11 as #23]
+        GlobalLimitExec: skip=0, fetch=1
+          CooperativeExec
+            SystemTableExec: table=stages, projection=Some([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]), filters=[BinaryExpr { left: Column { name: "session_id", index: 0 }, op: Eq, right: Literal { value: Utf8(""), field: Field { name: "lit", data_type: Utf8 } }, fail_on_overflow: false }, BinaryExpr { left: Column { name: "job_id", index: 1 }, op: Eq, right: Literal { value: UInt64(0), field: Field { name: "lit", data_type: UInt64 } }, fail_on_overflow: false }], fetch=Some(1)
+---
+name: "test_filter_and_limit_pushdown_for_system_tables.4"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#8@0 as session_id, #9@1 as job_id, #10@2 as stage, #11@3 as partition, #12@4 as attempt, #13@5 as status, #14@6 as created_at, #15@7 as stopped_at]
+      ProjectionExec: expr=[session_id@0 as #8, job_id@1 as #9, stage@2 as #10, partition@3 as #11, attempt@4 as #12, status@5 as #13, created_at@6 as #14, stopped_at@7 as #15]
+        GlobalLimitExec: skip=0, fetch=1
+          CooperativeExec
+            SystemTableExec: table=tasks, projection=Some([0, 1, 2, 3, 4, 5, 6, 7]), filters=[BinaryExpr { left: Column { name: "session_id", index: 0 }, op: Eq, right: Literal { value: Utf8(""), field: Field { name: "lit", data_type: Utf8 } }, fail_on_overflow: false }, BinaryExpr { left: Column { name: "job_id", index: 1 }, op: Eq, right: Literal { value: UInt64(0), field: Field { name: "lit", data_type: UInt64 } }, fail_on_overflow: false }], fetch=Some(1)
+---
+name: "test_filter_and_limit_pushdown_for_system_tables.5"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#7@0 as session_id, #8@1 as worker_id, #9@2 as host, #10@3 as port, #11@4 as status, #12@5 as created_at, #13@6 as stopped_at]
+      ProjectionExec: expr=[session_id@0 as #7, worker_id@1 as #8, host@2 as #9, port@3 as #10, status@4 as #11, created_at@5 as #12, stopped_at@6 as #13]
+        GlobalLimitExec: skip=0, fetch=1
+          CooperativeExec
+            SystemTableExec: table=workers, projection=Some([0, 1, 2, 3, 4, 5, 6]), filters=[BinaryExpr { left: Column { name: "session_id", index: 0 }, op: Eq, right: Literal { value: Utf8(""), field: Field { name: "lit", data_type: Utf8 } }, fail_on_overflow: false }, BinaryExpr { left: Column { name: "worker_id", index: 1 }, op: Eq, right: Literal { value: UInt64(0), field: Field { name: "lit", data_type: UInt64 } }, fail_on_overflow: false }], fetch=Some(1)
+---
+name: "test_filter_and_limit_pushdown_for_systemsessionoptions"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as key, #3@1 as value]
+      ProjectionExec: expr=[key@0 as #2, value@1 as #3]
+        GlobalLimitExec: skip=0, fetch=1
+          CooperativeExec
+            SystemTableExec: table=options, projection=Some([0, 1]), filters=[BinaryExpr { left: Column { name: "key", index: 0 }, op: Eq, right: Literal { value: Utf8("mode"), field: Field { name: "lit", data_type: Utf8 } }, fail_on_overflow: false }], fetch=Some(1)
+---
+name: "test_no_filter_pushdown_for_system_tables"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#5@0 as session_id, #6@1 as job_id, #7@2 as status, #8@3 as created_at, #9@4 as stopped_at]
+      ProjectionExec: expr=[session_id@0 as #5, job_id@1 as #6, status@2 as #7, created_at@3 as #8, stopped_at@4 as #9]
+        FilterExec: session_id@0 =  OR job_id@1 = 0
+          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+            CooperativeExec
+              SystemTableExec: table=jobs, projection=Some([0, 1, 2, 3, 4]), filters=[], fetch=None
+---
+name: "test_partial_filter_pushdown_for_system_tables"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#5@0 as session_id, #6@1 as job_id, #7@2 as status, #8@3 as created_at, #9@4 as stopped_at]
+      ProjectionExec: expr=[session_id@0 as #5, job_id@1 as #6, status@2 as #7, created_at@3 as #8, stopped_at@4 as #9]
+        FilterExec: spark_concat(session_id@0, CAST(job_id@1 AS Utf8)) = 0
+          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+            CooperativeExec
+              SystemTableExec: table=jobs, projection=Some([0, 1, 2, 3, 4]), filters=[BinaryExpr { left: BinaryExpr { left: CastExpr { expr: Column { name: "job_id", index: 1 }, cast_type: Decimal128(20, 0), cast_options: CastOptions { safe: false, format_options: FormatOptions { safe: true, null: "", date_format: None, datetime_format: None, timestamp_format: None, timestamp_tz_format: None, time_format: None, duration_format: Pretty, types_info: false, formatter_factory: None } } }, op: Plus, right: Literal { value: Decimal128(Some(1),20,0), field: Field { name: "lit", data_type: Decimal128(20, 0) } }, fail_on_overflow: false }, op: Eq, right: Literal { value: Decimal128(Some(1),21,0), field: Field { name: "lit", data_type: Decimal128(21, 0) } }, fail_on_overflow: false }], fetch=None
+---
+name: "test_projection_for_system_tables"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#5@0 as session_id, #6@1 as status]
+      ProjectionExec: expr=[session_id@0 as #5, status@1 as #6]
+        CooperativeExec
+          SystemTableExec: table=sessions, projection=Some([0, 2]), filters=[], fetch=None

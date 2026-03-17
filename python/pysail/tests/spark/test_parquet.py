@@ -1,4 +1,4 @@
-from pysail.tests.spark.utils import get_data_directory_size
+from pysail.testing.spark.utils.files import get_data_directory_size
 
 
 def test_parquet_write_with_bloom_filter(spark, tmpdir):
