@@ -18,6 +18,15 @@ pub enum CatalogObjectHandle {
     View(ViewHandle),
 }
 
+impl CatalogObjectHandle {
+    pub fn from_status(status: TableStatus) -> Result<Self, TableStatus> {
+        match TableHandle::from_status(status) {
+            Ok(handle) => Ok(Self::Table(handle)),
+            Err(status) => ViewHandle::from_status(status).map(Self::View),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd)]
 pub struct TableHandle {
     pub catalog: Option<String>,

@@ -6,24 +6,19 @@ use crate::manager::CatalogManager;
 use crate::provider::{
     CreateTemporaryViewOptions, CreateViewOptions, DropTemporaryViewOptions, DropViewOptions,
 };
-use crate::temp_view::GLOBAL_TEMPORARY_VIEW_MANAGER;
+use crate::temp_view::{TemporaryView, GLOBAL_TEMPORARY_VIEW_MANAGER};
 use crate::utils::match_pattern;
 
 impl CatalogManager {
     pub async fn open_view_handle<T: AsRef<str>>(&self, view: &[T]) -> CatalogResult<ViewHandle> {
         let (provider, database, view_name) = self.resolve_object(view)?;
-        let status = Self::normalize_table_status(
+        let status = Self::normalize_object_status(
             provider.get_name(),
             &database,
             &view_name,
             provider.get_view(&database, &view_name).await?,
         );
-        ViewHandle::from_status(status).map_err(|status| {
-            CatalogError::Internal(format!(
-                "catalog object '{}' is not a view: {:?}",
-                view_name, status.kind
-            ))
-        })
+        self.open_view_handle_from_status(&view_name, status)
     }
 
     pub async fn open_table_or_view_handle<T: AsRef<str>>(
@@ -34,15 +29,9 @@ impl CatalogManager {
         if let [name] = reference {
             match self.get_temporary_view(name.as_ref()).await {
                 Ok(status) => {
-                    return ViewHandle::from_status(status)
+                    return self
+                        .open_view_handle_from_status(name.as_ref(), status)
                         .map(CatalogObjectHandle::View)
-                        .map_err(|status| {
-                            CatalogError::Internal(format!(
-                                "catalog object '{}' is not a view: {:?}",
-                                name.as_ref(),
-                                status.kind
-                            ))
-                        });
                 }
                 Err(CatalogError::NotFound(_, _)) => {}
                 Err(error) => return Err(error),
@@ -53,23 +42,14 @@ impl CatalogManager {
                 return self
                     .get_global_temporary_view(name.as_ref())
                     .await
-                    .and_then(|status| {
-                        ViewHandle::from_status(status)
-                            .map(CatalogObjectHandle::View)
-                            .map_err(|status| {
-                                CatalogError::Internal(format!(
-                                    "catalog object '{}' is not a view: {:?}",
-                                    name.as_ref(),
-                                    status.kind
-                                ))
-                            })
-                    });
+                    .and_then(|status| self.open_view_handle_from_status(name.as_ref(), status))
+                    .map(CatalogObjectHandle::View);
             }
         }
         let (provider, database, object_name) = self.resolve_object(reference)?;
         match provider.get_table(&database, &object_name).await {
             Ok(status) => {
-                let status = Self::normalize_table_status(
+                let status = Self::normalize_object_status(
                     provider.get_name(),
                     &database,
                     &object_name,
@@ -87,6 +67,49 @@ impl CatalogManager {
             .map(CatalogObjectHandle::View)
     }
 
+    fn open_view_handle_from_status(
+        &self,
+        object_name: &str,
+        status: TableStatus,
+    ) -> CatalogResult<ViewHandle> {
+        ViewHandle::from_status(status).map_err(|status| {
+            CatalogError::Internal(format!(
+                "catalog object '{}' is not a view: {:?}",
+                object_name, status.kind
+            ))
+        })
+    }
+
+    fn temporary_view_status(
+        &self,
+        name: String,
+        database: Vec<String>,
+        view: &TemporaryView,
+        is_global: bool,
+    ) -> TableStatus {
+        let kind = if is_global {
+            TableKind::GlobalTemporaryView {
+                plan: view.plan().clone(),
+                columns: view.columns().to_vec(),
+                comment: view.comment().clone(),
+                properties: view.properties().to_vec(),
+            }
+        } else {
+            TableKind::TemporaryView {
+                plan: view.plan().clone(),
+                columns: view.columns().to_vec(),
+                comment: view.comment().clone(),
+                properties: view.properties().to_vec(),
+            }
+        };
+        TableStatus {
+            catalog: None,
+            database,
+            name,
+            kind,
+        }
+    }
+
     pub async fn list_global_temporary_views(
         &self,
         pattern: Option<&str>,
@@ -95,16 +118,8 @@ impl CatalogManager {
         let views = GLOBAL_TEMPORARY_VIEW_MANAGER
             .list_views(pattern)?
             .into_iter()
-            .map(|(name, view)| TableStatus {
-                catalog: None,
-                database: database.clone().into(),
-                name,
-                kind: TableKind::GlobalTemporaryView {
-                    plan: view.plan().clone(),
-                    columns: view.columns().to_vec(),
-                    comment: view.comment().clone(),
-                    properties: view.properties().to_vec(),
-                },
+            .map(|(name, view)| {
+                self.temporary_view_status(name, database.clone().into(), &view, true)
             })
             .collect();
         Ok(views)
@@ -118,17 +133,7 @@ impl CatalogManager {
             .temporary_views
             .list_views(pattern)?
             .into_iter()
-            .map(|(name, view)| TableStatus {
-                catalog: None,
-                database: vec![],
-                name,
-                kind: TableKind::TemporaryView {
-                    plan: view.plan().clone(),
-                    columns: view.columns().to_vec(),
-                    comment: view.comment().clone(),
-                    properties: view.properties().to_vec(),
-                },
-            })
+            .map(|(name, view)| self.temporary_view_status(name, vec![], &view, false))
             .collect();
         Ok(views)
     }
@@ -236,32 +241,12 @@ impl CatalogManager {
     pub async fn get_global_temporary_view(&self, name: &str) -> CatalogResult<TableStatus> {
         let view = GLOBAL_TEMPORARY_VIEW_MANAGER.get_view(name)?;
         let database = self.state()?.global_temporary_database.clone();
-        Ok(TableStatus {
-            catalog: None,
-            database: database.into(),
-            name: name.to_string(),
-            kind: TableKind::GlobalTemporaryView {
-                plan: view.plan().clone(),
-                columns: view.columns().to_vec(),
-                comment: view.comment().clone(),
-                properties: view.properties().to_vec(),
-            },
-        })
+        Ok(self.temporary_view_status(name.to_string(), database.into(), &view, true))
     }
 
     pub async fn get_temporary_view(&self, name: &str) -> CatalogResult<TableStatus> {
         let view = self.temporary_views.get_view(name)?;
-        Ok(TableStatus {
-            catalog: None,
-            database: vec![],
-            name: name.to_string(),
-            kind: TableKind::TemporaryView {
-                plan: view.plan().clone(),
-                columns: view.columns().to_vec(),
-                comment: view.comment().clone(),
-                properties: view.properties().to_vec(),
-            },
-        })
+        Ok(self.temporary_view_status(name.to_string(), vec![], &view, false))
     }
 
     pub async fn create_view<T: AsRef<str>>(
