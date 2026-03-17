@@ -50,6 +50,7 @@ impl TableFormat for DeltaTableFormat {
         info: SourceInfo,
     ) -> Result<Arc<dyn TableSource>> {
         let SourceInfo {
+            table: _,
             paths,
             schema,
             constraints: _,
@@ -69,6 +70,7 @@ impl TableFormat for DeltaTableFormat {
         info: SourceInfo,
     ) -> Result<Arc<dyn TableProvider>> {
         let SourceInfo {
+            table: _,
             paths,
             schema,
             constraints: _,

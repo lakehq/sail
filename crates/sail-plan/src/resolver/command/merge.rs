@@ -456,15 +456,15 @@ impl PlanResolver<'_> {
 
     async fn get_merge_target_info(&self, table: &spec::ObjectName) -> PlanResult<MergeTargetInfo> {
         let handle = self.require_table_handle(table).await?;
-        let location = handle.location.clone().ok_or_else(|| {
+        let location = handle.location().map(ToOwned::to_owned).ok_or_else(|| {
             PlanError::invalid(format!("table does not have a location: {table:?}"))
         })?;
         Ok(MergeTargetInfo {
-            format: handle.format.clone(),
+            format: handle.format().to_string(),
             table: handle.clone(),
             location,
-            partition_by: handle.partition_by.clone(),
-            options: vec![handle.options.clone()],
+            partition_by: handle.partition_by().to_vec(),
+            options: vec![handle.options().to_vec()],
         })
     }
 }

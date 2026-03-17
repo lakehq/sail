@@ -34,6 +34,7 @@ impl TableFormat for SocketTableFormat {
         info: SourceInfo,
     ) -> Result<Arc<dyn TableProvider>> {
         let SourceInfo {
+            table: _,
             paths: _,
             schema,
             constraints,

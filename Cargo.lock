@@ -5983,6 +5983,7 @@ dependencies = [
  "sail-common-datafusion",
  "serde",
  "serde_arrow",
+ "serde_json",
  "thiserror",
  "tokio",
 ]

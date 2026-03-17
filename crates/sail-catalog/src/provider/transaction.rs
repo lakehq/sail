@@ -1,8 +1,5 @@
-use std::any::Any;
-use std::fmt::Debug;
-use std::sync::Arc;
-
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::error::CatalogResult;
 
@@ -14,15 +11,24 @@ pub enum TableCommitFormat {
     Unknown,
 }
 
-pub trait TableCommitPayload: Any + Debug + Send + Sync {
-    fn format(&self) -> TableCommitFormat;
-
-    fn as_any(&self) -> &dyn Any;
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IcebergTableCommitPayload {
+    pub requirements: Vec<Value>,
+    pub updates: Vec<Value>,
 }
 
-impl dyn TableCommitPayload {
-    pub fn downcast_ref<T: TableCommitPayload + 'static>(&self) -> Option<&T> {
-        self.as_any().downcast_ref::<T>()
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "format", content = "payload")]
+pub enum TableCommitPayload {
+    Iceberg(IcebergTableCommitPayload),
+}
+
+impl TableCommitPayload {
+    pub fn format(&self) -> TableCommitFormat {
+        match self {
+            TableCommitPayload::Iceberg(_) => TableCommitFormat::Iceberg,
+        }
     }
 }
 
@@ -45,10 +51,7 @@ pub trait TableCommitter: Send + Sync {
         Ok(None)
     }
 
-    async fn commit(
-        &self,
-        payload: Arc<dyn TableCommitPayload>,
-    ) -> CatalogResult<TableCommitOutcome>;
+    async fn commit(&self, payload: TableCommitPayload) -> CatalogResult<TableCommitOutcome>;
 
     async fn abort(&self) -> CatalogResult<()> {
         Ok(())

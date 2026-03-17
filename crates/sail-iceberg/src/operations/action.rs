@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use sail_catalog::provider::{TableCommitFormat, TableCommitPayload};
+use sail_catalog::provider::{IcebergTableCommitPayload, TableCommitPayload};
 
 use super::Transaction;
 use crate::spec::{TableRequirement, TableUpdate};
@@ -45,13 +45,49 @@ impl ActionCommit {
     }
 }
 
-impl TableCommitPayload for ActionCommit {
-    fn format(&self) -> TableCommitFormat {
-        TableCommitFormat::Iceberg
-    }
+impl TryFrom<IcebergTableCommitPayload> for ActionCommit {
+    type Error = String;
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
+    fn try_from(value: IcebergTableCommitPayload) -> Result<Self, Self::Error> {
+        let requirements = value
+            .requirements
+            .into_iter()
+            .map(|requirement| {
+                serde_json::from_value(requirement).map_err(|error| error.to_string())
+            })
+            .collect::<Result<Vec<TableRequirement>, _>>()?;
+        let updates = value
+            .updates
+            .into_iter()
+            .map(|update| serde_json::from_value(update).map_err(|error| error.to_string()))
+            .collect::<Result<Vec<TableUpdate>, _>>()?;
+        Ok(Self::new(updates, requirements))
+    }
+}
+
+impl From<ActionCommit> for IcebergTableCommitPayload {
+    #[expect(clippy::expect_used)]
+    fn from(value: ActionCommit) -> Self {
+        Self {
+            requirements: value
+                .requirements
+                .into_iter()
+                .map(|requirement| {
+                    serde_json::to_value(requirement).expect("serialize iceberg requirement")
+                })
+                .collect(),
+            updates: value
+                .updates
+                .into_iter()
+                .map(|update| serde_json::to_value(update).expect("serialize iceberg update"))
+                .collect(),
+        }
+    }
+}
+
+impl From<ActionCommit> for TableCommitPayload {
+    fn from(value: ActionCommit) -> Self {
+        TableCommitPayload::Iceberg(value.into())
     }
 }
 

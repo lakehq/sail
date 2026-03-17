@@ -70,12 +70,12 @@ impl PlanResolver<'_> {
         table: &TableHandle,
     ) -> PlanResult<(String, String, DFSchemaRef)> {
         let location = table
-            .location
-            .clone()
+            .location()
+            .map(ToOwned::to_owned)
             .ok_or_else(|| PlanError::unsupported("DELETE on tables without location"))?;
         Ok((
             location,
-            table.format.clone(),
+            table.format().to_string(),
             table.schema().to_dfschema_ref()?,
         ))
     }

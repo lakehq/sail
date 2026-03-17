@@ -36,7 +36,7 @@ impl PlanResolver<'_> {
         table: &spec::ObjectName,
         handle: TableHandle,
     ) -> PlanResult<TableHandle> {
-        if !handle.columns.is_empty() {
+        if !handle.columns().is_empty() {
             return Ok(handle);
         }
 
@@ -48,10 +48,10 @@ impl PlanResolver<'_> {
                     "failed to access table format registry for table `{table:?}`: {error}",
                 ))
             })?;
-        let table_format = registry.get(&handle.format).map_err(|error| {
+        let table_format = registry.get(handle.format()).map_err(|error| {
             PlanError::invalid(format!(
                 "failed to resolve table format `{}` for table `{table:?}`: {error}",
-                handle.format
+                handle.format()
             ))
         })?;
         let provider = table_format
@@ -63,7 +63,7 @@ impl PlanResolver<'_> {
             .map_err(|error| {
                 PlanError::invalid(format!(
                     "failed to infer schema for table `{table:?}` from format `{}`: {error}",
-                    handle.format
+                    handle.format()
                 ))
             })?;
         let columns = provider
@@ -72,10 +72,10 @@ impl PlanResolver<'_> {
             .iter()
             .map(|field| {
                 let is_partition = handle
-                    .partition_by
+                    .partition_by()
                     .iter()
                     .any(|column| column.eq_ignore_ascii_case(field.name()));
-                let is_bucket = handle.bucket_by.as_ref().is_some_and(|bucket| {
+                let is_bucket = handle.bucket_by().is_some_and(|bucket| {
                     bucket
                         .columns
                         .iter()

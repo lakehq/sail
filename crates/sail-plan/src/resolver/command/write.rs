@@ -256,15 +256,19 @@ impl PlanResolver<'_> {
                     .resolve_write_mode(mode, Some(&info.schema()), state)
                     .await?;
                 file_write_options.table = Some(info.clone());
-                file_write_options.partition_by = info.partition_by;
-                file_write_options.sort_by = info.sort_by.into_iter().map(|x| x.into()).collect();
-                file_write_options.bucket_by = info.bucket_by.map(|x| x.into());
-                file_write_options.path = info.location.ok_or_else(|| {
-                    PlanError::invalid(format!("table does not have a location: {table:?}"))
-                })?;
-                file_write_options.format = info.format;
-                file_write_options.options.insert(0, info.options);
-                file_write_options.table_properties = info.properties;
+                file_write_options.partition_by = info.partition_by().to_vec();
+                file_write_options.sort_by =
+                    info.sort_by().iter().cloned().map(Into::into).collect();
+                file_write_options.bucket_by = info.bucket_by().cloned().map(Into::into);
+                file_write_options.path =
+                    info.location().map(ToOwned::to_owned).ok_or_else(|| {
+                        PlanError::invalid(format!("table does not have a location: {table:?}"))
+                    })?;
+                file_write_options.format = info.format().to_string();
+                file_write_options
+                    .options
+                    .insert(0, info.options().to_vec());
+                file_write_options.table_properties = info.properties().to_vec();
             }
             WriteTarget::NewTable { table, action } => {
                 let info = self.resolve_table_handle(&table).await?;
@@ -285,14 +289,14 @@ impl PlanResolver<'_> {
                 }
                 file_write_options.mode = self.resolve_write_mode(mode, None, state).await?;
                 if file_write_options.format.is_empty() {
-                    if let Some(format) = info.as_ref().map(|x| &x.format) {
-                        file_write_options.format = format.clone();
+                    if let Some(format) = info.as_ref().map(TableHandle::format) {
+                        file_write_options.format = format.to_string();
                     } else {
                         file_write_options.format = self.config.default_table_file_format.clone();
                     }
                 }
-                if let Some(location) = info.as_ref().and_then(|x| x.location.as_ref()) {
-                    file_write_options.path = location.clone();
+                if let Some(location) = info.as_ref().and_then(TableHandle::location) {
+                    file_write_options.path = location.to_string();
                 } else if let Some(location) = options_map.get("location") {
                     file_write_options.path = location.to_string();
                 } else if let Some(path) = options_map.get("path") {

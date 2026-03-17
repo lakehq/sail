@@ -742,26 +742,19 @@ fn build_alter_action_commit(
 
 #[async_trait::async_trait]
 impl TableCommitter for IcebergRestTableCommitter {
-    async fn commit(
-        &self,
-        payload: Arc<dyn TableCommitPayload>,
-    ) -> CatalogResult<TableCommitOutcome> {
-        let action_commit = payload
-            .as_ref()
-            .downcast_ref::<ActionCommit>()
-            .ok_or_else(|| {
-                CatalogError::InvalidArgument(format!(
-                    "Iceberg REST catalog expected Iceberg ActionCommit payload, got {:?}",
-                    payload.format()
-                ))
-            })?;
+    async fn commit(&self, payload: TableCommitPayload) -> CatalogResult<TableCommitOutcome> {
+        let action_commit = match payload {
+            TableCommitPayload::Iceberg(payload) => {
+                ActionCommit::try_from(payload).map_err(CatalogError::InvalidArgument)?
+            }
+        };
         let client = IcebergRestCatalogProvider::init_client(&self.catalog_config)?;
         commit_action(
             &client,
             &self.catalog_config,
             &self.database,
             &self.table,
-            action_commit,
+            &action_commit,
         )
         .await
     }

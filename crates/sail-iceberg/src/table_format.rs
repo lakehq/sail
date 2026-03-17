@@ -53,6 +53,7 @@ impl TableFormat for IcebergTableFormat {
         info: SourceInfo,
     ) -> Result<Arc<dyn TableProvider>> {
         let SourceInfo {
+            table: _,
             paths,
             schema: _,
             constraints: _,

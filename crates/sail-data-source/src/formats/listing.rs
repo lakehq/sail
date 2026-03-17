@@ -112,6 +112,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         info: SourceInfo,
     ) -> Result<Arc<dyn TableProvider>> {
         let SourceInfo {
+            table: _,
             paths,
             schema,
             constraints,

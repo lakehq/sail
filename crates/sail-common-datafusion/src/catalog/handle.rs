@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema;
 use datafusion_common::Constraints;
@@ -15,16 +16,21 @@ pub struct TableHandle {
     pub catalog: Option<String>,
     pub database: Vec<String>,
     pub name: String,
-    pub columns: Vec<TableColumnStatus>,
-    pub comment: Option<String>,
-    pub constraints: Vec<CatalogTableConstraint>,
-    pub location: Option<String>,
-    pub format: String,
-    pub partition_by: Vec<String>,
-    pub sort_by: Vec<CatalogTableSort>,
-    pub bucket_by: Option<CatalogTableBucketBy>,
-    pub options: Vec<(String, String)>,
-    pub properties: Vec<(String, String)>,
+    schema_data: Arc<TableSchemaData>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd)]
+struct TableSchemaData {
+    columns: Vec<TableColumnStatus>,
+    comment: Option<String>,
+    constraints: Vec<CatalogTableConstraint>,
+    location: Option<String>,
+    format: String,
+    partition_by: Vec<String>,
+    sort_by: Vec<CatalogTableSort>,
+    bucket_by: Option<CatalogTableBucketBy>,
+    options: Vec<(String, String)>,
+    properties: Vec<(String, String)>,
 }
 
 impl TableHandle {
@@ -51,16 +57,18 @@ impl TableHandle {
                 catalog,
                 database,
                 name,
-                columns,
-                comment,
-                constraints,
-                location,
-                format,
-                partition_by,
-                sort_by,
-                bucket_by,
-                options,
-                properties,
+                schema_data: Arc::new(TableSchemaData {
+                    columns,
+                    comment,
+                    constraints,
+                    location,
+                    format,
+                    partition_by,
+                    sort_by,
+                    bucket_by,
+                    options,
+                    properties,
+                }),
             }),
             kind => Err(TableStatus {
                 catalog,
@@ -69,6 +77,46 @@ impl TableHandle {
                 kind,
             }),
         }
+    }
+
+    pub fn columns(&self) -> &[TableColumnStatus] {
+        &self.schema_data.columns
+    }
+
+    pub fn comment(&self) -> Option<&str> {
+        self.schema_data.comment.as_deref()
+    }
+
+    pub fn constraints(&self) -> &[CatalogTableConstraint] {
+        &self.schema_data.constraints
+    }
+
+    pub fn location(&self) -> Option<&str> {
+        self.schema_data.location.as_deref()
+    }
+
+    pub fn format(&self) -> &str {
+        &self.schema_data.format
+    }
+
+    pub fn partition_by(&self) -> &[String] {
+        &self.schema_data.partition_by
+    }
+
+    pub fn sort_by(&self) -> &[CatalogTableSort] {
+        &self.schema_data.sort_by
+    }
+
+    pub fn bucket_by(&self) -> Option<&CatalogTableBucketBy> {
+        self.schema_data.bucket_by.as_ref()
+    }
+
+    pub fn options(&self) -> &[(String, String)] {
+        &self.schema_data.options
+    }
+
+    pub fn properties(&self) -> &[(String, String)] {
+        &self.schema_data.properties
     }
 
     pub fn full_name(&self) -> Vec<String> {
@@ -82,16 +130,22 @@ impl TableHandle {
 
     pub fn schema(&self) -> Schema {
         Schema::new(
-            self.columns
+            self.columns()
                 .iter()
                 .map(|column| column.field())
                 .collect::<Vec<_>>(),
         )
     }
 
-    pub fn with_columns(mut self, columns: Vec<TableColumnStatus>) -> Self {
-        self.columns = columns;
-        self
+    pub fn with_columns(&self, columns: Vec<TableColumnStatus>) -> Self {
+        let mut schema_data = self.schema_data.as_ref().clone();
+        schema_data.columns = columns;
+        Self {
+            catalog: self.catalog.clone(),
+            database: self.database.clone(),
+            name: self.name.clone(),
+            schema_data: Arc::new(schema_data),
+        }
     }
 
     pub fn validate_write_layout(
@@ -113,10 +167,11 @@ impl TableHandle {
                     .to_string(),
             );
         }
-        if !format.is_empty() && !format.eq_ignore_ascii_case(&self.format) {
+        if !format.is_empty() && !format.eq_ignore_ascii_case(self.format()) {
             return Err(format!(
                 "the format '{}' does not match the table format '{}'",
-                format, self.format
+                format,
+                self.format()
             ));
         }
         Ok(())
@@ -129,25 +184,26 @@ impl TableHandle {
         additional_options: Vec<HashMap<String, String>>,
     ) -> SourceInfo {
         let mut options = Vec::with_capacity(additional_options.len() + 1);
-        options.push(self.options.iter().cloned().collect());
+        options.push(self.options().iter().cloned().collect());
         options.extend(additional_options);
         SourceInfo {
-            paths: self.location.iter().cloned().collect(),
+            table: Some(self.clone()),
+            paths: self.location().into_iter().map(ToOwned::to_owned).collect(),
             schema,
             constraints,
-            partition_by: self.partition_by.clone(),
-            bucket_by: self.bucket_by.clone().map(Into::into),
-            sort_order: self.sort_by.clone().into_iter().map(Into::into).collect(),
+            partition_by: self.partition_by().to_vec(),
+            bucket_by: self.bucket_by().cloned().map(Into::into),
+            sort_order: self.sort_by().iter().cloned().map(Into::into).collect(),
             options,
         }
     }
 
     fn is_empty_or_equivalent_partitioning(&self, partition_by: &[String]) -> bool {
         partition_by.is_empty()
-            || (partition_by.len() == self.partition_by.len()
+            || (partition_by.len() == self.partition_by().len()
                 && partition_by
                     .iter()
-                    .zip(self.partition_by.iter())
+                    .zip(self.partition_by().iter())
                     .all(|(left, right)| left.eq_ignore_ascii_case(right)))
     }
 
@@ -156,7 +212,7 @@ impl TableHandle {
         bucket_by: &Option<BucketBy>,
         sort_by: &[Sort],
     ) -> bool {
-        let bucket_by_match = match (bucket_by, &self.bucket_by) {
+        let bucket_by_match = match (bucket_by, self.bucket_by()) {
             (None, _) => true,
             (Some(left), Some(right)) => {
                 left.num_buckets == right.num_buckets
@@ -169,7 +225,7 @@ impl TableHandle {
             }
             (Some(_), None) => false,
         };
-        let sort_by_match = match (sort_by, self.sort_by.as_slice()) {
+        let sort_by_match = match (sort_by, self.sort_by()) {
             ([], _) => true,
             (_, []) => false,
             (left, right) => {

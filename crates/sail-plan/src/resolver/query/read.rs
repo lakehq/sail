@@ -8,7 +8,7 @@ use datafusion_expr::{Expr, LogicalPlan, TableScan, TableSource, UNNAMED_TABLE};
 use rand::{rng, RngExt};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
-use sail_common_datafusion::catalog::{TableHandle, TableKind};
+use sail_common_datafusion::catalog::TableKind;
 use sail_common_datafusion::datasource::{SourceInfo, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
@@ -75,11 +75,10 @@ impl PlanResolver<'_> {
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
         let status = catalog_manager.get_table_or_view(&reference).await?;
         let plan = if matches!(&status.kind, TableKind::Table { .. }) {
-            let handle = TableHandle::from_status(status)
-                .map_err(|_| PlanError::internal("catalog returned a non-table as a table"))?;
+            let handle = catalog_manager.open_table_handle(&reference).await?;
             let schema = handle.schema();
             let constraints =
-                self.resolve_catalog_table_constraints(handle.constraints.clone(), &schema)?;
+                self.resolve_catalog_table_constraints(handle.constraints().to_vec(), &schema)?;
             let info = handle.to_source_info(
                 Some(schema),
                 constraints,
@@ -87,7 +86,7 @@ impl PlanResolver<'_> {
             );
             let registry = self.ctx.extension::<TableFormatRegistry>()?;
             let table_source = registry
-                .get(&handle.format)?
+                .get(handle.format())?
                 .create_source(&self.ctx.state(), info)
                 .await?;
             self.resolve_table_source_with_rename(
@@ -339,6 +338,7 @@ impl PlanResolver<'_> {
             None => None,
         };
         let info = SourceInfo {
+            table: None,
             paths,
             schema,
             // TODO: detect duplicated keys in the set of options

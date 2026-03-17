@@ -52,6 +52,7 @@ pub struct BucketBy {
 /// Information required to create a data source.
 #[derive(Debug, Clone)]
 pub struct SourceInfo {
+    pub table: Option<TableHandle>,
     pub paths: Vec<String>,
     /// The (optional) schema of the data source including partitioning columns.
     pub schema: Option<Schema>,
