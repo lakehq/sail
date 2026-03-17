@@ -17,8 +17,8 @@ use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::provider::{
     CatalogPartitionField, CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions,
     CreateTableOptions, CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions,
-    DropTableOptions, DropViewOptions, Namespace, PartitionTransform, TableCommitOutcome,
-    TableCommitPayload, TableCommitter,
+    DropTableOptions, DropViewOptions, Namespace, PartitionTransform, TableCommitFormat,
+    TableCommitOutcome, TableCommitPayload, TableCommitter,
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
 use sail_common::spec::AlterTableOperation;
@@ -742,12 +742,12 @@ fn build_alter_action_commit(
 
 #[async_trait::async_trait]
 impl TableCommitter for IcebergRestTableCommitter {
+    fn format(&self) -> TableCommitFormat {
+        TableCommitFormat::Iceberg
+    }
+
     async fn commit(&self, payload: TableCommitPayload) -> CatalogResult<TableCommitOutcome> {
-        let action_commit = match payload {
-            TableCommitPayload::Iceberg(payload) => {
-                ActionCommit::try_from(payload).map_err(CatalogError::InvalidArgument)?
-            }
-        };
+        let action_commit = ActionCommit::try_from(payload)?;
         let client = IcebergRestCatalogProvider::init_client(&self.catalog_config)?;
         commit_action(
             &client,

@@ -6,7 +6,9 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 
 use crate::error::{CatalogError, CatalogResult};
 use crate::manager::CatalogManager;
-use crate::provider::{CreateTableOptions, DropTableOptions};
+use crate::provider::{
+    CreateTableOptions, DropTableOptions, Namespace, TableCommit, TableCommitFormat,
+};
 use crate::utils::match_pattern;
 
 impl CatalogManager {
@@ -41,6 +43,51 @@ impl CatalogManager {
             ))
         })?;
         self.hydrate_table_handle(session, handle).await
+    }
+
+    pub async fn begin_table_commit<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        session: &dyn Session,
+    ) -> CatalogResult<TableCommit> {
+        let handle = self.open_table_handle(table, session).await?;
+        self.begin_table_commit_for_handle(&handle).await
+    }
+
+    pub async fn begin_table_commit_for_handle(
+        &self,
+        table: &TableHandle,
+    ) -> CatalogResult<TableCommit> {
+        let catalog = table.catalog.as_deref().ok_or_else(|| {
+            CatalogError::InvalidArgument(format!(
+                "table handle is missing catalog information: {:?}",
+                table.full_name()
+            ))
+        })?;
+        let database = Namespace::try_from(table.database.clone()).map_err(|error| {
+            CatalogError::InvalidArgument(format!(
+                "table handle has invalid database information: {error}"
+            ))
+        })?;
+        let provider = {
+            let state = self.state()?;
+            state.get_catalog(catalog)?
+        };
+        let committer = provider.begin_table_commit(&database, &table.name).await?;
+        let table_format = TableCommitFormat::from_table_format_name(table.format());
+        let commit_format = committer.format();
+        if table_format != TableCommitFormat::Unknown
+            && commit_format != TableCommitFormat::Unknown
+            && table_format != commit_format
+        {
+            return Err(CatalogError::Internal(format!(
+                "table commit format mismatch for '{}': table uses '{}' but committer uses '{}'",
+                table.name,
+                table_format.as_str(),
+                commit_format.as_str()
+            )));
+        }
+        Ok(TableCommit::new(table.clone(), committer))
     }
 
     pub async fn list_tables<T: AsRef<str>>(

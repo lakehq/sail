@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use sail_catalog::provider::{IcebergTableCommitPayload, TableCommitPayload};
+use sail_catalog::provider::{IcebergTableCommitPayload, TableCommitFormat, TableCommitPayload};
 
 use super::Transaction;
 use crate::spec::{TableRequirement, TableUpdate};
@@ -86,8 +86,22 @@ impl From<ActionCommit> for IcebergTableCommitPayload {
 }
 
 impl From<ActionCommit> for TableCommitPayload {
+    #[expect(clippy::expect_used)]
     fn from(value: ActionCommit) -> Self {
-        TableCommitPayload::Iceberg(value.into())
+        TableCommitPayload::try_new(
+            TableCommitFormat::Iceberg,
+            IcebergTableCommitPayload::from(value),
+        )
+        .expect("serialize iceberg table commit payload")
+    }
+}
+
+impl TryFrom<TableCommitPayload> for ActionCommit {
+    type Error = sail_catalog::error::CatalogError;
+
+    fn try_from(value: TableCommitPayload) -> Result<Self, Self::Error> {
+        let payload = value.deserialize::<IcebergTableCommitPayload>(TableCommitFormat::Iceberg)?;
+        ActionCommit::try_from(payload).map_err(sail_catalog::error::CatalogError::InvalidArgument)
     }
 }
 

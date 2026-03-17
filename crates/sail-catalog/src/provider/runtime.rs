@@ -1,16 +1,23 @@
 use std::sync::Arc;
 
+use sail_common::spec::AlterTableOperation;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
 use tokio::runtime::Handle;
 
 use super::{
     CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewOptions,
-    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace, TableCommitFormat,
+    TableCommitOutcome, TableCommitPayload, TableCommitter,
 };
 use crate::error::{CatalogError, CatalogResult};
 
 pub struct RuntimeAwareCatalogProvider<P: CatalogProvider> {
     inner: Arc<P>,
+    handle: Handle,
+}
+
+struct RuntimeAwareTableCommitter {
+    inner: Arc<dyn TableCommitter>,
     handle: Handle,
 }
 
@@ -22,6 +29,45 @@ impl<P: CatalogProvider> RuntimeAwareCatalogProvider<P> {
         let _guard = handle.enter();
         let inner = Arc::new(initializer()?);
         Ok(Self { inner, handle })
+    }
+}
+
+impl RuntimeAwareTableCommitter {
+    fn new(inner: Arc<dyn TableCommitter>, handle: Handle) -> Self {
+        Self { inner, handle }
+    }
+}
+
+#[async_trait::async_trait]
+impl TableCommitter for RuntimeAwareTableCommitter {
+    fn format(&self) -> TableCommitFormat {
+        self.inner.format()
+    }
+
+    async fn staging_location(&self) -> CatalogResult<Option<String>> {
+        let inner = self.inner.clone();
+        self.handle
+            .spawn(async move { inner.staging_location().await })
+            .await
+            .map_err(|e| {
+                CatalogError::External(format!("Failed to execute staging_location: {e}"))
+            })?
+    }
+
+    async fn commit(&self, payload: TableCommitPayload) -> CatalogResult<TableCommitOutcome> {
+        let inner = self.inner.clone();
+        self.handle
+            .spawn(async move { inner.commit(payload).await })
+            .await
+            .map_err(|e| CatalogError::External(format!("Failed to execute commit: {e}")))?
+    }
+
+    async fn abort(&self) -> CatalogResult<()> {
+        let inner = self.inner.clone();
+        self.handle
+            .spawn(async move { inner.abort().await })
+            .await
+            .map_err(|e| CatalogError::External(format!("Failed to execute abort: {e}")))?
     }
 }
 
@@ -176,5 +222,41 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
             .spawn(async move { inner.drop_view(&database, &view, options).await })
             .await
             .map_err(|e| CatalogError::External(format!("Failed to execute drop_view: {e}")))?
+    }
+
+    async fn begin_table_commit(
+        &self,
+        database: &Namespace,
+        table: &str,
+    ) -> CatalogResult<Arc<dyn TableCommitter>> {
+        let inner = self.inner.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        let committer = self
+            .handle
+            .spawn(async move { inner.begin_table_commit(&database, &table).await })
+            .await
+            .map_err(|e| {
+                CatalogError::External(format!("Failed to execute begin_table_commit: {e}"))
+            })??;
+        Ok(Arc::new(RuntimeAwareTableCommitter::new(
+            committer,
+            self.handle.clone(),
+        )))
+    }
+
+    async fn alter_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        operation: AlterTableOperation,
+    ) -> CatalogResult<TableStatus> {
+        let inner = self.inner.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        self.handle
+            .spawn(async move { inner.alter_table(&database, &table, operation).await })
+            .await
+            .map_err(|e| CatalogError::External(format!("Failed to execute alter_table: {e}")))?
     }
 }
