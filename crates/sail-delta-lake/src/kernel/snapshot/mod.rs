@@ -20,13 +20,15 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use chrono::Utc;
-use datafusion::arrow::array::{ArrayRef, StructArray};
+use datafusion::arrow::array::{ArrayRef, Int64Array, StructArray};
+use datafusion::arrow::compute::sum;
 use datafusion::arrow::datatypes::{
     Field, FieldRef, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
 };
 use datafusion::arrow::record_batch::RecordBatch;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
+use log::debug;
 use once_cell::sync::OnceCell;
 use url::Url;
 
@@ -41,7 +43,7 @@ use crate::spec::fields::{
 };
 use crate::spec::{
     Add, ColumnMappingMode, ColumnMetadataKey, DeltaError as DeltaTableError, DeltaResult,
-    Metadata, Protocol, Remove, TableProperties, Transaction,
+    Metadata, Protocol, Remove, TableFeature, TableProperties, Transaction, VersionChecksum,
 };
 use crate::storage::LogStore;
 
@@ -238,6 +240,84 @@ impl DeltaSnapshot {
 
     pub fn removes(&self) -> &[Remove] {
         self.removes.as_ref()
+    }
+
+    fn has_unknown_table_features(&self) -> bool {
+        self.protocol()
+            .reader_features()
+            .into_iter()
+            .flatten()
+            .chain(self.protocol().writer_features().into_iter().flatten())
+            .any(|feature| matches!(feature, TableFeature::Unknown))
+    }
+
+    fn has_deletion_vectors(&self) -> bool {
+        self.adds().iter().any(|add| add.deletion_vector.is_some())
+            || self
+                .removes()
+                .iter()
+                .any(|remove| remove.deletion_vector.is_some())
+    }
+
+    pub fn build_version_checksum(
+        &self,
+        txn_id: Option<String>,
+        in_commit_timestamp_opt: Option<i64>,
+    ) -> DeltaResult<Option<VersionChecksum>> {
+        // TODO: Remove these coarse skips once replay retains the latest
+        // DomainMetadata actions and reconciles files with deletion-vector identity.
+        if self.has_unknown_table_features() {
+            debug!(
+                "Skipping version checksum for version {} because the protocol includes unsupported features",
+                self.version()
+            );
+            return Ok(None);
+        }
+        if self.has_deletion_vectors() {
+            debug!(
+                "Skipping version checksum for version {} because the snapshot includes deletion vectors",
+                self.version()
+            );
+            return Ok(None);
+        }
+
+        let batch = self.build_files_batch_from_adds(self.adds())?;
+        let size_array = batch
+            .column_by_name(FIELD_NAME_SIZE)
+            .and_then(|column| column.as_any().downcast_ref::<Int64Array>())
+            .ok_or_else(|| {
+                DeltaTableError::generic("Version checksum requires an Int64 add.size column")
+            })?;
+
+        let num_files = i64::try_from(batch.num_rows())
+            .map_err(|_| DeltaTableError::generic("Version checksum file count overflow"))?;
+        let table_size_bytes = sum(size_array).unwrap_or(0);
+
+        let mut set_transactions = self.app_txns.values().cloned().collect::<Vec<_>>();
+        set_transactions.sort_by(|left, right| {
+            left.app_id
+                .cmp(&right.app_id)
+                .then(left.version.cmp(&right.version))
+        });
+
+        Ok(Some(VersionChecksum {
+            txn_id,
+            table_size_bytes,
+            num_files,
+            num_metadata: 1,
+            num_protocol: 1,
+            in_commit_timestamp_opt,
+            set_transactions: (!set_transactions.is_empty()).then_some(set_transactions),
+            // TODO(protocol-hardening): Populate from reconciled snapshot state once replay keeps
+            // the latest DomainMetadata actions alongside metadata/protocol/txns.
+            domain_metadata: None,
+            metadata: self.metadata.clone(),
+            protocol: self.protocol.clone(),
+            // TODO(protocol-hardening): Populate optional protocol fields when we can do so
+            // deterministically without synthesizing partial state.
+            file_size_histogram: None,
+            all_files: None,
+        }))
     }
 
     pub fn physical_partition_columns(&self) -> Vec<(String, String)> {

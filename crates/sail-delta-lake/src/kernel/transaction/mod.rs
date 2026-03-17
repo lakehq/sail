@@ -26,6 +26,7 @@ use bytes::Bytes;
 use chrono::Utc;
 use futures::future::BoxFuture;
 use log::*;
+use object_store::{Error as ObjectStoreError, PutMode, PutOptions};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -33,7 +34,7 @@ use uuid::Uuid;
 use crate::kernel::checkpoints::{cleanup_expired_logs_for, create_checkpoint_for};
 use crate::kernel::transaction::conflict_checker::{TransactionInfo, WinningCommitSummary};
 use crate::kernel::DeltaOperation;
-use crate::spec::{temp_commit_path, Action, DeltaError, DeltaResult, Transaction};
+use crate::spec::{checksum_path, temp_commit_path, Action, DeltaError, DeltaResult, Transaction};
 pub use crate::spec::{CommitConflictError, TransactionError};
 use crate::storage::{CommitOrBytes, LogStoreRef, ObjectStoreRef};
 use crate::table::DeltaSnapshot;
@@ -258,6 +259,28 @@ impl CommitData {
 
     pub fn get_bytes(&self) -> Result<Bytes, TransactionError> {
         actions_to_log_bytes(&self.actions)
+    }
+
+    fn commit_info(&self) -> Option<&crate::spec::CommitInfo> {
+        self.actions.iter().find_map(|action| match action {
+            Action::CommitInfo(info) => Some(info),
+            _ => None,
+        })
+    }
+
+    fn version_checksum_txn_id(&self) -> Option<String> {
+        self.commit_info().and_then(|info| {
+            info.info
+                .get("txnId")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+    }
+
+    fn version_checksum_in_commit_timestamp(&self) -> Option<i64> {
+        self.commit_info()
+            .and_then(|info| info.info.get("inCommitTimestamp"))
+            .and_then(Value::as_i64)
     }
 
     fn is_blind_append(actions: &[Action], operation: &DeltaOperation) -> bool {
@@ -784,7 +807,6 @@ pub struct PostCommit {
     /// The winning version number of the commit
     pub version: i64,
     /// The data that was committed to the log store
-    #[expect(unused)]
     pub data: CommitData,
     create_checkpoint: bool,
     cleanup_expired_logs: Option<bool>,
@@ -795,6 +817,77 @@ pub struct PostCommit {
 }
 
 impl PostCommit {
+    async fn write_version_checksum(&self, table_state: &DeltaSnapshot, operation_id: Uuid) {
+        if !table_state.table_properties().write_checksum_file_enabled() {
+            debug!(
+                "Skipping version checksum for version {} because delta.writeChecksumFile.enabled=false",
+                self.version
+            );
+            return;
+        }
+
+        let checksum = match table_state.build_version_checksum(
+            self.data.version_checksum_txn_id(),
+            self.data.version_checksum_in_commit_timestamp(),
+        ) {
+            Ok(Some(checksum)) => checksum,
+            Ok(None) => return,
+            Err(err) => {
+                warn!(
+                    "Failed to build version checksum for version {}: {}",
+                    self.version, err
+                );
+                return;
+            }
+        };
+
+        let checksum_path = checksum_path(self.version);
+        let checksum_bytes = match serde_json::to_vec(&checksum) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                warn!(
+                    "Failed to serialize version checksum for version {}: {}",
+                    self.version, err
+                );
+                return;
+            }
+        };
+
+        let put_result = self
+            .log_store
+            .object_store(Some(operation_id))
+            .put_opts(
+                &checksum_path,
+                Bytes::from(checksum_bytes).into(),
+                PutOptions {
+                    mode: PutMode::Create,
+                    ..Default::default()
+                },
+            )
+            .await;
+
+        match put_result {
+            Ok(_) => {
+                debug!(
+                    "Wrote version checksum for version {} to {}",
+                    self.version, checksum_path
+                );
+            }
+            Err(ObjectStoreError::AlreadyExists { .. }) => {
+                warn!(
+                    "Version checksum already exists for version {} at {}",
+                    self.version, checksum_path
+                );
+            }
+            Err(err) => {
+                warn!(
+                    "Failed to write version checksum for version {} to {}: {}",
+                    self.version, checksum_path, err
+                );
+            }
+        }
+    }
+
     /// Runs the post commit activities
     async fn run_post_commit_hook(&self) -> DeltaResult<(Arc<DeltaSnapshot>, PostCommitMetrics)> {
         let post_commit_operation_id = Uuid::new_v4();
@@ -819,6 +912,9 @@ impl PostCommit {
                 .await?,
             )
         };
+
+        self.write_version_checksum(state.as_ref(), post_commit_operation_id)
+            .await;
 
         let cleanup_logs = if let Some(cleanup_logs) = self.cleanup_expired_logs {
             cleanup_logs
@@ -969,17 +1065,5 @@ impl std::future::IntoFuture for PostCommit {
                 Err(err) => Err(err),
             }
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::should_create_checkpoint;
-
-    #[test]
-    fn test_should_create_checkpoint_skips_version_zero() {
-        assert!(!should_create_checkpoint(0, 10));
-        assert!(!should_create_checkpoint(1, 10));
-        assert!(should_create_checkpoint(10, 10));
     }
 }

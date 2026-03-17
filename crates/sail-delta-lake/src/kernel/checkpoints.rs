@@ -35,9 +35,10 @@ use regex::Regex;
 use uuid::Uuid;
 
 use crate::spec::{
-    checkpoint_path, delta_log_root_path, last_checkpoint_path, Action, Add, CheckpointActionRow,
-    DeltaError as DeltaTableError, DeltaResult, LastCheckpointHint, Metadata, Protocol, Remove,
-    TableProperties, Transaction,
+    checkpoint_path, checksum_path, delta_log_root_path, last_checkpoint_path,
+    parse_checksum_version, Action, Add, CheckpointActionRow, DeltaError as DeltaTableError,
+    DeltaResult, LastCheckpointHint, Metadata, Protocol, Remove, TableProperties, Transaction,
+    VersionChecksum,
 };
 use crate::storage::{get_actions, LogStore};
 static DELTA_LOG_REGEX: LazyLock<Result<Regex, regex::Error>> =
@@ -71,6 +72,14 @@ fn parse_version(regex: &Regex, location: &Path) -> Option<i64> {
         .captures(location.as_ref())
         .and_then(|caps| caps.get(1))
         .and_then(|m| m.as_str().parse::<i64>().ok())
+}
+
+fn parse_checksum_version_from_location(location: &Path) -> Option<i64> {
+    location
+        .as_ref()
+        .rsplit('/')
+        .next()
+        .and_then(parse_checksum_version)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -121,6 +130,9 @@ struct ReconciledCheckpointState {
     protocol: Option<Protocol>,
     metadata: Option<Metadata>,
     txns: HashMap<String, Transaction>,
+    // TODO: Key active files by the protocol identity `(path, dvId)` once
+    // replay is deletion-vector aware. The current path-only reconciliation is sufficient for the
+    // basic reader/writer paths, but not for protocol-complete checksum emission.
     adds: HashMap<String, Add>,
     removes: HashMap<String, Remove>,
 }
@@ -145,6 +157,8 @@ impl ReconciledCheckpointState {
                 self.adds.remove(&remove.path);
                 self.removes.insert(remove.path.clone(), remove);
             }
+            // TODO: Retain the latest DomainMetadata actions in replay state so
+            // VersionChecksum can populate `domainMetadata` instead of dropping it.
             Action::CommitInfo(_)
             | Action::Cdc(_)
             | Action::DomainMetadata(_)
@@ -329,6 +343,14 @@ pub(crate) struct ReplayedTableState {
     pub adds: Vec<Add>,
     pub removes: Vec<Remove>,
     pub commit_timestamps: BTreeMap<i64, i64>,
+}
+
+#[derive(Debug, Clone)]
+#[expect(dead_code)]
+pub(crate) struct ReplayedTableHeader {
+    pub version: i64,
+    pub protocol: Protocol,
+    pub metadata: Metadata,
 }
 
 fn encode_checkpoint_rows(rows: &Vec<CheckpointActionRow>) -> DeltaResult<RecordBatch> {
@@ -676,6 +698,60 @@ pub(crate) async fn load_replayed_table_state(
     })
 }
 
+#[expect(dead_code)]
+pub(crate) async fn load_replayed_table_header(
+    version: i64,
+    log_store: &dyn LogStore,
+) -> DeltaResult<ReplayedTableHeader> {
+    if version < 0 {
+        return Err(DeltaTableError::generic(format!(
+            "Cannot load table header for negative version: {version}"
+        )));
+    }
+
+    let store = log_store.object_store(None);
+    let crc_path = checksum_path(version);
+    match store.get(&crc_path).await {
+        Ok(result) => match result.bytes().await {
+            Ok(bytes) => match serde_json::from_slice::<VersionChecksum>(&bytes) {
+                Ok(checksum) => {
+                    return Ok(ReplayedTableHeader {
+                        version,
+                        protocol: checksum.protocol,
+                        metadata: checksum.metadata,
+                    });
+                }
+                Err(err) => {
+                    debug!(
+                        "Failed to deserialize version checksum {} for header load: {}",
+                        crc_path, err
+                    );
+                }
+            },
+            Err(err) => {
+                debug!(
+                    "Failed to read version checksum {} for header load: {}",
+                    crc_path, err
+                );
+            }
+        },
+        Err(object_store::Error::NotFound { .. }) => {}
+        Err(err) => {
+            debug!(
+                "Failed to fetch version checksum {} for header load: {}",
+                crc_path, err
+            );
+        }
+    }
+
+    let state = load_replayed_table_state(version, log_store).await?;
+    Ok(ReplayedTableHeader {
+        version: state.version,
+        protocol: state.protocol,
+        metadata: state.metadata,
+    })
+}
+
 /// Resolve the latest table version that can be replayed from `_delta_log`.
 ///
 /// This includes both commit JSON files and checkpoint parquet files. We rely on this when
@@ -762,9 +838,16 @@ pub async fn cleanup_expired_logs_for(
             };
 
             let ts = meta.last_modified.timestamp_millis();
-            let log_ver = parse_version(delta_log_pattern, &meta.location)?;
+            let commit_ver = parse_version(delta_log_pattern, &meta.location);
+            let checksum_ver = parse_checksum_version_from_location(&meta.location);
 
-            if log_ver < safe_checkpoint_version && ts <= cutoff_timestamp {
+            if ts > cutoff_timestamp {
+                return None;
+            }
+
+            if commit_ver.is_some_and(|ver| ver < safe_checkpoint_version)
+                || checksum_ver.is_some_and(|ver| ver < safe_checkpoint_version)
+            {
                 Some(Ok(meta.location))
             } else {
                 None

@@ -261,6 +261,18 @@ def _normalize_delta_metadata_for_snapshot(metadata: dict) -> dict:
     return normalized
 
 
+def _normalize_delta_log_json_file_for_snapshot(filename: str, obj: object) -> object:
+    if not isinstance(obj, dict):
+        return obj
+    if filename.endswith(".crc"):
+        normalized = dict(obj)
+        metadata = normalized.get("metadata")
+        if isinstance(metadata, dict):
+            normalized["metadata"] = _normalize_delta_metadata_for_snapshot(metadata)
+        return normalized
+    return obj
+
+
 @pytest.fixture
 def delta_log_cache() -> dict[str, dict]:
     """Per-scenario cache for normalized delta log objects."""
@@ -285,6 +297,13 @@ def _delta_log_compute(which: str, variables: dict, delta_log_cache: dict[str, d
 
     delta_log_cache[which] = obj
     return obj
+
+
+def _read_delta_log_json_file(location: Path, filename: str) -> object:
+    file_path = location / filename
+    assert file_path.exists(), f"delta log file does not exist: {file_path}"
+    with file_path.open("r", encoding="utf-8") as f:
+        return json.load(f)
 
 
 @then(
@@ -329,4 +348,22 @@ def delta_log_assert(
         paths = [r[0] for r in rows if r and r[0].strip()]
         obj = _pick_paths(obj, paths)
 
+    assert obj == snapshot
+
+
+@then(parsers.parse("delta log JSON file {filename} in {location_var} matches snapshot"))
+def delta_log_json_file_matches_snapshot(
+    filename: str,
+    location_var: str,
+    variables: dict,
+    snapshot: SnapshotAssertion,
+) -> None:
+    if is_jvm_spark():
+        pytest.skip("Delta log assertions are Sail-only")
+
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    obj = _read_delta_log_json_file(Path(location.path), filename)
+    obj = _normalize_delta_log_json_file_for_snapshot(filename, obj)
     assert obj == snapshot
