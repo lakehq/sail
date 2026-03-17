@@ -4,12 +4,19 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::Schema;
 use datafusion_common::Constraints;
 use datafusion_expr::expr::Sort;
+use datafusion_expr::LogicalPlan;
 
 use crate::catalog::{
     CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort, TableColumnStatus, TableKind,
     TableStatus,
 };
 use crate::datasource::{BucketBy, SourceInfo, SourceTarget};
+
+#[derive(Debug, Clone)]
+pub enum CatalogObjectHandle {
+    Table(TableHandle),
+    View(ViewHandle),
+}
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd)]
 pub struct TableHandle {
@@ -31,6 +38,29 @@ struct TableSchemaData {
     bucket_by: Option<CatalogTableBucketBy>,
     options: Vec<(String, String)>,
     properties: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ViewHandle {
+    pub catalog: Option<String>,
+    pub database: Vec<String>,
+    pub name: String,
+    view_data: Arc<ViewData>,
+}
+
+#[derive(Debug, Clone)]
+struct ViewData {
+    columns: Vec<TableColumnStatus>,
+    comment: Option<String>,
+    properties: Vec<(String, String)>,
+    kind: ViewHandleKind,
+}
+
+#[derive(Debug, Clone)]
+pub enum ViewHandleKind {
+    View { definition: String },
+    TemporaryView { plan: Arc<LogicalPlan> },
+    GlobalTemporaryView { plan: Arc<LogicalPlan> },
 }
 
 impl TableHandle {
@@ -240,5 +270,117 @@ impl TableHandle {
             }
         };
         bucket_by_match && sort_by_match
+    }
+}
+
+impl ViewHandle {
+    pub fn from_status(status: TableStatus) -> Result<Self, TableStatus> {
+        let TableStatus {
+            catalog,
+            database,
+            name,
+            kind,
+        } = status;
+        match kind {
+            TableKind::View {
+                definition,
+                columns,
+                comment,
+                properties,
+            } => Ok(Self {
+                catalog,
+                database,
+                name,
+                view_data: Arc::new(ViewData {
+                    columns,
+                    comment,
+                    properties,
+                    kind: ViewHandleKind::View { definition },
+                }),
+            }),
+            TableKind::TemporaryView {
+                plan,
+                columns,
+                comment,
+                properties,
+            } => Ok(Self {
+                catalog,
+                database,
+                name,
+                view_data: Arc::new(ViewData {
+                    columns,
+                    comment,
+                    properties,
+                    kind: ViewHandleKind::TemporaryView { plan },
+                }),
+            }),
+            TableKind::GlobalTemporaryView {
+                plan,
+                columns,
+                comment,
+                properties,
+            } => Ok(Self {
+                catalog,
+                database,
+                name,
+                view_data: Arc::new(ViewData {
+                    columns,
+                    comment,
+                    properties,
+                    kind: ViewHandleKind::GlobalTemporaryView { plan },
+                }),
+            }),
+            kind => Err(TableStatus {
+                catalog,
+                database,
+                name,
+                kind,
+            }),
+        }
+    }
+
+    pub fn columns(&self) -> &[TableColumnStatus] {
+        &self.view_data.columns
+    }
+
+    pub fn comment(&self) -> Option<&str> {
+        self.view_data.comment.as_deref()
+    }
+
+    pub fn properties(&self) -> &[(String, String)] {
+        &self.view_data.properties
+    }
+
+    pub fn schema(&self) -> Schema {
+        Schema::new(
+            self.columns()
+                .iter()
+                .map(|column| column.field())
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    pub fn definition(&self) -> Option<&str> {
+        match &self.view_data.kind {
+            ViewHandleKind::View { definition } if !definition.is_empty() => Some(definition),
+            _ => None,
+        }
+    }
+
+    pub fn plan(&self) -> Option<&Arc<LogicalPlan>> {
+        match &self.view_data.kind {
+            ViewHandleKind::TemporaryView { plan }
+            | ViewHandleKind::GlobalTemporaryView { plan } => Some(plan),
+            ViewHandleKind::View { .. } => None,
+        }
+    }
+
+    pub fn full_name(&self) -> Vec<String> {
+        self.catalog
+            .iter()
+            .cloned()
+            .chain(self.database.iter().cloned())
+            .chain(std::iter::once(self.name.clone()))
+            .collect()
     }
 }

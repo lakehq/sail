@@ -8,7 +8,6 @@ use datafusion_expr::{Expr, LogicalPlan, TableScan, TableSource, UNNAMED_TABLE};
 use rand::{rng, RngExt};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
-use sail_common_datafusion::catalog::TableKind;
 use sail_common_datafusion::datasource::{SourceInfo, SourceTarget, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
@@ -71,44 +70,36 @@ impl PlanResolver<'_> {
             };
         }
 
-        let reference: Vec<String> = name.clone().into();
-        let catalog_manager = self.ctx.extension::<CatalogManager>()?;
-        let status = catalog_manager.get_table_or_view(&reference).await?;
-        let plan = if matches!(&status.kind, TableKind::Table { .. }) {
-            let handle = catalog_manager
-                .open_table_handle(&reference, &self.ctx.state())
-                .await?;
-            let schema = handle.schema();
-            let constraints =
-                self.resolve_catalog_table_constraints(handle.constraints().to_vec(), &schema)?;
-            let info = handle.to_source_info(
-                Some(schema),
-                constraints,
-                vec![options.into_iter().collect()],
-            );
-            let registry = self.ctx.extension::<TableFormatRegistry>()?;
-            let table_source = registry
-                .get(handle.format())?
-                .create_source(&self.ctx.state(), info)
-                .await?;
-            self.resolve_table_source_with_rename(
-                table_source,
-                table_reference,
-                None,
-                vec![],
-                None,
-                state,
-            )?
-        } else {
-            match status.kind {
-                TableKind::View { .. } => return Err(PlanError::todo("read view")),
-                TableKind::TemporaryView { plan, .. }
-                | TableKind::GlobalTemporaryView { plan, .. } => {
+        let plan = match self.require_catalog_object_handle(&name).await? {
+            sail_common_datafusion::catalog::CatalogObjectHandle::Table(handle) => {
+                let schema = handle.schema();
+                let constraints =
+                    self.resolve_catalog_table_constraints(handle.constraints().to_vec(), &schema)?;
+                let info = handle.to_source_info(
+                    Some(schema),
+                    constraints,
+                    vec![options.into_iter().collect()],
+                );
+                let registry = self.ctx.extension::<TableFormatRegistry>()?;
+                let table_source = registry
+                    .get(handle.format())?
+                    .create_source(&self.ctx.state(), info)
+                    .await?;
+                self.resolve_table_source_with_rename(
+                    table_source,
+                    table_reference,
+                    None,
+                    vec![],
+                    None,
+                    state,
+                )?
+            }
+            sail_common_datafusion::catalog::CatalogObjectHandle::View(handle) => {
+                if let Some(plan) = handle.plan() {
                     let names = state.register_fields(plan.schema().inner().fields());
                     rename_logical_plan(plan.as_ref().clone(), &names)?
-                }
-                TableKind::Table { .. } => {
-                    return Err(PlanError::internal("catalog returned a table unexpectedly"));
+                } else {
+                    return Err(PlanError::todo("read view"));
                 }
             }
         };

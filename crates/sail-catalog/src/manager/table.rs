@@ -1,6 +1,8 @@
 use datafusion::catalog::Session;
 use sail_common::spec::AlterTableOperation;
-use sail_common_datafusion::catalog::{TableColumnStatus, TableHandle, TableStatus};
+use sail_common_datafusion::catalog::{
+    CatalogObjectHandle, TableColumnStatus, TableHandle, TableStatus, ViewHandle,
+};
 use sail_common_datafusion::datasource::TableFormatRegistry;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 
@@ -32,10 +34,12 @@ impl CatalogManager {
         session: &dyn Session,
     ) -> CatalogResult<TableHandle> {
         let (provider, database, table_name) = self.resolve_object(table)?;
-        let mut status = provider.get_table(&database, &table_name).await?;
-        status.catalog = Some(provider.get_name().to_string());
-        status.database = Vec::<String>::from(database.clone());
-        status.name = table_name.to_string();
+        let status = Self::normalize_table_status(
+            provider.get_name(),
+            &database,
+            &table_name,
+            provider.get_table(&database, &table_name).await?,
+        );
         let handle = TableHandle::from_status(status).map_err(|status| {
             CatalogError::Internal(format!(
                 "catalog object '{}' is not a table: {:?}",
@@ -166,6 +170,40 @@ impl CatalogManager {
             Err(e) => return Err(e),
         }
         self.get_view(reference).await
+    }
+
+    pub(super) fn normalize_table_status(
+        catalog_name: &str,
+        database: &Namespace,
+        object_name: &str,
+        mut status: TableStatus,
+    ) -> TableStatus {
+        status.catalog = Some(catalog_name.to_string());
+        status.database = Vec::<String>::from(database.clone());
+        status.name = object_name.to_string();
+        status
+    }
+
+    pub(super) async fn open_catalog_object_handle_from_table_status(
+        &self,
+        session: &dyn Session,
+        object_name: &str,
+        status: TableStatus,
+    ) -> CatalogResult<CatalogObjectHandle> {
+        match TableHandle::from_status(status) {
+            Ok(handle) => self
+                .hydrate_table_handle(session, handle)
+                .await
+                .map(CatalogObjectHandle::Table),
+            Err(status) => ViewHandle::from_status(status)
+                .map(CatalogObjectHandle::View)
+                .map_err(|status| {
+                    CatalogError::Internal(format!(
+                        "catalog object '{}' is neither a table nor a view: {:?}",
+                        object_name, status.kind
+                    ))
+                }),
+        }
     }
 
     async fn hydrate_table_handle(

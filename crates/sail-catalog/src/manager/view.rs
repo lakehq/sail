@@ -1,4 +1,5 @@
-use sail_common_datafusion::catalog::{TableKind, TableStatus};
+use datafusion::catalog::Session;
+use sail_common_datafusion::catalog::{CatalogObjectHandle, TableKind, TableStatus, ViewHandle};
 
 use crate::error::{CatalogError, CatalogResult};
 use crate::manager::CatalogManager;
@@ -9,6 +10,83 @@ use crate::temp_view::GLOBAL_TEMPORARY_VIEW_MANAGER;
 use crate::utils::match_pattern;
 
 impl CatalogManager {
+    pub async fn open_view_handle<T: AsRef<str>>(&self, view: &[T]) -> CatalogResult<ViewHandle> {
+        let (provider, database, view_name) = self.resolve_object(view)?;
+        let status = Self::normalize_table_status(
+            provider.get_name(),
+            &database,
+            &view_name,
+            provider.get_view(&database, &view_name).await?,
+        );
+        ViewHandle::from_status(status).map_err(|status| {
+            CatalogError::Internal(format!(
+                "catalog object '{}' is not a view: {:?}",
+                view_name, status.kind
+            ))
+        })
+    }
+
+    pub async fn open_table_or_view_handle<T: AsRef<str>>(
+        &self,
+        reference: &[T],
+        session: &dyn Session,
+    ) -> CatalogResult<CatalogObjectHandle> {
+        if let [name] = reference {
+            match self.get_temporary_view(name.as_ref()).await {
+                Ok(status) => {
+                    return ViewHandle::from_status(status)
+                        .map(CatalogObjectHandle::View)
+                        .map_err(|status| {
+                            CatalogError::Internal(format!(
+                                "catalog object '{}' is not a view: {:?}",
+                                name.as_ref(),
+                                status.kind
+                            ))
+                        });
+                }
+                Err(CatalogError::NotFound(_, _)) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        if let [x @ .., name] = reference {
+            if self.state()?.is_global_temporary_view_database(x) {
+                return self
+                    .get_global_temporary_view(name.as_ref())
+                    .await
+                    .and_then(|status| {
+                        ViewHandle::from_status(status)
+                            .map(CatalogObjectHandle::View)
+                            .map_err(|status| {
+                                CatalogError::Internal(format!(
+                                    "catalog object '{}' is not a view: {:?}",
+                                    name.as_ref(),
+                                    status.kind
+                                ))
+                            })
+                    });
+            }
+        }
+        let (provider, database, object_name) = self.resolve_object(reference)?;
+        match provider.get_table(&database, &object_name).await {
+            Ok(status) => {
+                let status = Self::normalize_table_status(
+                    provider.get_name(),
+                    &database,
+                    &object_name,
+                    status,
+                );
+                return self
+                    .open_catalog_object_handle_from_table_status(session, &object_name, status)
+                    .await;
+            }
+            Err(CatalogError::NotFound(_, _)) => {}
+            Err(error) => return Err(error),
+        }
+        self.open_view_handle(reference)
+            .await
+            .map(CatalogObjectHandle::View)
+    }
+
     pub async fn list_global_temporary_views(
         &self,
         pattern: Option<&str>,
