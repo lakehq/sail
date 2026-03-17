@@ -1,5 +1,8 @@
+use datafusion::catalog::Session;
 use sail_common::spec::AlterTableOperation;
-use sail_common_datafusion::catalog::{TableHandle, TableStatus};
+use sail_common_datafusion::catalog::{TableColumnStatus, TableHandle, TableStatus};
+use sail_common_datafusion::datasource::TableFormatRegistry;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 
 use crate::error::{CatalogError, CatalogResult};
 use crate::manager::CatalogManager;
@@ -24,18 +27,20 @@ impl CatalogManager {
     pub async fn open_table_handle<T: AsRef<str>>(
         &self,
         table: &[T],
+        session: &dyn Session,
     ) -> CatalogResult<TableHandle> {
         let (provider, database, table_name) = self.resolve_object(table)?;
         let mut status = provider.get_table(&database, &table_name).await?;
         status.catalog = Some(provider.get_name().to_string());
         status.database = Vec::<String>::from(database.clone());
         status.name = table_name.to_string();
-        TableHandle::from_status(status).map_err(|status| {
+        let handle = TableHandle::from_status(status).map_err(|status| {
             CatalogError::Internal(format!(
                 "catalog object '{}' is not a table: {:?}",
                 table_name, status.kind
             ))
-        })
+        })?;
+        self.hydrate_table_handle(session, handle).await
     }
 
     pub async fn list_tables<T: AsRef<str>>(
@@ -114,5 +119,71 @@ impl CatalogManager {
             Err(e) => return Err(e),
         }
         self.get_view(reference).await
+    }
+
+    async fn hydrate_table_handle(
+        &self,
+        session: &dyn Session,
+        handle: TableHandle,
+    ) -> CatalogResult<TableHandle> {
+        if !handle.columns().is_empty() {
+            return Ok(handle);
+        }
+
+        let table = handle.full_name().join(".");
+        let registry = session
+            .extension::<TableFormatRegistry>()
+            .map_err(|error| {
+                CatalogError::Internal(format!(
+                    "failed to access table format registry for table `{table}`: {error}",
+                ))
+            })?;
+        let table_format = registry.get(handle.format()).map_err(|error| {
+            CatalogError::Internal(format!(
+                "failed to resolve table format `{}` for table `{table}`: {error}",
+                handle.format()
+            ))
+        })?;
+        let provider = table_format
+            .create_provider(
+                session,
+                handle.to_source_info(None, Default::default(), vec![]),
+            )
+            .await
+            .map_err(|error| {
+                CatalogError::External(format!(
+                    "failed to infer schema for table `{table}` from format `{}`: {error}",
+                    handle.format()
+                ))
+            })?;
+        let columns = provider
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| {
+                let is_partition = handle
+                    .partition_by()
+                    .iter()
+                    .any(|column| column.eq_ignore_ascii_case(field.name()));
+                let is_bucket = handle.bucket_by().is_some_and(|bucket| {
+                    bucket
+                        .columns
+                        .iter()
+                        .any(|column| column.eq_ignore_ascii_case(field.name()))
+                });
+                TableColumnStatus {
+                    name: field.name().clone(),
+                    data_type: field.data_type().clone(),
+                    nullable: field.is_nullable(),
+                    comment: None,
+                    default: None,
+                    generated_always_as: None,
+                    is_partition,
+                    is_bucket,
+                    is_cluster: false,
+                }
+            })
+            .collect();
+        Ok(handle.with_columns(columns))
     }
 }

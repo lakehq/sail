@@ -75,7 +75,9 @@ impl PlanResolver<'_> {
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
         let status = catalog_manager.get_table_or_view(&reference).await?;
         let plan = if matches!(&status.kind, TableKind::Table { .. }) {
-            let handle = catalog_manager.open_table_handle(&reference).await?;
+            let handle = catalog_manager
+                .open_table_handle(&reference, &self.ctx.state())
+                .await?;
             let schema = handle.schema();
             let constraints =
                 self.resolve_catalog_table_constraints(handle.constraints().to_vec(), &schema)?;
