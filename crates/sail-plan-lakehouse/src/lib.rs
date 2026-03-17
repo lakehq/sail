@@ -10,7 +10,7 @@ use datafusion_expr::{LogicalPlan, UserDefinedLogicalNode};
 use sail_data_source::resolve_listing_urls;
 use sail_delta_lake::table::open_table_with_object_store;
 use sail_logical_plan::file_delete::FileDeleteNode;
-use sail_logical_plan::file_write::FileWriteNode;
+use sail_logical_plan::file_write::{FileWriteNode, FileWriteOptions, FileWriteTarget};
 use sail_logical_plan::merge::{MergeCardinalityCheckNode, MergeIntoWriteNode};
 use sail_physical_plan::file_delete::create_file_delete_physical_plan;
 use sail_physical_plan::file_write::create_file_write_physical_plan;
@@ -24,6 +24,15 @@ pub use optimizer::{lakehouse_optimizer_rules, ExpandMerge};
 
 fn is_lakehouse_format(format: &str) -> bool {
     format.eq_ignore_ascii_case("delta")
+}
+
+fn file_write_format(options: &FileWriteOptions) -> &str {
+    match &options.target {
+        FileWriteTarget::Table(table) => table.format(),
+        FileWriteTarget::Path { format, .. } | FileWriteTarget::Sink { format, .. } => {
+            format.as_str()
+        }
+    }
 }
 
 async fn delta_table_schema(session_state: &SessionState, path: &str) -> Result<DFSchemaRef> {
@@ -66,7 +75,7 @@ impl ExtensionPlanner for DeltaExtensionPlanner {
         session_state: &SessionState,
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
         if let Some(node) = node.as_any().downcast_ref::<FileWriteNode>() {
-            if !is_lakehouse_format(node.options().format.as_str()) {
+            if !is_lakehouse_format(file_write_format(node.options())) {
                 return Ok(None);
             }
             let [logical_input] = logical_inputs else {
@@ -87,14 +96,17 @@ impl ExtensionPlanner for DeltaExtensionPlanner {
         }
 
         if let Some(node) = node.as_any().downcast_ref::<FileDeleteNode>() {
-            if !is_lakehouse_format(node.options().format.as_str()) {
+            if !is_lakehouse_format(node.options().table.format()) {
                 return Ok(None);
             }
             if !logical_inputs.is_empty() || !physical_inputs.is_empty() {
                 return internal_err!("FileDeleteNode should have no inputs");
             }
 
-            let schema = delta_table_schema(session_state, &node.options().path).await?;
+            let path = node.options().table.location().ok_or_else(|| {
+                DataFusionError::Plan("DELETE target does not have a location".to_string())
+            })?;
+            let schema = delta_table_schema(session_state, path).await?;
             let plan = create_file_delete_physical_plan(
                 session_state,
                 planner,
@@ -106,7 +118,7 @@ impl ExtensionPlanner for DeltaExtensionPlanner {
         }
 
         if let Some(node) = node.as_any().downcast_ref::<MergeIntoWriteNode>() {
-            if !is_lakehouse_format(&node.options().target.format) {
+            if !is_lakehouse_format(node.options().target.table.format()) {
                 return Ok(None);
             }
 

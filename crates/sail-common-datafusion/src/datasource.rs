@@ -49,33 +49,126 @@ pub struct BucketBy {
     pub num_buckets: usize,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
+pub enum SourceTarget {
+    Table(TableHandle),
+    Paths {
+        paths: Vec<String>,
+        partition_by: Vec<String>,
+        bucket_by: Option<BucketBy>,
+        sort_order: Vec<Sort>,
+    },
+}
+
+impl SourceTarget {
+    pub fn paths(&self) -> Vec<String> {
+        match self {
+            SourceTarget::Table(table) => table
+                .location()
+                .into_iter()
+                .map(ToOwned::to_owned)
+                .collect(),
+            SourceTarget::Paths { paths, .. } => paths.clone(),
+        }
+    }
+
+    pub fn partition_by(&self) -> Vec<String> {
+        match self {
+            SourceTarget::Table(table) => table.partition_by().to_vec(),
+            SourceTarget::Paths { partition_by, .. } => partition_by.clone(),
+        }
+    }
+
+    pub fn bucket_by(&self) -> Option<BucketBy> {
+        match self {
+            SourceTarget::Table(table) => table.bucket_by().cloned().map(Into::into),
+            SourceTarget::Paths { bucket_by, .. } => bucket_by.clone(),
+        }
+    }
+
+    pub fn sort_order(&self) -> Vec<Sort> {
+        match self {
+            SourceTarget::Table(table) => table.sort_by().iter().cloned().map(Into::into).collect(),
+            SourceTarget::Paths { sort_order, .. } => sort_order.clone(),
+        }
+    }
+}
+
 /// Information required to create a data source.
 #[derive(Debug, Clone)]
 pub struct SourceInfo {
-    pub table: Option<TableHandle>,
-    pub paths: Vec<String>,
+    pub target: SourceTarget,
     /// The (optional) schema of the data source including partitioning columns.
     pub schema: Option<Schema>,
     pub constraints: Constraints,
-    pub partition_by: Vec<String>,
-    pub bucket_by: Option<BucketBy>,
-    pub sort_order: Vec<Sort>,
     /// The sets of options for the data source.
     /// A later set of options can override earlier ones.
     pub options: Vec<HashMap<String, String>>,
 }
 
+#[derive(Clone, Debug)]
+pub enum SinkTarget {
+    Table(TableHandle),
+    Path {
+        path: String,
+        partition_by: Vec<String>,
+        bucket_by: Option<BucketBy>,
+        table_properties: Vec<(String, String)>,
+    },
+    Sink {
+        partition_by: Vec<String>,
+        bucket_by: Option<BucketBy>,
+        table_properties: Vec<(String, String)>,
+    },
+}
+
+impl SinkTarget {
+    pub fn path(&self) -> Option<String> {
+        match self {
+            SinkTarget::Table(table) => table.location().map(ToOwned::to_owned),
+            SinkTarget::Path { path, .. } => Some(path.clone()),
+            SinkTarget::Sink { .. } => None,
+        }
+    }
+
+    pub fn partition_by(&self) -> Vec<String> {
+        match self {
+            SinkTarget::Table(table) => table.partition_by().to_vec(),
+            SinkTarget::Path { partition_by, .. } | SinkTarget::Sink { partition_by, .. } => {
+                partition_by.clone()
+            }
+        }
+    }
+
+    pub fn bucket_by(&self) -> Option<BucketBy> {
+        match self {
+            SinkTarget::Table(table) => table.bucket_by().cloned().map(Into::into),
+            SinkTarget::Path { bucket_by, .. } | SinkTarget::Sink { bucket_by, .. } => {
+                bucket_by.clone()
+            }
+        }
+    }
+
+    pub fn table_properties(&self) -> Vec<(String, String)> {
+        match self {
+            SinkTarget::Table(table) => table.properties().to_vec(),
+            SinkTarget::Path {
+                table_properties, ..
+            }
+            | SinkTarget::Sink {
+                table_properties, ..
+            } => table_properties.clone(),
+        }
+    }
+}
+
 /// Information required to create a data writer.
 #[derive(Debug, Clone)]
 pub struct SinkInfo {
-    pub table: Option<TableHandle>,
+    pub target: SinkTarget,
     pub input: Arc<dyn ExecutionPlan>,
-    pub path: String,
     pub mode: PhysicalSinkMode,
-    pub partition_by: Vec<String>,
-    pub bucket_by: Option<BucketBy>,
     pub sort_order: Option<LexRequirement>,
-    pub table_properties: HashMap<String, String>,
     /// The sets of options for the data sink.
     /// A later set of options can override earlier ones.
     pub options: Vec<HashMap<String, String>>,
@@ -85,7 +178,6 @@ pub struct SinkInfo {
 #[derive(Debug, Clone)]
 pub struct DeleteInfo {
     pub table: TableHandle,
-    pub path: String,
     pub condition: Option<ExprWithSource>,
     /// The sets of options for the data deletion.
     /// A later set of options can override earlier ones.
@@ -95,8 +187,6 @@ pub struct DeleteInfo {
 #[derive(Debug, Clone)]
 pub struct MergeTargetInfo {
     pub table: TableHandle,
-    pub path: String,
-    pub partition_by: Vec<String>,
     pub options: Vec<HashMap<String, String>>,
 }
 

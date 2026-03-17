@@ -30,7 +30,13 @@ impl OptimizerRule for ExpandMerge {
         plan.transform_up(|plan| {
             if let LogicalPlan::Extension(ext) = &plan {
                 if let Some(node) = ext.node.as_any().downcast_ref::<MergeIntoNode>() {
-                    if !node.options().target.format.eq_ignore_ascii_case("delta") {
+                    if !node
+                        .options()
+                        .target
+                        .table
+                        .format()
+                        .eq_ignore_ascii_case("delta")
+                    {
                         return Ok(Transformed::no(plan));
                     }
 

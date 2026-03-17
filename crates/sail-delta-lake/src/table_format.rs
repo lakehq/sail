@@ -50,15 +50,12 @@ impl TableFormat for DeltaTableFormat {
         info: SourceInfo,
     ) -> Result<Arc<dyn TableSource>> {
         let SourceInfo {
-            table: _,
-            paths,
+            target,
             schema,
             constraints: _,
-            partition_by: _,
-            bucket_by: _,
-            sort_order: _,
             options,
         } = info;
+        let paths = target.paths();
         let table_url = Self::parse_table_url(ctx, paths).await?;
         let options = resolve_delta_read_options(options)?;
         create_delta_source(ctx, table_url, schema, options).await
@@ -70,15 +67,12 @@ impl TableFormat for DeltaTableFormat {
         info: SourceInfo,
     ) -> Result<Arc<dyn TableProvider>> {
         let SourceInfo {
-            table: _,
-            paths,
+            target,
             schema,
             constraints: _,
-            partition_by: _,
-            bucket_by: _,
-            sort_order: _,
             options,
         } = info;
+        let paths = target.paths();
         let table_url = Self::parse_table_url(ctx, paths).await?;
         let options = resolve_delta_read_options(options)?;
         create_delta_provider(ctx, table_url, schema, options).await
@@ -90,16 +84,18 @@ impl TableFormat for DeltaTableFormat {
         info: SinkInfo,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let SinkInfo {
-            table: _,
+            target,
             input,
-            path,
             mode,
-            partition_by,
-            bucket_by,
             sort_order,
-            table_properties,
             options,
         } = info;
+        let path = target.path().ok_or_else(|| {
+            DataFusionError::Plan("Delta sink requires a table location".to_string())
+        })?;
+        let partition_by = target.partition_by();
+        let bucket_by = target.bucket_by();
+        let table_properties = target.table_properties().into_iter().collect();
 
         if is_flow_event_schema(&input.schema()) {
             return not_impl_err!("writing streaming data to Delta table");
@@ -240,13 +236,15 @@ impl TableFormat for DeltaTableFormat {
         info: DeleteInfo,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let DeleteInfo {
-            table: _,
-            path,
+            table,
             condition,
             options,
         } = info;
+        let path = table.location().ok_or_else(|| {
+            DataFusionError::Plan("DELETE target does not have a location".to_string())
+        })?;
 
-        let table_url = Self::parse_table_url(ctx, vec![path]).await?;
+        let table_url = Self::parse_table_url(ctx, vec![path.to_string()]).await?;
 
         let condition = condition.ok_or_else(|| {
             DataFusionError::Plan("DELETE operation requires a WHERE condition".to_string())
@@ -273,13 +271,16 @@ impl TableFormat for DeltaTableFormat {
         ctx: &dyn Session,
         info: MergeInfo,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let table_url = Self::parse_table_url(ctx, vec![info.target.path.clone()]).await?;
+        let path = info.target.table.location().ok_or_else(|| {
+            DataFusionError::Plan("MERGE target does not have a location".to_string())
+        })?;
+        let table_url = Self::parse_table_url(ctx, vec![path.to_string()]).await?;
         let delta_options = resolve_delta_write_options(info.target.options.clone())?;
         let merge_config = DeltaTableConfig::new(
             table_url,
             delta_options,
             HashMap::new(),
-            info.target.partition_by.clone(),
+            info.target.table.partition_by().to_vec(),
             None,
             true,
         );

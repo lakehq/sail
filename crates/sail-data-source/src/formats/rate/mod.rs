@@ -34,15 +34,14 @@ impl TableFormat for RateTableFormat {
         info: SourceInfo,
     ) -> Result<Arc<dyn TableProvider>> {
         let SourceInfo {
-            table: _,
-            paths: _,
+            target,
             schema,
             constraints,
-            partition_by,
-            bucket_by,
-            sort_order,
             options,
         } = info;
+        let partition_by = target.partition_by();
+        let bucket_by = target.bucket_by();
+        let sort_order = target.sort_order();
         if !constraints.deref().is_empty() {
             return plan_err!("the rate table format does not support constraints");
         }

@@ -16,15 +16,13 @@ pub async fn create_file_delete_physical_plan(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let FileDeleteOptions {
         table,
-        path,
-        format,
         condition,
         options,
     } = options;
+    let format = table.format().to_string();
 
     let info = DeleteInfo {
         table,
-        path,
         condition,
         options: options
             .into_iter()

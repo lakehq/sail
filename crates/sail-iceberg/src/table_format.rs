@@ -53,15 +53,12 @@ impl TableFormat for IcebergTableFormat {
         info: SourceInfo,
     ) -> Result<Arc<dyn TableProvider>> {
         let SourceInfo {
-            table: _,
-            paths,
+            target,
             schema: _,
             constraints: _,
-            partition_by: _,
-            bucket_by: _,
-            sort_order: _,
             options,
         } = info;
+        let paths = target.paths();
 
         let table_url = Self::parse_table_url(paths).await?;
         let iceberg_options = resolve_iceberg_read_options(options)?;
@@ -77,16 +74,17 @@ impl TableFormat for IcebergTableFormat {
         use datafusion::physical_plan::empty::EmptyExec;
 
         let SinkInfo {
-            table: _,
+            target,
             input,
-            path,
             mode,
-            partition_by,
-            bucket_by,
             sort_order,
-            table_properties: _,
             options,
         } = info;
+        let path = target.path().ok_or_else(|| {
+            DataFusionError::Plan("Iceberg sink requires a table location".to_string())
+        })?;
+        let partition_by = target.partition_by();
+        let bucket_by = target.bucket_by();
 
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for Iceberg format");

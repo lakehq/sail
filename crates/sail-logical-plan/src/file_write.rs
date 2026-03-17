@@ -10,15 +10,29 @@ use sail_common_datafusion::datasource::{BucketBy, SinkMode};
 use sail_common_datafusion::utils::items::ItemTaker;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
+pub enum FileWriteTarget {
+    Table(TableHandle),
+    Path {
+        path: String,
+        format: String,
+        partition_by: Vec<String>,
+        sort_by: Vec<Sort>,
+        bucket_by: Option<BucketBy>,
+        table_properties: Vec<(String, String)>,
+    },
+    Sink {
+        format: String,
+        partition_by: Vec<String>,
+        sort_by: Vec<Sort>,
+        bucket_by: Option<BucketBy>,
+        table_properties: Vec<(String, String)>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
 pub struct FileWriteOptions {
-    pub table: Option<TableHandle>,
-    pub path: String,
-    pub format: String,
+    pub target: FileWriteTarget,
     pub mode: SinkMode,
-    pub partition_by: Vec<String>,
-    pub sort_by: Vec<Sort>,
-    pub bucket_by: Option<BucketBy>,
-    pub table_properties: Vec<(String, String)>,
     pub options: Vec<Vec<(String, String)>>,
 }
 

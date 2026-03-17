@@ -9,7 +9,7 @@ use rand::{rng, RngExt};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::TableKind;
-use sail_common_datafusion::datasource::{SourceInfo, TableFormatRegistry};
+use sail_common_datafusion::datasource::{SourceInfo, SourceTarget, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
@@ -338,14 +338,15 @@ impl PlanResolver<'_> {
             None => None,
         };
         let info = SourceInfo {
-            table: None,
-            paths,
+            target: SourceTarget::Paths {
+                paths,
+                partition_by: vec![],
+                bucket_by: None,
+                sort_order: vec![],
+            },
             schema,
             // TODO: detect duplicated keys in the set of options
             constraints: Default::default(),
-            partition_by: vec![],
-            bucket_by: None,
-            sort_order: vec![],
             options: vec![options.into_iter().collect()],
         };
         let registry = self.ctx.extension::<TableFormatRegistry>()?;

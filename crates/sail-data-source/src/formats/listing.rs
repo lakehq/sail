@@ -112,15 +112,14 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         info: SourceInfo,
     ) -> Result<Arc<dyn TableProvider>> {
         let SourceInfo {
-            table: _,
-            paths,
+            target,
             schema,
             constraints,
-            partition_by,
-            bucket_by: _,
-            sort_order,
             options,
         } = info;
+        let paths = target.paths();
+        let partition_by = target.partition_by();
+        let sort_order = target.sort_order();
 
         let urls = crate::url::resolve_listing_urls(ctx, paths).await?;
         let file_format = self.inner.create_read_format(ctx, options.clone(), None)?;
@@ -192,17 +191,18 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         info: SinkInfo,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let SinkInfo {
-            table: _,
+            target,
             input,
-            path,
             // TODO: sink mode is ignored since the file formats only support append operation
             mode: _,
-            partition_by,
-            bucket_by,
             sort_order,
-            table_properties: _,
             options,
         } = info;
+        let path = target.path().ok_or_else(|| {
+            datafusion_common::DataFusionError::Internal("missing sink path".to_string())
+        })?;
+        let partition_by = target.partition_by();
+        let bucket_by = target.bucket_by();
         if is_flow_event_schema(&input.schema()) {
             return plan_err!("cannot write streaming data to listing table");
         }

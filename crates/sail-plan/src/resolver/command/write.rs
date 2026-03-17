@@ -13,7 +13,7 @@ use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_common_datafusion::rename::schema::rename_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_logical_plan::barrier::BarrierNode;
-use sail_logical_plan::file_write::{FileWriteNode, FileWriteOptions};
+use sail_logical_plan::file_write::{FileWriteNode, FileWriteOptions, FileWriteTarget};
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
@@ -180,37 +180,40 @@ impl PlanResolver<'_> {
             .clone()
             .into_iter()
             .collect::<std::collections::HashMap<_, _>>();
-        let mut file_write_options = FileWriteOptions {
-            table: None,
-            path: String::new(),
-            // The mode will be set later so the value here is just a placeholder.
-            mode: SinkMode::ErrorIfExists,
-            format: format.unwrap_or_default(),
-            partition_by: self.resolve_write_partition_by(partition_by.clone())?,
-            sort_by: self
-                .resolve_sort_orders(sort_by.clone(), true, input.schema(), state)
-                .await?,
-            bucket_by: self.resolve_write_bucket_by(bucket_by.clone())?,
-            table_properties: vec![],
-            options: vec![options],
-        };
+        let requested_format = format.unwrap_or_default();
+        let requested_partition_by = self.resolve_write_partition_by(partition_by.clone())?;
+        let requested_sort_by = self
+            .resolve_sort_orders(sort_by.clone(), true, input.schema(), state)
+            .await?;
+        let requested_bucket_by = self.resolve_write_bucket_by(bucket_by.clone())?;
+        let mut file_write_option_sets = vec![options];
         let mut preconditions = vec![];
-        match target {
+        let (file_write_target, file_write_mode) = match target {
             WriteTarget::Path { location } => {
                 if !table_properties.is_empty() {
                     return Err(PlanError::invalid(
                         "table properties are not supported for writing to a path",
                     ));
                 }
-                if file_write_options.format.is_empty() {
-                    file_write_options.format = self.config.default_table_file_format.clone();
-                }
-                file_write_options.path = location;
+                let format = if requested_format.is_empty() {
+                    self.config.default_table_file_format.clone()
+                } else {
+                    requested_format.clone()
+                };
                 let schema_for_cond =
                     matches!(mode, WriteMode::OverwriteIf { .. }).then_some(input_schema.as_ref());
-                file_write_options.mode = self
-                    .resolve_write_mode(mode, schema_for_cond, state)
-                    .await?;
+                (
+                    FileWriteTarget::Path {
+                        path: location,
+                        format,
+                        partition_by: requested_partition_by.clone(),
+                        sort_by: requested_sort_by.clone(),
+                        bucket_by: requested_bucket_by.clone(),
+                        table_properties: vec![],
+                    },
+                    self.resolve_write_mode(mode, schema_for_cond, state)
+                        .await?,
+                )
             }
             WriteTarget::Sink => {
                 if !table_properties.is_empty() {
@@ -218,14 +221,24 @@ impl PlanResolver<'_> {
                         "table properties are not supported for writing to a sink",
                     ));
                 }
-                if file_write_options.format.is_empty() {
-                    file_write_options.format = self.config.default_table_file_format.clone();
-                }
+                let format = if requested_format.is_empty() {
+                    self.config.default_table_file_format.clone()
+                } else {
+                    requested_format.clone()
+                };
                 let schema_for_cond =
                     matches!(mode, WriteMode::OverwriteIf { .. }).then_some(input_schema.as_ref());
-                file_write_options.mode = self
-                    .resolve_write_mode(mode, schema_for_cond, state)
-                    .await?;
+                (
+                    FileWriteTarget::Sink {
+                        format,
+                        partition_by: requested_partition_by.clone(),
+                        sort_by: requested_sort_by.clone(),
+                        bucket_by: requested_bucket_by.clone(),
+                        table_properties: vec![],
+                    },
+                    self.resolve_write_mode(mode, schema_for_cond, state)
+                        .await?,
+                )
             }
             WriteTarget::ExistingTable {
                 table,
@@ -245,30 +258,22 @@ impl PlanResolver<'_> {
                     return Ok(LogicalPlanBuilder::empty(false).build()?);
                 }
                 info.validate_write_layout(
-                    &file_write_options.partition_by,
-                    &file_write_options.bucket_by,
-                    &file_write_options.sort_by,
-                    &file_write_options.format,
+                    &requested_partition_by,
+                    &requested_bucket_by,
+                    &requested_sort_by,
+                    &requested_format,
                 )
                 .map_err(PlanError::invalid)?;
                 input = Self::rewrite_write_input(input, column_match, &info)?;
-                file_write_options.mode = self
-                    .resolve_write_mode(mode, Some(&info.schema()), state)
-                    .await?;
-                file_write_options.table = Some(info.clone());
-                file_write_options.partition_by = info.partition_by().to_vec();
-                file_write_options.sort_by =
-                    info.sort_by().iter().cloned().map(Into::into).collect();
-                file_write_options.bucket_by = info.bucket_by().cloned().map(Into::into);
-                file_write_options.path =
-                    info.location().map(ToOwned::to_owned).ok_or_else(|| {
-                        PlanError::invalid(format!("table does not have a location: {table:?}"))
-                    })?;
-                file_write_options.format = info.format().to_string();
-                file_write_options
-                    .options
-                    .insert(0, info.options().to_vec());
-                file_write_options.table_properties = info.properties().to_vec();
+                info.location().ok_or_else(|| {
+                    PlanError::invalid(format!("table does not have a location: {table:?}"))
+                })?;
+                file_write_option_sets.insert(0, info.options().to_vec());
+                (
+                    FileWriteTarget::Table(info.clone()),
+                    self.resolve_write_mode(mode, Some(&info.schema()), state)
+                        .await?,
+                )
             }
             WriteTarget::NewTable { table, action } => {
                 let info = self.resolve_table_handle(&table).await?;
@@ -278,34 +283,33 @@ impl PlanResolver<'_> {
                 if matches!(action, WriteTableAction::CreateIfNotExists) {
                     if let Some(ref info) = info {
                         info.validate_write_layout(
-                            &file_write_options.partition_by,
-                            &file_write_options.bucket_by,
-                            &file_write_options.sort_by,
-                            &file_write_options.format,
+                            &requested_partition_by,
+                            &requested_bucket_by,
+                            &requested_sort_by,
+                            &requested_format,
                         )
                         .map_err(PlanError::invalid)?;
                         input = Self::rewrite_write_input(input, WriteColumnMatch::ByName, info)?;
                     }
                 }
-                file_write_options.mode = self.resolve_write_mode(mode, None, state).await?;
-                if file_write_options.format.is_empty() {
+                let format = if requested_format.is_empty() {
                     if let Some(format) = info.as_ref().map(TableHandle::format) {
-                        file_write_options.format = format.to_string();
+                        format.to_string()
                     } else {
-                        file_write_options.format = self.config.default_table_file_format.clone();
+                        self.config.default_table_file_format.clone()
                     }
-                }
-                if let Some(location) = info.as_ref().and_then(TableHandle::location) {
-                    file_write_options.path = location.to_string();
-                } else if let Some(location) = options_map.get("location") {
-                    file_write_options.path = location.to_string();
-                } else if let Some(path) = options_map.get("path") {
-                    file_write_options.path = path.to_string();
                 } else {
-                    file_write_options.path = self.resolve_default_table_location(&table).await?;
-                }
-                file_write_options.table = info.clone();
-                file_write_options.table_properties = table_properties.clone();
+                    requested_format.clone()
+                };
+                let path = if let Some(location) = info.as_ref().and_then(TableHandle::location) {
+                    location.to_string()
+                } else if let Some(location) = options_map.get("location") {
+                    location.to_string()
+                } else if let Some(path) = options_map.get("path") {
+                    path.to_string()
+                } else {
+                    self.resolve_default_table_location(&table).await?
+                };
                 let (if_not_exists, replace) = match action {
                     WriteTableAction::Create => (false, false),
                     WriteTableAction::CreateIfNotExists => (true, false),
@@ -341,25 +345,40 @@ impl PlanResolver<'_> {
                         columns,
                         comment: None,
                         constraints: vec![],
-                        location: Some(file_write_options.path.clone()),
-                        format: file_write_options.format.clone(),
+                        location: Some(path.clone()),
+                        format: format.clone(),
                         partition_by,
                         sort_by,
                         bucket_by,
                         if_not_exists,
                         replace,
-                        options: file_write_options
-                            .options
+                        options: file_write_option_sets
                             .last()
                             .cloned()
                             .into_iter()
                             .flatten()
                             .collect(),
-                        properties: table_properties,
+                        properties: table_properties.clone(),
                     },
                 };
                 preconditions.push(Arc::new(self.resolve_catalog_command(command)?));
+                (
+                    FileWriteTarget::Path {
+                        path,
+                        format,
+                        partition_by: requested_partition_by.clone(),
+                        sort_by: requested_sort_by.clone(),
+                        bucket_by: requested_bucket_by.clone(),
+                        table_properties: table_properties.clone(),
+                    },
+                    self.resolve_write_mode(mode, None, state).await?,
+                )
             }
+        };
+        let file_write_options = FileWriteOptions {
+            target: file_write_target,
+            mode: file_write_mode,
+            options: file_write_option_sets,
         };
         let plan = LogicalPlan::Extension(Extension {
             node: Arc::new(FileWriteNode::new(Arc::new(input), file_write_options)),

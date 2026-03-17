@@ -26,7 +26,7 @@ impl PlanResolver<'_> {
             condition,
         } = delete;
         let table_handle = self.require_table_handle(&table).await?;
-        let (location, format, table_schema) = self.get_schema_for_delete(&table_handle)?;
+        let table_schema = self.get_schema_for_delete(&table_handle)?;
 
         let field_ids = state.register_fields(table_schema.fields());
 
@@ -54,8 +54,6 @@ impl PlanResolver<'_> {
 
         let file_delete_options = FileDeleteOptions {
             table: table_handle,
-            path: location,
-            format,
             condition,
             options: vec![],
         };
@@ -65,18 +63,10 @@ impl PlanResolver<'_> {
         }))
     }
 
-    fn get_schema_for_delete(
-        &self,
-        table: &TableHandle,
-    ) -> PlanResult<(String, String, DFSchemaRef)> {
-        let location = table
-            .location()
-            .map(ToOwned::to_owned)
-            .ok_or_else(|| PlanError::unsupported("DELETE on tables without location"))?;
-        Ok((
-            location,
-            table.format().to_string(),
-            table.schema().to_dfschema_ref()?,
-        ))
+    fn get_schema_for_delete(&self, table: &TableHandle) -> PlanResult<DFSchemaRef> {
+        if table.location().is_none() {
+            return Err(PlanError::unsupported("DELETE on tables without location"));
+        }
+        Ok(table.schema().to_dfschema_ref()?)
     }
 }

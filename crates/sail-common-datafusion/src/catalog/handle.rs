@@ -9,7 +9,7 @@ use crate::catalog::{
     CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort, TableColumnStatus, TableKind,
     TableStatus,
 };
-use crate::datasource::{BucketBy, SourceInfo};
+use crate::datasource::{BucketBy, SourceInfo, SourceTarget};
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd)]
 pub struct TableHandle {
@@ -187,13 +187,9 @@ impl TableHandle {
         options.push(self.options().iter().cloned().collect());
         options.extend(additional_options);
         SourceInfo {
-            table: Some(self.clone()),
-            paths: self.location().into_iter().map(ToOwned::to_owned).collect(),
+            target: SourceTarget::Table(self.clone()),
             schema,
             constraints,
-            partition_by: self.partition_by().to_vec(),
-            bucket_by: self.bucket_by().cloned().map(Into::into),
-            sort_order: self.sort_by().iter().cloned().map(Into::into).collect(),
             options,
         }
     }

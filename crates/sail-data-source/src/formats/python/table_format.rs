@@ -199,14 +199,14 @@ impl TableFormat for PythonTableFormat {
         use sail_common_datafusion::datasource::PhysicalSinkMode;
 
         let SinkInfo {
+            target,
             input,
-            path,
             mode,
-            partition_by,
-            table_properties: _,
             mut options,
             ..
         } = info;
+        let path = target.path();
+        let partition_by = target.partition_by();
 
         // Warn about unsupported partitionBy (PySpark compat: silently ignored)
         if !partition_by.is_empty() {
@@ -219,7 +219,7 @@ impl TableFormat for PythonTableFormat {
 
         // Inject save path into options so the Python DataSource receives it
         // via self.options["path"] in __init__ (matches PySpark behavior).
-        if !path.is_empty() {
+        if let Some(path) = path {
             let path_option: HashMap<String, String> =
                 [("path".to_string(), path)].into_iter().collect();
             options.push(path_option);

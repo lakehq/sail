@@ -29,12 +29,10 @@ pub async fn create_preexpanded_merge_physical_plan(
 
     let target = MergeTargetInfo {
         table: node.options().target.table.clone(),
-        path: node.options().target.location.clone(),
-        partition_by: node.options().target.partition_by.clone(),
         options: convert_options(&node.options().target.options),
     };
 
-    let format = node.options().target.format.clone();
+    let format = node.options().target.table.format().to_string();
     // Build a structured operation override from the logical MERGE options.
     // Downstream (format-specific) writers are responsible for converting this
     // to commit log metadata (e.g. Delta commitInfo.operationParameters).

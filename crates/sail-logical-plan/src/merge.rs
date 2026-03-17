@@ -143,9 +143,6 @@ pub struct MergeIntoOptions {
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
 pub struct MergeTargetInfo {
     pub table: TableHandle,
-    pub format: String,
-    pub location: String,
-    pub partition_by: Vec<String>,
     pub options: Vec<Vec<(String, String)>>,
 }
 
