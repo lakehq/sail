@@ -19,10 +19,10 @@ pub enum CatalogObjectHandle {
 }
 
 impl CatalogObjectHandle {
-    pub fn from_status(status: TableStatus) -> Result<Self, TableStatus> {
+    pub fn from_status(status: TableStatus) -> Result<Self, Box<TableStatus>> {
         match TableHandle::from_status(status) {
             Ok(handle) => Ok(Self::Table(handle)),
-            Err(status) => ViewHandle::from_status(status).map(Self::View),
+            Err(status) => ViewHandle::from_status(*status).map(Self::View),
         }
     }
 }
@@ -73,7 +73,7 @@ pub enum ViewHandleKind {
 }
 
 impl TableHandle {
-    pub fn from_status(status: TableStatus) -> Result<Self, TableStatus> {
+    pub fn from_status(status: TableStatus) -> Result<Self, Box<TableStatus>> {
         let TableStatus {
             catalog,
             database,
@@ -109,12 +109,12 @@ impl TableHandle {
                     properties,
                 }),
             }),
-            kind => Err(TableStatus {
+            kind => Err(Box::new(TableStatus {
                 catalog,
                 database,
                 name,
                 kind,
-            }),
+            })),
         }
     }
 
@@ -283,7 +283,7 @@ impl TableHandle {
 }
 
 impl ViewHandle {
-    pub fn from_status(status: TableStatus) -> Result<Self, TableStatus> {
+    pub fn from_status(status: TableStatus) -> Result<Self, Box<TableStatus>> {
         let TableStatus {
             catalog,
             database,
@@ -339,12 +339,12 @@ impl ViewHandle {
                     kind: ViewHandleKind::GlobalTemporaryView { plan },
                 }),
             }),
-            kind => Err(TableStatus {
+            kind => Err(Box::new(TableStatus {
                 catalog,
                 database,
                 name,
                 kind,
-            }),
+            })),
         }
     }
 
