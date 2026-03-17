@@ -841,7 +841,7 @@ impl PostCommit {
             }
         };
 
-        let checksum_path = checksum_path(self.version);
+        let crc_path = checksum_path(self.version);
         let checksum_bytes = match serde_json::to_vec(&checksum) {
             Ok(bytes) => bytes,
             Err(err) => {
@@ -857,7 +857,7 @@ impl PostCommit {
             .log_store
             .object_store(Some(operation_id))
             .put_opts(
-                &checksum_path,
+                &crc_path,
                 Bytes::from(checksum_bytes).into(),
                 PutOptions {
                     mode: PutMode::Create,
@@ -870,19 +870,19 @@ impl PostCommit {
             Ok(_) => {
                 debug!(
                     "Wrote version checksum for version {} to {}",
-                    self.version, checksum_path
+                    self.version, crc_path
                 );
             }
             Err(ObjectStoreError::AlreadyExists { .. }) => {
                 warn!(
                     "Version checksum already exists for version {} at {}",
-                    self.version, checksum_path
+                    self.version, crc_path
                 );
             }
             Err(err) => {
                 warn!(
                     "Failed to write version checksum for version {} to {}: {}",
-                    self.version, checksum_path, err
+                    self.version, crc_path, err
                 );
             }
         }

@@ -281,17 +281,21 @@ impl DeltaSnapshot {
             return Ok(None);
         }
 
-        let batch = self.build_files_batch_from_adds(self.adds())?;
-        let size_array = batch
-            .column_by_name(FIELD_NAME_SIZE)
-            .and_then(|column| column.as_any().downcast_ref::<Int64Array>())
-            .ok_or_else(|| {
-                DeltaTableError::generic("Version checksum requires an Int64 add.size column")
-            })?;
+        let mut num_files: i64 = 0;
+        let mut table_size_bytes: i64 = 0;
 
-        let num_files = i64::try_from(batch.num_rows())
-            .map_err(|_| DeltaTableError::generic("Version checksum file count overflow"))?;
-        let table_size_bytes = sum(size_array).unwrap_or(0);
+        for add in self.adds() {
+            num_files = num_files
+                .checked_add(1)
+                .ok_or_else(|| {
+                    DeltaTableError::generic("Version checksum file count overflow")
+                })?;
+            table_size_bytes = table_size_bytes
+                .checked_add(add.size)
+                .ok_or_else(|| {
+                    DeltaTableError::generic("Version checksum table size overflow")
+                })?;
+        }
 
         let mut set_transactions = self.app_txns.values().cloned().collect::<Vec<_>>();
         set_transactions.sort_by(|left, right| {
