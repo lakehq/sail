@@ -12,7 +12,9 @@ import pytest
 try:
     from pyspark.sql.datasource import EqualTo as _EqualTo  # noqa: F401
 except ImportError:
-    pytest.skip("Python DataSource API with filter pushdown not available (requires PySpark 4.1+)", allow_module_level=True)
+    pytest.skip(
+        "Python DataSource API with filter pushdown not available (requires PySpark 4.1+)", allow_module_level=True
+    )
 
 try:
     import vortex
