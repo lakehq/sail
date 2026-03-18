@@ -197,8 +197,3 @@ def pytest_collection_modifyitems(session, config, items):  # noqa: ARG001
             # Note: pytest-bdd preserves the hyphen in marker names
             elif item.get_closest_marker("sail-only"):
                 item.add_marker(skip_sail_only)
-    else:
-        # Mark @sail-bug scenarios as expected failures when running against Sail
-        for item in items:
-            if not isinstance(item, DoctestItem) and item.get_closest_marker("sail-bug"):
-                item.add_marker(pytest.mark.xfail(reason="Known Sail bug", strict=True))
