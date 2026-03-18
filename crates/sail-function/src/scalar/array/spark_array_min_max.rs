@@ -51,11 +51,9 @@ impl ScalarUDFImpl for ArrayMin {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[0] {
-            DataType::List(field)
-            | DataType::LargeList(field)
-            | DataType::FixedSizeList(field, _) => Ok(field.data_type().clone()),
+            DataType::List(field) | DataType::LargeList(field) => Ok(field.data_type().clone()),
             DataType::Null => Ok(DataType::Null),
-            _ => plan_err!("ArrayMin can only accept List, LargeList or FixedSizeList."),
+            _ => plan_err!("ArrayMin can only accept List or LargeList."),
         }
     }
 
@@ -102,11 +100,9 @@ impl ScalarUDFImpl for ArrayMax {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[0] {
-            DataType::List(field)
-            | DataType::LargeList(field)
-            | DataType::FixedSizeList(field, _) => Ok(field.data_type().clone()),
+            DataType::List(field) | DataType::LargeList(field) => Ok(field.data_type().clone()),
             DataType::Null => Ok(DataType::Null),
-            _ => plan_err!("ArrayMax can only accept List, LargeList or FixedSizeList."),
+            _ => plan_err!("ArrayMax can only accept List or LargeList."),
         }
     }
 
