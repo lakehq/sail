@@ -1,5 +1,4 @@
 import dataclasses
-from functools import partial
 from pathlib import Path
 
 import duckdb
@@ -7,7 +6,11 @@ import pytest
 
 from pysail.testing.spark.steps.plan import normalize_plan_text
 from pysail.testing.spark.utils.common import is_jvm_spark
-from pysail.testing.spark.utils.sql import format_show_string, normalize_floating_point_string, parse_show_string
+from pysail.testing.spark.utils.sql import (
+    format_show_string,
+    normalize_floating_point_string,
+    parse_show_string,
+)
 
 
 @pytest.fixture(scope="module")
@@ -34,7 +37,10 @@ def data(spark, duck):
 def test_derived_tpcds_query_result(spark, query, snapshot):
     for sql in read_sql(query):
         result = spark.sql(sql)._show_string(n=0x7FFFFFFF, truncate=False)  # noqa: SLF001
-        table = format_show_string(parse_show_string(result), normalizer=partial(normalize_floating_point_string, d=6))
+        table = format_show_string(
+            parse_show_string(result),
+            normalizer=lambda x: normalize_floating_point_string(x, d=6, n=6),
+        )
         assert table == snapshot
 
 

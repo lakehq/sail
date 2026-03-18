@@ -3124,107 +3124,107 @@ data:
 name: "test_derived_tpcds_query_result[22]"
 data:
   |-
-    | i_product_name  | i_brand              | i_class         | i_category  | qoh                |
-    | antiese         | NULL                 | NULL            | NULL        | 143.66666666666666 |
-    | antiese         | namelesscorp #6      | NULL            | NULL        | 143.66666666666666 |
-    | antiese         | namelesscorp #6      | mens watch      | NULL        | 143.66666666666666 |
-    | antiese         | namelesscorp #6      | mens watch      | Jewelry     | 143.66666666666666 |
-    | pripri          | NULL                 | NULL            | NULL        | 148.5              |
-    | pripri          | exportiexporti #2    | NULL            | NULL        | 148.5              |
-    | pripri          | exportiexporti #2    | toddlers        | NULL        | 148.5              |
-    | pripri          | exportiexporti #2    | toddlers        | Children    | 148.5              |
-    | prically        | NULL                 | NULL            | NULL        | 264.0              |
-    | prically        | importoimporto #2    | NULL            | NULL        | 264.0              |
-    | prically        | importoimporto #2    | shirts          | NULL        | 264.0              |
-    | prically        | importoimporto #2    | shirts          | Men         | 264.0              |
-    | priantiought    | NULL                 | NULL            | NULL        | 266.25             |
-    | priantiought    | edu packscholar #2   | NULL            | NULL        | 266.25             |
-    | priantiought    | edu packscholar #2   | classical       | NULL        | 266.25             |
-    | priantiought    | edu packscholar #2   | classical       | Music       | 266.25             |
-    | prin st         | NULL                 | NULL            | NULL        | 276.6666666666667  |
-    | prin st         | scholarmaxi #4       | NULL            | NULL        | 276.6666666666667  |
-    | prin st         | scholarmaxi #4       | fishing         | NULL        | 276.6666666666667  |
-    | prin st         | scholarmaxi #4       | fishing         | Sports      | 276.6666666666667  |
-    | oughtable       | NULL                 | NULL            | NULL        | 328.0              |
-    | oughtable       | corpbrand #6         | NULL            | NULL        | 328.0              |
-    | oughtable       | corpbrand #6         | consignment     | NULL        | 328.0              |
-    | oughtable       | corpbrand #6         | consignment     | Jewelry     | 328.0              |
-    | ationationought | NULL                 | NULL            | NULL        | 338.0              |
-    | ationationought | exportischolar #2    | NULL            | NULL        | 338.0              |
-    | ationationought | exportischolar #2    | pop             | NULL        | 338.0              |
-    | ationationought | exportischolar #2    | pop             | Music       | 338.0              |
-    | oughtationought | NULL                 | NULL            | NULL        | 367.0              |
-    | oughtationought | edu packscholar #2   | NULL            | NULL        | 367.0              |
-    | oughtationought | edu packscholar #2   | classical       | NULL        | 367.0              |
-    | oughtationought | edu packscholar #2   | classical       | Music       | 367.0              |
-    | ationn st       | NULL                 | NULL            | NULL        | 403.9791666666667  |
-    | ationn st       | scholarunivamalg #2  | NULL            | NULL        | 403.9791666666667  |
-    | ationn st       | scholarunivamalg #2  | fiction         | NULL        | 403.9791666666667  |
-    | ationn st       | scholarunivamalg #2  | fiction         | Books       | 403.9791666666667  |
-    | n steing        | NULL                 | NULL            | NULL        | 409.3921568627451  |
-    | n steing        | amalgimporto #2      | NULL            | NULL        | 409.3921568627451  |
-    | n steing        | amalgimporto #2      | accessories     | NULL        | 409.3921568627451  |
-    | n steing        | amalgimporto #2      | accessories     | Men         | 409.3921568627451  |
-    | antipriought    | NULL                 | NULL            | NULL        | 414.75             |
-    | antipriought    | maxiunivamalg #17    | NULL            | NULL        | 414.75             |
-    | antipriought    | maxiunivamalg #17    | televisions     | NULL        | 414.75             |
-    | antipriought    | maxiunivamalg #17    | televisions     | Electronics | 414.75             |
-    | ablecally       | NULL                 | NULL            | NULL        | 420.64444444444445 |
-    | ablecally       | edu packcorp #7      | NULL            | NULL        | 420.64444444444445 |
-    | ablecally       | edu packcorp #7      | bracelets       | NULL        | 420.64444444444445 |
-    | ablecally       | edu packcorp #7      | bracelets       | Jewelry     | 420.64444444444445 |
-    | n stpri         | NULL                 | NULL            | NULL        | 421.5              |
-    | n stpri         | importomaxi #4       | NULL            | NULL        | 421.5              |
-    | n stpri         | importomaxi #4       | business        | NULL        | 421.5              |
-    | n stpri         | importomaxi #4       | business        | Books       | 421.5              |
-    | n stese         | NULL                 | NULL            | NULL        | 426.57142857142856 |
-    | n stese         | edu packexporti #2   | NULL            | NULL        | 426.57142857142856 |
-    | n stese         | edu packexporti #2   | school-uniforms | NULL        | 426.57142857142856 |
-    | n stese         | edu packexporti #2   | school-uniforms | Children    | 426.57142857142856 |
-    | oughteseought   | NULL                 | NULL            | NULL        | 430.25             |
-    | oughteseought   | scholarunivamalg #10 | NULL            | NULL        | 430.25             |
-    | oughteseought   | scholarunivamalg #10 | fiction         | NULL        | 430.25             |
-    | oughteseought   | scholarunivamalg #10 | fiction         | Books       | 430.25             |
-    | bareseought     | NULL                 | NULL            | NULL        | 431.2608695652174  |
-    | bareseought     | importoscholar #1    | NULL            | NULL        | 431.2608695652174  |
-    | bareseought     | importoscholar #1    | country         | NULL        | 431.2608695652174  |
-    | bareseought     | importoscholar #1    | country         | Music       | 431.2608695652174  |
-    | priought        | NULL                 | NULL            | NULL        | 432.2307692307692  |
-    | priought        | importobrand #6      | NULL            | NULL        | 432.2307692307692  |
-    | priought        | importobrand #6      | costume         | NULL        | 432.2307692307692  |
-    | priought        | importobrand #6      | costume         | Jewelry     | 432.2307692307692  |
-    | baranti         | NULL                 | NULL            | NULL        | 433.7111111111111  |
-    | baranti         | edu packedu pack #1  | NULL            | NULL        | 433.7111111111111  |
-    | baranti         | edu packedu pack #1  | athletic        | NULL        | 433.7111111111111  |
-    | baranti         | edu packedu pack #1  | athletic        | Shoes       | 433.7111111111111  |
-    | n st            | NULL                 | NULL            | NULL        | 435.5              |
-    | n st            | edu packamalg #2     | NULL            | NULL        | 435.5              |
-    | n st            | edu packamalg #2     | swimwear        | NULL        | 435.5              |
-    | n st            | edu packamalg #2     | swimwear        | Women       | 435.5              |
-    | oughtn st       | NULL                 | NULL            | NULL        | 443.1041666666667  |
-    | oughtn st       | corpunivamalg #7     | NULL            | NULL        | 443.1041666666667  |
-    | oughtn st       | corpunivamalg #7     | musical         | NULL        | 443.1041666666667  |
-    | oughtn st       | corpunivamalg #7     | musical         | Electronics | 443.1041666666667  |
-    | oughtpri        | NULL                 | NULL            | NULL        | 446.5              |
-    | oughtpri        | scholarmaxi #2       | NULL            | NULL        | 446.5              |
-    | oughtpri        | scholarmaxi #2       | fishing         | NULL        | 446.5              |
-    | oughtpri        | scholarmaxi #2       | fishing         | Sports      | 446.5              |
-    | priation        | NULL                 | NULL            | NULL        | 448.76             |
-    | priation        | exportiamalg #2      | NULL            | NULL        | 448.76             |
-    | priation        | exportiamalg #2      | maternity       | NULL        | 448.76             |
-    | priation        | exportiamalg #2      | maternity       | Women       | 448.76             |
-    | n stantiought   | NULL                 | NULL            | NULL        | 453.0              |
-    | n stantiought   | amalgimporto #2      | NULL            | NULL        | 453.0              |
-    | n stantiought   | amalgimporto #2      | accessories     | NULL        | 453.0              |
-    | n stantiought   | amalgimporto #2      | accessories     | Men         | 453.0              |
-    | oughtanti       | NULL                 | NULL            | NULL        | 454.25             |
-    | oughtanti       | exportiexporti #2    | NULL            | NULL        | 454.25             |
-    | oughtanti       | exportiexporti #2    | toddlers        | NULL        | 454.25             |
-    | oughtanti       | exportiexporti #2    | toddlers        | Children    | 454.25             |
-    | n stcallyought  | NULL                 | NULL            | NULL        | 456.46             |
-    | n stcallyought  | amalgbrand #2        | NULL            | NULL        | 456.46             |
-    | n stcallyought  | amalgbrand #2        | semi-precious   | NULL        | 456.46             |
-    | n stcallyought  | amalgbrand #2        | semi-precious   | Jewelry     | 456.46             |
+    | i_product_name  | i_brand              | i_class         | i_category  | qoh        |
+    | antiese         | NULL                 | NULL            | NULL        | 143.666667 |
+    | antiese         | namelesscorp #6      | NULL            | NULL        | 143.666667 |
+    | antiese         | namelesscorp #6      | mens watch      | NULL        | 143.666667 |
+    | antiese         | namelesscorp #6      | mens watch      | Jewelry     | 143.666667 |
+    | pripri          | NULL                 | NULL            | NULL        | 148.5      |
+    | pripri          | exportiexporti #2    | NULL            | NULL        | 148.5      |
+    | pripri          | exportiexporti #2    | toddlers        | NULL        | 148.5      |
+    | pripri          | exportiexporti #2    | toddlers        | Children    | 148.5      |
+    | prically        | NULL                 | NULL            | NULL        | 264.0      |
+    | prically        | importoimporto #2    | NULL            | NULL        | 264.0      |
+    | prically        | importoimporto #2    | shirts          | NULL        | 264.0      |
+    | prically        | importoimporto #2    | shirts          | Men         | 264.0      |
+    | priantiought    | NULL                 | NULL            | NULL        | 266.25     |
+    | priantiought    | edu packscholar #2   | NULL            | NULL        | 266.25     |
+    | priantiought    | edu packscholar #2   | classical       | NULL        | 266.25     |
+    | priantiought    | edu packscholar #2   | classical       | Music       | 266.25     |
+    | prin st         | NULL                 | NULL            | NULL        | 276.666667 |
+    | prin st         | scholarmaxi #4       | NULL            | NULL        | 276.666667 |
+    | prin st         | scholarmaxi #4       | fishing         | NULL        | 276.666667 |
+    | prin st         | scholarmaxi #4       | fishing         | Sports      | 276.666667 |
+    | oughtable       | NULL                 | NULL            | NULL        | 328.0      |
+    | oughtable       | corpbrand #6         | NULL            | NULL        | 328.0      |
+    | oughtable       | corpbrand #6         | consignment     | NULL        | 328.0      |
+    | oughtable       | corpbrand #6         | consignment     | Jewelry     | 328.0      |
+    | ationationought | NULL                 | NULL            | NULL        | 338.0      |
+    | ationationought | exportischolar #2    | NULL            | NULL        | 338.0      |
+    | ationationought | exportischolar #2    | pop             | NULL        | 338.0      |
+    | ationationought | exportischolar #2    | pop             | Music       | 338.0      |
+    | oughtationought | NULL                 | NULL            | NULL        | 367.0      |
+    | oughtationought | edu packscholar #2   | NULL            | NULL        | 367.0      |
+    | oughtationought | edu packscholar #2   | classical       | NULL        | 367.0      |
+    | oughtationought | edu packscholar #2   | classical       | Music       | 367.0      |
+    | ationn st       | NULL                 | NULL            | NULL        | 403.979167 |
+    | ationn st       | scholarunivamalg #2  | NULL            | NULL        | 403.979167 |
+    | ationn st       | scholarunivamalg #2  | fiction         | NULL        | 403.979167 |
+    | ationn st       | scholarunivamalg #2  | fiction         | Books       | 403.979167 |
+    | n steing        | NULL                 | NULL            | NULL        | 409.392157 |
+    | n steing        | amalgimporto #2      | NULL            | NULL        | 409.392157 |
+    | n steing        | amalgimporto #2      | accessories     | NULL        | 409.392157 |
+    | n steing        | amalgimporto #2      | accessories     | Men         | 409.392157 |
+    | antipriought    | NULL                 | NULL            | NULL        | 414.75     |
+    | antipriought    | maxiunivamalg #17    | NULL            | NULL        | 414.75     |
+    | antipriought    | maxiunivamalg #17    | televisions     | NULL        | 414.75     |
+    | antipriought    | maxiunivamalg #17    | televisions     | Electronics | 414.75     |
+    | ablecally       | NULL                 | NULL            | NULL        | 420.644444 |
+    | ablecally       | edu packcorp #7      | NULL            | NULL        | 420.644444 |
+    | ablecally       | edu packcorp #7      | bracelets       | NULL        | 420.644444 |
+    | ablecally       | edu packcorp #7      | bracelets       | Jewelry     | 420.644444 |
+    | n stpri         | NULL                 | NULL            | NULL        | 421.5      |
+    | n stpri         | importomaxi #4       | NULL            | NULL        | 421.5      |
+    | n stpri         | importomaxi #4       | business        | NULL        | 421.5      |
+    | n stpri         | importomaxi #4       | business        | Books       | 421.5      |
+    | n stese         | NULL                 | NULL            | NULL        | 426.571429 |
+    | n stese         | edu packexporti #2   | NULL            | NULL        | 426.571429 |
+    | n stese         | edu packexporti #2   | school-uniforms | NULL        | 426.571429 |
+    | n stese         | edu packexporti #2   | school-uniforms | Children    | 426.571429 |
+    | oughteseought   | NULL                 | NULL            | NULL        | 430.25     |
+    | oughteseought   | scholarunivamalg #10 | NULL            | NULL        | 430.25     |
+    | oughteseought   | scholarunivamalg #10 | fiction         | NULL        | 430.25     |
+    | oughteseought   | scholarunivamalg #10 | fiction         | Books       | 430.25     |
+    | bareseought     | NULL                 | NULL            | NULL        | 431.260870 |
+    | bareseought     | importoscholar #1    | NULL            | NULL        | 431.260870 |
+    | bareseought     | importoscholar #1    | country         | NULL        | 431.260870 |
+    | bareseought     | importoscholar #1    | country         | Music       | 431.260870 |
+    | priought        | NULL                 | NULL            | NULL        | 432.230769 |
+    | priought        | importobrand #6      | NULL            | NULL        | 432.230769 |
+    | priought        | importobrand #6      | costume         | NULL        | 432.230769 |
+    | priought        | importobrand #6      | costume         | Jewelry     | 432.230769 |
+    | baranti         | NULL                 | NULL            | NULL        | 433.711111 |
+    | baranti         | edu packedu pack #1  | NULL            | NULL        | 433.711111 |
+    | baranti         | edu packedu pack #1  | athletic        | NULL        | 433.711111 |
+    | baranti         | edu packedu pack #1  | athletic        | Shoes       | 433.711111 |
+    | n st            | NULL                 | NULL            | NULL        | 435.5      |
+    | n st            | edu packamalg #2     | NULL            | NULL        | 435.5      |
+    | n st            | edu packamalg #2     | swimwear        | NULL        | 435.5      |
+    | n st            | edu packamalg #2     | swimwear        | Women       | 435.5      |
+    | oughtn st       | NULL                 | NULL            | NULL        | 443.104167 |
+    | oughtn st       | corpunivamalg #7     | NULL            | NULL        | 443.104167 |
+    | oughtn st       | corpunivamalg #7     | musical         | NULL        | 443.104167 |
+    | oughtn st       | corpunivamalg #7     | musical         | Electronics | 443.104167 |
+    | oughtpri        | NULL                 | NULL            | NULL        | 446.5      |
+    | oughtpri        | scholarmaxi #2       | NULL            | NULL        | 446.5      |
+    | oughtpri        | scholarmaxi #2       | fishing         | NULL        | 446.5      |
+    | oughtpri        | scholarmaxi #2       | fishing         | Sports      | 446.5      |
+    | priation        | NULL                 | NULL            | NULL        | 448.76     |
+    | priation        | exportiamalg #2      | NULL            | NULL        | 448.76     |
+    | priation        | exportiamalg #2      | maternity       | NULL        | 448.76     |
+    | priation        | exportiamalg #2      | maternity       | Women       | 448.76     |
+    | n stantiought   | NULL                 | NULL            | NULL        | 453.0      |
+    | n stantiought   | amalgimporto #2      | NULL            | NULL        | 453.0      |
+    | n stantiought   | amalgimporto #2      | accessories     | NULL        | 453.0      |
+    | n stantiought   | amalgimporto #2      | accessories     | Men         | 453.0      |
+    | oughtanti       | NULL                 | NULL            | NULL        | 454.25     |
+    | oughtanti       | exportiexporti #2    | NULL            | NULL        | 454.25     |
+    | oughtanti       | exportiexporti #2    | toddlers        | NULL        | 454.25     |
+    | oughtanti       | exportiexporti #2    | toddlers        | Children    | 454.25     |
+    | n stcallyought  | NULL                 | NULL            | NULL        | 456.46     |
+    | n stcallyought  | amalgbrand #2        | NULL            | NULL        | 456.46     |
+    | n stcallyought  | amalgbrand #2        | semi-precious   | NULL        | 456.46     |
+    | n stcallyought  | amalgbrand #2        | semi-precious   | Jewelry     | 456.46     |
 ---
 name: "test_derived_tpcds_query_result[23]"
 data:
@@ -3251,185 +3251,185 @@ data:
 name: "test_derived_tpcds_query_result[26]"
 data:
   |-
-    | i_item_id        | agg1               | agg2       | agg3        | agg4       |
-    | AAAAAAAAACAAAAAA | 25.0               | 84.620000  | 0.000000    | 70.640000  |
-    | AAAAAAAAAEAAAAAA | 60.0               | 291.990000 | 0.000000    | 99.270000  |
-    | AAAAAAAAAFAAAAAA | 57.5               | 113.850000 | 0.000000    | 45.190000  |
-    | AAAAAAAAAHAAAAAA | 43.0               | 78.775000  | 391.645000  | 28.460000  |
-    | AAAAAAAAAIAAAAAA | 61.0               | 63.965000  | 0.000000    | 25.110000  |
-    | AAAAAAAAAKAAAAAA | 86.5               | 45.800000  | 0.000000    | 36.200000  |
-    | AAAAAAAAALAAAAAA | 51.0               | 65.770000  | 0.000000    | 57.870000  |
-    | AAAAAAAABAAAAAAA | 81.0               | 186.910000 | 0.000000    | 175.690000 |
-    | AAAAAAAABDAAAAAA | 69.0               | 90.700000  | 0.000000    | 29.020000  |
-    | AAAAAAAABGAAAAAA | 81.5               | 104.090000 | 0.000000    | 50.175000  |
-    | AAAAAAAABJAAAAAA | 26.0               | 165.450000 | 0.000000    | 36.895000  |
-    | AAAAAAAACAAAAAAA | 42.0               | 49.170000  | 0.000000    | 30.480000  |
-    | AAAAAAAACCAAAAAA | 43.5               | 71.820000  | 994.780000  | 27.085000  |
-    | AAAAAAAACDAAAAAA | 100.0              | 143.880000 | 4558.080000 | 142.440000 |
-    | AAAAAAAACGAAAAAA | 45.0               | 30.420000  | 0.000000    | 26.460000  |
-    | AAAAAAAACIAAAAAA | 49.0               | 25.900000  | 0.000000    | 19.420000  |
-    | AAAAAAAACJAAAAAA | 23.0               | 100.800000 | 0.000000    | 0.000000   |
-    | AAAAAAAADBAAAAAA | 71.5               | 119.095000 | 0.000000    | 84.130000  |
-    | AAAAAAAADHAAAAAA | 53.0               | 171.595000 | 1544.165000 | 48.420000  |
-    | AAAAAAAAEBAAAAAA | 56.0               | 2.340000   | 0.000000    | 1.820000   |
-    | AAAAAAAAEDAAAAAA | 88.0               | 7.020000   | 0.000000    | 5.610000   |
-    | AAAAAAAAEEAAAAAA | 55.0               | 46.755000  | 0.000000    | 18.680000  |
-    | AAAAAAAAEGAAAAAA | 78.0               | 23.520000  | 0.000000    | 14.810000  |
-    | AAAAAAAAEHAAAAAA | 94.5               | 85.920000  | 363.725000  | 44.810000  |
-    | AAAAAAAAEJAAAAAA | 69.0               | 211.900000 | 0.000000    | 112.300000 |
-    | AAAAAAAAEKAAAAAA | 37.0               | 104.960000 | 0.000000    | 29.380000  |
-    | AAAAAAAAFCAAAAAA | 65.0               | 85.450000  | 0.000000    | 18.790000  |
-    | AAAAAAAAFFAAAAAA | 12.0               | 254.830000 | 0.000000    | 56.060000  |
-    | AAAAAAAAFIAAAAAA | 51.0               | 163.650000 | 0.000000    | 67.090000  |
-    | AAAAAAAAGBAAAAAA | 57.0               | 122.330000 | 278.305000  | 48.255000  |
-    | AAAAAAAAGCAAAAAA | 36.0               | 144.190000 | 0.000000    | 17.300000  |
-    | AAAAAAAAGEAAAAAA | 79.66666666666667  | 100.320000 | 3038.453333 | 77.110000  |
-    | AAAAAAAAGFAAAAAA | 13.0               | 144.200000 | 0.000000    | 82.085000  |
-    | AAAAAAAAGHAAAAAA | 57.5               | 148.695000 | 0.000000    | 23.815000  |
-    | AAAAAAAAGIAAAAAA | 26.0               | 19.460000  | 37.190000   | 6.220000   |
-    | AAAAAAAAGKAAAAAA | 26.0               | 115.630000 | 0.000000    | 60.120000  |
-    | AAAAAAAAHAAAAAAA | 47.5               | 52.305000  | 51.070000   | 39.070000  |
-    | AAAAAAAAHDAAAAAA | 41.0               | 158.940000 | 0.000000    | 114.430000 |
-    | AAAAAAAAHGAAAAAA | 48.0               | 119.430000 | 0.000000    | 61.950000  |
-    | AAAAAAAAHJAAAAAA | 66.0               | 59.490000  | 0.000000    | 39.260000  |
-    | AAAAAAAAIAAAAAAA | 69.5               | 103.905000 | 0.000000    | 47.960000  |
-    | AAAAAAAAICAAAAAA | 42.666666666666664 | 103.836666 | 0.000000    | 69.956666  |
-    | AAAAAAAAIDAAAAAA | 77.0               | 12.000000  | 157.540000  | 3.720000   |
-    | AAAAAAAAIGAAAAAA | 31.5               | 33.670000  | 397.425000  | 24.500000  |
-    | AAAAAAAAIIAAAAAA | 54.0               | 168.920000 | 0.000000    | 92.900000  |
-    | AAAAAAAAIJAAAAAA | 14.0               | 182.550000 | 184.010000  | 109.530000 |
-    | AAAAAAAAJBAAAAAA | 41.5               | 79.155000  | 0.000000    | 31.485000  |
-    | AAAAAAAAJHAAAAAA | 31.0               | 63.330000  | 0.000000    | 42.430000  |
-    | AAAAAAAAJKAAAAAA | 62.0               | 82.100000  | 0.000000    | 61.745000  |
-    | AAAAAAAAKDAAAAAA | 32.0               | 141.475000 | 0.000000    | 61.850000  |
-    | AAAAAAAAKEAAAAAA | 31.5               | 41.140000  | 0.000000    | 24.975000  |
-    | AAAAAAAAKGAAAAAA | 52.5               | 30.625000  | 0.000000    | 24.005000  |
-    | AAAAAAAAKHAAAAAA | 37.0               | 212.100000 | 0.000000    | 14.840000  |
-    | AAAAAAAAKJAAAAAA | 9.0                | 157.120000 | 0.000000    | 150.830000 |
-    | AAAAAAAAKKAAAAAA | 44.0               | 32.580000  | 0.000000    | 31.920000  |
-    | AAAAAAAALCAAAAAA | 10.5               | 72.755000  | 101.895000  | 34.735000  |
-    | AAAAAAAALFAAAAAA | 58.0               | 56.790000  | 0.000000    | 24.410000  |
-    | AAAAAAAAMBAAAAAA | 52.0               | 133.870000 | 27.200000   | 50.215000  |
-    | AAAAAAAAMCAAAAAA | 42.0               | 75.160000  | 71.020000   | 33.820000  |
-    | AAAAAAAAMEAAAAAA | 51.5               | 44.525000  | 0.000000    | 25.075000  |
-    | AAAAAAAAMFAAAAAA | 57.0               | 86.840000  | 0.000000    | 40.810000  |
-    | AAAAAAAAMIAAAAAA | 8.0                | 147.255000 | 0.000000    | 95.575000  |
-    | AAAAAAAAMKAAAAAA | 38.0               | 166.360000 | 202.160000  | 6.650000   |
-    | AAAAAAAANDAAAAAA | 67.0               | 140.080000 | 0.000000    | 81.240000  |
-    | AAAAAAAANJAAAAAA | 23.0               | 21.020000  | 333.580000  | 21.020000  |
-    | AAAAAAAAOCAAAAAA | 8.0                | 78.330000  | 0.000000    | 69.710000  |
-    | AAAAAAAAODAAAAAA | 53.5               | 128.470000 | 0.000000    | 25.530000  |
-    | AAAAAAAAOFAAAAAA | 55.5               | 26.490000  | 0.000000    | 1.355000   |
-    | AAAAAAAAOGAAAAAA | 35.0               | 49.560000  | 187.790000  | 28.240000  |
-    | AAAAAAAAOIAAAAAA | 91.0               | 43.230000  | 0.000000    | 41.930000  |
-    | AAAAAAAAOJAAAAAA | 1.0                | 78.550000  | 23.630000   | 46.340000  |
-    | AAAAAAAAPBAAAAAA | 50.0               | 117.900000 | 0.000000    | 16.500000  |
-    | AAAAAAAAPEAAAAAA | 2.0                | 28.450000  | 0.000000    | 0.560000   |
+    | i_item_id        | agg1      | agg2       | agg3        | agg4       |
+    | AAAAAAAAACAAAAAA | 25.0      | 84.620000  | 0.000000    | 70.640000  |
+    | AAAAAAAAAEAAAAAA | 60.0      | 291.990000 | 0.000000    | 99.270000  |
+    | AAAAAAAAAFAAAAAA | 57.5      | 113.850000 | 0.000000    | 45.190000  |
+    | AAAAAAAAAHAAAAAA | 43.0      | 78.775000  | 391.645000  | 28.460000  |
+    | AAAAAAAAAIAAAAAA | 61.0      | 63.965000  | 0.000000    | 25.110000  |
+    | AAAAAAAAAKAAAAAA | 86.5      | 45.800000  | 0.000000    | 36.200000  |
+    | AAAAAAAAALAAAAAA | 51.0      | 65.770000  | 0.000000    | 57.870000  |
+    | AAAAAAAABAAAAAAA | 81.0      | 186.910000 | 0.000000    | 175.690000 |
+    | AAAAAAAABDAAAAAA | 69.0      | 90.700000  | 0.000000    | 29.020000  |
+    | AAAAAAAABGAAAAAA | 81.5      | 104.090000 | 0.000000    | 50.175000  |
+    | AAAAAAAABJAAAAAA | 26.0      | 165.450000 | 0.000000    | 36.895000  |
+    | AAAAAAAACAAAAAAA | 42.0      | 49.170000  | 0.000000    | 30.480000  |
+    | AAAAAAAACCAAAAAA | 43.5      | 71.820000  | 994.780000  | 27.085000  |
+    | AAAAAAAACDAAAAAA | 100.0     | 143.880000 | 4558.080000 | 142.440000 |
+    | AAAAAAAACGAAAAAA | 45.0      | 30.420000  | 0.000000    | 26.460000  |
+    | AAAAAAAACIAAAAAA | 49.0      | 25.900000  | 0.000000    | 19.420000  |
+    | AAAAAAAACJAAAAAA | 23.0      | 100.800000 | 0.000000    | 0.000000   |
+    | AAAAAAAADBAAAAAA | 71.5      | 119.095000 | 0.000000    | 84.130000  |
+    | AAAAAAAADHAAAAAA | 53.0      | 171.595000 | 1544.165000 | 48.420000  |
+    | AAAAAAAAEBAAAAAA | 56.0      | 2.340000   | 0.000000    | 1.820000   |
+    | AAAAAAAAEDAAAAAA | 88.0      | 7.020000   | 0.000000    | 5.610000   |
+    | AAAAAAAAEEAAAAAA | 55.0      | 46.755000  | 0.000000    | 18.680000  |
+    | AAAAAAAAEGAAAAAA | 78.0      | 23.520000  | 0.000000    | 14.810000  |
+    | AAAAAAAAEHAAAAAA | 94.5      | 85.920000  | 363.725000  | 44.810000  |
+    | AAAAAAAAEJAAAAAA | 69.0      | 211.900000 | 0.000000    | 112.300000 |
+    | AAAAAAAAEKAAAAAA | 37.0      | 104.960000 | 0.000000    | 29.380000  |
+    | AAAAAAAAFCAAAAAA | 65.0      | 85.450000  | 0.000000    | 18.790000  |
+    | AAAAAAAAFFAAAAAA | 12.0      | 254.830000 | 0.000000    | 56.060000  |
+    | AAAAAAAAFIAAAAAA | 51.0      | 163.650000 | 0.000000    | 67.090000  |
+    | AAAAAAAAGBAAAAAA | 57.0      | 122.330000 | 278.305000  | 48.255000  |
+    | AAAAAAAAGCAAAAAA | 36.0      | 144.190000 | 0.000000    | 17.300000  |
+    | AAAAAAAAGEAAAAAA | 79.666667 | 100.320000 | 3038.453333 | 77.110000  |
+    | AAAAAAAAGFAAAAAA | 13.0      | 144.200000 | 0.000000    | 82.085000  |
+    | AAAAAAAAGHAAAAAA | 57.5      | 148.695000 | 0.000000    | 23.815000  |
+    | AAAAAAAAGIAAAAAA | 26.0      | 19.460000  | 37.190000   | 6.220000   |
+    | AAAAAAAAGKAAAAAA | 26.0      | 115.630000 | 0.000000    | 60.120000  |
+    | AAAAAAAAHAAAAAAA | 47.5      | 52.305000  | 51.070000   | 39.070000  |
+    | AAAAAAAAHDAAAAAA | 41.0      | 158.940000 | 0.000000    | 114.430000 |
+    | AAAAAAAAHGAAAAAA | 48.0      | 119.430000 | 0.000000    | 61.950000  |
+    | AAAAAAAAHJAAAAAA | 66.0      | 59.490000  | 0.000000    | 39.260000  |
+    | AAAAAAAAIAAAAAAA | 69.5      | 103.905000 | 0.000000    | 47.960000  |
+    | AAAAAAAAICAAAAAA | 42.666667 | 103.836666 | 0.000000    | 69.956666  |
+    | AAAAAAAAIDAAAAAA | 77.0      | 12.000000  | 157.540000  | 3.720000   |
+    | AAAAAAAAIGAAAAAA | 31.5      | 33.670000  | 397.425000  | 24.500000  |
+    | AAAAAAAAIIAAAAAA | 54.0      | 168.920000 | 0.000000    | 92.900000  |
+    | AAAAAAAAIJAAAAAA | 14.0      | 182.550000 | 184.010000  | 109.530000 |
+    | AAAAAAAAJBAAAAAA | 41.5      | 79.155000  | 0.000000    | 31.485000  |
+    | AAAAAAAAJHAAAAAA | 31.0      | 63.330000  | 0.000000    | 42.430000  |
+    | AAAAAAAAJKAAAAAA | 62.0      | 82.100000  | 0.000000    | 61.745000  |
+    | AAAAAAAAKDAAAAAA | 32.0      | 141.475000 | 0.000000    | 61.850000  |
+    | AAAAAAAAKEAAAAAA | 31.5      | 41.140000  | 0.000000    | 24.975000  |
+    | AAAAAAAAKGAAAAAA | 52.5      | 30.625000  | 0.000000    | 24.005000  |
+    | AAAAAAAAKHAAAAAA | 37.0      | 212.100000 | 0.000000    | 14.840000  |
+    | AAAAAAAAKJAAAAAA | 9.0       | 157.120000 | 0.000000    | 150.830000 |
+    | AAAAAAAAKKAAAAAA | 44.0      | 32.580000  | 0.000000    | 31.920000  |
+    | AAAAAAAALCAAAAAA | 10.5      | 72.755000  | 101.895000  | 34.735000  |
+    | AAAAAAAALFAAAAAA | 58.0      | 56.790000  | 0.000000    | 24.410000  |
+    | AAAAAAAAMBAAAAAA | 52.0      | 133.870000 | 27.200000   | 50.215000  |
+    | AAAAAAAAMCAAAAAA | 42.0      | 75.160000  | 71.020000   | 33.820000  |
+    | AAAAAAAAMEAAAAAA | 51.5      | 44.525000  | 0.000000    | 25.075000  |
+    | AAAAAAAAMFAAAAAA | 57.0      | 86.840000  | 0.000000    | 40.810000  |
+    | AAAAAAAAMIAAAAAA | 8.0       | 147.255000 | 0.000000    | 95.575000  |
+    | AAAAAAAAMKAAAAAA | 38.0      | 166.360000 | 202.160000  | 6.650000   |
+    | AAAAAAAANDAAAAAA | 67.0      | 140.080000 | 0.000000    | 81.240000  |
+    | AAAAAAAANJAAAAAA | 23.0      | 21.020000  | 333.580000  | 21.020000  |
+    | AAAAAAAAOCAAAAAA | 8.0       | 78.330000  | 0.000000    | 69.710000  |
+    | AAAAAAAAODAAAAAA | 53.5      | 128.470000 | 0.000000    | 25.530000  |
+    | AAAAAAAAOFAAAAAA | 55.5      | 26.490000  | 0.000000    | 1.355000   |
+    | AAAAAAAAOGAAAAAA | 35.0      | 49.560000  | 187.790000  | 28.240000  |
+    | AAAAAAAAOIAAAAAA | 91.0      | 43.230000  | 0.000000    | 41.930000  |
+    | AAAAAAAAOJAAAAAA | 1.0       | 78.550000  | 23.630000   | 46.340000  |
+    | AAAAAAAAPBAAAAAA | 50.0      | 117.900000 | 0.000000    | 16.500000  |
+    | AAAAAAAAPEAAAAAA | 2.0       | 28.450000  | 0.000000    | 0.560000   |
 ---
 name: "test_derived_tpcds_query_result[27]"
 data:
   |-
-    | i_item_id        | s_state | g_state | agg1              | agg2       | agg3        | agg4       |
-    | NULL             | NULL    | 1       | 50.20238095238095 | 80.912976  | 195.773176  | 44.271764  |
-    | AAAAAAAAABAAAAAA | NULL    | 1       | 4.0               | 33.100000  | 28.790000   | 24.820000  |
-    | AAAAAAAAABAAAAAA | TN      | 0       | 4.0               | 33.100000  | 28.790000   | 24.820000  |
-    | AAAAAAAAAEAAAAAA | NULL    | 1       | 69.5              | 31.390000  | 424.735000  | 21.515000  |
-    | AAAAAAAAAEAAAAAA | TN      | 0       | 69.5              | 31.390000  | 424.735000  | 21.515000  |
-    | AAAAAAAAALAAAAAA | NULL    | 1       | 87.0              | 21.670000  | 666.570000  | 13.210000  |
-    | AAAAAAAAALAAAAAA | TN      | 0       | 87.0              | 21.670000  | 666.570000  | 13.210000  |
-    | AAAAAAAABDAAAAAA | NULL    | 1       | 60.0              | 123.350000 | 1790.970000 | 67.840000  |
-    | AAAAAAAABDAAAAAA | TN      | 0       | 60.0              | 123.350000 | 1790.970000 | 67.840000  |
-    | AAAAAAAABGAAAAAA | NULL    | 1       | 20.0              | 130.730000 | 0.000000    | 122.880000 |
-    | AAAAAAAABGAAAAAA | TN      | 0       | 20.0              | 130.730000 | 0.000000    | 122.880000 |
-    | AAAAAAAABJAAAAAA | NULL    | 1       | 51.0              | 59.130000  | 0.000000    | 1.180000   |
-    | AAAAAAAABJAAAAAA | TN      | 0       | 51.0              | 59.130000  | 0.000000    | 1.180000   |
-    | AAAAAAAACAAAAAAA | NULL    | 1       | 91.0              | 157.100000 | 0.000000    | 149.240000 |
-    | AAAAAAAACAAAAAAA | TN      | 0       | 91.0              | 157.100000 | 0.000000    | 149.240000 |
-    | AAAAAAAACCAAAAAA | NULL    | 1       | 58.0              | 27.940000  | 0.000000    | 18.990000  |
-    | AAAAAAAACCAAAAAA | TN      | 0       | 58.0              | 27.940000  | 0.000000    | 18.990000  |
-    | AAAAAAAACDAAAAAA | NULL    | 1       | 71.0              | 34.505000  | 0.000000    | 22.770000  |
-    | AAAAAAAACDAAAAAA | TN      | 0       | 71.0              | 34.505000  | 0.000000    | 22.770000  |
-    | AAAAAAAACFAAAAAA | NULL    | 1       | 35.0              | 41.105000  | 0.000000    | 17.950000  |
-    | AAAAAAAACFAAAAAA | TN      | 0       | 35.0              | 41.105000  | 0.000000    | 17.950000  |
-    | AAAAAAAACIAAAAAA | NULL    | 1       | 30.0              | 88.650000  | 0.000000    | 59.390000  |
-    | AAAAAAAACIAAAAAA | TN      | 0       | 30.0              | 88.650000  | 0.000000    | 59.390000  |
-    | AAAAAAAACJAAAAAA | NULL    | 1       | 45.5              | 85.695000  | 0.000000    | 36.525000  |
-    | AAAAAAAACJAAAAAA | TN      | 0       | 45.5              | 85.695000  | 0.000000    | 36.525000  |
-    | AAAAAAAADBAAAAAA | NULL    | 1       | 33.0              | 34.710000  | 0.000000    | 15.610000  |
-    | AAAAAAAADBAAAAAA | TN      | 0       | 33.0              | 34.710000  | 0.000000    | 15.610000  |
-    | AAAAAAAADEAAAAAA | NULL    | 1       | 46.5              | 106.220000 | 197.765000  | 32.220000  |
-    | AAAAAAAADEAAAAAA | TN      | 0       | 46.5              | 106.220000 | 197.765000  | 32.220000  |
-    | AAAAAAAADKAAAAAA | NULL    | 1       | 78.0              | 109.020000 | 0.000000    | 34.410000  |
-    | AAAAAAAADKAAAAAA | TN      | 0       | 78.0              | 109.020000 | 0.000000    | 34.410000  |
-    | AAAAAAAAEDAAAAAA | NULL    | 1       | 47.0              | 99.390000  | 0.000000    | 30.810000  |
-    | AAAAAAAAEDAAAAAA | TN      | 0       | 47.0              | 99.390000  | 0.000000    | 30.810000  |
-    | AAAAAAAAEEAAAAAA | NULL    | 1       | 6.0               | 77.280000  | 0.000000    | 12.140000  |
-    | AAAAAAAAEEAAAAAA | TN      | 0       | 6.0               | 77.280000  | 0.000000    | 12.140000  |
-    | AAAAAAAAEGAAAAAA | NULL    | 1       | 28.0              | 80.660000  | 0.000000    | 20.160000  |
-    | AAAAAAAAEGAAAAAA | TN      | 0       | 28.0              | 80.660000  | 0.000000    | 20.160000  |
-    | AAAAAAAAEHAAAAAA | NULL    | 1       | 14.0              | 61.480000  | 0.000000    | 47.330000  |
-    | AAAAAAAAEHAAAAAA | TN      | 0       | 14.0              | 61.480000  | 0.000000    | 47.330000  |
-    | AAAAAAAAEJAAAAAA | NULL    | 1       | 37.0              | 52.060000  | 71.180000   | 2.600000   |
-    | AAAAAAAAEJAAAAAA | TN      | 0       | 37.0              | 52.060000  | 71.180000   | 2.600000   |
-    | AAAAAAAAEKAAAAAA | NULL    | 1       | 17.0              | 98.240000  | 0.000000    | 81.530000  |
-    | AAAAAAAAEKAAAAAA | TN      | 0       | 17.0              | 98.240000  | 0.000000    | 81.530000  |
-    | AAAAAAAAFCAAAAAA | NULL    | 1       | 44.0              | 66.990000  | 0.000000    | 15.400000  |
-    | AAAAAAAAFCAAAAAA | TN      | 0       | 44.0              | 66.990000  | 0.000000    | 15.400000  |
-    | AAAAAAAAFFAAAAAA | NULL    | 1       | 77.0              | 116.110000 | 0.000000    | 88.240000  |
-    | AAAAAAAAFFAAAAAA | TN      | 0       | 77.0              | 116.110000 | 0.000000    | 88.240000  |
-    | AAAAAAAAFIAAAAAA | NULL    | 1       | 38.0              | 31.180000  | 0.000000    | 27.430000  |
-    | AAAAAAAAFIAAAAAA | TN      | 0       | 38.0              | 31.180000  | 0.000000    | 27.430000  |
-    | AAAAAAAAGBAAAAAA | NULL    | 1       | 88.0              | 40.870000  | 0.000000    | 15.930000  |
-    | AAAAAAAAGBAAAAAA | TN      | 0       | 88.0              | 40.870000  | 0.000000    | 15.930000  |
-    | AAAAAAAAGCAAAAAA | NULL    | 1       | 25.0              | 120.010000 | 0.000000    | 46.405000  |
-    | AAAAAAAAGCAAAAAA | TN      | 0       | 25.0              | 120.010000 | 0.000000    | 46.405000  |
-    | AAAAAAAAGEAAAAAA | NULL    | 1       | 98.0              | 85.320000  | 4038.260000 | 59.720000  |
-    | AAAAAAAAGEAAAAAA | TN      | 0       | 98.0              | 85.320000  | 4038.260000 | 59.720000  |
-    | AAAAAAAAGHAAAAAA | NULL    | 1       | 96.0              | 169.890000 | 0.000000    | 101.930000 |
-    | AAAAAAAAGHAAAAAA | TN      | 0       | 96.0              | 169.890000 | 0.000000    | 101.930000 |
-    | AAAAAAAAGIAAAAAA | NULL    | 1       | 33.0              | 101.200000 | 0.000000    | 0.000000   |
-    | AAAAAAAAGIAAAAAA | TN      | 0       | 33.0              | 101.200000 | 0.000000    | 0.000000   |
-    | AAAAAAAAGKAAAAAA | NULL    | 1       | 83.0              | 58.815000  | 576.285000  | 21.955000  |
-    | AAAAAAAAGKAAAAAA | TN      | 0       | 83.0              | 58.815000  | 576.285000  | 21.955000  |
-    | AAAAAAAAHAAAAAAA | NULL    | 1       | 14.0              | 160.270000 | 0.000000    | 56.090000  |
-    | AAAAAAAAHAAAAAAA | TN      | 0       | 14.0              | 160.270000 | 0.000000    | 56.090000  |
-    | AAAAAAAAHDAAAAAA | NULL    | 1       | 64.0              | 134.605000 | 0.000000    | 78.665000  |
-    | AAAAAAAAHDAAAAAA | TN      | 0       | 64.0              | 134.605000 | 0.000000    | 78.665000  |
-    | AAAAAAAAHJAAAAAA | NULL    | 1       | 78.5              | 112.820000 | 22.410000   | 64.120000  |
-    | AAAAAAAAHJAAAAAA | TN      | 0       | 78.5              | 112.820000 | 22.410000   | 64.120000  |
-    | AAAAAAAAICAAAAAA | NULL    | 1       | 62.5              | 53.375000  | 0.000000    | 17.620000  |
-    | AAAAAAAAICAAAAAA | TN      | 0       | 62.5              | 53.375000  | 0.000000    | 17.620000  |
-    | AAAAAAAAIDAAAAAA | NULL    | 1       | 33.5              | 83.700000  | 26.395000   | 56.075000  |
-    | AAAAAAAAIDAAAAAA | TN      | 0       | 33.5              | 83.700000  | 26.395000   | 56.075000  |
-    | AAAAAAAAIIAAAAAA | NULL    | 1       | 46.0              | 71.295000  | 0.000000    | 59.480000  |
-    | AAAAAAAAIIAAAAAA | TN      | 0       | 46.0              | 71.295000  | 0.000000    | 59.480000  |
-    | AAAAAAAAIJAAAAAA | NULL    | 1       | 73.0              | 112.850000 | 0.000000    | 64.320000  |
-    | AAAAAAAAIJAAAAAA | TN      | 0       | 73.0              | 112.850000 | 0.000000    | 64.320000  |
-    | AAAAAAAAJEAAAAAA | NULL    | 1       | 3.0               | 52.000000  | 0.000000    | 29.120000  |
-    | AAAAAAAAJEAAAAAA | TN      | 0       | 3.0               | 52.000000  | 0.000000    | 29.120000  |
-    | AAAAAAAAJHAAAAAA | NULL    | 1       | 84.0              | 16.780000  | 0.000000    | 12.240000  |
-    | AAAAAAAAJHAAAAAA | TN      | 0       | 84.0              | 16.780000  | 0.000000    | 12.240000  |
-    | AAAAAAAAJKAAAAAA | NULL    | 1       | 69.0              | 97.180000  | 0.000000    | 48.590000  |
-    | AAAAAAAAJKAAAAAA | TN      | 0       | 69.0              | 97.180000  | 0.000000    | 48.590000  |
-    | AAAAAAAAKBAAAAAA | NULL    | 1       | 18.0              | 5.500000   | 0.000000    | 4.840000   |
-    | AAAAAAAAKBAAAAAA | TN      | 0       | 18.0              | 5.500000   | 0.000000    | 4.840000   |
-    | AAAAAAAAKGAAAAAA | NULL    | 1       | 35.0              | 17.300000  | 0.000000    | 10.380000  |
-    | AAAAAAAAKGAAAAAA | TN      | 0       | 35.0              | 17.300000  | 0.000000    | 10.380000  |
-    | AAAAAAAAKHAAAAAA | NULL    | 1       | 49.0              | 37.090000  | 0.000000    | 17.060000  |
-    | AAAAAAAAKHAAAAAA | TN      | 0       | 49.0              | 37.090000  | 0.000000    | 17.060000  |
-    | AAAAAAAAKJAAAAAA | NULL    | 1       | 22.5              | 92.445000  | 0.000000    | 33.850000  |
-    | AAAAAAAAKJAAAAAA | TN      | 0       | 22.5              | 92.445000  | 0.000000    | 33.850000  |
-    | AAAAAAAAKKAAAAAA | NULL    | 1       | 50.0              | 189.770000 | 0.000000    | 187.870000 |
-    | AAAAAAAAKKAAAAAA | TN      | 0       | 50.0              | 189.770000 | 0.000000    | 187.870000 |
-    | AAAAAAAALCAAAAAA | NULL    | 1       | 9.0               | 42.460000  | 0.000000    | 19.530000  |
-    | AAAAAAAALCAAAAAA | TN      | 0       | 9.0               | 42.460000  | 0.000000    | 19.530000  |
-    | AAAAAAAALIAAAAAA | NULL    | 1       | 6.0               | 83.820000  | 0.000000    | 68.730000  |
-    | AAAAAAAALIAAAAAA | TN      | 0       | 6.0               | 83.820000  | 0.000000    | 68.730000  |
-    | AAAAAAAAMCAAAAAA | NULL    | 1       | 25.0              | 105.190000 | 2160.690000 | 104.130000 |
-    | AAAAAAAAMCAAAAAA | TN      | 0       | 25.0              | 105.190000 | 2160.690000 | 104.130000 |
-    | AAAAAAAAMEAAAAAA | NULL    | 1       | 27.0              | 76.465000  | 0.000000    | 13.410000  |
-    | AAAAAAAAMEAAAAAA | TN      | 0       | 27.0              | 76.465000  | 0.000000    | 13.410000  |
-    | AAAAAAAAMFAAAAAA | NULL    | 1       | 43.0              | 63.460000  | 19.430000   | 56.385000  |
+    | i_item_id        | s_state | g_state | agg1      | agg2       | agg3        | agg4       |
+    | NULL             | NULL    | 1       | 50.202381 | 80.912976  | 195.773176  | 44.271764  |
+    | AAAAAAAAABAAAAAA | NULL    | 1       | 4.0       | 33.100000  | 28.790000   | 24.820000  |
+    | AAAAAAAAABAAAAAA | TN      | 0       | 4.0       | 33.100000  | 28.790000   | 24.820000  |
+    | AAAAAAAAAEAAAAAA | NULL    | 1       | 69.5      | 31.390000  | 424.735000  | 21.515000  |
+    | AAAAAAAAAEAAAAAA | TN      | 0       | 69.5      | 31.390000  | 424.735000  | 21.515000  |
+    | AAAAAAAAALAAAAAA | NULL    | 1       | 87.0      | 21.670000  | 666.570000  | 13.210000  |
+    | AAAAAAAAALAAAAAA | TN      | 0       | 87.0      | 21.670000  | 666.570000  | 13.210000  |
+    | AAAAAAAABDAAAAAA | NULL    | 1       | 60.0      | 123.350000 | 1790.970000 | 67.840000  |
+    | AAAAAAAABDAAAAAA | TN      | 0       | 60.0      | 123.350000 | 1790.970000 | 67.840000  |
+    | AAAAAAAABGAAAAAA | NULL    | 1       | 20.0      | 130.730000 | 0.000000    | 122.880000 |
+    | AAAAAAAABGAAAAAA | TN      | 0       | 20.0      | 130.730000 | 0.000000    | 122.880000 |
+    | AAAAAAAABJAAAAAA | NULL    | 1       | 51.0      | 59.130000  | 0.000000    | 1.180000   |
+    | AAAAAAAABJAAAAAA | TN      | 0       | 51.0      | 59.130000  | 0.000000    | 1.180000   |
+    | AAAAAAAACAAAAAAA | NULL    | 1       | 91.0      | 157.100000 | 0.000000    | 149.240000 |
+    | AAAAAAAACAAAAAAA | TN      | 0       | 91.0      | 157.100000 | 0.000000    | 149.240000 |
+    | AAAAAAAACCAAAAAA | NULL    | 1       | 58.0      | 27.940000  | 0.000000    | 18.990000  |
+    | AAAAAAAACCAAAAAA | TN      | 0       | 58.0      | 27.940000  | 0.000000    | 18.990000  |
+    | AAAAAAAACDAAAAAA | NULL    | 1       | 71.0      | 34.505000  | 0.000000    | 22.770000  |
+    | AAAAAAAACDAAAAAA | TN      | 0       | 71.0      | 34.505000  | 0.000000    | 22.770000  |
+    | AAAAAAAACFAAAAAA | NULL    | 1       | 35.0      | 41.105000  | 0.000000    | 17.950000  |
+    | AAAAAAAACFAAAAAA | TN      | 0       | 35.0      | 41.105000  | 0.000000    | 17.950000  |
+    | AAAAAAAACIAAAAAA | NULL    | 1       | 30.0      | 88.650000  | 0.000000    | 59.390000  |
+    | AAAAAAAACIAAAAAA | TN      | 0       | 30.0      | 88.650000  | 0.000000    | 59.390000  |
+    | AAAAAAAACJAAAAAA | NULL    | 1       | 45.5      | 85.695000  | 0.000000    | 36.525000  |
+    | AAAAAAAACJAAAAAA | TN      | 0       | 45.5      | 85.695000  | 0.000000    | 36.525000  |
+    | AAAAAAAADBAAAAAA | NULL    | 1       | 33.0      | 34.710000  | 0.000000    | 15.610000  |
+    | AAAAAAAADBAAAAAA | TN      | 0       | 33.0      | 34.710000  | 0.000000    | 15.610000  |
+    | AAAAAAAADEAAAAAA | NULL    | 1       | 46.5      | 106.220000 | 197.765000  | 32.220000  |
+    | AAAAAAAADEAAAAAA | TN      | 0       | 46.5      | 106.220000 | 197.765000  | 32.220000  |
+    | AAAAAAAADKAAAAAA | NULL    | 1       | 78.0      | 109.020000 | 0.000000    | 34.410000  |
+    | AAAAAAAADKAAAAAA | TN      | 0       | 78.0      | 109.020000 | 0.000000    | 34.410000  |
+    | AAAAAAAAEDAAAAAA | NULL    | 1       | 47.0      | 99.390000  | 0.000000    | 30.810000  |
+    | AAAAAAAAEDAAAAAA | TN      | 0       | 47.0      | 99.390000  | 0.000000    | 30.810000  |
+    | AAAAAAAAEEAAAAAA | NULL    | 1       | 6.0       | 77.280000  | 0.000000    | 12.140000  |
+    | AAAAAAAAEEAAAAAA | TN      | 0       | 6.0       | 77.280000  | 0.000000    | 12.140000  |
+    | AAAAAAAAEGAAAAAA | NULL    | 1       | 28.0      | 80.660000  | 0.000000    | 20.160000  |
+    | AAAAAAAAEGAAAAAA | TN      | 0       | 28.0      | 80.660000  | 0.000000    | 20.160000  |
+    | AAAAAAAAEHAAAAAA | NULL    | 1       | 14.0      | 61.480000  | 0.000000    | 47.330000  |
+    | AAAAAAAAEHAAAAAA | TN      | 0       | 14.0      | 61.480000  | 0.000000    | 47.330000  |
+    | AAAAAAAAEJAAAAAA | NULL    | 1       | 37.0      | 52.060000  | 71.180000   | 2.600000   |
+    | AAAAAAAAEJAAAAAA | TN      | 0       | 37.0      | 52.060000  | 71.180000   | 2.600000   |
+    | AAAAAAAAEKAAAAAA | NULL    | 1       | 17.0      | 98.240000  | 0.000000    | 81.530000  |
+    | AAAAAAAAEKAAAAAA | TN      | 0       | 17.0      | 98.240000  | 0.000000    | 81.530000  |
+    | AAAAAAAAFCAAAAAA | NULL    | 1       | 44.0      | 66.990000  | 0.000000    | 15.400000  |
+    | AAAAAAAAFCAAAAAA | TN      | 0       | 44.0      | 66.990000  | 0.000000    | 15.400000  |
+    | AAAAAAAAFFAAAAAA | NULL    | 1       | 77.0      | 116.110000 | 0.000000    | 88.240000  |
+    | AAAAAAAAFFAAAAAA | TN      | 0       | 77.0      | 116.110000 | 0.000000    | 88.240000  |
+    | AAAAAAAAFIAAAAAA | NULL    | 1       | 38.0      | 31.180000  | 0.000000    | 27.430000  |
+    | AAAAAAAAFIAAAAAA | TN      | 0       | 38.0      | 31.180000  | 0.000000    | 27.430000  |
+    | AAAAAAAAGBAAAAAA | NULL    | 1       | 88.0      | 40.870000  | 0.000000    | 15.930000  |
+    | AAAAAAAAGBAAAAAA | TN      | 0       | 88.0      | 40.870000  | 0.000000    | 15.930000  |
+    | AAAAAAAAGCAAAAAA | NULL    | 1       | 25.0      | 120.010000 | 0.000000    | 46.405000  |
+    | AAAAAAAAGCAAAAAA | TN      | 0       | 25.0      | 120.010000 | 0.000000    | 46.405000  |
+    | AAAAAAAAGEAAAAAA | NULL    | 1       | 98.0      | 85.320000  | 4038.260000 | 59.720000  |
+    | AAAAAAAAGEAAAAAA | TN      | 0       | 98.0      | 85.320000  | 4038.260000 | 59.720000  |
+    | AAAAAAAAGHAAAAAA | NULL    | 1       | 96.0      | 169.890000 | 0.000000    | 101.930000 |
+    | AAAAAAAAGHAAAAAA | TN      | 0       | 96.0      | 169.890000 | 0.000000    | 101.930000 |
+    | AAAAAAAAGIAAAAAA | NULL    | 1       | 33.0      | 101.200000 | 0.000000    | 0.000000   |
+    | AAAAAAAAGIAAAAAA | TN      | 0       | 33.0      | 101.200000 | 0.000000    | 0.000000   |
+    | AAAAAAAAGKAAAAAA | NULL    | 1       | 83.0      | 58.815000  | 576.285000  | 21.955000  |
+    | AAAAAAAAGKAAAAAA | TN      | 0       | 83.0      | 58.815000  | 576.285000  | 21.955000  |
+    | AAAAAAAAHAAAAAAA | NULL    | 1       | 14.0      | 160.270000 | 0.000000    | 56.090000  |
+    | AAAAAAAAHAAAAAAA | TN      | 0       | 14.0      | 160.270000 | 0.000000    | 56.090000  |
+    | AAAAAAAAHDAAAAAA | NULL    | 1       | 64.0      | 134.605000 | 0.000000    | 78.665000  |
+    | AAAAAAAAHDAAAAAA | TN      | 0       | 64.0      | 134.605000 | 0.000000    | 78.665000  |
+    | AAAAAAAAHJAAAAAA | NULL    | 1       | 78.5      | 112.820000 | 22.410000   | 64.120000  |
+    | AAAAAAAAHJAAAAAA | TN      | 0       | 78.5      | 112.820000 | 22.410000   | 64.120000  |
+    | AAAAAAAAICAAAAAA | NULL    | 1       | 62.5      | 53.375000  | 0.000000    | 17.620000  |
+    | AAAAAAAAICAAAAAA | TN      | 0       | 62.5      | 53.375000  | 0.000000    | 17.620000  |
+    | AAAAAAAAIDAAAAAA | NULL    | 1       | 33.5      | 83.700000  | 26.395000   | 56.075000  |
+    | AAAAAAAAIDAAAAAA | TN      | 0       | 33.5      | 83.700000  | 26.395000   | 56.075000  |
+    | AAAAAAAAIIAAAAAA | NULL    | 1       | 46.0      | 71.295000  | 0.000000    | 59.480000  |
+    | AAAAAAAAIIAAAAAA | TN      | 0       | 46.0      | 71.295000  | 0.000000    | 59.480000  |
+    | AAAAAAAAIJAAAAAA | NULL    | 1       | 73.0      | 112.850000 | 0.000000    | 64.320000  |
+    | AAAAAAAAIJAAAAAA | TN      | 0       | 73.0      | 112.850000 | 0.000000    | 64.320000  |
+    | AAAAAAAAJEAAAAAA | NULL    | 1       | 3.0       | 52.000000  | 0.000000    | 29.120000  |
+    | AAAAAAAAJEAAAAAA | TN      | 0       | 3.0       | 52.000000  | 0.000000    | 29.120000  |
+    | AAAAAAAAJHAAAAAA | NULL    | 1       | 84.0      | 16.780000  | 0.000000    | 12.240000  |
+    | AAAAAAAAJHAAAAAA | TN      | 0       | 84.0      | 16.780000  | 0.000000    | 12.240000  |
+    | AAAAAAAAJKAAAAAA | NULL    | 1       | 69.0      | 97.180000  | 0.000000    | 48.590000  |
+    | AAAAAAAAJKAAAAAA | TN      | 0       | 69.0      | 97.180000  | 0.000000    | 48.590000  |
+    | AAAAAAAAKBAAAAAA | NULL    | 1       | 18.0      | 5.500000   | 0.000000    | 4.840000   |
+    | AAAAAAAAKBAAAAAA | TN      | 0       | 18.0      | 5.500000   | 0.000000    | 4.840000   |
+    | AAAAAAAAKGAAAAAA | NULL    | 1       | 35.0      | 17.300000  | 0.000000    | 10.380000  |
+    | AAAAAAAAKGAAAAAA | TN      | 0       | 35.0      | 17.300000  | 0.000000    | 10.380000  |
+    | AAAAAAAAKHAAAAAA | NULL    | 1       | 49.0      | 37.090000  | 0.000000    | 17.060000  |
+    | AAAAAAAAKHAAAAAA | TN      | 0       | 49.0      | 37.090000  | 0.000000    | 17.060000  |
+    | AAAAAAAAKJAAAAAA | NULL    | 1       | 22.5      | 92.445000  | 0.000000    | 33.850000  |
+    | AAAAAAAAKJAAAAAA | TN      | 0       | 22.5      | 92.445000  | 0.000000    | 33.850000  |
+    | AAAAAAAAKKAAAAAA | NULL    | 1       | 50.0      | 189.770000 | 0.000000    | 187.870000 |
+    | AAAAAAAAKKAAAAAA | TN      | 0       | 50.0      | 189.770000 | 0.000000    | 187.870000 |
+    | AAAAAAAALCAAAAAA | NULL    | 1       | 9.0       | 42.460000  | 0.000000    | 19.530000  |
+    | AAAAAAAALCAAAAAA | TN      | 0       | 9.0       | 42.460000  | 0.000000    | 19.530000  |
+    | AAAAAAAALIAAAAAA | NULL    | 1       | 6.0       | 83.820000  | 0.000000    | 68.730000  |
+    | AAAAAAAALIAAAAAA | TN      | 0       | 6.0       | 83.820000  | 0.000000    | 68.730000  |
+    | AAAAAAAAMCAAAAAA | NULL    | 1       | 25.0      | 105.190000 | 2160.690000 | 104.130000 |
+    | AAAAAAAAMCAAAAAA | TN      | 0       | 25.0      | 105.190000 | 2160.690000 | 104.130000 |
+    | AAAAAAAAMEAAAAAA | NULL    | 1       | 27.0      | 76.465000  | 0.000000    | 13.410000  |
+    | AAAAAAAAMEAAAAAA | TN      | 0       | 27.0      | 76.465000  | 0.000000    | 13.410000  |
+    | AAAAAAAAMFAAAAAA | NULL    | 1       | 43.0      | 63.460000  | 19.430000   | 56.385000  |
 ---
 name: "test_derived_tpcds_query_result[28]"
 data:
@@ -3903,7 +3903,7 @@ name: "test_derived_tpcds_query_result[49]"
 data:
   |-
     | channel | item | return_ratio | return_rank | currency_rank |
-    | catalog | 125  | 0.92500000   | 1           | 1             |
+    | catalog | 125  | 0.925000     | 1           | 1             |
 ---
 name: "test_derived_tpcds_query_result[50]"
 data:
@@ -4356,7 +4356,7 @@ name: "test_derived_tpcds_query_result[66]"
 data:
   |-
     | w_warehouse_name    | w_warehouse_sq_ft | w_city | w_county          | w_state | w_country     | ship_carriers | year | jan_sales | feb_sales  | mar_sales | apr_sales | may_sales | jun_sales  | jul_sales | aug_sales  | sep_sales  | oct_sales | nov_sales  | dec_sales  | jan_sales_per_sq_foot | feb_sales_per_sq_foot | mar_sales_per_sq_foot | apr_sales_per_sq_foot | may_sales_per_sq_foot | jun_sales_per_sq_foot | jul_sales_per_sq_foot | aug_sales_per_sq_foot | sep_sales_per_sq_foot | oct_sales_per_sq_foot | nov_sales_per_sq_foot | dec_sales_per_sq_foot | jan_net    | feb_net   | mar_net    | apr_net    | may_net    | jun_net    | jul_net    | aug_net    | sep_net    | oct_net    | nov_net    | dec_net  |
-    | Conventional childr | 977787            | Midway | Williamson County | TN      | United States | FEDEX,GERMA   | 2001 | 50983.63  | 1741917.32 | 439997.54 | 27261.11  | 358962.89 | 1617160.97 | 59175.13  | 3506098.93 | 1604026.33 | 231134.27 | 1331564.61 | 1508985.03 | 0.05214185707112081   | 1.7814895473144972    | 0.4499932398364879    | 0.027880417718787427  | 0.36711767491283886   | 1.653899029134157     | 0.060519448509747005  | 3.5857491764566305    | 1.6404660012865786    | 0.23638509204969999   | 1.3618145976577722    | 1.5432655885177446    | 2546719.17 | 824505.14 | 1231035.79 | 1788373.09 | 2220318.07 | 2685291.09 | 3136698.66 | 1225313.88 | 1388994.58 | 2176810.04 | -158589.58 | 43716.56 |
+    | Conventional childr | 977787            | Midway | Williamson County | TN      | United States | FEDEX,GERMA   | 2001 | 50983.63  | 1741917.32 | 439997.54 | 27261.11  | 358962.89 | 1617160.97 | 59175.13  | 3506098.93 | 1604026.33 | 231134.27 | 1331564.61 | 1508985.03 | 0.052142              | 1.781490              | 0.449993              | 0.027880              | 0.367118              | 1.653899              | 0.060519              | 3.585749              | 1.640466              | 0.236385              | 1.361815              | 1.543266              | 2546719.17 | 824505.14 | 1231035.79 | 1788373.09 | 2220318.07 | 2685291.09 | 3136698.66 | 1225313.88 | 1388994.58 | 2176810.04 | -158589.58 | 43716.56 |
 ---
 name: "test_derived_tpcds_query_result[67]"
 data:
@@ -4401,7 +4401,7 @@ data:
     | Books      | parenting | NULL                  | NULL           | NULL   | NULL  | NULL  | NULL             | 119313.02  | 9  |
     | Books      | parenting | corpmaxi #3           | NULL           | NULL   | NULL  | NULL  | NULL             | 119313.02  | 9  |
     | Books      | parenting | corpmaxi #3           | ableableought  | NULL   | NULL  | NULL  | NULL             | 119313.02  | 9  |
-    | Books      | parenting | corpmaxi #3           | ableableought  | 1999   | NULL  | NULL  | NULL             | 75216      | 32 |
+    | Books      | parenting | corpmaxi #3           | ableableought  | 1999   | NULL  | NULL  | NULL             | 75216.0    | 32 |
     | Books      | parenting | corpmaxi #3           | ableableought  | 1999   | 3     | NULL  | NULL             | 37862.58   | 55 |
     | Books      | parenting | corpmaxi #3           | ableableought  | 1999   | 3     | 8     | NULL             | 27071.66   | 77 |
     | Books      | parenting | corpmaxi #3           | ableableought  | 1999   | 3     | 8     | AAAAAAAABAAAAAAA | 27071.66   | 77 |
@@ -4814,9 +4814,9 @@ data:
 name: "test_derived_tpcds_query_result[83]"
 data:
   |-
-    | item_id          | sr_item_qty | sr_dev            | cr_item_qty | cr_dev             | wr_item_qty | wr_dev             | average            |
-    | AAAAAAAACDAAAAAA | 9.0         | 4.615384615384616 | 1.0         | 0.5128205128205128 | 55.0        | 28.205128205128204 | 21.666666666666668 |
-    | AAAAAAAAKHAAAAAA | NULL        | NULL              | 37.0        | NULL               | 2.0         | NULL               | NULL               |
+    | item_id          | sr_item_qty | sr_dev   | cr_item_qty | cr_dev   | wr_item_qty | wr_dev    | average   |
+    | AAAAAAAACDAAAAAA | 9.0         | 4.615385 | 1.0         | 0.512821 | 55.0        | 28.205128 | 21.666667 |
+    | AAAAAAAAKHAAAAAA | NULL        | NULL     | 37.0        | NULL     | 2.0         | NULL      | NULL      |
 ---
 name: "test_derived_tpcds_query_result[84]"
 data:

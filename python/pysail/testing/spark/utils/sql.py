@@ -132,51 +132,30 @@ def format_show_string(rows: list[list[str]], normalizer=None):
     return "\n".join(f"| {x} |" for x in output)
 
 
-def normalize_floating_point_string(s: str, d: int = 6) -> str:
+def normalize_floating_point_string(s: str, d: int = 6, n: int = 6) -> str:
     """Normalizes a string representation of a floating-point number.
-    For example, it can convert "1.230000001" to "1.23" and "1.2339999991" to "1.234".
-    It detects noisy fractions of `d` or more consecutive 0s or 9s close to the end of the number
-    and rounds the number to remove them.
+
+    First, noisy fractions of `n` or more consecutive 0s or 9s close to the end of the number are removed.
+    For example, "1.230000001" is treated as "1.23" and "1.2339999991" is treated as "1.234".
+
+    Then, the number is rounded to have at most `d` digits in the fractional part.
+
     This is useful to make test assertions more stable against minor floating-point differences.
     """
     if d < 1:
-        msg = f"number of consecutive digits to detect must be at least 1 but got {d}"
+        msg = f"the maximum number of digits for the fractional part must be at least 1 but got {d}"
+        raise ValueError(msg)
+    if n < 1:
+        msg = f"number of consecutive 0s or 9s to detect noisy fractions must be at least 1 but got {n}"
         raise ValueError(msg)
 
-    number = s.lower()
-    if "e" in number:
-        i = number.index("e")
-        mantissa, exponent = s[:i], s[i:]
-    else:
-        mantissa, exponent = s, ""
-
-    try:
-        if exponent:
-            _ = int(exponent[1:])
-        integer, fraction = mantissa.split(".", 1)
-        _ = int(integer)
-        _ = int(fraction)
-    except ValueError:
-        return s
-
-    match = re.search(f"(0{{{d},}}[0-9]+$)|(9{{{d},}}[0-9]+$)", fraction)
+    match = re.fullmatch(
+        rf"(?P<num>[+-]?\d*[.](?P<frac>\d+?)(0{{{n},}}[0-9]+|9{{{n},}}[0-9]+)?)(?P<exp>[eE][+-]?\d+)?",
+        s,
+    )
     if not match:
         return s
 
-    start = match.start()
-
-    # handle the case of consecutive 0s
-    if match.group().startswith("0"):
-        if start == 0:
-            return f"{integer}{exponent}"
-        return f"{integer}.{fraction[:start]}{exponent}"
-
-    # handle the case of consecutive 9s
-    prefix = f"{integer}.{fraction[:start]}" if start > 0 else f"{integer}."
-    val = Decimal(prefix)
-    increment = Decimal(f"1e-{start}")
-    if integer.startswith("-"):
-        val -= increment
-    else:
-        val += increment
-    return f"{val!s}{exponent}"
+    num = round(Decimal(match.group("num")), min(len(match.group("frac")), d))
+    exp = match.group("exp") or ""
+    return f"{num}{exp}"
