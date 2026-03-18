@@ -1,3 +1,6 @@
+import pandas as pd
+from pandas.testing import assert_frame_equal
+
 from pysail.testing.spark.utils.files import get_data_directory_size
 
 
@@ -55,3 +58,16 @@ def test_parquet_write_with_bloom_filter(spark, tmpdir):
         .parquet(path)
     )
     assert 32768 < size(path) < 32768 + 1024  # noqa: PLR2004
+
+
+def test_parquet_write_with_path_option(spark, tmpdir):
+    """Test that df.write.format("parquet").option("path", path).save() works (issue #811)."""
+    data = [(1, "Alice"), (2, "Bob")]
+    df = spark.createDataFrame(data, schema="id INT, name STRING")
+
+    path = str(tmpdir / "output")
+    df.write.format("parquet").option("path", path).save()
+
+    actual = spark.read.parquet(path).orderBy("id").toPandas()
+    expected = pd.DataFrame({"id": [1, 2], "name": ["Alice", "Bob"]}).astype({"id": "int32"})
+    assert_frame_equal(actual, expected)

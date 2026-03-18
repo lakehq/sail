@@ -27,10 +27,14 @@ use datafusion::arrow::datatypes::{
 use datafusion::arrow::record_batch::RecordBatch;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
+use log::debug;
 use once_cell::sync::OnceCell;
 use url::Url;
 
-use crate::kernel::checkpoints::{latest_replayable_version, load_replayed_table_state};
+use crate::kernel::checkpoints::{
+    latest_replayable_version, load_replayed_table_header, load_replayed_table_state,
+    ReplayedTableHeader, ReplayedTableState,
+};
 pub use crate::kernel::snapshot::stats::SnapshotPruningStats;
 use crate::kernel::{DeltaTableConfig, SchemaRef};
 use crate::schema::{arrow_field_physical_name, arrow_schema_reorder_partitions};
@@ -41,7 +45,7 @@ use crate::spec::fields::{
 };
 use crate::spec::{
     Add, ColumnMappingMode, ColumnMetadataKey, DeltaError as DeltaTableError, DeltaResult,
-    Metadata, Protocol, Remove, TableProperties, Transaction,
+    Metadata, Protocol, Remove, TableFeature, TableProperties, Transaction, VersionChecksum,
 };
 use crate::storage::LogStore;
 
@@ -99,10 +103,11 @@ impl Clone for DeltaSnapshot {
 }
 
 impl DeltaSnapshot {
-    pub async fn try_new(
+    pub(crate) async fn try_new(
         log_store: &dyn LogStore,
         config: DeltaTableConfig,
         version: Option<i64>,
+        replay_hint: Option<&ReplayedTableHeader>,
     ) -> DeltaResult<Self> {
         let target_version = match version {
             Some(v) => v,
@@ -116,26 +121,107 @@ impl DeltaSnapshot {
                 Err(err) => return Err(err),
             },
         };
+
+        if !config.require_files {
+            match load_replayed_table_header(target_version, log_store, replay_hint).await {
+                Ok(Some(replayed)) => {
+                    return Self::from_replayed_header(log_store, config, replayed)
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    debug!(
+                        "Failed to load table header fast-path for version {}: {}; falling back to full replay",
+                        target_version, err
+                    );
+                }
+            }
+        }
+
         let replayed = load_replayed_table_state(target_version, log_store).await?;
-        let metadata = replayed.metadata;
-        let protocol = replayed.protocol;
+        Self::from_replayed_state(log_store, config, replayed)
+    }
+
+    fn from_replayed_state(
+        log_store: &dyn LogStore,
+        config: DeltaTableConfig,
+        replayed: ReplayedTableState,
+    ) -> DeltaResult<Self> {
+        Self::from_replayed_parts(
+            log_store,
+            config,
+            replayed.version,
+            replayed.protocol,
+            replayed.metadata,
+            replayed.adds,
+            replayed.removes,
+            replayed.txns,
+            replayed.commit_timestamps,
+        )
+    }
+
+    fn from_replayed_header(
+        log_store: &dyn LogStore,
+        config: DeltaTableConfig,
+        replayed: ReplayedTableHeader,
+    ) -> DeltaResult<Self> {
+        let arrow_schema = Arc::new(replayed.metadata.parse_schema_arrow()?);
+        let table_properties = TableProperties::from(replayed.metadata.configuration().iter());
+
+        Ok(Self {
+            version: replayed.version,
+            table_url: log_store.config().location.clone(),
+            config,
+            protocol: replayed.protocol,
+            metadata: replayed.metadata,
+            table_properties,
+            arrow_schema,
+            adds: Arc::new(Vec::new()),
+            removes: Arc::new(Vec::new()),
+            app_txns: replayed.txns,
+            commit_timestamps: replayed.commit_timestamps,
+            files_batch: OnceCell::new(),
+        })
+    }
+
+    #[expect(clippy::too_many_arguments)]
+    fn from_replayed_parts(
+        log_store: &dyn LogStore,
+        config: DeltaTableConfig,
+        version: i64,
+        protocol: Protocol,
+        metadata: Metadata,
+        adds: Vec<Add>,
+        removes: Vec<Remove>,
+        txns: HashMap<String, Transaction>,
+        commit_timestamps: BTreeMap<i64, i64>,
+    ) -> DeltaResult<Self> {
         let arrow_schema = Arc::new(metadata.parse_schema_arrow()?);
         let table_properties = TableProperties::from(metadata.configuration().iter());
 
         Ok(Self {
-            version: replayed.version,
+            version,
             table_url: log_store.config().location.clone(),
             config,
             protocol,
             metadata,
             table_properties,
             arrow_schema,
-            adds: Arc::new(replayed.adds),
-            removes: Arc::new(replayed.removes),
-            app_txns: Arc::new(replayed.txns),
-            commit_timestamps: Arc::new(replayed.commit_timestamps),
+            adds: Arc::new(adds),
+            removes: Arc::new(removes),
+            app_txns: Arc::new(txns),
+            commit_timestamps: Arc::new(commit_timestamps),
             files_batch: OnceCell::new(),
         })
+    }
+
+    fn replay_hint(&self) -> ReplayedTableHeader {
+        ReplayedTableHeader {
+            version: self.version,
+            protocol: self.protocol.clone(),
+            metadata: self.metadata.clone(),
+            txns: Arc::clone(&self.app_txns),
+            commit_timestamps: Arc::clone(&self.commit_timestamps),
+        }
     }
 
     pub async fn update(
@@ -156,7 +242,14 @@ impl DeltaSnapshot {
             return Err(DeltaTableError::generic("Cannot downgrade snapshot"));
         }
 
-        *self = Self::try_new(log_store, self.config.clone(), Some(target_version)).await?;
+        let replay_hint = (!self.config.require_files).then(|| self.replay_hint());
+        *self = Self::try_new(
+            log_store,
+            self.config.clone(),
+            Some(target_version),
+            replay_hint.as_ref(),
+        )
+        .await?;
         Ok(())
     }
 
@@ -238,6 +331,84 @@ impl DeltaSnapshot {
 
     pub fn removes(&self) -> &[Remove] {
         self.removes.as_ref()
+    }
+
+    fn has_unknown_table_features(&self) -> bool {
+        self.protocol()
+            .reader_features()
+            .into_iter()
+            .flatten()
+            .chain(self.protocol().writer_features().into_iter().flatten())
+            .any(|feature| matches!(feature, TableFeature::Unknown))
+    }
+
+    fn has_deletion_vectors(&self) -> bool {
+        self.adds().iter().any(|add| add.deletion_vector.is_some())
+            || self
+                .removes()
+                .iter()
+                .any(|remove| remove.deletion_vector.is_some())
+    }
+
+    pub fn build_version_checksum(
+        &self,
+        txn_id: Option<String>,
+        in_commit_timestamp_opt: Option<i64>,
+    ) -> DeltaResult<Option<VersionChecksum>> {
+        // TODO: Remove these coarse skips once replay retains the latest
+        // DomainMetadata actions and reconciles files with deletion-vector identity.
+        if self.has_unknown_table_features() {
+            debug!(
+                "Skipping version checksum for version {} because the protocol includes unsupported features",
+                self.version()
+            );
+            return Ok(None);
+        }
+        if self.has_deletion_vectors() {
+            debug!(
+                "Skipping version checksum for version {} because the snapshot includes deletion vectors",
+                self.version()
+            );
+            return Ok(None);
+        }
+
+        let mut num_files: i64 = 0;
+        let mut table_size_bytes: i64 = 0;
+
+        for add in self.adds() {
+            num_files = num_files
+                .checked_add(1)
+                .ok_or_else(|| DeltaTableError::generic("Version checksum file count overflow"))?;
+            table_size_bytes = table_size_bytes
+                .checked_add(add.size)
+                .ok_or_else(|| DeltaTableError::generic("Version checksum table size overflow"))?;
+        }
+
+        let mut set_transactions = self.app_txns.values().cloned().collect::<Vec<_>>();
+        set_transactions.sort_by(|left, right| {
+            left.app_id
+                .cmp(&right.app_id)
+                .then(left.version.cmp(&right.version))
+        });
+
+        Ok(Some(VersionChecksum {
+            txn_id,
+            table_size_bytes,
+            num_files,
+            num_metadata: 1,
+            num_protocol: 1,
+            in_commit_timestamp_opt,
+            set_transactions: (!set_transactions.is_empty()).then_some(set_transactions),
+            // TODO(protocol-hardening): Populate from reconciled snapshot state once replay keeps
+            // the latest DomainMetadata actions alongside metadata/protocol/txns.
+            domain_metadata: None,
+            metadata: self.metadata.clone(),
+            protocol: self.protocol.clone(),
+            // TODO(protocol-hardening): Populate optional protocol fields when we can do so
+            // deterministically without synthesizing partial state.
+            file_size_histogram: None,
+            all_files: None,
+        }))
     }
 
     pub fn physical_partition_columns(&self) -> Vec<(String, String)> {

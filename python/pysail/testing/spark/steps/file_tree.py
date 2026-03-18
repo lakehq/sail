@@ -14,10 +14,23 @@ _SPARK_PART_FILE_RE = re.compile(
     r"-c\d+\.(?P<codec>[A-Za-z0-9]+)\.parquet$"
 )
 
+# Iceberg-specific patterns
+_ICEBERG_PART_FILE_RE = re.compile(
+    r"^part-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+    r"-\d+\.parquet$"
+)
+_ICEBERG_METADATA_FILE_RE = re.compile(
+    r"^\d+-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\.metadata\.json$"
+)
+_ICEBERG_MANIFEST_FILE_RE = re.compile(
+    r"^manifest-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\.avro$"
+)
+_ICEBERG_SNAP_FILE_RE = re.compile(r"^snap-\d+\.avro$")
+
 _UUID_SUFFIX_RE = re.compile(r"^(.+)-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 
-def _normalize_name(name: str) -> str | None:
+def _normalize_name(name: str, *, include_checksum_files: bool = False) -> str | None:
     """
     Normalize a single path component.
 
@@ -38,9 +51,30 @@ def _normalize_name(name: str) -> str | None:
     if name == "_SUCCESS":
         return None
 
-    # Ignore filesystem checksum noise.
-    if name.endswith(".crc"):
+    # Ignore filesystem checksum noise unless a scenario explicitly wants to assert
+    # Delta version checksum files in `_delta_log`.
+    if name.endswith(".crc") and not include_checksum_files:
         return None
+
+    # Ignore Iceberg version-hint.text (internal file)
+    if name == "version-hint.text":
+        return None
+
+    # Normalize Iceberg data file names (part-<uuid>-<seq>.parquet)
+    if _ICEBERG_PART_FILE_RE.match(name):
+        return "*.parquet"
+
+    # Normalize Iceberg metadata files (<seq>-<uuid>.metadata.json)
+    if _ICEBERG_METADATA_FILE_RE.match(name):
+        return "*.metadata.json"
+
+    # Normalize Iceberg manifest files (manifest-<uuid>.avro)
+    if _ICEBERG_MANIFEST_FILE_RE.match(name):
+        return None  # Hide manifest files, they're covered by snap files
+
+    # Normalize Iceberg snapshot files (snap-<id>.avro)
+    if _ICEBERG_SNAP_FILE_RE.match(name):
+        return "snap-*.avro"
 
     # Normalize Spark data file names.
     m = _SPARK_PART_FILE_RE.match(name)
@@ -61,7 +95,7 @@ def normalize_file_tree_text(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
-def render_normalized_file_tree(root_path: Path) -> str:
+def render_normalized_file_tree(root_path: Path, *, include_checksum_files: bool = False) -> str:
     """
     Render a deterministic, normalized file tree for a directory.
 
@@ -78,22 +112,28 @@ def render_normalized_file_tree(root_path: Path) -> str:
         entries: list[Path] = sorted(current.iterdir(), key=lambda p: p.name)
 
         dirs: list[tuple[str, Path]] = []
-        files: list[tuple[str, Path]] = []
+        files: list[str] = []  # Changed to list[str] to store normalized names
         for p in entries:
-            rendered = _normalize_name(p.name)
+            rendered = _normalize_name(p.name, include_checksum_files=include_checksum_files)
             if rendered is None:
                 continue
             if p.is_dir():
                 dirs.append((rendered, p))
             else:
-                files.append((rendered, p))
+                files.append(rendered)
 
         for name, p in dirs:
             indent = "  " * depth
             lines.append(f"{indent}📂 {name}")
             render_dir(p, depth=depth + 1)
 
-        for name, _p in files:
+        dedup_names = {"*.parquet", "*.metadata.json", "snap-*.avro"}
+        seen_files = set()
+        for name in files:
+            if name in dedup_names:
+                if name in seen_files:
+                    continue
+                seen_files.add(name)
             indent = "  " * depth
             lines.append(f"{indent}📄 {name}")
 
@@ -102,17 +142,41 @@ def render_normalized_file_tree(root_path: Path) -> str:
     return "\n".join(lines)
 
 
-@then(parsers.parse("file tree in {location_var} matches"))
-def file_tree_matches_docstring(location_var: str, variables: dict, docstring: str) -> None:
+def _assert_file_tree_matches_docstring(
+    location_var: str,
+    variables: dict,
+    docstring: str,
+    *,
+    include_checksum_files: bool = False,
+) -> None:
     location = variables.get(location_var)
     assert location is not None, f"Variable {location_var!r} not found"
 
     real_path = Path(location.path)
     assert real_path.exists(), f"Directory {real_path} does not exist"
 
-    actual = render_normalized_file_tree(real_path)
+    actual = render_normalized_file_tree(real_path, include_checksum_files=include_checksum_files)
     expected = normalize_file_tree_text(docstring)
     assert actual == expected
+
+
+@then(parsers.parse("file tree in {location_var} matches"))
+def file_tree_matches_docstring(location_var: str, variables: dict, docstring: str) -> None:
+    _assert_file_tree_matches_docstring(location_var, variables, docstring)
+
+
+@then(parsers.parse("file tree including checksum files in {location_var} matches"))
+def file_tree_including_checksum_files_matches_docstring(
+    location_var: str,
+    variables: dict,
+    docstring: str,
+) -> None:
+    _assert_file_tree_matches_docstring(
+        location_var,
+        variables,
+        docstring,
+        include_checksum_files=True,
+    )
 
 
 @given(parsers.parse("file {filename} in {location_var} is deleted"))
@@ -123,6 +187,21 @@ def file_in_location_is_deleted(filename: str, location_var: str, variables: dic
     file_path = Path(location.path) / filename
     assert file_path.exists(), f"File {file_path} does not exist"
     file_path.unlink()
+
+
+@given(parsers.parse("file {filename} in {location_var} is replaced with"))
+def file_in_location_is_replaced_with(
+    filename: str,
+    location_var: str,
+    variables: dict,
+    docstring: str,
+) -> None:
+    """Replaces a named file in the given location directory with the provided text."""
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    file_path = Path(location.path) / filename
+    assert file_path.exists(), f"File {file_path} does not exist"
+    file_path.write_text(docstring, encoding="utf-8")
 
 
 @then(parsers.parse("data files in {location_var} count is {n:d}"))

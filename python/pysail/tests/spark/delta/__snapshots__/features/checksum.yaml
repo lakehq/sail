@@ -1,0 +1,64 @@
+# serializer version: 1
+---
+name: "test_delta_log_checksum_snapshot_records_explicit_writechecksumfile_enablement"
+data:
+  metadata:
+    configuration:
+      delta.writeChecksumFile.enabled: 'true'
+    createdTime: <created_time>
+    description: null
+    format:
+      options: {}
+      provider: parquet
+    id: <table_id>
+    name: null
+    partitionColumns: []
+    schemaString:
+      fields:
+      - metadata: {}
+        name: id
+        nullable: true
+        type: integer
+      - metadata: {}
+        name: value
+        nullable: true
+        type: string
+      type: struct
+  numFiles: 2
+  numMetadata: 1
+  numProtocol: 1
+  protocol:
+    minReaderVersion: 1
+    minWriterVersion: 2
+  tableSizeBytes: 1459
+---
+name: "test_delta_log_contains_checksum_files_and_latest_checksum_matches_snapshot"
+data:
+  metadata:
+    configuration: {}
+    createdTime: <created_time>
+    description: null
+    format:
+      options: {}
+      provider: parquet
+    id: <table_id>
+    name: null
+    partitionColumns: []
+    schemaString:
+      fields:
+      - metadata: {}
+        name: id
+        nullable: true
+        type: integer
+      - metadata: {}
+        name: value
+        nullable: true
+        type: string
+      type: struct
+  numFiles: 2
+  numMetadata: 1
+  numProtocol: 1
+  protocol:
+    minReaderVersion: 1
+    minWriterVersion: 2
+  tableSizeBytes: 1459
