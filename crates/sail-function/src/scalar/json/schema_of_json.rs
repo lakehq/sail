@@ -98,7 +98,13 @@ fn remove_leading_zeros(string: String) -> String {
 fn value_to_str(value: &Value, options: &SparkSchemaOfJsonOptions) -> Result<String> {
     match value {
         Value::String(_) => Ok("STRING".to_string()),
-        Value::Number(_) => Ok("BIGINT".to_string()),
+        Value::Number(num) => {
+            if num.is_f64() {
+                Ok("DOUBLE".to_string())
+            } else {
+                Ok("BIGINT".to_string())
+            }
+        },
         Value::Bool(_) => Ok("BOOL".to_string()),
         Value::Object(map) => {
             let mut inner = Vec::new();
