@@ -189,6 +189,21 @@ def file_in_location_is_deleted(filename: str, location_var: str, variables: dic
     file_path.unlink()
 
 
+@given(parsers.parse("file {filename} in {location_var} is replaced with"))
+def file_in_location_is_replaced_with(
+    filename: str,
+    location_var: str,
+    variables: dict,
+    docstring: str,
+) -> None:
+    """Replaces a named file in the given location directory with the provided text."""
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    file_path = Path(location.path) / filename
+    assert file_path.exists(), f"File {file_path} does not exist"
+    file_path.write_text(docstring, encoding="utf-8")
+
+
 @then(parsers.parse("data files in {location_var} count is {n:d}"))
 def data_files_count_is(location_var: str, n: int, variables: dict) -> None:
     location = variables.get(location_var)

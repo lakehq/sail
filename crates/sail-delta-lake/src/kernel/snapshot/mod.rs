@@ -31,7 +31,10 @@ use log::debug;
 use once_cell::sync::OnceCell;
 use url::Url;
 
-use crate::kernel::checkpoints::{latest_replayable_version, load_replayed_table_state};
+use crate::kernel::checkpoints::{
+    latest_replayable_version, load_replayed_table_header, load_replayed_table_state,
+    ReplayedTableHeader, ReplayedTableState,
+};
 pub use crate::kernel::snapshot::stats::SnapshotPruningStats;
 use crate::kernel::{DeltaTableConfig, SchemaRef};
 use crate::schema::{arrow_field_physical_name, arrow_schema_reorder_partitions};
@@ -100,10 +103,11 @@ impl Clone for DeltaSnapshot {
 }
 
 impl DeltaSnapshot {
-    pub async fn try_new(
+    pub(crate) async fn try_new(
         log_store: &dyn LogStore,
         config: DeltaTableConfig,
         version: Option<i64>,
+        replay_hint: Option<&ReplayedTableHeader>,
     ) -> DeltaResult<Self> {
         let target_version = match version {
             Some(v) => v,
@@ -117,26 +121,100 @@ impl DeltaSnapshot {
                 Err(err) => return Err(err),
             },
         };
+
+        if !config.require_files {
+            match load_replayed_table_header(target_version, log_store, replay_hint).await {
+                Ok(Some(replayed)) => {
+                    return Self::from_replayed_header(log_store, config, replayed)
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    debug!(
+                        "Failed to load table header fast-path for version {}: {}; falling back to full replay",
+                        target_version, err
+                    );
+                }
+            }
+        }
+
         let replayed = load_replayed_table_state(target_version, log_store).await?;
-        let metadata = replayed.metadata;
-        let protocol = replayed.protocol;
+        Self::from_replayed_state(log_store, config, replayed)
+    }
+
+    fn from_replayed_state(
+        log_store: &dyn LogStore,
+        config: DeltaTableConfig,
+        replayed: ReplayedTableState,
+    ) -> DeltaResult<Self> {
+        Self::from_replayed_parts(
+            log_store,
+            config,
+            replayed.version,
+            replayed.protocol,
+            replayed.metadata,
+            replayed.adds,
+            replayed.removes,
+            replayed.txns,
+            replayed.commit_timestamps,
+        )
+    }
+
+    fn from_replayed_header(
+        log_store: &dyn LogStore,
+        config: DeltaTableConfig,
+        replayed: ReplayedTableHeader,
+    ) -> DeltaResult<Self> {
+        Self::from_replayed_parts(
+            log_store,
+            config,
+            replayed.version,
+            replayed.protocol,
+            replayed.metadata,
+            Vec::new(),
+            Vec::new(),
+            replayed.txns,
+            replayed.commit_timestamps,
+        )
+    }
+    #[expect(clippy::too_many_arguments)]
+    fn from_replayed_parts(
+        log_store: &dyn LogStore,
+        config: DeltaTableConfig,
+        version: i64,
+        protocol: Protocol,
+        metadata: Metadata,
+        adds: Vec<Add>,
+        removes: Vec<Remove>,
+        txns: HashMap<String, Transaction>,
+        commit_timestamps: BTreeMap<i64, i64>,
+    ) -> DeltaResult<Self> {
         let arrow_schema = Arc::new(metadata.parse_schema_arrow()?);
         let table_properties = TableProperties::from(metadata.configuration().iter());
 
         Ok(Self {
-            version: replayed.version,
+            version,
             table_url: log_store.config().location.clone(),
             config,
             protocol,
             metadata,
             table_properties,
             arrow_schema,
-            adds: Arc::new(replayed.adds),
-            removes: Arc::new(replayed.removes),
-            app_txns: Arc::new(replayed.txns),
-            commit_timestamps: Arc::new(replayed.commit_timestamps),
+            adds: Arc::new(adds),
+            removes: Arc::new(removes),
+            app_txns: Arc::new(txns),
+            commit_timestamps: Arc::new(commit_timestamps),
             files_batch: OnceCell::new(),
         })
+    }
+
+    fn replay_hint(&self) -> ReplayedTableHeader {
+        ReplayedTableHeader {
+            version: self.version,
+            protocol: self.protocol.clone(),
+            metadata: self.metadata.clone(),
+            txns: self.app_txns.as_ref().clone(),
+            commit_timestamps: self.commit_timestamps.as_ref().clone(),
+        }
     }
 
     pub async fn update(
@@ -157,7 +235,14 @@ impl DeltaSnapshot {
             return Err(DeltaTableError::generic("Cannot downgrade snapshot"));
         }
 
-        *self = Self::try_new(log_store, self.config.clone(), Some(target_version)).await?;
+        let replay_hint = (!self.config.require_files).then(|| self.replay_hint());
+        *self = Self::try_new(
+            log_store,
+            self.config.clone(),
+            Some(target_version),
+            replay_hint.as_ref(),
+        )
+        .await?;
         Ok(())
     }
 

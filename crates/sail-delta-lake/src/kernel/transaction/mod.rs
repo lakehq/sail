@@ -650,6 +650,7 @@ impl std::future::IntoFuture for PreparedCommit {
                             this.log_store.as_ref(),
                             Default::default(),
                             Some(latest_version),
+                            None,
                         )
                         .await?;
                         read_snapshot = Some(Arc::new(snapshot));
@@ -908,6 +909,7 @@ impl PostCommit {
                     self.log_store.as_ref(),
                     Default::default(),
                     Some(self.version),
+                    None,
                 )
                 .await?,
             )
@@ -966,6 +968,7 @@ impl PostCommit {
                         self.log_store.as_ref(),
                         state.load_config().clone(),
                         Some(self.version),
+                        None,
                     )
                     .await?,
                 );

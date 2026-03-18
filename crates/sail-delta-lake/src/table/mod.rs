@@ -114,6 +114,7 @@ impl DeltaTable {
                     self.log_store.as_ref(),
                     self.config.clone(),
                     max_version,
+                    None,
                 )
                 .await?;
                 self.state = Some(Arc::new(state));
