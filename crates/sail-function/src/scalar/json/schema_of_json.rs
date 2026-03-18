@@ -1,17 +1,20 @@
-use std::{sync::Arc};
+use std::sync::Arc;
 
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, function::Hint};
+use datafusion::arrow::array::{downcast_array, Array, ArrayRef, MapArray, StringArray};
+use datafusion::arrow::datatypes::DataType;
+use datafusion_common::{exec_err, plan_err, DataFusionError, Result};
+use datafusion_expr::function::Hint;
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_expr_common::signature::Volatility;
-use datafusion::arrow::{array::{Array, ArrayRef, MapArray, StringArray, downcast_array}, datatypes::DataType};
-use datafusion_common::{DataFusionError, Result, exec_err, plan_err};
-use datafusion_functions::{downcast_arg, utils::make_scalar_function};
-use serde_json::Value;
+use datafusion_functions::downcast_arg;
+use datafusion_functions::utils::make_scalar_function;
 use regex::Regex;
+use serde_json::Value;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkSchemaOfJson {
     signature: Signature,
-    aliases: [String; 1]
+    aliases: [String; 1],
 }
 
 impl Default for SparkSchemaOfJson {
@@ -24,7 +27,7 @@ impl SparkSchemaOfJson {
     pub fn new() -> Self {
         SparkSchemaOfJson {
             signature: Signature::user_defined(Volatility::Immutable),
-            aliases: ["schema_of_json".to_string()]
+            aliases: ["schema_of_json".to_string()],
         }
     }
 }
@@ -62,7 +65,10 @@ impl ScalarUDFImpl for SparkSchemaOfJson {
 
 fn schema_of_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() < 1 || args.len() > 2 {
-        return plan_err!("function `schema_of_json` expected 1 to 2 args but got {}", args.len())
+        return plan_err!(
+            "function `schema_of_json` expected 1 to 2 args but got {}",
+            args.len()
+        );
     };
     let rows = downcast_arg!(&args[0], StringArray);
     let options = if let Some(arg) = args.get(1) {
@@ -104,7 +110,7 @@ fn value_to_str(value: &Value, options: &SparkSchemaOfJsonOptions) -> Result<Str
             } else {
                 Ok("BIGINT".to_string())
             }
-        },
+        }
         Value::Bool(_) => Ok("BOOL".to_string()),
         Value::Object(map) => {
             let mut inner = Vec::new();
@@ -115,12 +121,12 @@ fn value_to_str(value: &Value, options: &SparkSchemaOfJsonOptions) -> Result<Str
             }
             let inner_str = inner.join(", ");
             Ok(format!("STRUCT<{}>", inner_str))
-        },
+        }
         Value::Array(arr) => {
             let nested_val = value_to_str(&arr[0], options)?;
             Ok(format!("ARRAY<{nested_val}>"))
-        },
-        other => exec_err!("Unsupported parsing of json type {other}")
+        }
+        other => exec_err!("Unsupported parsing of json type {other}"),
     }
 }
 
@@ -129,7 +135,7 @@ enum ModeOptions {
     #[default]
     Permissive,
     FailFast,
-    DropMalformed
+    DropMalformed,
 }
 
 impl ModeOptions {
@@ -209,19 +215,5 @@ impl Default for SparkSchemaOfJsonOptions {
             mode: ModeOptions::default(),
             allow_numeric_leading_zeros: false,
         }
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn test_tmp() {
-        let s = r#"{"a": 01, "b": [1]}"#;
-        let mut options = SparkSchemaOfJsonOptions::default();
-        options.allow_numeric_leading_zeros = true;
-        let o = infer_json_schema_type(s, &options);
-        dbg!(o);
     }
 }
