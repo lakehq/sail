@@ -10,9 +10,9 @@ import pyarrow as pa
 import pytest
 
 try:
-    from pyspark.sql import datasource as _pyspark_datasource  # noqa: F401
+    from pyspark.sql.datasource import EqualTo as _EqualTo  # noqa: F401
 except ImportError:
-    pytest.skip("Python DataSource API not available", allow_module_level=True)
+    pytest.skip("Python DataSource API with filter pushdown not available (requires PySpark 4.1+)", allow_module_level=True)
 
 try:
     import vortex
