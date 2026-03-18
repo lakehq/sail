@@ -2,7 +2,7 @@ mod json_as_text;
 mod json_length;
 mod json_object_keys;
 mod to_json;
-mod schema_to_json;
+mod schema_of_json;
 
 mod common;
 mod common_union;
@@ -12,3 +12,4 @@ pub use json_as_text::{json_as_text_udf, JsonAsText};
 pub use json_length::{json_length_udf, JsonLength};
 pub use json_object_keys::{json_object_keys_udf, JsonObjectKeys};
 pub use to_json::{to_json_udf, SparkToJson};
+pub use schema_of_json::SparkSchemaOfJson;
