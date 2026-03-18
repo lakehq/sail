@@ -331,7 +331,7 @@ impl ReconciledHeaderState {
         Self {
             protocol: Some(header.protocol.clone()),
             metadata: Some(header.metadata.clone()),
-            txns: header.txns.clone(),
+            txns: header.txns.as_ref().clone(),
         }
     }
 }
@@ -401,8 +401,8 @@ pub(crate) struct ReplayedTableHeader {
     pub version: i64,
     pub protocol: Protocol,
     pub metadata: Metadata,
-    pub txns: HashMap<String, Transaction>,
-    pub commit_timestamps: BTreeMap<i64, i64>,
+    pub txns: Arc<HashMap<String, Transaction>>,
+    pub commit_timestamps: Arc<BTreeMap<i64, i64>>,
 }
 
 fn encode_checkpoint_rows(rows: &Vec<CheckpointActionRow>) -> DeltaResult<RecordBatch> {
@@ -660,16 +660,12 @@ fn build_header_from_checksum(version: i64, checksum: VersionChecksum) -> Replay
         .into_iter()
         .map(|txn| (txn.app_id.clone(), txn))
         .collect::<HashMap<_, _>>();
-    let commit_timestamps = checksum
-        .in_commit_timestamp_opt
-        .map(|timestamp| BTreeMap::from([(version, timestamp)]))
-        .unwrap_or_default();
     ReplayedTableHeader {
         version,
         protocol: checksum.protocol,
         metadata: checksum.metadata,
-        txns,
-        commit_timestamps,
+        txns: Arc::new(txns),
+        commit_timestamps: Arc::new(BTreeMap::new()),
     }
 }
 
@@ -996,7 +992,7 @@ pub(crate) async fn load_replayed_table_header(
         _ => (
             ReconciledHeaderState::from_header(&base_hint),
             base_hint.version.saturating_add(1),
-            base_hint.commit_timestamps,
+            Arc::unwrap_or_clone(base_hint.commit_timestamps),
         ),
     };
     if start_commit_version <= version {
@@ -1022,8 +1018,8 @@ pub(crate) async fn load_replayed_table_header(
         version,
         protocol,
         metadata,
-        txns: state.txns,
-        commit_timestamps,
+        txns: Arc::new(state.txns),
+        commit_timestamps: Arc::new(commit_timestamps),
     }))
 }
 

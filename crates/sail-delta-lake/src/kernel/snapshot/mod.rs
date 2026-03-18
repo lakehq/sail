@@ -164,18 +164,25 @@ impl DeltaSnapshot {
         config: DeltaTableConfig,
         replayed: ReplayedTableHeader,
     ) -> DeltaResult<Self> {
-        Self::from_replayed_parts(
-            log_store,
+        let arrow_schema = Arc::new(replayed.metadata.parse_schema_arrow()?);
+        let table_properties = TableProperties::from(replayed.metadata.configuration().iter());
+
+        Ok(Self {
+            version: replayed.version,
+            table_url: log_store.config().location.clone(),
             config,
-            replayed.version,
-            replayed.protocol,
-            replayed.metadata,
-            Vec::new(),
-            Vec::new(),
-            replayed.txns,
-            replayed.commit_timestamps,
-        )
+            protocol: replayed.protocol,
+            metadata: replayed.metadata,
+            table_properties,
+            arrow_schema,
+            adds: Arc::new(Vec::new()),
+            removes: Arc::new(Vec::new()),
+            app_txns: replayed.txns,
+            commit_timestamps: replayed.commit_timestamps,
+            files_batch: OnceCell::new(),
+        })
     }
+
     #[expect(clippy::too_many_arguments)]
     fn from_replayed_parts(
         log_store: &dyn LogStore,
@@ -212,8 +219,8 @@ impl DeltaSnapshot {
             version: self.version,
             protocol: self.protocol.clone(),
             metadata: self.metadata.clone(),
-            txns: self.app_txns.as_ref().clone(),
-            commit_timestamps: self.commit_timestamps.as_ref().clone(),
+            txns: Arc::clone(&self.app_txns),
+            commit_timestamps: Arc::clone(&self.commit_timestamps),
         }
     }
 
