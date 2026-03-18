@@ -1,4 +1,4 @@
-"""Vortex data source for Sail, backed by the ``vortex`` Python library.
+"""Vortex data source for Sail, backed by the ``vortex-data`` Python library.
 
 Supports ``spark.read.format("vortex")`` with filter pushdown and
 zero-copy Arrow RecordBatch yield.
@@ -12,7 +12,7 @@ Usage::
     from pysail.spark.datasource.vortex import VortexDataSource
 
     spark.dataSource.register(VortexDataSource)
-    df = spark.read.format("vortex").option("path", "/data/file.vtx").load()
+    df = spark.read.format("vortex").option("path", "/data/file.vortex").load()
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ try:
     import vortex
     from vortex.expr import and_, column, not_
 except ImportError as e:
-    msg = "pyvortex is required for the Vortex data source. Install it with: pip install pysail[vortex]"
+    msg = "vortex-data is required for the Vortex data source. Install it with: pip install pysail[vortex]"
     raise ImportError(msg) from e
 
 try:
@@ -37,8 +37,6 @@ try:
         GreaterThanOrEqual,
         In,
         InputPartition,
-        IsNotNull,
-        IsNull,
         LessThan,
         LessThanOrEqual,
         Not,
@@ -84,8 +82,6 @@ def _filter_to_tuple(f: Filter) -> tuple | None:
     Returns None if the filter type is not supported.
     Tuple formats:
       - Comparison: (col, op, value)     e.g. ("id", "__gt__", 5)
-      - IsNull:     (col, "is_null")
-      - IsNotNull:  (col, "is_not_null")
       - In:         (col, "in", (v1, v2, ...))
       - Not:        ("not", child_tuple)
       - String:     (col, "starts_with"|"ends_with"|"contains", value)
@@ -94,10 +90,6 @@ def _filter_to_tuple(f: Filter) -> tuple | None:
     if op is not None:
         return (_col_name(f), op, f.value)
 
-    if isinstance(f, IsNull):
-        return (_col_name(f), "is_null")
-    if isinstance(f, IsNotNull):
-        return (_col_name(f), "is_not_null")
     if isinstance(f, In):
         return (_col_name(f), "in", f.value)
     if isinstance(f, Not):
@@ -130,11 +122,6 @@ def _tuple_to_vortex_expr(t: tuple):
     # Comparison: (col, "__eq__", value)
     if op.startswith("__"):
         return getattr(col, op)(t[2])
-
-    # Null checks — Vortex doesn't support null comparison expressions,
-    # so we reject these and let Sail post-filter.
-    if op in ("is_null", "is_not_null"):
-        return None
 
     # In: (col, "in", (v1, v2, ...))
     if op == "in":
@@ -264,21 +251,21 @@ class VortexReader(DataSourceReader):
 
 
 class VortexDataSource(DataSource):
-    """Vortex columnar data source backed by the ``vortex`` library.
+    """Vortex columnar data source backed by the ``vortex-data`` library.
 
     Register and use::
 
         from pysail.spark.datasource.vortex import VortexDataSource
 
         spark.dataSource.register(VortexDataSource)
-        df = spark.read.format("vortex").option("path", "/data/file.vtx").load()
+        df = spark.read.format("vortex").option("path", "/data/file.vortex").load()
 
     Supported options:
 
     +--------+----------+------------------------------------------+
     | Option | Required | Description                              |
     +========+==========+==========================================+
-    | path   | Yes      | Path to the Vortex file (.vtx)           |
+    | path   | Yes      | Path to the Vortex file (.vortex)        |
     +--------+----------+------------------------------------------+
 
     Supported filter pushdown: EqualTo, GreaterThan, GreaterThanOrEqual,

@@ -1,7 +1,7 @@
 """Tests for the Vortex Python DataSource.
 
-Requires the ``vortex`` package to be installed.
-All tests are skipped if ``vortex`` is not available.
+Requires the ``vortex-data`` package to be installed.
+All tests are skipped if ``vortex-data`` is not available.
 """
 
 from __future__ import annotations
@@ -16,12 +16,8 @@ except ImportError:
 
 try:
     import vortex
-
-    HAS_VORTEX = True
 except ImportError:
-    HAS_VORTEX = False
-
-pytestmark = pytest.mark.skipif(not HAS_VORTEX, reason="vortex not installed")
+    pytest.skip("vortex-data not installed", allow_module_level=True)
 
 
 @pytest.fixture
@@ -34,7 +30,7 @@ def vtx_file(tmp_path):
             "score": pa.array([90.5, 85.0, 92.3, 78.1, 88.7], type=pa.float64()),
         }
     )
-    path = str(tmp_path / "test.vtx")
+    path = str(tmp_path / "test.vortex")
     vortex.io.write(table, path)
     return path
 
@@ -48,7 +44,7 @@ def vtx_file_with_nulls(tmp_path):
             "name": pa.array(["alice", None, "carol", "dave", None], type=pa.string()),
         }
     )
-    path = str(tmp_path / "nulls.vtx")
+    path = str(tmp_path / "nulls.vortex")
     vortex.io.write(table, path)
     return path
 
@@ -140,7 +136,7 @@ class TestVortexEdgeCases:
             spark.read.format("vortex").load().collect()
 
     def test_nonexistent_file(self, spark, tmp_path):
-        path = str(tmp_path / "nonexistent.vtx")
+        path = str(tmp_path / "nonexistent.vortex")
         with pytest.raises(Exception, match="Failed to open Vortex file"):
             spark.read.format("vortex").option("path", path).load().collect()
 
