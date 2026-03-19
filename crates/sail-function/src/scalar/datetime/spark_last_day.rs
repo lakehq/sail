@@ -46,12 +46,7 @@ impl ScalarUDFImpl for SparkLastDay {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
-        let [arg] = args.as_slice() else {
-            return exec_err!(
-                "Spark `last_day` function requires 1 argument, got {}",
-                args.len()
-            );
-        };
+        let arg = &args[0];
         match arg {
             ColumnarValue::Scalar(ScalarValue::Date32(days)) => {
                 if let Some(days) = days {

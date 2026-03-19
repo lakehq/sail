@@ -55,13 +55,6 @@ impl ScalarUDFImpl for StAsBinary {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = args.args;
 
-        if args.len() != 1 {
-            return exec_err!(
-                "st_asbinary requires exactly 1 argument, got {}",
-                args.len()
-            );
-        }
-
         match &args[0] {
             ColumnarValue::Scalar(ScalarValue::Binary(Some(b))) => {
                 Ok(ColumnarValue::Scalar(ScalarValue::Binary(Some(b.to_vec()))))

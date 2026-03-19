@@ -45,12 +45,8 @@ impl ScalarUDFImpl for SparkMakeYmInterval {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
-        let [year, month] = args.as_slice() else {
-            return exec_err!(
-                "Spark `make_ym_interval` function requires 2 arguments, got {}",
-                args.len()
-            );
-        };
+        let year = &args[0];
+        let month = &args[1];
         match (year, month) {
             (
                 ColumnarValue::Scalar(ScalarValue::Int32(years)),

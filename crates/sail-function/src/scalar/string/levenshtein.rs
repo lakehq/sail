@@ -82,13 +82,7 @@ impl ScalarUDFImpl for Levenshtein {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
-        let [first, _, ..] = args.as_slice() else {
-            return exec_err!(
-                "`levenshtein` function requires two or three arguments, got {}",
-                args.len()
-            );
-        };
-        match first.data_type() {
+        match args[0].data_type() {
             DataType::Utf8 | DataType::Utf8View => {
                 make_scalar_function(levenshtein::<i32>, vec![])(&args)
             }

@@ -64,12 +64,7 @@ impl ScalarUDFImpl for SparkSignum {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
-        let [arg] = args.as_slice() else {
-            return exec_err!(
-                "Spark `signum` function requires 1 argument, got {}",
-                args.len()
-            );
-        };
+        let arg = &args[0];
         match arg {
             ColumnarValue::Scalar(ScalarValue::UInt8(val)) => {
                 Ok(ColumnarValue::Scalar(ScalarValue::Float64(val.map(|x| {

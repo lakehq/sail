@@ -11,7 +11,6 @@ use datafusion::arrow::datatypes::{
 use datafusion::common::cast::{as_large_list_array, as_list_array};
 use datafusion::common::{DataFusionError, Result};
 use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-use datafusion_common::exec_err;
 use datafusion_expr::ScalarFunctionArgs;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -126,12 +125,7 @@ impl ScalarUDFImpl for ArrayItemWithPosition {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
         let args = ColumnarValue::values_to_arrays(&args)?;
-        let [arg] = args.as_slice() else {
-            return exec_err!(
-                "{} should only be called with a single argument",
-                self.name()
-            );
-        };
+        let arg = &args[0];
         let out = match arg.data_type() {
             DataType::List(f) => {
                 let array = as_list_array(arg)?;

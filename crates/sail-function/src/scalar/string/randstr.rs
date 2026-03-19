@@ -49,13 +49,6 @@ impl ScalarUDFImpl for Randstr {
             args, number_rows, ..
         } = args;
 
-        if args.is_empty() || args.len() > 2 {
-            return exec_err!(
-                "`randstr` requires 1 or 2 arguments (length, [seed]), got {}",
-                args.len()
-            );
-        }
-
         let length = match &args[0] {
             ColumnarValue::Scalar(ScalarValue::Int32(Some(v))) => *v as usize,
             ColumnarValue::Scalar(ScalarValue::Int64(Some(v))) => *v as usize,

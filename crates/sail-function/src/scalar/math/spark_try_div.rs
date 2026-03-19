@@ -70,9 +70,8 @@ impl ScalarUDFImpl for SparkTryDiv {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
-        let [left, right] = args.as_slice() else {
-            return Err(invalid_arg_count_exec_err("try_divide", (2, 2), args.len()));
-        };
+        let left = &args[0];
+        let right = &args[1];
 
         let len = match (&left, &right) {
             (ColumnarValue::Array(arr), _) => arr.len(),

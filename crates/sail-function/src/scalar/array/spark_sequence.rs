@@ -124,13 +124,6 @@ impl ScalarUDFImpl for SparkSequence {
 }
 
 fn gen_sequence_timestamp(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 3 {
-        return exec_err!(
-            "Spark `sequence` function requires 3 arguments for TIMESTAMP, got {}",
-            args.len()
-        );
-    }
-
     let (start_array, start_tz, stop_array, stop_tz) =
         match (&args[0].data_type(), &args[1].data_type()) {
             (
@@ -228,13 +221,6 @@ fn gen_sequence_timestamp(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 fn gen_sequence_date(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() < 2 || args.len() > 3 {
-        return exec_err!(
-            "Spark `sequence` function requires 2 or 3 arguments for DATE, got {}",
-            args.len()
-        );
-    }
-
     let (start_array, stop_array, step_array) = match args.len() {
         2 => (
             Some(args[0].as_primitive::<Date32Type>()),

@@ -55,12 +55,7 @@ impl ScalarUDFImpl for Randn {
             return invoke_no_seed(number_rows);
         }
 
-        let [seed] = args.as_slice() else {
-            return exec_err!(
-                "randn should be called with at most 1 argument, got {}",
-                args.len()
-            );
-        };
+        let seed = &args[0];
         match seed {
             ColumnarValue::Scalar(scalar) => {
                 let seed = match scalar {

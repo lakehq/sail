@@ -66,12 +66,7 @@ impl ScalarUDFImpl for SparkAbs {
     // TODO: ANSI mode
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
-        let [arg] = args.as_slice() else {
-            return exec_err!(
-                "Spark `abs` function requires 1 argument, got {}",
-                args.len()
-            );
-        };
+        let arg = &args[0];
         match arg {
             ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(interval)) => {
                 Ok(ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(

@@ -59,12 +59,8 @@ impl ScalarUDFImpl for SparkEncode {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
-        let [first, second] = args.as_slice() else {
-            return exec_err!(
-                "Spark `encode` function requires 2 arguments, got {}",
-                args.len()
-            );
-        };
+        let first = &args[0];
+        let second = &args[1];
 
         if matches!(
             first,
@@ -299,12 +295,8 @@ impl ScalarUDFImpl for SparkDecode {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
-        let [first, second] = args.as_slice() else {
-            return exec_err!(
-                "Spark `decode` function requires 2 arguments, got {}",
-                args.len()
-            );
-        };
+        let first = &args[0];
+        let second = &args[1];
 
         if matches!(
             first,
