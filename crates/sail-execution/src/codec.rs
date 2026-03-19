@@ -169,6 +169,7 @@ use sail_function::scalar::string::spark_encode_decode::{SparkDecode, SparkEncod
 use sail_function::scalar::string::spark_mask::SparkMask;
 use sail_function::scalar::string::spark_split::SparkSplit;
 use sail_function::scalar::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
+use sail_function::scalar::string::spark_to_char::SparkToChar;
 use sail_function::scalar::string::spark_to_number::SparkToNumber;
 use sail_function::scalar::string::spark_try_to_number::SparkTryToNumber;
 use sail_function::scalar::struct_function::StructFunction;
@@ -1826,6 +1827,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_concat" | "concat" | "array_concat" => {
                 Ok(Arc::new(ScalarUDF::from(SparkConcat::new())))
             }
+            "spark_to_char" => Ok(Arc::new(ScalarUDF::from(SparkToChar::new()))),
             "spark_to_number" | "to_number" => Ok(Arc::new(ScalarUDF::from(SparkToNumber::new()))),
             "spark_try_to_number" | "try_to_number" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryToNumber::new())))
@@ -2030,6 +2032,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkToBinary>()
             || node_inner.is::<SparkToChronoFmt>()
             || node_inner.is::<SparkToLargeUtf8>()
+            || node_inner.is::<SparkToChar>()
             || node_inner.is::<SparkToNumber>()
             || node_inner.is::<SparkToUtf8>()
             || node_inner.is::<SparkToUtf8View>()

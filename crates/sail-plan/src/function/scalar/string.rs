@@ -4,12 +4,13 @@ use datafusion::functions::regex::expr_fn as regex_fn;
 use datafusion::functions::regex::regexpcount::RegexpCountFunc;
 use datafusion::functions::regex::regexpinstr::RegexpInstrFunc;
 use datafusion_common::{DFSchema, ScalarValue};
-use datafusion_expr::{cast, expr, lit, try_cast, when, ExprSchemable};
+use datafusion_expr::{cast, expr, lit, try_cast, when, ExprSchemable, ScalarUDF};
 use datafusion_functions_nested::expr_fn::array_element;
 use datafusion_spark::function::string::elt::SparkElt;
 use datafusion_spark::function::string::expr_fn as string_fn;
 use datafusion_spark::function::string::format_string::FormatStringFunc;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
 use sail_function::scalar::string::format_number::FormatNumber;
 use sail_function::scalar::string::levenshtein::Levenshtein;
 use sail_function::scalar::string::make_valid_utf8::MakeValidUtf8;
@@ -21,6 +22,7 @@ use sail_function::scalar::string::spark_encode_decode::{SparkDecode, SparkEncod
 use sail_function::scalar::string::spark_mask::SparkMask;
 use sail_function::scalar::string::spark_split::SparkSplit;
 use sail_function::scalar::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
+use sail_function::scalar::string::spark_to_char::SparkToChar;
 use sail_function::scalar::string::spark_to_number::SparkToNumber;
 use sail_function::scalar::string::spark_try_to_number::SparkTryToNumber;
 
@@ -294,9 +296,9 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("substring", F::custom(substr)),
         ("substring_index", F::ternary(expr_fn::substr_index)),
         ("to_binary", F::udf(SparkToBinary::new())),
-        ("to_char", F::unknown("to_char")),
+        ("to_char", F::custom(to_char)),
         ("to_number", F::udf(SparkToNumber::new())),
-        ("to_varchar", F::unknown("to_varchar")),
+        ("to_varchar", F::custom(to_char)),
         ("translate", F::ternary(expr_fn::translate)),
         ("trim", F::var_arg(rev_args(expr_fn::trim))),
         ("try_to_binary", F::udf(SparkTryToBinary::new())),
@@ -308,4 +310,31 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("validate_utf8", F::custom(validate_utf8)),
         ("strpos", F::binary(expr_fn::strpos)),
     ]
+}
+
+/// Spark's `to_char(expr, fmt)` / `to_varchar(expr, fmt)`:
+/// - For temporal types: converts Java datetime pattern to chrono and calls DF's `to_char`
+/// - For numeric types: not yet implemented (Spark uses 9/0/S/$/G/D format, not DecimalFormat)
+fn to_char(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (value, format) = input.arguments.two()?;
+    let schema = input.function_context.schema;
+    let dt = value
+        .get_type(schema.as_ref())
+        .map_err(|e| PlanError::invalid(format!("to_char: cannot resolve input type: {e}")))?;
+
+    if dt.is_temporal() {
+        let chrono_format = ScalarUDF::from(SparkToChronoFmt::new()).call(vec![format]);
+        Ok(expr_fn::to_char(value, chrono_format))
+    } else if dt.is_numeric()
+        || matches!(
+            dt,
+            DataType::Binary | DataType::LargeBinary | DataType::FixedSizeBinary(_)
+        )
+    {
+        Ok(ScalarUDF::from(SparkToChar::new()).call(vec![value, format]))
+    } else {
+        Err(PlanError::invalid(format!(
+            "to_char/to_varchar requires a numeric or temporal type, got {dt}"
+        )))
+    }
 }

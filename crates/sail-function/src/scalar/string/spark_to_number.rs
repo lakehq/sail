@@ -235,13 +235,13 @@ macro_rules! get_capture_group {
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct RegexSpec {
-    left_sign: Option<String>,
-    currency_left: Option<String>,
-    numbers: String,
-    dot: Option<String>,
-    decimals: Option<String>,
-    currency_right: Option<String>,
-    right_sign: Option<String>,
+    pub(crate) left_sign: Option<String>,
+    pub(crate) currency_left: Option<String>,
+    pub(crate) numbers: String,
+    pub(crate) dot: Option<String>,
+    pub(crate) decimals: Option<String>,
+    pub(crate) currency_right: Option<String>,
+    pub(crate) right_sign: Option<String>,
 }
 impl TryFrom<&str> for RegexSpec {
     type Error = DataFusionError;
