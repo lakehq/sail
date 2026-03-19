@@ -31,12 +31,12 @@ pub(super) mod telemetry {
     use sail_telemetry::telemetry::{init_telemetry, shutdown_telemetry, ResourceOptions};
 
     pub struct TelemetryGuard {
-        /// A marker to prevent struct creation without calling [`TelemetryGuard::new()`].
+        /// A marker to prevent struct creation without calling [`TelemetryGuard::try_new()`].
         _marker: (),
     }
 
     impl TelemetryGuard {
-        pub fn new(config: &AppConfig) -> Result<Self, Box<dyn std::error::Error>> {
+        pub fn try_new(config: &AppConfig) -> Result<Self, Box<dyn std::error::Error>> {
             let resource = ResourceOptions { kind: "server" };
             init_telemetry(&config.telemetry, resource)?;
             Ok(Self { _marker: () })
@@ -49,6 +49,20 @@ pub(super) mod telemetry {
         }
     }
 }
+
+/// A user-facing error for the Spark Connect server.
+/// This does not wrap the underlying error but only tracks the error message,
+/// so that it can be `Send` from the server task.
+#[derive(Debug)]
+pub struct ServerError(String);
+
+impl std::fmt::Display for ServerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "server error: {}", self.0)
+    }
+}
+
+impl std::error::Error for ServerError {}
 
 /// Starts a Spark Connect server and runs the given workload with the server address.
 /// This function should be called only once in the entire process since it initializes
@@ -69,7 +83,7 @@ where
     let _telemetry = runtime
         .handle()
         .primary()
-        .block_on(async { telemetry::TelemetryGuard::new(&config) });
+        .block_on(async { telemetry::TelemetryGuard::try_new(&config) })?;
 
     let handle = runtime.handle();
     let (server_address, server_task) = runtime.handle().primary().block_on(async {
@@ -79,12 +93,15 @@ where
         let server_task = async move {
             info!("Starting the Spark Connect server on {server_address}...");
             match serve(listener, signal, config, handle).await {
-                Ok(()) => {}
+                Ok(()) => {
+                    info!("The Spark Connect server has stopped.");
+                    Ok(())
+                }
                 Err(e) => {
                     error!("{e}");
+                    Err(ServerError(e.to_string()))
                 }
             }
-            info!("The Spark Connect server has stopped.");
         };
         <Result<_, Box<dyn std::error::Error>>>::Ok((server_address, server_task))
     })?;
@@ -93,8 +110,13 @@ where
 
     runtime.handle().primary().block_on(async move {
         let result = workload(server_address).await;
-        let _ = server_task.await;
-        result
+        let server_result = server_task.await;
+        match (result, server_result) {
+            (Err(e), _) => Err(e),
+            (Ok(()), Ok(Ok(()))) => Ok(()),
+            (Ok(()), Ok(Err(e))) => Err(Box::new(e) as Box<dyn std::error::Error>),
+            (Ok(()), Err(e)) => Err(Box::new(e) as Box<dyn std::error::Error>),
+        }
     })
 }
 
