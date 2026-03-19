@@ -382,9 +382,7 @@ def delta_log_json_file_matches_snapshot(
 
 
 @given(
-    parsers.parse(
-        "delta log JSON files for versions {versions} in {location_var} are backdated by {seconds:d} seconds"
-    )
+    parsers.parse("delta log JSON files for versions {versions} in {location_var} are backdated by {seconds:d} seconds")
 )
 def delta_log_json_files_are_backdated(
     versions: str,
