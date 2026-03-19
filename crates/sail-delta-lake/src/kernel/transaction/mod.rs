@@ -31,7 +31,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::kernel::checkpoints::{cleanup_expired_logs_for, create_checkpoint_for};
+use crate::delta_log::cleanup::cleanup_expired_delta_log_files;
+use crate::kernel::checkpoints::create_checkpoint_for;
 use crate::kernel::transaction::conflict_checker::{TransactionInfo, WinningCommitSummary};
 use crate::kernel::DeltaOperation;
 use crate::spec::{checksum_path, temp_commit_path, Action, DeltaError, DeltaResult, Transaction};
@@ -923,20 +924,25 @@ impl PostCommit {
         } else {
             state.table_properties().enable_expired_log_cleanup()
         };
+        let will_create_checkpoint = self.create_checkpoint
+            && should_create_checkpoint(
+                self.version,
+                state.table_properties().checkpoint_interval().get() as i64,
+            );
 
         // Run arbitrary before_post_commit_hook code
         if let Some(custom_execute_handler) = &self.custom_execute_handler {
             custom_execute_handler
                 .before_post_commit_hook(
                     &self.log_store,
-                    cleanup_logs || self.create_checkpoint,
+                    will_create_checkpoint,
                     post_commit_operation_id,
                 )
                 .await?
         }
 
         let mut new_checkpoint_created = false;
-        if self.create_checkpoint {
+        if will_create_checkpoint {
             // Execute create checkpoint hook
             new_checkpoint_created = self
                 .create_checkpoint(
@@ -949,16 +955,19 @@ impl PostCommit {
         }
 
         let mut num_log_files_cleaned_up: u64 = 0;
-        if cleanup_logs {
+        if cleanup_logs && new_checkpoint_created {
+            let retention_millis = state
+                .table_properties()
+                .log_retention_duration()
+                .as_millis() as i64;
+            let cutoff_timestamp = (Utc::now().timestamp_millis() - retention_millis)
+                .div_euclid(24 * 60 * 60 * 1000)
+                * (24 * 60 * 60 * 1000);
             // Execute clean up logs hook
-            num_log_files_cleaned_up = cleanup_expired_logs_for(
+            num_log_files_cleaned_up = cleanup_expired_delta_log_files(
                 self.version,
                 self.log_store.as_ref(),
-                Utc::now().timestamp_millis()
-                    - state
-                        .table_properties()
-                        .log_retention_duration()
-                        .as_millis() as i64,
+                cutoff_timestamp,
                 Some(post_commit_operation_id),
             )
             .await? as u64;
@@ -980,7 +989,7 @@ impl PostCommit {
             custom_execute_handler
                 .after_post_commit_hook(
                     &self.log_store,
-                    cleanup_logs || self.create_checkpoint,
+                    new_checkpoint_created,
                     post_commit_operation_id,
                 )
                 .await?
