@@ -34,8 +34,10 @@ data:
 ---
 name: "test_delta_log_contains_checksum_files_and_latest_checksum_matches_snapshot"
 data:
+  inCommitTimestampOpt: <in_commit_timestamp>
   metadata:
-    configuration: {}
+    configuration:
+      delta.enableInCommitTimestamps: 'true'
     createdTime: <created_time>
     description: null
     format:
@@ -60,5 +62,7 @@ data:
   numProtocol: 1
   protocol:
     minReaderVersion: 1
-    minWriterVersion: 2
+    minWriterVersion: 7
+    writerFeatures:
+    - inCommitTimestamp
   tableSizeBytes: 1459

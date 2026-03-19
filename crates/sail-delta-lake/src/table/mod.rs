@@ -30,11 +30,12 @@ use object_store::ObjectStore;
 use url::Url;
 
 use crate::datasource::{DeltaScanConfig, DeltaTableProvider};
+use crate::delta_log::resolve_version_timestamp;
 pub use crate::kernel::snapshot::DeltaSnapshot;
 use crate::kernel::DeltaTableConfig;
 use crate::logical::table_source::DeltaTableSource;
 use crate::options::TableDeltaOptions;
-use crate::spec::{commit_path, DeltaError, DeltaError as DeltaTableError, DeltaResult};
+use crate::spec::{DeltaError, DeltaError as DeltaTableError, DeltaResult};
 use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
 
 /// In memory representation of a Delta Table
@@ -83,17 +84,15 @@ impl DeltaTable {
 
     /// Get the timestamp of a given version commit.
     pub(crate) async fn get_version_timestamp(&self, version: i64) -> Result<i64, DeltaTableError> {
-        if let Some(ts) = self
-            .state
-            .as_ref()
-            .and_then(|s| s.version_timestamp(version))
-        {
-            return Ok(ts);
-        }
-
-        let commit_uri = commit_path(version);
-        let meta = self.log_store.object_store(None).head(&commit_uri).await?;
-        Ok(meta.last_modified.timestamp_millis())
+        let snapshot = self.snapshot()?;
+        resolve_version_timestamp(
+            self.log_store.as_ref(),
+            version,
+            snapshot.version_timestamp(version),
+            snapshot.protocol(),
+            snapshot.metadata(),
+        )
+        .await
     }
 
     /// Updates the DeltaTable to the latest version by incrementally applying newer versions.
@@ -377,14 +376,25 @@ async fn find_version_for_timestamp(
     datetime: DateTime<Utc>,
 ) -> DeltaResult<i64> {
     let log_store = table.log_store();
-    let mut max_version = log_store.get_latest_version(0).await?;
-    let mut min_version = 0;
-
-    // In case the table is not initialized yet (e.g. state is None),
-    // get_version_timestamp needs some state to work with. Let's load version 0.
-    if table.version().is_none() {
-        table.load_version(0).await?;
+    let latest_version = log_store.get_latest_version(0).await?;
+    if table.version() != Some(latest_version) {
+        table.load_version(latest_version).await?;
     }
+    let snapshot = table.snapshot()?;
+    let (mut min_version, mut max_version) =
+        if let Some((enablement_version, enablement_timestamp)) =
+            snapshot.in_commit_timestamp_enablement()
+        {
+            if datetime.timestamp_millis() >= enablement_timestamp {
+                (enablement_version, latest_version)
+            } else if enablement_version == 0 {
+                return Err(DeltaError::MissingVersion);
+            } else {
+                (0, enablement_version - 1)
+            }
+        } else {
+            (0, latest_version)
+        };
 
     let target_ts = datetime.timestamp_millis();
     let mut target_version = -1;

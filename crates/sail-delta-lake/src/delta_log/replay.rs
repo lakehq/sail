@@ -90,7 +90,7 @@ pub(crate) async fn load_replayed_table_state(
         0
     };
 
-    replay_commit_actions(
+    let commit_timestamps = replay_commit_actions(
         &mut state,
         store,
         &commit_files,
@@ -118,12 +118,6 @@ pub(crate) async fn load_replayed_table_state(
         .collect::<BTreeMap<_, _>>()
         .into_values()
         .collect::<Vec<_>>();
-    let commit_timestamps = commit_files
-        .iter()
-        .filter(|(v, _)| *v >= start_commit_version && *v <= target_version)
-        .map(|(v, meta)| (*v, meta.last_modified.timestamp_millis()))
-        .collect::<BTreeMap<_, _>>();
-
     Ok(ReplayedTableState {
         version: target_version,
         protocol,

@@ -93,6 +93,8 @@ def _normalize_delta_commit_info_for_snapshot(commit_info: dict) -> dict:
 
     if "timestamp" in normalized:
         normalized["timestamp"] = "<timestamp>"
+    if "inCommitTimestamp" in normalized:
+        normalized["inCommitTimestamp"] = "<in_commit_timestamp>"
 
     cv = normalized.get("clientVersion")
     if isinstance(cv, str) and cv.startswith("sail-delta-lake."):
@@ -268,6 +270,8 @@ def _normalize_delta_log_json_file_for_snapshot(filename: str, obj: object) -> o
         return obj
     if filename.endswith(".crc"):
         normalized = dict(obj)
+        if "inCommitTimestampOpt" in normalized:
+            normalized["inCommitTimestampOpt"] = "<in_commit_timestamp>"
         metadata = normalized.get("metadata")
         if isinstance(metadata, dict):
             normalized["metadata"] = _normalize_delta_metadata_for_snapshot(metadata)

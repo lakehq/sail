@@ -18,6 +18,9 @@ Feature: Delta Lake Version Checksum
         )
         USING DELTA
         LOCATION {{ location.sql }}
+        TBLPROPERTIES (
+          'delta.enableInCommitTimestamps' = 'true'
+        )
         """
       Given statement
         """
@@ -41,6 +44,9 @@ Feature: Delta Lake Version Checksum
         | 1  | one   |
         | 2  | two   |
         | 3  | three |
+      Then delta log first commit protocol and metadata contains
+        | path                                               | value  |
+        | metaData.configuration['delta.enableInCommitTimestamps'] | "true" |
       Then file tree in delta_log matches
         """
         📄 00000000000000000000.crc

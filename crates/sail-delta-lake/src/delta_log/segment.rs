@@ -279,7 +279,13 @@ fn validate_and_build_header(
         protocol: checksum.protocol,
         metadata: checksum.metadata,
         txns: Arc::new(txns),
-        commit_timestamps: Arc::new(BTreeMap::new()),
+        commit_timestamps: Arc::new(
+            checksum
+                .in_commit_timestamp_opt
+                .into_iter()
+                .map(|timestamp| (version, timestamp))
+                .collect(),
+        ),
     })
 }
 
@@ -372,7 +378,11 @@ fn validate_commit_contiguity(
 mod tests {
     use super::*;
 
-    fn make_test_checksum(num_metadata: i64, num_protocol: i64) -> VersionChecksum {
+    fn make_test_checksum(
+        num_metadata: i64,
+        num_protocol: i64,
+        in_commit_timestamp_opt: Option<i64>,
+    ) -> VersionChecksum {
         use crate::spec::{Metadata, Protocol, StructType};
 
         let protocol = Protocol::new(1, 2, None, None);
@@ -392,7 +402,7 @@ mod tests {
             num_files: 0,
             num_metadata,
             num_protocol,
-            in_commit_timestamp_opt: None,
+            in_commit_timestamp_opt,
             set_transactions: None,
             domain_metadata: None,
             metadata,
@@ -404,7 +414,7 @@ mod tests {
 
     #[test]
     fn valid_checksum_builds_header() {
-        let checksum = make_test_checksum(1, 1);
+        let checksum = make_test_checksum(1, 1, None);
         let header = validate_and_build_header(42, checksum);
         assert!(header.is_some());
         let h = header.unwrap();
@@ -414,26 +424,33 @@ mod tests {
     }
 
     #[test]
+    fn checksum_header_keeps_in_commit_timestamp() {
+        let checksum = make_test_checksum(1, 1, Some(123));
+        let header = validate_and_build_header(42, checksum).expect("checksum should be valid");
+        assert_eq!(header.commit_timestamps.get(&42), Some(&123));
+    }
+
+    #[test]
     fn checksum_with_num_metadata_zero_is_rejected() {
-        let checksum = make_test_checksum(0, 1);
+        let checksum = make_test_checksum(0, 1, None);
         assert!(validate_and_build_header(1, checksum).is_none());
     }
 
     #[test]
     fn checksum_with_num_protocol_zero_is_rejected() {
-        let checksum = make_test_checksum(1, 0);
+        let checksum = make_test_checksum(1, 0, None);
         assert!(validate_and_build_header(1, checksum).is_none());
     }
 
     #[test]
     fn checksum_with_num_metadata_two_is_rejected() {
-        let checksum = make_test_checksum(2, 1);
+        let checksum = make_test_checksum(2, 1, None);
         assert!(validate_and_build_header(1, checksum).is_none());
     }
 
     #[test]
     fn checksum_with_both_invalid_is_rejected() {
-        let checksum = make_test_checksum(0, 0);
+        let checksum = make_test_checksum(0, 0, None);
         assert!(validate_and_build_header(1, checksum).is_none());
     }
 
@@ -492,7 +509,7 @@ mod tests {
 
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
 
-        let checksum_55 = make_test_checksum(1, 1);
+        let checksum_55 = make_test_checksum(1, 1, None);
         let crc_bytes = serde_json::to_vec(&checksum_55).unwrap();
         store
             .put(
@@ -527,7 +544,7 @@ mod tests {
 
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
 
-        let checksum_55 = make_test_checksum(1, 1);
+        let checksum_55 = make_test_checksum(1, 1, None);
         let crc_bytes = serde_json::to_vec(&checksum_55).unwrap();
         store
             .put(
