@@ -41,8 +41,10 @@ Feature: Delta Lake Checkpoint
         | metaData.configuration['delta.checkpointInterval'] | "1"   |
       Then file tree in delta_log matches
         """
+        📄 00000000000000000000.crc
         📄 00000000000000000000.json
         📄 00000000000000000001.checkpoint.parquet
+        📄 00000000000000000001.crc
         📄 00000000000000000001.json
         📄 _last_checkpoint
         """
@@ -112,14 +114,21 @@ Feature: Delta Lake Checkpoint
         | metaData.configuration['delta.checkpointInterval'] | "3"   |
       Then file tree in delta_log matches
         """
+        📄 00000000000000000000.crc
         📄 00000000000000000000.json
+        📄 00000000000000000001.crc
         📄 00000000000000000001.json
+        📄 00000000000000000002.crc
         📄 00000000000000000002.json
         📄 00000000000000000003.checkpoint.parquet
+        📄 00000000000000000003.crc
         📄 00000000000000000003.json
+        📄 00000000000000000004.crc
         📄 00000000000000000004.json
+        📄 00000000000000000005.crc
         📄 00000000000000000005.json
         📄 00000000000000000006.checkpoint.parquet
+        📄 00000000000000000006.crc
         📄 00000000000000000006.json
         📄 _last_checkpoint
         """
@@ -209,9 +218,12 @@ Feature: Delta Lake Checkpoint
         | metaData.configuration['delta.deletedFileRetentionDuration'] | "interval 0 seconds" |
       Then file tree in delta_log matches
         """
+        📄 00000000000000000000.crc
         📄 00000000000000000000.json
+        📄 00000000000000000001.crc
         📄 00000000000000000001.json
         📄 00000000000000000002.checkpoint.parquet
+        📄 00000000000000000002.crc
         📄 00000000000000000002.json
         📄 _last_checkpoint
         """
@@ -277,7 +289,7 @@ Feature: Delta Lake Checkpoint
         | 3  |
         | 4  |
         | 5  |
-      Then file tree including checksum files in delta_log matches
+      Then file tree in delta_log matches
         """
         📄 00000000000000000002.checkpoint.parquet
         📄 00000000000000000002.crc
@@ -373,11 +385,16 @@ Feature: Delta Lake Checkpoint
         | metaData.configuration['delta.checkpointInterval'] | "3"   |
       Then file tree in delta_log matches
         """
+        📄 00000000000000000000.crc
         📄 00000000000000000000.json
+        📄 00000000000000000001.crc
         📄 00000000000000000001.json
+        📄 00000000000000000002.crc
         📄 00000000000000000002.json
         📄 00000000000000000003.checkpoint.parquet
+        📄 00000000000000000003.crc
         📄 00000000000000000003.json
+        📄 00000000000000000004.crc
         📄 00000000000000000004.json
         📄 _last_checkpoint
         """
