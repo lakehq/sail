@@ -123,7 +123,15 @@ impl TryAvgAccumulator {
         }
     }
 
-    fn update_dec128(&mut self, arr: &Decimal128Array, p: u8, _s: i8) {
+    fn update_dec128(&mut self, arr: &Decimal128Array, p: u8, s: i8) {
+        // Spark uses DECIMAL(min(p+4, 38), min(s+4, 38)) for the intermediate sum accumulator.
+        // This means the max integer digits = acc_p - acc_s, which can be less than the input's.
+        // For DECIMAL(38,0): acc = DECIMAL(38,4) → max 34 integer digits → overflow at 10^34.
+        let acc_s = (s as u8).saturating_add(4).min(38);
+        let acc_p = p.saturating_add(4).min(38);
+        // The effective precision for overflow check is acc_p - (acc_s - s as u8)
+        // which equals the number of integer digits in the accumulator type.
+        let effective_p = acc_p.saturating_sub(acc_s.saturating_sub(s as u8));
         if self.failed {
             return;
         }
@@ -143,7 +151,7 @@ impl TryAvgAccumulator {
                 },
             };
             if let Some(sum) = self.sum_dec128 {
-                if exceeds_decimal128_precision(sum, p) {
+                if exceeds_decimal128_precision(sum, effective_p) {
                     self.failed = true;
                     return;
                 }
@@ -363,7 +371,11 @@ impl Accumulator for TryAvgAccumulator {
 
         // 3) merge sums
         match self.dtype {
-            DataType::Decimal128(p, _s) => {
+            DataType::Decimal128(ref p, ref s) => {
+                let s_u8 = *s as u8;
+                let acc_s = s_u8.saturating_add(4).min(38);
+                let acc_p = p.saturating_add(4).min(38);
+                let effective_p = acc_p.saturating_sub(acc_s.saturating_sub(s_u8));
                 let array = downcast_value!(states[0], Decimal128Array);
                 for value in array.iter().flatten() {
                     let next = match self.sum_dec128 {
@@ -377,7 +389,7 @@ impl Accumulator for TryAvgAccumulator {
                         },
                     };
 
-                    if exceeds_decimal128_precision(next, p) {
+                    if exceeds_decimal128_precision(next, effective_p) {
                         self.failed = true;
                         return Ok(());
                     }
@@ -499,12 +511,7 @@ impl AggregateUDFImpl for TryAvgFunction {
         let sum_dt = args.return_field.data_type().clone();
         Ok(vec![
             Field::new(format_state_name(args.name, "sum"), sum_dt.clone(), true).into(),
-            Field::new(
-                format_state_name(args.name, "count"),
-                DataType::Int64,
-                false,
-            )
-            .into(),
+            Field::new(format_state_name(args.name, "count"), DataType::Int64, true).into(),
             Field::new(
                 format_state_name(args.name, "failed"),
                 DataType::Boolean,
