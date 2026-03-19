@@ -124,14 +124,7 @@ impl TryAvgAccumulator {
     }
 
     fn update_dec128(&mut self, arr: &Decimal128Array, p: u8, s: i8) {
-        // Spark uses DECIMAL(min(p+4, 38), min(s+4, 38)) for the intermediate sum accumulator.
-        // This means the max integer digits = acc_p - acc_s, which can be less than the input's.
-        // For DECIMAL(38,0): acc = DECIMAL(38,4) → max 34 integer digits → overflow at 10^34.
-        let acc_s = (s as u8).saturating_add(4).min(38);
-        let acc_p = p.saturating_add(4).min(38);
-        // The effective precision for overflow check is acc_p - (acc_s - s as u8)
-        // which equals the number of integer digits in the accumulator type.
-        let effective_p = acc_p.saturating_sub(acc_s.saturating_sub(s as u8));
+        let effective_p = spark_accumulator_effective_precision(p, s);
         if self.failed {
             return;
         }
@@ -372,10 +365,7 @@ impl Accumulator for TryAvgAccumulator {
         // 3) merge sums
         match self.dtype {
             DataType::Decimal128(ref p, ref s) => {
-                let s_u8 = *s as u8;
-                let acc_s = s_u8.saturating_add(4).min(38);
-                let acc_p = p.saturating_add(4).min(38);
-                let effective_p = acc_p.saturating_sub(acc_s.saturating_sub(s_u8));
+                let effective_p = spark_accumulator_effective_precision(*p, *s);
                 let array = downcast_value!(states[0], Decimal128Array);
                 for value in array.iter().flatten() {
                     let next = match self.sum_dec128 {
@@ -452,6 +442,22 @@ fn pow10_i128(p: u8) -> Option<i128> {
         v = v.checked_mul(10)?;
     }
     Some(v)
+}
+
+/// Computes the effective precision for overflow detection in Spark's try_avg accumulator.
+///
+/// Spark uses `DECIMAL(min(p+4, 38), min(s+4, 38))` for the intermediate sum.
+/// The effective precision is the max number of total digits the unscaled sum can have
+/// at the original scale, accounting for the increased scale in the accumulator.
+/// For example, DECIMAL(38,0) → acc DECIMAL(38,4) → effective_p = 38 - (4-0) = 34.
+fn spark_accumulator_effective_precision(p: u8, s: i8) -> u8 {
+    // Use i16 to safely handle negative scales without wrapping
+    let s_i16 = s as i16;
+    let acc_s = (s_i16 + 4).clamp(0, 38) as u8;
+    let acc_p = (p as i16 + 4).clamp(0, 38) as u8;
+    // effective_p = acc_p - (acc_s - original_s_clamped)
+    let original_s_clamped = s_i16.clamp(0, 38) as u8;
+    acc_p.saturating_sub(acc_s.saturating_sub(original_s_clamped))
 }
 
 fn exceeds_decimal128_precision(sum: i128, p: u8) -> bool {
