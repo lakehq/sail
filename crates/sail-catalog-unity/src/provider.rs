@@ -21,7 +21,9 @@ use sail_catalog::provider::{
     DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
 };
 use sail_catalog::utils::{get_property, quote_namespace_if_needed};
-use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
+use sail_common_datafusion::catalog::{
+    identity_partition_fields, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
+};
 use secrecy::SecretString;
 use tokio::sync::OnceCell;
 
@@ -325,7 +327,7 @@ impl UnityCatalogProvider {
                 constraints: vec![],
                 location: storage_location,
                 format,
-                partition_by,
+                partition_by: identity_partition_fields(&partition_by),
                 sort_by: vec![],
                 bucket_by: None,
                 options,

@@ -14,6 +14,7 @@ use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, Result};
 use datafusion_expr::expr::Sort;
 use datafusion_expr::TableSource;
 
+use crate::catalog::CatalogPartitionField;
 use crate::extension::SessionExtension;
 use crate::logical_expr::ExprWithSource;
 
@@ -69,7 +70,7 @@ pub struct SinkInfo {
     pub input: Arc<dyn ExecutionPlan>,
     pub path: String,
     pub mode: PhysicalSinkMode,
-    pub partition_by: Vec<String>,
+    pub partition_by: Vec<CatalogPartitionField>,
     pub bucket_by: Option<BucketBy>,
     pub sort_order: Option<LexRequirement>,
     pub table_properties: HashMap<String, String>,

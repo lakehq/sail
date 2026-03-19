@@ -72,6 +72,7 @@ use datafusion_spark::function::url::url_encode::UrlEncode;
 use prost::Message;
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::array::record_batch::{read_record_batches, write_record_batches};
+use sail_common_datafusion::catalog::{CatalogPartitionField, PartitionTransform};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::system::catalog::SystemTable;
 use sail_common_datafusion::udf::StreamUDF;
@@ -973,6 +974,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     self.try_decode_physical_sink_mode(sink_mode, &input.schema(), ctx)?;
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
+                let partition_columns = partition_columns
+                    .into_iter()
+                    .map(|field| self.try_decode_catalog_partition_field(field))
+                    .collect::<Result<Vec<_>>>()?;
                 let options = if options.is_empty() {
                     TableIcebergOptions::default()
                 } else {
@@ -1585,7 +1590,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::IcebergWriter(gen::IcebergWriterExecNode {
                 input,
                 table_url: iceberg_writer_exec.table_url().to_string(),
-                partition_columns: iceberg_writer_exec.partition_columns().to_vec(),
+                partition_columns: iceberg_writer_exec
+                    .partition_columns()
+                    .iter()
+                    .map(Self::try_encode_catalog_partition_field)
+                    .collect::<Result<Vec<_>>>()?,
                 sink_mode: Some(sink_mode),
                 table_exists: iceberg_writer_exec.table_exists(),
                 options,
@@ -2432,6 +2441,55 @@ impl RemoteExecutionCodec {
             }
         };
         Ok(gen::PhysicalSinkMode { mode: Some(mode) })
+    }
+
+    fn try_decode_catalog_partition_field(
+        &self,
+        field: gen::CatalogPartitionFieldNode,
+    ) -> Result<CatalogPartitionField> {
+        let transform_kind = gen::PartitionTransformKind::try_from(field.transform_kind)
+            .map_err(|_| plan_datafusion_err!("invalid partition transform kind"))?;
+        let transform = match transform_kind {
+            gen::PartitionTransformKind::Unspecified | gen::PartitionTransformKind::Identity => {
+                None
+            }
+            gen::PartitionTransformKind::Year => Some(PartitionTransform::Year),
+            gen::PartitionTransformKind::Month => Some(PartitionTransform::Month),
+            gen::PartitionTransformKind::Day => Some(PartitionTransform::Day),
+            gen::PartitionTransformKind::Hour => Some(PartitionTransform::Hour),
+            gen::PartitionTransformKind::Bucket => {
+                Some(PartitionTransform::Bucket(field.transform_value))
+            }
+            gen::PartitionTransformKind::Truncate => {
+                Some(PartitionTransform::Truncate(field.transform_value))
+            }
+        };
+        Ok(CatalogPartitionField {
+            column: field.column,
+            transform,
+        })
+    }
+
+    fn try_encode_catalog_partition_field(
+        field: &CatalogPartitionField,
+    ) -> Result<gen::CatalogPartitionFieldNode> {
+        let (transform_kind, transform_value) = match field.transform {
+            None => (gen::PartitionTransformKind::Unspecified as i32, 0),
+            Some(PartitionTransform::Identity) => (gen::PartitionTransformKind::Identity as i32, 0),
+            Some(PartitionTransform::Year) => (gen::PartitionTransformKind::Year as i32, 0),
+            Some(PartitionTransform::Month) => (gen::PartitionTransformKind::Month as i32, 0),
+            Some(PartitionTransform::Day) => (gen::PartitionTransformKind::Day as i32, 0),
+            Some(PartitionTransform::Hour) => (gen::PartitionTransformKind::Hour as i32, 0),
+            Some(PartitionTransform::Bucket(n)) => (gen::PartitionTransformKind::Bucket as i32, n),
+            Some(PartitionTransform::Truncate(w)) => {
+                (gen::PartitionTransformKind::Truncate as i32, w)
+            }
+        };
+        Ok(gen::CatalogPartitionFieldNode {
+            column: field.column.clone(),
+            transform_kind,
+            transform_value,
+        })
     }
 
     fn try_decode_stream_udf(&self, udf: ExtendedStreamUdf) -> Result<Arc<dyn StreamUDF>> {
