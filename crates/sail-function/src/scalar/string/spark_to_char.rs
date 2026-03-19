@@ -8,12 +8,11 @@ use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 use super::spark_to_number::{NumberComponents, RegexSpec};
-use crate::error::{invalid_arg_count_exec_err, unsupported_data_types_exec_err};
+use crate::error::{generic_exec_err, invalid_arg_count_exec_err, unsupported_data_types_exec_err};
 
 /// Spark-compatible `to_char` / `to_varchar` function.
 ///
-/// Supports three input types:
-/// - **Temporal**: delegates to DataFusion's `to_char` with Java→Chrono pattern conversion
+/// Handles two input types (temporal is routed separately by the plan resolver):
 /// - **Numeric**: formats using Spark's number format specification
 /// - **Binary**: decodes to string using `utf-8`, `base64`, or `hex` format
 ///
@@ -74,9 +73,10 @@ impl ScalarUDFImpl for SparkToChar {
                 arg_types.len(),
             ));
         }
+        // Note: temporal types are handled by the plan resolver (routed to DF's to_char),
+        // so they should never reach this UDF. We reject them here to catch misrouting.
         let value_type = match &arg_types[0] {
             dt if dt.is_numeric() => dt.clone(),
-            dt if dt.is_temporal() => dt.clone(),
             DataType::Binary | DataType::LargeBinary | DataType::FixedSizeBinary(_) => {
                 arg_types[0].clone()
             }
@@ -84,7 +84,7 @@ impl ScalarUDFImpl for SparkToChar {
             _ => {
                 return Err(unsupported_data_types_exec_err(
                     "to_char",
-                    "numeric, temporal, or binary",
+                    "numeric or binary",
                     arg_types,
                 ));
             }
@@ -105,24 +105,36 @@ impl ScalarUDFImpl for SparkToChar {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
-        if args.len() != 2 {
-            return exec_err!("spark_to_char requires 2 arguments, got {}", args.len());
-        }
-
-        // Extract format string (must be scalar/constant)
+        // Extract format string (must be scalar/constant).
+        // Uses try_as_str() to support Utf8, LargeUtf8, and Utf8View scalar variants.
         let format_str = match &args[1] {
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))) => s.clone(),
-            ColumnarValue::Scalar(ScalarValue::Utf8(None) | ScalarValue::Null) => {
-                return match &args[0] {
-                    ColumnarValue::Scalar(_) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
-                    ColumnarValue::Array(arr) => {
-                        let nulls: StringArray =
-                            (0..arr.len()).map(|_| Option::<&str>::None).collect();
-                        Ok(ColumnarValue::Array(Arc::new(nulls)))
-                    }
-                };
+            ColumnarValue::Scalar(scalar) => match scalar.try_as_str().flatten() {
+                Some(s) => s.to_string(),
+                None if scalar.is_null() => {
+                    return match &args[0] {
+                        ColumnarValue::Scalar(_) => {
+                            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
+                        }
+                        ColumnarValue::Array(arr) => {
+                            let nulls: StringArray =
+                                (0..arr.len()).map(|_| Option::<&str>::None).collect();
+                            Ok(ColumnarValue::Array(Arc::new(nulls)))
+                        }
+                    };
+                }
+                None => {
+                    return Err(generic_exec_err(
+                        "to_char",
+                        "format must be a constant string",
+                    ))
+                }
+            },
+            _ => {
+                return Err(generic_exec_err(
+                    "to_char",
+                    "format must be a constant string",
+                ))
             }
-            _ => return exec_err!("spark_to_char format must be a constant string"),
         };
 
         // Binary path: to_char(binary, 'utf-8'|'base64'|'hex')
@@ -576,41 +588,16 @@ fn scalar_to_bytes(scalar: &ScalarValue) -> Result<Option<Vec<u8>>> {
 }
 
 fn binary_to_utf8(bytes: &[u8]) -> String {
+    // Spark raises an error for invalid UTF-8, but we use lossy for robustness.
+    // TODO: consider strict mode with error propagation
     String::from_utf8_lossy(bytes).into_owned()
 }
 
 fn binary_to_base64(bytes: &[u8]) -> String {
-    base64_encode(bytes)
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
 fn binary_to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02X}")).collect()
-}
-
-/// Standard base64 encoding (matches Spark's behavior).
-fn base64_encode(input: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-    let mut result = String::with_capacity(input.len().div_ceil(3) * 4);
-    let chunks = input.chunks(3);
-    for chunk in chunks {
-        let b0 = chunk[0] as u32;
-        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
-        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
-        let triple = (b0 << 16) | (b1 << 8) | b2;
-
-        result.push(ALPHABET[((triple >> 18) & 0x3F) as usize] as char);
-        result.push(ALPHABET[((triple >> 12) & 0x3F) as usize] as char);
-        if chunk.len() > 1 {
-            result.push(ALPHABET[((triple >> 6) & 0x3F) as usize] as char);
-        } else {
-            result.push('=');
-        }
-        if chunk.len() > 2 {
-            result.push(ALPHABET[(triple & 0x3F) as usize] as char);
-        } else {
-            result.push('=');
-        }
-    }
-    result
 }

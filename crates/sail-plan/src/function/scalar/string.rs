@@ -314,7 +314,8 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
 
 /// Spark's `to_char(expr, fmt)` / `to_varchar(expr, fmt)`:
 /// - For temporal types: converts Java datetime pattern to chrono and calls DF's `to_char`
-/// - For numeric types: not yet implemented (Spark uses 9/0/S/$/G/D format, not DecimalFormat)
+/// - For numeric types: formats using Spark's number pattern spec (9/0/S/$/G/D)
+/// - For binary types: decodes using `utf-8`, `base64`, or `hex` format
 fn to_char(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let (value, format) = input.arguments.two()?;
     let schema = input.function_context.schema;
@@ -334,7 +335,7 @@ fn to_char(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         Ok(ScalarUDF::from(SparkToChar::new()).call(vec![value, format]))
     } else {
         Err(PlanError::invalid(format!(
-            "to_char/to_varchar requires a numeric or temporal type, got {dt}"
+            "to_char/to_varchar requires a numeric, temporal, or binary type, got {dt}"
         )))
     }
 }
