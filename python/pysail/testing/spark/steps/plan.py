@@ -154,6 +154,7 @@ def _collect_plan(query: str, spark) -> str:
     df = spark.sql(query)
     rows = df.collect()
     assert len(rows) == 1, f"expected single row, got {len(rows)}"
+    assert len(rows[0]) == 1, f"expected single column, got {len(rows[0])}"
     plan = rows[0][0]
     assert isinstance(plan, str), "expected string plan output"
     assert plan, "expected non-empty plan output"

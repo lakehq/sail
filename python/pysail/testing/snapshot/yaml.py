@@ -268,6 +268,9 @@ class YamlDataSerializer:
         return snapshot_collection
 
 
+YAML_SNAPSHOT_MARKER = "yamlsnapshot"
+
+
 class YamlSnapshotExtension(AbstractSyrupyExtension):
     """
     Syrupy extension that stores snapshots as YAML multi-document files.
@@ -299,6 +302,19 @@ class YamlSnapshotExtension(AbstractSyrupyExtension):
         item = test_location.item
         obj = getattr(item, "obj", None)
         scenario = getattr(obj, "__scenario__", None)
+
+        # Collect the metadata to customize the snapshot.
+        # The metadata can be specified via the pytest marker for the test function.
+        metadata = {}
+        for marker in item.own_markers:
+            if marker.name == YAML_SNAPSHOT_MARKER:
+                if marker.args:
+                    msg = (
+                        f"marker `{YAML_SNAPSHOT_MARKER}` does not accept positional arguments but got: {marker.args!r}"
+                    )
+                    raise ValueError(msg)
+                metadata.update(marker.kwargs)
+
         if scenario is not None:
             feature = getattr(scenario, "feature", None)
             feature_filename = getattr(feature, "filename", None)
@@ -307,6 +323,8 @@ class YamlSnapshotExtension(AbstractSyrupyExtension):
                 test_dir = Path(test_location.filepath).parent
                 rel = feature_path.relative_to(test_dir)
                 return str(rel.with_suffix(""))
+        if group := metadata.get("group"):
+            return f"{test_location.basename}.{group}"
         return test_location.basename
 
     def serialize(self, data: SerializableData, **kwargs: Any) -> str:

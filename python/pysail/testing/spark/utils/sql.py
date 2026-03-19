@@ -1,4 +1,6 @@
 import itertools
+import re
+from decimal import Decimal
 from typing import Any
 
 import pandas as pd
@@ -112,3 +114,48 @@ def parse_show_string(text) -> list[list[str]]:
             row.append(line[start + 1 : end].strip())
         result.append(row)
     return result
+
+
+def format_show_string(rows: list[list[str]], normalizer=None):
+    """
+    Formats the show string result as a simple table.
+    This is useful to save the result as a string in the snapshot.
+
+    The optional `normalizer` function can be used to normalize the cell values before formatting.
+    """
+    header, *values = rows
+    if normalizer is not None:
+        values = [[normalizer(cell) for cell in row] for row in values]
+        rows = [header, *values]
+    widths = [max(len(row[i]) for row in rows) for i in range(len(header))]
+    output = [" | ".join(f"{cell:{widths[i]}}" for i, cell in enumerate(row)) for row in rows]
+    return "\n".join(f"| {x} |" for x in output)
+
+
+def normalize_floating_point_string(s: str, d: int = 6, n: int = 6) -> str:
+    """Normalizes a string representation of a floating-point number.
+
+    First, noisy fractions of `n` or more consecutive 0s or 9s close to the end of the number are removed.
+    For example, "1.230000001" is treated as "1.23" and "1.2339999991" is treated as "1.234".
+
+    Then, the number is rounded to have at most `d` digits in the fractional part.
+
+    This is useful to make test assertions more stable against minor floating-point differences.
+    """
+    if d < 1:
+        msg = f"the maximum number of digits for the fractional part must be at least 1 but got {d}"
+        raise ValueError(msg)
+    if n < 1:
+        msg = f"number of consecutive 0s or 9s to detect noisy fractions must be at least 1 but got {n}"
+        raise ValueError(msg)
+
+    match = re.fullmatch(
+        rf"(?P<num>[+-]?\d*[.](?P<frac>\d+?)(0{{{n},}}[0-9]+|9{{{n},}}[0-9]+)?)(?P<exp>[eE][+-]?\d+)?",
+        s,
+    )
+    if not match:
+        return s
+
+    num = round(Decimal(match.group("num")), min(len(match.group("frac")), d))
+    exp = match.group("exp") or ""
+    return f"{num}{exp}"
