@@ -277,15 +277,6 @@ Feature: Delta Lake Checkpoint
         | 3  |
         | 4  |
         | 5  |
-      Then file tree in delta_log matches
-        """
-        📄 00000000000000000002.checkpoint.parquet
-        📄 00000000000000000002.json
-        📄 00000000000000000003.json
-        📄 00000000000000000004.checkpoint.parquet
-        📄 00000000000000000004.json
-        📄 _last_checkpoint
-        """
       Then file tree including checksum files in delta_log matches
         """
         📄 00000000000000000002.checkpoint.parquet
