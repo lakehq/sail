@@ -24,12 +24,12 @@ _March 20, 2026_
   - `soundex`
   - `array_min`
   - `array_max`
+- Added support for the `path` option when using the `save()` method in the Spark DataFrame writer ([#1533](https://github.com/lakehq/sail/pull/1533)).
+- Improved namespace handling for catalog providers ([#1484](https://github.com/lakehq/sail/pull/1484)).
 - Fixed an issue with `COUNT(DISTINCT *)` in SQL queries ([#1394](https://github.com/lakehq/sail/pull/1394)).
 - Fixed an issue with non-literal expressions in window `RANGE` frame boundaries ([#1482](https://github.com/lakehq/sail/pull/1482)).
 - Fixed issues with using SQL queries with Python data sources ([#1469](https://github.com/lakehq/sail/pull/1469)).
 - Fixed an issue with the `saveAsTable()` method when using `mode="append"` for non-existing tables in the Spark DataFrame API ([#1525](https://github.com/lakehq/sail/pull/1525)).
-- Fixed an issue with the `option("path", path)` option in the Spark DataFrame writer ([#1533](https://github.com/lakehq/sail/pull/1533)).
-- Fixed namespace handling for catalog providers ([#1484](https://github.com/lakehq/sail/pull/1484)).
 - Fixed the SQL syntax for the `CREATE DATABASE` statement ([#1480](https://github.com/lakehq/sail/pull/1480)).
 - Fixed an issue with large gRPC error messages ([#1488](https://github.com/lakehq/sail/pull/1488)).
 - Fixed issues in the query planner ([#1473](https://github.com/lakehq/sail/pull/1473) and [#1483](https://github.com/lakehq/sail/pull/1483)).
