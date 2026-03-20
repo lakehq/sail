@@ -1,7 +1,9 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, AsArray, Float64Array, Int64Array, StringArray};
+use datafusion::arrow::array::{
+    ArrayRef, AsArray, Decimal128Array, Float64Array, Int64Array, StringArray,
+};
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::cast::as_float64_array;
 use datafusion_common::{exec_err, Result, ScalarValue};
@@ -148,8 +150,11 @@ impl ScalarUDFImpl for SparkToChar {
         let spec = RegexSpec::try_from(format_str.as_str())?;
         let components = NumberComponents::try_from(&spec)?;
 
-        // For integer types without decimals in format, use i128 path to avoid f64 precision loss
-        let use_integer_path = components.scale == 0 && args[0].data_type().is_integer();
+        // Use exact i128 path for integers and Decimal128 with scale=0 to avoid f64 precision loss.
+        // Decimal128 with scale>0 still uses f64 but only when format also has decimals.
+        let use_integer_path = components.scale == 0
+            && (args[0].data_type().is_integer()
+                || matches!(args[0].data_type(), DataType::Decimal128(_, 0)));
 
         // Decimal overflow: Spark checks input type's scale vs format's scale
         let input_scale = match args[0].data_type() {
@@ -196,6 +201,21 @@ impl ScalarUDFImpl for SparkToChar {
             }
             ColumnarValue::Array(arr) => {
                 if use_integer_path {
+                    // For Decimal128(_, 0), read i128 directly to preserve full precision.
+                    // For other integer types, cast to i64 (no precision loss for Int8..Int64).
+                    if matches!(arr.data_type(), DataType::Decimal128(_, 0)) {
+                        let dec_arr = arr.as_any().downcast_ref::<Decimal128Array>().ok_or_else(|| {
+                            datafusion_common::DataFusionError::Internal(format!(
+                                "to_char: expected Decimal128Array, got {:?}",
+                                arr.data_type()
+                            ))
+                        })?;
+                        let result: StringArray = dec_arr
+                            .iter()
+                            .map(|opt: Option<i128>| opt.map(|v| format_spark_integer(v, &spec, &components)))
+                            .collect();
+                        return Ok(ColumnarValue::Array(Arc::new(result)));
+                    }
                     let i64_arr = cast_to_i64(arr)?;
                     let result: StringArray = i64_arr
                         .iter()
@@ -309,7 +329,13 @@ fn format_spark_number(value: f64, spec: &RegexSpec, components: &NumberComponen
 /// Uses string formatting to avoid f64 precision loss.
 fn split_number(abs_value: f64, scale: usize) -> (String, String) {
     if scale == 0 {
-        let int_val = abs_value.round() as u128;
+        let rounded = abs_value.round();
+        // Avoid saturating cast: if value exceeds u128 range, produce a string
+        // that will trigger the overflow check in the caller.
+        if rounded < 0.0 || rounded > u128::MAX as f64 {
+            return (format!("{rounded:.0}"), String::new());
+        }
+        let int_val = rounded as u128;
         return (int_val.to_string(), String::new());
     }
 
@@ -357,15 +383,18 @@ fn insert_grouping_separators(formatted_int: &str, format_with_seps: &str) -> St
     let mut result = Vec::with_capacity(format_chars.len());
 
     let mut int_idx = 0;
+    let mut seen_digit = false;
     for &fc in &format_chars {
         if fc == ',' || fc == 'G' {
-            let has_digit_left = result.iter().any(|c: &char| c.is_ascii_digit());
-            if has_digit_left {
+            if seen_digit {
                 result.push(',');
             } else {
                 result.push(' ');
             }
         } else if int_idx < int_chars.len() {
+            if int_chars[int_idx].is_ascii_digit() {
+                seen_digit = true;
+            }
             result.push(int_chars[int_idx]);
             int_idx += 1;
         }
@@ -409,16 +438,17 @@ fn apply_sign(number: &str, is_negative: bool, spec: &RegexSpec) -> String {
 /// Spark places the sign just before the first digit, after any leading spaces.
 fn insert_sign_left(number: &str, sign_char: char) -> String {
     let chars: Vec<char> = number.chars().collect();
-    // Find first non-space position
-    let first_nonspace = chars.iter().position(|c| *c != ' ').unwrap_or(0);
-    if first_nonspace > 0 {
-        // Replace the space just before first digit with the sign
-        let mut result: Vec<char> = chars;
-        result[first_nonspace - 1] = sign_char;
-        result.into_iter().collect()
-    } else {
-        // No leading space — prepend sign
-        format!("{sign_char}{}", number)
+    match chars.iter().position(|c| *c != ' ') {
+        Some(pos) if pos > 0 => {
+            // Replace the space just before first digit with the sign
+            let mut result = chars;
+            result[pos - 1] = sign_char;
+            result.into_iter().collect()
+        }
+        _ => {
+            // No leading space or all spaces — prepend sign
+            format!("{sign_char}{number}")
+        }
     }
 }
 
@@ -482,6 +512,7 @@ fn scalar_to_i128(scalar: &ScalarValue) -> Result<Option<i128>> {
         ScalarValue::UInt16(v) => Ok(v.map(|x| x as i128)),
         ScalarValue::UInt32(v) => Ok(v.map(|x| x as i128)),
         ScalarValue::UInt64(v) => Ok(v.map(|x| x as i128)),
+        ScalarValue::Decimal128(v, _, _) => Ok(*v),
         ScalarValue::Null => Ok(None),
         other => exec_err!(
             "spark_to_char integer path: unexpected type {}",
