@@ -21,7 +21,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use datafusion::arrow::datatypes::Schema;
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
@@ -345,10 +345,7 @@ async fn load_table_by_options(table: &mut DeltaTable, options: &TableDeltaOptio
     if let Some(version) = options.version_as_of {
         table.load_version(version).await?;
     } else if let Some(timestamp_str) = &options.timestamp_as_of {
-        // This logic is adapted from delta-rs `DeltaTable::load_with_datetime`
-        let datetime = DateTime::parse_from_rfc3339(timestamp_str)
-            .map_err(|e| DeltaTableError::generic(format!("Invalid timestamp string: {}", e)))?
-            .with_timezone(&Utc);
+        let datetime = parse_timestamp_as_of(timestamp_str)?;
 
         let target_version = find_version_for_timestamp(table, datetime)
             .await
@@ -377,15 +374,13 @@ async fn find_version_for_timestamp(
     datetime: DateTime<Utc>,
 ) -> DeltaResult<i64> {
     let log_store = table.log_store();
-    let mut max_version = log_store.get_latest_version(0).await?;
-    let mut min_version = 0;
-
-    // In case the table is not initialized yet (e.g. state is None),
-    // get_version_timestamp needs some state to work with. Let's load version 0.
-    if table.version().is_none() {
-        table.load_version(0).await?;
+    let latest_version = log_store.get_latest_version(0).await?;
+    if table.version() != Some(latest_version) {
+        table.load_version(latest_version).await?;
     }
 
+    let mut min_version = 0;
+    let mut max_version = latest_version;
     let target_ts = datetime.timestamp_millis();
     let mut target_version = -1;
 
@@ -410,4 +405,20 @@ async fn find_version_for_timestamp(
     } else {
         Ok(target_version)
     }
+}
+
+fn parse_timestamp_as_of(timestamp: &str) -> DeltaResult<DateTime<Utc>> {
+    if let Ok(datetime) = DateTime::parse_from_rfc3339(timestamp) {
+        return Ok(datetime.with_timezone(&Utc));
+    }
+
+    for format in ["%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%dT%H:%M:%S%.f"] {
+        if let Ok(naive) = NaiveDateTime::parse_from_str(timestamp, format) {
+            return Ok(Utc.from_utc_datetime(&naive));
+        }
+    }
+
+    Err(DeltaTableError::generic(format!(
+        "Invalid timestamp string: {timestamp}",
+    )))
 }
