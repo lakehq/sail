@@ -13,6 +13,6 @@ Refer to your LLM provider's documentation to see how to load the skill for your
 
 ::: code-group
 
-<<< ./_code/pyspark-skill.md [SKILL.md]
+<<< ./\_code/pyspark-skill.md [SKILL.md]
 
 :::
