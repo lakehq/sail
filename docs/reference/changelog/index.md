@@ -5,6 +5,39 @@ next: false
 
 # Changelog
 
+## 0.5.3
+
+_March 20, 2026_
+
+- Added a CLI command to run PySpark scripts ([#1535](https://github.com/lakehq/sail/pull/1535)).
+- Added a system table to expose the application configuration ([#1464](https://github.com/lakehq/sail/pull/1464)).
+- Added support for emitting execution metrics on a configured interval ([#1465](https://github.com/lakehq/sail/pull/1465)).
+- Added support for resolving the default table location using the database location ([#1492](https://github.com/lakehq/sail/pull/1492)).
+- Improved Delta Lake integration ([#1346](https://github.com/lakehq/sail/pull/1346), [#1461](https://github.com/lakehq/sail/pull/1461), [#1477](https://github.com/lakehq/sail/pull/1477), [#1500](https://github.com/lakehq/sail/pull/1500), [#1504](https://github.com/lakehq/sail/pull/1504), [#1530](https://github.com/lakehq/sail/pull/1530), [#1532](https://github.com/lakehq/sail/pull/1532), and [#1534](https://github.com/lakehq/sail/pull/1534)).
+- Improved Iceberg integration ([#1183](https://github.com/lakehq/sail/pull/1183) and [#1512](https://github.com/lakehq/sail/pull/1512)).
+- Improved the internals of catalog management ([#1466](https://github.com/lakehq/sail/pull/1466), [#1471](https://github.com/lakehq/sail/pull/1471), and [#1479](https://github.com/lakehq/sail/pull/1479)).
+- Added support for the following SQL functions ([#1470](https://github.com/lakehq/sail/pull/1470)):
+  - `make_time`
+  - `time_diff`
+  - `time_trunc`
+- Improved the following SQL functions ([#1517](https://github.com/lakehq/sail/pull/1517) and [#1536](https://github.com/lakehq/sail/pull/1536)):
+  - `soundex`
+  - `array_min`
+  - `array_max`
+- Fixed an issue with `COUNT(DISTINCT *)` in SQL queries ([#1394](https://github.com/lakehq/sail/pull/1394)).
+- Fixed an issue with non-literal expressions in window `RANGE` frame boundaries ([#1482](https://github.com/lakehq/sail/pull/1482)).
+- Fixed issues with using SQL queries with Python data sources ([#1469](https://github.com/lakehq/sail/pull/1469)).
+- Fixed an issue with the `saveAsTable()` method when using `mode="append"` for non-existing tables in the Spark DataFrame API ([#1525](https://github.com/lakehq/sail/pull/1525)).
+- Fixed an issue with the `option("path", path)` option in the Spark DataFrame writer ([#1533](https://github.com/lakehq/sail/pull/1533)).
+- Fixed namespace handling for catalog providers ([#1484](https://github.com/lakehq/sail/pull/1484)).
+- Fixed the SQL syntax for the `CREATE DATABASE` statement ([#1480](https://github.com/lakehq/sail/pull/1480)).
+- Fixed an issue with large gRPC error messages ([#1488](https://github.com/lakehq/sail/pull/1488)).
+- Fixed issues in the query planner ([#1473](https://github.com/lakehq/sail/pull/1473) and [#1483](https://github.com/lakehq/sail/pull/1483)).
+
+### Contributors
+
+Huge thanks to [@davidlghellin](https://github.com/davidlghellin) and [@tamirkifle](https://github.com/tamirkifle) for your contributions!
+
 ## 0.5.2
 
 _March 2, 2026_
