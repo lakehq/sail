@@ -38,7 +38,7 @@ impl ScalarUDFImpl for SparkSchemaOfJson {
     }
 
     fn name(&self) -> &str {
-        &"schema_of_json"
+        "schema_of_json"
     }
 
     fn aliases(&self) -> &[String] {
@@ -58,13 +58,42 @@ impl ScalarUDFImpl for SparkSchemaOfJson {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        // check arg length and types
+        // spark fails if json isn't a literal, for cols the function `schema_of_json_agg`
+        // could be implemented, but it's only on databricks spark
+        match args.args.len() {
+            n if n == 0 || n > 2 => {
+                return plan_err!(
+                    "function `{}` expected 1 to 2 args but got {}",
+                    self.name(),
+                    n
+                )
+            }
+            1 => {
+                if let ColumnarValue::Array(_) = args.args[0] {
+                    return Err(DataFusionError::Execution(format!(
+                        "Expected a literal value for the first arg of `{}`, instead got a column",
+                        self.name()
+                    )))
+                }
+            }
+            2 => {
+                if let ColumnarValue::Array(_) = args.args[0] {
+                    return Err(DataFusionError::Execution(format!(
+                        "Expected a literal value for the second arg of `{}`, instead got a column",
+                        self.name()
+                    )))
+                }
+            }
+            _ => {}
+        };
         let hints = vec![Hint::AcceptsSingular, Hint::AcceptsSingular];
         make_scalar_function(schema_of_json_inner, hints)(&args.args)
     }
 }
 
 fn schema_of_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() < 1 || args.len() > 2 {
+    if args.is_empty() || args.len() > 2 {
         return plan_err!(
             "function `schema_of_json` expected 1 to 2 args but got {}",
             args.len()
@@ -82,13 +111,15 @@ fn schema_of_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 fn infer_json_schema_type(json_string: &str, options: &SparkSchemaOfJsonOptions) -> Result<String> {
-    let preprocessed = preprocess(json_string, options);
-    let value = serde_json::from_str::<serde_json::Value>(&preprocessed)
+    let preprocessed_json = preprocess_json(json_string, options);
+    let value = serde_json::from_str::<serde_json::Value>(&preprocessed_json)
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-    value_to_str(&value, options)
+    value_to_ddl_type(&value)
 }
 
-fn preprocess(string: &str, options: &SparkSchemaOfJsonOptions) -> String {
+fn preprocess_json(string: &str, options: &SparkSchemaOfJsonOptions) -> String {
+    // Preprocessing required bc serde json (even json5) can't allow for leading 0s in numeric
+    // types
     if options.allow_numeric_leading_zeros {
         remove_leading_zeros(string.to_string())
     } else {
@@ -96,12 +127,13 @@ fn preprocess(string: &str, options: &SparkSchemaOfJsonOptions) -> String {
     }
 }
 
+#[expect(clippy::unwrap_used)]
 fn remove_leading_zeros(string: String) -> String {
     let re = Regex::new(r"\b0+([1-9]\d*)").unwrap();
     re.replace_all(string.as_str(), "$1").to_string()
 }
 
-fn value_to_str(value: &Value, options: &SparkSchemaOfJsonOptions) -> Result<String> {
+fn value_to_ddl_type(value: &Value) -> Result<String> {
     match value {
         Value::String(_) => Ok("STRING".to_string()),
         Value::Number(num) => {
@@ -113,18 +145,18 @@ fn value_to_str(value: &Value, options: &SparkSchemaOfJsonOptions) -> Result<Str
         }
         Value::Bool(_) => Ok("BOOL".to_string()),
         Value::Object(map) => {
-            let mut inner = Vec::new();
+            let mut inner_k_v_ddl = Vec::new();
             for (k, v) in map.iter() {
-                let val = value_to_str(v, options)?;
-                let x = format!("{}: {}", k, val);
-                inner.push(x);
+                let ddl_type = value_to_ddl_type(v)?;
+                inner_k_v_ddl.push(format!("{}: {}", k, ddl_type));
             }
-            let inner_str = inner.join(", ");
+            let inner_str = inner_k_v_ddl.join(", ");
             Ok(format!("STRUCT<{}>", inner_str))
         }
         Value::Array(arr) => {
-            let nested_val = value_to_str(&arr[0], options)?;
-            Ok(format!("ARRAY<{nested_val}>"))
+            // TODO: evaluate all vals and pick broadest type
+            let nested_type = value_to_ddl_type(&arr[0])?;
+            Ok(format!("ARRAY<{nested_type}>"))
         }
         other => exec_err!("Unsupported parsing of json type {other}"),
     }
@@ -149,7 +181,7 @@ impl ModeOptions {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct SparkSchemaOfJsonOptions {
     mode: ModeOptions,
     allow_numeric_leading_zeros: bool,
@@ -206,14 +238,5 @@ impl SparkSchemaOfJsonOptions {
             }
         }
         Ok(self)
-    }
-}
-
-impl Default for SparkSchemaOfJsonOptions {
-    fn default() -> Self {
-        SparkSchemaOfJsonOptions {
-            mode: ModeOptions::default(),
-            allow_numeric_leading_zeros: false,
-        }
     }
 }
