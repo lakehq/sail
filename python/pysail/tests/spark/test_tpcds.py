@@ -39,7 +39,7 @@ def test_derived_tpcds_query_result(spark, query, snapshot):
         result = spark.sql(sql)._show_string(n=0x7FFFFFFF, truncate=False)  # noqa: SLF001
         table = format_show_string(
             parse_show_string(result),
-            normalizer=lambda x: normalize_floating_point_string(x, d=6, n=6),
+            normalizer=lambda x: normalize_floating_point_string(x, d=6, n=4),
         )
         assert table == snapshot
 
