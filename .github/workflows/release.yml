@@ -9,6 +9,8 @@ on:
   workflow_dispatch:
     inputs:
       publish:
+        # The manual test must be done from the `main` branch
+        # due to the environment protection rules.
         description: Publish the package to Test PyPI
         type: boolean
         required: true
@@ -17,7 +19,6 @@ jobs:
   setup:
     name: Setup
     runs-on: ubuntu-slim
-    environment: release
     permissions:
       # This is required for calling the GitHub API to generate release notes.
       contents: write
@@ -367,17 +368,13 @@ jobs:
     name: Release to PyPI
     if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true') }}
     runs-on: ubuntu-slim
-    environment: release
+    environment: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && 'release' || 'release/test' }}
     permissions:
       id-token: write
     needs:
       - setup
       - review
     steps:
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
       - uses: actions/download-artifact@v4
         with:
           pattern: "package-*"
@@ -385,12 +382,11 @@ jobs:
           merge-multiple: true
 
       - name: Publish to PyPI
-        uses: PyO3/maturin-action@v1
-        env:
-          MATURIN_REPOSITORY: "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && 'pypi' || 'testpypi' }}"
+        uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          command: upload
-          args: --non-interactive --skip-existing dist/*
+          repository-url: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && 'https://upload.pypi.org/legacy/' || 'https://test.pypi.org/legacy/' }}
+          packages-dir: dist
+          skip-existing: true
 
   release-github:
     name: Release to GitHub
