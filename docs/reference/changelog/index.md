@@ -7,7 +7,7 @@ next: false
 
 ## 0.5.3
 
-_March 20, 2026_
+_March 21, 2026_
 
 - Added a CLI command to run PySpark scripts ([#1535](https://github.com/lakehq/sail/pull/1535)).
 - Added a system table to expose the application configuration ([#1464](https://github.com/lakehq/sail/pull/1464)).

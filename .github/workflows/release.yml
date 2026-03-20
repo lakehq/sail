@@ -367,7 +367,9 @@ jobs:
   release-pypi:
     name: Release to PyPI
     if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true') }}
-    runs-on: ubuntu-slim
+    # The PyPI publishing step runs inside a Docker container,
+    # so we cannot use the `ubuntu-slim` runner.
+    runs-on: ubuntu-latest
     environment: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && 'release' || 'release/test' }}
     permissions:
       id-token: write
