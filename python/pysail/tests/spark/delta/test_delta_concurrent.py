@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-pytest.mark.skip("flaky tests", allow_module_level=True)
+pytest.skip("flaky tests", allow_module_level=True)
 
 
 def test_delta_concurrent_initial_consistent_metadata(spark, tmp_path):
