@@ -10,6 +10,33 @@ Feature: to_json function converts complex types to JSON strings
         | result         |
         | STRUCT<a: BIGINT, b: DOUBLE, c: STRING, d: BOOL>  |
 
+    Scenario: schema of json empty list
+      When query
+        """
+        SELECT schema_of_json('{"a": []}') AS result
+        """
+      Then query result
+        | result         |
+        | STRUCT<a: ARRAY<STRING>>  |
+
+    Scenario: schema of json scalar
+      When query
+        """
+        SELECT schema_of_json('1') AS result
+        """
+      Then query result
+        | result         |
+        | BIGINT  |
+
+    Scenario: schema of json empty string
+      When query
+        """
+        SELECT schema_of_json('') AS result
+        """
+      Then query result
+        | result         |
+        | STRING  |
+
   Rule: Infer nested structures
     Scenario: schema of json nested
       When query
@@ -20,7 +47,18 @@ Feature: to_json function converts complex types to JSON strings
         | result         |
         | ARRAY<STRUCT<a: STRUCT<a: BIGINT>>>  |
 
-  Rule: Infer nested structures
+  Rule: Invalid json handled like spark
+    Scenario: schema of json leading zeros
+        Testing that this doesn't fail
+      When query
+        """
+        SELECT schema_of_json('{"a": 01, "b": "01"}', map('allowNumericLeadingZeros', 'true')) AS result
+        """
+      Then query result
+        | result         |
+        | STRUCT<a: BIGINT, b: STRING>  |
+
+  Rule: Exceptions handled appropriately
     Scenario: schema of json not scalar
       When query
         """
@@ -33,5 +71,14 @@ Feature: to_json function converts complex types to JSON strings
         select schema_of_json(json) as result
         from rows
         """
-        Then query error Expected a literal value
+      Then query error Expected a literal value
+
+    Scenario: schema of json null input
+      When query
+        """
+        SELECT schema_of_json(null) AS result
+        """
+      Then query result
+        | result         |
+        | STRING  |
 
