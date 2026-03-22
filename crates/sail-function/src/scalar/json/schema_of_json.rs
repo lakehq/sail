@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, ArrayRef, MapArray, StringArray, StructArray, downcast_array};
-use datafusion::arrow::datatypes::{DataType};
+use datafusion::arrow::array::{
+    downcast_array, Array, ArrayRef, MapArray, StringArray, StructArray,
+};
+use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{exec_err, plan_err, DataFusionError, Result};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
@@ -42,27 +44,25 @@ impl SparkSchemaOfJson {
         Ok(())
     }
 
-    fn validate_args_are_literal(cols: &Vec<ColumnarValue>) -> Result<()> {
-        if let Some(ColumnarValue::Array(_)) = cols.get(0) {
+    fn validate_args_are_literal(cols: &[ColumnarValue]) -> Result<()> {
+        if let Some(ColumnarValue::Array(_)) = cols.first() {
             return Err(DataFusionError::Execution(format!(
                 "Expected a literal value for the first arg of `{}`, instead got a column",
                 Self::SCHEMA_OF_JSON_NAME,
-            )))
+            )));
         }
         if let Some(ColumnarValue::Array(_)) = cols.get(1) {
             return Err(DataFusionError::Execution(format!(
                 "Expected a literal value for the second arg of `{}`, instead got a column",
                 Self::SCHEMA_OF_JSON_NAME,
-            )))
+            )));
         }
         Ok(())
     }
 
     fn validate_arg_types(arg_types: &[DataType]) -> Result<()> {
         match arg_types {
-            [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8] => {
-                Ok(())
-            },
+            [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8] => Ok(()),
             [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Map(map_field, _)] => {
                 match map_field.data_type() {
                     DataType::Struct(fields) => {
@@ -78,15 +78,15 @@ impl SparkSchemaOfJson {
                             )));
                         }
                         Ok(())
-                    },
-                    _ => unreachable!()
+                    }
+                    _ => unreachable!(),
                 }
             }
             _ => plan_err!(
                 "For function `{:?}` found invalid arg types: {:?}",
                 Self::SCHEMA_OF_JSON_NAME,
                 arg_types
-            )
+            ),
         }
     }
 }
@@ -132,7 +132,9 @@ fn schema_of_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         SparkSchemaOfJsonOptions::default()
     };
     let type_ddl = if rows.is_empty() {
-        return Err(DataFusionError::Execution("No value passed into input".to_string()))
+        return Err(DataFusionError::Execution(
+            "No value passed into input".to_string(),
+        ));
     } else if rows.value(0).is_empty() {
         "STRING".to_string()
     } else {
@@ -191,7 +193,6 @@ fn value_to_ddl_type(value: &Value) -> Result<String> {
                 // TODO: evaluate all vals and pick broadest type
                 let nested_type = value_to_ddl_type(&arr[0])?;
                 Ok(format!("ARRAY<{nested_type}>"))
-
             }
         }
         other => exec_err!("Unsupported parsing of json type {other}"),
@@ -274,30 +275,16 @@ impl SparkSchemaOfJsonOptions {
         Ok((keys, values))
     }
 
-    fn unwrap_or_key_value<'a>(key: Option<&'a str>, value: Option<&'a str>) -> Result<(&'a str, &'a str)> {
+    fn unwrap_or_key_value<'a>(
+        key: Option<&'a str>,
+        value: Option<&'a str>,
+    ) -> Result<(&'a str, &'a str)> {
         match (key, value) {
             (Some(k), Some(v)) => Ok((k, v)),
-            _ => {
-                Err(DataFusionError::Plan(format!(
-                    "Unexpected options key value pair: {:?}: {:?}",
-                    key,
-                    value
-                )))
-            }
+            _ => Err(DataFusionError::Plan(format!(
+                "Unexpected options key value pair: {:?}: {:?}",
+                key, value
+            ))),
         }
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-    use datafusion::arrow::array::new_empty_array;
-
-    #[test]
-    fn test_tmp() {
-        let arr = new_empty_array(&DataType::Utf8);
-        dbg!("hi");
-        let r = schema_of_json_inner(&[arr]);
-        dbg!(r);
     }
 }
