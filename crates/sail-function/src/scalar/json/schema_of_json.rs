@@ -1,21 +1,19 @@
 use std::sync::Arc;
 
-use datafusion::arrow::array::{downcast_array, Array, ArrayRef, MapArray, StringArray};
-use datafusion::arrow::datatypes::{DataType, UnionFields, Field, Fields};
+use datafusion::arrow::array::{Array, ArrayRef, MapArray, StringArray, StructArray, downcast_array};
+use datafusion::arrow::datatypes::{DataType};
 use datafusion_common::{exec_err, plan_err, DataFusionError, Result};
 use datafusion_expr::function::Hint;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_expr_common::signature::Volatility;
 use datafusion_functions::downcast_arg;
 use datafusion_functions::utils::make_scalar_function;
-use datafusion_functions_nested::map::map;
 use regex::Regex;
 use serde_json::Value;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkSchemaOfJson {
     signature: Signature,
-    aliases: [String; 1],
 }
 
 impl Default for SparkSchemaOfJson {
@@ -25,39 +23,70 @@ impl Default for SparkSchemaOfJson {
 }
 
 impl SparkSchemaOfJson {
+    pub const SCHEMA_OF_JSON_NAME: &'static str = "schema_of_json";
+
     pub fn new() -> Self {
-        let json_str_type = DataType::Union(
-            UnionFields::from_fields(vec![
-                Field::new("utf8", DataType::Utf8, false),
-                Field::new("utf8view", DataType::Utf8View, false),
-                Field::new("largeutf8", DataType::LargeUtf8, false),
-            ]),
-            datafusion::arrow::datatypes::UnionMode::Dense
-        );
-        let options_type = DataType::Map(
-            Arc::new(
-                Field::new(
-                    "entries",
-                    DataType::Struct(
-                        Fields::from(vec![
-                            Field::new("key", DataType::Utf8, false),
-                            Field::new("value", DataType::Utf8, false),
-                        ])
-                    ),
-                    true
-                )
-            ),
-            false
-        );
         SparkSchemaOfJson {
-            signature: Signature::one_of(
-                vec![
-                    TypeSignature::Exact(vec![json_str_type.clone()]),
-                    TypeSignature::Exact(vec![json_str_type, options_type]),
-                ],
-                Volatility::Immutable
-            ),
-            aliases: ["schema_of_json".to_string()],
+            signature: Signature::user_defined(Volatility::Immutable),
+        }
+    }
+
+    pub fn validate_args_len<T>(args: &[T]) -> Result<()> {
+        if args.is_empty() || args.len() > 2 {
+            return plan_err!(
+                "function `{}` expected 1 to 2 args but got {}",
+                Self::SCHEMA_OF_JSON_NAME,
+                args.len()
+            );
+        };
+        Ok(())
+    }
+
+    fn validate_args_are_literal(cols: &Vec<ColumnarValue>) -> Result<()> {
+        if let Some(ColumnarValue::Array(_)) = cols.get(0) {
+            return Err(DataFusionError::Execution(format!(
+                "Expected a literal value for the first arg of `{}`, instead got a column",
+                Self::SCHEMA_OF_JSON_NAME,
+            )))
+        }
+        if let Some(ColumnarValue::Array(_)) = cols.get(1) {
+            return Err(DataFusionError::Execution(format!(
+                "Expected a literal value for the second arg of `{}`, instead got a column",
+                Self::SCHEMA_OF_JSON_NAME,
+            )))
+        }
+        Ok(())
+    }
+
+    fn validate_arg_types(arg_types: &[DataType]) -> Result<()> {
+        match arg_types {
+            [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8] => {
+                Ok(())
+            },
+            [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Map(map_field, _)] => {
+                match map_field.data_type() {
+                    DataType::Struct(fields) => {
+                        let key = fields[0].clone();
+                        let value = fields[1].clone();
+                        if !key.data_type().is_string() || !value.data_type().is_string() {
+                            return Err(DataFusionError::Plan(format!(
+                                "For function `{}`, the options map keys/values should both be type string. Instead
+                                got key: {}, value: {}",
+                                Self::SCHEMA_OF_JSON_NAME,
+                                key.data_type(),
+                                value.data_type(),
+                            )));
+                        }
+                        Ok(())
+                    },
+                    _ => unreachable!()
+                }
+            }
+            _ => plan_err!(
+                "For function `{:?}` found invalid arg types: {:?}",
+                Self::SCHEMA_OF_JSON_NAME,
+                arg_types
+            )
         }
     }
 }
@@ -68,11 +97,7 @@ impl ScalarUDFImpl for SparkSchemaOfJson {
     }
 
     fn name(&self) -> &str {
-        "schema_of_json"
-    }
-
-    fn aliases(&self) -> &[String] {
-        &self.aliases
+        Self::SCHEMA_OF_JSON_NAME
     }
 
     fn signature(&self) -> &Signature {
@@ -83,48 +108,22 @@ impl ScalarUDFImpl for SparkSchemaOfJson {
         Ok(DataType::Utf8)
     }
 
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        Self::validate_args_len(arg_types)?;
+        Self::validate_arg_types(arg_types)?;
+        Ok(arg_types.to_vec())
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        // check arg length and types
-        // spark fails if json isn't a literal, for cols the function `schema_of_json_agg`
-        // could be implemented, but it's only on databricks spark
-        match args.args.len() {
-            n if n == 0 || n > 2 => {
-                return plan_err!(
-                    "function `{}` expected 1 to 2 args but got {}",
-                    self.name(),
-                    n
-                )
-            }
-            1 => {
-                if let ColumnarValue::Array(_) = args.args[0] {
-                    return Err(DataFusionError::Execution(format!(
-                        "Expected a literal value for the first arg of `{}`, instead got a column",
-                        self.name()
-                    )))
-                }
-            }
-            2 => {
-                if let ColumnarValue::Array(_) = args.args[0] {
-                    return Err(DataFusionError::Execution(format!(
-                        "Expected a literal value for the second arg of `{}`, instead got a column",
-                        self.name()
-                    )))
-                }
-            }
-            _ => {}
-        };
+        Self::validate_args_len(&args.args)?;
+        Self::validate_args_are_literal(&args.args)?;
         let hints = vec![Hint::AcceptsSingular, Hint::AcceptsSingular];
         make_scalar_function(schema_of_json_inner, hints)(&args.args)
     }
 }
 
 fn schema_of_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.is_empty() || args.len() > 2 {
-        return plan_err!(
-            "function `schema_of_json` expected 1 to 2 args but got {}",
-            args.len()
-        );
-    };
+    SparkSchemaOfJson::validate_args_len(args)?;
     let rows = downcast_arg!(&args[0], StringArray);
     let options = if let Some(arg) = args.get(1) {
         let map_array = downcast_arg!(arg, MapArray);
@@ -134,8 +133,6 @@ fn schema_of_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     };
     let type_ddl = if rows.is_empty() {
         return Err(DataFusionError::Execution("No value passed into input".to_string()))
-    } else if rows.is_null(0) {
-        return Err(DataFusionError::Execution("Cannot infer a schema for input NULL".to_string()))
     } else if rows.value(0).is_empty() {
         "STRING".to_string()
     } else {
@@ -189,7 +186,7 @@ fn value_to_ddl_type(value: &Value) -> Result<String> {
         }
         Value::Array(arr) => {
             if arr.is_empty() {
-                Ok("ARRAY<STRING>".to_lowercase())
+                Ok("ARRAY<STRING>".to_string())
             } else {
                 // TODO: evaluate all vals and pick broadest type
                 let nested_type = value_to_ddl_type(&arr[0])?;
@@ -230,6 +227,27 @@ impl SparkSchemaOfJsonOptions {
     pub fn map_to_options(mut self, map_array: &MapArray) -> Result<Self> {
         let inner_struct = map_array.value(0);
         // validate map is of type map<string, string>
+        let (keys, values) = Self::get_keys_values_from_map(inner_struct)?;
+        // match each k v pair
+        for (key, value) in keys.iter().zip(values.iter()) {
+            let (key, value) = Self::unwrap_or_key_value(key, value)?;
+            match key {
+                "mode" => self.mode = ModeOptions::from_str(value.to_string())?,
+                "allowNumericLeadingZeros" => {
+                    self.allow_numeric_leading_zeros = value.parse::<bool>()
+                        .map_err(|e| DataFusionError::Plan(format!(
+                            "Error parsing options: {key} of {value} can't be parsed to a bool. Original error: {e}"
+                        )))?
+                },
+                other => {
+                    return plan_err!("Found unsupported option type when parsing options: {other}")
+                }
+            }
+        }
+        Ok(self)
+    }
+
+    fn get_keys_values_from_map(inner_struct: StructArray) -> Result<(StringArray, StringArray)> {
         let (keys, values) = match inner_struct.data_type() {
             DataType::Struct(fields) => {
                 let key_type = fields[0].data_type();
@@ -253,30 +271,20 @@ impl SparkSchemaOfJsonOptions {
                 )))
             }
         };
-        // Get each k/v pair
-        for (key, value) in keys.iter().zip(values.iter()) {
-            let (key, value) = match (key, value) {
-                (Some(k), Some(v)) => (k, v),
-                (_, _) => {
-                    return Err(DataFusionError::Plan(
-                        "Bad options most likely because len of keys != len of values".to_string(),
-                    ))
-                }
-            };
-            match key {
-                "mode" => self.mode = ModeOptions::from_str(value.to_string())?,
-                "allowNumericLeadingZeros" => {
-                    self.allow_numeric_leading_zeros = value.parse::<bool>()
-                        .map_err(|e| DataFusionError::Plan(format!(
-                            "Error parsing options: {key} of {value} can't be parsed to a bool. Original error: {e}"
-                        )))?
-                },
-                other => {
-                    return plan_err!("Found unsupported option type when parsing options: {other}")
-                }
+        Ok((keys, values))
+    }
+
+    fn unwrap_or_key_value<'a>(key: Option<&'a str>, value: Option<&'a str>) -> Result<(&'a str, &'a str)> {
+        match (key, value) {
+            (Some(k), Some(v)) => Ok((k, v)),
+            _ => {
+                Err(DataFusionError::Plan(format!(
+                    "Unexpected options key value pair: {:?}: {:?}",
+                    key,
+                    value
+                )))
             }
         }
-        Ok(self)
     }
 }
 

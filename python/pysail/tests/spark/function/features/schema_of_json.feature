@@ -78,7 +78,5 @@ Feature: to_json function converts complex types to JSON strings
         """
         SELECT schema_of_json(null) AS result
         """
-      Then query result
-        | result         |
-        | STRING  |
+      Then query error Execution error:.*found invalid arg types: \[Null\]
 
