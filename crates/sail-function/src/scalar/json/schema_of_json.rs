@@ -33,7 +33,7 @@ impl SparkSchemaOfJson {
         }
     }
 
-    pub fn validate_args_len<T>(args: &[T]) -> Result<()> {
+    fn validate_args_len<T>(args: &[T]) -> Result<()> {
         if args.is_empty() || args.len() > 2 {
             return plan_err!(
                 "function `{}` expected 1 to 2 args but got {}",

@@ -1,4 +1,4 @@
-Feature: to_json function converts complex types to JSON strings
+Feature: schema_of_json function detects the schema of a literal json string
 
   Rule: Infer basic types
     Scenario: schema of json basic
