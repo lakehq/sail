@@ -4,9 +4,11 @@ use std::sync::Arc;
 use chrono::{SecondsFormat, TimeZone, Utc};
 use datafusion::arrow::datatypes::{DataType, Schema, TimeUnit};
 use datafusion::datasource::{provider_as_source, source_as_provider, TableProvider};
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{DFSchema, ScalarValue, TableReference};
-use datafusion_expr::{Expr, LogicalPlan, Projection, TableScan, TableSource, UNNAMED_TABLE};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
+use datafusion_common::{DFSchema, DFSchemaRef, ScalarValue, TableReference};
+use datafusion_expr::{
+    EmptyRelation, Expr, Limit, LogicalPlan, Projection, TableScan, TableSource, UNNAMED_TABLE,
+};
 use rand::{rng, RngExt};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
@@ -269,7 +271,7 @@ impl PlanResolver<'_> {
             ),
         });
         let scalar = self.execute_time_travel_scalar(timestamp).await?;
-        self.normalize_time_travel_timestamp_scalar(scalar)
+        Self::normalize_time_travel_timestamp_scalar(scalar)
     }
 
     async fn evaluate_time_travel_version_i64(
@@ -282,7 +284,7 @@ impl PlanResolver<'_> {
             .resolve_time_travel_expression(expr, kind, state)
             .await?;
         let scalar = self.execute_time_travel_scalar(resolved).await?;
-        self.scalar_to_time_travel_i64(&scalar, kind)
+        Self::scalar_to_time_travel_i64(&scalar, kind)
     }
 
     async fn evaluate_time_travel_version_for_iceberg(
@@ -305,7 +307,7 @@ impl PlanResolver<'_> {
                 }
             }
             _ => Ok(IcebergVersionAsOf::SnapshotId(
-                self.scalar_to_time_travel_i64(&scalar, "version")?,
+                Self::scalar_to_time_travel_i64(&scalar, "version")?,
             )),
         }
     }
@@ -399,10 +401,8 @@ impl PlanResolver<'_> {
     }
 
     async fn execute_time_travel_scalar(&self, expr: Expr) -> PlanResult<ScalarValue> {
-        let plan = LogicalPlan::Projection(Projection::try_new(
-            vec![expr],
-            Arc::new(self.resolve_query_empty(true)?),
-        )?);
+        let expr = Self::cap_time_travel_scalar_subqueries(expr)?;
+        let plan = Self::build_time_travel_scalar_plan(expr)?;
         let batches = self.ctx.execute_logical_plan(plan).await?.collect().await?;
         let mut total_rows = 0usize;
         let mut value = None;
@@ -420,7 +420,42 @@ impl PlanResolver<'_> {
         }
     }
 
-    fn normalize_time_travel_timestamp_scalar(&self, scalar: ScalarValue) -> PlanResult<String> {
+    fn cap_time_travel_scalar_subqueries(expr: Expr) -> datafusion_common::Result<Expr> {
+        expr.transform(|nested| match nested {
+            Expr::ScalarSubquery(subquery) => Ok(Transformed::yes(Expr::ScalarSubquery(
+                datafusion_expr::logical_plan::Subquery {
+                    subquery: Arc::new(Self::limit_plan_to_two_rows(Arc::unwrap_or_clone(
+                        subquery.subquery,
+                    ))),
+                    outer_ref_columns: subquery.outer_ref_columns,
+                    spans: subquery.spans,
+                },
+            ))),
+            _ => Ok(Transformed::no(nested)),
+        })
+        .data()
+    }
+
+    fn build_time_travel_scalar_plan(expr: Expr) -> PlanResult<LogicalPlan> {
+        let projection = LogicalPlan::Projection(Projection::try_new(
+            vec![expr],
+            Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: true,
+                schema: DFSchemaRef::new(DFSchema::empty()),
+            })),
+        )?);
+        Ok(Self::limit_plan_to_two_rows(projection))
+    }
+
+    fn limit_plan_to_two_rows(input: LogicalPlan) -> LogicalPlan {
+        LogicalPlan::Limit(Limit {
+            skip: None,
+            fetch: Some(Box::new(Expr::Literal(ScalarValue::Int64(Some(2)), None))),
+            input: Arc::new(input),
+        })
+    }
+
+    fn normalize_time_travel_timestamp_scalar(scalar: ScalarValue) -> PlanResult<String> {
         match scalar {
             ScalarValue::TimestampMicrosecond(Some(value), Some(_)) => {
                 let datetime = Utc.timestamp_micros(value).single().ok_or_else(|| {
@@ -446,7 +481,7 @@ impl PlanResolver<'_> {
         }
     }
 
-    fn scalar_to_time_travel_i64(&self, scalar: &ScalarValue, kind: &str) -> PlanResult<i64> {
+    fn scalar_to_time_travel_i64(scalar: &ScalarValue, kind: &str) -> PlanResult<i64> {
         match scalar {
             ScalarValue::Int8(Some(value)) => Ok(i64::from(*value)),
             ScalarValue::Int16(Some(value)) => Ok(i64::from(*value)),

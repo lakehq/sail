@@ -408,17 +408,34 @@ async fn find_version_for_timestamp(
 }
 
 fn parse_timestamp_as_of(timestamp: &str) -> DeltaResult<DateTime<Utc>> {
-    if let Ok(datetime) = DateTime::parse_from_rfc3339(timestamp) {
+    let rfc3339_result = DateTime::parse_from_rfc3339(timestamp);
+    if let Ok(datetime) = rfc3339_result {
         return Ok(datetime.with_timezone(&Utc));
     }
 
-    for format in ["%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%dT%H:%M:%S%.f"] {
-        if let Ok(naive) = NaiveDateTime::parse_from_str(timestamp, format) {
-            return Ok(Utc.from_utc_datetime(&naive));
+    let mut last_error = rfc3339_result
+        .err()
+        .map(|e| format!("RFC3339 parsing error: {e}"));
+
+    for format in [
+        "%Y-%m-%d %H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S",
+    ] {
+        match NaiveDateTime::parse_from_str(timestamp, format) {
+            Ok(naive) => return Ok(Utc.from_utc_datetime(&naive)),
+            Err(e) => {
+                last_error = Some(format!("Failed to parse with format '{format}': {e}"));
+            }
         }
     }
 
+    let detail = last_error
+        .map(|e| format!(" Details: {e}"))
+        .unwrap_or_default();
+
     Err(DeltaTableError::generic(format!(
-        "Invalid timestamp string: {timestamp}",
+        "Invalid timestamp string: {timestamp}. Supported formats are: RFC3339 (e.g. '2024-01-02T03:04:05Z'), '%Y-%m-%d %H:%M:%S%.f', '%Y-%m-%dT%H:%M:%S%.f', '%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S'.{detail}",
     )))
 }

@@ -205,16 +205,35 @@ impl Table {
 }
 
 fn parse_timestamp_to_ms(s: &str) -> std::result::Result<i64, String> {
-    // Try RFC3339 first
-    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+    let rfc3339_result = DateTime::parse_from_rfc3339(s);
+    if let Ok(dt) = rfc3339_result {
         return Ok(dt.with_timezone(&Utc).timestamp_millis());
     }
 
-    // Fallback format "yyyy-MM-dd HH:mm:ss.SSS"
-    let fmt = "%Y-%m-%d %H:%M:%S%.3f";
-    let naive = NaiveDateTime::parse_from_str(s, fmt)
-        .map_err(|e| format!("Invalid timestamp '{s}': {e}"))?;
-    Ok(Utc.from_utc_datetime(&naive).timestamp_millis())
+    let mut last_error = rfc3339_result
+        .err()
+        .map(|e| format!("RFC3339 parsing error: {e}"));
+
+    for format in [
+        "%Y-%m-%d %H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S",
+    ] {
+        match NaiveDateTime::parse_from_str(s, format) {
+            Ok(naive) => return Ok(Utc.from_utc_datetime(&naive).timestamp_millis()),
+            Err(e) => {
+                last_error = Some(format!("Failed to parse with format '{format}': {e}"));
+            }
+        }
+    }
+
+    let detail = last_error
+        .map(|e| format!(" Details: {e}"))
+        .unwrap_or_default();
+    Err(format!(
+        "Invalid timestamp '{s}'. Supported formats are: RFC3339 (e.g. '2024-01-02T03:04:05Z'), '%Y-%m-%d %H:%M:%S%.f', '%Y-%m-%dT%H:%M:%S%.f', '%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S'.{detail}"
+    ))
 }
 
 fn find_snapshot_by_ts(meta: &TableMetadata, ts_ms: i64) -> Option<&Snapshot> {
@@ -231,30 +250,17 @@ fn find_snapshot_by_ts(meta: &TableMetadata, ts_ms: i64) -> Option<&Snapshot> {
             meta.snapshots
                 .iter()
                 .find(|s| s.snapshot_id() == log_entry.snapshot_id)
+                .map(|snapshot| (log_entry.timestamp_ms, snapshot.snapshot_id(), snapshot))
         });
 
-    let from_snapshots = meta
-        .snapshots
-        .iter()
-        .filter(|s| s.timestamp_ms() <= ts_ms)
-        .max_by(|a, b| {
-            a.timestamp_ms()
-                .cmp(&b.timestamp_ms())
-                .then_with(|| a.snapshot_id().cmp(&b.snapshot_id()))
-        });
-
-    match (from_log, from_snapshots) {
-        (Some(logged), Some(snapshot)) => Some(
-            if (logged.timestamp_ms(), logged.snapshot_id())
-                >= (snapshot.timestamp_ms(), snapshot.snapshot_id())
-            {
-                logged
-            } else {
-                snapshot
-            },
-        ),
-        (Some(logged), None) => Some(logged),
-        (None, Some(snapshot)) => Some(snapshot),
-        (None, None) => None,
-    }
+    from_log.map(|(_, _, snapshot)| snapshot).or_else(|| {
+        meta.snapshots
+            .iter()
+            .filter(|s| s.timestamp_ms() <= ts_ms)
+            .max_by(|a, b| {
+                a.timestamp_ms()
+                    .cmp(&b.timestamp_ms())
+                    .then_with(|| a.snapshot_id().cmp(&b.snapshot_id()))
+            })
+    })
 }
