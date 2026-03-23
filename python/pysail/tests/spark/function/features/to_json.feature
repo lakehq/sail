@@ -303,7 +303,6 @@ Feature: to_json function converts complex types to JSON strings
         | result                    |
         | {"outer":{"inner":1}}     |
 
-  Rule: Multiple types in struct
   Rule: String with special characters
     Scenario: Empty string value
       When query
