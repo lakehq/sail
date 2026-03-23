@@ -668,7 +668,7 @@ mod tests {
     };
     use crate::spec::{
         Action, Add, CheckpointActionRow, CommitInfo, DataType, DeletionVectorDescriptor,
-        DeltaResult, Metadata, Protocol, Remove, StorageType, StructField, StructType,
+        DeltaError, DeltaResult, Metadata, Protocol, Remove, StorageType, StructField, StructType,
         TableFeature, Transaction,
     };
 
@@ -688,15 +688,16 @@ mod tests {
         )
     }
 
-    fn commit_meta(version: i64, last_modified_millis: i64) -> ObjectMeta {
-        ObjectMeta {
+    fn commit_meta(version: i64, last_modified_millis: i64) -> DeltaResult<ObjectMeta> {
+        let last_modified = DateTime::from_timestamp_millis(last_modified_millis)
+            .ok_or_else(|| DeltaError::generic("test timestamp must be valid"))?;
+        Ok(ObjectMeta {
             location: Path::from(format!("_delta_log/{version:020}.json")),
-            last_modified: DateTime::from_timestamp_millis(last_modified_millis)
-                .expect("test timestamp must be valid"),
+            last_modified,
             size: 0,
             e_tag: None,
             version: None,
-        }
+        })
     }
 
     async fn put_commit(
@@ -1101,10 +1102,11 @@ mod tests {
         )
         .await?;
 
+        let commit_meta = commit_meta(0, 9_999)?;
         let timestamps = replay_commit_header_actions(
             &mut ReconciledHeaderState::default(),
             store,
-            &[(0, commit_meta(0, 9_999))],
+            &[(0, commit_meta)],
             0,
             0,
         )
@@ -1131,10 +1133,11 @@ mod tests {
         )
         .await?;
 
+        let commit_meta = commit_meta(0, 4_567)?;
         let timestamps = replay_commit_header_actions(
             &mut ReconciledHeaderState::default(),
             store,
-            &[(0, commit_meta(0, 4_567))],
+            &[(0, commit_meta)],
             0,
             0,
         )

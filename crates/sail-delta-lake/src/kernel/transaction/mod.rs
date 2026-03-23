@@ -1198,8 +1198,8 @@ mod tests {
     use super::*;
     use crate::schema::protocol_for_create;
     use crate::spec::{
-        checksum_path, Action, CommitInfo, DataType, Metadata, SaveMode, StructField, StructType,
-        VersionChecksum,
+        checksum_path, Action, CommitInfo, DataType, DeltaError, Metadata, SaveMode, StructField,
+        StructType, VersionChecksum,
     };
     use crate::storage::{default_logstore, get_actions, StorageConfig};
 
@@ -1246,10 +1246,10 @@ mod tests {
         serde_json::from_slice(&bytes).unwrap()
     }
 
-    fn commit_info(actions: &[Action]) -> &CommitInfo {
+    fn commit_info(actions: &[Action]) -> DeltaResult<&CommitInfo> {
         match actions.first() {
-            Some(Action::CommitInfo(info)) => info,
-            _ => panic!("expected commitInfo action at index 0"),
+            Some(Action::CommitInfo(info)) => Ok(info),
+            _ => Err(DeltaError::generic("expected commitInfo action at index 0")),
         }
     }
 
@@ -1277,10 +1277,10 @@ mod tests {
             )
             .await?;
         let first_actions = read_commit_actions(&log_store, 0).await;
-        let first_commit_info = commit_info(&first_actions);
-        let first_ict = first_commit_info
-            .in_commit_timestamp
-            .expect("ICT-enabled create commit should write inCommitTimestamp");
+        let first_commit_info = commit_info(&first_actions)?;
+        let first_ict = first_commit_info.in_commit_timestamp.ok_or_else(|| {
+            DeltaError::generic("ICT-enabled create commit should write inCommitTimestamp")
+        })?;
         assert!(matches!(first_actions.first(), Some(Action::CommitInfo(_))));
         assert_eq!(
             read_version_checksum(&log_store, 0)
@@ -1302,10 +1302,10 @@ mod tests {
             )
             .await?;
         let second_actions = read_commit_actions(&log_store, appended.version).await;
-        let second_commit_info = commit_info(&second_actions);
-        let second_ict = second_commit_info
-            .in_commit_timestamp
-            .expect("ICT-enabled append commit should write inCommitTimestamp");
+        let second_commit_info = commit_info(&second_actions)?;
+        let second_ict = second_commit_info.in_commit_timestamp.ok_or_else(|| {
+            DeltaError::generic("ICT-enabled append commit should write inCommitTimestamp")
+        })?;
 
         assert!(matches!(
             second_actions.first(),
@@ -1343,10 +1343,9 @@ mod tests {
                 },
             )
             .await?;
-        let previous_timestamp = created
-            .snapshot
-            .version_timestamp(0)
-            .expect("non-ICT tables still track pre-enable commit timestamps");
+        let previous_timestamp = created.snapshot.version_timestamp(0).ok_or_else(|| {
+            DeltaError::generic("non-ICT tables still track pre-enable commit timestamps")
+        })?;
 
         let upgrade_protocol = protocol_for_create(false, false, true)?;
         let upgrade_metadata = test_metadata([("delta.enableInCommitTimestamps", "true")]);
@@ -1373,10 +1372,10 @@ mod tests {
             Some(previous_timestamp),
             previous_timestamp.saturating_sub(10),
         )?;
-        let commit_info = commit_info(&finalized_actions);
+        let commit_info = commit_info(&finalized_actions)?;
         let upgrade_timestamp = commit_info
             .in_commit_timestamp
-            .expect("upgrade commit should assign inCommitTimestamp");
+            .ok_or_else(|| DeltaError::generic("upgrade commit should assign inCommitTimestamp"))?;
         assert_eq!(upgrade_timestamp, previous_timestamp + 1);
 
         let metadata = finalized_actions
@@ -1385,7 +1384,7 @@ mod tests {
                 Action::Metadata(metadata) => Some(metadata),
                 _ => None,
             })
-            .expect("upgrade commit should keep metadata action");
+            .ok_or_else(|| DeltaError::generic("upgrade commit should keep metadata action"))?;
         assert_eq!(
             metadata
                 .configuration()

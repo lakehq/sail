@@ -426,7 +426,9 @@ mod tests {
     #[test]
     fn checksum_header_keeps_in_commit_timestamp() {
         let checksum = make_test_checksum(1, 1, Some(123));
-        let header = validate_and_build_header(42, checksum).expect("checksum should be valid");
+        let header = validate_and_build_header(42, checksum);
+        assert!(header.is_some());
+        let header = header.unwrap();
         assert_eq!(header.commit_timestamps.get(&42), Some(&123));
     }
 

@@ -99,11 +99,11 @@ pub fn protocol_for_create(
 #[cfg(test)]
 mod tests {
     use super::protocol_for_create;
-    use crate::spec::TableFeature;
+    use crate::spec::{DeltaResult, TableFeature};
 
     #[test]
-    fn protocol_for_create_treats_in_commit_timestamp_as_writer_only() {
-        let protocol = protocol_for_create(false, false, true).expect("protocol should build");
+    fn protocol_for_create_treats_in_commit_timestamp_as_writer_only() -> DeltaResult<()> {
+        let protocol = protocol_for_create(false, false, true)?;
         assert_eq!(protocol.min_reader_version(), 1);
         assert_eq!(protocol.min_writer_version(), 7);
         assert_eq!(protocol.reader_features(), None);
@@ -111,5 +111,6 @@ mod tests {
             protocol.writer_features(),
             Some([TableFeature::InCommitTimestamp].as_slice())
         );
+        Ok(())
     }
 }
