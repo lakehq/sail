@@ -74,7 +74,7 @@ pub(super) struct WritePlanBuilder {
     bucket_by: Option<spec::SaveBucketBy>,
     sort_by: Vec<spec::SortOrder>,
     cluster_by: Vec<spec::ObjectName>,
-    options: Vec<(String, String)>,
+    options: Vec<Vec<(String, String)>>,
     table_properties: Vec<(String, String)>,
 }
 
@@ -138,15 +138,7 @@ impl WritePlanBuilder {
     }
 
     pub fn with_options(mut self, options: Vec<(String, String)>) -> Self {
-        self.options = options;
-        self
-    }
-
-    /// Appends a single key-value pair to the current options.
-    /// If the key is already present, the new value takes precedence because
-    /// later entries in the option list override earlier ones.
-    pub fn with_extra_option(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.options.push((key.into(), value.into()));
+        self.options.push(options);
         self
     }
 
@@ -189,10 +181,21 @@ impl PlanResolver<'_> {
             return Err(PlanError::todo("CLUSTER BY for write"));
         }
         let input_schema = input.schema().inner().clone();
-        let options_map = options
-            .clone()
-            .into_iter()
-            .collect::<std::collections::HashMap<_, _>>();
+        // Precompute case-insensitive option lookups before moving `options` into FileWriteOptions.
+        // Last option set wins; within a set, last matching entry wins.
+        let find_option = |key: &str| -> Option<String> {
+            options.iter().rev().find_map(|set| {
+                set.iter().rev().find_map(|(k, v)| {
+                    if k.eq_ignore_ascii_case(key) {
+                        Some(v.clone())
+                    } else {
+                        None
+                    }
+                })
+            })
+        };
+        let options_path = find_option("path");
+        let options_location = find_option("location");
         let mut file_write_options = FileWriteOptions {
             path: String::new(),
             // The mode will be set later so the value here is just a placeholder.
@@ -204,7 +207,7 @@ impl PlanResolver<'_> {
                 .await?,
             bucket_by: self.resolve_write_bucket_by(bucket_by.clone())?,
             table_properties: vec![],
-            options: vec![options],
+            options,
         };
         let mut preconditions = vec![];
         match target {
@@ -217,8 +220,8 @@ impl PlanResolver<'_> {
                 if file_write_options.format.is_empty() {
                     file_write_options.format = self.config.default_table_file_format.clone();
                 }
-                if let Some(path) = options_map.get("path") {
-                    file_write_options.path = path.to_string();
+                if let Some(path) = options_path {
+                    file_write_options.path = path;
                 }
                 let schema_for_cond =
                     matches!(mode, WriteMode::OverwriteIf { .. }).then_some(input_schema.as_ref());
@@ -288,10 +291,10 @@ impl PlanResolver<'_> {
                 }
                 if let Some(location) = info.as_ref().and_then(|x| x.location.as_ref()) {
                     file_write_options.path = location.clone();
-                } else if let Some(location) = options_map.get("location") {
-                    file_write_options.path = location.to_string();
-                } else if let Some(path) = options_map.get("path") {
-                    file_write_options.path = path.to_string();
+                } else if let Some(location) = options_location {
+                    file_write_options.path = location;
+                } else if let Some(path) = options_path {
+                    file_write_options.path = path;
                 } else {
                     file_write_options.path = self.resolve_default_table_location(&table).await?;
                 };
@@ -348,13 +351,8 @@ impl PlanResolver<'_> {
                         bucket_by,
                         if_not_exists,
                         replace,
-                        options: file_write_options
-                            .options
-                            .last()
-                            .cloned()
-                            .into_iter()
-                            .flatten()
-                            .collect(),
+                        // TODO: Revisit passing write options to CreateTableOptions.
+                        options: vec![],
                         properties: table_properties,
                     },
                 };

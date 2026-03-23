@@ -190,6 +190,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         ctx: &dyn Session,
         info: SinkInfo,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let path = info.path();
         let SinkInfo {
             input,
             // TODO: sink mode is ignored since the file formats only support append operation
@@ -209,11 +210,6 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         if partition_by.iter().any(|field| field.transform.is_some()) {
             return not_impl_err!("partition transforms for writing listing table format");
         }
-        let path = options
-            .iter()
-            .rev()
-            .find_map(|m| m.get("path").cloned())
-            .unwrap_or_default();
         // always write multi-file output
         let path = if path.ends_with(object_store::path::DELIMITER) {
             path

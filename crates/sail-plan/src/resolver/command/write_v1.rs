@@ -91,7 +91,7 @@ impl PlanResolver<'_> {
                 builder = builder
                     .with_target(WriteTarget::DataSource)
                     .with_mode(mode)
-                    .with_extra_option("path", location);
+                    .with_options(vec![("path".to_string(), location)]);
             }
             SaveType::Sink => {
                 let mode = to_write_mode(mode)?;

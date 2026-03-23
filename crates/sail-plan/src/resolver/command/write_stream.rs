@@ -57,7 +57,7 @@ impl PlanResolver<'_> {
             Some(WriteStreamSinkDestination::Path { path }) => {
                 builder = builder
                     .with_target(WriteTarget::DataSource)
-                    .with_extra_option("path", path);
+                    .with_options(vec![("path".to_string(), path)]);
             }
             Some(WriteStreamSinkDestination::Table { table }) => {
                 builder = builder.with_target(WriteTarget::NewTable {

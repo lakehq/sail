@@ -78,6 +78,7 @@ impl TableFormat for IcebergTableFormat {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         use datafusion::physical_plan::empty::EmptyExec;
 
+        let path = info.path();
         let SinkInfo {
             input,
             mode,
@@ -92,11 +93,6 @@ impl TableFormat for IcebergTableFormat {
             return not_impl_err!("bucketing for Iceberg format");
         }
 
-        let path = options
-            .iter()
-            .rev()
-            .find_map(|m| m.get("path").cloned())
-            .unwrap_or_default();
         let table_url = Self::parse_table_url(vec![path]).await?;
         let iceberg_options = resolve_iceberg_write_options(options)?;
 
