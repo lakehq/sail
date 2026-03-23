@@ -46,8 +46,8 @@ try:
     )
 except ImportError as e:
     msg = (
-        "The Vortex data source requires PySpark 4.0+ with the Python "
-        "DataSource API (pyspark.sql.datasource). Please upgrade PySpark or "
+        "The Vortex data source requires PySpark 4.1+ with filter pushdown support "
+        "(pyspark.sql.datasource). Please upgrade PySpark or "
         "disable this data source."
     )
     raise ImportError(msg) from e
@@ -71,9 +71,18 @@ _COMPARISON_OPS: dict[type, str] = {
 }
 
 
-def _col_name(f: Filter) -> str:
-    """Extract the column name from a PySpark Filter."""
-    return f.attribute[0] if isinstance(f.attribute, tuple) else f.attribute
+def _col_name(f: Filter) -> str | None:
+    """Extract the column name from a PySpark Filter.
+
+    Returns None for nested columns (multi-part attributes) since Vortex
+    does not support nested column pushdown.
+    """
+    attr = f.attribute
+    if isinstance(attr, tuple):
+        if len(attr) != 1:
+            return None  # Reject nested columns
+        return attr[0]
+    return attr
 
 
 def _filter_to_tuple(f: Filter) -> tuple | None:
@@ -88,27 +97,32 @@ def _filter_to_tuple(f: Filter) -> tuple | None:
     """
     op = _COMPARISON_OPS.get(type(f))
     if op is not None:
-        return (_col_name(f), op, f.value)
+        col = _col_name(f)
+        return (col, op, f.value) if col is not None else None
 
     if isinstance(f, In):
-        return (_col_name(f), "in", f.value)
+        col = _col_name(f)
+        return (col, "in", f.value) if col is not None else None
     if isinstance(f, Not):
         child = _filter_to_tuple(f.child)
         return ("not", child) if child is not None else None
     if isinstance(f, StringStartsWith):
-        return (_col_name(f), "starts_with", f.value)
+        col = _col_name(f)
+        return (col, "starts_with", f.value) if col is not None else None
     if isinstance(f, StringEndsWith):
-        return (_col_name(f), "ends_with", f.value)
+        col = _col_name(f)
+        return (col, "ends_with", f.value) if col is not None else None
     if isinstance(f, StringContains):
-        return (_col_name(f), "contains", f.value)
+        col = _col_name(f)
+        return (col, "contains", f.value) if col is not None else None
     return None
 
 
-def _tuple_to_vortex_expr(t: tuple):
+def _tuple_to_vortex_expr(t: tuple) -> object | None:
     """Convert a pickle-safe filter tuple to a vortex.expr expression.
 
     Returns None if the filter cannot be expressed in Vortex
-    (e.g. string predicates).
+    (e.g. string predicates or empty ``In`` lists).
     """
     # Not: ("not", child_tuple)
     if t[0] == "not":
@@ -125,8 +139,11 @@ def _tuple_to_vortex_expr(t: tuple):
 
     # In: (col, "in", (v1, v2, ...))
     if op == "in":
+        values = t[2]
+        if not values:
+            return None  # Empty In list — let Sail post-filter
         expr = None
-        for v in t[2]:
+        for v in values:
             eq = col == v
             expr = eq if expr is None else expr | eq
         return expr
@@ -146,17 +163,20 @@ def _normalize_schema(schema: pa.Schema) -> pa.Schema:
 
     Vortex may report Utf8View in the schema but produce Utf8/BinaryView
     as Binary in batches. Normalize view types to their non-view equivalents
-    to avoid schema mismatch errors.
+    to avoid schema mismatch errors. Uses ``field.with_type()`` to preserve
+    field-level metadata.
+
+    .. todo:: Normalize recursively for struct fields.
     """
     fields = []
     for field in schema:
         if field.type == pa.string_view():
-            fields.append(pa.field(field.name, pa.utf8(), nullable=field.nullable))
+            fields.append(field.with_type(pa.utf8()))
         elif field.type == pa.binary_view():
-            fields.append(pa.field(field.name, pa.binary(), nullable=field.nullable))
+            fields.append(field.with_type(pa.binary()))
         else:
             fields.append(field)
-    return pa.schema(fields)
+    return pa.schema(fields, metadata=schema.metadata)
 
 
 def _cast_view_types(table: pa.Table) -> pa.Table:
@@ -195,7 +215,7 @@ class VortexPartition(InputPartition):
     """A single Vortex file partition."""
 
     def __init__(self, path: str) -> None:
-        super().__init__(0)
+        super().__init__(0)  # partition index; single-file source always uses 0
         self.path = path
 
 
@@ -238,6 +258,8 @@ class VortexReader(DataSourceReader):
         scan_expr = None
         for t in self._filters:
             expr = _tuple_to_vortex_expr(t)
+            if expr is None:
+                continue  # Skip filters that couldn't be converted
             scan_expr = expr if scan_expr is None else and_(scan_expr, expr)
 
         for batch in vf.scan(expr=scan_expr):

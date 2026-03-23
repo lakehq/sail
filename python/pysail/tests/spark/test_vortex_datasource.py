@@ -115,6 +115,24 @@ class TestVortexFilterPushdown:
         assert len(result) == 1
         assert result[0]["id"] == 2  # noqa: PLR2004
 
+    def test_in_filter(self, spark, vtx_file):
+        df = spark.read.format("vortex").option("path", vtx_file).load()
+        result = df.filter(df.id.isin(1, 3, 5)).orderBy("id").collect()
+        assert len(result) == 3  # noqa: PLR2004
+        assert [r["id"] for r in result] == [1, 3, 5]
+
+    def test_not_equal_filter(self, spark, vtx_file):
+        df = spark.read.format("vortex").option("path", vtx_file).load()
+        result = df.filter(df.id != 3).orderBy("id").collect()  # noqa: PLR2004
+        assert len(result) == 4  # noqa: PLR2004
+        assert [r["id"] for r in result] == [1, 2, 4, 5]
+
+    def test_not_in_filter(self, spark, vtx_file):
+        df = spark.read.format("vortex").option("path", vtx_file).load()
+        result = df.filter(~df.id.isin(2, 4)).orderBy("id").collect()
+        assert len(result) == 3  # noqa: PLR2004
+        assert [r["id"] for r in result] == [1, 3, 5]
+
 
 class TestVortexNullHandling:
     def test_read_with_nulls(self, spark, vtx_file_with_nulls):
