@@ -43,19 +43,24 @@ pub async fn create_file_write_physical_plan(
         SinkMode::OverwritePartitions => PhysicalSinkMode::OverwritePartitions,
     };
     let sort_order = create_sort_order(ctx, sort_by, logical_input.schema())?;
+    // TODO: detect duplicated keys in each set of options
+    let mut all_options: Vec<std::collections::HashMap<String, String>> = options
+        .into_iter()
+        .map(|x| x.into_iter().collect())
+        .collect();
+    // Place path as the last (highest-priority) option set so format handlers
+    // can access it via `SinkInfo::path()`.
+    if !path.is_empty() {
+        all_options.push([("path".to_string(), path)].into_iter().collect());
+    }
     let info = SinkInfo {
         input: physical_input,
-        path,
         mode,
         partition_by,
         bucket_by,
         sort_order,
         table_properties: table_properties.into_iter().collect(),
-        // TODO: detect duplicated keys in each set of options
-        options: options
-            .into_iter()
-            .map(|x| x.into_iter().collect())
-            .collect(),
+        options: all_options,
     };
     let registry = ctx.extension::<TableFormatRegistry>()?;
     registry.get(&format)?.create_writer(ctx, info).await

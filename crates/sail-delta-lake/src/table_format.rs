@@ -89,7 +89,6 @@ impl TableFormat for DeltaTableFormat {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let SinkInfo {
             input,
-            path,
             mode,
             partition_by,
             bucket_by,
@@ -112,6 +111,11 @@ impl TableFormat for DeltaTableFormat {
             .map(|field| field.column)
             .collect::<Vec<_>>();
 
+        let path = options
+            .iter()
+            .rev()
+            .find_map(|m| m.get("path").cloned())
+            .unwrap_or_default();
         let table_url = Self::parse_table_url(ctx, vec![path]).await?;
         let (options, routed_table_properties) =
             split_delta_write_options_and_table_properties(options);

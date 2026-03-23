@@ -39,10 +39,7 @@ pub(super) enum WriteMode {
 }
 
 pub(super) enum WriteTarget {
-    Path {
-        location: String,
-    },
-    Sink,
+    DataSource,
     ExistingTable {
         table: spec::ObjectName,
         column_match: WriteColumnMatch,
@@ -145,6 +142,14 @@ impl WritePlanBuilder {
         self
     }
 
+    /// Appends a single key-value pair to the current options.
+    /// If the key is already present, the new value takes precedence because
+    /// later entries in the option list override earlier ones.
+    pub fn with_extra_option(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.options.push((key.into(), value.into()));
+        self
+    }
+
     pub fn with_table_properties(mut self, properties: Vec<(String, String)>) -> Self {
         self.table_properties = properties;
         self
@@ -203,30 +208,17 @@ impl PlanResolver<'_> {
         };
         let mut preconditions = vec![];
         match target {
-            WriteTarget::Path { location } => {
+            WriteTarget::DataSource => {
                 if !table_properties.is_empty() {
                     return Err(PlanError::invalid(
-                        "table properties are not supported for writing to a path",
+                        "table properties are not supported for writing to a data source",
                     ));
                 }
                 if file_write_options.format.is_empty() {
                     file_write_options.format = self.config.default_table_file_format.clone();
                 }
-                file_write_options.path = location;
-                let schema_for_cond =
-                    matches!(mode, WriteMode::OverwriteIf { .. }).then_some(input_schema.as_ref());
-                file_write_options.mode = self
-                    .resolve_write_mode(mode, schema_for_cond, state)
-                    .await?;
-            }
-            WriteTarget::Sink => {
-                if !table_properties.is_empty() {
-                    return Err(PlanError::invalid(
-                        "table properties are not supported for writing to a sink",
-                    ));
-                }
-                if file_write_options.format.is_empty() {
-                    file_write_options.format = self.config.default_table_file_format.clone();
+                if let Some(path) = options_map.get("path") {
+                    file_write_options.path = path.to_string();
                 }
                 let schema_for_cond =
                     matches!(mode, WriteMode::OverwriteIf { .. }).then_some(input_schema.as_ref());

@@ -36,7 +36,6 @@ impl TableFormat for ConsoleTableFormat {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let SinkInfo {
             input,
-            path,
             mode,
             partition_by,
             bucket_by,
@@ -47,7 +46,7 @@ impl TableFormat for ConsoleTableFormat {
         if !is_flow_event_schema(&input.schema()) {
             return plan_err!("the console table format only supports streaming data");
         }
-        if !path.is_empty() {
+        if options.iter().any(|m| m.contains_key("path")) {
             return plan_err!("the console table format does not support path");
         }
         if !matches!(mode, PhysicalSinkMode::Append) {

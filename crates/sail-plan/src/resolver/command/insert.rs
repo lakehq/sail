@@ -43,9 +43,10 @@ impl PlanResolver<'_> {
         };
         let builder = WritePlanBuilder::new()
             .with_mode(WriteMode::Overwrite)
-            .with_target(WriteTarget::Path { location })
+            .with_target(WriteTarget::DataSource)
             .with_format(format)
-            .with_options(options);
+            .with_options(options)
+            .with_extra_option("path", location);
         let input = self.resolve_write_input(input, state).await?;
         self.resolve_write_with_builder(input, builder, state).await
     }

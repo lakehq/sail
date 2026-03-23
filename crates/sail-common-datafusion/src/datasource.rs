@@ -68,7 +68,6 @@ pub struct SourceInfo {
 #[derive(Debug, Clone)]
 pub struct SinkInfo {
     pub input: Arc<dyn ExecutionPlan>,
-    pub path: String,
     pub mode: PhysicalSinkMode,
     pub partition_by: Vec<CatalogPartitionField>,
     pub bucket_by: Option<BucketBy>,
@@ -76,7 +75,20 @@ pub struct SinkInfo {
     pub table_properties: HashMap<String, String>,
     /// The sets of options for the data sink.
     /// A later set of options can override earlier ones.
+    /// The path for the sink is stored under the `"path"` key in options.
     pub options: Vec<HashMap<String, String>>,
+}
+
+impl SinkInfo {
+    /// Returns the path from options, or an empty string if not set.
+    /// The last `"path"` value across all option sets takes precedence.
+    pub fn path(&self) -> String {
+        self.options
+            .iter()
+            .rev()
+            .find_map(|m| m.get("path").cloned())
+            .unwrap_or_default()
+    }
 }
 
 /// Information required to create a data deleter.

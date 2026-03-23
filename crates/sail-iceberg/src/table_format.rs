@@ -80,7 +80,6 @@ impl TableFormat for IcebergTableFormat {
 
         let SinkInfo {
             input,
-            path,
             mode,
             partition_by,
             bucket_by,
@@ -93,6 +92,11 @@ impl TableFormat for IcebergTableFormat {
             return not_impl_err!("bucketing for Iceberg format");
         }
 
+        let path = options
+            .iter()
+            .rev()
+            .find_map(|m| m.get("path").cloned())
+            .unwrap_or_default();
         let table_url = Self::parse_table_url(vec![path]).await?;
         let iceberg_options = resolve_iceberg_write_options(options)?;
 

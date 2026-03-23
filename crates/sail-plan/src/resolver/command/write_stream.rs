@@ -52,10 +52,12 @@ impl PlanResolver<'_> {
             .with_mode(WriteMode::Append);
         match sink_destination {
             None => {
-                builder = builder.with_target(WriteTarget::Sink);
+                builder = builder.with_target(WriteTarget::DataSource);
             }
             Some(WriteStreamSinkDestination::Path { path }) => {
-                builder = builder.with_target(WriteTarget::Path { location: path });
+                builder = builder
+                    .with_target(WriteTarget::DataSource)
+                    .with_extra_option("path", path);
             }
             Some(WriteStreamSinkDestination::Table { table }) => {
                 builder = builder.with_target(WriteTarget::NewTable {

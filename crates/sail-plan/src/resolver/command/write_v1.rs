@@ -37,14 +37,6 @@ impl PlanResolver<'_> {
             }
         });
 
-        let path_option = options.iter().find_map(|(k, v)| {
-            if k.eq_ignore_ascii_case("path") {
-                Some(v.clone())
-            } else {
-                None
-            }
-        });
-
         let input = self.resolve_write_input(*input, state).await?;
         let clustering_columns = self.resolve_write_cluster_by_columns(clustering_columns)?;
 
@@ -97,20 +89,16 @@ impl PlanResolver<'_> {
             SaveType::Path(location) => {
                 let mode = to_write_mode(mode)?;
                 builder = builder
-                    .with_target(WriteTarget::Path { location })
-                    .with_mode(mode);
+                    .with_target(WriteTarget::DataSource)
+                    .with_mode(mode)
+                    .with_extra_option("path", location);
             }
             SaveType::Sink => {
                 let mode = to_write_mode(mode)?;
-                // Support df.write.format(...).option("path", path).save() by extracting
-                // the "path" option and treating it as an explicit path target.
-                if let Some(location) = path_option {
-                    builder = builder
-                        .with_target(WriteTarget::Path { location })
-                        .with_mode(mode);
-                } else {
-                    builder = builder.with_target(WriteTarget::Sink).with_mode(mode);
-                }
+                // Any "path" option supplied by the user (e.g. via
+                // df.write.format(...).option("path", path).save()) remains in
+                // options and is picked up by WriteTarget::DataSource.
+                builder = builder.with_target(WriteTarget::DataSource).with_mode(mode);
             }
             SaveType::Table {
                 table,
