@@ -8,7 +8,7 @@ mod server;
 mod task_assigner;
 pub(super) mod worker_pool;
 
-#[allow(clippy::all)]
+#[expect(clippy::allow_attributes)]
 mod gen {
     tonic::include_proto!("sail.driver");
 

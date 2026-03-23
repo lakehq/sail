@@ -7,7 +7,9 @@ edition = { workspace = true }
 workspace = true
 
 [dependencies]
+sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 
 async-trait = { workspace = true }
 serde = { workspace = true }

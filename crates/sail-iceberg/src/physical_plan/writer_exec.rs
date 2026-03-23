@@ -28,6 +28,7 @@ use datafusion_common::{internal_err, DataFusionError, Result};
 use futures::stream::once;
 use futures::StreamExt;
 use parquet::file::properties::WriterProperties;
+use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
@@ -45,12 +46,16 @@ use crate::spec::partition::{
 use crate::spec::schema::Schema as IcebergSchema;
 use crate::spec::{TableMetadata, TableRequirement};
 use crate::utils::get_object_store_from_context;
+use crate::utils::partition_transform::{
+    catalog_partition_field_from_iceberg, format_partition_expr,
+    iceberg_transform_from_partition_field, partition_field_name,
+};
 
 #[derive(Debug)]
 pub struct IcebergWriterExec {
     input: Arc<dyn ExecutionPlan>,
     table_url: Url,
-    partition_columns: Vec<String>,
+    partition_columns: Vec<CatalogPartitionField>,
     sink_mode: PhysicalSinkMode,
     table_exists: bool,
     options: TableIcebergOptions,
@@ -61,7 +66,7 @@ impl IcebergWriterExec {
     fn extract_partition_columns(
         spec: &Option<BoundPartitionSpec>,
         iceberg_schema: &IcebergSchema,
-    ) -> Result<Vec<String>> {
+    ) -> Result<Vec<CatalogPartitionField>> {
         if let Some(spec) = spec {
             let mut cols = Vec::with_capacity(spec.fields().len());
             for f in spec.fields() {
@@ -71,7 +76,10 @@ impl IcebergWriterExec {
                         f.source_id
                     ))
                 })?;
-                cols.push(field.name.clone());
+                cols.push(
+                    catalog_partition_field_from_iceberg(field.name.clone(), f.transform)
+                        .map_err(DataFusionError::Plan)?,
+                );
             }
             Ok(cols)
         } else {
@@ -82,7 +90,7 @@ impl IcebergWriterExec {
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         table_url: Url,
-        partition_columns: Vec<String>,
+        partition_columns: Vec<CatalogPartitionField>,
         sink_mode: PhysicalSinkMode,
         table_exists: bool,
         options: TableIcebergOptions,
@@ -119,7 +127,7 @@ impl IcebergWriterExec {
         &self.table_url
     }
 
-    pub fn partition_columns(&self) -> &[String] {
+    pub fn partition_columns(&self) -> &[CatalogPartitionField] {
         &self.partition_columns
     }
 
@@ -165,6 +173,7 @@ impl IcebergWriterExec {
 
     fn resolve_data_dir(table_meta: &TableMetadata, table_url: &Url) -> String {
         let data_dir = "data".to_string();
+        let base_path = crate::utils::url_to_object_path(table_url).ok();
         if let Some(val) = table_meta
             .properties
             .get("write.data.path")
@@ -176,27 +185,31 @@ impl IcebergWriterExec {
                     if prop_url.scheme() == table_url.scheme()
                         && prop_url.host_str() == table_url.host_str()
                     {
-                        let base_path = table_url.path().trim_end_matches('/');
-                        let prop_path = prop_url.path().trim_start_matches('/');
-                        let base_no_leading = base_path.trim_start_matches('/');
-                        if let Some(stripped) = prop_path.strip_prefix(base_no_leading) {
-                            let rel = stripped.trim_start_matches('/').trim_matches('/');
-                            if !rel.is_empty() {
-                                return rel.to_string();
+                        if let (Ok(prop_path), Some(base_path)) = (
+                            crate::utils::url_to_object_path(&prop_url),
+                            base_path.as_ref(),
+                        ) {
+                            let prop_str = prop_path.as_ref();
+                            let base_str = base_path.as_ref();
+                            if let Some(stripped) = prop_str.strip_prefix(base_str) {
+                                let rel = stripped.trim_start_matches('/').trim_matches('/');
+                                if !rel.is_empty() {
+                                    return rel.to_string();
+                                }
                             }
                         }
                     }
                 } else {
-                    let prop_path = raw;
-                    let base_path = table_url.path();
+                    let prop_path = raw.replace('\\', "/");
                     if prop_path.starts_with('/') {
-                        if let Some(stripped) = prop_path
-                            .strip_prefix(base_path)
-                            .or_else(|| prop_path.strip_prefix(base_path.trim_start_matches('/')))
-                        {
-                            let rel = stripped.trim_start_matches('/').trim_matches('/');
-                            if !rel.is_empty() {
-                                return rel.to_string();
+                        if let Some(base_path) = base_path.as_ref() {
+                            let base_str = base_path.as_ref();
+                            let prop_no_leading = prop_path.trim_start_matches('/');
+                            if let Some(stripped) = prop_no_leading.strip_prefix(base_str) {
+                                let rel = stripped.trim_start_matches('/').trim_matches('/');
+                                if !rel.is_empty() {
+                                    return rel.to_string();
+                                }
                             }
                         }
                     } else {
@@ -338,15 +351,20 @@ impl ExecutionPlan for IcebergWriterExec {
                         if let Some(existing) = &default_spec {
                             builder = builder.with_spec_id(existing.spec_id());
                         }
-                        use crate::spec::transform::Transform;
-                        for name in &partition_columns {
-                            let fid = current_schema.field_id_by_name(name).ok_or_else(|| {
-                                DataFusionError::Plan(format!(
-                                    "Partition column mismatch: column '{}' not found in schema",
-                                    name
-                                ))
-                            })?;
-                            builder = builder.add_field(fid, name.clone(), Transform::Identity);
+                        for field in &partition_columns {
+                            let fid = current_schema.field_id_by_name(&field.column).ok_or_else(
+                                || {
+                                    DataFusionError::Plan(format!(
+                                        "Partition column mismatch: column '{}' not found in schema",
+                                        format_partition_expr(field)
+                                    ))
+                                },
+                            )?;
+                            builder = builder.add_field(
+                                fid,
+                                partition_field_name(field),
+                                iceberg_transform_from_partition_field(field),
+                            );
                         }
                         default_spec = Some(builder.build());
                     }
@@ -364,7 +382,12 @@ impl ExecutionPlan for IcebergWriterExec {
                     } else if partition_columns != table_partition_columns {
                         return Err(DataFusionError::Plan(format!(
                             "Partition column mismatch: table uses {:?}, requested {:?}",
-                            table_partition_columns, partition_columns
+                            crate::utils::partition_transform::format_partition_exprs(
+                                &table_partition_columns
+                            ),
+                            crate::utils::partition_transform::format_partition_exprs(
+                                &partition_columns
+                            )
                         )));
                     }
                 }
@@ -398,19 +421,22 @@ impl ExecutionPlan for IcebergWriterExec {
                         "Invalid Iceberg schema: field id 0 detected after assignment".to_string(),
                     ));
                 }
-                for name in &partition_columns {
-                    if iceberg_schema.field_id_by_name(name).is_none() {
+                for field in &partition_columns {
+                    if iceberg_schema.field_id_by_name(&field.column).is_none() {
                         return Err(DataFusionError::Plan(format!(
                             "Partition column mismatch: column '{}' not found in schema",
-                            name
+                            format_partition_expr(field)
                         )));
                     }
                 }
                 let mut builder = crate::spec::partition::PartitionSpec::builder();
-                use crate::spec::transform::Transform;
-                for name in &partition_columns {
-                    if let Some(fid) = iceberg_schema.field_id_by_name(name) {
-                        builder = builder.add_field(fid, name.clone(), Transform::Identity);
+                for field in &partition_columns {
+                    if let Some(fid) = iceberg_schema.field_id_by_name(&field.column) {
+                        builder = builder.add_field(
+                            fid,
+                            partition_field_name(field),
+                            iceberg_transform_from_partition_field(field),
+                        );
                     }
                 }
                 let spec = builder.build();
@@ -454,7 +480,8 @@ impl ExecutionPlan for IcebergWriterExec {
                 partition_spec: unbound_spec,
             };
 
-            let writer_root = object_store::path::Path::from(table_url.path());
+            let writer_root = crate::utils::url_to_object_path(&table_url)
+                .map_err(|e| DataFusionError::Plan(e.to_string()))?;
             let mut writer = IcebergTableWriter::new(
                 object_store.clone(),
                 writer_root,

@@ -12,15 +12,41 @@
 
 //! Integration tests for Glue catalog view operations.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;
+mod table_view_common;
 
 use arrow::datatypes::DataType;
-use common::{col, setup_with_database, simple_table_options, simple_view_options, view_col};
 use sail_catalog::provider::{
     CatalogProvider, CreateViewColumnOptions, CreateViewOptions, DropViewOptions,
 };
+use table_view_common::{col, setup_with_database, simple_table_options};
+
+/// Helper to create a view column with default options (nullable=true, no comment).
+fn view_col(name: &str, data_type: DataType) -> CreateViewColumnOptions {
+    CreateViewColumnOptions {
+        name: name.to_string(),
+        data_type,
+        nullable: true,
+        comment: None,
+    }
+}
+
+/// Helper to create view options with sensible defaults.
+fn simple_view_options(
+    definition: &str,
+    columns: Vec<CreateViewColumnOptions>,
+) -> CreateViewOptions {
+    CreateViewOptions {
+        columns,
+        definition: definition.to_string(),
+        if_not_exists: false,
+        replace: false,
+        comment: None,
+        properties: vec![],
+    }
+}
 
 /// Tests view creation in Glue catalog.
 ///

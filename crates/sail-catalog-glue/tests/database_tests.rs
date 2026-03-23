@@ -12,7 +12,7 @@
 
 //! Integration tests for Glue catalog database operations.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
 

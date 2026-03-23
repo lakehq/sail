@@ -155,7 +155,7 @@ impl TryFrom<JsonUnion> for UnionArray {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
+#[cfg_attr(not(test), expect(dead_code))]
 pub(crate) enum JsonUnionField {
     JsonNull,
     Bool(bool),
@@ -233,7 +233,7 @@ impl JsonUnionField {
         }
     }
 
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub fn scalar_value(f: Option<Self>) -> ScalarValue {
         ScalarValue::Union(
             f.map(|f| (f.type_id(), Box::new(f.into()))),
@@ -287,7 +287,7 @@ impl JsonUnionEncoder {
     }
 
     #[must_use]
-    #[allow(clippy::len_without_is_empty)]
+    #[expect(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         self.type_ids.len()
     }
@@ -325,7 +325,7 @@ pub enum JsonUnionValue<'a> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[expect(clippy::unwrap_used)]
 mod test {
     use super::*;
 

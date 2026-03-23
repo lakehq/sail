@@ -4,6 +4,7 @@ pub mod csv;
 pub mod datetime;
 pub mod drop_struct_field;
 pub mod explode;
+pub mod geo;
 pub mod hash;
 pub mod json;
 pub mod map;

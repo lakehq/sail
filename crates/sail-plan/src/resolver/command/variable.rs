@@ -1,4 +1,4 @@
-#[allow(clippy::disallowed_types)]
+#[expect(clippy::disallowed_types)]
 use datafusion_expr::{LogicalPlan, SetVariable, Statement};
 
 use crate::error::PlanResult;

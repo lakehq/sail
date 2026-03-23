@@ -36,4 +36,5 @@ half = { workspace = true }
 url = { workspace = true }
 percent-encoding = { workspace = true }
 jiter = { workspace = true }
+thiserror = { workspace = true }
 serde_json = { workspace = true }

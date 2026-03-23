@@ -12,18 +12,19 @@
 
 //! Integration tests for Glue catalog table operations.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;
+mod table_view_common;
 
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Fields, TimeUnit};
-use common::{col, setup_with_database, simple_table_options};
 use sail_catalog::provider::{
     CatalogPartitionField, CatalogProvider, CreateTableColumnOptions, CreateTableOptions,
     DropTableOptions, PartitionTransform,
 };
+use table_view_common::{col, setup_with_database, simple_table_options};
 
 /// Tests table creation in Glue catalog.
 ///
@@ -97,7 +98,13 @@ async fn test_create_table() {
             assert_eq!(comment, &Some("Product catalog table".to_string()));
             assert_eq!(location, &Some("s3://bucket/products".to_string()));
             assert_eq!(format, "parquet");
-            assert_eq!(partition_by, &vec!["category".to_string()]);
+            assert_eq!(
+                partition_by,
+                &vec![CatalogPartitionField {
+                    column: "category".to_string(),
+                    transform: None,
+                }]
+            );
             assert!(properties
                 .iter()
                 .any(|(k, v)| k == "owner" && v == "test_user"));

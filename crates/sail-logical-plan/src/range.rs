@@ -1,4 +1,3 @@
-use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::sync::Arc;
@@ -7,6 +6,7 @@ use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion::common::{DFSchema, DFSchemaRef, Result};
 use datafusion::logical_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use datafusion_common::plan_err;
+use educe::Educe;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
@@ -76,32 +76,13 @@ impl Iterator for RangeIterator {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
+#[educe(PartialOrd)]
 pub struct RangeNode {
     range: Range,
     num_partitions: usize,
+    #[educe(PartialOrd(ignore))]
     schema: DFSchemaRef,
-}
-
-#[derive(PartialEq, PartialOrd)]
-struct RangeNodeOrd<'a> {
-    range: &'a Range,
-    num_partitions: usize,
-}
-
-impl<'a> From<&'a RangeNode> for RangeNodeOrd<'a> {
-    fn from(node: &'a RangeNode) -> Self {
-        Self {
-            range: &node.range,
-            num_partitions: node.num_partitions,
-        }
-    }
-}
-
-impl PartialOrd for RangeNode {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        RangeNodeOrd::from(self).partial_cmp(&other.into())
-    }
 }
 
 impl RangeNode {

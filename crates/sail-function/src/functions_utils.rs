@@ -105,7 +105,7 @@ mod tests {
 
     use super::*;
 
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     #[test]
     fn string_to_int_type() {
         let v = utf8_to_int_type(&DataType::Utf8, "test").unwrap();

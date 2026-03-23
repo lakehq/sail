@@ -1,8 +1,7 @@
 use std::iter::once;
 use std::str::FromStr;
 
-use chrono;
-use chrono::TimeDelta;
+use chrono::{self, TimeDelta};
 use lazy_static::lazy_static;
 use regex::Regex;
 use sail_common::spec;
@@ -17,7 +16,7 @@ use crate::parser::parse_interval_literal;
 use crate::value::from_ast_string;
 
 fn create_regex(regex: Result<Regex, regex::Error>) -> Regex {
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     regex.unwrap()
 }
 

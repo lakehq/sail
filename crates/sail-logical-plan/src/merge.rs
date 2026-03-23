@@ -28,8 +28,8 @@ pub const SOURCE_PRESENT_COLUMN: &str = "__sail_merge_source_row_present";
 pub const TARGET_PRESENT_COLUMN: &str = "__sail_merge_target_row_present";
 pub const TARGET_ROW_ID_COLUMN: &str = "__sail_merge_target_row_id";
 
-#[derive(Clone, Debug, PartialEq, Educe)]
-#[educe(Eq, Hash, PartialOrd)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
+#[educe(PartialOrd)]
 pub struct MergeCardinalityCheckNode {
     input: Arc<LogicalPlan>,
     target_row_id_col: String,
@@ -194,8 +194,8 @@ pub struct MergeAssignment {
     pub value: Expr,
 }
 
-#[derive(Clone, Debug, PartialEq, Educe)]
-#[educe(Eq, Hash, PartialOrd)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
+#[educe(PartialOrd)]
 pub struct MergeIntoNode {
     target: Arc<LogicalPlan>,
     source: Arc<LogicalPlan>,
@@ -282,8 +282,8 @@ impl UserDefinedLogicalNodeCore for MergeIntoNode {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Educe)]
-#[educe(Eq, Hash, PartialOrd)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
+#[educe(PartialOrd)]
 pub struct MergeIntoWriteNode {
     raw_target: Arc<LogicalPlan>,
     raw_source: Arc<LogicalPlan>,

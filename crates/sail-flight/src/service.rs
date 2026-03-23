@@ -38,7 +38,7 @@ use sail_sql_analyzer::parser::parse_one_statement;
 use sail_sql_analyzer::statement::from_ast_statement;
 use sail_sql_parser::ast::statement::Statement;
 use sail_telemetry::metrics::{MetricAttribute, MetricRegistry};
-use sail_telemetry::telemetry::global_metric_registry;
+use sail_telemetry::telemetry::global_metrics;
 use tonic::{Request, Response, Status, Streaming};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,7 +118,7 @@ impl SailFlightSqlService {
         let config = Arc::new(PlanConfig::default());
 
         // Get global metric registry if telemetry is enabled
-        let metrics = global_metric_registry();
+        let metrics = global_metrics().map(|m| m.registry);
         if metrics.is_some() {
             info!("OTLP metrics enabled for Flight SQL service");
         }

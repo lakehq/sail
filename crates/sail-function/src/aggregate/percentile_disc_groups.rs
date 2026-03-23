@@ -43,7 +43,7 @@ impl<T: ArrowNumericType + Send> PercentileDiscGroupsAccumulator<T> {
         let data = values.values();
         // SAFETY: his function represents an infallible situation.
         // When the null count is greater than zero, the null buffer must exist.
-        #[allow(clippy::expect_used)]
+        #[expect(clippy::expect_used)]
         let nulls = values
             .nulls()
             .expect("null buffer must exist when null_count > 0");

@@ -1,9 +1,9 @@
-use std::cmp::Ordering;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion_common::Result;
+use educe::Educe;
 use pyo3::Python;
 use sail_common_datafusion::rename::record_batch::rename_record_batch_stream;
 use sail_common_datafusion::udf::StreamUDF;
@@ -20,12 +20,14 @@ pub enum PySparkMapIterKind {
     Arrow,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash, Educe)]
+#[educe(PartialOrd)]
 pub struct PySparkMapIterUDF {
     kind: PySparkMapIterKind,
     name: String,
     payload: Vec<u8>,
     input_names: Vec<String>,
+    #[educe(PartialOrd(ignore))]
     output_schema: SchemaRef,
     config: Arc<PySparkUdfConfig>,
 }
@@ -63,33 +65,6 @@ impl PySparkMapIterUDF {
 
     pub fn config(&self) -> &Arc<PySparkUdfConfig> {
         &self.config
-    }
-}
-
-#[derive(PartialEq, PartialOrd)]
-struct PySparkMapIterUDFOrd<'a> {
-    kind: PySparkMapIterKind,
-    name: &'a String,
-    payload: &'a Vec<u8>,
-    input_names: &'a [String],
-    config: &'a PySparkUdfConfig,
-}
-
-impl<'a> From<&'a PySparkMapIterUDF> for PySparkMapIterUDFOrd<'a> {
-    fn from(udf: &'a PySparkMapIterUDF) -> Self {
-        Self {
-            kind: udf.kind,
-            name: &udf.name,
-            payload: &udf.payload,
-            input_names: &udf.input_names,
-            config: &udf.config,
-        }
-    }
-}
-
-impl PartialOrd for PySparkMapIterUDF {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        PySparkMapIterUDFOrd::from(self).partial_cmp(&other.into())
     }
 }
 

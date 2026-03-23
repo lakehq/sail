@@ -1,51 +1,26 @@
-use std::cmp::Ordering;
 use std::fmt::Formatter;
-use std::sync::Arc;
 
-use datafusion::catalog::MemTable;
 use datafusion::common::{DFSchemaRef, Result};
-use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use datafusion::prelude::SessionContext;
-use datafusion_common::{exec_datafusion_err, internal_datafusion_err, DFSchema};
-use datafusion_expr::{TableScan, UNNAMED_TABLE};
+use datafusion_common::{internal_datafusion_err, DFSchema};
+use educe::Educe;
 use sail_catalog::command::CatalogCommand;
-use sail_catalog::manager::CatalogManager;
 use sail_catalog::utils::quote_names_if_needed;
 use sail_common_datafusion::catalog::display::CatalogObjectDisplay;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
-use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanFormatter;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::formatter::SparkPlanFormatter;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub(crate) struct CatalogCommandNode {
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
+#[educe(PartialOrd)]
+pub struct CatalogCommandNode {
     name: String,
+    #[educe(PartialOrd(ignore))]
     schema: DFSchemaRef,
     command: CatalogCommand,
-}
-
-#[derive(PartialEq, PartialOrd)]
-struct CatalogCommandNodeOrd<'a> {
-    name: &'a String,
-    command: &'a CatalogCommand,
-}
-
-impl<'a> From<&'a CatalogCommandNode> for CatalogCommandNodeOrd<'a> {
-    fn from(node: &'a CatalogCommandNode) -> Self {
-        Self {
-            name: &node.name,
-            command: &node.command,
-        }
-    }
-}
-
-impl PartialOrd for CatalogCommandNode {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        CatalogCommandNodeOrd::from(self).partial_cmp(&other.into())
-    }
 }
 
 impl CatalogCommandNode {
@@ -59,25 +34,9 @@ impl CatalogCommandNode {
             command,
         })
     }
-}
 
-impl CatalogCommandNode {
-    pub(crate) async fn execute(&self, ctx: &SessionContext) -> Result<LogicalPlan> {
-        let manager = ctx.extension::<CatalogManager>()?;
-        let batch = self
-            .command
-            .clone()
-            .execute(ctx, manager.as_ref())
-            .await
-            .map_err(|e| exec_datafusion_err!("{e}"))?;
-        let provider = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
-        Ok(LogicalPlan::TableScan(TableScan::try_new(
-            UNNAMED_TABLE,
-            provider_as_source(Arc::new(provider)),
-            None,
-            vec![],
-            None,
-        )?))
+    pub fn command(&self) -> &CatalogCommand {
+        &self.command
     }
 }
 

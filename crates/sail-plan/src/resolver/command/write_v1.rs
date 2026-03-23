@@ -1,5 +1,4 @@
 use datafusion_expr::LogicalPlan;
-use sail_catalog::provider::CatalogPartitionField;
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
@@ -38,16 +37,18 @@ impl PlanResolver<'_> {
             }
         });
 
+        let path_option = options.iter().find_map(|(k, v)| {
+            if k.eq_ignore_ascii_case("path") {
+                Some(v.clone())
+            } else {
+                None
+            }
+        });
+
         let input = self.resolve_write_input(*input, state).await?;
         let clustering_columns = self.resolve_write_cluster_by_columns(clustering_columns)?;
 
-        let partition_by = partitioning_columns
-            .into_iter()
-            .map(|c| CatalogPartitionField {
-                column: c.into(),
-                transform: None,
-            })
-            .collect();
+        let partition_by = self.resolve_write_partition_by_expressions(partitioning_columns)?;
         let mut builder = WritePlanBuilder::new()
             .with_partition_by(partition_by)
             .with_bucket_by(bucket_by)
@@ -57,41 +58,59 @@ impl PlanResolver<'_> {
         if let Some(source) = source {
             builder = builder.with_format(source);
         }
+        let to_write_mode = |mode: Option<SaveMode>| -> PlanResult<WriteMode> {
+            let write_mode = match mode {
+                Some(SaveMode::ErrorIfExists) | None => WriteMode::ErrorIfExists,
+                Some(SaveMode::IgnoreIfExists) => WriteMode::IgnoreIfExists,
+                Some(SaveMode::Append) => WriteMode::Append,
+                Some(SaveMode::Overwrite) => match replace_where {
+                    Some(ref replace_where) => {
+                        let ast_expr =
+                            sail_sql_analyzer::parser::parse_expression(replace_where.as_str())
+                                .map_err(|e| {
+                                    PlanError::invalid(format!(
+                                        "invalid replaceWhere expression: {replace_where} ({e})"
+                                    ))
+                                })?;
+                        let spec_expr = sail_sql_analyzer::expression::from_ast_expression(
+                            ast_expr,
+                        )
+                        .map_err(|e| {
+                            PlanError::invalid(format!(
+                                "invalid replaceWhere expression: {replace_where} ({e})"
+                            ))
+                        })?;
+                        WriteMode::OverwriteIf {
+                            condition: Box::new(spec::ExprWithSource {
+                                expr: spec_expr,
+                                source: Some(replace_where.clone()),
+                            }),
+                        }
+                    }
+                    None => WriteMode::Overwrite,
+                },
+            };
+            Ok(write_mode)
+        };
+
         match save_type {
             SaveType::Path(location) => {
-                let mode = match mode {
-                    Some(SaveMode::ErrorIfExists) | None => WriteMode::ErrorIfExists,
-                    Some(SaveMode::IgnoreIfExists) => WriteMode::IgnoreIfExists,
-                    Some(SaveMode::Append) => WriteMode::Append,
-                    Some(SaveMode::Overwrite) => match replace_where {
-                        Some(ref replace_where) => {
-                            let ast_expr =
-                                sail_sql_analyzer::parser::parse_expression(replace_where.as_str())
-                                    .map_err(|e| {
-                                        PlanError::invalid(format!(
-                                    "invalid replaceWhere expression: {replace_where} ({e})"
-                                ))
-                                    })?;
-                            let spec_expr =
-                                sail_sql_analyzer::expression::from_ast_expression(ast_expr)
-                                    .map_err(|e| {
-                                        PlanError::invalid(format!(
-                                            "invalid replaceWhere expression: {replace_where} ({e})"
-                                        ))
-                                    })?;
-                            WriteMode::OverwriteIf {
-                                condition: Box::new(spec::ExprWithSource {
-                                    expr: spec_expr,
-                                    source: Some(replace_where.clone()),
-                                }),
-                            }
-                        }
-                        None => WriteMode::Overwrite,
-                    },
-                };
+                let mode = to_write_mode(mode)?;
                 builder = builder
                     .with_target(WriteTarget::Path { location })
                     .with_mode(mode);
+            }
+            SaveType::Sink => {
+                let mode = to_write_mode(mode)?;
+                // Support df.write.format(...).option("path", path).save() by extracting
+                // the "path" option and treating it as an explicit path target.
+                if let Some(location) = path_option {
+                    builder = builder
+                        .with_target(WriteTarget::Path { location })
+                        .with_mode(mode);
+                } else {
+                    builder = builder.with_target(WriteTarget::Sink).with_mode(mode);
+                }
             }
             SaveType::Table {
                 table,
@@ -115,9 +134,9 @@ impl PlanResolver<'_> {
                 }
                 Some(SaveMode::Append) => {
                     builder = builder
-                        .with_target(WriteTarget::ExistingTable {
+                        .with_target(WriteTarget::NewTable {
                             table,
-                            column_match: WriteColumnMatch::ByName,
+                            action: WriteTableAction::CreateIfNotExists,
                         })
                         .with_mode(WriteMode::Append);
                 }

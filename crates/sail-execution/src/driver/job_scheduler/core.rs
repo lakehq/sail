@@ -503,6 +503,7 @@ impl JobScheduler {
         actions
     }
 
+    /// Builds the serialized task definition and context for the given task key.
     pub fn get_task_definition(
         &self,
         key: &TaskKey,

@@ -19,7 +19,7 @@ use sail_session::session_manager::{SessionManager, SessionManagerOptions};
 use crate::error::FlightError;
 
 pub struct FlightSessionMutator {
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     config: Arc<AppConfig>,
 }
 

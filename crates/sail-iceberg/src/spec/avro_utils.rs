@@ -19,7 +19,7 @@ pub const FIELD_ID_ATTR: &str = "field-id";
 
 /// Wrap a schema in an optional (null-union) Avro schema.
 pub fn optional(schema: AvroSchema) -> AvroSchema {
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     AvroSchema::Union(UnionSchema::new(vec![AvroSchema::Null, schema]).unwrap())
 }
 

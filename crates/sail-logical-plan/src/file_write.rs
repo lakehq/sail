@@ -4,6 +4,8 @@ use std::sync::Arc;
 use datafusion_common::{DFSchema, DFSchemaRef};
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
+use educe::Educe;
+use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::datasource::{BucketBy, SinkMode};
 use sail_common_datafusion::utils::items::ItemTaker;
 
@@ -12,16 +14,19 @@ pub struct FileWriteOptions {
     pub path: String,
     pub format: String,
     pub mode: SinkMode,
-    pub partition_by: Vec<String>,
+    pub partition_by: Vec<CatalogPartitionField>,
     pub sort_by: Vec<Sort>,
     pub bucket_by: Option<BucketBy>,
+    pub table_properties: Vec<(String, String)>,
     pub options: Vec<Vec<(String, String)>>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
+#[educe(PartialOrd)]
 pub struct FileWriteNode {
     input: Arc<LogicalPlan>,
     options: FileWriteOptions,
+    #[educe(PartialOrd(ignore))]
     schema: DFSchemaRef,
 }
 
@@ -36,27 +41,6 @@ impl FileWriteNode {
 
     pub fn options(&self) -> &FileWriteOptions {
         &self.options
-    }
-}
-
-#[derive(PartialEq, PartialOrd)]
-struct FileWriteNodeOrd<'a> {
-    input: &'a Arc<LogicalPlan>,
-    options: &'a FileWriteOptions,
-}
-
-impl<'a> From<&'a FileWriteNode> for FileWriteNodeOrd<'a> {
-    fn from(node: &'a FileWriteNode) -> Self {
-        Self {
-            input: &node.input,
-            options: &node.options,
-        }
-    }
-}
-
-impl PartialOrd for FileWriteNode {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        FileWriteNodeOrd::from(self).partial_cmp(&other.into())
     }
 }
 

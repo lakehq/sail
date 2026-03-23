@@ -134,14 +134,13 @@ pub fn visit_struct<V: SchemaVisitor>(s: &StructType, visitor: &mut V) -> Result
     visitor.r#struct(s, results)
 }
 
-#[allow(unused)]
+#[expect(unused)]
 /// Visit schema in post order.
 pub fn visit_schema<V: SchemaVisitor>(schema: &Schema, visitor: &mut V) -> Result<V::T, String> {
     let result = visit_struct(&schema.struct_type, visitor)?;
     visitor.schema(schema, result)
 }
 
-#[allow(unused)]
 /// A post order schema visitor with partner.
 ///
 /// For order of methods called, please refer to [`visit_schema_with_partner`].
@@ -224,7 +223,6 @@ pub trait SchemaWithPartnerVisitor<P> {
     fn primitive(&mut self, p: &PrimitiveType, partner: &P) -> Result<Self::T, String>;
 }
 
-#[allow(unused)]
 /// Accessor used to get child partner from parent partner.
 pub trait PartnerAccessor<P> {
     /// Get the struct partner from schema partner.
@@ -247,7 +245,6 @@ pub trait PartnerAccessor<P> {
     fn map_value_partner<'a>(&self, map_partner: &'a P) -> Result<&'a P, String>;
 }
 
-#[allow(unused)]
 /// Visiting a type in post order.
 pub(crate) fn visit_type_with_partner<P, V: SchemaWithPartnerVisitor<P>, A: PartnerAccessor<P>>(
     r#type: &Type,
@@ -312,7 +309,7 @@ pub fn visit_struct_with_partner<P, V: SchemaWithPartnerVisitor<P>, A: PartnerAc
     visitor.r#struct(s, partner, results)
 }
 
-#[allow(unused)]
+#[expect(unused)]
 /// Visit schema in post order.
 pub fn visit_schema_with_partner<P, V: SchemaWithPartnerVisitor<P>, A: PartnerAccessor<P>>(
     schema: &Schema,

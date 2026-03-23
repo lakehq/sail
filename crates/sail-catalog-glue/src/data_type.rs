@@ -384,7 +384,7 @@ fn find_type_separator(s: &str) -> CatalogResult<usize> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

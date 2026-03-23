@@ -47,7 +47,7 @@ pub enum DataType {
     Double(Double),
     Float32(Float32),
     Float64(Float64),
-    #[allow(clippy::type_complexity)]
+    #[expect(clippy::type_complexity)]
     Decimal(
         DecimalType,
         Option<(
@@ -162,7 +162,7 @@ pub enum IntervalDayTimeUnit {
     Second(Second),
 }
 
-#[allow(clippy::enum_variant_names)]
+#[expect(clippy::enum_variant_names)]
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 pub enum TimezoneType {
     WithTimeZone(With, Time, Zone),

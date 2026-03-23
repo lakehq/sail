@@ -976,7 +976,7 @@ mod tests {
         assert_eq!(TEST_CONST_OPTIONS.date_format, TimeFormat::Custom("foo"));
     }
 
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     #[test]
     fn test_map_array_to_string() {
         let keys = vec!["a", "b", "c", "d", "e", "f", "g", "h"];
@@ -995,7 +995,7 @@ mod tests {
         );
     }
 
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     fn format_array(array: &dyn Array, fmt: &FormatOptions) -> Vec<String> {
         let fmt = ArrayFormatter::try_new(array, fmt).unwrap();
         (0..array.len()).map(|x| fmt.value(x).to_string()).collect()
@@ -1111,7 +1111,7 @@ mod tests {
         assert_eq!(formatted, &["NULL".to_string(), "NULL".to_string()])
     }
 
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     #[test]
     fn test_string_run_arry_to_string() {
         let mut builder = StringRunBuilder::<Int32Type>::new();
