@@ -150,7 +150,7 @@ def normalize_floating_point_string(s: str, d: int = 6, n: int = 6) -> str:
         raise ValueError(msg)
 
     match = re.fullmatch(
-        rf"(?P<num>[+-]?\d*[.](?P<frac>\d+?)(0{{{n},}}[0-9]+|9{{{n},}}[0-9]+)?)(?P<exp>[eE][+-]?\d+)?",
+        rf"(?P<num>[+-]?\d*[.](?P<frac>\d+?)(0{{{n},}}[1-9]+|9{{{n},}}[0-9]+)?)(?P<exp>[eE][+-]?\d+)?",
         s,
     )
     if not match:
