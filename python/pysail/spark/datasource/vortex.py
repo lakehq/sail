@@ -233,13 +233,15 @@ class VortexReader(DataSourceReader):
 
     def pushFilters(self, filters: list[Filter]) -> Iterator[Filter]:  # noqa: N802
         accepted: list[tuple] = []
+        rejected: list[Filter] = []
         for f in filters:
             t = _filter_to_tuple(f)
             if t is not None and _tuple_to_vortex_expr(t) is not None:
                 accepted.append(t)
             else:
-                yield f
+                rejected.append(f)
         self._filters = accepted
+        return iter(rejected)
 
     def partitions(self) -> list[InputPartition]:
         return [VortexPartition(self.path)]
