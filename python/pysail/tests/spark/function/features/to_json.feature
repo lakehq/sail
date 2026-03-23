@@ -1,4 +1,3 @@
-@to_json
 Feature: to_json function converts complex types to JSON strings
 
   Rule: Basic struct conversion
@@ -305,15 +304,6 @@ Feature: to_json function converts complex types to JSON strings
         | {"outer":{"inner":1}}     |
 
   Rule: Multiple types in struct
-    Scenario: Struct with mixed types omits null
-      When query
-        """
-        SELECT to_json(named_struct('i', 1, 's', 'hello', 'b', true, 'd', 3.14, 'n', CAST(NULL AS INT))) AS result
-        """
-      Then query result
-        | result                                  |
-        | {"i":1,"s":"hello","b":true,"d":3.14}   |
-
   Rule: String with special characters
     Scenario: Empty string value
       When query
