@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import time
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
-from pytest_bdd import parsers, then
+from pytest_bdd import given, parsers, then
 
 from pysail.testing.spark.utils.common import is_jvm_spark
 
@@ -306,6 +308,16 @@ def _read_delta_log_json_file(location: Path, filename: str) -> object:
         return json.load(f)
 
 
+def _parse_version_list(raw: str) -> list[int]:
+    versions = []
+    for raw_part in raw.split(","):
+        version_text = raw_part.strip()
+        if not version_text:
+            continue
+        versions.append(int(version_text))
+    return versions
+
+
 @then(
     parsers.re(
         r"delta log (?P<which>latest commit info|first commit protocol and metadata) "
@@ -367,3 +379,26 @@ def delta_log_json_file_matches_snapshot(
     obj = _read_delta_log_json_file(Path(location.path), filename)
     obj = _normalize_delta_log_json_file_for_snapshot(filename, obj)
     assert obj == snapshot
+
+
+@given(
+    parsers.parse("delta log JSON files for versions {versions} in {location_var} are backdated by {seconds:d} seconds")
+)
+def delta_log_json_files_are_backdated(
+    versions: str,
+    location_var: str,
+    seconds: int,
+    variables: dict,
+) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    target_timestamp = time.time() - seconds
+    log_dir = Path(location.path)
+    parsed_versions = _parse_version_list(versions)
+    assert parsed_versions, "expected at least one Delta log version to backdate"
+
+    for version in parsed_versions:
+        log_file = log_dir / f"{version:020}.json"
+        assert log_file.exists(), f"Delta log JSON file does not exist: {log_file}"
+        os.utime(log_file, (target_timestamp, target_timestamp))

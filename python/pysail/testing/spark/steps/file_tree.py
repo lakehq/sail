@@ -30,7 +30,7 @@ _ICEBERG_SNAP_FILE_RE = re.compile(r"^snap-\d+\.avro$")
 _UUID_SUFFIX_RE = re.compile(r"^(.+)-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 
-def _normalize_name(name: str, *, include_checksum_files: bool = False) -> str | None:
+def _normalize_name(name: str) -> str | None:
     """
     Normalize a single path component.
 
@@ -49,11 +49,6 @@ def _normalize_name(name: str, *, include_checksum_files: bool = False) -> str |
 
     # Ignore Spark marker files.
     if name == "_SUCCESS":
-        return None
-
-    # Ignore filesystem checksum noise unless a scenario explicitly wants to assert
-    # Delta version checksum files in `_delta_log`.
-    if name.endswith(".crc") and not include_checksum_files:
         return None
 
     # Ignore Iceberg version-hint.text (internal file)
@@ -95,7 +90,7 @@ def normalize_file_tree_text(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
-def render_normalized_file_tree(root_path: Path, *, include_checksum_files: bool = False) -> str:
+def render_normalized_file_tree(root_path: Path) -> str:
     """
     Render a deterministic, normalized file tree for a directory.
 
@@ -114,7 +109,7 @@ def render_normalized_file_tree(root_path: Path, *, include_checksum_files: bool
         dirs: list[tuple[str, Path]] = []
         files: list[str] = []  # Changed to list[str] to store normalized names
         for p in entries:
-            rendered = _normalize_name(p.name, include_checksum_files=include_checksum_files)
+            rendered = _normalize_name(p.name)
             if rendered is None:
                 continue
             if p.is_dir():
@@ -146,8 +141,6 @@ def _assert_file_tree_matches_docstring(
     location_var: str,
     variables: dict,
     docstring: str,
-    *,
-    include_checksum_files: bool = False,
 ) -> None:
     location = variables.get(location_var)
     assert location is not None, f"Variable {location_var!r} not found"
@@ -155,7 +148,7 @@ def _assert_file_tree_matches_docstring(
     real_path = Path(location.path)
     assert real_path.exists(), f"Directory {real_path} does not exist"
 
-    actual = render_normalized_file_tree(real_path, include_checksum_files=include_checksum_files)
+    actual = render_normalized_file_tree(real_path)
     expected = normalize_file_tree_text(docstring)
     assert actual == expected
 
@@ -163,20 +156,6 @@ def _assert_file_tree_matches_docstring(
 @then(parsers.parse("file tree in {location_var} matches"))
 def file_tree_matches_docstring(location_var: str, variables: dict, docstring: str) -> None:
     _assert_file_tree_matches_docstring(location_var, variables, docstring)
-
-
-@then(parsers.parse("file tree including checksum files in {location_var} matches"))
-def file_tree_including_checksum_files_matches_docstring(
-    location_var: str,
-    variables: dict,
-    docstring: str,
-) -> None:
-    _assert_file_tree_matches_docstring(
-        location_var,
-        variables,
-        docstring,
-        include_checksum_files=True,
-    )
 
 
 @given(parsers.parse("file {filename} in {location_var} is deleted"))

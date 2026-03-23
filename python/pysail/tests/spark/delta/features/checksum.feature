@@ -41,7 +41,7 @@ Feature: Delta Lake Version Checksum
         | 1  | one   |
         | 2  | two   |
         | 3  | three |
-      Then file tree including checksum files in delta_log matches
+      Then file tree in delta_log matches
         """
         📄 00000000000000000000.crc
         📄 00000000000000000000.json
@@ -97,7 +97,7 @@ Feature: Delta Lake Version Checksum
       Then delta log first commit protocol and metadata contains
         | path                                                  | value  |
         | metaData.configuration['delta.writeChecksumFile.enabled'] | "true" |
-      Then file tree including checksum files in delta_log matches
+      Then file tree in delta_log matches
         """
         📄 00000000000000000000.crc
         📄 00000000000000000000.json
@@ -153,7 +153,7 @@ Feature: Delta Lake Version Checksum
       Then delta log first commit protocol and metadata contains
         | path                                                  | value   |
         | metaData.configuration['delta.writeChecksumFile.enabled'] | "false" |
-      Then file tree including checksum files in delta_log matches
+      Then file tree in delta_log matches
         """
         📄 00000000000000000000.json
         📄 00000000000000000001.json

@@ -33,8 +33,9 @@ use url::Url;
 
 use crate::kernel::checkpoints::{
     latest_replayable_version, load_replayed_table_header, load_replayed_table_state,
-    ReplayedTableHeader, ReplayedTableState,
+    ReplayedTableState,
 };
+use crate::kernel::log_segment::ReplayedTableHeader;
 pub use crate::kernel::snapshot::stats::SnapshotPruningStats;
 use crate::kernel::{DeltaTableConfig, SchemaRef};
 use crate::schema::{arrow_field_physical_name, arrow_schema_reorder_partitions};

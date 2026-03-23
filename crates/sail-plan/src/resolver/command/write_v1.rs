@@ -1,5 +1,4 @@
 use datafusion_expr::LogicalPlan;
-use sail_catalog::provider::CatalogPartitionField;
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
@@ -49,13 +48,7 @@ impl PlanResolver<'_> {
         let input = self.resolve_write_input(*input, state).await?;
         let clustering_columns = self.resolve_write_cluster_by_columns(clustering_columns)?;
 
-        let partition_by = partitioning_columns
-            .into_iter()
-            .map(|c| CatalogPartitionField {
-                column: c.into(),
-                transform: None,
-            })
-            .collect();
+        let partition_by = self.resolve_write_partition_by_expressions(partitioning_columns)?;
         let mut builder = WritePlanBuilder::new()
             .with_partition_by(partition_by)
             .with_bucket_by(bucket_by)

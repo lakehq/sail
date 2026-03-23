@@ -19,69 +19,32 @@
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/protocol/checkpoints.rs>
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
-use chrono::{TimeZone, Utc};
+use chrono::Utc;
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, FieldRef};
 use datafusion::arrow::record_batch::RecordBatch;
-use futures::{StreamExt, TryStreamExt};
-use log::{debug, error};
-use object_store::path::Path;
+use log::debug;
 use object_store::{ObjectMeta, ObjectStore};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::async_writer::ParquetObjectWriter;
 use parquet::arrow::AsyncArrowWriter;
-use regex::Regex;
 use uuid::Uuid;
 
+pub(crate) use crate::delta_log::{
+    latest_replayable_version, load_replayed_table_header, load_replayed_table_state,
+};
+use crate::delta_log::{
+    list_delta_log_entries_from, parse_checkpoint_version_from_location,
+    parse_commit_version_from_location, read_last_checkpoint_version_from_store,
+};
+use crate::kernel::log_segment::ReplayedTableHeader;
 use crate::spec::{
-    checkpoint_path, checksum_path, delta_log_prefix_path, delta_log_root_path,
-    last_checkpoint_path, parse_checksum_version, Action, Add, CheckpointActionRow,
+    checkpoint_path, last_checkpoint_path, Action, Add, CheckpointActionRow,
     DeltaError as DeltaTableError, DeltaResult, LastCheckpointHint, Metadata, Protocol, Remove,
-    TableProperties, Transaction, VersionChecksum,
+    TableProperties, Transaction,
 };
 use crate::storage::{get_actions, LogStore};
-static DELTA_LOG_REGEX: LazyLock<Result<Regex, regex::Error>> =
-    LazyLock::new(|| Regex::new(r"(\d{20})\.json$"));
-// Multipart checkpoints are deprecated in the Delta protocol.
-static CHECKPOINT_REGEX: LazyLock<Result<Regex, regex::Error>> =
-    LazyLock::new(|| Regex::new(r"(\d{20})\.checkpoint.*\.parquet$"));
-const CHECKSUM_LOOKBACK_WINDOW: i64 = 100;
-
-fn regex_from_lazy(
-    lazy: &'static LazyLock<Result<Regex, regex::Error>>,
-    name: &str,
-) -> DeltaResult<&'static Regex> {
-    match LazyLock::force(lazy) {
-        Ok(regex) => Ok(regex),
-        Err(err) => Err(DeltaTableError::generic(format!(
-            "Failed to compile {name} regex: {err}"
-        ))),
-    }
-}
-
-fn delta_log_regex() -> DeltaResult<&'static Regex> {
-    regex_from_lazy(&DELTA_LOG_REGEX, "delta log")
-}
-
-fn checkpoint_regex() -> DeltaResult<&'static Regex> {
-    regex_from_lazy(&CHECKPOINT_REGEX, "checkpoint")
-}
-
-fn parse_version(regex: &Regex, location: &Path) -> Option<i64> {
-    regex
-        .captures(location.as_ref())
-        .and_then(|caps| caps.get(1))
-        .and_then(|m| m.as_str().parse::<i64>().ok())
-}
-
-fn parse_checksum_version_from_location(location: &Path) -> Option<i64> {
-    location
-        .as_ref()
-        .rsplit('/')
-        .next()
-        .and_then(parse_checksum_version)
-}
 
 #[derive(Debug, Clone, Copy)]
 struct CheckpointRetentionTimestamps {
@@ -127,15 +90,13 @@ fn retention_cutoff_timestamp(
 }
 
 #[derive(Debug, Default)]
-struct ReconciledCheckpointState {
-    protocol: Option<Protocol>,
-    metadata: Option<Metadata>,
-    txns: HashMap<String, Transaction>,
-    // TODO: Key active files by the protocol identity `(path, dvId)` once
-    // replay is deletion-vector aware. The current path-only reconciliation is sufficient for the
-    // basic reader/writer paths, but not for protocol-complete checksum emission.
-    adds: HashMap<String, Add>,
-    removes: HashMap<String, Remove>,
+pub(crate) struct ReconciledCheckpointState {
+    pub(crate) protocol: Option<Protocol>,
+    pub(crate) metadata: Option<Metadata>,
+    pub(crate) txns: HashMap<String, Transaction>,
+    // TODO: Use `(path, dvId)` once replay is deletion-vector aware.
+    pub(crate) adds: HashMap<String, Add>,
+    pub(crate) removes: HashMap<String, Remove>,
 }
 
 impl ReconciledCheckpointState {
@@ -158,8 +119,7 @@ impl ReconciledCheckpointState {
                 self.adds.remove(&remove.path);
                 self.removes.insert(remove.path.clone(), remove);
             }
-            // TODO: Retain the latest DomainMetadata actions in replay state so
-            // VersionChecksum can populate `domainMetadata` instead of dropping it.
+            // TODO: Preserve DomainMetadata so VersionChecksum can emit it.
             Action::CommitInfo(_)
             | Action::Cdc(_)
             | Action::DomainMetadata(_)
@@ -168,7 +128,7 @@ impl ReconciledCheckpointState {
         }
     }
 
-    fn apply_checkpoint_row(&mut self, row: CheckpointActionRow) -> DeltaResult<()> {
+    pub(crate) fn apply_checkpoint_row(&mut self, row: CheckpointActionRow) -> DeltaResult<()> {
         if let Some(protocol) = row.protocol {
             self.protocol = Some(protocol);
         }
@@ -221,18 +181,8 @@ impl ReconciledCheckpointState {
         Ok(())
     }
 
-    // TODO: This batch iterator removes the single-RecordBatch peak during checkpoint writes.
-    // It is only a partial mitigation: we still materialize the full reconciled table state
-    // in memory before writing.
-    // The long-term fix should eliminate the full-state maps and emit checkpoint rows directly
-    // from reconciliation.
-    // The target design is a streaming pipeline:
-    //   log batches -> dedup/reconcile state -> selected checkpoint batches -> parquet writer.
-    // Keep only the minimum state required for deduplication and protocol/metadata finalization.
-    // Avoid building a full Vec<CheckpointActionRow> or a full map of final actions when a
-    // smaller incremental state machine can produce the same checkpoint contents.
-    // Writer-side batching and flushing are still useful, but they do not solve the root cause
-    // if reconciliation remains fully materialized.
+    // TODO: Make checkpoint creation fully streaming. This iterator removes the
+    // single-batch peak, but the reconciled state is still fully materialized.
     fn into_checkpoint_batch_iter(
         self,
         batch_size: usize,
@@ -287,10 +237,10 @@ impl ReconciledCheckpointState {
 }
 
 #[derive(Debug, Default)]
-struct ReconciledHeaderState {
-    protocol: Option<Protocol>,
-    metadata: Option<Metadata>,
-    txns: HashMap<String, Transaction>,
+pub(crate) struct ReconciledHeaderState {
+    pub(crate) protocol: Option<Protocol>,
+    pub(crate) metadata: Option<Metadata>,
+    pub(crate) txns: HashMap<String, Transaction>,
 }
 
 impl ReconciledHeaderState {
@@ -315,7 +265,7 @@ impl ReconciledHeaderState {
         }
     }
 
-    fn apply_checkpoint_row(&mut self, row: CheckpointActionRow) {
+    pub(crate) fn apply_checkpoint_row(&mut self, row: CheckpointActionRow) {
         if let Some(protocol) = row.protocol {
             self.protocol = Some(protocol);
         }
@@ -327,7 +277,7 @@ impl ReconciledHeaderState {
         }
     }
 
-    fn from_header(header: &ReplayedTableHeader) -> Self {
+    pub(crate) fn from_header(header: &ReplayedTableHeader) -> Self {
         Self {
             protocol: Some(header.protocol.clone()),
             metadata: Some(header.metadata.clone()),
@@ -396,21 +346,12 @@ pub(crate) struct ReplayedTableState {
     pub commit_timestamps: BTreeMap<i64, i64>,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct ReplayedTableHeader {
-    pub version: i64,
-    pub protocol: Protocol,
-    pub metadata: Metadata,
-    pub txns: Arc<HashMap<String, Transaction>>,
-    pub commit_timestamps: Arc<BTreeMap<i64, i64>>,
-}
-
 fn encode_checkpoint_rows(rows: &Vec<CheckpointActionRow>) -> DeltaResult<RecordBatch> {
     let fields = checkpoint_fields()?;
     serde_arrow::to_record_batch(&fields, rows).map_err(DeltaTableError::generic_err)
 }
 
-fn decode_checkpoint_rows(batch: &RecordBatch) -> DeltaResult<Vec<CheckpointActionRow>> {
+pub(crate) fn decode_checkpoint_rows(batch: &RecordBatch) -> DeltaResult<Vec<CheckpointActionRow>> {
     serde_arrow::from_record_batch(batch).map_err(DeltaTableError::generic_err)
 }
 
@@ -484,22 +425,21 @@ impl<'a> CheckpointManager<'a> {
         }
 
         let store = self.log_store.object_store(Some(self.operation_id));
-        let log_entries = store
-            .list(Some(&delta_log_root_path()))
-            .try_collect::<Vec<_>>()
-            .await?;
-        let delta_log_pattern = delta_log_regex()?;
-        let checkpoint_pattern = checkpoint_regex()?;
+        let offset_version = read_last_checkpoint_version_from_store(store.clone()).await;
+        let offset_version = offset_version
+            .map(|v| v.min(version).saturating_sub(1))
+            .unwrap_or(0);
+        let log_entries = list_delta_log_entries_from(store.clone(), offset_version).await?;
         let mut commit_entries: Vec<(i64, ObjectMeta)> = Vec::new();
         let mut checkpoint_entries: Vec<(i64, ObjectMeta)> = Vec::new();
         for meta in log_entries {
-            if let Some(v) = parse_version(delta_log_pattern, &meta.location) {
+            if let Some(v) = parse_commit_version_from_location(&meta.location) {
                 if v <= version {
                     commit_entries.push((v, meta));
                 }
                 continue;
             }
-            if let Some(v) = parse_version(checkpoint_pattern, &meta.location) {
+            if let Some(v) = parse_checkpoint_version_from_location(&meta.location) {
                 if v <= version {
                     checkpoint_entries.push((v, meta));
                 }
@@ -528,14 +468,8 @@ impl<'a> CheckpointManager<'a> {
         .await?;
         state.prune_expired_checkpoint_actions(Utc::now().timestamp_millis())?;
 
-        // Design note:
-        // - This write path is intentionally batch-oriented so checkpoint output does not require a
-        //   single giant RecordBatch.
-        // - The root-cause goal is stronger: make checkpoint creation fully streaming from log
-        //   replay through parquet writing, so memory usage scales with batch size instead of table
-        //   size.
-        // - If needed, this path can also add row-group tuning and early flush thresholds, but the
-        //   primary objective is to remove full-state materialization before write.
+        // Batching avoids one giant RecordBatch, but full-state materialization
+        // is still the main memory cost here.
         const CHECKPOINT_WRITE_BATCH_SIZE: usize = 16_384;
         let (mut checkpoint_batches, checkpoint_add_count) =
             state.into_checkpoint_batch_iter(CHECKPOINT_WRITE_BATCH_SIZE)?;
@@ -587,7 +521,7 @@ impl<'a> CheckpointManager<'a> {
     }
 }
 
-async fn replay_commit_actions(
+pub(crate) async fn replay_commit_actions(
     state: &mut ReconciledCheckpointState,
     root_store: std::sync::Arc<dyn ObjectStore>,
     commit_entries: &[(i64, ObjectMeta)],
@@ -625,12 +559,14 @@ async fn replay_commit_actions(
     Ok(())
 }
 
-async fn read_checkpoint_rows_from_parquet(
+pub(crate) async fn read_checkpoint_rows_from_parquet(
     root_store: std::sync::Arc<dyn ObjectStore>,
     meta: ObjectMeta,
 ) -> DeltaResult<Vec<CheckpointActionRow>> {
     let bytes = root_store.get(&meta.location).await?.bytes().await?;
     tokio::task::spawn_blocking(move || {
+        // TODO: V2 checkpoints move add/remove rows into sidecars; full replay
+        // needs to read those parquet files too.
         let mut batches = ParquetRecordBatchReaderBuilder::try_new(bytes)
             .map_err(DeltaTableError::generic_err)?
             .build()
@@ -647,173 +583,7 @@ async fn read_checkpoint_rows_from_parquet(
     .map_err(DeltaTableError::generic_err)?
 }
 
-#[derive(Debug, Clone)]
-enum ChecksumReplayHint {
-    Exact(ReplayedTableHeader),
-    Older(ReplayedTableHeader),
-}
-
-fn build_header_from_checksum(version: i64, checksum: VersionChecksum) -> ReplayedTableHeader {
-    let txns = checksum
-        .set_transactions
-        .unwrap_or_default()
-        .into_iter()
-        .map(|txn| (txn.app_id.clone(), txn))
-        .collect::<HashMap<_, _>>();
-    ReplayedTableHeader {
-        version,
-        protocol: checksum.protocol,
-        metadata: checksum.metadata,
-        txns: Arc::new(txns),
-        commit_timestamps: Arc::new(BTreeMap::new()),
-    }
-}
-
-async fn read_last_checkpoint_version(log_store: &dyn LogStore, max_version: i64) -> Option<i64> {
-    let store = log_store.object_store(None);
-    let path = last_checkpoint_path();
-    let bytes = store.get(&path).await.ok()?.bytes().await.ok()?;
-    let hint: LastCheckpointHint = serde_json::from_slice(&bytes).ok()?;
-    Some(hint.version.min(max_version))
-}
-
-async fn list_replay_entries(
-    version: i64,
-    log_store: &dyn LogStore,
-) -> DeltaResult<(
-    std::sync::Arc<dyn ObjectStore>,
-    Vec<(i64, ObjectMeta)>,
-    Vec<(i64, ObjectMeta)>,
-)> {
-    let store = log_store.object_store(None);
-    let log_entries = store
-        .list(Some(&delta_log_root_path()))
-        .try_collect::<Vec<_>>()
-        .await?;
-    let delta_log_pattern = delta_log_regex()?;
-    let checkpoint_pattern = checkpoint_regex()?;
-    let mut commit_entries: Vec<(i64, ObjectMeta)> = Vec::new();
-    let mut checkpoint_entries: Vec<(i64, ObjectMeta)> = Vec::new();
-    for meta in log_entries {
-        if let Some(entry_version) = parse_version(delta_log_pattern, &meta.location) {
-            if entry_version <= version {
-                commit_entries.push((entry_version, meta));
-            }
-            continue;
-        }
-        if let Some(entry_version) = parse_version(checkpoint_pattern, &meta.location) {
-            if entry_version <= version {
-                checkpoint_entries.push((entry_version, meta));
-            }
-        }
-    }
-    commit_entries.sort_by(|(av, _), (bv, _)| av.cmp(bv));
-    checkpoint_entries.sort_by(|(av, _), (bv, _)| av.cmp(bv));
-    Ok((store, commit_entries, checkpoint_entries))
-}
-
-async fn read_version_checksum_at(
-    store: std::sync::Arc<dyn ObjectStore>,
-    path: Path,
-) -> Option<VersionChecksum> {
-    match store.get(&path).await {
-        Ok(result) => match result.bytes().await {
-            Ok(bytes) => match serde_json::from_slice::<VersionChecksum>(&bytes) {
-                Ok(checksum) => Some(checksum),
-                Err(err) => {
-                    debug!("Failed to deserialize version checksum {}: {}", path, err);
-                    None
-                }
-            },
-            Err(err) => {
-                debug!("Failed to read version checksum {}: {}", path, err);
-                None
-            }
-        },
-        Err(object_store::Error::NotFound { .. }) => None,
-        Err(err) => {
-            debug!("Failed to fetch version checksum {}: {}", path, err);
-            None
-        }
-    }
-}
-
-async fn list_checksum_entries_from(
-    store: std::sync::Arc<dyn ObjectStore>,
-    lower_bound: i64,
-) -> DeltaResult<Vec<(i64, ObjectMeta)>> {
-    let log_root = delta_log_root_path();
-    let offset = delta_log_prefix_path(lower_bound);
-    let mut entries = match store
-        .list_with_offset(Some(&log_root), &offset)
-        .try_collect::<Vec<_>>()
-        .await
-    {
-        Ok(entries) => entries,
-        Err(_) => store.list(Some(&log_root)).try_collect::<Vec<_>>().await?,
-    };
-    if entries.is_empty() {
-        entries = store.list(Some(&log_root)).try_collect::<Vec<_>>().await?;
-    }
-
-    let mut checksum_entries = entries
-        .into_iter()
-        .filter_map(|meta| {
-            parse_checksum_version_from_location(&meta.location).map(|version| (version, meta))
-        })
-        .filter(|(version, _)| *version >= lower_bound)
-        .collect::<Vec<_>>();
-    checksum_entries.sort_by(|(av, _), (bv, _)| av.cmp(bv));
-    Ok(checksum_entries)
-}
-
-async fn find_checksum_replay_hint(
-    version: i64,
-    log_store: &dyn LogStore,
-    replay_hint: Option<&ReplayedTableHeader>,
-) -> DeltaResult<Option<ChecksumReplayHint>> {
-    let store = log_store.object_store(None);
-    let exact_checksum_path = checksum_path(version);
-    if let Some(checksum) = read_version_checksum_at(store.clone(), exact_checksum_path).await {
-        return Ok(Some(ChecksumReplayHint::Exact(build_header_from_checksum(
-            version, checksum,
-        ))));
-    }
-
-    let lower_bound = [
-        0,
-        version.saturating_sub(CHECKSUM_LOOKBACK_WINDOW),
-        read_last_checkpoint_version(log_store, version)
-            .await
-            .unwrap_or(0),
-        replay_hint
-            .map(|hint| hint.version.saturating_add(1))
-            .unwrap_or(0),
-    ]
-    .into_iter()
-    .max()
-    .unwrap_or(0);
-    if lower_bound >= version {
-        return Ok(None);
-    }
-
-    let checksum_entries = list_checksum_entries_from(store.clone(), lower_bound).await?;
-    for (checksum_version, meta) in checksum_entries.into_iter().rev() {
-        if checksum_version >= version {
-            continue;
-        }
-        if let Some(checksum) = read_version_checksum_at(store.clone(), meta.location.clone()).await
-        {
-            return Ok(Some(ChecksumReplayHint::Older(build_header_from_checksum(
-                checksum_version,
-                checksum,
-            ))));
-        }
-    }
-    Ok(None)
-}
-
-async fn replay_commit_header_actions(
+pub(crate) async fn replay_commit_header_actions(
     state: &mut ReconciledHeaderState,
     root_store: std::sync::Arc<dyn ObjectStore>,
     commit_entries: &[(i64, ObjectMeta)],
@@ -862,277 +632,6 @@ pub(crate) async fn create_checkpoint_for(
     CheckpointManager::new(log_store, operation_id)
         .create_checkpoint(version)
         .await
-}
-
-/// Load the reconciled table state at a specific version by replaying checkpoint + commits.
-pub(crate) async fn load_replayed_table_state(
-    version: i64,
-    log_store: &dyn LogStore,
-) -> DeltaResult<ReplayedTableState> {
-    if version < 0 {
-        return Err(DeltaTableError::generic(format!(
-            "Cannot load table state for negative version: {version}"
-        )));
-    }
-
-    let (store, commit_entries, mut checkpoint_entries) =
-        list_replay_entries(version, log_store).await?;
-
-    let mut state = ReconciledCheckpointState::default();
-    let start_commit_version = if let Some((cp_ver, cp_meta)) = checkpoint_entries.pop() {
-        let rows = read_checkpoint_rows_from_parquet(store.clone(), cp_meta).await?;
-        for row in rows {
-            state.apply_checkpoint_row(row)?;
-        }
-        cp_ver.saturating_add(1)
-    } else {
-        0
-    };
-
-    replay_commit_actions(
-        &mut state,
-        store,
-        &commit_entries,
-        start_commit_version,
-        version,
-    )
-    .await?;
-
-    let protocol = state
-        .protocol
-        .ok_or_else(|| DeltaTableError::generic("Cannot load table state without protocol"))?;
-    let metadata = state
-        .metadata
-        .ok_or_else(|| DeltaTableError::generic("Cannot load table state without metadata"))?;
-    let txns = state.txns;
-    let adds = state
-        .adds
-        .into_iter()
-        .collect::<BTreeMap<_, _>>()
-        .into_values()
-        .collect::<Vec<_>>();
-    let removes = state
-        .removes
-        .into_iter()
-        .collect::<BTreeMap<_, _>>()
-        .into_values()
-        .collect::<Vec<_>>();
-    let commit_timestamps = commit_entries
-        .iter()
-        .filter(|(v, _)| *v >= start_commit_version && *v <= version)
-        .map(|(v, meta)| (*v, meta.last_modified.timestamp_millis()))
-        .collect::<BTreeMap<_, _>>();
-
-    Ok(ReplayedTableState {
-        version,
-        protocol,
-        metadata,
-        txns,
-        adds,
-        removes,
-        commit_timestamps,
-    })
-}
-
-pub(crate) async fn load_replayed_table_header(
-    version: i64,
-    log_store: &dyn LogStore,
-    replay_hint: Option<&ReplayedTableHeader>,
-) -> DeltaResult<Option<ReplayedTableHeader>> {
-    if version < 0 {
-        return Err(DeltaTableError::generic(format!(
-            "Cannot load table header for negative version: {version}"
-        )));
-    }
-
-    let older_checksum_hint =
-        match find_checksum_replay_hint(version, log_store, replay_hint).await? {
-            Some(ChecksumReplayHint::Exact(header)) => {
-                debug!("crc-header: exact checksum hit target_version={version}");
-                return Ok(Some(header));
-            }
-            Some(ChecksumReplayHint::Older(header)) => {
-                debug!(
-                    "crc-header: older checksum hint hit target_version={}, checksum_version={}",
-                    version, header.version
-                );
-                Some(header)
-            }
-            None => None,
-        };
-
-    if older_checksum_hint.is_none() {
-        if let Some(hint) = replay_hint {
-            debug!(
-                "crc-header: reused snapshot hint target_version={}, hint_version={}",
-                version, hint.version
-            );
-        } else {
-            debug!("crc-header: no usable checksum or replay hint target_version={version}");
-        }
-    }
-
-    let base_hint = older_checksum_hint.or_else(|| replay_hint.cloned());
-    let Some(base_hint) = base_hint else {
-        return Ok(None);
-    };
-
-    let (store, commit_entries, mut checkpoint_entries) =
-        list_replay_entries(version, log_store).await?;
-    let latest_checkpoint = checkpoint_entries.pop();
-    let (mut state, start_commit_version, mut commit_timestamps) = match latest_checkpoint {
-        Some((checkpoint_version, checkpoint_meta)) if checkpoint_version > base_hint.version => {
-            let rows = read_checkpoint_rows_from_parquet(store.clone(), checkpoint_meta).await?;
-            let mut state = ReconciledHeaderState::default();
-            for row in rows {
-                state.apply_checkpoint_row(row);
-            }
-            (state, checkpoint_version.saturating_add(1), BTreeMap::new())
-        }
-        _ => (
-            ReconciledHeaderState::from_header(&base_hint),
-            base_hint.version.saturating_add(1),
-            Arc::unwrap_or_clone(base_hint.commit_timestamps),
-        ),
-    };
-    if start_commit_version <= version {
-        commit_timestamps.extend(
-            replay_commit_header_actions(
-                &mut state,
-                store,
-                &commit_entries,
-                start_commit_version,
-                version,
-            )
-            .await?,
-        );
-    }
-
-    let protocol = state
-        .protocol
-        .ok_or_else(|| DeltaTableError::generic("Cannot load table header without protocol"))?;
-    let metadata = state
-        .metadata
-        .ok_or_else(|| DeltaTableError::generic("Cannot load table header without metadata"))?;
-    Ok(Some(ReplayedTableHeader {
-        version,
-        protocol,
-        metadata,
-        txns: Arc::new(state.txns),
-        commit_timestamps: Arc::new(commit_timestamps),
-    }))
-}
-
-/// Resolve the latest table version that can be replayed from `_delta_log`.
-///
-/// This includes both commit JSON files and checkpoint parquet files. We rely on this when
-/// loading snapshots because commit JSON files can be pruned while checkpoints are retained.
-pub(crate) async fn latest_replayable_version(log_store: &dyn LogStore) -> DeltaResult<i64> {
-    let store = log_store.object_store(None);
-    let log_entries = store
-        .list(Some(&delta_log_root_path()))
-        .try_collect::<Vec<_>>()
-        .await?;
-    let delta_log_pattern = delta_log_regex()?;
-    let checkpoint_pattern = checkpoint_regex()?;
-
-    let latest = log_entries
-        .iter()
-        .filter_map(|meta| {
-            parse_version(delta_log_pattern, &meta.location)
-                .or_else(|| parse_version(checkpoint_pattern, &meta.location))
-        })
-        .max();
-
-    latest.ok_or(crate::spec::DeltaError::MissingVersion)
-}
-
-/// Delete expired Delta log files up to a safe checkpoint boundary.
-pub async fn cleanup_expired_logs_for(
-    mut keep_version: i64,
-    log_store: &dyn LogStore,
-    cutoff_timestamp: i64,
-    operation_id: Option<Uuid>,
-) -> DeltaResult<usize> {
-    debug!("called cleanup_expired_logs_for");
-    let delta_log_pattern = delta_log_regex()?;
-    let checkpoint_pattern = checkpoint_regex()?;
-    let object_store = log_store.object_store(operation_id);
-    let log_path = delta_log_root_path();
-
-    let log_entries = object_store.list(Some(&log_path)).collect::<Vec<_>>().await;
-
-    debug!("starting keep_version: {keep_version}");
-    debug!(
-        "starting cutoff_timestamp: {:?}",
-        Utc.timestamp_millis_opt(cutoff_timestamp).unwrap()
-    );
-
-    let min_retention_version = log_entries
-        .iter()
-        .filter_map(|entry| entry.as_ref().ok())
-        .filter_map(|meta| {
-            parse_version(delta_log_pattern, &meta.location)
-                .map(|ver| (ver, meta.last_modified.timestamp_millis()))
-        })
-        .filter(|(_, ts)| *ts >= cutoff_timestamp)
-        .map(|(ver, _)| ver)
-        .min()
-        .unwrap_or(keep_version);
-
-    keep_version = keep_version.min(min_retention_version);
-
-    let safe_checkpoint_version = log_entries
-        .iter()
-        .filter_map(|entry| entry.as_ref().ok())
-        .filter_map(|meta| parse_version(checkpoint_pattern, &meta.location))
-        .filter(|ver| *ver <= keep_version)
-        .max();
-
-    let Some(safe_checkpoint_version) = safe_checkpoint_version else {
-        debug!(
-            "Not cleaning metadata files, could not find a checkpoint with version <= keep_version ({keep_version})"
-        );
-        return Ok(0);
-    };
-
-    debug!("safe_checkpoint_version: {safe_checkpoint_version}");
-
-    let locations = futures::stream::iter(log_entries.into_iter())
-        .filter_map(|meta| async move {
-            let meta = match meta {
-                Ok(m) => m,
-                Err(err) => {
-                    error!("Error received while cleaning up expired logs: {err:?}");
-                    return None;
-                }
-            };
-
-            let ts = meta.last_modified.timestamp_millis();
-            let commit_ver = parse_version(delta_log_pattern, &meta.location);
-            let checksum_ver = parse_checksum_version_from_location(&meta.location);
-
-            if ts > cutoff_timestamp {
-                return None;
-            }
-
-            if commit_ver.is_some_and(|ver| ver < safe_checkpoint_version)
-                || checksum_ver.is_some_and(|ver| ver < safe_checkpoint_version)
-            {
-                Some(Ok(meta.location))
-            } else {
-                None
-            }
-        })
-        .boxed();
-
-    let deleted = object_store
-        .delete_stream(locations)
-        .try_collect::<Vec<_>>()
-        .await?;
-
-    debug!("Deleted {} expired logs", deleted.len());
-    Ok(deleted.len())
 }
 
 #[cfg(test)]
