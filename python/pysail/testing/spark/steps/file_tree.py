@@ -51,10 +51,6 @@ def _normalize_name(name: str) -> str | None:
     if name == "_SUCCESS":
         return None
 
-    # Ignore filesystem checksum noise.
-    if name.endswith(".crc"):
-        return None
-
     # Ignore Iceberg version-hint.text (internal file)
     if name == "version-hint.text":
         return None
@@ -141,8 +137,11 @@ def render_normalized_file_tree(root_path: Path) -> str:
     return "\n".join(lines)
 
 
-@then(parsers.parse("file tree in {location_var} matches"))
-def file_tree_matches_docstring(location_var: str, variables: dict, docstring: str) -> None:
+def _assert_file_tree_matches_docstring(
+    location_var: str,
+    variables: dict,
+    docstring: str,
+) -> None:
     location = variables.get(location_var)
     assert location is not None, f"Variable {location_var!r} not found"
 
@@ -154,6 +153,11 @@ def file_tree_matches_docstring(location_var: str, variables: dict, docstring: s
     assert actual == expected
 
 
+@then(parsers.parse("file tree in {location_var} matches"))
+def file_tree_matches_docstring(location_var: str, variables: dict, docstring: str) -> None:
+    _assert_file_tree_matches_docstring(location_var, variables, docstring)
+
+
 @given(parsers.parse("file {filename} in {location_var} is deleted"))
 def file_in_location_is_deleted(filename: str, location_var: str, variables: dict) -> None:
     """Deletes a named file from the given location directory."""
@@ -162,6 +166,21 @@ def file_in_location_is_deleted(filename: str, location_var: str, variables: dic
     file_path = Path(location.path) / filename
     assert file_path.exists(), f"File {file_path} does not exist"
     file_path.unlink()
+
+
+@given(parsers.parse("file {filename} in {location_var} is replaced with"))
+def file_in_location_is_replaced_with(
+    filename: str,
+    location_var: str,
+    variables: dict,
+    docstring: str,
+) -> None:
+    """Replaces a named file in the given location directory with the provided text."""
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    file_path = Path(location.path) / filename
+    assert file_path.exists(), f"File {file_path} does not exist"
+    file_path.write_text(docstring, encoding="utf-8")
 
 
 @then(parsers.parse("data files in {location_var} count is {n:d}"))

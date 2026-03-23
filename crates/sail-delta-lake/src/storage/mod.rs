@@ -26,17 +26,16 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion::execution::context::TaskContext;
 use datafusion_common::{DataFusionError, Result as DataFusionResult};
-use futures::TryStreamExt;
 use log::{debug, error};
 use object_store::path::Path;
-use object_store::{Error as ObjectStoreError, ObjectMeta, ObjectStore, PutMode, PutOptions};
+use object_store::{Error as ObjectStoreError, ObjectStore, PutMode, PutOptions};
 use serde_json::Deserializer as JsonDeserializer;
 use url::Url;
 use uuid::Uuid;
 
+use crate::delta_log::latest_version_from_listing;
 use crate::spec::{
-    commit_path, delta_log_root_path, Action, DeltaError as DeltaTableError, DeltaError,
-    DeltaResult, TransactionError,
+    commit_path, Action, DeltaError as DeltaTableError, DeltaError, DeltaResult, TransactionError,
 };
 
 mod config;
@@ -57,8 +56,6 @@ pub fn get_object_store_from_context(
         .get_store(table_url)
         .map_err(|e| DataFusionError::External(Box::new(e)))
 }
-
-static DELTA_LOG_PATH: LazyLock<Path> = LazyLock::new(delta_log_root_path);
 
 /// Holder for temporary commit paths or prepared bytes.
 #[derive(Clone)]
@@ -102,19 +99,6 @@ pub fn default_logstore(
             options: options.clone(),
         },
     ))
-}
-
-/// Extract version from an object store entry in the delta log.
-fn extract_version_from_meta(meta: &ObjectMeta) -> Option<i64> {
-    let filename = meta.location.as_ref().rsplit('/').next()?;
-    if filename.len() != 25 || !filename.ends_with(".json") {
-        return None;
-    }
-    let prefix = filename.get(0..20)?;
-    if !prefix.as_bytes().iter().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    prefix.parse::<i64>().ok()
 }
 
 /// Reads a commit and gets list of actions.
@@ -306,17 +290,6 @@ async fn read_commit_entry(storage: &dyn ObjectStore, version: i64) -> DeltaResu
             Err(err.into())
         }
     }
-}
-
-async fn latest_version_from_listing(store: Arc<dyn ObjectStore>) -> DeltaResult<Option<i64>> {
-    let mut stream = store.list(Some(&DELTA_LOG_PATH));
-    let mut max_version: Option<i64> = None;
-    while let Some(meta) = stream.try_next().await? {
-        if let Some(version) = extract_version_from_meta(&meta) {
-            max_version = Some(max_version.map_or(version, |curr| curr.max(version)));
-        }
-    }
-    Ok(max_version)
 }
 
 fn to_uri(root: &Url, location: &Path) -> String {

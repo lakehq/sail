@@ -14,6 +14,7 @@ use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike};
 use datafusion::arrow::array::{ArrayRef, UInt32Array};
 use datafusion::arrow::compute;
 use datafusion::arrow::record_batch::RecordBatch;
+use sail_common_datafusion::catalog::CatalogPartitionField;
 
 use crate::spec::partition::UnboundPartitionSpec as PartitionSpec;
 use crate::spec::schema::Schema as IcebergSchema;
@@ -154,7 +155,7 @@ pub fn compute_partition_values(
     batch: &RecordBatch,
     spec: &PartitionSpec,
     iceberg_schema: &IcebergSchema,
-    partition_columns: &[String],
+    partition_columns: &[CatalogPartitionField],
 ) -> Result<(Vec<Option<Literal>>, String), String> {
     let _ = partition_columns; // not used in single-group fallback
     let mut values = Vec::with_capacity(spec.fields.len());

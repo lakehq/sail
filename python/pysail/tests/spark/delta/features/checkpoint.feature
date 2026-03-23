@@ -41,8 +41,10 @@ Feature: Delta Lake Checkpoint
         | metaData.configuration['delta.checkpointInterval'] | "1"   |
       Then file tree in delta_log matches
         """
+        📄 00000000000000000000.crc
         📄 00000000000000000000.json
         📄 00000000000000000001.checkpoint.parquet
+        📄 00000000000000000001.crc
         📄 00000000000000000001.json
         📄 _last_checkpoint
         """
@@ -112,14 +114,21 @@ Feature: Delta Lake Checkpoint
         | metaData.configuration['delta.checkpointInterval'] | "3"   |
       Then file tree in delta_log matches
         """
+        📄 00000000000000000000.crc
         📄 00000000000000000000.json
+        📄 00000000000000000001.crc
         📄 00000000000000000001.json
+        📄 00000000000000000002.crc
         📄 00000000000000000002.json
         📄 00000000000000000003.checkpoint.parquet
+        📄 00000000000000000003.crc
         📄 00000000000000000003.json
+        📄 00000000000000000004.crc
         📄 00000000000000000004.json
+        📄 00000000000000000005.crc
         📄 00000000000000000005.json
         📄 00000000000000000006.checkpoint.parquet
+        📄 00000000000000000006.crc
         📄 00000000000000000006.json
         📄 _last_checkpoint
         """
@@ -161,6 +170,137 @@ Feature: Delta Lake Checkpoint
         | 1  |
         | 2  |
         | 3  |
+
+  @sail-only
+  Rule: Expired remove actions are pruned from checkpoint parquet based on table properties
+
+    Background:
+      Given variable location for temporary directory delta_checkpoint_deleted_file_retention
+      Given variable delta_log for delta log of location
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_checkpoint_deleted_file_retention_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_checkpoint_deleted_file_retention_test (id INT)
+        USING DELTA
+        LOCATION {{ location.sql }}
+        TBLPROPERTIES (
+          'delta.checkpointInterval' = '2',
+          'delta.deletedFileRetentionDuration' = 'interval 0 seconds'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO delta_checkpoint_deleted_file_retention_test VALUES (1)
+        """
+      Given statement
+        """
+        DELETE FROM delta_checkpoint_deleted_file_retention_test WHERE id = 1
+        """
+      Given statement
+        """
+        INSERT INTO delta_checkpoint_deleted_file_retention_test VALUES (2)
+        """
+
+    Scenario: Checkpoint parquet omits expired remove actions
+      When query
+        """
+        SELECT * FROM delta_checkpoint_deleted_file_retention_test ORDER BY id
+        """
+      Then query result ordered
+        | id |
+        | 2  |
+      Then delta log first commit protocol and metadata contains
+        | path                                                          | value                |
+        | metaData.configuration['delta.checkpointInterval']           | "2"                  |
+        | metaData.configuration['delta.deletedFileRetentionDuration'] | "interval 0 seconds" |
+      Then file tree in delta_log matches
+        """
+        📄 00000000000000000000.crc
+        📄 00000000000000000000.json
+        📄 00000000000000000001.crc
+        📄 00000000000000000001.json
+        📄 00000000000000000002.checkpoint.parquet
+        📄 00000000000000000002.crc
+        📄 00000000000000000002.json
+        📄 _last_checkpoint
+        """
+
+  @sail-only
+  Rule: Expired Delta log files are cleaned up after checkpoint creation when enabled by table properties
+
+    Background:
+      Given variable location for temporary directory delta_checkpoint_log_cleanup
+      Given variable delta_log for delta log of location
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_checkpoint_log_cleanup_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_checkpoint_log_cleanup_test (id INT)
+        USING DELTA
+        LOCATION {{ location.sql }}
+        TBLPROPERTIES (
+          'delta.checkpointInterval' = '2',
+          'delta.logRetentionDuration' = 'interval 0 seconds',
+          'delta.enableExpiredLogCleanup' = 'true'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO delta_checkpoint_log_cleanup_test VALUES (1)
+        """
+      Given statement
+        """
+        INSERT INTO delta_checkpoint_log_cleanup_test VALUES (2)
+        """
+      Given statement
+        """
+        INSERT INTO delta_checkpoint_log_cleanup_test VALUES (3)
+        """
+
+    Scenario: Old JSON commit logs are physically deleted after a later checkpoint
+      Then delta log first commit protocol and metadata contains
+        | path                                                     | value                |
+        | metaData.configuration['delta.checkpointInterval']      | "2"                  |
+        | metaData.configuration['delta.logRetentionDuration']    | "interval 0 seconds" |
+        | metaData.configuration['delta.enableExpiredLogCleanup'] | "true"               |
+      Given delta log JSON files for versions 0, 1, 2 in delta_log are backdated by 172800 seconds
+      Given sleep for 1 seconds
+      Given statement
+        """
+        INSERT INTO delta_checkpoint_log_cleanup_test VALUES (4)
+        """
+      Given statement
+        """
+        INSERT INTO delta_checkpoint_log_cleanup_test VALUES (5)
+        """
+      When query
+        """
+        SELECT * FROM delta_checkpoint_log_cleanup_test ORDER BY id
+        """
+      Then query result ordered
+        | id |
+        | 1  |
+        | 2  |
+        | 3  |
+        | 4  |
+        | 5  |
+      Then file tree in delta_log matches
+        """
+        📄 00000000000000000002.checkpoint.parquet
+        📄 00000000000000000002.crc
+        📄 00000000000000000002.json
+        📄 00000000000000000003.crc
+        📄 00000000000000000003.json
+        📄 00000000000000000004.checkpoint.parquet
+        📄 00000000000000000004.crc
+        📄 00000000000000000004.json
+        📄 _last_checkpoint
+        """
 
   @sail-only
   Rule: EXPLAIN shows checkpoint parquet in metadata-as-data log replay
@@ -245,11 +385,16 @@ Feature: Delta Lake Checkpoint
         | metaData.configuration['delta.checkpointInterval'] | "3"   |
       Then file tree in delta_log matches
         """
+        📄 00000000000000000000.crc
         📄 00000000000000000000.json
+        📄 00000000000000000001.crc
         📄 00000000000000000001.json
+        📄 00000000000000000002.crc
         📄 00000000000000000002.json
         📄 00000000000000000003.checkpoint.parquet
+        📄 00000000000000000003.crc
         📄 00000000000000000003.json
+        📄 00000000000000000004.crc
         📄 00000000000000000004.json
         📄 _last_checkpoint
         """

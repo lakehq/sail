@@ -28,6 +28,7 @@ use datafusion_common::{internal_err, DataFusionError, Result};
 use futures::stream::once;
 use futures::StreamExt;
 use parquet::file::properties::WriterProperties;
+use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
@@ -45,13 +46,16 @@ use crate::spec::partition::{
 use crate::spec::schema::Schema as IcebergSchema;
 use crate::spec::{TableMetadata, TableRequirement};
 use crate::utils::get_object_store_from_context;
-use crate::utils::partition_transform::{format_partition_expr, parse_partition_field_expr};
+use crate::utils::partition_transform::{
+    catalog_partition_field_from_iceberg, format_partition_expr,
+    iceberg_transform_from_partition_field, partition_field_name,
+};
 
 #[derive(Debug)]
 pub struct IcebergWriterExec {
     input: Arc<dyn ExecutionPlan>,
     table_url: Url,
-    partition_columns: Vec<String>,
+    partition_columns: Vec<CatalogPartitionField>,
     sink_mode: PhysicalSinkMode,
     table_exists: bool,
     options: TableIcebergOptions,
@@ -62,7 +66,7 @@ impl IcebergWriterExec {
     fn extract_partition_columns(
         spec: &Option<BoundPartitionSpec>,
         iceberg_schema: &IcebergSchema,
-    ) -> Result<Vec<String>> {
+    ) -> Result<Vec<CatalogPartitionField>> {
         if let Some(spec) = spec {
             let mut cols = Vec::with_capacity(spec.fields().len());
             for f in spec.fields() {
@@ -72,7 +76,10 @@ impl IcebergWriterExec {
                         f.source_id
                     ))
                 })?;
-                cols.push(format_partition_expr(&field.name, f.transform));
+                cols.push(
+                    catalog_partition_field_from_iceberg(field.name.clone(), f.transform)
+                        .map_err(DataFusionError::Plan)?,
+                );
             }
             Ok(cols)
         } else {
@@ -83,7 +90,7 @@ impl IcebergWriterExec {
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         table_url: Url,
-        partition_columns: Vec<String>,
+        partition_columns: Vec<CatalogPartitionField>,
         sink_mode: PhysicalSinkMode,
         table_exists: bool,
         options: TableIcebergOptions,
@@ -120,7 +127,7 @@ impl IcebergWriterExec {
         &self.table_url
     }
 
-    pub fn partition_columns(&self) -> &[String] {
+    pub fn partition_columns(&self) -> &[CatalogPartitionField] {
         &self.partition_columns
     }
 
@@ -344,22 +351,20 @@ impl ExecutionPlan for IcebergWriterExec {
                         if let Some(existing) = &default_spec {
                             builder = builder.with_spec_id(existing.spec_id());
                         }
-                        for name in &partition_columns {
-                            let pf = parse_partition_field_expr(name).map_err(|e| {
-                                DataFusionError::Plan(format!(
-                                    "Invalid partition transform expression '{}': {e}",
-                                    name
-                                ))
-                            })?;
-                            let fid = current_schema
-                                .field_id_by_name(&pf.source_column)
-                                .ok_or_else(|| {
+                        for field in &partition_columns {
+                            let fid = current_schema.field_id_by_name(&field.column).ok_or_else(
+                                || {
                                     DataFusionError::Plan(format!(
                                         "Partition column mismatch: column '{}' not found in schema",
-                                        pf.source_column
+                                        format_partition_expr(field)
                                     ))
-                                })?;
-                            builder = builder.add_field(fid, pf.field_name, pf.transform);
+                                },
+                            )?;
+                            builder = builder.add_field(
+                                fid,
+                                partition_field_name(field),
+                                iceberg_transform_from_partition_field(field),
+                            );
                         }
                         default_spec = Some(builder.build());
                     }
@@ -377,7 +382,12 @@ impl ExecutionPlan for IcebergWriterExec {
                     } else if partition_columns != table_partition_columns {
                         return Err(DataFusionError::Plan(format!(
                             "Partition column mismatch: table uses {:?}, requested {:?}",
-                            table_partition_columns, partition_columns
+                            crate::utils::partition_transform::format_partition_exprs(
+                                &table_partition_columns
+                            ),
+                            crate::utils::partition_transform::format_partition_exprs(
+                                &partition_columns
+                            )
                         )));
                     }
                 }
@@ -411,30 +421,22 @@ impl ExecutionPlan for IcebergWriterExec {
                         "Invalid Iceberg schema: field id 0 detected after assignment".to_string(),
                     ));
                 }
-                for name in &partition_columns {
-                    let pf = parse_partition_field_expr(name).map_err(|e| {
-                        DataFusionError::Plan(format!(
-                            "Invalid partition transform expression '{}': {e}",
-                            name
-                        ))
-                    })?;
-                    if iceberg_schema.field_id_by_name(&pf.source_column).is_none() {
+                for field in &partition_columns {
+                    if iceberg_schema.field_id_by_name(&field.column).is_none() {
                         return Err(DataFusionError::Plan(format!(
                             "Partition column mismatch: column '{}' not found in schema",
-                            pf.source_column
+                            format_partition_expr(field)
                         )));
                     }
                 }
                 let mut builder = crate::spec::partition::PartitionSpec::builder();
-                for name in &partition_columns {
-                    let pf = parse_partition_field_expr(name).map_err(|e| {
-                        DataFusionError::Plan(format!(
-                            "Invalid partition transform expression '{}': {e}",
-                            name
-                        ))
-                    })?;
-                    if let Some(fid) = iceberg_schema.field_id_by_name(&pf.source_column) {
-                        builder = builder.add_field(fid, pf.field_name, pf.transform);
+                for field in &partition_columns {
+                    if let Some(fid) = iceberg_schema.field_id_by_name(&field.column) {
+                        builder = builder.add_field(
+                            fid,
+                            partition_field_name(field),
+                            iceberg_transform_from_partition_field(field),
+                        );
                     }
                 }
                 let spec = builder.build();

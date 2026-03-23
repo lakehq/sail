@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use sail_common::error::CommonError;
 
+use crate::spark::run::run_pyspark_script;
 use crate::spark::{
     run_pyspark_shell, run_spark_connect_server, run_spark_mcp_server, McpSettings, McpTransport,
 };
@@ -48,6 +49,22 @@ enum SparkCommand {
         about = "Start the PySpark shell with a Spark Connect server running in the background"
     )]
     Shell,
+    #[command(about = "Run a PySpark script and exit")]
+    Run {
+        #[arg(
+            short = 'f',
+            long,
+            help = "The PySpark script file to run, or '-' for stdin",
+            default_value = "-"
+        )]
+        file: String,
+        #[arg(
+            short = 'C',
+            long,
+            help = "The directory to change to before running the script"
+        )]
+        directory: Option<String>,
+    },
     #[command(about = "Start the Spark MCP (Model Context Protocol) server")]
     McpServer {
         #[arg(
@@ -109,6 +126,12 @@ pub fn main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
                 //   according to the Python multiprocessing resource tracker?
                 run_pyspark_shell()
             }
+            SparkCommand::Run { file, directory } => {
+                if let Some(directory) = directory {
+                    std::env::set_current_dir(directory)?;
+                }
+                run_pyspark_script(file)
+            }
             SparkCommand::McpServer {
                 host,
                 port,
@@ -119,12 +142,14 @@ pub fn main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(directory) = directory {
                     std::env::set_current_dir(directory)?;
                 }
-                run_spark_mcp_server(McpSettings {
-                    transport,
-                    host,
-                    port,
+                run_spark_mcp_server(
+                    McpSettings {
+                        transport,
+                        host,
+                        port,
+                    },
                     spark_remote,
-                })
+                )
             }
         },
     }

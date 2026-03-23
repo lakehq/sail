@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import time
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
-from pytest_bdd import parsers, then
+from pytest_bdd import given, parsers, then
 
 from pysail.testing.spark.utils.common import is_jvm_spark
 
@@ -261,6 +263,18 @@ def _normalize_delta_metadata_for_snapshot(metadata: dict) -> dict:
     return normalized
 
 
+def _normalize_delta_log_json_file_for_snapshot(filename: str, obj: object) -> object:
+    if not isinstance(obj, dict):
+        return obj
+    if filename.endswith(".crc"):
+        normalized = dict(obj)
+        metadata = normalized.get("metadata")
+        if isinstance(metadata, dict):
+            normalized["metadata"] = _normalize_delta_metadata_for_snapshot(metadata)
+        return normalized
+    return obj
+
+
 @pytest.fixture
 def delta_log_cache() -> dict[str, dict]:
     """Per-scenario cache for normalized delta log objects."""
@@ -285,6 +299,23 @@ def _delta_log_compute(which: str, variables: dict, delta_log_cache: dict[str, d
 
     delta_log_cache[which] = obj
     return obj
+
+
+def _read_delta_log_json_file(location: Path, filename: str) -> object:
+    file_path = location / filename
+    assert file_path.exists(), f"delta log file does not exist: {file_path}"
+    with file_path.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _parse_version_list(raw: str) -> list[int]:
+    versions = []
+    for raw_part in raw.split(","):
+        version_text = raw_part.strip()
+        if not version_text:
+            continue
+        versions.append(int(version_text))
+    return versions
 
 
 @then(
@@ -330,3 +361,44 @@ def delta_log_assert(
         obj = _pick_paths(obj, paths)
 
     assert obj == snapshot
+
+
+@then(parsers.parse("delta log JSON file {filename} in {location_var} matches snapshot"))
+def delta_log_json_file_matches_snapshot(
+    filename: str,
+    location_var: str,
+    variables: dict,
+    snapshot: SnapshotAssertion,
+) -> None:
+    if is_jvm_spark():
+        pytest.skip("Delta log assertions are Sail-only")
+
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    obj = _read_delta_log_json_file(Path(location.path), filename)
+    obj = _normalize_delta_log_json_file_for_snapshot(filename, obj)
+    assert obj == snapshot
+
+
+@given(
+    parsers.parse("delta log JSON files for versions {versions} in {location_var} are backdated by {seconds:d} seconds")
+)
+def delta_log_json_files_are_backdated(
+    versions: str,
+    location_var: str,
+    seconds: int,
+    variables: dict,
+) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    target_timestamp = time.time() - seconds
+    log_dir = Path(location.path)
+    parsed_versions = _parse_version_list(versions)
+    assert parsed_versions, "expected at least one Delta log version to backdate"
+
+    for version in parsed_versions:
+        log_file = log_dir / f"{version:020}.json"
+        assert log_file.exists(), f"Delta log JSON file does not exist: {log_file}"
+        os.utime(log_file, (target_timestamp, target_timestamp))

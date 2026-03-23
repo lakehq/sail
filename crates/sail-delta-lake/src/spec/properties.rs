@@ -91,6 +91,7 @@ pub struct TableProperties {
     pub checkpoint_interval: Option<NonZeroU64>,
     pub checkpoint_write_stats_as_json: Option<bool>,
     pub checkpoint_write_stats_as_struct: Option<bool>,
+    pub write_checksum_file_enabled: Option<bool>,
     pub column_mapping_mode: Option<ColumnMappingMode>,
     pub data_skipping_num_indexed_cols: Option<DataSkippingNumIndexedCols>,
     pub data_skipping_stats_columns: Option<Vec<ColumnName>>,
@@ -143,6 +144,10 @@ impl TableProperties {
             .unwrap_or(DEFAULT_CHECKPOINT_INTERVAL)
     }
 
+    pub fn write_checksum_file_enabled(&self) -> bool {
+        self.write_checksum_file_enabled.unwrap_or(true)
+    }
+
     pub fn deleted_file_retention_duration(&self) -> Duration {
         self.deleted_file_retention_duration
             .unwrap_or(Duration::from_secs(DEFAULT_DELETED_FILE_RETENTION_SECS))
@@ -186,6 +191,9 @@ fn canonicalize_table_property_key(key: &str) -> Option<&'static str> {
         "delta.checkpoint.writestatsasstruct"
         | "checkpoint_write_stats_as_struct"
         | "checkpointwritestatsasstruct" => Some("delta.checkpoint.writeStatsAsStruct"),
+        "delta.writechecksumfile.enabled"
+        | "write_checksum_file_enabled"
+        | "writechecksumfileenabled" => Some("delta.writeChecksumFile.enabled"),
         "delta.columnmapping.mode"
         | "column_mapping_mode"
         | "columnmappingmode"
@@ -242,6 +250,7 @@ fn validate_table_property(key: &str, value: &str) -> DeltaResult<()> {
         "delta.appendOnly"
         | "delta.checkpoint.writeStatsAsJson"
         | "delta.checkpoint.writeStatsAsStruct"
+        | "delta.writeChecksumFile.enabled"
         | "delta.enableExpiredLogCleanup" => parse_bool(value).map(|_| ()).ok_or_else(|| {
             DeltaTableError::generic(format!("invalid boolean value for {key}: {value}"))
         }),
@@ -277,6 +286,9 @@ fn try_parse_table_property(props: &mut TableProperties, key: &str, value: &str)
         }
         "delta.checkpoint.writeStatsAsStruct" => {
             props.checkpoint_write_stats_as_struct = Some(parse_bool(value)?)
+        }
+        "delta.writeChecksumFile.enabled" => {
+            props.write_checksum_file_enabled = Some(parse_bool(value)?)
         }
         "delta.columnMapping.mode" => {
             props.column_mapping_mode = ColumnMappingMode::try_from(value).ok()
@@ -368,10 +380,16 @@ mod tests {
     }
 
     #[test]
+    fn test_write_checksum_file_enabled_default_is_true() {
+        assert!(TableProperties::default().write_checksum_file_enabled());
+    }
+
+    #[test]
     fn test_canonicalize_table_property_aliases() -> DeltaResult<()> {
         let props = canonicalize_and_validate_table_properties([
             ("column_mapping_mode", "name"),
             ("checkpoint_interval", "7"),
+            ("write_checksum_file_enabled", "false"),
             ("custom.key", "value"),
         ])?;
 
@@ -382,6 +400,10 @@ mod tests {
         assert_eq!(
             props.get("delta.checkpointInterval"),
             Some(&"7".to_string())
+        );
+        assert_eq!(
+            props.get("delta.writeChecksumFile.enabled"),
+            Some(&"false".to_string())
         );
         assert_eq!(props.get("custom.key"), Some(&"value".to_string()));
         Ok(())
@@ -404,6 +426,10 @@ mod tests {
         assert_eq!(
             route_table_property_key("column_mapping_mode"),
             Some("delta.columnMapping.mode".to_string())
+        );
+        assert_eq!(
+            route_table_property_key("write_checksum_file_enabled"),
+            Some("delta.writeChecksumFile.enabled".to_string())
         );
         assert_eq!(
             route_table_property_key("append_only"),

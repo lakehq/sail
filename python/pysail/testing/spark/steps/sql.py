@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -101,6 +102,11 @@ def final_statement(template, docstring, spark, variables):
     s = Template(docstring).render(**variables) if template else docstring
     yield
     spark.sql(s)
+
+
+@given(parsers.parse("sleep for {seconds:d} seconds"))
+def sleep_for_seconds(seconds: int) -> None:
+    time.sleep(seconds)
 
 
 @when(parsers.re("query(?P<template>( template)?)"), target_fixture="query")
