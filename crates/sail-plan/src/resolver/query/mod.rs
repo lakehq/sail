@@ -26,6 +26,7 @@ mod sample;
 mod set_op;
 mod sort;
 mod stat;
+mod time_travel;
 mod udf;
 mod udtf;
 mod values;
