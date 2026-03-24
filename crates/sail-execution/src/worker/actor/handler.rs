@@ -2,6 +2,7 @@ use std::mem;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use log::{error, info, warn};
+use sail_common::cache_id::CacheId;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_server::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
@@ -159,6 +160,26 @@ impl WorkerActor {
                 // on this worker as failed.
                 error!("failed to report task status with retries: {e}");
                 let _ = handle.send(WorkerEvent::Shutdown).await;
+            }
+        });
+        ActorAction::Continue
+    }
+
+    /// Notifies the driver that a cache partition is stored on this worker.
+    pub(super) fn handle_cache_partition_stored(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        cache_id: CacheId,
+        partition: usize,
+    ) -> ActorAction {
+        let worker_id = self.options.worker_id;
+        let client = self.driver_client_set.core.clone();
+        ctx.spawn(async move {
+            if let Err(e) = client
+                .notify_cache_partition_stored(worker_id, cache_id, partition)
+                .await
+            {
+                warn!("failed to notify cache partition stored: {e}");
             }
         });
         ActorAction::Continue

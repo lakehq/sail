@@ -54,6 +54,8 @@ message ExtendedPhysicalPlanNode {
     PythonDataSourceWriteCommitExecNode python_data_source_write_commit = 39;
     CatalogCommandExecNode catalog_command = 40;
     BarrierExecNode barrier = 41;
+    CacheWriteExecNode cache_write = 42;
+    CacheReadExecNode cache_read = 43;
   }
 }
 
@@ -547,6 +549,17 @@ message MonotonicIdExecNode {
   bytes input = 1;
   string column_name = 2;
   bytes schema = 3;
+}
+
+message CacheWriteExecNode {
+  bytes input = 1;
+  uint64 cache_id = 2;
+}
+
+message CacheReadExecNode {
+  uint64 cache_id = 1;
+  bytes schema = 2;
+  uint64 num_partitions = 3;
 }
 
 message JoinOn {

@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 
 use datafusion::arrow::datatypes::SchemaRef;
+use sail_common::cache_id::CacheId;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_telemetry::common::{SpanAssociation, SpanAttribute};
 use tokio::sync::oneshot;
@@ -8,6 +9,7 @@ use tokio::sync::oneshot;
 use crate::driver::TaskStatus;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
+use crate::plan::CachePartitionReporterMessage;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
 use crate::task::definition::TaskDefinition;
@@ -37,6 +39,11 @@ pub enum WorkerEvent {
         status: TaskStatus,
         message: Option<String>,
         cause: Option<CommonErrorCause>,
+    },
+    /// Indicates that a cache partition has been stored on this worker.
+    CachePartitionStored {
+        cache_id: CacheId,
+        partition: usize,
     },
     ProbePendingLocalStream {
         key: TaskStreamKey,
@@ -76,6 +83,15 @@ pub enum WorkerEvent {
     Shutdown,
 }
 
+impl CachePartitionReporterMessage for WorkerEvent {
+    fn cache_partition_stored(cache_id: CacheId, partition: usize) -> Self {
+        Self::CachePartitionStored {
+            cache_id,
+            partition,
+        }
+    }
+}
+
 pub enum WorkerStreamOwner {
     This,
     Worker {
@@ -93,6 +109,7 @@ impl SpanAssociation for WorkerEvent {
             WorkerEvent::RunTask { .. } => "RunTask",
             WorkerEvent::StopTask { .. } => "StopTask",
             WorkerEvent::ReportTaskStatus { .. } => "ReportTaskStatus",
+            WorkerEvent::CachePartitionStored { .. } => "CachePartitionStored",
             WorkerEvent::ProbePendingLocalStream { .. } => "ProbePendingLocalStream",
             WorkerEvent::CreateLocalStream { .. } => "CreateLocalStream",
             WorkerEvent::CreateRemoteStream { .. } => "CreateRemoteStream",
@@ -170,6 +187,10 @@ impl SpanAssociation for WorkerEvent {
                     ));
                 }
             }
+            WorkerEvent::CachePartitionStored {
+                cache_id: _,
+                partition: _,
+            } => {}
             WorkerEvent::ProbePendingLocalStream {
                 key:
                     TaskStreamKey {

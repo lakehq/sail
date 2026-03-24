@@ -7,6 +7,7 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::ExecutionPlan;
 use futures::TryStreamExt;
 use log::{debug, error, info, warn};
+use sail_common::cache_id::CacheId;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_common_datafusion::session::job::JobRunnerHistory;
 use sail_common_datafusion::system::observable::JobRunnerObserver;
@@ -173,10 +174,24 @@ impl DriverActor {
         let out = self.job_scheduler.accept_job(ctx, plan, context);
         if let Ok((job_id, _)) = &out {
             self.refresh_job(ctx, *job_id);
+
             self.run_tasks(ctx);
             self.scale_up_workers(ctx);
         }
         let _ = result.send(out.map(|(_, stream)| stream));
+        ActorAction::Continue
+    }
+
+    /// Records that a cache partition is stored on a node for this session.
+    pub(super) fn handle_cache_partition_stored(
+        &mut self,
+        _ctx: &mut ActorContext<Self>,
+        cache_id: CacheId,
+        partition: usize,
+        worker_id: WorkerId,
+    ) -> ActorAction {
+        self.cache_partition_locations
+            .record(cache_id, partition, worker_id);
         ActorAction::Continue
     }
 
@@ -411,18 +426,27 @@ impl DriverActor {
         ActorAction::Stop
     }
 
+    /// Refreshes job state and executes the resulting scheduler actions.
     fn refresh_job(&mut self, ctx: &mut ActorContext<Self>, job_id: JobId) {
-        for action in self.job_scheduler.refresh_job(job_id) {
+        let cache_partition_locations = self.cache_partition_locations.clone();
+        for action in self
+            .job_scheduler
+            .refresh_job(job_id, |cache_id, partition| {
+                cache_partition_locations.resolve_worker(cache_id, partition)
+            })
+        {
             self.run_job_action(ctx, action);
         }
     }
 
+    /// Cleans up a job and executes the resulting scheduler actions.
     fn clean_up_job(&mut self, ctx: &mut ActorContext<Self>, job_id: JobId) {
         for action in self.job_scheduler.clean_up_job(job_id) {
             self.run_job_action(ctx, action);
         }
     }
 
+    /// Executes a scheduler action for the driver.
     fn run_job_action(&mut self, ctx: &mut ActorContext<Self>, action: JobAction) {
         debug!("job action: {action:?}");
         match action {
@@ -438,6 +462,19 @@ impl DriverActor {
                     }
                 }
                 self.task_assigner.enqueue_tasks(region);
+            }
+            JobAction::FailTasks { keys, error } => {
+                let message = error.to_string();
+                let cause = CommonErrorCause::Execution(message.clone());
+                for key in keys {
+                    ctx.send(DriverEvent::UpdateTask {
+                        key,
+                        status: TaskStatus::Failed,
+                        message: Some(message.clone()),
+                        cause: Some(cause.clone()),
+                        sequence: None,
+                    });
+                }
             }
             JobAction::CancelTask { key } => {
                 self.task_assigner.exclude_task(&key);

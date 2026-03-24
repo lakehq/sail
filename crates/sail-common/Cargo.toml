@@ -27,4 +27,5 @@ half = { workspace = true }
 iana-time-zone = { workspace = true }
 tokio = { workspace = true }
 secrecy = { workspace = true }
+slotmap = { workspace = true }
 toml = { workspace = true }

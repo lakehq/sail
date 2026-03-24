@@ -11,6 +11,7 @@ use datafusion_proto::protobuf::PhysicalPlanNode;
 use indexmap::{IndexMap, IndexSet};
 use log::{debug, warn};
 use prost::Message;
+use sail_common::cache_id::CacheId;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::ActorContext;
@@ -19,11 +20,11 @@ use crate::driver::job_scheduler::state::{
     JobDescriptor, JobState, StageState, TaskAttemptDescriptor, TaskRegionState, TaskState,
 };
 use crate::driver::job_scheduler::topology::TaskRegionTopology;
-use crate::driver::job_scheduler::{JobAction, JobScheduler, JobSchedulerOptions};
+use crate::driver::job_scheduler::{CachePinError, JobAction, JobScheduler, JobSchedulerOptions};
 use crate::driver::output::build_job_output;
 use crate::driver::DriverActor;
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey};
+use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey, WorkerId};
 use crate::job_graph::{
     InputMode, JobGraph, OutputDistribution, OutputMode, Stage, StageInput, TaskPlacement,
 };
@@ -32,7 +33,8 @@ use crate::task::definition::{
     TaskOutputLocator,
 };
 use crate::task::scheduling::{
-    TaskAssignment, TaskAssignmentGetter, TaskOutputKind, TaskRegion, TaskSet, TaskSetEntry,
+    SchedulableTaskPlacement, TaskAssignment, TaskAssignmentGetter, TaskOutputKind, TaskRegion,
+    TaskSet, TaskSetEntry,
 };
 
 impl JobScheduler {
@@ -118,7 +120,14 @@ impl JobScheduler {
     ///   5. If all the tasks in the final stages have succeeded, the job is marked as succeeded.
     ///   6. For each task region, schedule the tasks of the region if all the dependency
     ///      regions have succeeded.
-    pub fn refresh_job(&mut self, job_id: JobId) -> Vec<JobAction> {
+    pub fn refresh_job(
+        &mut self,
+        job_id: JobId,
+        mut resolve_cache_partition_worker: impl FnMut(
+            CacheId,
+            usize,
+        ) -> Result<WorkerId, CachePinError>,
+    ) -> Vec<JobAction> {
         let Some(job) = self.jobs.get_mut(&job_id) else {
             warn!("job {job_id} not found");
             return vec![];
@@ -163,7 +172,11 @@ impl JobScheduler {
             return actions;
         }
 
-        actions.extend(Self::schedule_task_regions(job_id, job));
+        actions.extend(Self::schedule_task_regions(
+            job_id,
+            job,
+            &mut resolve_cache_partition_worker,
+        ));
 
         actions
     }
@@ -272,7 +285,15 @@ impl JobScheduler {
         actions
     }
 
-    fn schedule_task_regions(job_id: JobId, job: &mut JobDescriptor) -> Vec<JobAction> {
+    /// Creates scheduling actions for all runnable task regions in a job.
+    fn schedule_task_regions(
+        job_id: JobId,
+        job: &mut JobDescriptor,
+        resolve_cache_partition_worker: &mut impl FnMut(
+            CacheId,
+            usize,
+        ) -> Result<WorkerId, CachePinError>,
+    ) -> Vec<JobAction> {
         let mut actions = vec![];
 
         for (r, region) in job.topology.regions.iter().enumerate() {
@@ -313,19 +334,49 @@ impl JobScheduler {
                     });
             }
 
-            actions.push(JobAction::ScheduleTaskRegion {
-                region: Self::build_task_region(job_id, job, region),
-            });
+            match Self::build_task_region(job_id, job, region, resolve_cache_partition_worker) {
+                Ok(region) => actions.push(JobAction::ScheduleTaskRegion { region }),
+                Err(error) => {
+                    actions.push(Self::build_fail_tasks_action(job_id, job, region, error))
+                }
+            }
         }
 
         actions
     }
 
+    /// Builds a fail-tasks action for the latest attempts in a region.
+    fn build_fail_tasks_action(
+        job_id: JobId,
+        job: &JobDescriptor,
+        region: &TaskRegionTopology,
+        error: CachePinError,
+    ) -> JobAction {
+        let keys = region
+            .tasks
+            .iter()
+            .filter_map(|t| {
+                Self::get_latest_task_attempt(job, t.stage, t.partition).map(|attempt| TaskKey {
+                    job_id,
+                    stage: t.stage,
+                    partition: t.partition,
+                    attempt,
+                })
+            })
+            .collect::<Vec<_>>();
+        JobAction::FailTasks { keys, error }
+    }
+
+    /// Builds a runnable task region from topology and job state.
     fn build_task_region(
         job_id: JobId,
         job: &JobDescriptor,
         region: &TaskRegionTopology,
-    ) -> TaskRegion {
+        resolve_cache_partition_worker: &mut impl FnMut(
+            CacheId,
+            usize,
+        ) -> Result<WorkerId, CachePinError>,
+    ) -> Result<TaskRegion, CachePinError> {
         let stages = region
             .tasks
             .iter()
@@ -375,14 +426,68 @@ impl JobScheduler {
             }
         }
 
-        let mut tasks: Vec<(TaskPlacement, TaskSet)> = vec![];
+        let mut tasks: Vec<(SchedulableTaskPlacement, TaskSet)> = vec![];
         for (key, value) in stage_groups {
             for entries in value.buckets {
-                tasks.push((key.placement, TaskSet { entries }));
+                let placement = Self::resolve_task_set_placement(
+                    key.placement,
+                    job,
+                    &entries,
+                    resolve_cache_partition_worker,
+                )?;
+                tasks.push((placement, TaskSet { entries }));
             }
         }
 
-        TaskRegion { tasks }
+        Ok(TaskRegion { tasks })
+    }
+
+    /// Resolves the runnable placement for a task set from stage placement and cache pins.
+    fn resolve_task_set_placement(
+        placement: TaskPlacement,
+        job: &JobDescriptor,
+        entries: &[TaskSetEntry],
+        resolve_cache_partition_worker: &mut impl FnMut(
+            CacheId,
+            usize,
+        ) -> Result<WorkerId, CachePinError>,
+    ) -> Result<SchedulableTaskPlacement, CachePinError> {
+        match placement {
+            TaskPlacement::Driver => Ok(SchedulableTaskPlacement::Driver),
+            TaskPlacement::Worker => {
+                let mut required: Option<WorkerId> = None;
+                for entry in entries {
+                    let cache_reads = job
+                        .graph
+                        .stages()
+                        .get(entry.key.stage)
+                        .ok_or(CachePinError::StageNotFound {
+                            job_id: entry.key.job_id,
+                            stage: entry.key.stage,
+                        })?
+                        .cache_reads
+                        .as_slice();
+                    for &cache_id in cache_reads {
+                        let worker_id =
+                            resolve_cache_partition_worker(cache_id, entry.key.partition)?;
+                        required = match required {
+                            None => Some(worker_id),
+                            Some(existing) if existing == worker_id => Some(existing),
+                            Some(existing) => {
+                                return Err(CachePinError::ConflictingWorkers {
+                                    existing,
+                                    actual: worker_id,
+                                });
+                            }
+                        };
+                    }
+                }
+                Ok(match required {
+                    Some(worker_id) => SchedulableTaskPlacement::PinnedWorker { worker_id },
+                    None => SchedulableTaskPlacement::Worker,
+                })
+            }
+        }
     }
 
     fn extend_job_output(job_id: JobId, job: &mut JobDescriptor) -> Vec<JobAction> {

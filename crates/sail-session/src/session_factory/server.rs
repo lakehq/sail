@@ -125,6 +125,7 @@ impl ServerSessionFactory {
         Ok(config)
     }
 
+    /// Builds a SessionState with Sail-specific planners, rules, and runtime config.
     fn create_session_state(&mut self, info: &ServerSessionInfo) -> Result<SessionState> {
         let config = self.create_session_config(info)?;
         let runtime = self
