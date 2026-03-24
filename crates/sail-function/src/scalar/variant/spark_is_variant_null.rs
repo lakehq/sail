@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-variant/blob/51e0d4be62d7675e9b7b56ed1c0b0a10ae4a28d7/src/is_variant_null.rs>
-use arrow::array::{Array, ArrayRef};
+use arrow::array::ArrayRef;
 use arrow_schema::DataType;
 use datafusion::common::{exec_datafusion_err, exec_err};
 use datafusion::error::Result;
@@ -63,39 +63,28 @@ impl ScalarUDFImpl for SparkIsVariantNullUdf {
             return exec_err!("expected 1 argument");
         };
 
+        // Based on datafusion-variant's cleaner pattern:
+        // https://github.com/datafusion-contrib/datafusion-variant/blob/main/src/is_variant_null.rs
         let out = match variant_arg {
-            ColumnarValue::Scalar(scalar_variant) => match scalar_variant {
-                // SQL NULL is not a Variant null, so return false
-                ScalarValue::Null => ColumnarValue::Scalar(ScalarValue::Boolean(Some(false))),
-                ScalarValue::Struct(arc_struct) if arc_struct.is_null(0) => {
-                    // Struct marked as NULL (from parse_json(null)) is also not a Variant null
-                    ColumnarValue::Scalar(ScalarValue::Boolean(Some(false)))
+            ColumnarValue::Scalar(scalar_variant) => {
+                // SQL NULL and NULL structs are not Variant null — return false
+                // (verified against Spark JVM: is_variant_null(NULL) → false)
+                if scalar_variant.is_null() {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(false))));
                 }
-                ScalarValue::Struct(_) => {
-                    let variant_array = try_parse_variant_scalar(scalar_variant)?;
-                    let variant = variant_array.value(0);
-                    ColumnarValue::Scalar(ScalarValue::Boolean(Some(variant == Variant::Null)))
-                }
-                unsupported => {
-                    return exec_err!(
-                        "expected variant scalar value, got data type: {}",
-                        unsupported.data_type()
-                    );
-                }
-            },
+                let variant_array = try_parse_variant_scalar(scalar_variant)?;
+                let variant = variant_array.value(0);
+                ColumnarValue::Scalar(ScalarValue::Boolean(Some(variant == Variant::Null)))
+            }
             ColumnarValue::Array(variant_array) => {
                 let variant_array = VariantArray::try_new(variant_array.as_ref())?;
-
-                let mut builder = arrow::array::BooleanBuilder::with_capacity(variant_array.len());
-                for variant_option in variant_array.iter() {
-                    match variant_option {
-                        None => builder.append_value(false),
-                        Some(variant) => builder.append_value(variant == Variant::Null),
-                    }
-                }
-                let boolean_array = builder.finish();
-
-                ColumnarValue::Array(Arc::new(boolean_array) as ArrayRef)
+                // Spark: NULL variant rows → false (not SQL NULL)
+                let result: arrow::array::BooleanArray = variant_array
+                    .iter()
+                    .map(|v| Some(v.is_some_and(|v| v == Variant::Null)))
+                    .collect::<Vec<_>>()
+                    .into();
+                ColumnarValue::Array(Arc::new(result) as ArrayRef)
             }
         };
 
