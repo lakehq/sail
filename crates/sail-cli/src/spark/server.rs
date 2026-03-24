@@ -139,7 +139,9 @@ pub fn run_spark_connect_server(
                 let flight_handle = flight_runtime.handle().clone();
                 sail_flight::serve(
                     flight_listener,
-                    async { let _ = tokio::signal::ctrl_c().await; },
+                    async {
+                        let _ = tokio::signal::ctrl_c().await;
+                    },
                     flight_config,
                     flight_handle,
                 )
