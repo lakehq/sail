@@ -149,10 +149,9 @@ impl PlanResolver<'_> {
         let column_names = PlanResolver::get_field_names(input.schema(), state)?;
         let input = rename_logical_plan(input, &column_names)?;
         let format = self.resolve_catalog_table_format(file_format)?;
-        // Handle location: add to options if specified
         let mut write_options = options;
         if let Some(location) = location {
-            write_options.push(("location".to_string(), location));
+            write_options.push(("path".to_string(), location));
         }
 
         // Set write mode and action based on if_not_exists
