@@ -31,11 +31,11 @@ use crate::resolver::PlanResolver;
 
 /// The write modes for all targets.
 ///
-/// The modes are classified based the action to take when the target exists or
-/// does not exist. More modes can be added if there are more actions to take.
-/// If the target does not exist, the action is usually only "creating the target
-/// and write the data" or "returning an error". If the target exists, the action
-/// is more diverse.
+/// The modes are classified based on the action to take when the target exists or
+/// does not exist. More modes can be added if additional actions are required.
+/// If the target does not exist, the action is usually either "creating the target
+/// and writing the data" or "returning an error". If the target exists, the actions
+/// are more diverse.
 ///
 /// We avoid using terms such as "overwrite" since it has different semantics
 /// in different APIs, so we introduce more specific terms such as "replace"
@@ -328,7 +328,6 @@ impl PlanResolver<'_> {
                             "partition transforms are only supported for Iceberg tables",
                         ));
                     }
-                    file_write_options.table_properties = table_properties.clone();
                     let all_options: Vec<std::collections::HashMap<String, String>> =
                         file_write_options
                             .options
