@@ -177,17 +177,15 @@ impl ScalarUDFImpl for SparkVariantGet {
         // so we extract as an intermediate type (double/string) and then cast.
         let final_type = type_str.as_deref().map(spark_type_to_arrow).transpose()?;
         let (extract_field, needs_post_cast) = match &final_type {
-            Some(dt @ DataType::Decimal128(_, _)) => {
+            Some(DataType::Decimal128(_, _)) => {
                 // Extract as double, then cast to decimal
-                let _ = dt;
                 (
                     Some(Arc::new(Field::new("result", DataType::Float64, true))),
                     true,
                 )
             }
-            Some(dt @ DataType::Timestamp(_, _)) => {
+            Some(DataType::Timestamp(_, _)) => {
                 // Extract as string, then cast to timestamp
-                let _ = dt;
                 (
                     Some(Arc::new(Field::new("result", DataType::Utf8, true))),
                     true,
