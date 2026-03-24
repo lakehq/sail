@@ -42,7 +42,9 @@ impl PlanResolver<'_> {
             }
         };
         let builder = WritePlanBuilder::new()
-            .with_mode(WriteMode::Overwrite)
+            .with_mode(WriteMode::Replace {
+                error_if_absent: false,
+            })
             .with_target(WriteTarget::DataSource)
             .with_format(format)
             .with_options(options)
@@ -70,51 +72,54 @@ impl PlanResolver<'_> {
 
         let input = self.resolve_write_input(input, state).await?;
 
-        let mut builder = WritePlanBuilder::new().with_partition(partition);
+        if !partition.is_empty() {
+            return Err(PlanError::todo("PARTITION for write"));
+        }
+        let mut builder = WritePlanBuilder::new();
         match mode {
             InsertMode::InsertByPosition { overwrite } => {
                 let mode = if overwrite {
-                    WriteMode::Overwrite
+                    WriteMode::Truncate
                 } else {
-                    WriteMode::Append
+                    WriteMode::Append {
+                        error_if_absent: true,
+                    }
                 };
-                builder = builder
-                    .with_mode(mode)
-                    .with_target(WriteTarget::ExistingTable {
-                        table,
-                        column_match: WriteColumnMatch::ByPosition,
-                    });
+                builder = builder.with_mode(mode).with_target(WriteTarget::Table {
+                    table,
+                    column_match: WriteColumnMatch::ByPosition,
+                });
             }
             InsertMode::InsertByName { overwrite } => {
                 let mode = if overwrite {
-                    WriteMode::Overwrite
+                    WriteMode::Truncate
                 } else {
-                    WriteMode::Append
+                    WriteMode::Append {
+                        error_if_absent: true,
+                    }
                 };
-                builder = builder
-                    .with_mode(mode)
-                    .with_target(WriteTarget::ExistingTable {
-                        table,
-                        column_match: WriteColumnMatch::ByName,
-                    });
+                builder = builder.with_mode(mode).with_target(WriteTarget::Table {
+                    table,
+                    column_match: WriteColumnMatch::ByName,
+                });
             }
             InsertMode::InsertByColumns { columns, overwrite } => {
                 let mode = if overwrite {
-                    WriteMode::Overwrite
+                    WriteMode::Truncate
                 } else {
-                    WriteMode::Append
+                    WriteMode::Append {
+                        error_if_absent: true,
+                    }
                 };
-                builder = builder
-                    .with_mode(mode)
-                    .with_target(WriteTarget::ExistingTable {
-                        table,
-                        column_match: WriteColumnMatch::ByColumns { columns },
-                    });
+                builder = builder.with_mode(mode).with_target(WriteTarget::Table {
+                    table,
+                    column_match: WriteColumnMatch::ByColumns { columns },
+                });
             }
             InsertMode::Replace { condition } => {
                 builder = builder
-                    .with_mode(WriteMode::OverwriteIf { condition })
-                    .with_target(WriteTarget::ExistingTable {
+                    .with_mode(WriteMode::TruncateIf { condition })
+                    .with_target(WriteTarget::Table {
                         table,
                         column_match: WriteColumnMatch::ByPosition,
                     });

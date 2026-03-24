@@ -3,7 +3,7 @@ use sail_catalog::provider::CatalogPartitionField;
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::command::write::{WriteMode, WritePlanBuilder, WriteTableAction, WriteTarget};
+use crate::resolver::command::write::{WriteColumnMatch, WriteMode, WritePlanBuilder, WriteTarget};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
@@ -49,7 +49,9 @@ impl PlanResolver<'_> {
             .with_cluster_by(clustering_columns)
             .with_format(format)
             .with_options(options)
-            .with_mode(WriteMode::Append);
+            .with_mode(WriteMode::Append {
+                error_if_absent: false,
+            });
         match sink_destination {
             None => {
                 builder = builder.with_target(WriteTarget::DataSource);
@@ -60,9 +62,9 @@ impl PlanResolver<'_> {
                     .with_options(vec![("path".to_string(), path)]);
             }
             Some(WriteStreamSinkDestination::Table { table }) => {
-                builder = builder.with_target(WriteTarget::NewTable {
+                builder = builder.with_target(WriteTarget::Table {
                     table,
-                    action: WriteTableAction::CreateIfNotExists,
+                    column_match: WriteColumnMatch::ByName,
                 })
             }
         }
