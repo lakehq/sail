@@ -81,18 +81,21 @@ pub struct SinkInfo {
 
 impl SinkInfo {
     /// Returns the path from options, or an empty string if not set.
-    /// The last `"path"` value across all option sets takes precedence.
+    /// The last value for the `"path"` or `"location"` key (in that priority order)
+    /// across all option sets takes precedence.
     /// Key comparison is case-insensitive.
     pub fn path(&self) -> String {
-        for options in self.options.iter().rev() {
-            if let Some(value) = options.iter().find_map(|(k, v)| {
-                if k.eq_ignore_ascii_case("path") {
-                    Some(v.clone())
-                } else {
-                    None
+        for key in ["path", "location"] {
+            for options in self.options.iter().rev() {
+                if let Some(value) = options.iter().find_map(|(k, v)| {
+                    if k.eq_ignore_ascii_case(key) {
+                        Some(v.clone())
+                    } else {
+                        None
+                    }
+                }) {
+                    return value;
                 }
-            }) {
-                return value;
             }
         }
         String::new()

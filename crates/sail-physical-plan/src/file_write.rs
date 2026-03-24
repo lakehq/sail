@@ -19,7 +19,6 @@ pub async fn create_file_write_physical_plan(
     options: FileWriteOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let FileWriteOptions {
-        path,
         format,
         mode,
         partition_by,
@@ -44,15 +43,10 @@ pub async fn create_file_write_physical_plan(
     };
     let sort_order = create_sort_order(ctx, sort_by, logical_input.schema())?;
     // TODO: detect duplicated keys in each set of options
-    let mut all_options: Vec<std::collections::HashMap<String, String>> = options
+    let all_options: Vec<std::collections::HashMap<String, String>> = options
         .into_iter()
         .map(|x| x.into_iter().collect())
         .collect();
-    // Place path as the last (highest-priority) option set so format handlers
-    // can access it via `SinkInfo::path()`.
-    if !path.is_empty() {
-        all_options.push([("path".to_string(), path)].into_iter().collect());
-    }
     let info = SinkInfo {
         input: physical_input,
         mode,
