@@ -14,7 +14,9 @@ use sail_common::spec;
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableSort, TableColumnStatus, TableKind,
 };
-use sail_common_datafusion::datasource::{BucketBy, SinkMode, SourceInfo, TableFormatRegistry};
+use sail_common_datafusion::datasource::{
+    find_option, BucketBy, SinkMode, SourceInfo, TableFormatRegistry,
+};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
@@ -281,7 +283,7 @@ impl PlanResolver<'_> {
                     let default_location = self.resolve_default_table_location(&table).await?;
                     file_write_options
                         .options
-                        .push(vec![("path".to_string(), default_location)]);
+                        .insert(0, vec![("path".to_string(), default_location)]);
                 };
                 if file_write_options
                     .partition_by
@@ -294,13 +296,14 @@ impl PlanResolver<'_> {
                     ));
                 }
                 file_write_options.table_properties = table_properties.clone();
-                let table_location = file_write_options
-                    .options
-                    .last()
-                    .and_then(|set| {
-                        set.iter()
-                            .find_map(|(k, v)| k.eq_ignore_ascii_case("path").then(|| v.clone()))
-                    })
+                let all_options: Vec<std::collections::HashMap<String, String>> =
+                    file_write_options
+                        .options
+                        .iter()
+                        .map(|set| set.iter().cloned().collect())
+                        .collect();
+                let table_location = find_option(&all_options, "path")
+                    .or_else(|| find_option(&all_options, "location"))
                     .unwrap_or_default();
                 let (if_not_exists, replace) = match action {
                     WriteTableAction::Create => (false, false),
