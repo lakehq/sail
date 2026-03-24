@@ -35,7 +35,9 @@ use crate::delta_log::cleanup::cleanup_expired_delta_log_files;
 use crate::kernel::checkpoints::create_checkpoint_for;
 use crate::kernel::transaction::conflict_checker::{TransactionInfo, WinningCommitSummary};
 use crate::kernel::DeltaOperation;
-use crate::spec::{checksum_path, temp_commit_path, Action, DeltaError, DeltaResult, Transaction};
+use crate::spec::{
+    checksum_path, temp_commit_path, Action, CommitAction, DeltaError, DeltaResult, Transaction,
+};
 pub use crate::spec::{CommitConflictError, TransactionError};
 use crate::storage::{CommitOrBytes, LogStoreRef, ObjectStoreRef};
 use crate::table::DeltaSnapshot;
@@ -183,7 +185,7 @@ impl From<HashMap<String, Value>> for OperationMetrics {
     }
 }
 
-fn actions_to_log_bytes(actions: &[Action]) -> Result<Bytes, TransactionError> {
+fn actions_to_log_bytes(actions: &[CommitAction]) -> Result<Bytes, TransactionError> {
     let mut buf: Vec<u8> = Vec::new();
     for (index, action) in actions.iter().enumerate() {
         if index > 0 {
@@ -197,13 +199,13 @@ fn actions_to_log_bytes(actions: &[Action]) -> Result<Bytes, TransactionError> {
 
 #[derive(Debug)]
 pub struct CommitData {
-    pub actions: Vec<Action>,
+    pub actions: Vec<CommitAction>,
     pub operation: DeltaOperation,
 }
 
 impl CommitData {
     pub fn new(
-        mut actions: Vec<Action>,
+        mut actions: Vec<CommitAction>,
         operation: DeltaOperation,
         mut app_metadata: HashMap<String, Value>,
         operation_metrics: OperationMetrics,
@@ -213,7 +215,7 @@ impl CommitData {
 
         let mut has_commit_info = false;
         for action in actions.iter_mut() {
-            if let Action::CommitInfo(info) = action {
+            if let CommitAction::CommitInfo(info) = action {
                 info.is_blind_append = Some(is_blind_append);
                 has_commit_info = true;
             }
@@ -248,11 +250,11 @@ impl CommitData {
                 );
             }
             commit_info.info = merged_info;
-            actions.push(Action::CommitInfo(commit_info));
+            actions.push(CommitAction::CommitInfo(commit_info));
         }
 
         for txn in &app_transactions {
-            actions.push(Action::Txn(txn.clone()));
+            actions.push(CommitAction::Txn(txn.clone()));
         }
 
         Self { actions, operation }
@@ -264,7 +266,7 @@ impl CommitData {
 
     fn commit_info(&self) -> Option<&crate::spec::CommitInfo> {
         self.actions.iter().find_map(|action| match action {
-            Action::CommitInfo(info) => Some(info),
+            CommitAction::CommitInfo(info) => Some(info),
             _ => None,
         })
     }
@@ -284,11 +286,11 @@ impl CommitData {
             .and_then(Value::as_i64)
     }
 
-    fn is_blind_append(actions: &[Action], operation: &DeltaOperation) -> bool {
+    fn is_blind_append(actions: &[CommitAction], operation: &DeltaOperation) -> bool {
         match operation {
             DeltaOperation::Write { predicate, .. } if predicate.is_none() => actions
                 .iter()
-                .all(|action| matches!(action, Action::Add(_) | Action::Txn(_))),
+                .all(|action| matches!(action, CommitAction::Add(_) | CommitAction::Txn(_))),
             _ => false,
         }
     }
@@ -415,7 +417,7 @@ impl From<CommitProperties> for CommitBuilder {
 
 /// Prepare data to be committed to the Delta log and control how the commit is performed
 pub struct CommitBuilder {
-    actions: Vec<Action>,
+    actions: Vec<CommitAction>,
     app_metadata: HashMap<String, Value>,
     operation_metrics: OperationMetrics,
     app_transaction: Vec<Transaction>,
@@ -441,8 +443,11 @@ impl Default for CommitBuilder {
 }
 
 impl CommitBuilder {
-    /// Actions to be included in the commit
-    pub fn with_actions(mut self, actions: Vec<Action>) -> Self {
+    /// Actions to be included in the commit.
+    ///
+    /// Accepts [`CommitAction`] only — checkpoint-only actions (`Sidecar`,
+    /// `CheckpointMetadata`) are rejected at compile time.
+    pub fn with_actions(mut self, actions: Vec<CommitAction>) -> Self {
         self.actions = actions;
         self
     }
@@ -544,11 +549,19 @@ impl PreCommit {
         }
 
         Box::pin(async move {
-            let local_actions: Vec<_> = this.data.actions.to_vec();
             if let Some(table_reference) = &this.table_data {
+                // Convert CommitAction → Action only for the protocol-checker call site,
+                // which still uses the broader Action type.
+                let actions_for_check: Vec<Action> = this
+                    .data
+                    .actions
+                    .iter()
+                    .cloned()
+                    .map(Action::from)
+                    .collect();
                 PROTOCOL.can_commit(
                     table_reference.as_ref(),
-                    &local_actions,
+                    &actions_for_check,
                     &this.data.operation,
                 )?;
             }
@@ -610,20 +623,20 @@ impl std::future::IntoFuture for PreparedCommit {
 
         Box::pin(async move {
             let mut commit_or_bytes = this.commit_or_bytes;
-            let mut local_actions: Vec<_> = this.data.actions.to_vec();
+            let mut local_actions: Vec<CommitAction> = this.data.actions.to_vec();
             let creation_intent = this.table_data.is_none();
             let creation_protocol = local_actions.iter().find_map(|a| match a {
-                Action::Protocol(p) => Some(p.clone()),
+                CommitAction::Protocol(p) => Some(p.clone()),
                 _ => None,
             });
             let creation_metadata = local_actions.iter().find_map(|a| match a {
-                Action::Metadata(m) => Some(m.clone()),
+                CommitAction::Metadata(m) => Some(m.clone()),
                 _ => None,
             });
             let current_is_blind_append = local_actions
                 .iter()
                 .find_map(|action| match action {
-                    Action::CommitInfo(info) => info.is_blind_append,
+                    CommitAction::CommitInfo(info) => info.is_blind_append,
                     _ => None,
                 })
                 .unwrap_or(false);
@@ -691,15 +704,21 @@ impl std::future::IntoFuture for PreparedCommit {
 
                             if !creation_actions_stripped
                                 && local_actions.iter().any(|action| {
-                                    matches!(action, Action::Protocol(_) | Action::Metadata(_))
+                                    matches!(
+                                        action,
+                                        CommitAction::Protocol(_) | CommitAction::Metadata(_)
+                                    )
                                 })
                             {
                                 local_actions.retain(|action| {
-                                    !matches!(action, Action::Protocol(_) | Action::Metadata(_))
+                                    !matches!(
+                                        action,
+                                        CommitAction::Protocol(_) | CommitAction::Metadata(_)
+                                    )
                                 });
 
                                 for action in local_actions.iter_mut() {
-                                    if let Action::CommitInfo(info) = action {
+                                    if let CommitAction::CommitInfo(info) = action {
                                         info.is_blind_append = Some(true);
                                     }
                                 }

@@ -28,11 +28,31 @@ pub enum TableFeature {
     Invariants,
     CheckConstraints,
     ChangeDataFeed,
+    #[serde(rename = "allowColumnDefaults")]
+    AllowColumnDefaults,
     GeneratedColumns,
     IdentityColumns,
     ColumnMapping,
+    DeletionVectors,
+    RowTracking,
+    DomainMetadata,
+    #[serde(rename = "v2Checkpoint")]
+    V2Checkpoint,
+    InCommitTimestamp,
     #[serde(rename = "timestampNtz")]
     TimestampWithoutTimezone,
+    // TODO: Implement reader/writer support for these newer protocol features.
+    // For now we only register the official names so protocol parsing succeeds and
+    // ProtocolChecker can reject unsupported tables explicitly.
+    #[serde(rename = "icebergCompatV1")]
+    IcebergCompatV1,
+    #[serde(rename = "icebergCompatV2")]
+    IcebergCompatV2,
+    Clustering,
+    VacuumProtocolCheck,
+    VariantType,
+    TypeWidening,
+    CatalogManaged,
     #[serde(other)]
     Unknown,
 }
@@ -44,10 +64,23 @@ impl TableFeature {
             Self::Invariants => "invariants",
             Self::CheckConstraints => "checkConstraints",
             Self::ChangeDataFeed => "changeDataFeed",
+            Self::AllowColumnDefaults => "allowColumnDefaults",
             Self::GeneratedColumns => "generatedColumns",
             Self::IdentityColumns => "identityColumns",
             Self::ColumnMapping => "columnMapping",
+            Self::DeletionVectors => "deletionVectors",
+            Self::RowTracking => "rowTracking",
+            Self::DomainMetadata => "domainMetadata",
+            Self::V2Checkpoint => "v2Checkpoint",
+            Self::InCommitTimestamp => "inCommitTimestamp",
             Self::TimestampWithoutTimezone => "timestampNtz",
+            Self::IcebergCompatV1 => "icebergCompatV1",
+            Self::IcebergCompatV2 => "icebergCompatV2",
+            Self::Clustering => "clustering",
+            Self::VacuumProtocolCheck => "vacuumProtocolCheck",
+            Self::VariantType => "variantType",
+            Self::TypeWidening => "typeWidening",
+            Self::CatalogManaged => "catalogManaged",
             Self::Unknown => "unknown",
         }
     }
@@ -58,13 +91,52 @@ impl TableFeature {
             "invariants" => Ok(Self::Invariants),
             "checkConstraints" => Ok(Self::CheckConstraints),
             "changeDataFeed" => Ok(Self::ChangeDataFeed),
+            "allowColumnDefaults" => Ok(Self::AllowColumnDefaults),
             "generatedColumns" => Ok(Self::GeneratedColumns),
             "identityColumns" => Ok(Self::IdentityColumns),
             "columnMapping" => Ok(Self::ColumnMapping),
+            "deletionVectors" => Ok(Self::DeletionVectors),
+            "rowTracking" => Ok(Self::RowTracking),
+            "domainMetadata" => Ok(Self::DomainMetadata),
+            "v2Checkpoint" => Ok(Self::V2Checkpoint),
+            "inCommitTimestamp" => Ok(Self::InCommitTimestamp),
             "timestampNtz" => Ok(Self::TimestampWithoutTimezone),
+            "icebergCompatV1" => Ok(Self::IcebergCompatV1),
+            "icebergCompatV2" => Ok(Self::IcebergCompatV2),
+            "clustering" => Ok(Self::Clustering),
+            "vacuumProtocolCheck" => Ok(Self::VacuumProtocolCheck),
+            "variantType" => Ok(Self::VariantType),
+            "typeWidening" => Ok(Self::TypeWidening),
+            "catalogManaged" => Ok(Self::CatalogManaged),
             _ => Err(DeltaTableError::generic(format!(
                 "Unknown table feature: {value}"
             ))),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TableFeature;
+
+    #[test]
+    fn table_feature_string_mappings_include_recent_protocol_features() {
+        let cases = [
+            (TableFeature::IcebergCompatV1, "icebergCompatV1"),
+            (TableFeature::IcebergCompatV2, "icebergCompatV2"),
+            (TableFeature::Clustering, "clustering"),
+            (TableFeature::VacuumProtocolCheck, "vacuumProtocolCheck"),
+            (TableFeature::VariantType, "variantType"),
+            (TableFeature::TypeWidening, "typeWidening"),
+            (TableFeature::CatalogManaged, "catalogManaged"),
+        ];
+
+        for (feature, expected_name) in cases {
+            assert_eq!(feature.as_str(), expected_name);
+            assert_eq!(
+                TableFeature::parse_str_name(expected_name).unwrap(),
+                feature
+            );
         }
     }
 }
@@ -110,5 +182,20 @@ impl Protocol {
 
     pub fn writer_features(&self) -> Option<&[TableFeature]> {
         self.writer_features.as_deref()
+    }
+
+    /// Returns `true` if the table protocol explicitly declares the given writer feature.
+    ///
+    /// This does **not** infer features from `min_writer_version`; use
+    /// [`crate::kernel::transaction::PROTOCOL`] when you need version-aware checks.
+    pub fn has_writer_feature(&self, feature: &TableFeature) -> bool {
+        self.writer_features()
+            .is_some_and(|fs| fs.contains(feature))
+    }
+
+    /// Returns `true` if the table protocol explicitly declares the given reader feature.
+    pub fn has_reader_feature(&self, feature: &TableFeature) -> bool {
+        self.reader_features()
+            .is_some_and(|fs| fs.contains(feature))
     }
 }

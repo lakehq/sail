@@ -13,12 +13,13 @@ pub mod schema;
 pub mod statistics;
 pub(crate) mod utils;
 pub use action_schema::{
-    add_struct_type, deletion_vector_struct_type, metadata_struct_type, protocol_struct_type,
-    remove_struct_type, transaction_struct_type,
+    add_struct_type, checkpoint_metadata_struct_type, deletion_vector_struct_type,
+    domain_metadata_struct_type, metadata_struct_type, protocol_struct_type, remove_struct_type,
+    sidecar_struct_type, transaction_struct_type,
 };
 pub use actions::{
-    Action, Add, CommitInfo, DeletionVectorDescriptor, Remove, RemoveOptions, StorageType,
-    Transaction,
+    Action, Add, CheckpointMetadata, CommitAction, CommitInfo, DeletionVectorDescriptor,
+    DomainMetadata, Remove, RemoveOptions, Sidecar, StorageType, Transaction,
 };
 pub use checkpoint::{CheckpointActionRow, LastCheckpointHint};
 pub use checksum::VersionChecksum;
@@ -42,5 +43,5 @@ pub use schema::{
     MetadataValue, PrimitiveType, Schema, StructField, StructType,
 };
 pub(crate) use statistics::stats_schema;
-pub use statistics::{ColumnCountStat, ColumnValueStat, StatValue, Stats};
+pub use statistics::{ColumnCountStat, ColumnValueStat, MaxStat, MinStat, StatValue, Stats};
 pub(crate) use utils::{contains_timestampntz, contains_timestampntz_arrow};

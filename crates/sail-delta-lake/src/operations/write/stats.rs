@@ -225,6 +225,7 @@ fn stats_from_metadata(
         max_values,
         num_records: num_rows,
         null_count,
+        tight_bounds: true,
     })
 }
 

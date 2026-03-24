@@ -23,7 +23,8 @@ use std::sync::LazyLock;
 
 use crate::kernel::DeltaOperation;
 use crate::spec::{
-    contains_timestampntz, Action, Protocol, Schema, TableFeature, TransactionError,
+    contains_timestampntz, Action, CommitConflictError, Protocol, Schema, TableFeature,
+    TransactionError,
 };
 use crate::table::DeltaSnapshot;
 
@@ -138,21 +139,86 @@ impl ProtocolChecker {
         self.can_read_from_protocol(snapshot.protocol())
     }
 
+    fn required_reader_features(
+        &self,
+        protocol: &Protocol,
+    ) -> Result<Option<HashSet<TableFeature>>, TransactionError> {
+        match protocol.min_reader_version() {
+            0 | 1 => Ok(None),
+            2 => Ok(Some(READER_V2.clone())),
+            3 => Ok(Some(
+                protocol
+                    .reader_features()
+                    .unwrap_or(&[])
+                    .iter()
+                    .cloned()
+                    .collect(),
+            )),
+            version => Err(TransactionError::CommitConflict(
+                CommitConflictError::UnsupportedReaderVersion(version),
+            )),
+        }
+    }
+
+    fn required_writer_features(
+        &self,
+        protocol: &Protocol,
+    ) -> Result<Option<HashSet<TableFeature>>, TransactionError> {
+        // Delta protocol differs here:
+        // - writer versions 2..=6 imply a fixed feature set from `minWriterVersion`
+        // - writer version 7 uses the explicit `writerFeatures` declared by the table
+        match protocol.min_writer_version() {
+            0 | 1 => Ok(None),
+            2 => Ok(Some(WRITER_V2.clone())),
+            3 => Ok(Some(WRITER_V3.clone())),
+            4 => Ok(Some(WRITER_V4.clone())),
+            5 => Ok(Some(WRITER_V5.clone())),
+            6 => Ok(Some(WRITER_V6.clone())),
+            7 => Ok(Some(
+                protocol
+                    .writer_features()
+                    .unwrap_or(&[])
+                    .iter()
+                    .cloned()
+                    .collect(),
+            )),
+            version => Err(TransactionError::CommitConflict(
+                CommitConflictError::UnsupportedWriterVersion(version),
+            )),
+        }
+    }
+
+    pub(crate) fn unsupported_reader_features(
+        &self,
+        protocol: &Protocol,
+    ) -> Result<Vec<TableFeature>, TransactionError> {
+        let Some(features) = self.required_reader_features(protocol)? else {
+            return Ok(vec![]);
+        };
+        Ok(features
+            .difference(&self.reader_features)
+            .cloned()
+            .collect::<Vec<_>>())
+    }
+
+    pub(crate) fn unsupported_writer_features(
+        &self,
+        protocol: &Protocol,
+    ) -> Result<Vec<TableFeature>, TransactionError> {
+        let Some(features) = self.required_writer_features(protocol)? else {
+            return Ok(vec![]);
+        };
+        Ok(features
+            .difference(&self.writer_features)
+            .cloned()
+            .collect::<Vec<_>>())
+    }
+
     pub fn can_read_from_protocol(&self, protocol: &Protocol) -> Result<(), TransactionError> {
-        let required_features: Option<HashSet<TableFeature>> = match protocol.min_reader_version() {
-            0 | 1 => None,
-            2 => Some(READER_V2.clone()),
-            // _ => protocol.reader_features_set(),
-            _ => Some(HashSet::new()),
-        };
-        if let Some(features) = required_features {
-            let mut diff = features.difference(&self.reader_features).peekable();
-            if diff.peek().is_some() {
-                return Err(TransactionError::UnsupportedTableFeatures(
-                    diff.cloned().collect(),
-                ));
-            }
-        };
+        let diff = self.unsupported_reader_features(protocol)?;
+        if !diff.is_empty() {
+            return Err(TransactionError::UnsupportedTableFeatures(diff));
+        }
         Ok(())
     }
 
@@ -160,27 +226,10 @@ impl ProtocolChecker {
     pub fn can_write_to(&self, snapshot: &DeltaSnapshot) -> Result<(), TransactionError> {
         // NOTE: writers must always support all required reader features
         self.can_read_from(snapshot)?;
-        let min_writer_version = snapshot.protocol().min_writer_version();
-
-        let required_features: Option<HashSet<TableFeature>> = match min_writer_version {
-            0 | 1 => None,
-            2 => Some(WRITER_V2.clone()),
-            3 => Some(WRITER_V3.clone()),
-            4 => Some(WRITER_V4.clone()),
-            5 => Some(WRITER_V5.clone()),
-            6 => Some(WRITER_V6.clone()),
-            //  _ => snapshot.protocol().writer_features_set(),
-            _ => Some(HashSet::new()),
-        };
-
-        if let Some(features) = required_features {
-            let mut diff = features.difference(&self.writer_features).peekable();
-            if diff.peek().is_some() {
-                return Err(TransactionError::UnsupportedTableFeatures(
-                    diff.cloned().collect(),
-                ));
-            }
-        };
+        let diff = self.unsupported_writer_features(snapshot.protocol())?;
+        if !diff.is_empty() {
+            return Err(TransactionError::UnsupportedTableFeatures(diff));
+        }
         Ok(())
     }
 
@@ -238,15 +287,18 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     reader_features.insert(TableFeature::ColumnMapping);
 
     let mut writer_features = HashSet::new();
+    // Keep this list aligned with end-to-end behavior, not just protocol parsing.
+    // For writer versions 2..=6, claiming support here also means accepting older tables whose
+    // `minWriterVersion` implies the feature set in WRITER_V2..WRITER_V6.
     writer_features.insert(TableFeature::AppendOnly);
     writer_features.insert(TableFeature::TimestampWithoutTimezone);
-    {
-        writer_features.insert(TableFeature::ChangeDataFeed);
-        writer_features.insert(TableFeature::Invariants);
-        writer_features.insert(TableFeature::CheckConstraints);
-        writer_features.insert(TableFeature::GeneratedColumns);
-    }
+    // writer_features.insert(TableFeature::DomainMetadata);
     writer_features.insert(TableFeature::ColumnMapping);
+    // writer_features.insert(TableFeature::ChangeDataFeed);
+    // FIXME: implement delta.invariants
+    writer_features.insert(TableFeature::Invariants);
+    // writer_features.insert(TableFeature::CheckConstraints);
+    // writer_features.insert(TableFeature::GeneratedColumns);
     // writer_features.insert(TableFeature::IdentityColumns);
 
     ProtocolChecker::new(reader_features, writer_features)

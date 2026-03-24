@@ -30,6 +30,12 @@ use object_store::ObjectStore;
 use url::Url;
 
 use crate::datasource::{DeltaScanConfig, DeltaTableProvider};
+pub mod features;
+pub use features::{
+    ChangeDataFeedToken, ColumnMappingToken, DeletionVectorToken, EnabledRowTrackingToken,
+    RowTrackingToken, SupportedRowTrackingToken,
+};
+
 pub use crate::kernel::snapshot::DeltaSnapshot;
 use crate::kernel::DeltaTableConfig;
 use crate::logical::table_source::DeltaTableSource;
