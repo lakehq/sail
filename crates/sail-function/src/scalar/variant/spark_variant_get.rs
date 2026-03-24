@@ -229,9 +229,32 @@ impl ScalarUDFImpl for SparkVariantGet {
 }
 
 /// Converts Spark type strings to Arrow DataType.
-/// TODO: Add support for decimal(p,s), timestamp, array<T>, map<K,V>, struct<...>
+/// TODO: Add support for array<T>, map<K,V>, struct<...>
 fn spark_type_to_arrow(type_str: &str) -> Result<DataType> {
-    match type_str.to_lowercase().as_str() {
+    let lower = type_str.to_lowercase();
+    let trimmed = lower.trim();
+
+    // Handle parameterized types: decimal(p,s)
+    if let Some(params) = trimmed.strip_prefix("decimal(").and_then(|s| s.strip_suffix(')')) {
+        let parts: Vec<&str> = params.split(',').map(|s| s.trim()).collect();
+        return match parts.as_slice() {
+            [p, s] => {
+                let precision = p.parse::<u8>().map_err(|_| {
+                    generic_exec_err("variant_get", &format!("invalid decimal precision: '{p}'"))
+                })?;
+                let scale = s.parse::<i8>().map_err(|_| {
+                    generic_exec_err("variant_get", &format!("invalid decimal scale: '{s}'"))
+                })?;
+                Ok(DataType::Decimal128(precision, scale))
+            }
+            _ => Err(generic_exec_err(
+                "variant_get",
+                &format!("invalid decimal type: '{type_str}'. Expected: decimal(precision, scale)"),
+            )),
+        };
+    }
+
+    match trimmed {
         "boolean" => Ok(DataType::Boolean),
         "byte" | "tinyint" => Ok(DataType::Int8),
         "short" | "smallint" => Ok(DataType::Int16),
@@ -239,12 +262,21 @@ fn spark_type_to_arrow(type_str: &str) -> Result<DataType> {
         "long" | "bigint" => Ok(DataType::Int64),
         "float" => Ok(DataType::Float32),
         "double" => Ok(DataType::Float64),
+        "decimal" => Ok(DataType::Decimal128(10, 0)),
         "string" => Ok(DataType::Utf8),
         "binary" => Ok(DataType::Binary),
         "date" => Ok(DataType::Date32),
+        "timestamp" => Ok(DataType::Timestamp(
+            datafusion::arrow::datatypes::TimeUnit::Microsecond,
+            None,
+        )),
+        "timestamp_ntz" => Ok(DataType::Timestamp(
+            datafusion::arrow::datatypes::TimeUnit::Microsecond,
+            None,
+        )),
         other => Err(generic_exec_err(
             "variant_get",
-            &format!("unsupported target type '{other}'. Supported: boolean, byte, short, int, long, float, double, string, binary, date"),
+            &format!("unsupported target type '{other}'"),
         )),
     }
 }

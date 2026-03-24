@@ -421,6 +421,95 @@ Feature: Variant type functions (parse_json, is_variant_null, variant_get)
         | false  |
         | false  |
 
+  Rule: Decimal type extraction
+
+    Scenario: Extract as decimal with default precision
+      When query
+        """
+        SELECT variant_get(parse_json('3.14'), '$', 'decimal') AS result
+        """
+      Then query result
+        | result |
+        | 3      |
+
+    Scenario: Extract as decimal(10,2)
+      When query
+        """
+        SELECT variant_get(parse_json('3.14'), '$', 'decimal(10,2)') AS result
+        """
+      Then query result
+        | result |
+        | 3.14   |
+
+    Scenario: Extract negative decimal
+      When query
+        """
+        SELECT variant_get(parse_json('-123.456'), '$', 'decimal(10,3)') AS result
+        """
+      Then query result
+        | result   |
+        | -123.456 |
+
+    Scenario: Extract nested decimal field
+      When query
+        """
+        SELECT variant_get(parse_json('{"price":19.99}'), '$.price', 'decimal(10,2)') AS result
+        """
+      Then query result
+        | result |
+        | 19.99  |
+
+  Rule: Timestamp type extraction
+
+    Scenario: Extract as timestamp
+      When query
+        """
+        SELECT CAST(variant_get(parse_json('"2024-01-15T10:30:00"'), '$', 'timestamp') AS STRING) AS result
+        """
+      Then query result
+        | result              |
+        | 2024-01-15 10:30:00 |
+
+  Rule: Byte and short types
+
+    Scenario: Extract as byte
+      When query
+        """
+        SELECT variant_get(parse_json('127'), '$', 'byte') AS result
+        """
+      Then query result
+        | result |
+        | 127    |
+
+    Scenario: Extract as short
+      When query
+        """
+        SELECT variant_get(parse_json('32767'), '$', 'short') AS result
+        """
+      Then query result
+        | result |
+        | 32767  |
+
+  Rule: try_variant_get with wrong types
+
+    Scenario: try_variant_get string as decimal returns NULL
+      When query
+        """
+        SELECT try_variant_get(parse_json('"hello"'), '$', 'decimal(10,2)') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: try_variant_get object as int returns NULL
+      When query
+        """
+        SELECT try_variant_get(parse_json('{"a":1}'), '$', 'int') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
   Rule: Error cases
 
     Scenario: Invalid JSON raises error
