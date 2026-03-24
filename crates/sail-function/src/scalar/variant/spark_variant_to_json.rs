@@ -19,7 +19,7 @@ use crate::scalar::variant::utils::helper::try_field_as_variant_array;
 ///
 /// ## Arguments
 /// - expr: a DataType::Struct expression that represents a VariantArray
-/// - options: an optional MAP (note, it seems arrow-rs' parquet-variant is pretty restrictive about the options)
+/// - options: an optional MAP (not yet implemented — currently rejected at runtime)
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkVariantToJsonUdf {
     signature: Signature,
@@ -57,17 +57,21 @@ impl ScalarUDFImpl for SparkVariantToJsonUdf {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        // coerce_types accepts 1-2 args, but options (arg 2) is not yet implemented
+        if args.args.len() > 1 {
+            return exec_err!(
+                "variant_to_json: the optional `options` argument is not yet implemented"
+            );
+        }
+
         let field = args
             .arg_fields
             .first()
-            .ok_or_else(|| exec_datafusion_err!("empty argument, expected 1 argument"))?;
+            .ok_or_else(|| exec_datafusion_err!("missing argument field metadata"))?;
 
         try_field_as_variant_array(field.as_ref())?;
 
-        let arg = args
-            .args
-            .first()
-            .ok_or_else(|| exec_datafusion_err!("empty argument, expected 1 argument"))?;
+        let arg = &args.args[0];
 
         let out = match arg {
             ColumnarValue::Scalar(scalar) => match scalar {

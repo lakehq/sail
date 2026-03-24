@@ -52,7 +52,9 @@ impl ScalarUDFImpl for SparkJsonToVariantUdf {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         // Use Binary instead of BinaryView for PySpark compatibility
-        // (PySpark doesn't support BinaryView in Arrow conversion)
+        // TODO: Canonical variant layout uses BinaryView, but PySpark doesn't
+        // support BinaryView in Arrow conversion. Using Binary for compatibility.
+        // The canonical layout is: metadata: BinaryView (non-null), value: BinaryView (nullable)
         Ok(DataType::Struct(Fields::from(vec![
             Field::new("metadata", DataType::Binary, false),
             Field::new("value", DataType::Binary, false),

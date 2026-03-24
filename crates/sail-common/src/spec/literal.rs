@@ -366,12 +366,9 @@ pub fn data_type_to_null_literal(data_type: spec::DataType) -> CommonResult<Lite
         spec::DataType::ConfiguredBinary => Ok(Literal::Binary { value: None }),
         spec::DataType::UserDefined { sql_type, .. } => data_type_to_null_literal(*sql_type),
         spec::DataType::Variant => {
-            // Variant is represented as a struct with binary fields (value, metadata)
-            // For null variant, we return a null struct
+            // For null variant, use the Variant type directly
             Ok(Literal::Struct {
-                data_type: spec::DataType::Struct {
-                    fields: spec::Fields::empty(),
-                },
+                data_type: spec::DataType::Variant,
                 values: None,
             })
         }

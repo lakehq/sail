@@ -274,10 +274,11 @@ impl PlanResolver<'_> {
             }
             DataType::ConfiguredBinary => Ok(self.arrow_binary_type(state)),
             DataType::Variant => {
-                // Variant is represented as a Struct with two binary fields: metadata and value
-                // The extension type metadata is handled at the Field level
+                // Variant layout using Binary for PySpark compatibility.
+                // parquet-variant uses BinaryView internally but we convert to Binary
+                // at the Sail boundary (matching parse_json's output format).
                 let fields = adt::Fields::from(vec![
-                    adt::Field::new("metadata", adt::DataType::Binary, true),
+                    adt::Field::new("metadata", adt::DataType::Binary, false),
                     adt::Field::new("value", adt::DataType::Binary, true),
                 ]);
                 Ok(adt::DataType::Struct(fields))

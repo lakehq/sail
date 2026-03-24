@@ -16,6 +16,14 @@ pub fn to_struct_array(
     if args.is_empty() {
         return exec_err!("struct requires at least one argument");
     }
+    if args.len() != field_names.len() || args.len() != arg_fields.len() {
+        return exec_err!(
+            "struct: mismatched lengths: args={}, field_names={}, arg_fields={}",
+            args.len(),
+            field_names.len(),
+            arg_fields.len()
+        );
+    }
 
     let vec: Vec<_> = args
         .iter()
@@ -90,15 +98,9 @@ impl ScalarUDFImpl for StructFunction {
             })
             .collect();
 
-        // The struct is nullable if any of its input fields are nullable
-        let struct_nullable = args.arg_fields.iter().any(|f| f.is_nullable());
-
+        // The struct value itself is non-null; child fields carry their own nullability
         let struct_type = DataType::Struct(Fields::from(fields));
-        Ok(Arc::new(Field::new(
-            self.name(),
-            struct_type,
-            struct_nullable,
-        )))
+        Ok(Arc::new(Field::new(self.name(), struct_type, false)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
