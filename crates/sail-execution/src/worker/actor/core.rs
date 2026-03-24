@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::mem;
 
 use fastrace::future::FutureExt;
@@ -6,12 +5,13 @@ use fastrace::Span;
 use log::info;
 use sail_server::actor::{Actor, ActorAction, ActorContext};
 
-use crate::codec::RemoteExecutionCodec;
-use crate::driver::DriverClient;
+use crate::driver::DriverClientSet;
 use crate::rpc::{ClientOptions, ServerMonitor};
-use crate::worker::actor::peer_tracker::{PeerTracker, PeerTrackerOptions};
+use crate::stream_manager::{StreamManager, StreamManagerOptions};
+use crate::task_runner::TaskRunner;
 use crate::worker::event::WorkerEvent;
 use crate::worker::options::WorkerOptions;
+use crate::worker::peer_tracker::{PeerTracker, PeerTrackerOptions};
 use crate::worker::WorkerActor;
 
 #[tonic::async_trait]
@@ -24,20 +24,20 @@ impl Actor for WorkerActor {
     }
 
     fn new(options: WorkerOptions) -> Self {
-        let driver_client = DriverClient::new(ClientOptions {
+        let driver_client_set = DriverClientSet::new(ClientOptions {
             enable_tls: options.enable_tls,
             host: options.driver_host.clone(),
             port: options.driver_port,
         });
-        let peer_tracker = PeerTracker::new(PeerTrackerOptions::new(&options));
+        let peer_tracker = PeerTracker::new(PeerTrackerOptions::from(&options));
+        let stream_manager = StreamManager::new(StreamManagerOptions::from(&options));
         Self {
             options,
             server: ServerMonitor::new(),
-            driver_client,
+            driver_client_set,
             peer_tracker,
-            task_signals: HashMap::new(),
-            local_streams: HashMap::new(),
-            physical_plan_codec: Box::new(RemoteExecutionCodec),
+            task_runner: TaskRunner::new(),
+            stream_manager,
             sequence: 42,
         }
     }
@@ -64,46 +64,48 @@ impl Actor for WorkerActor {
                 self.handle_report_known_peers(ctx, peer_worker_ids)
             }
             WorkerEvent::RunTask {
-                instance,
-                plan,
-                partition,
-                channel,
+                key,
+                definition,
                 peers,
-            } => self.handle_run_task(ctx, instance, plan, partition, channel, peers),
-            WorkerEvent::StopTask { instance } => self.handle_stop_task(ctx, instance),
+            } => self.handle_run_task(ctx, key, definition, peers),
+            WorkerEvent::StopTask { key } => self.handle_stop_task(ctx, key),
             WorkerEvent::ReportTaskStatus {
-                instance,
+                key,
                 status,
                 message,
                 cause,
-            } => self.handle_report_task_status(ctx, instance, status, message, cause),
+            } => self.handle_report_task_status(ctx, key, status, message, cause),
+            WorkerEvent::ProbePendingLocalStream { key } => {
+                self.handle_probe_pending_local_stream(ctx, key)
+            }
             WorkerEvent::CreateLocalStream {
-                channel,
+                key,
                 storage,
                 schema,
                 result,
-            } => self.handle_create_local_stream(ctx, channel, storage, schema, result),
+            } => self.handle_create_local_stream(ctx, key, storage, schema, result),
             WorkerEvent::CreateRemoteStream {
                 uri,
+                key,
                 schema,
                 result,
-            } => self.handle_create_remote_stream(ctx, uri, schema, result),
-            WorkerEvent::FetchThisWorkerStream { channel, result } => {
-                self.handle_fetch_this_worker_stream(ctx, channel, result)
+            } => self.handle_create_remote_stream(ctx, uri, key, schema, result),
+            WorkerEvent::FetchDriverStream {
+                key,
+                schema,
+                result,
+            } => self.handle_fetch_driver_stream(ctx, key, schema, result),
+            WorkerEvent::FetchWorkerStream { owner, key, result } => {
+                self.handle_fetch_worker_stream(ctx, owner, key, result)
             }
-            WorkerEvent::FetchOtherWorkerStream {
-                worker_id,
-                channel,
-                schema,
-                result,
-            } => self.handle_fetch_other_worker_stream(ctx, worker_id, channel, schema, result),
             WorkerEvent::FetchRemoteStream {
                 uri,
+                key,
                 schema,
                 result,
-            } => self.handle_fetch_remote_stream(ctx, uri, schema, result),
-            WorkerEvent::RemoveLocalStream { channel_prefix } => {
-                self.handle_remove_local_stream(ctx, channel_prefix)
+            } => self.handle_fetch_remote_stream(ctx, uri, key, schema, result),
+            WorkerEvent::CleanUpJob { job_id, stage } => {
+                self.handle_clean_up_job(ctx, job_id, stage)
             }
             WorkerEvent::Shutdown => ActorAction::Stop,
         }

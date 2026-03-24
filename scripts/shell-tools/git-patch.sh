@@ -22,7 +22,7 @@ function apply_git_patch() {
   export __GIT_PATCH_FILE="${file}"
 
   echo "Applying the patch..."
-  git -C "${__GIT_PATCH_DIRECTORY}" apply "${file}"
+  git -C "${__GIT_PATCH_DIRECTORY}" apply --ignore-whitespace "${file}"
 
   trap 'revert_git_patch' EXIT
 }

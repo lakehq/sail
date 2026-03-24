@@ -45,7 +45,8 @@ impl UserDefinedLogicalNodeCore for SortWithinPartitionsNode {
     }
 
     fn expressions(&self) -> Vec<Expr> {
-        vec![]
+        // Return the inner expression from each Sort so the optimizer can transform them
+        self.sort_expr.iter().map(|s| s.expr.clone()).collect()
     }
 
     fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
@@ -63,10 +64,30 @@ impl UserDefinedLogicalNodeCore for SortWithinPartitionsNode {
     }
 
     fn with_exprs_and_inputs(&self, exprs: Vec<Expr>, inputs: Vec<LogicalPlan>) -> Result<Self> {
-        exprs.zero()?;
+        // Validate that expressions length matches
+        if exprs.len() != self.sort_expr.len() {
+            return Err(datafusion_common::DataFusionError::Internal(format!(
+                "SortWithinPartitionsNode: expected {} expressions, got {}",
+                self.sort_expr.len(),
+                exprs.len()
+            )));
+        }
+
+        // Rebuild sort_expr using new expressions but keeping same asc/nulls_first
+        let sort_expr = self
+            .sort_expr
+            .iter()
+            .zip(exprs)
+            .map(|(old_sort, new_expr)| Sort {
+                expr: new_expr,
+                asc: old_sort.asc,
+                nulls_first: old_sort.nulls_first,
+            })
+            .collect();
+
         Ok(Self {
             input: Arc::new(inputs.one()?),
-            sort_expr: self.sort_expr.clone(),
+            sort_expr,
             fetch: self.fetch,
         })
     }

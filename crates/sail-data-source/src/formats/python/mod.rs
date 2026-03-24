@@ -1,0 +1,52 @@
+//! Python data source support for Sail.
+//!
+//! This module provides the infrastructure for Python-defined data sources,
+//! enabling users to implement custom data sources in Python while leveraging
+//! Sail's distributed execution.
+//!
+//! # Architecture
+//!
+//! The implementation follows a trait-based abstraction for future-proofing:
+//!
+//! - `PythonExecutor` trait: Abstracts Python execution (in-process or subprocess)
+//! - `InProcessExecutor`: MVP implementation using PyO3 directly
+//! - `RemoteExecutor`: Future implementation for subprocess isolation (PR #3)
+//!
+//! # Components
+//!
+//! - `discovery`: Entry point discovery and registry
+//! - `filter`: Filter pushdown conversion (DataFusion → Python)
+//! - `executor`: Python execution abstraction
+//! - `stream`: RecordBatch streaming with RAII cleanup
+//! - `arrow_utils`: Arrow ↔ Python conversion utilities
+//! - `write_exec`: Distributed write execution plan for Python datasources
+//! - `commit_exec`: Single-partition commit/abort execution plan
+pub mod arrow_utils;
+mod commit_exec;
+mod datasource;
+mod discovery;
+mod error;
+mod exec;
+mod executor;
+mod filter;
+mod stream;
+mod table_format;
+mod table_provider;
+mod write_exec;
+
+// Public exports - always available
+// Public exports - require python feature
+pub use commit_exec::PythonDataSourceWriteCommitExec;
+pub use datasource::PythonDataSource;
+pub use discovery::{
+    discover_data_sources, validate_datasource_class, DataSourceEntry, PythonDataSourceRegistry,
+    DATA_SOURCE_REGISTRY,
+};
+pub use error::PythonDataSourceError;
+pub use exec::PythonDataSourceExec;
+pub use executor::{InProcessExecutor, InputPartition, PythonExecutor};
+pub use filter::{exprs_to_python_filters, ColumnPath, FilterValue, PythonFilter};
+pub use stream::{PythonDataSourceStream, RowBatchCollector, DEFAULT_BATCH_SIZE};
+pub use table_format::PythonTableFormat;
+pub use table_provider::PythonTableProvider;
+pub use write_exec::PythonDataSourceWriteExec;

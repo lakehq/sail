@@ -67,7 +67,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: array_sort"
+        "success": "ok"
       }
     },
     {

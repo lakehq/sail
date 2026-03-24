@@ -12,7 +12,7 @@ use crate::driver::gen::{
 };
 use crate::driver::{gen, DriverEvent};
 use crate::error::ExecutionError;
-use crate::id::{TaskInstance, WorkerId};
+use crate::id::{TaskKey, WorkerId};
 
 pub struct DriverServer {
     handle: ActorHandle<DriverActor>,
@@ -107,7 +107,8 @@ impl DriverService for DriverServer {
         debug!("{request:?}");
         let ReportTaskStatusRequest {
             job_id,
-            task_id,
+            stage,
+            partition,
             attempt,
             status,
             message,
@@ -120,9 +121,10 @@ impl DriverService for DriverServer {
             .transpose()
             .map_err(ExecutionError::from)?;
         let event = DriverEvent::UpdateTask {
-            instance: TaskInstance {
+            key: TaskKey {
                 job_id: job_id.into(),
-                task_id: task_id.into(),
+                stage: stage as usize,
+                partition: partition as usize,
                 attempt: attempt as usize,
             },
             status: status.into(),

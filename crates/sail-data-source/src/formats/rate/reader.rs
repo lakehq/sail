@@ -12,7 +12,7 @@ use datafusion::logical_expr::Expr;
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
-use datafusion_common::{arrow_datafusion_err, plan_err, DataFusionError, Result};
+use datafusion_common::{arrow_datafusion_err, plan_err, Result};
 use futures::{Stream, StreamExt};
 use sail_common_datafusion::streaming::event::encoding::EncodedFlowEventStream;
 use sail_common_datafusion::streaming::event::schema::to_flow_event_schema;

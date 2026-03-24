@@ -8,8 +8,9 @@
   {
     "module": "pyspark.sql.functions",
     "function": "array_sort",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/229"
+    "status": "partially supported",
+    "ref": "https://github.com/lakehq/sail/issues/229",
+    "note": "Array sorting is supported for the case when the lambda function is not provided."
   },
   {
     "module": "pyspark.sql.functions",

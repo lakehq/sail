@@ -24,13 +24,19 @@ impl MetricEmitter for FilterMetricEmitter {
                     .execution_filter_input_row_count
                     .recorder(ratio_metrics.total())
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
                 registry
                     .execution_filter_output_row_count
                     .recorder(ratio_metrics.part())
                     .with_attributes(attributes)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
+                    .with_optional_attribute(
+                        MetricAttribute::EXECUTION_PARTITION,
+                        metric.partition(),
+                    )
                     .emit();
                 MetricHandled::Yes
             }

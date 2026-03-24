@@ -7,6 +7,9 @@ inputs:
   install-testing-tools:
     description: Whether to install testing tools (grcov, nextest, llvm-tools-preview)
     default: "true"
+  install-nightly-toolchain:
+    description: Whether to install the Rust nightly toolchain
+    default: "false"
 runs:
   using: composite
   steps:
@@ -18,14 +21,19 @@ runs:
         repo-token: ${{ github.token }}
 
     # The Rust stable toolchain is likely installed already, but we need to check for updates.
-    # The Rust nightly toolchain is needed for features used in e.g. code formatting.
-    - name: Install Rust toolchains
+    - name: Install Rust toolchain (stable)
       run: |
         if [[ "${{ inputs.install-testing-tools }}" == "true" ]]; then
           rustup toolchain install stable --profile default --component llvm-tools-preview
         else
           rustup toolchain install stable --profile default
         fi
+      shell: bash
+
+    # The Rust nightly toolchain is needed for features used in e.g. code formatting.
+    - name: Install Rust toolchain (nightly)
+      if: ${{ inputs.install-nightly-toolchain == 'true' }}
+      run: |
         rustup toolchain install nightly --profile default
       shell: bash
 

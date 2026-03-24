@@ -19,12 +19,14 @@ datafusion-expr = { workspace = true }
 datafusion-expr-common = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-functions-nested = { workspace = true }
+datafusion-physical-expr = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = { workspace = true }
 regex = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
 rand_distr = { workspace = true }
+ordered-float = { workspace = true }
 lazy_static = { workspace = true }
 twox-hash = { workspace = true }
 aes = { workspace = true }
@@ -38,4 +40,6 @@ parquet-variant = { workspace = true }
 parquet-variant-compute = { workspace = true }
 parquet-variant-json = { workspace = true }
 percent-encoding = { workspace = true }
-serde_json ={ workspace = true }
+jiter = { workspace = true }
+thiserror = { workspace = true }
+serde_json = { workspace = true }

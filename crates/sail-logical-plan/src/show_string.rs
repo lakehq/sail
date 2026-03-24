@@ -1,4 +1,3 @@
-use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::hash::Hash;
@@ -9,6 +8,7 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::{DFSchema, DFSchemaRef, Result};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
+use educe::Educe;
 use sail_common::string::escape_meta_characters;
 use sail_common_datafusion::display::{ArrayFormatter, FormatOptions};
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -207,37 +207,17 @@ impl ShowStringFormat {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
+#[educe(PartialOrd)]
 pub struct ShowStringNode {
     input: Arc<LogicalPlan>,
+    // names is part of schema so we skip it in PartialOrd
+    #[educe(PartialOrd(ignore))]
     names: Vec<String>,
+    #[educe(PartialOrd(ignore))]
     schema: DFSchemaRef,
     limit: usize,
     format: ShowStringFormat,
-}
-
-#[derive(PartialEq, PartialOrd)]
-struct ShowStringNodeOrd<'a> {
-    // names is part of schema so we skip that
-    input: &'a Arc<LogicalPlan>,
-    limit: usize,
-    format: &'a ShowStringFormat,
-}
-
-impl<'a> From<&'a ShowStringNode> for ShowStringNodeOrd<'a> {
-    fn from(node: &'a ShowStringNode) -> Self {
-        Self {
-            input: &node.input,
-            limit: node.limit,
-            format: &node.format,
-        }
-    }
-}
-
-impl PartialOrd for ShowStringNode {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        ShowStringNodeOrd::from(self).partial_cmp(&other.into())
-    }
 }
 
 impl ShowStringNode {

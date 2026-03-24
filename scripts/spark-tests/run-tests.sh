@@ -27,6 +27,7 @@ case "$(basename "${VIRTUAL_ENV}")" in
   test-ibis)
     plugin_args=("-p" "plugins.ibis")
     test_run_name="${TEST_RUN_NAME:-ibis}"
+    export IBIS_TESTING="1"
     export IBIS_TESTING_DATA_DIR="${project_path}/opt/ibis-testing-data"
     ;;
   *)

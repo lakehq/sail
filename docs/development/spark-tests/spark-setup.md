@@ -15,7 +15,7 @@ git clone git@github.com:ibis-project/testing-data.git opt/ibis-testing-data
 
 ::: info
 
-You may use options such as `--branch v4.1.0 --depth 1` to get a shallow copy of the Spark repository. But you would need to take care of fetching other branches if you need to work with multiple Spark versions.
+You may use options such as `--branch v4.1.1 --depth 1` to get a shallow copy of the Spark repository. But you would need to take care of fetching other branches if you need to work with multiple Spark versions.
 
 :::
 
@@ -26,7 +26,7 @@ Python tests are also included in the patched package.
 You can choose to run any or all of the commands, depending on the Spark versions you want to test against.
 
 ```bash
-env SPARK_VERSION=4.1.0 scripts/spark-tests/build-pyspark.sh
+env SPARK_VERSION=4.1.1 scripts/spark-tests/build-pyspark.sh
 env SPARK_VERSION=3.5.7 scripts/spark-tests/build-pyspark.sh
 ```
 

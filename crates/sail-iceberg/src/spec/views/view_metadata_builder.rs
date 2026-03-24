@@ -11,6 +11,5 @@
 // limitations under the License.
 
 // Awareness stub
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ViewMetadataBuilder;

@@ -2,8 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion_common::arrow::datatypes::Field;
-use datafusion_common::{DFSchemaRef, TableReference};
+use datafusion_common::{DFSchemaRef, ScalarValue, TableReference};
 use datafusion_expr::LogicalPlan;
+use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::expression::NamedExpr;
@@ -74,7 +75,16 @@ pub(super) struct PlanResolverState {
     aggregate_state: AggregateState,
     /// The CTEs for the current query.
     ctes: HashMap<TableReference, Arc<LogicalPlan>>,
+    /// Unresolved subquery references from a WithRelations node, keyed by plan_id.
+    subquery_references: HashMap<i64, spec::QueryPlan>,
     config: PlanResolverStateConfig,
+    /// Named parameter values available for IDENTIFIER clause evaluation.
+    /// Set when resolving a `WithParameters` query node so that IDENTIFIER expressions
+    /// can substitute placeholders before constant-folding them.
+    param_values: HashMap<String, ScalarValue>,
+    /// Positional parameter values available for IDENTIFIER clause evaluation.
+    /// Set alongside `param_values` when resolving a `WithParameters` query node.
+    positional_param_values: Vec<ScalarValue>,
 }
 
 impl Default for PlanResolverState {
@@ -91,7 +101,10 @@ impl PlanResolverState {
             outer_query_schema: None,
             aggregate_state: AggregateState::default(),
             ctes: HashMap::new(),
+            subquery_references: HashMap::new(),
             config: PlanResolverStateConfig::default(),
+            param_values: HashMap::new(),
+            positional_param_values: Vec::new(),
         }
     }
 
@@ -199,6 +212,24 @@ impl PlanResolverState {
         self.ctes.insert(table_ref, Arc::new(plan));
     }
 
+    /// Returns a subquery reference plan from state by plan_id.
+    pub fn get_subquery_reference(&self, plan_id: i64) -> Option<spec::QueryPlan> {
+        self.subquery_references.get(&plan_id).cloned()
+    }
+
+    /// Stores a subquery reference plan in state, returning the previous value if any.
+    pub fn insert_subquery_reference(
+        &mut self,
+        plan_id: i64,
+        plan: spec::QueryPlan,
+    ) -> Option<spec::QueryPlan> {
+        self.subquery_references.insert(plan_id, plan)
+    }
+
+    pub fn enter_with_relations_scope(&mut self) -> WithRelationsScope<'_> {
+        WithRelationsScope::new(self)
+    }
+
     pub fn enter_config_scope(&mut self) -> ConfigScope<'_> {
         ConfigScope::new(self)
     }
@@ -218,6 +249,62 @@ impl PlanResolverState {
 
     pub fn config_mut(&mut self) -> &mut PlanResolverStateConfig {
         &mut self.config
+    }
+
+    /// Returns the named parameter value for the given name, if any.
+    pub fn get_param_value(&self, name: &str) -> Option<&ScalarValue> {
+        self.param_values.get(name)
+    }
+
+    /// Returns the positional parameter value at the given 0-based index, if any.
+    pub fn get_positional_param_value(&self, index: usize) -> Option<&ScalarValue> {
+        self.positional_param_values.get(index)
+    }
+
+    /// Enters a scope where named and positional parameter values are set.
+    /// The previous parameter values are restored when the scope is dropped.
+    pub fn enter_param_values_scope(
+        &mut self,
+        named: HashMap<String, ScalarValue>,
+        positional: Vec<ScalarValue>,
+    ) -> ParamValuesScope<'_> {
+        ParamValuesScope::new(self, named, positional)
+    }
+}
+
+/// Scope for parameter values used by IDENTIFIER clause evaluation.
+pub(crate) struct ParamValuesScope<'a> {
+    state: &'a mut PlanResolverState,
+    previous_param_values: HashMap<String, ScalarValue>,
+    previous_positional_param_values: Vec<ScalarValue>,
+}
+
+impl<'a> ParamValuesScope<'a> {
+    fn new(
+        state: &'a mut PlanResolverState,
+        named: HashMap<String, ScalarValue>,
+        positional: Vec<ScalarValue>,
+    ) -> Self {
+        let previous_param_values = std::mem::replace(&mut state.param_values, named);
+        let previous_positional_param_values =
+            std::mem::replace(&mut state.positional_param_values, positional);
+        Self {
+            state,
+            previous_param_values,
+            previous_positional_param_values,
+        }
+    }
+
+    pub(crate) fn state(&mut self) -> &mut PlanResolverState {
+        self.state
+    }
+}
+
+impl Drop for ParamValuesScope<'_> {
+    fn drop(&mut self) {
+        self.state.param_values = std::mem::take(&mut self.previous_param_values);
+        self.state.positional_param_values =
+            std::mem::take(&mut self.previous_positional_param_values);
     }
 }
 
@@ -319,5 +406,31 @@ impl<'a> ConfigScope<'a> {
 impl Drop for ConfigScope<'_> {
     fn drop(&mut self) {
         self.state.config = std::mem::take(&mut self.previous_config);
+    }
+}
+
+/// Scope for WithRelations subquery references.
+pub(crate) struct WithRelationsScope<'a> {
+    state: &'a mut PlanResolverState,
+    previous_subquery_references: HashMap<i64, spec::QueryPlan>,
+}
+
+impl<'a> WithRelationsScope<'a> {
+    fn new(state: &'a mut PlanResolverState) -> Self {
+        let previous_subquery_references = std::mem::take(&mut state.subquery_references);
+        Self {
+            state,
+            previous_subquery_references,
+        }
+    }
+
+    pub(crate) fn state(&mut self) -> &mut PlanResolverState {
+        self.state
+    }
+}
+
+impl Drop for WithRelationsScope<'_> {
+    fn drop(&mut self) {
+        self.state.subquery_references = std::mem::take(&mut self.previous_subquery_references);
     }
 }

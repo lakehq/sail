@@ -1,0 +1,18 @@
+[package]
+name = "sail-catalog-system"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-catalog = { path = "../sail-catalog" }
+
+serde = { workspace = true }
+datafusion = { workspace = true }
+async-trait = { workspace = true }
+educe = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true }

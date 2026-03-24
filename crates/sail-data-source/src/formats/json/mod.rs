@@ -7,7 +7,7 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_datasource::file_format::FileFormat;
 
 use crate::formats::json::options::{resolve_json_read_options, resolve_json_write_options};
-use crate::formats::listing::{ListingFormat, ListingTableFormat};
+use crate::formats::listing::{DefaultSchemaInfer, ListingFormat, ListingTableFormat, SchemaInfer};
 
 mod options;
 
@@ -41,5 +41,9 @@ impl ListingFormat for JsonListingFormat {
     ) -> datafusion_common::Result<(Arc<dyn FileFormat>, Option<String>)> {
         let options = resolve_json_write_options(ctx, options)?;
         Ok((Arc::new(JsonFormat::default().with_options(options)), None))
+    }
+
+    fn schema_inferrer(&self) -> Arc<dyn SchemaInfer> {
+        Arc::new(DefaultSchemaInfer)
     }
 }

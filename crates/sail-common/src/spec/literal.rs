@@ -375,5 +375,8 @@ pub fn data_type_to_null_literal(data_type: spec::DataType) -> CommonResult<Lite
                 values: None,
             })
         }
+        // Geometry and Geography are stored as WKB-encoded Binary at the Arrow level
+        spec::DataType::Geometry { .. } => Ok(Literal::Binary { value: None }),
+        spec::DataType::Geography { .. } => Ok(Literal::Binary { value: None }),
     }
 }

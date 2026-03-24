@@ -7,6 +7,7 @@ use sail_catalog::provider::{
     CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions,
     DropViewOptions, Namespace,
 };
+use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
 
 struct MemoryDatabase {
@@ -71,7 +72,7 @@ impl CatalogProvider for MemoryCatalogProvider {
                 } else {
                     Err(CatalogError::AlreadyExists(
                         "database",
-                        database.to_string(),
+                        quote_namespace_if_needed(database),
                     ))
                 }
             }
@@ -98,7 +99,10 @@ impl CatalogProvider for MemoryCatalogProvider {
         if let Some(db) = self.databases.get(database) {
             Ok(db.status.clone())
         } else {
-            Err(CatalogError::NotFound("database", database.to_string()))
+            Err(CatalogError::NotFound(
+                "database",
+                quote_namespace_if_needed(database),
+            ))
         }
     }
 
@@ -133,7 +137,10 @@ impl CatalogProvider for MemoryCatalogProvider {
             if if_exists {
                 Ok(())
             } else {
-                Err(CatalogError::NotFound("database", database.to_string()))
+                Err(CatalogError::NotFound(
+                    "database",
+                    quote_namespace_if_needed(database),
+                ))
             }
         } else {
             Ok(())
@@ -160,10 +167,16 @@ impl CatalogProvider for MemoryCatalogProvider {
             options,
             properties,
         } = options;
-        let mut db = self
-            .databases
-            .get_mut(database)
-            .ok_or_else(|| CatalogError::NotFound("database", database.to_string()))?;
+        if !format.eq_ignore_ascii_case("iceberg")
+            && partition_by.iter().any(|f| f.transform.is_some())
+        {
+            return Err(CatalogError::NotSupported(
+                "partition transforms are not supported by memory catalog".to_string(),
+            ));
+        }
+        let mut db = self.databases.get_mut(database).ok_or_else(|| {
+            CatalogError::NotFound("database", quote_namespace_if_needed(database))
+        })?;
         if let Some(status) = db.tables.get(table) {
             if if_not_exists {
                 return Ok(status.clone());
@@ -184,7 +197,9 @@ impl CatalogProvider for MemoryCatalogProvider {
                     default,
                     generated_always_as,
                 } = x;
-                let is_partition = partition_by.iter().any(|x| x.eq_ignore_ascii_case(&name));
+                let is_partition = partition_by
+                    .iter()
+                    .any(|x| x.column.eq_ignore_ascii_case(&name));
                 let is_bucket = bucket_by
                     .as_ref()
                     .is_some_and(|b| b.columns.iter().any(|x| x.eq_ignore_ascii_case(&name)));
@@ -202,10 +217,10 @@ impl CatalogProvider for MemoryCatalogProvider {
             })
             .collect();
         let status = TableStatus {
+            catalog: Some(self.name.clone()),
+            database: database.clone().into(),
             name: table.to_string(),
             kind: TableKind::Table {
-                catalog: self.name.clone(),
-                database: database.clone().into(),
                 columns,
                 comment,
                 constraints,
@@ -235,7 +250,10 @@ impl CatalogProvider for MemoryCatalogProvider {
         if let Some(db) = self.databases.get(database) {
             Ok(db.tables.values().cloned().collect())
         } else {
-            Err(CatalogError::NotFound("database", database.to_string()))
+            Err(CatalogError::NotFound(
+                "database",
+                quote_namespace_if_needed(database),
+            ))
         }
     }
 
@@ -261,7 +279,10 @@ impl CatalogProvider for MemoryCatalogProvider {
         } else if if_exists {
             Ok(())
         } else {
-            Err(CatalogError::NotFound("database", database.to_string()))
+            Err(CatalogError::NotFound(
+                "database",
+                quote_namespace_if_needed(database),
+            ))
         }
     }
 
@@ -279,10 +300,9 @@ impl CatalogProvider for MemoryCatalogProvider {
             comment,
             properties,
         } = options;
-        let mut db = self
-            .databases
-            .get_mut(database)
-            .ok_or_else(|| CatalogError::NotFound("database", database.to_string()))?;
+        let mut db = self.databases.get_mut(database).ok_or_else(|| {
+            CatalogError::NotFound("database", quote_namespace_if_needed(database))
+        })?;
         if let Some(status) = db.views.get(view) {
             if if_not_exists {
                 return Ok(status.clone());
@@ -315,10 +335,10 @@ impl CatalogProvider for MemoryCatalogProvider {
             })
             .collect();
         let status = TableStatus {
+            catalog: Some(self.name.clone()),
+            database: database.clone().into(),
             name: view.to_string(),
             kind: TableKind::View {
-                catalog: self.name.clone(),
-                database: database.clone().into(),
                 columns,
                 definition,
                 comment,
@@ -342,7 +362,10 @@ impl CatalogProvider for MemoryCatalogProvider {
         if let Some(db) = self.databases.get(database) {
             Ok(db.views.values().cloned().collect())
         } else {
-            Err(CatalogError::NotFound("database", database.to_string()))
+            Err(CatalogError::NotFound(
+                "database",
+                quote_namespace_if_needed(database),
+            ))
         }
     }
 
@@ -362,7 +385,10 @@ impl CatalogProvider for MemoryCatalogProvider {
         } else if if_exists {
             Ok(())
         } else {
-            Err(CatalogError::NotFound("database", database.to_string()))
+            Err(CatalogError::NotFound(
+                "database",
+                quote_namespace_if_needed(database),
+            ))
         }
     }
 }

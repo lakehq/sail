@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use fastrace::future::FutureExt;
 use fastrace::prelude::SpanContext;
 use fastrace::Span;
-use log::error;
+use log::{error, warn};
 use sail_telemetry::common::{SpanAssociation, SpanAttribute, SpanKind};
 use tokio::sync::mpsc;
 use tokio::task::{AbortHandle, JoinSet};
@@ -18,7 +18,7 @@ pub trait Actor: Sized + Send + 'static {
     fn name() -> &'static str;
 
     fn new(options: Self::Options) -> Self;
-    #[allow(unused_variables)]
+    #[expect(unused_variables)]
     async fn start(&mut self, ctx: &mut ActorContext<Self>) {}
     /// Process one message and return the next action.
     /// This method should handle errors internally (e.g. by sending itself an error message
@@ -28,7 +28,7 @@ pub trait Actor: Sized + Send + 'static {
     /// If the actor needs to perform async operations, it should spawn tasks via
     /// [ActorContext::spawn].
     fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction;
-    #[allow(unused_variables)]
+    #[expect(unused_variables)]
     async fn stop(self, ctx: &mut ActorContext<Self>) {}
 }
 
@@ -217,7 +217,18 @@ impl<T: Actor> ActorRunner<T> {
             }
             self.ctx.reap();
         }
+        // The receiver will be dropped at the end of this function call,
+        // and the other end of the channel will then know that the actor is no longer running.
+        // But here we explicitly close the receiver so that the other end knows sooner
+        // that the actor is no longer running, since the actor may take some time to stop.
+        self.receiver.close();
         self.actor.stop(&mut self.ctx).await;
+        self.ctx.reap();
+        // The remaining tasks will be aborted when the `ActorContext` is dropped.
+        let n = self.ctx.tasks.len();
+        if n > 0 {
+            warn!("aborting {n} task(s) for {}", T::name());
+        }
     }
 }
 

@@ -16,7 +16,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::{new_null_array, ArrayRef};
 use datafusion::arrow::datatypes::{FieldRef, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion_common::DataFusionError;
+use datafusion_common::{DataFusionError, Result};
 use object_store::path::Path as ObjectPath;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
@@ -80,26 +80,24 @@ impl IcebergTableWriter {
         if spec.fields.is_empty() {
             // Unpartitioned: write as-is once
             let partition_dir = String::new();
-            #[allow(clippy::expect_used)]
-            let writer = self
-                .writers
-                .entry(partition_dir.clone())
-                .or_insert_with(|| {
+            let writer = match self.writers.entry(partition_dir.clone()) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
                     for (i, f) in self.config.table_schema.fields().iter().enumerate() {
                         log::trace!(
-                            "iceberg.table_writer.writer_schema: field[{}]='{}' type={:?} field_id_meta={:?}",
-                            i,
-                            f.name(),
-                            f.data_type(),
-                            f.metadata().get(PARQUET_FIELD_ID_META_KEY)
-                        );
+                                    "iceberg.table_writer.writer_schema: field[{}]='{}' type={:?} field_id_meta={:?}",
+                                    i,
+                                    f.name(),
+                                    f.data_type(),
+                                    f.metadata().get(PARQUET_FIELD_ID_META_KEY)
+                                );
                     }
-                    ArrowParquetWriter::try_new(
+                    entry.insert(ArrowParquetWriter::try_new(
                         self.config.table_schema.as_ref(),
                         self.config.writer_properties.clone(),
-                    )
-                    .expect("parquet writer")
-                });
+                    )?)
+                }
+            };
             self.partition_values_map
                 .entry(partition_dir.clone())
                 .or_default();
@@ -118,11 +116,9 @@ impl IcebergTableWriter {
         let parts = split_record_batch_by_partition(batch, spec, iceberg_schema)?;
         for p in parts.into_iter() {
             let partition_dir = p.partition_dir;
-            #[allow(clippy::expect_used)]
-            let writer = self
-                .writers
-                .entry(partition_dir.clone())
-                .or_insert_with(|| {
+            let writer = match self.writers.entry(partition_dir.clone()) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
                     for (i, f) in self.config.table_schema.fields().iter().enumerate() {
                         log::trace!(
                             "iceberg.table_writer.writer_schema: field[{}]='{}' type={:?} field_id_meta={:?}",
@@ -132,12 +128,12 @@ impl IcebergTableWriter {
                             f.metadata().get(PARQUET_FIELD_ID_META_KEY)
                         );
                     }
-                    ArrowParquetWriter::try_new(
+                    entry.insert(ArrowParquetWriter::try_new(
                         self.config.table_schema.as_ref(),
                         self.config.writer_properties.clone(),
-                    )
-                    .expect("parquet writer")
-                });
+                    )?)
+                }
+            };
             self.partition_values_map
                 .entry(partition_dir.clone())
                 .or_insert(p.partition_values);

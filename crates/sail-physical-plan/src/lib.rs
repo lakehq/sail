@@ -1,9 +1,12 @@
+pub mod barrier;
+pub mod catalog_command;
 pub mod file_delete;
 pub mod file_write;
 pub mod format_tag;
 pub mod map_partitions;
 pub mod merge;
 pub mod merge_cardinality_check;
+pub mod monotonic_id;
 pub mod range;
 pub mod repartition;
 pub mod schema_pivot;

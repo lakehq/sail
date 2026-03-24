@@ -26,6 +26,7 @@ fn apply_csv_read_options(
         multi_line,
         compression,
         allow_truncated_rows,
+        infer_schema: _,
     } = from;
     let null_regex = match (null_value, null_regex) {
         (Some(null_value), Some(null_regex))

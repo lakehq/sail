@@ -1,37 +1,22 @@
-use std::cmp::Ordering;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
 use datafusion::logical_expr::LogicalPlan;
 use datafusion_common::{plan_err, DFSchema, DFSchemaRef, Result};
 use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
+use educe::Educe;
 use sail_common_datafusion::streaming::event::schema::to_flow_event_schema;
 
 /// A logical plan node that adapts a non-streaming data source
 /// to a streaming source so that it can be used in a streaming query.
 /// The wrapped source contains retraction flag for each row,
 /// and emits data flow markers.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
+#[educe(PartialOrd)]
 pub struct StreamSourceAdapterNode {
     input: Arc<LogicalPlan>,
+    #[educe(PartialOrd(ignore))]
     schema: DFSchemaRef,
-}
-
-#[derive(PartialEq, PartialOrd)]
-struct StreamSourceAdapterNodeOrd<'a> {
-    input: &'a Arc<LogicalPlan>,
-}
-
-impl<'a> From<&'a StreamSourceAdapterNode> for StreamSourceAdapterNodeOrd<'a> {
-    fn from(node: &'a StreamSourceAdapterNode) -> Self {
-        Self { input: &node.input }
-    }
-}
-
-impl PartialOrd for StreamSourceAdapterNode {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        StreamSourceAdapterNodeOrd::from(self).partial_cmp(&other.into())
-    }
 }
 
 impl StreamSourceAdapterNode {

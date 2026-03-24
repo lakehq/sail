@@ -354,27 +354,31 @@ impl Literal {
         use crate::spec::types::{PrimitiveType, Type};
 
         fn days_to_date_str(days: i32) -> String {
-            #[allow(clippy::unwrap_used)]
-            let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+            #[expect(clippy::expect_used)]
+            let epoch = NaiveDate::from_ymd_opt(1970, 1, 1)
+                .expect("Creating date from constant should never fail");
             let d = epoch + chrono::Days::new(days as u64);
             d.to_string()
         }
         fn micros_to_time_str(us: i64) -> String {
             let secs = us.div_euclid(1_000_000);
-            let rem = (us.rem_euclid(1_000_000)) as u32;
-            #[allow(clippy::unwrap_used)]
+            let rem = us.rem_euclid(1_000_000) as u32;
+            #[expect(clippy::expect_used)]
             let t = NaiveTime::from_num_seconds_from_midnight_opt(secs as u32, rem * 1000)
-                .unwrap_or(NaiveTime::from_hms_opt(0, 0, 0).unwrap());
+                .unwrap_or(
+                    NaiveTime::from_hms_opt(0, 0, 0)
+                        .expect("Creating time from constant should never fail"),
+                );
             t.format("%H:%M:%S%.f").to_string()
         }
         fn micros_to_datetime_str(us: i64) -> String {
             let secs = us.div_euclid(1_000_000);
-            let rem = (us.rem_euclid(1_000_000)) as u32;
-            #[allow(clippy::unwrap_used)]
+            let rem = us.rem_euclid(1_000_000) as u32;
+            #[expect(clippy::expect_used)]
             let base = NaiveDate::from_ymd_opt(1970, 1, 1)
-                .unwrap()
+                .expect("Creating date from constant should never fail")
                 .and_hms_nano_opt(0, 0, 0, 0)
-                .unwrap();
+                .expect("Creating time from constant should never fail");
             let dt = base
                 .checked_add_signed(chrono::Duration::seconds(secs))
                 .and_then(|d| {
@@ -551,7 +555,7 @@ impl RawLiteral {
 }
 
 impl Serialize for RawLiteral {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
@@ -566,7 +570,7 @@ impl Serialize for RawLiteral {
 }
 
 impl<'de> Deserialize<'de> for RawLiteral {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
@@ -577,7 +581,7 @@ impl<'de> Deserialize<'de> for RawLiteral {
             fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
                 f.write_str("Avro record for RawLiteral")
             }
-            fn visit_map<M>(self, mut map: M) -> std::result::Result<Self::Value, M::Error>
+            fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
             where
                 M: MapAccess<'de>,
             {
@@ -668,8 +672,8 @@ mod tests {
         assert!(b > a);
         assert!(a <= b);
         assert!(b >= a);
-        assert!(a == a);
-        assert!(a != b);
+        assert_eq!(a, a);
+        assert_ne!(a, b);
     }
 
     #[test]

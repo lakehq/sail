@@ -8,10 +8,11 @@ use datafusion_expr::expr::FieldMetadata;
 use datafusion_expr::{expr, lit, BinaryExpr, ExprSchemable, ScalarUDF};
 use datafusion_expr_common::operator::Operator;
 use datafusion_functions::core::expr_ext::FieldAccessor;
-use datafusion_functions_nested::expr_fn::array_element;
+use datafusion_functions_nested::expr_fn::{array_element, map_extract};
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::session::PlanService;
+use sail_common_datafusion::literal::LiteralEvaluator;
+use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::drop_struct_field::DropStructField;
 use sail_function::scalar::table_input::TableInput;
@@ -56,6 +57,81 @@ impl PlanResolver<'_> {
         Ok(NamedExpr::new(vec![name], expr))
     }
 
+    pub(super) async fn resolve_expression_identifier_clause(
+        &self,
+        expr: spec::Expr,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let resolved = self.resolve_expression(expr, schema, state).await?;
+        let name = self.evaluate_identifier_expr(resolved, state)?;
+        let object_name = sail_sql_analyzer::expression::from_ast_object_name(
+            sail_sql_analyzer::parser::parse_object_name(&name)?,
+        )?;
+        self.resolve_expression_attribute(object_name, None, false, schema, state)
+    }
+
+    /// Evaluates a resolved DataFusion expression as an identifier string.
+    ///
+    /// Named parameter placeholders (e.g. `:col`) are substituted from the
+    /// current parameter scope in `state` before constant-folding, which
+    /// allows expressions like `IDENTIFIER(:col)` or
+    /// `IDENTIFIER(:tab || '.' || :col)` to work inside parameterized SQL.
+    pub(in super::super) fn evaluate_identifier_expr(
+        &self,
+        expr: expr::Expr,
+        state: &PlanResolverState,
+    ) -> PlanResult<String> {
+        use datafusion_common::tree_node::{Transformed, TreeNode};
+        let expr = expr
+            .transform(|e| {
+                if let expr::Expr::Placeholder(expr::Placeholder { id, .. }) = &e {
+                    if id.is_empty() {
+                        return Ok(Transformed::no(e));
+                    }
+                    // Strip the leading prefix character (e.g. ':' or '$') from the
+                    // placeholder id to get the param key, mirroring DataFusion's own
+                    // `get_placeholders_with_values` which does `id[1..]`.
+                    let key = &id[1..];
+                    // Try named parameter.
+                    if let Some(scalar) = state.get_param_value(key) {
+                        return Ok(Transformed::yes(expr::Expr::Literal(scalar.clone(), None)));
+                    }
+                    // Try positional parameter (key is a 1-based integer index).
+                    if let Ok(index) = key.parse::<usize>() {
+                        if index > 0 {
+                            if let Some(scalar) = state.get_positional_param_value(index - 1) {
+                                return Ok(Transformed::yes(expr::Expr::Literal(
+                                    scalar.clone(),
+                                    None,
+                                )));
+                            }
+                        }
+                    }
+                }
+                Ok(Transformed::no(e))
+            })
+            .map_err(|e| {
+                PlanError::invalid(format!("IDENTIFIER placeholder substitution failed: {e}"))
+            })?
+            .data;
+        let evaluator = LiteralEvaluator::new();
+        // Any placeholder that was not substituted above (e.g. because it had no
+        // matching parameter) will cause the evaluation to fail here, since the
+        // LiteralEvaluator cannot constant-fold an unresolved placeholder expression.
+        let scalar = evaluator.evaluate(&expr).map_err(|e| {
+            PlanError::invalid(format!("IDENTIFIER expression must be a constant: {e}"))
+        })?;
+        match scalar {
+            ScalarValue::Utf8(Some(s))
+            | ScalarValue::LargeUtf8(Some(s))
+            | ScalarValue::Utf8View(Some(s)) => Ok(s),
+            _ => Err(PlanError::invalid(
+                "IDENTIFIER expression must evaluate to a string",
+            )),
+        }
+    }
+
     pub(super) async fn resolve_expression_table(
         &self,
         expr: spec::Expr,
@@ -68,12 +144,12 @@ impl PlanResolver<'_> {
                 plan_id: None,
                 is_metadata_column: false,
             } => spec::QueryPlan::new(spec::QueryNode::Read {
-                read_type: spec::ReadType::NamedTable(spec::ReadNamedTable {
+                read_type: spec::ReadType::NamedTable(Box::new(spec::ReadNamedTable {
                     name,
                     temporal: None,
                     sample: None,
                     options: vec![],
-                }),
+                })),
                 is_streaming: false,
             }),
             _ => {
@@ -91,12 +167,67 @@ impl PlanResolver<'_> {
 
     pub(super) async fn resolve_expression_regex(
         &self,
-        _col_name: String,
-        _plan_id: Option<i64>,
-        _schema: &DFSchemaRef,
-        _state: &mut PlanResolverState,
+        col_name: String,
+        plan_id: Option<i64>,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        Err(PlanError::todo("unresolved regex"))
+        use regex::Regex;
+        use sail_function::scalar::multi_expr::MultiExpr;
+
+        // Remove backticks from the pattern if present
+        let pattern_str = col_name.trim_matches('`');
+
+        // Add anchors to match the entire column name (like Spark does)
+        let anchored_pattern = format!("^{}$", pattern_str);
+
+        // Compile the regex pattern
+        let pattern = Regex::new(&anchored_pattern).map_err(|e| {
+            PlanError::invalid(format!("invalid regex pattern '{}': {}", pattern_str, e))
+        })?;
+
+        // Collect all matching columns
+        let mut matching_columns = Vec::new();
+        let mut matching_names = Vec::new();
+
+        for (qualifier, field) in schema.iter() {
+            // Skip qualified columns if no qualifier is expected
+            if qualifier.is_some() {
+                continue;
+            }
+
+            // Get field info
+            let Ok(info) = state.get_field_info(field.name()) else {
+                continue;
+            };
+
+            // Skip hidden fields
+            if info.is_hidden() {
+                continue;
+            }
+
+            // Check if the field name matches the pattern and plan_id
+            let field_name = info.name();
+            if pattern.is_match(field_name) && info.matches(field_name, plan_id) {
+                matching_columns.push(expr::Expr::Column(Column::new_unqualified(field.name())));
+                matching_names.push(field_name.to_string());
+            }
+        }
+
+        // If no columns match, return empty MultiExpr (like Spark does)
+        if matching_columns.is_empty() {
+            let multi_expr = ScalarUDF::from(MultiExpr::new()).call(matching_columns);
+            return Ok(NamedExpr::new(matching_names, multi_expr));
+        }
+
+        // If only one column matches, return it directly
+        if matching_columns.len() == 1 {
+            return Ok(NamedExpr::new(matching_names, matching_columns.one()?));
+        }
+
+        // If multiple columns match, wrap them in a MultiExpr
+        let multi_expr = ScalarUDF::from(MultiExpr::new()).call(matching_columns);
+        Ok(NamedExpr::new(matching_names, multi_expr))
     }
 
     pub(super) async fn resolve_expression_extract_value(
@@ -106,17 +237,44 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let spec::Expr::Literal(extraction) = extraction else {
-            return Err(PlanError::invalid("extraction must be a literal"));
+        let NamedExpr { name, expr, .. } =
+            self.resolve_named_expression(child, schema, state).await?;
+        let data_type = expr.get_type(schema)?;
+
+        // For Maps, we support non-literal expressions as keys
+        if matches!(data_type, DataType::Map(_, _)) {
+            let NamedExpr {
+                name: extraction_name,
+                expr: extraction_expr,
+                ..
+            } = self
+                .resolve_named_expression(extraction, schema, state)
+                .await?;
+
+            let result_name = format!("{}[{}]", name.one()?, extraction_name.one()?);
+            // Use map_extract which supports dynamic keys, then extract first element
+            let result_expr = array_element(map_extract(expr, extraction_expr), lit(1));
+            return Ok(NamedExpr::new(vec![result_name], result_expr));
+        }
+
+        // For other types (List, Struct), extraction must be a literal.
+        // An UnresolvedAttribute from dot notation (e.g. `a.b`) is treated as a
+        // literal field name so that the spec can keep the attribute unresolved.
+        let extraction = match extraction {
+            spec::Expr::Literal(lit) => lit,
+            spec::Expr::UnresolvedAttribute { name, .. } => {
+                let name: Vec<String> = name.into();
+                spec::Literal::Utf8 {
+                    value: Some(name.one()?),
+                }
+            }
+            _ => return Err(PlanError::invalid("extraction must be a literal")),
         };
         let extraction = self.resolve_literal(extraction, state)?;
         let service = self.ctx.extension::<PlanService>()?;
         let extraction_name = service
             .plan_formatter()
             .literal_to_string(&extraction, &self.config.session_timezone)?;
-        let NamedExpr { name, expr, .. } =
-            self.resolve_named_expression(child, schema, state).await?;
-        let data_type = expr.get_type(schema)?;
         let name = match data_type {
             DataType::Struct(_) => {
                 format!("{}.{}", name.one()?, extraction_name)
@@ -157,8 +315,6 @@ impl PlanResolver<'_> {
                 };
                 expr.field(name)
             }
-            // TODO: support non-string map keys
-            DataType::Map(_, _) => expr.field(extraction),
             _ => {
                 return Err(PlanError::AnalysisError(format!(
                     "cannot extract value from data type: {data_type}"

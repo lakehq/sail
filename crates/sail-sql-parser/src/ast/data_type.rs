@@ -2,11 +2,12 @@ use sail_sql_macro::{TreeParser, TreeSyntax, TreeText};
 
 use crate::ast::identifier::Ident;
 use crate::ast::keywords::{
-    Array, Bigint, Binary, Bool, Boolean, Byte, Bytea, Char, Character, Comment, Date, Date32,
-    Date64, Day, Dec, Decimal, Double, Float, Float32, Float64, Hour, Int, Int16, Int32, Int64,
-    Int8, Integer, Interval, Local, Long, Map, Minute, Month, Not, Null, Numeric, Real, Second,
-    Short, Smallint, Struct, Text, Time, Timestamp, TimestampLtz, TimestampNtz, Tinyint, To,
-    Uint16, Uint32, Uint64, Uint8, Unsigned, Varchar, Void, With, Without, Year, Zone,
+    Any, Array, Bigint, Binary, Bool, Boolean, Byte, Bytea, Char, Character, Comment, Date, Date32,
+    Date64, Day, Dec, Decimal, Double, Float, Float32, Float64, Geography, Geometry, Hour, Int,
+    Int16, Int32, Int64, Int8, Integer, Interval, Local, Long, Map, Minute, Month, Not, Null,
+    Numeric, Real, Second, Short, Smallint, Struct, Text, Time, Timestamp, TimestampLtz,
+    TimestampNtz, Tinyint, To, Uint16, Uint32, Uint64, Uint8, Unsigned, Varchar, Void, With,
+    Without, Year, Zone,
 };
 use crate::ast::literal::{IntegerLiteral, StringLiteral};
 use crate::ast::operator::{
@@ -46,7 +47,7 @@ pub enum DataType {
     Double(Double),
     Float32(Float32),
     Float64(Float64),
-    #[allow(clippy::type_complexity)]
+    #[expect(clippy::type_complexity)]
     Decimal(
         DecimalType,
         Option<(
@@ -83,6 +84,10 @@ pub enum DataType {
     Date(Date),
     Date32(Date32),
     Date64(Date64),
+    Time(
+        Time,
+        Option<(LeftParenthesis, IntegerLiteral, RightParenthesis)>,
+    ),
     Interval(IntervalType),
     Array(
         Array,
@@ -105,6 +110,20 @@ pub enum DataType {
         #[parser(function = |d, _| boxed(d))] Box<DataType>,
         GreaterThan,
     ),
+    Geometry(Geometry, LeftParenthesis, GeometrySrid, RightParenthesis),
+    Geography(Geography, LeftParenthesis, GeographySrid, RightParenthesis),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum GeometrySrid {
+    Srid(IntegerLiteral),
+    Any(Any),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum GeographySrid {
+    Srid(IntegerLiteral),
+    Any(Any),
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
@@ -143,7 +162,7 @@ pub enum IntervalDayTimeUnit {
     Second(Second),
 }
 
-#[allow(clippy::enum_variant_names)]
+#[expect(clippy::enum_variant_names)]
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 pub enum TimezoneType {
     WithTimeZone(With, Time, Zone),

@@ -85,7 +85,9 @@
     Infers the input schema automatically from data. It requires one extra pass over the data.
     Ignored if the schema is specified explicitly. If False, the schema must be specified explicitly.
     CSV built-in functions ignore this option.
-  supported: false
+  supported: true
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
 
 - key: schema_infer_max_records
   aliases:

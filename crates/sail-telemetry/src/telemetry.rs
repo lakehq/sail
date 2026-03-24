@@ -7,7 +7,7 @@ use std::time::Duration;
 use datafusion::common::runtime::set_join_set_tracer;
 use fastrace::collector::{Config, Reporter, SpanRecord};
 use fastrace_opentelemetry::OpenTelemetryReporter;
-use log::Log;
+use log::{debug, Log};
 use opentelemetry::metrics::Meter;
 use opentelemetry::{global, InstrumentationScope};
 use opentelemetry_appender_log::OpenTelemetryLogBridge;
@@ -21,7 +21,7 @@ use crate::error::{TelemetryError, TelemetryResult};
 use crate::execution::join_set::DefaultJoinSetTracer;
 use crate::loggers::composite::CompositeLogger;
 use crate::loggers::span::SpanEventLogger;
-use crate::metrics::MetricRegistry;
+use crate::metrics::{MetricManager, MetricRegistry};
 
 enum TelemetryStatus {
     Uninitialized,
@@ -34,7 +34,7 @@ enum TelemetryStatus {
 struct TelemetryState {
     meter_provider: Option<SdkMeterProvider>,
     meter: Option<Meter>,
-    metric_registry: Option<Arc<MetricRegistry>>,
+    metrics: Option<MetricManager>,
     logger_provider: Option<SdkLoggerProvider>,
 }
 
@@ -58,6 +58,7 @@ pub fn init_telemetry(config: &TelemetryConfig, resource: ResourceOptions) -> Te
                 .and_then(|()| init_datafusion_telemetry())
             {
                 Ok(()) => {
+                    debug!("OpenTelemetry initialized");
                     *status = TelemetryStatus::Initialized(state);
                     Ok(())
                 }
@@ -130,7 +131,10 @@ fn init_metrics(
         global::set_meter_provider(provider.clone());
         let meter = global::meter_with_scope(get_instrumentation_scope());
         state.meter_provider = Some(provider);
-        state.metric_registry = Some(Arc::new(MetricRegistry::new(&meter)));
+        state.metrics = Some(MetricManager {
+            registry: Arc::new(MetricRegistry::new(&meter)),
+            collection_interval: Duration::from_secs(config.metrics_collection_interval_secs),
+        });
         state.meter = Some(meter);
     }
     Ok(())
@@ -202,6 +206,7 @@ fn init_datafusion_telemetry() -> TelemetryResult<()> {
 }
 
 pub fn shutdown_telemetry() {
+    debug!("Shutting down OpenTelemetry...");
     fastrace::flush();
     if let Ok(mut status) = TELEMETRY_STATUS.lock() {
         if let TelemetryStatus::Initialized(ref state) = *status {
@@ -216,12 +221,12 @@ pub fn shutdown_telemetry() {
     }
 }
 
-pub fn global_metric_registry() -> Option<Arc<MetricRegistry>> {
+pub fn global_metrics() -> Option<MetricManager> {
     TELEMETRY_STATUS
         .lock()
         .ok()
         .and_then(|status| match &*status {
-            TelemetryStatus::Initialized(state) => state.metric_registry.clone(),
+            TelemetryStatus::Initialized(state) => state.metrics.clone(),
             _ => None,
         })
 }

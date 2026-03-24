@@ -1,13 +1,15 @@
 use log::debug;
+use prost::Message;
 use sail_server::actor::ActorHandle;
 use tonic::{Request, Response, Status};
 
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::TaskInstance;
+use crate::id::TaskKey;
+use crate::task::definition::TaskDefinition;
 use crate::worker::actor::WorkerActor;
 use crate::worker::gen::worker_service_server::WorkerService;
 use crate::worker::gen::{
-    RemoveStreamRequest, RemoveStreamResponse, RunTaskRequest, RunTaskResponse, StopTaskRequest,
+    CleanUpJobRequest, CleanUpJobResponse, RunTaskRequest, RunTaskResponse, StopTaskRequest,
     StopTaskResponse, StopWorkerRequest, StopWorkerResponse,
 };
 use crate::worker::WorkerEvent;
@@ -32,26 +34,26 @@ impl WorkerService for WorkerServer {
         debug!("{request:?}");
         let RunTaskRequest {
             job_id,
-            task_id,
-            attempt,
+            stage,
             partition,
-            plan,
-            channel,
+            attempt,
+            definition,
             peers,
         } = request;
         let peers = peers
             .into_iter()
             .map(|x| x.try_into())
             .collect::<ExecutionResult<Vec<_>>>()?;
+        let definition = crate::task::gen::TaskDefinition::decode(definition.as_slice())
+            .map_err(|e| Status::invalid_argument(format!("invalid task definition: {e}")))?;
         let event = WorkerEvent::RunTask {
-            instance: TaskInstance {
+            key: TaskKey {
                 job_id: job_id.into(),
-                task_id: task_id.into(),
+                stage: stage as usize,
+                partition: partition as usize,
                 attempt: attempt as usize,
             },
-            partition: partition as usize,
-            plan,
-            channel: channel.map(|x| x.into()),
+            definition: TaskDefinition::try_from(definition)?,
             peers,
         };
         self.handle
@@ -71,13 +73,15 @@ impl WorkerService for WorkerServer {
         debug!("{request:?}");
         let StopTaskRequest {
             job_id,
-            task_id,
+            stage,
+            partition,
             attempt,
         } = request;
         let event = WorkerEvent::StopTask {
-            instance: TaskInstance {
+            key: TaskKey {
                 job_id: job_id.into(),
-                task_id: task_id.into(),
+                stage: stage as usize,
+                partition: partition as usize,
                 attempt: attempt as usize,
             },
         };
@@ -90,19 +94,22 @@ impl WorkerService for WorkerServer {
         Ok(Response::new(response))
     }
 
-    async fn remove_stream(
+    async fn clean_up_job(
         &self,
-        request: Request<RemoveStreamRequest>,
-    ) -> Result<Response<RemoveStreamResponse>, Status> {
+        request: Request<CleanUpJobRequest>,
+    ) -> Result<Response<CleanUpJobResponse>, Status> {
         let request = request.into_inner();
         debug!("{request:?}");
-        let RemoveStreamRequest { channel_prefix } = request;
-        let event = WorkerEvent::RemoveLocalStream { channel_prefix };
+        let CleanUpJobRequest { job_id, stage } = request;
+        let event = WorkerEvent::CleanUpJob {
+            job_id: job_id.into(),
+            stage: stage.map(|x| x as usize),
+        };
         self.handle
             .send(event)
             .await
             .map_err(ExecutionError::from)?;
-        let response = RemoveStreamResponse {};
+        let response = CleanUpJobResponse {};
         debug!("{response:?}");
         Ok(Response::new(response))
     }

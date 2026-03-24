@@ -4,7 +4,7 @@ use std::sync::Arc;
 use datafusion_expr::{LogicalPlan, SubqueryAlias};
 use sail_common::spec;
 
-use crate::error::{PlanError, PlanResult};
+use crate::error::PlanResult;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
@@ -16,15 +16,17 @@ impl PlanResolver<'_> {
         ctes: Vec<(spec::Identifier, spec::QueryPlan)>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let cte_names = ctes
-            .iter()
-            .map(|(name, _)| name.clone())
-            .collect::<HashSet<_>>();
-        if cte_names.len() < ctes.len() {
-            return Err(PlanError::invalid(
-                "CTE query name specified more than once",
-            ));
-        }
+        // Deduplicate CTEs - keep the last occurrence of each name (shadowing behavior)
+        // This matches Spark's behavior where later CTEs can shadow earlier ones
+        let mut seen_names: HashSet<spec::Identifier> = HashSet::new();
+        let ctes: Vec<_> = ctes
+            .into_iter()
+            .rev() // Reverse to keep last occurrence
+            .filter(|(name, _)| seen_names.insert(name.clone()))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev() // Reverse back to original order
+            .collect();
         let mut scope = state.enter_cte_scope();
         let state = scope.state();
         for (name, query) in ctes.into_iter() {

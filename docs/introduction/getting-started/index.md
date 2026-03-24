@@ -18,12 +18,12 @@ See the [Installation](/introduction/installation/) page for full installation i
 
 ```bash-vue [Spark 4.1 (Client) ]
 pip install "pysail=={{ libVersion }}"
-pip install "pyspark-client==4.1.0"
+pip install "pyspark-client==4.1.1"
 ```
 
 ```bash-vue [Spark 4.1]
 pip install "pysail=={{ libVersion }}"
-pip install "pyspark[connect]==4.1.0"
+pip install "pyspark[connect]==4.1.1"
 ```
 
 ```bash-vue [Spark 3.5]

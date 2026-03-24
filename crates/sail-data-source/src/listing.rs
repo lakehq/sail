@@ -1,10 +1,11 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::{ListingOptions, ListingTableConfig, ListingTableUrl};
+use datafusion::execution::cache::TableScopedPath;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{internal_err, plan_err, DataFusionError, GetExt, Result};
 use datafusion_datasource::file_compression_type::FileCompressionType;
@@ -74,7 +75,7 @@ pub async fn resolve_listing_schema<T: ListingFormat>(
             )?;
             options.format = listing_format.inner().create_read_format(
                 ctx,
-                options_vec,
+                options_vec.clone(),
                 Some(file_compression_type),
             )?;
             Some(file_extension)
@@ -88,17 +89,10 @@ pub async fn resolve_listing_schema<T: ListingFormat>(
 
     let mut schemas = vec![];
     for (store, files) in file_groups.iter() {
-        let mut schema = options
-            .format
-            .infer_schema(ctx, store, files)
-            .await?
-            .as_ref()
-            .clone();
-        let ext = options.format.get_ext().to_lowercase();
-        let ext = ext.trim();
-        if matches!(ext, ".csv") || matches!(ext, "csv") {
-            schema = rename_default_csv_columns(schema);
-        }
+        let schema_inferrer = listing_format.inner().schema_inferrer();
+        let schema = schema_inferrer
+            .get_schema(ctx, store, files, options, &options_vec)
+            .await?;
         schemas.push(schema);
     }
     let schema = Schema::try_merge(schemas)?;
@@ -203,13 +197,17 @@ pub async fn list_all_files<'a>(
         true => match ctx.runtime_env().cache_manager.get_list_files_cache() {
             None => store.list(Some(url.prefix())),
             Some(cache) => {
-                if let Some(res) = cache.get(url.prefix()) {
+                let key = TableScopedPath {
+                    table: None,
+                    path: url.prefix().clone(),
+                };
+                if let Some(res) = cache.get(&key) {
                     debug!("Hit list all files cache");
                     futures::stream::iter(res.as_ref().clone().into_iter().map(Ok)).boxed()
                 } else {
                     let list_res = store.list(Some(url.prefix()));
                     let vec = list_res.try_collect::<Vec<ObjectMeta>>().await?;
-                    cache.put(url.prefix(), Arc::new(vec.clone()));
+                    cache.put(&key, Arc::new(vec.clone()));
                     futures::stream::iter(vec.into_iter().map(Ok)).boxed()
                 }
             }
@@ -260,51 +258,4 @@ pub fn rewrite_listing_partitions(mut config: ListingTableConfig) -> Result<List
             }
         });
     Ok(config)
-}
-
-fn rename_default_csv_columns(schema: Schema) -> Schema {
-    let mut failed_parsing = false;
-    let mut seen_names = HashSet::new();
-    let mut new_fields = schema
-        .fields()
-        .iter()
-        .map(|field| {
-            // Order may not be guaranteed, so we try to parse the index from the column name
-            let new_name = if field.name().starts_with("column_") {
-                if let Some(index_str) = field.name().strip_prefix("column_") {
-                    if let Ok(index) = index_str.trim().parse::<usize>() {
-                        format!("_c{}", index.saturating_sub(1))
-                    } else {
-                        failed_parsing = true;
-                        field.name().to_string()
-                    }
-                } else {
-                    field.name().to_string()
-                }
-            } else {
-                field.name().to_string()
-            };
-            if !seen_names.insert(new_name.clone()) {
-                failed_parsing = true;
-            }
-            Field::new(new_name, field.data_type().clone(), field.is_nullable())
-        })
-        .collect::<Vec<_>>();
-
-    if failed_parsing {
-        new_fields = schema
-            .fields()
-            .iter()
-            .enumerate()
-            .map(|(i, field)| {
-                Field::new(
-                    format!("_c{i}"),
-                    field.data_type().clone(),
-                    field.is_nullable(),
-                )
-            })
-            .collect::<Vec<_>>();
-    }
-
-    Schema::new_with_metadata(new_fields, schema.metadata().clone())
 }

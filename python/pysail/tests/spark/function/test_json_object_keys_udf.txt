@@ -1,0 +1,31 @@
+>>> spark.sql("""SELECT
+...   json_object_keys('{"f1":"abc","f2":{"f3":"a","f4":"b"}}') AS keys,
+...   typeof(json_object_keys('{"f1":"abc","f2":{"f3":"a","f4":"b"}}')) AS type
+... """).show(truncate=False)
++--------+-------------+
+|keys    |type         |
++--------+-------------+
+|[f1, f2]|array<string>|
++--------+-------------+
+<BLANKLINE>
+
+>>> spark.sql("SELECT json_object_keys('{}') AS keys, typeof(json_object_keys('{}')) AS type").show(truncate=False)
++----+-------------+
+|keys|type         |
++----+-------------+
+|[]  |array<string>|
++----+-------------+
+<BLANKLINE>
+
+>>> spark.sql("""SELECT
+...   json_object_keys('[1,2]') AS non_object,
+...   json_object_keys(CAST(NULL AS STRING)) AS null_json,
+...   json_object_keys('not a json') AS invalid_json
+... """).show(truncate=False)
++----------+---------+------------+
+|non_object|null_json|invalid_json|
++----------+---------+------------+
+|NULL      |NULL     |NULL        |
++----------+---------+------------+
+<BLANKLINE>
+

@@ -3,6 +3,7 @@ use std::fmt;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
@@ -10,7 +11,9 @@ use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::{plan_err, Result, Statistics};
 use datafusion::config::ConfigOptions;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{Distribution, OrderingRequirements, PhysicalExpr};
+use datafusion::physical_expr::{
+    Distribution, OrderingRequirements, PhysicalExpr, PhysicalSortExpr,
+};
 use datafusion::physical_plan::execution_plan::{
     check_default_invariants, CardinalityEffect, InvariantLevel,
 };
@@ -19,6 +22,7 @@ use datafusion::physical_plan::filter_pushdown::{
 };
 use datafusion::physical_plan::metrics::MetricsSet;
 use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_plan::sort_pushdown::SortOrderPushdownResult;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 use fastrace::Span;
@@ -29,20 +33,20 @@ use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::common::{KeyValue, SpanAttribute};
 use crate::execution::metrics::MetricEmitter;
-use crate::metrics::{MetricAttribute, MetricRegistry};
+use crate::metrics::{MetricAttribute, MetricManager, MetricRegistry};
 
 #[derive(Debug, Clone, Default)]
 pub struct TracingExecOptions {
-    pub metric_registry: Option<Arc<MetricRegistry>>,
+    pub metrics: Option<MetricManager>,
     pub job_id: Option<u64>,
-    pub task_id: Option<u64>,
-    pub task_attempt: Option<usize>,
+    pub stage: Option<usize>,
+    pub attempt: Option<usize>,
     pub operator_id: Option<u64>,
 }
 
 impl TracingExecOptions {
-    pub fn with_metric_registry(mut self, registry: Arc<MetricRegistry>) -> Self {
-        self.metric_registry = Some(registry);
+    pub fn with_metrics(mut self, manager: MetricManager) -> Self {
+        self.metrics = Some(manager);
         self
     }
 }
@@ -174,13 +178,15 @@ impl ExecutionPlan for TracingExec {
             self.inner.execute(partition, context)?
         };
         let schema = stream.schema();
-        if let Some(ref registry) = self.options.metric_registry {
+        if let Some(ref manager) = self.options.metrics {
             let stream = MetricEmitterStream {
                 inner: stream,
                 plan: self.inner.clone(),
                 emitter: self.build_metric_emitter(),
                 attributes: self.build_metric_attributes(),
-                registry: registry.clone(),
+                registry: manager.registry.clone(),
+                interval: manager.collection_interval,
+                last_emit: None,
             };
             Ok(Box::pin(RecordBatchStreamAdapter::new(
                 schema,
@@ -198,7 +204,7 @@ impl ExecutionPlan for TracingExec {
         self.inner.metrics()
     }
 
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     fn statistics(&self) -> Result<Statistics> {
         self.inner.statistics()
     }
@@ -254,6 +260,13 @@ impl ExecutionPlan for TracingExec {
     fn with_new_state(&self, _state: Arc<dyn Any + Send + Sync>) -> Option<Arc<dyn ExecutionPlan>> {
         None
     }
+
+    fn try_pushdown_sort(
+        &self,
+        _order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        Ok(SortOrderPushdownResult::Unsupported)
+    }
 }
 
 impl TracingExec {
@@ -264,22 +277,25 @@ impl TracingExec {
     fn build_metric_attributes(&self) -> Vec<KeyValue> {
         let mut attributes = vec![];
         if let Some(job_id) = self.options.job_id {
-            attributes.push((MetricAttribute::JOB_ID, job_id.to_string().into()));
+            attributes.push((MetricAttribute::EXECUTION_JOB_ID, job_id.to_string().into()));
         }
-        if let Some(task_id) = self.options.task_id {
-            attributes.push((MetricAttribute::TASK_ID, task_id.to_string().into()));
+        if let Some(stage) = self.options.stage {
+            attributes.push((MetricAttribute::EXECUTION_STAGE, stage.to_string().into()));
         }
-        if let Some(task_attempt) = self.options.task_attempt {
+        if let Some(attempt) = self.options.attempt {
             attributes.push((
-                MetricAttribute::TASK_ATTEMPT,
-                task_attempt.to_string().into(),
+                MetricAttribute::EXECUTION_ATTEMPT,
+                attempt.to_string().into(),
             ));
         }
         if let Some(operator_id) = self.options.operator_id {
-            attributes.push((MetricAttribute::OPERATOR_ID, operator_id.to_string().into()));
+            attributes.push((
+                MetricAttribute::EXECUTION_OPERATOR_ID,
+                operator_id.to_string().into(),
+            ));
         }
         attributes.push((
-            MetricAttribute::OPERATOR_NAME,
+            MetricAttribute::EXECUTION_OPERATOR_NAME,
             self.inner.name().to_string().into(),
         ));
         attributes
@@ -294,6 +310,8 @@ pin_project! {
         emitter: Box<dyn MetricEmitter>,
         attributes: Vec<KeyValue>,
         registry: Arc<MetricRegistry>,
+        interval: Duration,
+        last_emit: Option<Instant>,
     }
 }
 
@@ -304,12 +322,20 @@ impl Stream for MetricEmitterStream {
         let this = self.project();
         let poll = this.inner.poll_next(cx);
         if poll.is_ready() {
-            if let Some(metrics) = this.plan.metrics() {
-                for metric in metrics.iter() {
-                    let _ = this
-                        .emitter
-                        .try_emit(metric, this.attributes, this.registry);
+            let is_done = matches!(poll, Poll::Ready(None));
+            // Note: metrics are not emitted regularly if a batch takes long to be produced,
+            // but this is acceptable for the purpose of execution metrics.
+            let should_emit =
+                is_done || this.last_emit.is_none_or(|t| t.elapsed() >= *this.interval);
+            if should_emit {
+                if let Some(metrics) = this.plan.metrics() {
+                    for metric in metrics.iter() {
+                        let _ = this
+                            .emitter
+                            .try_emit(metric, this.attributes, this.registry);
+                    }
                 }
+                *this.last_emit = Some(Instant::now());
             }
         }
         poll

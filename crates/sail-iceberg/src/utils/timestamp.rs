@@ -69,7 +69,7 @@ mod tests {
                 for _ in 0..iterations_per_thread {
                     local_timestamps.push(monotonic_timestamp_ms());
                 }
-                #[allow(clippy::unwrap_used)]
+                #[expect(clippy::unwrap_used)]
                 let mut ts = timestamps_clone.lock().unwrap();
                 for t in local_timestamps {
                     assert!(ts.insert(t), "Duplicate timestamp detected: {}", t);
@@ -79,11 +79,11 @@ mod tests {
         }
 
         for handle in handles {
-            #[allow(clippy::unwrap_used)]
+            #[expect(clippy::unwrap_used)]
             handle.join().unwrap();
         }
 
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let ts = timestamps.lock().unwrap();
         assert_eq!(
             ts.len(),

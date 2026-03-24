@@ -1,8 +1,9 @@
 use datafusion_expr::LogicalPlan;
+use sail_catalog::provider::CatalogPartitionField;
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::command::write::{WriteMode, WritePlanBuilder, WriteTableAction, WriteTarget};
+use crate::resolver::command::write::{WriteColumnMatch, WriteMode, WritePlanBuilder, WriteTarget};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
@@ -36,23 +37,34 @@ impl PlanResolver<'_> {
         }
         let input = self.resolve_write_input(*input, state).await?;
         let clustering_columns = self.resolve_write_cluster_by_columns(clustering_column_names)?;
+        let partition_by = partitioning_column_names
+            .into_iter()
+            .map(|c| CatalogPartitionField {
+                column: c.into(),
+                transform: None,
+            })
+            .collect();
         let mut builder = WritePlanBuilder::new()
-            .with_partition_by(partitioning_column_names)
+            .with_partition_by(partition_by)
             .with_cluster_by(clustering_columns)
             .with_format(format)
             .with_options(options)
-            .with_mode(WriteMode::Append);
+            .with_mode(WriteMode::Append {
+                error_if_absent: false,
+            });
         match sink_destination {
             None => {
-                builder = builder.with_target(WriteTarget::Sink);
+                builder = builder.with_target(WriteTarget::DataSource);
             }
             Some(WriteStreamSinkDestination::Path { path }) => {
-                builder = builder.with_target(WriteTarget::Path { location: path });
+                builder = builder
+                    .with_target(WriteTarget::DataSource)
+                    .with_options(vec![("path".to_string(), path)]);
             }
             Some(WriteStreamSinkDestination::Table { table }) => {
-                builder = builder.with_target(WriteTarget::NewTable {
+                builder = builder.with_target(WriteTarget::Table {
                     table,
-                    action: WriteTableAction::CreateIfNotExists,
+                    column_match: WriteColumnMatch::ByName,
                 })
             }
         }

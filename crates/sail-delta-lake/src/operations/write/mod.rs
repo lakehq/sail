@@ -11,5 +11,6 @@
 // limitations under the License.
 
 pub mod async_utils;
+mod partitioning;
 pub mod stats;
 pub mod writer;

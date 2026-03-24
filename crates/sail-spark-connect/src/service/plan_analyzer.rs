@@ -9,7 +9,8 @@ use sail_plan::resolver::PlanResolver;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::proto::data_type::parse_spark_data_type;
-use crate::schema::{to_spark_schema, to_tree_string};
+use crate::proto::data_type_json::parse_spark_json_data_type;
+use crate::schema::{to_ddl_string, to_spark_schema, to_tree_string};
 use crate::session::SparkSession;
 use crate::spark::connect as sc;
 use crate::spark::connect::analyze_plan_request::explain::ExplainMode;
@@ -187,7 +188,9 @@ pub(crate) async fn handle_analyze_get_storage_level(
 
 pub(crate) async fn handle_analyze_json_to_ddl(
     _ctx: &SessionContext,
-    _request: JsonToDdlRequest,
+    request: JsonToDdlRequest,
 ) -> SparkResult<JsonToDdlResponse> {
-    Err(SparkError::todo("handle analyze json to ddl"))
+    let data_type = parse_spark_json_data_type(&request.json_string)?;
+    let ddl_string = to_ddl_string(&data_type)?;
+    Ok(JsonToDdlResponse { ddl_string })
 }

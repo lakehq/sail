@@ -6,7 +6,7 @@ use datafusion_expr::expr::AggregateFunctionParams;
 use datafusion_expr::{expr, AggregateUDF, Expr, ExprSchemable, ScalarUDF};
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::session::PlanService;
+use sail_common_datafusion::session::plan::PlanService;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;
 use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
@@ -59,7 +59,7 @@ impl PlanResolver<'_> {
         Ok(NamedExpr::new(vec![name], func))
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(super) fn resolve_python_udf_expr(
         &self,
         function: PythonUdf,

@@ -3,7 +3,249 @@
     {
       "input": "\nREPLACE TABLE my_tab (a INT, b STRING, ts TIMESTAMP) USING parquet\nPARTITIONED BY (\n    a,\n    bucket(16, b),\n    years(ts),\n    months(ts),\n    days(ts),\n    hours(ts),\n    foo(a, \"bar\", 34))\n      ",
       "output": {
-        "failure": "invalid argument: found ( at 102:103 expected ':', data type, ',', or ')'"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "columns": [
+                {
+                  "name": "a",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                },
+                {
+                  "name": "b",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                },
+                {
+                  "name": "ts",
+                  "dataType": {
+                    "timestamp": {
+                      "timeUnit": "microsecond",
+                      "timestampType": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                },
+                {
+                  "unresolvedFunction": {
+                    "functionName": [
+                      "bucket"
+                    ],
+                    "arguments": [
+                      {
+                        "literal": {
+                          "int32": {
+                            "value": 16
+                          }
+                        }
+                      },
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "b"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      }
+                    ],
+                    "namedArguments": [],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "isInternal": null,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
+                  }
+                },
+                {
+                  "unresolvedFunction": {
+                    "functionName": [
+                      "years"
+                    ],
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "ts"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      }
+                    ],
+                    "namedArguments": [],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "isInternal": null,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
+                  }
+                },
+                {
+                  "unresolvedFunction": {
+                    "functionName": [
+                      "months"
+                    ],
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "ts"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      }
+                    ],
+                    "namedArguments": [],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "isInternal": null,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
+                  }
+                },
+                {
+                  "unresolvedFunction": {
+                    "functionName": [
+                      "days"
+                    ],
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "ts"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      }
+                    ],
+                    "namedArguments": [],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "isInternal": null,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
+                  }
+                },
+                {
+                  "unresolvedFunction": {
+                    "functionName": [
+                      "hours"
+                    ],
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "ts"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      }
+                    ],
+                    "namedArguments": [],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "isInternal": null,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
+                  }
+                },
+                {
+                  "unresolvedFunction": {
+                    "functionName": [
+                      "foo"
+                    ],
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "a"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      },
+                      {
+                        "literal": {
+                          "utf8": {
+                            "value": "bar"
+                          }
+                        }
+                      },
+                      {
+                        "literal": {
+                          "int32": {
+                            "value": 34
+                          }
+                        }
+                      }
+                    ],
+                    "namedArguments": [],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "isInternal": null,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
+                  }
+                }
+              ],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": true,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
@@ -360,7 +602,15 @@
               },
               "rowFormat": null,
               "partitionBy": [
-                "part"
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "part"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
               ],
               "sortBy": [],
               "bucketBy": null,
@@ -410,7 +660,15 @@
                 }
               },
               "partitionBy": [
-                "part"
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "part"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
               ],
               "sortBy": [],
               "bucketBy": null,
@@ -464,7 +722,15 @@
                 }
               },
               "partitionBy": [
-                "part"
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "part"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
               ],
               "sortBy": [],
               "bucketBy": null,
@@ -519,7 +785,15 @@
                 }
               },
               "partitionBy": [
-                "part"
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "part"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
               ],
               "sortBy": [],
               "bucketBy": null,
@@ -563,7 +837,15 @@
               },
               "rowFormat": null,
               "partitionBy": [
-                "part"
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "part"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
               ],
               "sortBy": [],
               "bucketBy": null,
@@ -617,7 +899,15 @@
                 }
               },
               "partitionBy": [
-                "part"
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "part"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
               ],
               "sortBy": [],
               "bucketBy": null,
@@ -671,7 +961,15 @@
                 }
               },
               "partitionBy": [
-                "part"
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "part"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
               ],
               "sortBy": [],
               "bucketBy": null,
@@ -724,7 +1022,15 @@
                 }
               },
               "partitionBy": [
-                "part"
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "part"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
               ],
               "sortBy": [],
               "bucketBy": null,
@@ -778,7 +1084,15 @@
                 }
               },
               "partitionBy": [
-                "part"
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "part"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
               ],
               "sortBy": [],
               "bucketBy": null,
@@ -818,7 +1132,15 @@
               "fileFormat": null,
               "rowFormat": null,
               "partitionBy": [
-                "part"
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "part"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
               ],
               "sortBy": [],
               "bucketBy": null,
@@ -869,7 +1191,15 @@
               },
               "rowFormat": null,
               "partitionBy": [
-                "part"
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "part"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
               ],
               "sortBy": [],
               "bucketBy": null,
@@ -929,8 +1259,24 @@
               "fileFormat": null,
               "rowFormat": null,
               "partitionBy": [
-                "p1",
-                "p2"
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "p1"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "p2"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
               ],
               "sortBy": [],
               "bucketBy": null,
@@ -949,7 +1295,93 @@
       "input": "REPLACE TABLE my_tab (id bigint, p1 string) PARTITIONED BY (p2 string, truncate(p1, 16))",
       "exception": "\nOperation not allowed: PARTITION BY: Cannot mix partition expressions and partition columns:\nExpressions: truncate(p1, 16)\nColumns: p2 string.\n== SQL (line 1, position 1) ==\nREPLACE TABLE my_tab (id bigint, p1 string) PARTITIONED BY (p2 string, truncate(p1, 16))\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found ( at 79:80 expected ':', data type, ',', or ')'"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                },
+                {
+                  "name": "p1",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": null,
+              "rowFormat": null,
+              "partitionBy": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "p2"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                },
+                {
+                  "unresolvedFunction": {
+                    "functionName": [
+                      "truncate"
+                    ],
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "p1"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      },
+                      {
+                        "literal": {
+                          "int32": {
+                            "value": 16
+                          }
+                        }
+                      }
+                    ],
+                    "namedArguments": [],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "isInternal": null,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
+                  }
+                }
+              ],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": true,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
@@ -1099,7 +1531,15 @@
               "fileFormat": null,
               "rowFormat": null,
               "partitionBy": [
-                "part"
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "part"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
               ],
               "sortBy": [],
               "bucketBy": null,
@@ -1209,7 +1649,15 @@
               },
               "rowFormat": null,
               "partitionBy": [
-                "a"
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
               ],
               "sortBy": [],
               "bucketBy": null,
@@ -1440,7 +1888,15 @@
               },
               "rowFormat": null,
               "partitionBy": [
-                "a"
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
               ],
               "sortBy": [],
               "bucketBy": null,

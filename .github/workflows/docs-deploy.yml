@@ -21,7 +21,7 @@ on:
 jobs:
   docs-deploy:
     name: Docs Deploy
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     environment: docs/${{ inputs.stage }}
     permissions:
       id-token: write

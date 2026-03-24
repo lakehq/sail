@@ -7,7 +7,7 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::Result;
 use datafusion_datasource::file_format::FileFormat;
 
-use crate::formats::listing::{ListingFormat, ListingTableFormat};
+use crate::formats::listing::{DefaultSchemaInfer, ListingFormat, ListingTableFormat, SchemaInfer};
 use crate::formats::parquet::options::{
     resolve_parquet_read_options, resolve_parquet_write_options,
 };
@@ -45,5 +45,9 @@ impl ListingFormat for ParquetListingFormat {
             Arc::new(ParquetFormat::default().with_options(options)),
             compression,
         ))
+    }
+
+    fn schema_inferrer(&self) -> Arc<dyn SchemaInfer> {
+        Arc::new(DefaultSchemaInfer)
     }
 }

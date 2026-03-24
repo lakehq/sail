@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use datafusion::arrow::array::{Array, StringArray, UInt64Array};
+use datafusion::arrow::array::UInt64Array;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
@@ -36,6 +36,7 @@ use crate::operations::bootstrap::{
     bootstrap_first_snapshot, bootstrap_new_table, PersistStrategy,
 };
 use crate::operations::{SnapshotProduceOperation, Transaction, TransactionAction};
+use crate::physical_plan::action_schema::decode_actions_and_meta_from_batch;
 use crate::physical_plan::commit::IcebergCommitInfo;
 use crate::spec::catalog::TableUpdate;
 use crate::spec::metadata::table_metadata::SnapshotLog;
@@ -257,30 +258,47 @@ impl ExecutionPlan for IcebergCommitExec {
             let object_store = get_object_store_from_context(&context, &table_url)?;
             let store_ctx = StoreContext::new(object_store.clone(), &table_url)?;
 
-            // Read writer result (first row, string JSON)
+            // Read writer result as Arrow-native action batches (may be empty for IgnoreIfExists).
             let mut data = input_stream;
-            let arr = if let Some(batch_result) = data.next().await {
+            let mut added_data_files = Vec::new();
+            let mut commit_meta = None;
+            while let Some(batch_result) = data.next().await {
                 let batch = batch_result?;
-                batch
-                    .column(0)
-                    .as_any()
-                    .downcast_ref::<StringArray>()
-                    .cloned()
-                    .ok_or_else(|| {
-                        DataFusionError::Plan("Invalid writer output schema".to_string())
-                    })?
-            } else {
-                let array = Arc::new(UInt64Array::from(vec![0u64]));
-                let batch = RecordBatch::try_new(schema, vec![array])?;
-                return Ok(batch);
-            };
-            if arr.is_empty() {
+                if batch.num_rows() == 0 {
+                    continue;
+                }
+                let (adds, _deletes, meta) = decode_actions_and_meta_from_batch(&batch)?;
+                added_data_files.extend(adds);
+                if meta.is_some() {
+                    commit_meta = meta;
+                }
+            }
+
+            // No-op path (e.g. IgnoreIfExists on existing table): no rows, no meta.
+            if commit_meta.is_none() && added_data_files.is_empty() {
                 let array = Arc::new(UInt64Array::from(vec![0u64]));
                 let batch = RecordBatch::try_new(schema, vec![array])?;
                 return Ok(batch);
             }
-            let commit_info: IcebergCommitInfo = serde_json::from_str(arr.value(0))
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+            let commit_meta = commit_meta.ok_or_else(|| {
+                DataFusionError::Internal(
+                    "missing commit_meta action from writer output".to_string(),
+                )
+            })?;
+
+            let commit_info = IcebergCommitInfo {
+                table_uri: commit_meta.table_uri,
+                row_count: commit_meta.row_count,
+                data_files: added_data_files,
+                manifest_path: String::new(),
+                manifest_list_path: String::new(),
+                updates: vec![],
+                requirements: commit_meta.requirements,
+                operation: commit_meta.operation,
+                schema: commit_meta.schema,
+                partition_spec: commit_meta.partition_spec,
+            };
 
             // Load table metadata JSON if exists; for overwrite on new table we bootstrap
             let latest_meta_res =
