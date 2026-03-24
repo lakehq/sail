@@ -3,11 +3,11 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::{Result, ScalarValue};
-
-use crate::error::generic_exec_err;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use parquet_variant::VariantPath;
 use parquet_variant_compute::{variant_get, GetOptions};
+
+use crate::error::generic_exec_err;
 
 /// Spark-compatible `variant_get(variant, path, type)` function.
 ///
@@ -121,9 +121,7 @@ impl ScalarUDFImpl for SparkVariantGet {
         });
         if arg_types.len() == 3 {
             result.push(match &arg_types[2] {
-                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
-                    arg_types[2].clone()
-                }
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => arg_types[2].clone(),
                 DataType::Null => DataType::Utf8,
                 _ => {
                     return Err(crate::error::unsupported_data_type_exec_err(
@@ -175,13 +173,32 @@ impl ScalarUDFImpl for SparkVariantGet {
         };
 
         // 2-arg: return variant, 3-arg: cast to specified type
-        let target_field = type_str
-            .as_deref()
-            .map(|t| -> Result<_> {
-                let dt = spark_type_to_arrow(t)?;
-                Ok(Arc::new(Field::new("result", dt, true)))
-            })
-            .transpose()?;
+        // For Decimal/Timestamp, parquet-variant doesn't support direct extraction,
+        // so we extract as an intermediate type (double/string) and then cast.
+        let final_type = type_str.as_deref().map(spark_type_to_arrow).transpose()?;
+        let (extract_field, needs_post_cast) = match &final_type {
+            Some(dt @ DataType::Decimal128(_, _)) => {
+                // Extract as double, then cast to decimal
+                let _ = dt;
+                (
+                    Some(Arc::new(Field::new("result", DataType::Float64, true))),
+                    true,
+                )
+            }
+            Some(dt @ DataType::Timestamp(_, _)) => {
+                // Extract as string, then cast to timestamp
+                let _ = dt;
+                (
+                    Some(Arc::new(Field::new("result", DataType::Utf8, true))),
+                    true,
+                )
+            }
+            Some(dt) => (
+                Some(Arc::new(Field::new("result", dt.clone(), true))),
+                false,
+            ),
+            None => (None, false),
+        };
 
         // Get the variant array
         let variant_arr = match &args[0] {
@@ -190,7 +207,7 @@ impl ScalarUDFImpl for SparkVariantGet {
         };
 
         // Build options
-        let mut options = GetOptions::new_with_path(variant_path).with_as_type(target_field);
+        let mut options = GetOptions::new_with_path(variant_path).with_as_type(extract_field);
 
         if self.safe {
             options = options.with_cast_options(datafusion::arrow::compute::CastOptions {
@@ -204,16 +221,25 @@ impl ScalarUDFImpl for SparkVariantGet {
             datafusion_common::DataFusionError::Execution(format!("{}: {e}", self.name()))
         })?;
 
-        // For 2-arg form, convert BinaryView→Binary for PySpark compatibility
-        // (parquet-variant-compute returns BinaryView internally)
-        let result = if type_str.is_none() {
-            datafusion::arrow::compute::cast(&result, &DataType::Struct(
-                vec![
-                    Field::new("metadata", DataType::Binary, false),
-                    Field::new("value", DataType::Binary, true),
-                ]
-                .into(),
-            ))?
+        // Post-cast for types that parquet-variant can't extract directly
+        let result = if needs_post_cast {
+            if let Some(ref dt) = final_type {
+                datafusion::arrow::compute::cast(&result, dt)?
+            } else {
+                result
+            }
+        } else if type_str.is_none() {
+            // 2-arg form: convert BinaryView→Binary for PySpark compatibility
+            datafusion::arrow::compute::cast(
+                &result,
+                &DataType::Struct(
+                    vec![
+                        Field::new("metadata", DataType::Binary, false),
+                        Field::new("value", DataType::Binary, true),
+                    ]
+                    .into(),
+                ),
+            )?
         } else {
             result
         };
@@ -235,7 +261,10 @@ fn spark_type_to_arrow(type_str: &str) -> Result<DataType> {
     let trimmed = lower.trim();
 
     // Handle parameterized types: decimal(p,s)
-    if let Some(params) = trimmed.strip_prefix("decimal(").and_then(|s| s.strip_suffix(')')) {
+    if let Some(params) = trimmed
+        .strip_prefix("decimal(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
         let parts: Vec<&str> = params.split(',').map(|s| s.trim()).collect();
         return match parts.as_slice() {
             [p, s] => {
