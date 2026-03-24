@@ -81,25 +81,30 @@ pub struct SinkInfo {
 
 impl SinkInfo {
     /// Returns the path from options, or an empty string if not set.
-    /// The last value for the `"path"` or `"location"` key (in that priority order)
-    /// across all option sets takes precedence.
+    /// Checks the `"path"` key first, then `"location"`.
     /// Key comparison is case-insensitive.
     pub fn path(&self) -> String {
-        for key in ["path", "location"] {
-            for options in self.options.iter().rev() {
-                if let Some(value) = options.iter().find_map(|(k, v)| {
-                    if k.eq_ignore_ascii_case(key) {
-                        Some(v.clone())
-                    } else {
-                        None
-                    }
-                }) {
-                    return value;
-                }
-            }
-        }
-        String::new()
+        find_option(&self.options, "path")
+            .or_else(|| find_option(&self.options, "location"))
+            .unwrap_or_default()
     }
+}
+
+/// Searches option sets in reverse order for a case-insensitive key match.
+/// Returns the value from the last option set that contains the key, or `None`.
+pub fn find_option(options: &[HashMap<String, String>], key: &str) -> Option<String> {
+    for set in options.iter().rev() {
+        if let Some(value) = set.iter().find_map(|(k, v)| {
+            if k.eq_ignore_ascii_case(key) {
+                Some(v.clone())
+            } else {
+                None
+            }
+        }) {
+            return Some(value);
+        }
+    }
+    None
 }
 
 /// Information required to create a data deleter.

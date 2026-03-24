@@ -181,21 +181,6 @@ impl PlanResolver<'_> {
             return Err(PlanError::todo("CLUSTER BY for write"));
         }
         let input_schema = input.schema().inner().clone();
-        // Precompute case-insensitive option lookups before moving `options` into FileWriteOptions.
-        // Last option set wins; within a set, last matching entry wins.
-        let find_option = |key: &str| -> Option<String> {
-            options.iter().rev().find_map(|set| {
-                set.iter().rev().find_map(|(k, v)| {
-                    if k.eq_ignore_ascii_case(key) {
-                        Some(v.clone())
-                    } else {
-                        None
-                    }
-                })
-            })
-        };
-        let options_path = find_option("path");
-        let options_location = find_option("location");
         let mut file_write_options = FileWriteOptions {
             // The mode will be set later so the value here is just a placeholder.
             mode: SinkMode::ErrorIfExists,
@@ -292,14 +277,6 @@ impl PlanResolver<'_> {
                     file_write_options
                         .options
                         .push(vec![("path".to_string(), location.clone())]);
-                } else if let Some(location) = options_location {
-                    file_write_options
-                        .options
-                        .push(vec![("path".to_string(), location)]);
-                } else if let Some(path) = options_path {
-                    file_write_options
-                        .options
-                        .push(vec![("path".to_string(), path)]);
                 } else {
                     let default_location = self.resolve_default_table_location(&table).await?;
                     file_write_options
@@ -317,12 +294,13 @@ impl PlanResolver<'_> {
                     ));
                 }
                 file_write_options.table_properties = table_properties.clone();
-                // The resolved path is the last option set, which takes highest priority.
                 let table_location = file_write_options
                     .options
                     .last()
-                    .and_then(|set| set.first())
-                    .map(|(_, v)| v.clone())
+                    .and_then(|set| {
+                        set.iter()
+                            .find_map(|(k, v)| k.eq_ignore_ascii_case("path").then(|| v.clone()))
+                    })
                     .unwrap_or_default();
                 let (if_not_exists, replace) = match action {
                     WriteTableAction::Create => (false, false),
