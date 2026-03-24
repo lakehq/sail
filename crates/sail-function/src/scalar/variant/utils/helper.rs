@@ -10,8 +10,16 @@ pub fn try_field_as_variant_array(field: &Field) -> datafusion_common::Result<()
         return Ok(());
     }
 
+    // Check extension type name exists before calling extension_type()
+    // which panics in arrow 57.3 if ARROW:extension:name is missing
+    let has_variant_ext = field
+        .metadata()
+        .get("ARROW:extension:name")
+        .map(|s| s == "arrow.parquet.variant")
+        .unwrap_or(false);
+
     ensure(
-        matches!(field.extension_type(), VariantType),
+        has_variant_ext,
         "field does not have extension type VariantType",
     )?;
 

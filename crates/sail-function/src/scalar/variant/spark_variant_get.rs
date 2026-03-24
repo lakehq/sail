@@ -23,7 +23,13 @@ pub struct SparkVariantGet {
 impl SparkVariantGet {
     pub fn new(safe: bool) -> Self {
         Self {
-            signature: Signature::any(3, Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![
+                    datafusion_expr::TypeSignature::Any(2),
+                    datafusion_expr::TypeSignature::Any(3),
+                ],
+                Volatility::Immutable,
+            ),
             safe,
         }
     }
@@ -52,16 +58,35 @@ impl ScalarUDFImpl for SparkVariantGet {
     }
 
     fn return_field_from_args(&self, args: datafusion_expr::ReturnFieldArgs) -> Result<Arc<Field>> {
-        // The third argument (type string) determines the return type
+        // 2-arg form: variant_get(variant, path) → returns Variant (struct with metadata + value)
+        // 3-arg form: variant_get(variant, path, type) → returns the specified type
         let type_str = args
             .scalar_arguments
             .get(2)
             .and_then(|opt| opt.as_ref())
-            .and_then(|sv| sv.try_as_str().flatten())
-            .unwrap_or("string");
+            .and_then(|sv| sv.try_as_str().flatten());
 
-        let dt = spark_type_to_arrow(type_str)?;
-        Ok(Arc::new(Field::new(self.name(), dt, true)))
+        match type_str {
+            Some(t) => {
+                let dt = spark_type_to_arrow(t)?;
+                Ok(Arc::new(Field::new(self.name(), dt, true)))
+            }
+            None => {
+                // 2-arg: return Variant type with extension metadata
+                // so downstream functions (is_variant_null, etc.) recognize it
+                use parquet_variant_compute::VariantType;
+                let variant_struct = DataType::Struct(
+                    vec![
+                        Field::new("metadata", DataType::BinaryView, false),
+                        Field::new("value", DataType::BinaryView, true),
+                    ]
+                    .into(),
+                );
+                let field =
+                    Field::new(self.name(), variant_struct, true).with_extension_type(VariantType);
+                Ok(Arc::new(field))
+            }
+        }
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -76,13 +101,16 @@ impl ScalarUDFImpl for SparkVariantGet {
             _ => return exec_err!("{}: path must be a constant string", self.name()),
         };
 
-        // Extract type string (must be scalar/constant)
-        let type_str = match &args[2] {
-            ColumnarValue::Scalar(scalar) => match scalar.try_as_str().flatten() {
-                Some(s) => s.to_string(),
-                None => return exec_err!("{}: type must be a non-null string", self.name()),
-            },
-            _ => return exec_err!("{}: type must be a constant string", self.name()),
+        // Extract type string (optional — 2-arg form returns variant)
+        let type_str = if args.len() >= 3 {
+            match &args[2] {
+                ColumnarValue::Scalar(scalar) => {
+                    scalar.try_as_str().flatten().map(|s| s.to_string())
+                }
+                _ => return exec_err!("{}: type must be a constant string", self.name()),
+            }
+        } else {
+            None
         };
 
         // Parse the Spark path: strip leading "$." or "$"
@@ -97,9 +125,14 @@ impl ScalarUDFImpl for SparkVariantGet {
             VariantPath::from(clean_path)
         };
 
-        // Parse the type string to Arrow DataType
-        let target_type = spark_type_to_arrow(&type_str)?;
-        let target_field = Arc::new(Field::new("result", target_type.clone(), true));
+        // 2-arg: return variant, 3-arg: cast to specified type
+        let target_field = type_str
+            .as_deref()
+            .map(|t| -> Result<_> {
+                let dt = spark_type_to_arrow(t)?;
+                Ok(Arc::new(Field::new("result", dt, true)))
+            })
+            .transpose()?;
 
         // Get the variant array
         let variant_arr = match &args[0] {
@@ -108,7 +141,7 @@ impl ScalarUDFImpl for SparkVariantGet {
         };
 
         // Build options
-        let mut options = GetOptions::new_with_path(variant_path).with_as_type(Some(target_field));
+        let mut options = GetOptions::new_with_path(variant_path).with_as_type(target_field);
 
         if self.safe {
             options = options.with_cast_options(datafusion::arrow::compute::CastOptions {

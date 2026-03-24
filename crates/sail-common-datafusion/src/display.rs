@@ -1191,7 +1191,7 @@ mod tests {
         );
     }
 
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     #[test]
     fn test_variant_array_to_string() {
         use parquet_variant_compute::VariantArrayBuilder;

@@ -124,6 +124,98 @@ Feature: Variant type functions (parse_json, is_variant_null, variant_get)
         | result |
         | false  |
 
+    Scenario: String "null" (quoted) is NOT variant null
+      When query
+        """
+        SELECT is_variant_null(parse_json('"null"')) AS result
+        """
+      Then query result
+        | result |
+        | false  |
+
+    Scenario: Integer 13 is not variant null
+      When query
+        """
+        SELECT is_variant_null(parse_json('13')) AS result
+        """
+      Then query result
+        | result |
+        | false  |
+
+    Scenario: Boolean false is not variant null
+      When query
+        """
+        SELECT is_variant_null(parse_json('false')) AS result
+        """
+      Then query result
+        | result |
+        | false  |
+
+    Scenario: Empty array is not variant null
+      When query
+        """
+        SELECT is_variant_null(parse_json('[]')) AS result
+        """
+      Then query result
+        | result |
+        | false  |
+
+    Scenario: Empty object is not variant null
+      When query
+        """
+        SELECT is_variant_null(parse_json('{}')) AS result
+        """
+      Then query result
+        | result |
+        | false  |
+
+  Rule: parse_json roundtrip with complex types
+
+    Scenario: Parse object with float field
+      When query
+        """
+        SELECT variant_get(parse_json('{"a":1,"b":0.8}'), '$.b', 'double') AS result
+        """
+      Then query result
+        | result |
+        | 0.8    |
+
+    Scenario: Parse object with boolean and integer
+      When query
+        """
+        SELECT variant_get(parse_json('{"flag":true,"count":42}'), '$.flag', 'boolean') AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: Extract string from nested object
+      When query
+        """
+        SELECT variant_get(parse_json('{"a":null,"b":"spark"}'), '$.b', 'string') AS result
+        """
+      Then query result
+        | result |
+        | spark  |
+
+    Scenario: Extract null field from object returns NULL
+      When query
+        """
+        SELECT variant_get(parse_json('{"a":null,"b":"spark"}'), '$.a', 'string') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: Extract missing field from object returns NULL
+      When query
+        """
+        SELECT variant_get(parse_json('{"a":null,"b":"spark"}'), '$.c', 'string') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
   Rule: Array access
 
     Scenario: Array index 0
