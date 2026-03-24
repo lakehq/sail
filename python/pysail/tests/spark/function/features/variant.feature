@@ -341,6 +341,86 @@ Feature: Variant type functions (parse_json, is_variant_null, variant_get)
         | 2      |
         | 3      |
 
+  Rule: is_variant_null additional cases from doctest
+
+    Scenario: Array containing null is not variant null
+      When query
+        """
+        SELECT is_variant_null(parse_json('[null]')) AS result
+        """
+      Then query result
+        | result |
+        | false  |
+
+    Scenario: Object with null field is not variant null
+      When query
+        """
+        SELECT is_variant_null(parse_json('{"a": null}')) AS result
+        """
+      Then query result
+        | result |
+        | false  |
+
+    Scenario: Empty string value is not variant null
+      When query
+        """
+        SELECT is_variant_null(parse_json('""')) AS result
+        """
+      Then query result
+        | result |
+        | false  |
+
+    Scenario: Zero is not variant null
+      When query
+        """
+        SELECT is_variant_null(parse_json('0')) AS result
+        """
+      Then query result
+        | result |
+        | false  |
+
+  Rule: parse_json display and multi-row
+
+    Scenario: Parse JSON object displays correctly
+      When query
+        """
+        SELECT parse_json('{"name":"sail"}') AS result
+        """
+      Then query result
+        | result          |
+        | {"name":"sail"} |
+
+    Scenario: Parse empty object
+      When query
+        """
+        SELECT parse_json('{}') AS result
+        """
+      Then query result
+        | result |
+        | {}     |
+
+    Scenario: Parse empty string value
+      When query
+        """
+        SELECT parse_json('""') AS result
+        """
+      Then query result
+        | result |
+        | ""     |
+
+    Scenario: Multi-row parse_json with is_variant_null
+      When query
+        """
+        SELECT is_variant_null(parse_json(col)) AS result
+        FROM VALUES ('null'), ('{"a":1}'), (null), ('0') AS t(col)
+        """
+      Then query result
+        | result |
+        | true   |
+        | false  |
+        | false  |
+        | false  |
+
   Rule: Error cases
 
     Scenario: Invalid JSON raises error
