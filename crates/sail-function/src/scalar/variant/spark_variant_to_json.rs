@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-variant/blob/51e0d4be62d7675e9b7b56ed1c0b0a10ae4a28d7/src/variant_to_json.rs>
-use arrow::array::StringViewArray;
 use arrow_schema::DataType;
 use datafusion::common::{exec_datafusion_err, exec_err};
 use datafusion::error::Result;
@@ -57,12 +56,8 @@ impl ScalarUDFImpl for SparkVariantToJsonUdf {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        // coerce_types accepts 1-2 args, but options (arg 2) is not yet implemented
-        if args.args.len() > 1 {
-            return exec_err!(
-                "variant_to_json: the optional `options` argument is not yet implemented"
-            );
-        }
+        // Spark: "If expr is a VARIANT, the options are ignored."
+        // https://docs.databricks.com/en/sql/language-manual/functions/to_json.html
 
         let field = args
             .arg_fields
@@ -90,11 +85,15 @@ impl ScalarUDFImpl for SparkVariantToJsonUdf {
                 DataType::Struct(_) => {
                     let variant_array = VariantArray::try_new(arr.as_ref())?;
 
-                    let string_view_array: StringViewArray = variant_array
-                        .iter()
-                        .map(|variant| variant.map(|v| v.to_json_string()).transpose())
-                        .collect::<Result<Vec<_>, _>>()?
-                        .into();
+                    let mut builder =
+                        arrow::array::StringViewBuilder::with_capacity(variant_array.len());
+                    for variant in variant_array.iter() {
+                        match variant {
+                            Some(v) => builder.append_value(v.to_json_string()?),
+                            None => builder.append_null(),
+                        }
+                    }
+                    let string_view_array = builder.finish();
 
                     ColumnarValue::Array(Arc::new(string_view_array))
                 }
@@ -206,6 +205,72 @@ mod tests {
         let json: Value = serde_json::from_str(j.as_str())
             .map_err(|e| exec_datafusion_err!("failed to parse json: {}", e))?;
         assert_eq!(json, expected_json);
+        Ok(())
+    }
+
+    #[test]
+    fn test_scalar_null_returns_null() -> Result<()> {
+        let udf = SparkVariantToJsonUdf::default();
+        let return_field = Arc::new(Field::new("result", DataType::Utf8View, true));
+        let arg_field = Arc::new(
+            Field::new("input", DataType::Struct(Fields::empty()), true)
+                .with_extension_type(VariantType),
+        );
+
+        let args = ScalarFunctionArgs {
+            args: vec![ColumnarValue::Scalar(ScalarValue::Null)],
+            return_field,
+            arg_fields: vec![arg_field],
+            number_rows: Default::default(),
+            config_options: Default::default(),
+        };
+
+        let result = udf.invoke_with_args(args)?;
+        let ColumnarValue::Scalar(ScalarValue::Utf8View(None)) = result else {
+            return exec_err!("expected NULL Utf8View");
+        };
+        Ok(())
+    }
+
+    #[test]
+    fn test_columnar_with_nulls() -> Result<()> {
+        use arrow::array::{Array, ArrayRef, StringViewArray, StructArray};
+        use parquet_variant_json::JsonToVariant;
+
+        let mut builder = VariantArrayBuilder::new(3);
+        builder.append_json(r#"{"a":1}"#)?;
+        builder.append_null();
+        builder.append_json(r#""hello""#)?;
+        let arr: StructArray = builder.build().into();
+
+        let udf = SparkVariantToJsonUdf::default();
+        let return_field = Arc::new(Field::new("result", DataType::Utf8View, true));
+        let arg_field = Arc::new(
+            Field::new("input", DataType::Struct(Fields::empty()), true)
+                .with_extension_type(VariantType),
+        );
+
+        let args = ScalarFunctionArgs {
+            args: vec![ColumnarValue::Array(Arc::new(arr) as ArrayRef)],
+            return_field,
+            arg_fields: vec![arg_field],
+            number_rows: Default::default(),
+            config_options: Default::default(),
+        };
+
+        let result = udf.invoke_with_args(args)?;
+        let ColumnarValue::Array(arr) = result else {
+            return exec_err!("expected Array");
+        };
+        let str_arr = arr
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .ok_or_else(|| exec_datafusion_err!("expected StringViewArray"))?;
+
+        assert_eq!(str_arr.len(), 3);
+        assert_eq!(str_arr.value(0), r#"{"a":1}"#);
+        assert!(str_arr.is_null(1));
+        assert_eq!(str_arr.value(2), r#""hello""#);
         Ok(())
     }
 }

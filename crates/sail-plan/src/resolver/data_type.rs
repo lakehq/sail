@@ -276,7 +276,6 @@ impl PlanResolver<'_> {
             DataType::Variant => {
                 // Variant layout using Binary for PySpark compatibility.
                 // parquet-variant uses BinaryView internally but we convert to Binary
-                // at the Sail boundary (matching parse_json's output format).
                 let fields = adt::Fields::from(vec![
                     adt::Field::new("metadata", adt::DataType::Binary, false),
                     adt::Field::new("value", adt::DataType::Binary, true),

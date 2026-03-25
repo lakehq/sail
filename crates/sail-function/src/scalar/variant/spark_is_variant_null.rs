@@ -79,11 +79,11 @@ impl ScalarUDFImpl for SparkIsVariantNullUdf {
             ColumnarValue::Array(variant_array) => {
                 let variant_array = VariantArray::try_new(variant_array.as_ref())?;
                 // Spark: NULL variant rows → false (not SQL NULL)
-                let result: arrow::array::BooleanArray = variant_array
-                    .iter()
-                    .map(|v| Some(v.is_some_and(|v| v == Variant::Null)))
-                    .collect::<Vec<_>>()
-                    .into();
+                let mut builder = arrow::array::BooleanBuilder::with_capacity(variant_array.len());
+                for v in variant_array.iter() {
+                    builder.append_value(v.is_some_and(|v| v == Variant::Null));
+                }
+                let result = builder.finish();
                 ColumnarValue::Array(Arc::new(result) as ArrayRef)
             }
         };

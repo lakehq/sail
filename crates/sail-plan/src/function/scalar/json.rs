@@ -42,6 +42,9 @@ fn to_json(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     // to_json accepts 1 or 2 arguments:
     // - to_json(expr) - convert expr to JSON string
     // - to_json(expr, options) - convert expr to JSON string with options
+    // TODO: when expr is a Variant, route to variant_to_json (which ignores options).
+    // Currently to_json(variant, options) fails because this always dispatches to to_json_udf.
+    // See: https://docs.databricks.com/en/sql/language-manual/functions/to_json.html
     match args.len() {
         1 | 2 => Ok(to_json_udf().call(args)),
         n => Err(PlanError::invalid(format!(

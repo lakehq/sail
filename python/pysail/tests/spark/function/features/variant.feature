@@ -525,3 +525,25 @@ Feature: Variant type functions (parse_json, is_variant_null, variant_get)
         SELECT parse_json('') AS result
         """
       Then query error (MALFORMED_RECORD_IN_PARSING|JSON format error|empty)
+
+  Rule: variant_to_json with options (ignores options for Variant input)
+
+    @sail-bug
+    Scenario: variant_to_json ignores options for Variant input
+      When query
+        """
+        SELECT to_json(parse_json('{"a":1}'), map('timestampFormat', 'yyyy-MM-dd')) AS result
+        """
+      Then query result
+        | result  |
+        | {"a":1} |
+
+    @sail-bug
+    Scenario: variant_to_json ignores options with different format
+      When query
+        """
+        SELECT to_json(parse_json('[1,2,3]'), map('pretty', 'true')) AS result
+        """
+      Then query result
+        | result  |
+        | [1,2,3] |

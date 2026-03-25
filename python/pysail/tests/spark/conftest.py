@@ -186,6 +186,14 @@ def pytest_collection_modifyitems(session, config, items):  # noqa: ARG001
                     for marker in test.markers:
                         item.add_marker(marker)
 
+    # Mark @sail-bug scenarios as xfail when running against Sail
+    if not is_jvm_spark():
+        for item in items:
+            marker = item.get_closest_marker("sail-bug")
+            if marker:
+                reason = marker.kwargs.get("reason", "Known Sail bug")
+                item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
+
     if is_jvm_spark():
         skip_sail_only = pytest.mark.skip(reason="Sail-only feature, not supported by Spark")
         for item in items:
