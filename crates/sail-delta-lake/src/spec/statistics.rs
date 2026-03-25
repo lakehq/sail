@@ -547,6 +547,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::unwrap_used)]
     fn stats_default_tight_bounds_to_true_when_absent() {
         let stats = Stats::from_json_str(r#"{"numRecords":3,"minValues":{"value":1}}"#).unwrap();
 

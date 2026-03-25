@@ -122,6 +122,7 @@ mod tests {
     use super::TableFeature;
 
     #[test]
+    #[expect(clippy::unwrap_used)]
     fn table_feature_string_mappings_include_recent_protocol_features() {
         let cases = [
             (TableFeature::IcebergCompatV1, "icebergCompatV1"),

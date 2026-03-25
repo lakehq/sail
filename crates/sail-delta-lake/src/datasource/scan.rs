@@ -659,6 +659,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, clippy::unwrap_used)]
     fn test_stats_for_add_marks_wide_bounds_as_inexact() {
         let file_schema = Arc::new(Schema::new(vec![Field::new(
             "value",

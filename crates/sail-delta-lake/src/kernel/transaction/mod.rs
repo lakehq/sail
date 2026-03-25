@@ -291,9 +291,7 @@ impl CommitData {
                 actions.iter().all(|action| {
                     matches!(
                         action,
-                        CommitAction::Add(_)
-                            | CommitAction::Txn(_)
-                            | CommitAction::CommitInfo(_)
+                        CommitAction::Add(_) | CommitAction::Txn(_) | CommitAction::CommitInfo(_)
                     )
                 })
             }
@@ -1224,8 +1222,8 @@ mod tests {
     use super::*;
     use crate::schema::protocol_for_create;
     use crate::spec::{
-        checksum_path, Action, CommitAction, CommitInfo, DataType, DeltaError, Metadata,
-        SaveMode, StructField, StructType, VersionChecksum,
+        checksum_path, Action, CommitAction, CommitInfo, DataType, DeltaError, Metadata, SaveMode,
+        StructField, StructType, VersionChecksum,
     };
     use crate::storage::{default_logstore, get_actions, StorageConfig};
 

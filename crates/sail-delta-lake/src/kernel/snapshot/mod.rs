@@ -864,6 +864,7 @@ mod tests {
     };
     use crate::table::RowTrackingToken;
 
+    #[expect(clippy::unwrap_used)]
     fn test_metadata(
         configuration: impl IntoIterator<Item = (&'static str, &'static str)>,
     ) -> Metadata {
@@ -889,6 +890,7 @@ mod tests {
         test_snapshot_with_adds(protocol, metadata, domain_metadata, Vec::new())
     }
 
+    #[expect(clippy::unwrap_used)]
     fn test_snapshot_with_adds(
         protocol: Protocol,
         metadata: Metadata,
@@ -919,6 +921,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::unwrap_used)]
     fn row_tracking_state_uses_protocol_features_and_domain_high_water_mark() {
         let protocol = Protocol::new(
             1,
@@ -965,10 +968,12 @@ mod tests {
             }],
         );
 
-        match snapshot.get_row_tracking_state().unwrap() {
-            RowTrackingToken::Enabled(token) => assert_eq!(token.next_row_id, 43),
-            other => panic!("expected enabled row tracking, got {other:?}"),
-        }
+        let next_row_id = match snapshot.get_row_tracking_state().unwrap() {
+            RowTrackingToken::Enabled(token) => Some(token.next_row_id),
+            _ => None,
+        };
+
+        assert_eq!(next_row_id, Some(43));
     }
 
     #[test]
@@ -1081,6 +1086,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::unwrap_used)]
     fn version_checksum_skips_explicitly_known_but_unsupported_features() {
         let protocol = Protocol::new(1, 7, None, Some(vec![TableFeature::InCommitTimestamp]));
         let snapshot = test_snapshot(protocol, test_metadata([]), Vec::new());

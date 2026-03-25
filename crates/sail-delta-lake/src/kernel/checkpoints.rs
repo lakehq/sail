@@ -1250,6 +1250,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::unwrap_used)]
     fn reconciled_checkpoint_state_rejects_sidecars() {
         let mut state = ReconciledCheckpointState::default();
         let err = state
@@ -1270,6 +1271,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::unwrap_used)]
     fn reconciled_header_state_rejects_sidecars() {
         let mut state = ReconciledHeaderState::default();
         let err = state

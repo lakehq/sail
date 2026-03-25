@@ -35,6 +35,7 @@ pub use features::{
     ChangeDataFeedToken, ColumnMappingToken, DeletionVectorToken, EnabledRowTrackingToken,
     RowTrackingToken, SupportedRowTrackingToken,
 };
+
 use crate::delta_log::resolve_version_timestamp;
 pub use crate::kernel::snapshot::DeltaSnapshot;
 use crate::kernel::DeltaTableConfig;
