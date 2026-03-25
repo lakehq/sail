@@ -181,6 +181,7 @@ def iceberg_tag_points_to_snapshot_index(
     _write_metadata(table_path, metadata)
 
 
+# FIXME: Remove this workaround once we get a proper solution. 
 @given(parsers.parse("append JSON row {row_json} to iceberg table in {location_var} with mergeSchema"))
 def append_json_row_to_iceberg_table_with_merge_schema(
     row_json: str,
