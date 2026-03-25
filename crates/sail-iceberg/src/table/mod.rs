@@ -111,71 +111,89 @@ impl Table {
     }
 
     fn select_snapshot(&self, options: &TableIcebergOptions) -> Result<(Schema, Snapshot)> {
-        let chosen_snapshot = if let Some(id) = options.snapshot_id {
-            self.metadata
-                .snapshots
-                .iter()
-                .find(|s| s.snapshot_id() == id)
-                .cloned()
-                .ok_or_else(|| {
-                    DataFusionError::Plan(format!("Snapshot with id {} not found", id))
-                })?
-        } else if let Some(ref_name) = options.use_ref.as_deref() {
-            let sid = if ref_name == MAIN_BRANCH {
-                self.metadata.current_snapshot_id.ok_or_else(|| {
-                    DataFusionError::Plan(
-                        "Iceberg table metadata is missing current snapshot id".to_string(),
-                    )
-                })?
-            } else {
+        let (chosen_snapshot, use_snapshot_schema) = if let Some(id) = options.snapshot_id {
+            (
                 self.metadata
-                    .refs
-                    .get(ref_name)
-                    .map(|r| r.snapshot_id)
+                    .snapshots
+                    .iter()
+                    .find(|s| s.snapshot_id() == id)
+                    .cloned()
                     .ok_or_else(|| {
-                        DataFusionError::Plan(format!("Unknown Iceberg ref: {}", ref_name))
-                    })?
+                        DataFusionError::Plan(format!("Snapshot with id {} not found", id))
+                    })?,
+                true,
+            )
+        } else if let Some(ref_name) = options.use_ref.as_deref() {
+            let (sid, use_snapshot_schema) = if ref_name == MAIN_BRANCH {
+                (
+                    self.metadata.current_snapshot_id.ok_or_else(|| {
+                        DataFusionError::Plan(
+                            "Iceberg table metadata is missing current snapshot id".to_string(),
+                        )
+                    })?,
+                    false,
+                )
+            } else {
+                let reference = self.metadata.refs.get(ref_name).ok_or_else(|| {
+                    DataFusionError::Plan(format!("Unknown Iceberg ref: {}", ref_name))
+                })?;
+                (reference.snapshot_id, !reference.is_branch())
             };
-            self.metadata
-                .snapshots
-                .iter()
-                .find(|s| s.snapshot_id() == sid)
-                .cloned()
-                .ok_or_else(|| {
-                    DataFusionError::Plan(format!(
-                        "Snapshot for ref {} (id={}) not found",
-                        ref_name, sid
-                    ))
-                })?
+            (
+                self.metadata
+                    .snapshots
+                    .iter()
+                    .find(|s| s.snapshot_id() == sid)
+                    .cloned()
+                    .ok_or_else(|| {
+                        DataFusionError::Plan(format!(
+                            "Snapshot for ref {} (id={}) not found",
+                            ref_name, sid
+                        ))
+                    })?,
+                use_snapshot_schema,
+            )
         } else if let Some(ts_str) = options.timestamp_as_of.as_deref() {
             let ts_ms =
                 parse_timestamp_to_ms(ts_str).map_err(|e| DataFusionError::Plan(e.to_string()))?;
-            find_snapshot_by_ts(&self.metadata, ts_ms)
-                .cloned()
-                .ok_or_else(|| {
-                    DataFusionError::Plan(format!(
-                        "No Iceberg snapshot exists at or before timestamp {}",
-                        ts_str
-                    ))
-                })?
+            (
+                find_snapshot_by_ts(&self.metadata, ts_ms)
+                    .cloned()
+                    .ok_or_else(|| {
+                        DataFusionError::Plan(format!(
+                            "No Iceberg snapshot exists at or before timestamp {}",
+                            ts_str
+                        ))
+                    })?,
+                true,
+            )
         } else {
-            self.metadata.current_snapshot().cloned().ok_or_else(|| {
-                DataFusionError::Plan("No current snapshot found in table metadata".to_string())
-            })?
+            (
+                self.metadata.current_snapshot().cloned().ok_or_else(|| {
+                    DataFusionError::Plan("No current snapshot found in table metadata".to_string())
+                })?,
+                false,
+            )
         };
 
-        let schema = if let Some(schema_id) = chosen_snapshot.schema_id() {
-            self.metadata
-                .schemas
-                .iter()
-                .find(|s| s.schema_id() == schema_id)
-                .cloned()
-                .ok_or_else(|| {
-                    DataFusionError::Plan(format!(
-                        "Schema with id {} not found for chosen snapshot",
-                        schema_id
-                    ))
+        let schema = if use_snapshot_schema {
+            if let Some(schema_id) = chosen_snapshot.schema_id() {
+                self.metadata
+                    .schemas
+                    .iter()
+                    .find(|s| s.schema_id() == schema_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        DataFusionError::Plan(format!(
+                            "Schema with id {} not found for chosen snapshot",
+                            schema_id
+                        ))
+                    })?
+            } else {
+                self.metadata.current_schema().cloned().ok_or_else(|| {
+                    DataFusionError::Plan("No current schema found in table metadata".to_string())
                 })?
+            }
         } else {
             self.metadata.current_schema().cloned().ok_or_else(|| {
                 DataFusionError::Plan("No current schema found in table metadata".to_string())
@@ -187,20 +205,39 @@ impl Table {
 }
 
 fn parse_timestamp_to_ms(s: &str) -> std::result::Result<i64, String> {
-    // Try RFC3339 first
-    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+    let rfc3339_result = DateTime::parse_from_rfc3339(s);
+    if let Ok(dt) = rfc3339_result {
         return Ok(dt.with_timezone(&Utc).timestamp_millis());
     }
 
-    // Fallback format "yyyy-MM-dd HH:mm:ss.SSS"
-    let fmt = "%Y-%m-%d %H:%M:%S%.3f";
-    let naive = NaiveDateTime::parse_from_str(s, fmt)
-        .map_err(|e| format!("Invalid timestamp '{s}': {e}"))?;
-    Ok(Utc.from_utc_datetime(&naive).timestamp_millis())
+    let mut last_error = rfc3339_result
+        .err()
+        .map(|e| format!("RFC3339 parsing error: {e}"));
+
+    for format in [
+        "%Y-%m-%d %H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S",
+    ] {
+        match NaiveDateTime::parse_from_str(s, format) {
+            Ok(naive) => return Ok(Utc.from_utc_datetime(&naive).timestamp_millis()),
+            Err(e) => {
+                last_error = Some(format!("Failed to parse with format '{format}': {e}"));
+            }
+        }
+    }
+
+    let detail = last_error
+        .map(|e| format!(" Details: {e}"))
+        .unwrap_or_default();
+    Err(format!(
+        "Invalid timestamp '{s}'. Supported formats are: RFC3339 (e.g. '2024-01-02T03:04:05Z'), '%Y-%m-%d %H:%M:%S%.f', '%Y-%m-%dT%H:%M:%S%.f', '%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S'.{detail}"
+    ))
 }
 
 fn find_snapshot_by_ts(meta: &TableMetadata, ts_ms: i64) -> Option<&Snapshot> {
-    if let Some(log_entry) = meta
+    let from_log = meta
         .snapshot_log
         .iter()
         .filter(|e| e.timestamp_ms <= ts_ms)
@@ -209,19 +246,21 @@ fn find_snapshot_by_ts(meta: &TableMetadata, ts_ms: i64) -> Option<&Snapshot> {
                 .cmp(&b.timestamp_ms)
                 .then_with(|| a.snapshot_id.cmp(&b.snapshot_id))
         })
-    {
-        return meta
-            .snapshots
-            .iter()
-            .find(|s| s.snapshot_id() == log_entry.snapshot_id);
-    }
+        .and_then(|log_entry| {
+            meta.snapshots
+                .iter()
+                .find(|s| s.snapshot_id() == log_entry.snapshot_id)
+                .map(|snapshot| (log_entry.timestamp_ms, snapshot.snapshot_id(), snapshot))
+        });
 
-    meta.snapshots
-        .iter()
-        .filter(|s| s.timestamp_ms() <= ts_ms)
-        .max_by(|a, b| {
-            a.timestamp_ms()
-                .cmp(&b.timestamp_ms())
-                .then_with(|| a.snapshot_id().cmp(&b.snapshot_id()))
-        })
+    from_log.map(|(_, _, snapshot)| snapshot).or_else(|| {
+        meta.snapshots
+            .iter()
+            .filter(|s| s.timestamp_ms() <= ts_ms)
+            .max_by(|a, b| {
+                a.timestamp_ms()
+                    .cmp(&b.timestamp_ms())
+                    .then_with(|| a.snapshot_id().cmp(&b.snapshot_id()))
+            })
+    })
 }

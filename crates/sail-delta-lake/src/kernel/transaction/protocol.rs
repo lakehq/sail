@@ -249,11 +249,7 @@ impl ProtocolChecker {
         } else {
             snapshot
                 .protocol()
-                .writer_features()
-                .ok_or(TransactionError::TableFeaturesRequired(
-                    TableFeature::AppendOnly,
-                ))?
-                .contains(&TableFeature::AppendOnly)
+                .has_writer_feature(&TableFeature::AppendOnly)
                 && snapshot.table_properties().append_only()
         };
         if append_only_enabled {
@@ -291,6 +287,7 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     // For writer versions 2..=6, claiming support here also means accepting older tables whose
     // `minWriterVersion` implies the feature set in WRITER_V2..WRITER_V6.
     writer_features.insert(TableFeature::AppendOnly);
+    writer_features.insert(TableFeature::InCommitTimestamp);
     writer_features.insert(TableFeature::TimestampWithoutTimezone);
     // writer_features.insert(TableFeature::DomainMetadata);
     writer_features.insert(TableFeature::ColumnMapping);

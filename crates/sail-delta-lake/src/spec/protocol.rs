@@ -18,6 +18,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::spec::properties::TableProperties;
 use crate::spec::{DeltaError as DeltaTableError, DeltaResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -38,6 +39,7 @@ pub enum TableFeature {
     DomainMetadata,
     #[serde(rename = "v2Checkpoint")]
     V2Checkpoint,
+    #[serde(rename = "inCommitTimestamp")]
     InCommitTimestamp,
     #[serde(rename = "timestampNtz")]
     TimestampWithoutTimezone,
@@ -184,18 +186,23 @@ impl Protocol {
         self.writer_features.as_deref()
     }
 
-    /// Returns `true` if the table protocol explicitly declares the given writer feature.
-    ///
-    /// This does **not** infer features from `min_writer_version`; use
-    /// [`crate::kernel::transaction::PROTOCOL`] when you need version-aware checks.
-    pub fn has_writer_feature(&self, feature: &TableFeature) -> bool {
-        self.writer_features()
-            .is_some_and(|fs| fs.contains(feature))
-    }
-
     /// Returns `true` if the table protocol explicitly declares the given reader feature.
     pub fn has_reader_feature(&self, feature: &TableFeature) -> bool {
         self.reader_features()
-            .is_some_and(|fs| fs.contains(feature))
+            .is_some_and(|features| features.contains(feature))
+    }
+
+    /// Returns `true` if the table protocol explicitly declares the given writer feature.
+    pub fn has_writer_feature(&self, feature: &TableFeature) -> bool {
+        self.writer_features()
+            .is_some_and(|features| features.contains(feature))
+    }
+
+    pub fn supports_in_commit_timestamps(&self) -> bool {
+        self.min_writer_version() >= 7 && self.has_writer_feature(&TableFeature::InCommitTimestamp)
+    }
+
+    pub fn is_in_commit_timestamps_enabled(&self, table_properties: &TableProperties) -> bool {
+        self.supports_in_commit_timestamps() && table_properties.enable_in_commit_timestamps()
     }
 }

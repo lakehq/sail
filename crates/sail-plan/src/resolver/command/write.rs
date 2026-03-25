@@ -29,26 +29,63 @@ use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
+/// The write modes for all targets.
+///
+/// The modes are classified based on the action to take when the target exists or
+/// does not exist. More modes can be added if additional actions are required.
+/// If the target does not exist, the action is usually either "creating the target
+/// and writing the data" or "returning an error". If the target exists, the actions
+/// are more diverse.
+///
+/// We avoid using terms such as "overwrite" since it has different semantics
+/// in different APIs, so we introduce more specific terms such as "replace"
+/// and "truncate" instead.
 pub(super) enum WriteMode {
+    /// If the target exists, return an error.
+    /// If the target does not exist, create the target and write the data.
     ErrorIfExists,
+    /// If the target exists, skip the write operation.
+    /// If the target does not exist, create the target and write the data.
     IgnoreIfExists,
-    Append,
-    Overwrite,
-    OverwriteIf {
+    /// If the target exists, add the data to the target.
+    /// If the target does not exist, return an error if `error_if_absent` is true,
+    /// or create the target and write the data if `error_if_absent` is false.
+    ///
+    /// The data must have compatible schema if the target exists.
+    Append { error_if_absent: bool },
+    /// If the target exists, remove and recreate the target and write the data.
+    /// If the target does not exist, return an error if `error_if_absent` is true,
+    /// or create the target and write the data if `error_if_absent` is false.
+    ///
+    /// The data can have incompatible schema even if the target exists.
+    Replace { error_if_absent: bool },
+    /// If the target exists, remove all data and write the data.
+    /// If the target does not exist, return an error.
+    ///
+    /// This is different from [`Self::Replace`] since the existing target is not removed and
+    /// recreated.
+    /// The data must have compatible schema if the target exists.
+    Truncate,
+    /// If the target exists, remove all data matching the condition and add the data.
+    /// If the target does not exist, return an error.
+    ///
+    /// The data must have compatible schema if the target exists.
+    TruncateIf {
         condition: Box<spec::ExprWithSource>,
     },
-    OverwritePartitions,
+    /// If the target exists, remove all data from partitions that overlap with the data to write,
+    /// and then add the data.
+    /// If the target does not exist, return an error.
+    ///
+    /// The data must have compatible schema if the target exists.
+    TruncatePartitions,
 }
 
 pub(super) enum WriteTarget {
     DataSource,
-    ExistingTable {
+    Table {
         table: spec::ObjectName,
         column_match: WriteColumnMatch,
-    },
-    NewTable {
-        table: spec::ObjectName,
-        action: WriteTableAction,
     },
 }
 
@@ -59,19 +96,11 @@ pub(super) enum WriteColumnMatch {
     ByColumns { columns: Vec<spec::Identifier> },
 }
 
-pub(super) enum WriteTableAction {
-    Create,
-    CreateIfNotExists,
-    CreateOrReplace,
-    Replace,
-}
-
 /// A unified logical plan builder for all write or insert operations.
 pub(super) struct WritePlanBuilder {
     target: Option<WriteTarget>,
     mode: Option<WriteMode>,
     format: Option<String>,
-    partition: Vec<(spec::Identifier, Option<spec::Expr>)>,
     partition_by: Vec<CatalogPartitionField>,
     bucket_by: Option<spec::SaveBucketBy>,
     sort_by: Vec<spec::SortOrder>,
@@ -86,7 +115,6 @@ impl WritePlanBuilder {
             target: None,
             mode: None,
             format: None,
-            partition: vec![],
             partition_by: vec![],
             bucket_by: None,
             sort_by: vec![],
@@ -108,14 +136,6 @@ impl WritePlanBuilder {
 
     pub fn with_format(mut self, format: String) -> Self {
         self.format = Some(format);
-        self
-    }
-
-    pub fn with_partition(
-        mut self,
-        partition: Vec<(spec::Identifier, Option<spec::Expr>)>,
-    ) -> Self {
-        self.partition = partition;
         self
     }
 
@@ -161,7 +181,6 @@ impl PlanResolver<'_> {
             mode,
             target,
             format,
-            partition,
             partition_by,
             bucket_by,
             sort_by,
@@ -176,9 +195,6 @@ impl PlanResolver<'_> {
         let Some(target) = target else {
             return Err(PlanError::internal("target is required for write builder"));
         };
-        if !partition.is_empty() {
-            return Err(PlanError::todo("PARTITION for write"));
-        }
         if !cluster_by.is_empty() {
             return Err(PlanError::todo("CLUSTER BY for write"));
         }
@@ -207,161 +223,177 @@ impl PlanResolver<'_> {
                     file_write_options.format = self.config.default_table_file_format.clone();
                 }
                 let schema_for_cond =
-                    matches!(mode, WriteMode::OverwriteIf { .. }).then_some(input_schema.as_ref());
+                    matches!(mode, WriteMode::TruncateIf { .. }).then_some(input_schema.as_ref());
                 file_write_options.mode = self
                     .resolve_write_mode(mode, schema_for_cond, state)
                     .await?;
             }
-            WriteTarget::ExistingTable {
+            WriteTarget::Table {
                 table,
                 column_match,
             } => {
-                if !table_properties.is_empty() {
-                    return Err(PlanError::invalid(
-                        "cannot specify table properties when writing to an existing table",
-                    ));
-                }
-                let Some(info) = self.resolve_table_info(&table).await? else {
-                    return Err(PlanError::invalid(format!(
-                        "table does not exist: {table:?}"
-                    )));
-                };
-                if matches!(mode, WriteMode::IgnoreIfExists) {
-                    return Ok(LogicalPlanBuilder::empty(false).build()?);
-                }
-                info.validate_file_write_options(&file_write_options)?;
-                input = Self::rewrite_write_input(input, column_match, &info)?;
-                file_write_options.mode = self
-                    .resolve_write_mode(mode, Some(&info.schema()), state)
-                    .await?;
-                if file_write_options.partition_by.is_empty()
-                    || !info.format.eq_ignore_ascii_case("iceberg")
-                {
-                    file_write_options.partition_by = info.partition_by.clone();
-                }
-                file_write_options.sort_by = info.sort_by.into_iter().map(|x| x.into()).collect();
-                file_write_options.bucket_by = info.bucket_by.map(|x| x.into());
-                let location = info.location.ok_or_else(|| {
-                    PlanError::invalid(format!("table does not have a location: {table:?}"))
-                })?;
-                file_write_options
-                    .options
-                    .push(vec![("path".to_string(), location)]);
-                file_write_options.format = info.format;
-                file_write_options.options.insert(0, info.options);
-                file_write_options.table_properties = info.properties;
-            }
-            WriteTarget::NewTable { table, action } => {
                 let info = self.resolve_table_info(&table).await?;
+
+                // Return early if the target exists and the mode says to skip
                 if matches!(mode, WriteMode::IgnoreIfExists) && info.is_some() {
                     return Ok(LogicalPlanBuilder::empty(false).build()?);
                 }
-                if matches!(action, WriteTableAction::CreateIfNotExists) {
-                    if let Some(ref info) = info {
-                        info.validate_file_write_options(&file_write_options)?;
-                        input = Self::rewrite_write_input(input, WriteColumnMatch::ByName, info)?;
-                        file_write_options.partition_by = info.partition_by.clone();
-                        file_write_options.sort_by =
-                            info.sort_by.iter().cloned().map(|x| x.into()).collect();
-                        file_write_options.bucket_by = info.bucket_by.clone().map(|x| x.into());
-                        file_write_options.options.insert(0, info.options.clone());
-                    }
+
+                // Error if the mode requires an existing target but it does not exist
+                let requires_existing = matches!(
+                    mode,
+                    WriteMode::Append {
+                        error_if_absent: true
+                    } | WriteMode::Replace {
+                        error_if_absent: true
+                    } | WriteMode::Truncate
+                        | WriteMode::TruncateIf { .. }
+                        | WriteMode::TruncatePartitions
+                );
+                if requires_existing && info.is_none() {
+                    return Err(PlanError::invalid(format!(
+                        "table does not exist: {table:?}"
+                    )));
                 }
-                file_write_options.mode = self.resolve_write_mode(mode, None, state).await?;
-                if file_write_options.format.is_empty() {
-                    if let Some(format) = info.as_ref().map(|x| &x.format) {
-                        file_write_options.format = format.clone();
-                    } else {
-                        file_write_options.format = self.config.default_table_file_format.clone();
-                    }
-                }
-                if let Some(location) = info.as_ref().and_then(|x| x.location.as_ref()) {
-                    file_write_options
-                        .options
-                        .push(vec![("path".to_string(), location.clone())]);
+
+                // Compute the schema for conditional truncation before potentially consuming info
+                let schema_for_cond = if matches!(mode, WriteMode::TruncateIf { .. }) {
+                    info.as_ref().map(|i| i.schema())
                 } else {
-                    let default_location = self.resolve_default_table_location(&table).await?;
+                    None
+                };
+
+                // Use the existing table metadata when the table exists and the mode is
+                // "append or truncate" (as opposed to "replace or create").
+                let use_existing = matches!(
+                    mode,
+                    WriteMode::Append { .. }
+                        | WriteMode::Truncate
+                        | WriteMode::TruncateIf { .. }
+                        | WriteMode::TruncatePartitions
+                );
+                if let Some(info) = info.as_ref().filter(|_| use_existing) {
+                    if !table_properties.is_empty() {
+                        return Err(PlanError::invalid(
+                            "cannot specify table properties when writing to an existing table",
+                        ));
+                    }
+                    info.validate_file_write_options(&file_write_options)?;
+                    input = Self::rewrite_write_input(input, column_match, info)?;
+                    if file_write_options.partition_by.is_empty()
+                        || !info.format.eq_ignore_ascii_case("iceberg")
+                    {
+                        file_write_options.partition_by = info.partition_by.clone();
+                    }
+                    file_write_options.sort_by =
+                        info.sort_by.iter().cloned().map(|x| x.into()).collect();
+                    file_write_options.bucket_by = info.bucket_by.clone().map(|x| x.into());
+                    let location = info.location.clone().ok_or_else(|| {
+                        PlanError::invalid(format!("table does not have a location: {table:?}"))
+                    })?;
                     file_write_options
                         .options
-                        .insert(0, vec![("path".to_string(), default_location)]);
-                };
-                if file_write_options
-                    .partition_by
-                    .iter()
-                    .any(|field| field.transform.is_some())
-                    && !file_write_options.format.eq_ignore_ascii_case("iceberg")
-                {
-                    return Err(PlanError::unsupported(
-                        "partition transforms are only supported for Iceberg tables",
-                    ));
-                }
-                file_write_options.table_properties = table_properties.clone();
-                let all_options: Vec<std::collections::HashMap<String, String>> =
-                    file_write_options
+                        .push(vec![("path".to_string(), location)]);
+                    file_write_options.format = info.format.clone();
+                    file_write_options.options.insert(0, info.options.clone());
+                    file_write_options.table_properties = info.properties.clone();
+                } else {
+                    // Create or replace the table
+                    file_write_options.table_properties = table_properties.clone();
+                    if file_write_options.format.is_empty() {
+                        if let Some(format) = info.as_ref().map(|x| &x.format) {
+                            file_write_options.format = format.clone();
+                        } else {
+                            file_write_options.format =
+                                self.config.default_table_file_format.clone();
+                        }
+                    }
+                    if let Some(location) = info.as_ref().and_then(|x| x.location.as_ref()) {
+                        file_write_options
+                            .options
+                            .push(vec![("path".to_string(), location.clone())]);
+                    } else {
+                        let default_location = self.resolve_default_table_location(&table).await?;
+                        file_write_options
+                            .options
+                            .insert(0, vec![("path".to_string(), default_location)]);
+                    };
+                    if file_write_options
+                        .partition_by
+                        .iter()
+                        .any(|field| field.transform.is_some())
+                        && !file_write_options.format.eq_ignore_ascii_case("iceberg")
+                    {
+                        return Err(PlanError::unsupported(
+                            "partition transforms are only supported for Iceberg tables",
+                        ));
+                    }
+                    let all_options: Vec<std::collections::HashMap<String, String>> =
+                        file_write_options
+                            .options
+                            .iter()
+                            .map(|set| set.iter().cloned().collect())
+                            .collect();
+                    let table_location = find_option(&all_options, "path")
+                        .or_else(|| find_option(&all_options, "location"))
+                        .unwrap_or_default();
+                    let (if_not_exists, replace) = if matches!(mode, WriteMode::Append { .. }) {
+                        (true, false)
+                    } else if matches!(mode, WriteMode::Replace { .. }) {
+                        (false, true)
+                    } else {
+                        // ErrorIfExists or IgnoreIfExists
+                        (false, false)
+                    };
+                    let columns = input
+                        .schema()
+                        .inner()
+                        .fields()
+                        .iter()
+                        .map(|f| CreateTableColumnOptions {
+                            name: f.name().clone(),
+                            data_type: f.data_type().clone(),
+                            nullable: f.is_nullable(),
+                            comment: None,
+                            default: None,
+                            generated_always_as: None,
+                        })
+                        .collect();
+                    // TODO: Revisit passing write options to CreateTableOptions.
+                    let create_table_options: Vec<(String, String)> = file_write_options
                         .options
                         .iter()
-                        .map(|set| set.iter().cloned().collect())
+                        .flatten()
+                        .filter(|(k, _)| {
+                            !k.eq_ignore_ascii_case("path") && !k.eq_ignore_ascii_case("location")
+                        })
+                        .cloned()
                         .collect();
-                let table_location = find_option(&all_options, "path")
-                    .or_else(|| find_option(&all_options, "location"))
-                    .unwrap_or_default();
-                let (if_not_exists, replace) = match action {
-                    WriteTableAction::Create => (false, false),
-                    WriteTableAction::CreateIfNotExists => (true, false),
-                    WriteTableAction::CreateOrReplace => (false, true),
-                    WriteTableAction::Replace => {
-                        if info.is_none() {
-                            return Err(PlanError::invalid(format!(
-                                "table does not exist: {table:?}"
-                            )));
-                        }
-                        (false, true)
-                    }
-                };
-                let columns = input
-                    .schema()
-                    .inner()
-                    .fields()
-                    .iter()
-                    .map(|f| CreateTableColumnOptions {
-                        name: f.name().clone(),
-                        data_type: f.data_type().clone(),
-                        nullable: f.is_nullable(),
-                        comment: None,
-                        default: None,
-                        generated_always_as: None,
-                    })
-                    .collect();
-                let sort_by = self.resolve_catalog_table_sort(sort_by)?;
-                let bucket_by = self.resolve_catalog_table_bucket_by(bucket_by)?;
-                // TODO: Revisit passing write options to CreateTableOptions.
-                let create_table_options: Vec<(String, String)> = file_write_options
-                    .options
-                    .iter()
-                    .flatten()
-                    .filter(|(k, _)| {
-                        !k.eq_ignore_ascii_case("path") && !k.eq_ignore_ascii_case("location")
-                    })
-                    .cloned()
-                    .collect();
-                let command = CatalogCommand::CreateTable {
-                    table: table.into(),
-                    options: CreateTableOptions {
-                        columns,
-                        comment: None,
-                        constraints: vec![],
-                        location: Some(table_location),
-                        format: file_write_options.format.clone(),
-                        partition_by,
-                        sort_by,
-                        bucket_by,
-                        if_not_exists,
-                        replace,
-                        options: create_table_options,
-                        properties: table_properties,
-                    },
-                };
-                preconditions.push(Arc::new(self.resolve_catalog_command(command)?));
+                    let sort_by = self.resolve_catalog_table_sort(sort_by)?;
+                    let bucket_by = self.resolve_catalog_table_bucket_by(bucket_by)?;
+                    let command = CatalogCommand::CreateTable {
+                        table: table.into(),
+                        options: CreateTableOptions {
+                            columns,
+                            comment: None,
+                            constraints: vec![],
+                            location: Some(table_location),
+                            format: file_write_options.format.clone(),
+                            partition_by,
+                            sort_by,
+                            bucket_by,
+                            if_not_exists,
+                            replace,
+                            options: create_table_options,
+                            properties: table_properties,
+                        },
+                    };
+                    preconditions.push(Arc::new(self.resolve_catalog_command(command)?));
+                }
+
+                file_write_options.mode = self
+                    .resolve_write_mode(mode, schema_for_cond.as_ref(), state)
+                    .await?;
             }
         };
         let plan = LogicalPlan::Extension(Extension {
@@ -400,9 +432,9 @@ impl PlanResolver<'_> {
         match mode {
             WriteMode::ErrorIfExists => Ok(SinkMode::ErrorIfExists),
             WriteMode::IgnoreIfExists => Ok(SinkMode::IgnoreIfExists),
-            WriteMode::Append => Ok(SinkMode::Append),
-            WriteMode::Overwrite => Ok(SinkMode::Overwrite),
-            WriteMode::OverwriteIf { condition } => {
+            WriteMode::Append { .. } => Ok(SinkMode::Append),
+            WriteMode::Replace { .. } | WriteMode::Truncate => Ok(SinkMode::Overwrite),
+            WriteMode::TruncateIf { condition } => {
                 let Some(schema) = schema else {
                     return Err(PlanError::internal(
                         "conditional overwrite is not allowed without a table schema",
@@ -419,7 +451,7 @@ impl PlanResolver<'_> {
                     condition: Box::new(ExprWithSource::new(expr, condition.source)),
                 })
             }
-            WriteMode::OverwritePartitions => Ok(SinkMode::OverwritePartitions),
+            WriteMode::TruncatePartitions => Ok(SinkMode::OverwritePartitions),
         }
     }
 

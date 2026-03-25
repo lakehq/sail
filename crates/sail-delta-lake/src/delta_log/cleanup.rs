@@ -7,8 +7,9 @@ use uuid::Uuid;
 
 use super::{
     parse_checkpoint_version_from_location, parse_checksum_version_from_location,
-    parse_commit_version_from_location,
+    parse_commit_version_from_location, resolve_version_timestamp,
 };
+use crate::kernel::snapshot::DeltaSnapshot;
 use crate::spec::{delta_log_root_path, DeltaResult};
 use crate::storage::LogStore;
 
@@ -26,9 +27,8 @@ impl LogRetentionWindow {
         }
     }
 
-    fn includes_commit(self, meta: &ObjectMeta, version: i64) -> bool {
-        version <= self.latest_version
-            && meta.last_modified.timestamp_millis() <= self.cutoff_timestamp
+    fn includes_commit(self, version_timestamp: i64, version: i64) -> bool {
+        version <= self.latest_version && version_timestamp <= self.cutoff_timestamp
     }
 
     fn includes_checkpoint(self, version: i64) -> bool {
@@ -59,18 +59,6 @@ impl DeltaLogFile {
         }
     }
 
-    fn is_checkpoint(self) -> bool {
-        matches!(self, Self::Checkpoint(_))
-    }
-
-    fn is_retained_by(self, retention: LogRetentionWindow, meta: &ObjectMeta) -> bool {
-        match self {
-            Self::Commit(version) => retention.includes_commit(meta, version),
-            Self::Checksum(_) => false,
-            Self::Checkpoint(version) => retention.includes_checkpoint(version),
-        }
-    }
-
     fn expires_before(self, retention_checkpoint_version: i64) -> bool {
         self.version() < retention_checkpoint_version
     }
@@ -83,19 +71,20 @@ struct RetentionCleanupBoundary {
 }
 
 impl RetentionCleanupBoundary {
-    fn observe(&mut self, meta: &ObjectMeta, retention: LogRetentionWindow) {
-        let Some(file) = DeltaLogFile::from_meta(meta) else {
-            return;
-        };
-
-        if !file.is_retained_by(retention, meta) {
-            return;
+    fn observe_checkpoint(&mut self, version: i64, retention: LogRetentionWindow) {
+        if retention.includes_checkpoint(version) {
+            self.checkpoint_versions.insert(version);
         }
+    }
 
-        if file.is_checkpoint() {
-            self.checkpoint_versions.insert(file.version());
-        } else {
-            self.cutoff_commit_version = self.cutoff_commit_version.max(Some(file.version()));
+    fn observe_commit(
+        &mut self,
+        version: i64,
+        version_timestamp: i64,
+        retention: LogRetentionWindow,
+    ) {
+        if retention.includes_commit(version_timestamp, version) {
+            self.cutoff_commit_version = self.cutoff_commit_version.max(Some(version));
         }
     }
 
@@ -109,16 +98,18 @@ impl RetentionCleanupBoundary {
 }
 
 pub(crate) async fn cleanup_expired_delta_log_files(
-    latest_version: i64,
+    table_state: &DeltaSnapshot,
     log_store: &dyn LogStore,
     cutoff_timestamp: i64,
     operation_id: Option<Uuid>,
 ) -> DeltaResult<usize> {
+    let latest_version = table_state.version();
     let object_store = log_store.object_store(operation_id);
     let retention = LogRetentionWindow::new(latest_version, cutoff_timestamp);
 
     let Some(retention_checkpoint_version) =
-        find_retention_checkpoint_version(object_store.clone(), retention).await
+        find_retention_checkpoint_version(table_state, log_store, object_store.clone(), retention)
+            .await?
     else {
         return Ok(0);
     };
@@ -127,19 +118,47 @@ pub(crate) async fn cleanup_expired_delta_log_files(
 }
 
 async fn find_retention_checkpoint_version(
+    table_state: &DeltaSnapshot,
+    log_store: &dyn LogStore,
     object_store: Arc<dyn ObjectStore>,
     retention: LogRetentionWindow,
-) -> Option<i64> {
+) -> DeltaResult<Option<i64>> {
     let mut boundary = RetentionCleanupBoundary::default();
+    let mut commit_entries = Vec::new();
     let log_path = delta_log_root_path();
     let mut log_entries = object_store.list(Some(&log_path));
     while let Some(meta) = log_entries.next().await {
-        if let Ok(meta) = meta {
-            boundary.observe(&meta, retention);
+        let Ok(meta) = meta else {
+            continue;
+        };
+        let Some(file) = DeltaLogFile::from_meta(&meta) else {
+            continue;
+        };
+        match file {
+            DeltaLogFile::Commit(version) if version <= retention.latest_version => {
+                commit_entries.push((version, meta));
+            }
+            DeltaLogFile::Checkpoint(version) => {
+                boundary.observe_checkpoint(version, retention);
+            }
+            _ => {}
         }
     }
+    commit_entries.sort_by_key(|(version, _)| *version);
 
-    boundary.retention_checkpoint_version()
+    for (version, _) in commit_entries {
+        let version_timestamp = resolve_version_timestamp(
+            log_store,
+            version,
+            table_state.version_timestamp(version),
+            table_state.protocol(),
+            table_state.metadata(),
+        )
+        .await?;
+        boundary.observe_commit(version, version_timestamp, retention);
+    }
+
+    Ok(boundary.retention_checkpoint_version())
 }
 
 async fn delete_logs_before_checkpoint_version(
@@ -183,7 +202,11 @@ mod tests {
     use url::Url;
 
     use super::*;
-    use crate::spec::{checkpoint_path, checksum_path, commit_path};
+    use crate::kernel::snapshot::DeltaSnapshot;
+    use crate::spec::{
+        checkpoint_path, checksum_path, commit_path, Action, CommitInfo, DataType, Metadata,
+        Protocol, StructField, StructType, TableFeature, VersionChecksum,
+    };
     use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
 
     fn test_log_store(store: Arc<dyn ObjectStore>) -> LogStoreRef {
@@ -197,6 +220,75 @@ mod tests {
 
     async fn put_log_file(store: &Arc<dyn ObjectStore>, path: Path) {
         store.put(&path, b"{}".to_vec().into()).await.unwrap();
+    }
+
+    fn test_metadata(
+        configuration: impl IntoIterator<Item = (&'static str, &'static str)>,
+    ) -> Metadata {
+        Metadata::try_new(
+            None,
+            None,
+            StructType::try_new([StructField::not_null("id", DataType::LONG)]).unwrap(),
+            Vec::new(),
+            0,
+            configuration
+                .into_iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect(),
+        )
+        .unwrap()
+    }
+
+    async fn put_commit(store: &Arc<dyn ObjectStore>, version: i64, actions: &[Action]) {
+        let mut bytes = Vec::new();
+        for (index, action) in actions.iter().enumerate() {
+            if index > 0 {
+                bytes.push(b'\n');
+            }
+            serde_json::to_writer(&mut bytes, action).unwrap();
+        }
+        store
+            .put(&commit_path(version), bytes.into())
+            .await
+            .unwrap();
+    }
+
+    async fn put_checksum(
+        store: &Arc<dyn ObjectStore>,
+        version: i64,
+        protocol: &Protocol,
+        metadata: &Metadata,
+        in_commit_timestamp_opt: Option<i64>,
+    ) {
+        let checksum = VersionChecksum {
+            txn_id: None,
+            table_size_bytes: 0,
+            num_files: 0,
+            num_metadata: 1,
+            num_protocol: 1,
+            in_commit_timestamp_opt,
+            set_transactions: None,
+            domain_metadata: None,
+            metadata: metadata.clone(),
+            protocol: protocol.clone(),
+            file_size_histogram: None,
+            all_files: None,
+        };
+        store
+            .put(
+                &checksum_path(version),
+                serde_json::to_vec(&checksum).unwrap().into(),
+            )
+            .await
+            .unwrap();
+    }
+
+    async fn load_snapshot(log_store: &LogStoreRef, version: i64) -> Arc<DeltaSnapshot> {
+        Arc::new(
+            DeltaSnapshot::try_new(log_store.as_ref(), Default::default(), Some(version), None)
+                .await
+                .unwrap(),
+        )
     }
 
     async fn list_log_file_paths(store: &Arc<dyn ObjectStore>) -> Vec<String> {
@@ -213,22 +305,33 @@ mod tests {
     #[tokio::test]
     async fn cleanup_expired_delta_log_files_deletes_entries_before_retention_checkpoint() {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        put_log_file(&store, commit_path(0)).await;
-        put_log_file(&store, commit_path(1)).await;
-        put_log_file(&store, checksum_path(1)).await;
-        put_log_file(&store, checkpoint_path(1)).await;
-        put_log_file(&store, commit_path(2)).await;
-        put_log_file(&store, checkpoint_path(2)).await;
-        put_log_file(&store, commit_path(3)).await;
-
-        let deleted = cleanup_expired_delta_log_files(
-            3,
-            test_log_store(store.clone()).as_ref(),
-            i64::MAX,
-            None,
+        let protocol = Protocol::new(1, 2, None, None);
+        let metadata = test_metadata([]);
+        put_commit(
+            &store,
+            0,
+            &[
+                Action::CommitInfo(CommitInfo::default()),
+                Action::Protocol(protocol.clone()),
+                Action::Metadata(metadata.clone()),
+            ],
         )
-        .await
-        .unwrap();
+        .await;
+        put_commit(&store, 1, &[Action::CommitInfo(CommitInfo::default())]).await;
+        put_commit(&store, 2, &[Action::CommitInfo(CommitInfo::default())]).await;
+        put_commit(&store, 3, &[Action::CommitInfo(CommitInfo::default())]).await;
+
+        let log_store = test_log_store(store.clone());
+        let snapshot = load_snapshot(&log_store, 3).await;
+
+        put_checksum(&store, 1, &protocol, &metadata, None).await;
+        put_log_file(&store, checkpoint_path(1)).await;
+        put_log_file(&store, checkpoint_path(2)).await;
+
+        let deleted =
+            cleanup_expired_delta_log_files(snapshot.as_ref(), log_store.as_ref(), i64::MAX, None)
+                .await
+                .unwrap();
 
         assert_eq!(deleted, 4);
         assert_eq!(
@@ -244,19 +347,30 @@ mod tests {
     #[tokio::test]
     async fn cleanup_expired_delta_log_files_skips_when_no_checkpoint_is_eligible() {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        put_log_file(&store, commit_path(0)).await;
-        put_log_file(&store, commit_path(1)).await;
-        put_log_file(&store, checkpoint_path(2)).await;
-        put_log_file(&store, commit_path(2)).await;
-
-        let deleted = cleanup_expired_delta_log_files(
-            1,
-            test_log_store(store.clone()).as_ref(),
-            i64::MAX,
-            None,
+        let protocol = Protocol::new(1, 2, None, None);
+        let metadata = test_metadata([]);
+        put_commit(
+            &store,
+            0,
+            &[
+                Action::CommitInfo(CommitInfo::default()),
+                Action::Protocol(protocol),
+                Action::Metadata(metadata),
+            ],
         )
-        .await
-        .unwrap();
+        .await;
+        put_commit(&store, 1, &[Action::CommitInfo(CommitInfo::default())]).await;
+
+        let log_store = test_log_store(store.clone());
+        let snapshot = load_snapshot(&log_store, 1).await;
+
+        put_log_file(&store, checkpoint_path(2)).await;
+        put_commit(&store, 2, &[Action::CommitInfo(CommitInfo::default())]).await;
+
+        let deleted =
+            cleanup_expired_delta_log_files(snapshot.as_ref(), log_store.as_ref(), i64::MAX, None)
+                .await
+                .unwrap();
 
         assert_eq!(deleted, 0);
         assert_eq!(
@@ -266,6 +380,75 @@ mod tests {
                 "_delta_log/00000000000000000001.json".to_string(),
                 "_delta_log/00000000000000000002.checkpoint.parquet".to_string(),
                 "_delta_log/00000000000000000002.json".to_string(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn cleanup_expired_delta_log_files_uses_ict_cutoff_instead_of_object_mtime() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let protocol = Protocol::new(1, 7, None, Some(vec![TableFeature::InCommitTimestamp]));
+        let metadata = test_metadata([("delta.enableInCommitTimestamps", "true")]);
+        put_commit(
+            &store,
+            0,
+            &[
+                Action::CommitInfo(CommitInfo {
+                    in_commit_timestamp: Some(100),
+                    ..Default::default()
+                }),
+                Action::Protocol(protocol.clone()),
+                Action::Metadata(metadata.clone()),
+            ],
+        )
+        .await;
+        put_commit(
+            &store,
+            1,
+            &[Action::CommitInfo(CommitInfo {
+                in_commit_timestamp: Some(200),
+                ..Default::default()
+            })],
+        )
+        .await;
+        put_commit(
+            &store,
+            2,
+            &[Action::CommitInfo(CommitInfo {
+                in_commit_timestamp: Some(300),
+                ..Default::default()
+            })],
+        )
+        .await;
+        put_commit(
+            &store,
+            3,
+            &[Action::CommitInfo(CommitInfo {
+                in_commit_timestamp: Some(400),
+                ..Default::default()
+            })],
+        )
+        .await;
+
+        let log_store = test_log_store(store.clone());
+        let snapshot = load_snapshot(&log_store, 3).await;
+
+        put_checksum(&store, 1, &protocol, &metadata, Some(200)).await;
+        put_log_file(&store, checkpoint_path(1)).await;
+        put_log_file(&store, checkpoint_path(2)).await;
+
+        let deleted =
+            cleanup_expired_delta_log_files(snapshot.as_ref(), log_store.as_ref(), 350, None)
+                .await
+                .unwrap();
+
+        assert_eq!(deleted, 4);
+        assert_eq!(
+            list_log_file_paths(&store).await,
+            vec![
+                "_delta_log/00000000000000000002.checkpoint.parquet".to_string(),
+                "_delta_log/00000000000000000002.json".to_string(),
+                "_delta_log/00000000000000000003.json".to_string(),
             ]
         );
     }

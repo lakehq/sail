@@ -317,6 +317,8 @@ pub struct CommitInfo {
     pub is_blind_append: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub engine_info: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub in_commit_timestamp: Option<i64>,
     #[serde(flatten, default)]
     pub info: HashMap<String, serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
