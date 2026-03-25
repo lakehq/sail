@@ -46,9 +46,9 @@ use crate::spec::fields::{
     STATS_FIELD_NULL_COUNT, STATS_FIELD_NUM_RECORDS,
 };
 use crate::spec::{
-    Add, ColumnMappingMode, ColumnMetadataKey, DeltaError as DeltaTableError, DeltaResult,
-    DomainMetadata, Metadata, Protocol, Remove, TableFeature, TableProperties, Transaction,
-    VersionChecksum,
+    Add, ColumnMappingMode, ColumnMetadataKey, CommitConflictError, DeltaError as DeltaTableError,
+    DeltaResult, DomainMetadata, Metadata, Protocol, Remove, TableFeature, TableProperties,
+    Transaction, TransactionError, VersionChecksum,
 };
 use crate::storage::LogStore;
 use crate::table::{
@@ -365,6 +365,12 @@ impl DeltaSnapshot {
 
     pub fn removes(&self) -> &[Remove] {
         self.removes.as_ref()
+    }
+
+    pub fn ensure_data_read_supported(&self) -> DeltaResult<()> {
+        crate::kernel::transaction::PROTOCOL
+            .can_read_from_protocol(self.protocol())
+            .map_err(map_read_protocol_error)
     }
 
     fn has_unsupported_table_features(&self) -> bool {
@@ -848,20 +854,39 @@ fn optional_struct_child(array: &StructArray, name: &str) -> Option<(ArrayRef, b
     Some((column, nullable))
 }
 
+fn map_read_protocol_error(err: TransactionError) -> DeltaTableError {
+    match err {
+        TransactionError::UnsupportedTableFeatures(features) => DeltaTableError::Unsupported(
+            format!("Reading this Delta table requires unsupported reader features: {features:?}"),
+        ),
+        TransactionError::CommitConflict(CommitConflictError::UnsupportedReaderVersion(
+            version,
+        )) => DeltaTableError::Unsupported(format!(
+            "Sail Delta Lake does not support reader version {version}"
+        )),
+        other => DeltaTableError::Transaction(other),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, HashMap};
     use std::sync::Arc;
 
+    use object_store::memory::InMemory;
+    use object_store::ObjectStore;
     use once_cell::sync::OnceCell;
     use url::Url;
 
     use super::DeltaSnapshot;
+    use crate::datasource::{DeltaScanConfig, DeltaTableProvider};
     use crate::kernel::DeltaTableConfig;
+    use crate::logical::table_source::DeltaTableSource;
     use crate::spec::{
         Add, DataType, DomainMetadata, Metadata, Protocol, StructField, StructType, TableFeature,
         TableProperties,
     };
+    use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
     use crate::table::RowTrackingToken;
 
     #[expect(clippy::unwrap_used)]
@@ -918,6 +943,17 @@ mod tests {
             commit_timestamps: Arc::new(BTreeMap::new()),
             files_batch: OnceCell::new(),
         }
+    }
+
+    #[expect(clippy::unwrap_used)]
+    fn test_log_store() -> LogStoreRef {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        default_logstore(
+            store.clone(),
+            store,
+            &Url::parse("memory:///").unwrap(),
+            &StorageConfig,
+        )
     }
 
     #[test]
@@ -1083,6 +1119,61 @@ mod tests {
             Vec::new(),
         );
         assert!(supported.verify_change_data_feed().is_ok());
+    }
+
+    #[test]
+    fn data_read_support_allows_writer_only_features() {
+        let protocol = Protocol::new(
+            1,
+            7,
+            None,
+            Some(vec![
+                TableFeature::RowTracking,
+                TableFeature::DomainMetadata,
+            ]),
+        );
+        let snapshot = test_snapshot(protocol, test_metadata([]), Vec::new());
+
+        assert!(snapshot.ensure_data_read_supported().is_ok());
+    }
+
+    #[test]
+    fn delta_table_provider_rejects_unsupported_reader_features() {
+        let protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::DeletionVectors]),
+            Some(vec![TableFeature::DeletionVectors]),
+        );
+        let snapshot = Arc::new(test_snapshot(protocol, test_metadata([]), Vec::new()));
+
+        let err =
+            DeltaTableProvider::try_new(snapshot, test_log_store(), DeltaScanConfig::default())
+                .unwrap_err();
+
+        assert!(matches!(
+            err,
+            crate::spec::DeltaError::Unsupported(message) if message.contains("DeletionVectors")
+        ));
+    }
+
+    #[test]
+    fn delta_table_source_rejects_unsupported_reader_features() {
+        let protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::DeletionVectors]),
+            Some(vec![TableFeature::DeletionVectors]),
+        );
+        let snapshot = Arc::new(test_snapshot(protocol, test_metadata([]), Vec::new()));
+
+        let err = DeltaTableSource::try_new(snapshot, test_log_store(), DeltaScanConfig::default())
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            crate::spec::DeltaError::Unsupported(message) if message.contains("DeletionVectors")
+        ));
     }
 
     #[test]

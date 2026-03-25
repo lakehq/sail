@@ -134,6 +134,9 @@ impl ScanByAddsStreamState {
         };
 
         let snapshot_state = cached.snapshot.clone();
+        snapshot_state
+            .ensure_data_read_supported()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let partition_columns = snapshot_state.metadata().partition_columns().clone();
         let session_state = SessionStateBuilder::new()
             .with_runtime_env(self.context.runtime_env().clone())

@@ -37,7 +37,8 @@ use crate::kernel::checkpoints::create_checkpoint_for;
 use crate::kernel::transaction::conflict_checker::{TransactionInfo, WinningCommitSummary};
 use crate::kernel::DeltaOperation;
 use crate::spec::{
-    checksum_path, temp_commit_path, Action, CommitAction, DeltaError, DeltaResult, Transaction,
+    checksum_path, temp_commit_path, Action, CommitAction, DeltaError, DeltaResult, Metadata,
+    TableFeature, Transaction,
 };
 pub use crate::spec::{CommitConflictError, TransactionError};
 use crate::storage::{CommitOrBytes, LogStoreRef, ObjectStoreRef};
@@ -418,6 +419,106 @@ fn finalize_attempt_actions(
     }
 
     Ok(finalized_actions)
+}
+
+fn table_property_enabled(metadata: &Metadata, key: &str) -> bool {
+    metadata
+        .configuration()
+        .get(key)
+        .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+}
+
+fn protocol_supports_legacy_change_data_feed(protocol: &crate::spec::Protocol) -> bool {
+    matches!(protocol.min_writer_version(), 4..=6)
+}
+
+fn protocol_has_writer_feature(protocol: &crate::spec::Protocol, feature: &TableFeature) -> bool {
+    protocol.min_writer_version() >= 7 && protocol.has_writer_feature(feature)
+}
+
+fn protocol_has_reader_writer_feature(
+    protocol: &crate::spec::Protocol,
+    feature: &TableFeature,
+) -> bool {
+    protocol.min_reader_version() >= 3
+        && protocol.min_writer_version() >= 7
+        && protocol.has_reader_feature(feature)
+        && protocol.has_writer_feature(feature)
+}
+
+fn validate_effective_commit_target(
+    read_snapshot: Option<&Arc<DeltaSnapshot>>,
+    actions: &[CommitAction],
+) -> DeltaResult<()> {
+    let actions_as_actions = actions
+        .iter()
+        .cloned()
+        .map(Action::from)
+        .collect::<Vec<_>>();
+    let (protocol, metadata) = resolve_effective_protocol_and_metadata(
+        read_snapshot.map(|snapshot| snapshot.protocol()),
+        read_snapshot.map(|snapshot| snapshot.metadata()),
+        &actions_as_actions,
+    )
+    .ok_or_else(|| {
+        DeltaError::generic("Cannot validate commit without effective protocol and metadata")
+    })?;
+
+    PROTOCOL.can_write_to_protocol(&protocol)?;
+    PROTOCOL.check_can_write_timestamp_ntz_to_protocol(&protocol, &metadata.parse_schema()?)?;
+
+    if actions_as_actions
+        .iter()
+        .any(|action| matches!(action, Action::DomainMetadata(_)))
+        && !protocol_has_writer_feature(&protocol, &TableFeature::DomainMetadata)
+    {
+        return Err(TransactionError::TableFeaturesRequired(TableFeature::DomainMetadata).into());
+    }
+
+    if actions_as_actions
+        .iter()
+        .any(|action| matches!(action, Action::Cdc(_)))
+        && !protocol_supports_legacy_change_data_feed(&protocol)
+        && !protocol_has_writer_feature(&protocol, &TableFeature::ChangeDataFeed)
+    {
+        return Err(TransactionError::TableFeaturesRequired(TableFeature::ChangeDataFeed).into());
+    }
+
+    if actions_as_actions.iter().any(|action| match action {
+        Action::Add(add) => add.deletion_vector.is_some(),
+        Action::Remove(remove) => remove.deletion_vector.is_some(),
+        _ => false,
+    }) && !protocol_has_reader_writer_feature(&protocol, &TableFeature::DeletionVectors)
+    {
+        return Err(TransactionError::TableFeaturesRequired(TableFeature::DeletionVectors).into());
+    }
+
+    if table_property_enabled(&metadata, "delta.enableChangeDataFeed")
+        && !protocol_supports_legacy_change_data_feed(&protocol)
+        && !protocol_has_writer_feature(&protocol, &TableFeature::ChangeDataFeed)
+    {
+        return Err(TransactionError::TableFeaturesRequired(TableFeature::ChangeDataFeed).into());
+    }
+
+    if table_property_enabled(&metadata, "delta.enableDeletionVectors")
+        && !protocol_has_reader_writer_feature(&protocol, &TableFeature::DeletionVectors)
+    {
+        return Err(TransactionError::TableFeaturesRequired(TableFeature::DeletionVectors).into());
+    }
+
+    let row_tracking_requested = table_property_enabled(&metadata, "delta.enableRowTracking")
+        || table_property_enabled(&metadata, "delta.rowTrackingSuspended");
+    if row_tracking_requested && !protocol_has_writer_feature(&protocol, &TableFeature::RowTracking)
+    {
+        return Err(TransactionError::TableFeaturesRequired(TableFeature::RowTracking).into());
+    }
+    if row_tracking_requested
+        && !protocol_has_writer_feature(&protocol, &TableFeature::DomainMetadata)
+    {
+        return Err(TransactionError::TableFeaturesRequired(TableFeature::DomainMetadata).into());
+    }
+
+    Ok(())
 }
 
 #[async_trait]
@@ -880,6 +981,7 @@ impl std::future::IntoFuture for PreparedCommit {
                     previous_commit_timestamp,
                     Utc::now().timestamp_millis(),
                 )?;
+                validate_effective_commit_target(read_snapshot.as_ref(), &finalized_actions)?;
                 let commit_or_bytes =
                     prepare_commit_or_bytes(&this.log_store, this.operation_id, &finalized_actions)
                         .await?;
@@ -1222,8 +1324,8 @@ mod tests {
     use super::*;
     use crate::schema::protocol_for_create;
     use crate::spec::{
-        checksum_path, Action, CommitAction, CommitInfo, DataType, DeltaError, Metadata, SaveMode,
-        StructField, StructType, VersionChecksum,
+        checksum_path, Action, CommitAction, CommitInfo, DataType, DeltaError, DomainMetadata,
+        Metadata, Protocol, SaveMode, StructField, StructType, TableFeature, VersionChecksum,
     };
     use crate::storage::{default_logstore, get_actions, StorageConfig};
 
@@ -1428,6 +1530,150 @@ mod tests {
                 .get("delta.inCommitTimestampEnablementTimestamp"),
             Some(&upgrade_timestamp.to_string())
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_commit_rejects_unsupported_reader_features() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let log_store = test_log_store(store);
+        let protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::DeletionVectors]),
+            Some(vec![TableFeature::DeletionVectors]),
+        );
+        let metadata = test_metadata([]);
+
+        let err = CommitBuilder::default()
+            .with_actions(vec![
+                CommitAction::Protocol(protocol.clone()),
+                CommitAction::Metadata(metadata.clone()),
+            ])
+            .build(
+                None,
+                log_store,
+                DeltaOperation::Create {
+                    mode: SaveMode::ErrorIfExists,
+                    location: "memory:///".to_string(),
+                    protocol: Box::new(protocol),
+                    metadata: Box::new(metadata),
+                },
+            )
+            .await
+            .err()
+            .expect("create commit should reject unsupported reader features");
+
+        assert!(matches!(
+            err,
+            DeltaError::Transaction(TransactionError::UnsupportedTableFeatures(features))
+                if features.contains(&TableFeature::DeletionVectors)
+        ));
+    }
+
+    #[tokio::test]
+    async fn commit_rejects_timestamp_ntz_schema_without_protocol_feature() -> DeltaResult<()> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let log_store = test_log_store(store);
+        let protocol = protocol_for_create(false, false, false)?;
+        let metadata = test_metadata([]);
+        let created = CommitBuilder::default()
+            .with_actions(vec![
+                CommitAction::Protocol(protocol.clone()),
+                CommitAction::Metadata(metadata.clone()),
+            ])
+            .build(
+                None,
+                log_store.clone(),
+                DeltaOperation::Create {
+                    mode: SaveMode::ErrorIfExists,
+                    location: "memory:///".to_string(),
+                    protocol: Box::new(protocol),
+                    metadata: Box::new(metadata),
+                },
+            )
+            .await?;
+
+        let updated_schema =
+            StructType::try_new([StructField::not_null("ts", DataType::TIMESTAMP_NTZ)])?;
+        let updated_metadata = created
+            .snapshot
+            .metadata()
+            .clone()
+            .with_schema(&updated_schema)?;
+
+        let err = CommitBuilder::default()
+            .with_actions(vec![CommitAction::Metadata(updated_metadata)])
+            .build(
+                Some(created.snapshot.clone()),
+                log_store,
+                DeltaOperation::Write {
+                    mode: SaveMode::Append,
+                    partition_by: None,
+                    predicate: None,
+                },
+            )
+            .await
+            .err()
+            .expect("commit should reject timestamp_ntz without protocol support");
+
+        assert!(matches!(
+            err,
+            DeltaError::Transaction(TransactionError::TableFeaturesRequired(
+                TableFeature::TimestampWithoutTimezone
+            ))
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn commit_rejects_domain_metadata_actions_without_protocol_feature() -> DeltaResult<()> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let log_store = test_log_store(store);
+        let protocol = protocol_for_create(false, false, false)?;
+        let metadata = test_metadata([]);
+        let created = CommitBuilder::default()
+            .with_actions(vec![
+                CommitAction::Protocol(protocol.clone()),
+                CommitAction::Metadata(metadata.clone()),
+            ])
+            .build(
+                None,
+                log_store.clone(),
+                DeltaOperation::Create {
+                    mode: SaveMode::ErrorIfExists,
+                    location: "memory:///".to_string(),
+                    protocol: Box::new(protocol),
+                    metadata: Box::new(metadata),
+                },
+            )
+            .await?;
+
+        let err = CommitBuilder::default()
+            .with_actions(vec![CommitAction::DomainMetadata(DomainMetadata {
+                domain: "delta.rowTracking".to_string(),
+                configuration: r#"{"rowIdHighWaterMark":1}"#.to_string(),
+                removed: false,
+            })])
+            .build(
+                Some(created.snapshot.clone()),
+                log_store,
+                DeltaOperation::Write {
+                    mode: SaveMode::Append,
+                    partition_by: None,
+                    predicate: None,
+                },
+            )
+            .await
+            .err()
+            .expect("commit should reject domain metadata without protocol support");
+
+        assert!(matches!(
+            err,
+            DeltaError::Transaction(TransactionError::TableFeaturesRequired(
+                TableFeature::DomainMetadata
+            ))
+        ));
         Ok(())
     }
 }

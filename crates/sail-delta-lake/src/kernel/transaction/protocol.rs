@@ -104,41 +104,6 @@ impl ProtocolChecker {
         Ok(())
     }
 
-    /// Check can write_timestamp_ntz
-    #[expect(unused)]
-    pub fn check_can_write_timestamp_ntz(
-        &self,
-        snapshot: &DeltaSnapshot,
-        schema: &Schema,
-    ) -> Result<(), TransactionError> {
-        let contains_timestampntz = contains_timestampntz(schema.fields());
-        let required_features: Option<&[TableFeature]> =
-            match snapshot.protocol().min_writer_version() {
-                0..=6 => None,
-                _ => snapshot.protocol().writer_features(),
-            };
-
-        if let Some(table_features) = required_features {
-            if !table_features.contains(&TableFeature::TimestampWithoutTimezone)
-                && contains_timestampntz
-            {
-                return Err(TransactionError::TableFeaturesRequired(
-                    TableFeature::TimestampWithoutTimezone,
-                ));
-            }
-        } else if contains_timestampntz {
-            return Err(TransactionError::TableFeaturesRequired(
-                TableFeature::TimestampWithoutTimezone,
-            ));
-        }
-        Ok(())
-    }
-
-    /// Check if delta-rs can read form the given delta table.
-    pub fn can_read_from(&self, snapshot: &DeltaSnapshot) -> Result<(), TransactionError> {
-        self.can_read_from_protocol(snapshot.protocol())
-    }
-
     fn required_reader_features(
         &self,
         protocol: &Protocol,
@@ -222,11 +187,37 @@ impl ProtocolChecker {
         Ok(())
     }
 
-    /// Check if delta-rs can write to the given delta table.
-    pub fn can_write_to(&self, snapshot: &DeltaSnapshot) -> Result<(), TransactionError> {
+    pub fn check_can_write_timestamp_ntz_to_protocol(
+        &self,
+        protocol: &Protocol,
+        schema: &Schema,
+    ) -> Result<(), TransactionError> {
+        let contains_timestampntz = contains_timestampntz(schema.fields());
+        let required_features: Option<&[TableFeature]> = match protocol.min_writer_version() {
+            0..=6 => None,
+            _ => protocol.writer_features(),
+        };
+
+        if let Some(table_features) = required_features {
+            if !table_features.contains(&TableFeature::TimestampWithoutTimezone)
+                && contains_timestampntz
+            {
+                return Err(TransactionError::TableFeaturesRequired(
+                    TableFeature::TimestampWithoutTimezone,
+                ));
+            }
+        } else if contains_timestampntz {
+            return Err(TransactionError::TableFeaturesRequired(
+                TableFeature::TimestampWithoutTimezone,
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn can_write_to_protocol(&self, protocol: &Protocol) -> Result<(), TransactionError> {
         // NOTE: writers must always support all required reader features
-        self.can_read_from(snapshot)?;
-        let diff = self.unsupported_writer_features(snapshot.protocol())?;
+        self.can_read_from_protocol(protocol)?;
+        let diff = self.unsupported_writer_features(protocol)?;
         if !diff.is_empty() {
             return Err(TransactionError::UnsupportedTableFeatures(diff));
         }
@@ -239,7 +230,7 @@ impl ProtocolChecker {
         actions: &[Action],
         operation: &DeltaOperation,
     ) -> Result<(), TransactionError> {
-        self.can_write_to(snapshot)?;
+        self.can_write_to_protocol(snapshot.protocol())?;
 
         // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#append-only-tables
         let append_only_enabled = if snapshot.protocol().min_writer_version() < 2 {
