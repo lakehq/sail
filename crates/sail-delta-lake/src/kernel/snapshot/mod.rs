@@ -1147,9 +1147,16 @@ mod tests {
         );
         let snapshot = Arc::new(test_snapshot(protocol, test_metadata([]), Vec::new()));
 
-        let err =
-            DeltaTableProvider::try_new(snapshot, test_log_store(), DeltaScanConfig::default())
-                .unwrap_err();
+        let result =
+            DeltaTableProvider::try_new(snapshot, test_log_store(), DeltaScanConfig::default());
+        assert!(
+            result.is_err(),
+            "provider creation should reject unsupported reader features"
+        );
+        let err = match result {
+            Err(err) => err,
+            Ok(_) => return,
+        };
 
         assert!(matches!(
             err,
@@ -1167,8 +1174,16 @@ mod tests {
         );
         let snapshot = Arc::new(test_snapshot(protocol, test_metadata([]), Vec::new()));
 
-        let err = DeltaTableSource::try_new(snapshot, test_log_store(), DeltaScanConfig::default())
-            .unwrap_err();
+        let result =
+            DeltaTableSource::try_new(snapshot, test_log_store(), DeltaScanConfig::default());
+        assert!(
+            result.is_err(),
+            "table source creation should reject unsupported reader features"
+        );
+        let err = match result {
+            Err(err) => err,
+            Ok(_) => return,
+        };
 
         assert!(matches!(
             err,

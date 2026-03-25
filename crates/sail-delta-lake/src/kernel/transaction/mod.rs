@@ -1545,7 +1545,7 @@ mod tests {
         );
         let metadata = test_metadata([]);
 
-        let err = CommitBuilder::default()
+        let result = CommitBuilder::default()
             .with_actions(vec![
                 CommitAction::Protocol(protocol.clone()),
                 CommitAction::Metadata(metadata.clone()),
@@ -1560,9 +1560,15 @@ mod tests {
                     metadata: Box::new(metadata),
                 },
             )
-            .await
-            .err()
-            .expect("create commit should reject unsupported reader features");
+            .await;
+        assert!(
+            result.is_err(),
+            "create commit should reject unsupported reader features"
+        );
+        let err = match result {
+            Err(err) => err,
+            Ok(_) => return,
+        };
 
         assert!(matches!(
             err,
@@ -1602,7 +1608,7 @@ mod tests {
             .clone()
             .with_schema(&updated_schema)?;
 
-        let err = CommitBuilder::default()
+        let result = CommitBuilder::default()
             .with_actions(vec![CommitAction::Metadata(updated_metadata)])
             .build(
                 Some(created.snapshot.clone()),
@@ -1613,9 +1619,15 @@ mod tests {
                     predicate: None,
                 },
             )
-            .await
-            .err()
-            .expect("commit should reject timestamp_ntz without protocol support");
+            .await;
+        assert!(
+            result.is_err(),
+            "commit should reject timestamp_ntz without protocol support"
+        );
+        let err = match result {
+            Err(err) => err,
+            Ok(_) => return Ok(()),
+        };
 
         assert!(matches!(
             err,
@@ -1649,7 +1661,7 @@ mod tests {
             )
             .await?;
 
-        let err = CommitBuilder::default()
+        let result = CommitBuilder::default()
             .with_actions(vec![CommitAction::DomainMetadata(DomainMetadata {
                 domain: "delta.rowTracking".to_string(),
                 configuration: r#"{"rowIdHighWaterMark":1}"#.to_string(),
@@ -1664,9 +1676,15 @@ mod tests {
                     predicate: None,
                 },
             )
-            .await
-            .err()
-            .expect("commit should reject domain metadata without protocol support");
+            .await;
+        assert!(
+            result.is_err(),
+            "commit should reject domain metadata without protocol support"
+        );
+        let err = match result {
+            Err(err) => err,
+            Ok(_) => return Ok(()),
+        };
 
         assert!(matches!(
             err,
