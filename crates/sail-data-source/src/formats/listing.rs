@@ -190,9 +190,9 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         ctx: &dyn Session,
         info: SinkInfo,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let path = info.path();
         let SinkInfo {
             input,
-            path,
             // TODO: sink mode is ignored since the file formats only support append operation
             mode: _,
             partition_by,

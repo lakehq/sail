@@ -83,7 +83,7 @@ impl PlanResolver<'_> {
         query: spec::QueryPlan,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        use super::super::write::{WriteMode, WritePlanBuilder, WriteTableAction, WriteTarget};
+        use super::super::write::{WriteColumnMatch, WriteMode, WritePlanBuilder, WriteTarget};
         let spec::TableDefinition {
             columns,
             comment,
@@ -149,26 +149,23 @@ impl PlanResolver<'_> {
         let column_names = PlanResolver::get_field_names(input.schema(), state)?;
         let input = rename_logical_plan(input, &column_names)?;
         let format = self.resolve_catalog_table_format(file_format)?;
-        // Handle location: add to options if specified
         let mut write_options = options;
         if let Some(location) = location {
-            write_options.push(("location".to_string(), location));
+            write_options.push(("path".to_string(), location));
         }
 
-        // Set write mode and action based on if_not_exists
+        // Set write mode based on if_not_exists
         let write_mode = if if_not_exists {
             WriteMode::IgnoreIfExists
         } else {
             WriteMode::ErrorIfExists
         };
-        let action = if if_not_exists {
-            WriteTableAction::CreateIfNotExists
-        } else {
-            WriteTableAction::Create
-        };
         let partition_by = self.resolve_write_partition_by_expressions(partition_by)?;
         let builder = WritePlanBuilder::new()
-            .with_target(WriteTarget::NewTable { table, action })
+            .with_target(WriteTarget::Table {
+                table,
+                column_match: WriteColumnMatch::ByName,
+            })
             .with_mode(write_mode)
             .with_format(format)
             .with_partition_by(partition_by)
