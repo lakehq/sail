@@ -462,9 +462,9 @@ impl PartitionWriter {
 
         let mut full_path = self.config.table_path.clone();
         for segment in &self.config.partition_segments {
-            full_path = full_path.child(segment.as_str());
+            full_path = full_path.join(segment.as_str());
         }
-        full_path = full_path.child(file_name.as_str());
+        full_path = full_path.join(file_name.as_str());
 
         let relative_path = if self.config.partition_segments.is_empty() {
             file_name

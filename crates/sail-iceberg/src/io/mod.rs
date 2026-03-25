@@ -71,7 +71,7 @@ impl StoreContext {
 
         let mut full = self.prefix_path.clone();
         for comp in raw_path.split('/').filter(|s| !s.is_empty()) {
-            full = full.child(comp);
+            full = full.join(comp);
         }
         Ok(full)
     }

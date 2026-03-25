@@ -659,7 +659,7 @@ mod tests {
     use datafusion::arrow::datatypes::DataType as ArrowDataType;
     use object_store::memory::InMemory;
     use object_store::path::Path;
-    use object_store::{ObjectMeta, ObjectStore};
+    use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 
     use super::{
         checkpoint_fields, decode_checkpoint_rows, encode_checkpoint_rows,
