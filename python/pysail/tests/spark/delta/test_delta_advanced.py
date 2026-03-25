@@ -230,6 +230,12 @@ class TestDeltaAdvancedFeatures:
         log_dir = delta_path / "_delta_log"
         self._rewrite_in_commit_timestamp(log_dir, 0, 10_000_000)
         self._rewrite_in_commit_timestamp(log_dir, 1, 20_000_000)
+        # TODO: Once there is a user-facing path to enable ICT on an existing Delta table like
+        # ALTER TABLE ... SET TBLPROPERTIES ('delta.enableInCommitTimestamps'='true'),
+        # add a BDD snapshot that verifies
+        # delta.inCommitTimestampEnablementVersion and
+        # delta.inCommitTimestampEnablementTimestamp are written to metaData.configuration by the
+        # real writer path instead of being synthesized in test setup.
         self._enable_in_commit_timestamps(log_dir, 2, 300_000)
         os.utime(log_dir / "00000000000000000000.json", (100, 100))
         os.utime(log_dir / "00000000000000000001.json", (200, 200))
