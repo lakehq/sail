@@ -2,6 +2,7 @@ pub(crate) mod cleanup;
 mod listing;
 mod replay;
 mod segment;
+mod timestamps;
 
 pub(crate) use listing::{
     latest_version_from_listing, list_delta_log_entries_from,
@@ -13,4 +14,8 @@ pub(crate) use replay::{
 };
 pub(crate) use segment::{
     list_log_files, LogSegmentResolver, ReplayedTableHeader, ResolvedLogSegment,
+};
+pub(crate) use timestamps::{
+    resolve_commit_timestamp_from_actions, resolve_effective_protocol_and_metadata,
+    resolve_version_timestamp,
 };

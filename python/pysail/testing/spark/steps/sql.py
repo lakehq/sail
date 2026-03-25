@@ -45,6 +45,11 @@ class PathWrapper:
         """The file URI representation of the path."""
         return f"'{self.path.absolute().as_uri()}'"
 
+    @property
+    def file_uri(self):
+        """The unquoted file URI representation of the path."""
+        return self.path.absolute().as_uri()
+
 
 @given(parsers.parse("variable {name} for temporary directory {directory}"), target_fixture="variables")
 def variable_for_temporary_directory(name, directory, tmp_path, variables):

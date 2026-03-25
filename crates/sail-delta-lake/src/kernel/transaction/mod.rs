@@ -32,6 +32,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::delta_log::cleanup::cleanup_expired_delta_log_files;
+use crate::delta_log::{resolve_effective_protocol_and_metadata, resolve_version_timestamp};
 use crate::kernel::checkpoints::create_checkpoint_for;
 use crate::kernel::transaction::conflict_checker::{TransactionInfo, WinningCommitSummary};
 use crate::kernel::DeltaOperation;
@@ -210,56 +211,56 @@ impl CommitData {
         app_transactions: Vec<Transaction>,
     ) -> Self {
         let is_blind_append = Self::is_blind_append(&actions, &operation);
-
-        let mut has_commit_info = false;
-        for action in actions.iter_mut() {
-            if let Action::CommitInfo(info) = action {
-                info.is_blind_append = Some(is_blind_append);
-                has_commit_info = true;
-            }
+        let mut commit_info = actions
+            .iter()
+            .find_map(|action| match action {
+                Action::CommitInfo(info) => Some(info.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| operation.get_commit_info());
+        if commit_info.in_commit_timestamp.is_none() {
+            commit_info.in_commit_timestamp = commit_info
+                .info
+                .remove("inCommitTimestamp")
+                .and_then(|value| value.as_i64());
+        } else {
+            commit_info.info.remove("inCommitTimestamp");
         }
+        commit_info.is_blind_append = Some(is_blind_append);
+        app_metadata
+            .entry("clientVersion".to_string())
+            .or_insert_with(|| {
+                Value::String(format!("sail-delta-lake.{}", env!("CARGO_PKG_VERSION")))
+            });
+        // Merge operationMetrics into the final commitInfo.info.
+        // If the caller also provided `operationMetrics` in app metadata, merge both.
+        let mut merged_operation_metrics: HashMap<String, Value> = HashMap::new();
+        if let Some(Value::Object(obj)) = commit_info.info.get("operationMetrics").cloned() {
+            merged_operation_metrics.extend(obj);
+        }
+        if let Some(Value::Object(obj)) = app_metadata.get("operationMetrics").cloned() {
+            merged_operation_metrics.extend(obj);
+        }
+        merged_operation_metrics.extend(operation_metrics.into_map());
 
-        if !has_commit_info {
-            let mut commit_info = operation.get_commit_info();
-            commit_info.timestamp = Some(Utc::now().timestamp_millis());
-            commit_info.is_blind_append = Some(is_blind_append);
-            app_metadata.insert(
-                "clientVersion".to_string(),
-                Value::String(format!("sail-delta-lake.{}", env!("CARGO_PKG_VERSION"))),
+        // Merge base info + app metadata (app metadata wins on conflicts).
+        let mut merged_info = commit_info.info.clone();
+        merged_info.extend(app_metadata.clone());
+        if !merged_operation_metrics.is_empty() {
+            merged_info.insert(
+                "operationMetrics".to_string(),
+                Value::Object(merged_operation_metrics.into_iter().collect()),
             );
-            // Merge operationMetrics into the final commitInfo.info.
-            // If the caller also provided `operationMetrics` in app metadata, merge both.
-            let mut merged_operation_metrics: HashMap<String, Value> = HashMap::new();
-            if let Some(Value::Object(obj)) = commit_info.info.get("operationMetrics").cloned() {
-                merged_operation_metrics.extend(obj);
-            }
-            if let Some(Value::Object(obj)) = app_metadata.get("operationMetrics").cloned() {
-                merged_operation_metrics.extend(obj);
-            }
-            merged_operation_metrics.extend(operation_metrics.into_map());
-
-            // Merge base info + app metadata (app metadata wins on conflicts).
-            let mut merged_info = commit_info.info.clone();
-            merged_info.extend(app_metadata.clone());
-            if !merged_operation_metrics.is_empty() {
-                merged_info.insert(
-                    "operationMetrics".to_string(),
-                    Value::Object(merged_operation_metrics.into_iter().collect()),
-                );
-            }
-            commit_info.info = merged_info;
-            actions.push(Action::CommitInfo(commit_info));
         }
+        commit_info.info = merged_info;
+        actions.retain(|action| !matches!(action, Action::CommitInfo(_)));
+        actions.insert(0, Action::CommitInfo(commit_info));
 
         for txn in &app_transactions {
             actions.push(Action::Txn(txn.clone()));
         }
 
         Self { actions, operation }
-    }
-
-    pub fn get_bytes(&self) -> Result<Bytes, TransactionError> {
-        actions_to_log_bytes(&self.actions)
     }
 
     fn commit_info(&self) -> Option<&crate::spec::CommitInfo> {
@@ -279,19 +280,137 @@ impl CommitData {
     }
 
     fn version_checksum_in_commit_timestamp(&self) -> Option<i64> {
-        self.commit_info()
-            .and_then(|info| info.info.get("inCommitTimestamp"))
-            .and_then(Value::as_i64)
+        self.commit_info().and_then(|info| info.in_commit_timestamp)
     }
 
     fn is_blind_append(actions: &[Action], operation: &DeltaOperation) -> bool {
         match operation {
-            DeltaOperation::Write { predicate, .. } if predicate.is_none() => actions
-                .iter()
-                .all(|action| matches!(action, Action::Add(_) | Action::Txn(_))),
+            DeltaOperation::Write { predicate, .. } if predicate.is_none() => {
+                actions.iter().all(|action| {
+                    matches!(
+                        action,
+                        Action::Add(_) | Action::Txn(_) | Action::CommitInfo(_)
+                    )
+                })
+            }
             _ => false,
         }
     }
+}
+
+async fn write_tmp_commit(log_entry: Bytes, store: ObjectStoreRef) -> DeltaResult<CommitOrBytes> {
+    let token = uuid::Uuid::new_v4().to_string();
+    let path = temp_commit_path(&token);
+    store.put(&path, log_entry.into()).await?;
+    Ok(CommitOrBytes::TmpCommit(path))
+}
+
+async fn prepare_commit_or_bytes(
+    log_store: &LogStoreRef,
+    operation_id: Uuid,
+    actions: &[Action],
+) -> DeltaResult<CommitOrBytes> {
+    let log_entry = actions_to_log_bytes(actions)?;
+    if ["LakeFSLogStore", "DefaultLogStore"].contains(&log_store.name().as_str()) {
+        Ok(CommitOrBytes::LogBytes(log_entry))
+    } else {
+        write_tmp_commit(log_entry, log_store.object_store(Some(operation_id))).await
+    }
+}
+
+async fn previous_effective_commit_timestamp(
+    log_store: &LogStoreRef,
+    snapshot: Option<&Arc<DeltaSnapshot>>,
+) -> DeltaResult<Option<i64>> {
+    let Some(snapshot) = snapshot else {
+        return Ok(None);
+    };
+    resolve_version_timestamp(
+        log_store.as_ref(),
+        snapshot.version(),
+        snapshot.version_timestamp(snapshot.version()),
+        snapshot.protocol(),
+        snapshot.metadata(),
+    )
+    .await
+    .map(Some)
+}
+
+fn finalized_commit_info(actions: &mut [Action]) -> &mut crate::spec::CommitInfo {
+    match actions.first_mut() {
+        Some(Action::CommitInfo(info)) => info,
+        _ => unreachable!("commit actions must be normalized with commitInfo at index 0"),
+    }
+}
+
+fn finalize_attempt_actions(
+    base_actions: &[Action],
+    read_snapshot: Option<&Arc<DeltaSnapshot>>,
+    version: i64,
+    previous_commit_timestamp: Option<i64>,
+    now_ms: i64,
+) -> DeltaResult<Vec<Action>> {
+    let mut finalized_actions = base_actions.to_vec();
+    let old_in_commit_timestamps_enabled = read_snapshot
+        .map(|snapshot| snapshot.in_commit_timestamps_enabled())
+        .unwrap_or(false);
+    let effective_protocol_and_metadata = resolve_effective_protocol_and_metadata(
+        read_snapshot.map(|snapshot| snapshot.protocol()),
+        read_snapshot.map(|snapshot| snapshot.metadata()),
+        &finalized_actions,
+    );
+    let new_in_commit_timestamps_enabled = effective_protocol_and_metadata
+        .as_ref()
+        .map(|(protocol, metadata)| {
+            let table_properties =
+                crate::spec::TableProperties::from(metadata.configuration().iter());
+            protocol.is_in_commit_timestamps_enabled(&table_properties)
+        })
+        .unwrap_or(false);
+    let mut in_commit_timestamp = None;
+
+    {
+        let commit_info = finalized_commit_info(&mut finalized_actions);
+        commit_info.timestamp = Some(now_ms);
+        commit_info.info.remove("inCommitTimestamp");
+        if new_in_commit_timestamps_enabled {
+            let min_timestamp = previous_commit_timestamp
+                .map(|timestamp| timestamp.saturating_add(1))
+                .unwrap_or(now_ms);
+            in_commit_timestamp = Some(now_ms.max(min_timestamp));
+            commit_info.in_commit_timestamp = in_commit_timestamp;
+        } else {
+            commit_info.in_commit_timestamp = None;
+        }
+    }
+
+    if read_snapshot.is_some()
+        && !old_in_commit_timestamps_enabled
+        && new_in_commit_timestamps_enabled
+    {
+        if let Some(in_commit_timestamp) = in_commit_timestamp {
+            if let Some(metadata) = finalized_actions
+                .iter_mut()
+                .find_map(|action| match action {
+                    Action::Metadata(metadata) => Some(metadata),
+                    _ => None,
+                })
+            {
+                *metadata = metadata
+                    .clone()
+                    .add_config_key(
+                        "delta.inCommitTimestampEnablementVersion".to_string(),
+                        version.to_string(),
+                    )
+                    .add_config_key(
+                        "delta.inCommitTimestampEnablementTimestamp".to_string(),
+                        in_commit_timestamp.to_string(),
+                    );
+            }
+        }
+    }
+
+    Ok(finalized_actions)
 }
 
 #[async_trait]
@@ -531,18 +650,6 @@ impl PreCommit {
     pub fn into_prepared_commit_future(self) -> BoxFuture<'static, DeltaResult<PreparedCommit>> {
         let this = self;
 
-        // Write delta log entry as temporary file to storage. For the actual commit,
-        // the temporary file is moved (atomic rename) to the delta log folder within `commit` function.
-        async fn write_tmp_commit(
-            log_entry: Bytes,
-            store: ObjectStoreRef,
-        ) -> DeltaResult<CommitOrBytes> {
-            let token = uuid::Uuid::new_v4().to_string();
-            let path = temp_commit_path(&token);
-            store.put(&path, log_entry.into()).await?;
-            Ok(CommitOrBytes::TmpCommit(path))
-        }
-
         Box::pin(async move {
             let local_actions: Vec<_> = this.data.actions.to_vec();
             if let Some(table_reference) = &this.table_data {
@@ -552,24 +659,8 @@ impl PreCommit {
                     &this.data.operation,
                 )?;
             }
-            let log_entry = this.data.get_bytes()?;
-
-            // With the DefaultLogStore & LakeFSLogstore, we just pass the bytes around, since we use conditionalPuts
-            // Other stores will use tmp_commits
-            let commit_or_bytes = if ["LakeFSLogStore", "DefaultLogStore"]
-                .contains(&this.log_store.name().as_str())
-            {
-                CommitOrBytes::LogBytes(log_entry)
-            } else {
-                write_tmp_commit(
-                    log_entry,
-                    this.log_store.object_store(Some(this.operation_id)),
-                )
-                .await?
-            };
 
             Ok(PreparedCommit {
-                commit_or_bytes,
                 log_store: this.log_store,
                 table_data: this.table_data,
                 max_retries: this.max_retries,
@@ -584,7 +675,6 @@ impl PreCommit {
 
 /// Represents a inflight commit
 pub struct PreparedCommit {
-    commit_or_bytes: CommitOrBytes,
     log_store: LogStoreRef,
     data: CommitData,
     table_data: Option<Arc<DeltaSnapshot>>,
@@ -609,7 +699,6 @@ impl std::future::IntoFuture for PreparedCommit {
         let this = self;
 
         Box::pin(async move {
-            let mut commit_or_bytes = this.commit_or_bytes;
             let mut local_actions: Vec<_> = this.data.actions.to_vec();
             let creation_intent = this.table_data.is_none();
             let creation_protocol = local_actions.iter().find_map(|a| match a {
@@ -703,9 +792,6 @@ impl std::future::IntoFuture for PreparedCommit {
                                         info.is_blind_append = Some(true);
                                     }
                                 }
-
-                                commit_or_bytes =
-                                    CommitOrBytes::LogBytes(actions_to_log_bytes(&local_actions)?);
                                 creation_actions_stripped = true;
                             }
                         }
@@ -760,6 +846,19 @@ impl std::future::IntoFuture for PreparedCommit {
                     }
                 }
                 let version: i64 = latest_version.map(|v| v + 1).unwrap_or(0);
+                let previous_commit_timestamp =
+                    previous_effective_commit_timestamp(&this.log_store, read_snapshot.as_ref())
+                        .await?;
+                let finalized_actions = finalize_attempt_actions(
+                    &local_actions,
+                    read_snapshot.as_ref(),
+                    version,
+                    previous_commit_timestamp,
+                    Utc::now().timestamp_millis(),
+                )?;
+                let commit_or_bytes =
+                    prepare_commit_or_bytes(&this.log_store, this.operation_id, &finalized_actions)
+                        .await?;
 
                 match this
                     .log_store
@@ -769,7 +868,10 @@ impl std::future::IntoFuture for PreparedCommit {
                     Ok(()) => {
                         return Ok(PostCommit {
                             version,
-                            data: this.data,
+                            data: CommitData {
+                                actions: finalized_actions,
+                                operation: this.data.operation.clone(),
+                            },
                             create_checkpoint: this
                                 .post_commit
                                 .map(|v| v.create_checkpoint)
@@ -787,6 +889,9 @@ impl std::future::IntoFuture for PreparedCommit {
                         });
                     }
                     Err(TransactionError::VersionAlreadyExists(version)) => {
+                        this.log_store
+                            .abort_commit_entry(version, commit_or_bytes, this.operation_id)
+                            .await?;
                         error!("The transaction {version} already exists, will retry!");
                         continue;
                     }
@@ -965,7 +1070,7 @@ impl PostCommit {
                 * (24 * 60 * 60 * 1000);
             // Execute clean up logs hook
             num_log_files_cleaned_up = cleanup_expired_delta_log_files(
-                self.version,
+                state.as_ref(),
                 self.log_store.as_ref(),
                 cutoff_timestamp,
                 Some(post_commit_operation_id),
@@ -1077,5 +1182,221 @@ impl std::future::IntoFuture for PostCommit {
                 Err(err) => Err(err),
             }
         })
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use object_store::memory::InMemory;
+    use object_store::ObjectStore;
+    use url::Url;
+
+    use super::*;
+    use crate::schema::protocol_for_create;
+    use crate::spec::{
+        checksum_path, Action, CommitInfo, DataType, DeltaError, Metadata, SaveMode, StructField,
+        StructType, VersionChecksum,
+    };
+    use crate::storage::{default_logstore, get_actions, StorageConfig};
+
+    fn test_log_store(store: Arc<dyn ObjectStore>) -> LogStoreRef {
+        default_logstore(
+            store.clone(),
+            store,
+            &Url::parse("memory:///").unwrap(),
+            &StorageConfig,
+        )
+    }
+
+    fn test_metadata(
+        configuration: impl IntoIterator<Item = (&'static str, &'static str)>,
+    ) -> Metadata {
+        Metadata::try_new(
+            None,
+            None,
+            StructType::try_new([StructField::not_null("id", DataType::LONG)]).unwrap(),
+            Vec::new(),
+            0,
+            configuration
+                .into_iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect(),
+        )
+        .unwrap()
+    }
+
+    async fn read_commit_actions(log_store: &LogStoreRef, version: i64) -> Vec<Action> {
+        let bytes = log_store.read_commit_entry(version).await.unwrap().unwrap();
+        get_actions(version, &bytes).unwrap()
+    }
+
+    async fn read_version_checksum(log_store: &LogStoreRef, version: i64) -> VersionChecksum {
+        let bytes = log_store
+            .object_store(None)
+            .get(&checksum_path(version))
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    fn commit_info(actions: &[Action]) -> DeltaResult<&CommitInfo> {
+        match actions.first() {
+            Some(Action::CommitInfo(info)) => Ok(info),
+            _ => Err(DeltaError::generic("expected commitInfo action at index 0")),
+        }
+    }
+
+    #[tokio::test]
+    async fn commit_writes_commit_info_first_monotonic_ict_and_checksum() -> DeltaResult<()> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let log_store = test_log_store(store);
+        let protocol = protocol_for_create(false, false, true)?;
+        let metadata = test_metadata([("delta.enableInCommitTimestamps", "true")]);
+
+        let created = CommitBuilder::default()
+            .with_actions(vec![
+                Action::Protocol(protocol.clone()),
+                Action::Metadata(metadata.clone()),
+            ])
+            .build(
+                None,
+                log_store.clone(),
+                DeltaOperation::Create {
+                    mode: SaveMode::ErrorIfExists,
+                    location: "memory:///".to_string(),
+                    protocol: Box::new(protocol),
+                    metadata: Box::new(metadata),
+                },
+            )
+            .await?;
+        let first_actions = read_commit_actions(&log_store, 0).await;
+        let first_commit_info = commit_info(&first_actions)?;
+        let first_ict = first_commit_info.in_commit_timestamp.ok_or_else(|| {
+            DeltaError::generic("ICT-enabled create commit should write inCommitTimestamp")
+        })?;
+        assert!(matches!(first_actions.first(), Some(Action::CommitInfo(_))));
+        assert_eq!(
+            read_version_checksum(&log_store, 0)
+                .await
+                .in_commit_timestamp_opt,
+            Some(first_ict)
+        );
+
+        let appended = CommitBuilder::default()
+            .with_actions(vec![])
+            .build(
+                Some(created.snapshot.clone()),
+                log_store.clone(),
+                DeltaOperation::Write {
+                    mode: SaveMode::Append,
+                    partition_by: None,
+                    predicate: None,
+                },
+            )
+            .await?;
+        let second_actions = read_commit_actions(&log_store, appended.version).await;
+        let second_commit_info = commit_info(&second_actions)?;
+        let second_ict = second_commit_info.in_commit_timestamp.ok_or_else(|| {
+            DeltaError::generic("ICT-enabled append commit should write inCommitTimestamp")
+        })?;
+
+        assert!(matches!(
+            second_actions.first(),
+            Some(Action::CommitInfo(_))
+        ));
+        assert!(second_ict > first_ict);
+        assert_eq!(
+            read_version_checksum(&log_store, appended.version)
+                .await
+                .in_commit_timestamp_opt,
+            Some(second_ict)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn finalize_attempt_actions_backfills_enablement_metadata() -> DeltaResult<()> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let log_store = test_log_store(store);
+        let protocol = protocol_for_create(false, false, false)?;
+        let metadata = test_metadata([]);
+        let created = CommitBuilder::default()
+            .with_actions(vec![
+                Action::Protocol(protocol.clone()),
+                Action::Metadata(metadata.clone()),
+            ])
+            .build(
+                None,
+                log_store.clone(),
+                DeltaOperation::Create {
+                    mode: SaveMode::ErrorIfExists,
+                    location: "memory:///".to_string(),
+                    protocol: Box::new(protocol),
+                    metadata: Box::new(metadata),
+                },
+            )
+            .await?;
+        let previous_timestamp = created.snapshot.version_timestamp(0).ok_or_else(|| {
+            DeltaError::generic("non-ICT tables still track pre-enable commit timestamps")
+        })?;
+
+        let upgrade_protocol = protocol_for_create(false, false, true)?;
+        let upgrade_metadata = test_metadata([("delta.enableInCommitTimestamps", "true")]);
+        let base_actions = CommitData::new(
+            vec![
+                Action::Protocol(upgrade_protocol),
+                Action::Metadata(upgrade_metadata),
+            ],
+            DeltaOperation::Write {
+                mode: SaveMode::Append,
+                partition_by: None,
+                predicate: None,
+            },
+            HashMap::new(),
+            OperationMetrics::default(),
+            vec![],
+        )
+        .actions;
+
+        let finalized_actions = finalize_attempt_actions(
+            &base_actions,
+            Some(&created.snapshot),
+            1,
+            Some(previous_timestamp),
+            previous_timestamp.saturating_sub(10),
+        )?;
+        let commit_info = commit_info(&finalized_actions)?;
+        let upgrade_timestamp = commit_info
+            .in_commit_timestamp
+            .ok_or_else(|| DeltaError::generic("upgrade commit should assign inCommitTimestamp"))?;
+        assert_eq!(upgrade_timestamp, previous_timestamp + 1);
+
+        let metadata = finalized_actions
+            .iter()
+            .find_map(|action| match action {
+                Action::Metadata(metadata) => Some(metadata),
+                _ => None,
+            })
+            .ok_or_else(|| DeltaError::generic("upgrade commit should keep metadata action"))?;
+        assert_eq!(
+            metadata
+                .configuration()
+                .get("delta.inCommitTimestampEnablementVersion"),
+            Some(&"1".to_string())
+        );
+        assert_eq!(
+            metadata
+                .configuration()
+                .get("delta.inCommitTimestampEnablementTimestamp"),
+            Some(&upgrade_timestamp.to_string())
+        );
+        Ok(())
     }
 }

@@ -37,6 +37,7 @@ pub(crate) use crate::delta_log::{
 use crate::delta_log::{
     list_delta_log_entries_from, parse_checkpoint_version_from_location,
     parse_commit_version_from_location, read_last_checkpoint_version_from_store,
+    resolve_commit_timestamp_from_actions,
 };
 use crate::kernel::log_segment::ReplayedTableHeader;
 use crate::spec::{
@@ -527,12 +528,13 @@ pub(crate) async fn replay_commit_actions(
     commit_entries: &[(i64, ObjectMeta)],
     start_version: i64,
     end_version: i64,
-) -> DeltaResult<()> {
+) -> DeltaResult<BTreeMap<i64, i64>> {
     if start_version > end_version {
-        return Ok(());
+        return Ok(BTreeMap::new());
     }
 
     let mut expected_version = start_version;
+    let mut commit_timestamps = BTreeMap::new();
     for (version, meta) in commit_entries {
         if *version < start_version || *version > end_version {
             continue;
@@ -544,9 +546,17 @@ pub(crate) async fn replay_commit_actions(
         }
         let bytes = root_store.get(&meta.location).await?.bytes().await?;
         let actions = get_actions(*version, &bytes)?;
+        let commit_timestamp = resolve_commit_timestamp_from_actions(
+            *version,
+            meta,
+            state.protocol.as_ref(),
+            state.metadata.as_ref(),
+            &actions,
+        )?;
         for action in actions {
             state.apply_action(action);
         }
+        commit_timestamps.insert(*version, commit_timestamp);
         expected_version = expected_version.saturating_add(1);
     }
 
@@ -556,7 +566,7 @@ pub(crate) async fn replay_commit_actions(
             expected_version.saturating_sub(1)
         )));
     }
-    Ok(())
+    Ok(commit_timestamps)
 }
 
 pub(crate) async fn read_checkpoint_rows_from_parquet(
@@ -607,10 +617,17 @@ pub(crate) async fn replay_commit_header_actions(
         }
         let bytes = root_store.get(&meta.location).await?.bytes().await?;
         let actions = get_actions(*version, &bytes)?;
+        let commit_timestamp = resolve_commit_timestamp_from_actions(
+            *version,
+            meta,
+            state.protocol.as_ref(),
+            state.metadata.as_ref(),
+            &actions,
+        )?;
         for action in actions {
             state.apply_action(action);
         }
-        commit_timestamps.insert(*version, meta.last_modified.timestamp_millis());
+        commit_timestamps.insert(*version, commit_timestamp);
         expected_version = expected_version.saturating_add(1);
     }
 
@@ -637,17 +654,22 @@ pub(crate) async fn create_checkpoint_for(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Arc;
 
+    use chrono::DateTime;
     use datafusion::arrow::datatypes::DataType as ArrowDataType;
+    use object_store::memory::InMemory;
+    use object_store::path::Path;
+    use object_store::{ObjectMeta, ObjectStore};
 
     use super::{
         checkpoint_fields, decode_checkpoint_rows, encode_checkpoint_rows,
-        ReconciledCheckpointState,
+        replay_commit_header_actions, ReconciledCheckpointState, ReconciledHeaderState,
     };
     use crate::spec::{
-        Action, Add, CheckpointActionRow, DataType, DeletionVectorDescriptor, DeltaResult,
-        Metadata, Protocol, Remove, StorageType, StructField, StructType, TableFeature,
-        Transaction,
+        Action, Add, CheckpointActionRow, CommitInfo, DataType, DeletionVectorDescriptor,
+        DeltaError, DeltaResult, Metadata, Protocol, Remove, StorageType, StructField, StructType,
+        TableFeature, Transaction,
     };
 
     fn test_metadata(
@@ -664,6 +686,39 @@ mod tests {
                 .map(|(key, value)| (key.to_string(), value.to_string()))
                 .collect(),
         )
+    }
+
+    fn commit_meta(version: i64, last_modified_millis: i64) -> DeltaResult<ObjectMeta> {
+        let last_modified = DateTime::from_timestamp_millis(last_modified_millis)
+            .ok_or_else(|| DeltaError::generic("test timestamp must be valid"))?;
+        Ok(ObjectMeta {
+            location: Path::from(format!("_delta_log/{version:020}.json")),
+            last_modified,
+            size: 0,
+            e_tag: None,
+            version: None,
+        })
+    }
+
+    async fn put_commit(
+        store: &Arc<dyn ObjectStore>,
+        version: i64,
+        actions: &[Action],
+    ) -> DeltaResult<()> {
+        let mut bytes = Vec::new();
+        for (index, action) in actions.iter().enumerate() {
+            if index > 0 {
+                bytes.push(b'\n');
+            }
+            serde_json::to_writer(&mut bytes, action)?;
+        }
+        store
+            .put(
+                &Path::from(format!("_delta_log/{version:020}.json")),
+                bytes.into(),
+            )
+            .await?;
+        Ok(())
     }
 
     #[test]
@@ -1026,5 +1081,123 @@ mod tests {
 
         assert_eq!(add_type, Some(expected_add));
         assert_eq!(metadata_type, Some(expected_metadata));
+    }
+
+    #[tokio::test]
+    async fn replay_commit_header_actions_prefers_in_commit_timestamp() -> DeltaResult<()> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let protocol = Protocol::new(1, 7, None, Some(vec![TableFeature::InCommitTimestamp]));
+        let metadata = test_metadata([("delta.enableInCommitTimestamps", "true")])?;
+        put_commit(
+            &store,
+            0,
+            &[
+                Action::CommitInfo(CommitInfo {
+                    in_commit_timestamp: Some(123),
+                    ..Default::default()
+                }),
+                Action::Protocol(protocol.clone()),
+                Action::Metadata(metadata.clone()),
+            ],
+        )
+        .await?;
+
+        let commit_meta = commit_meta(0, 9_999)?;
+        let timestamps = replay_commit_header_actions(
+            &mut ReconciledHeaderState::default(),
+            store,
+            &[(0, commit_meta)],
+            0,
+            0,
+        )
+        .await?;
+
+        assert_eq!(timestamps.get(&0), Some(&123));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn replay_commit_header_actions_falls_back_to_mtime_before_enablement() -> DeltaResult<()>
+    {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let protocol = Protocol::new(1, 2, None, None);
+        let metadata = test_metadata([])?;
+        put_commit(
+            &store,
+            0,
+            &[
+                Action::CommitInfo(CommitInfo::default()),
+                Action::Protocol(protocol.clone()),
+                Action::Metadata(metadata.clone()),
+            ],
+        )
+        .await?;
+
+        let commit_meta = commit_meta(0, 4_567)?;
+        let timestamps = replay_commit_header_actions(
+            &mut ReconciledHeaderState::default(),
+            store,
+            &[(0, commit_meta)],
+            0,
+            0,
+        )
+        .await?;
+
+        assert_eq!(timestamps.get(&0), Some(&4_567));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn replay_commit_header_actions_ignores_pre_enable_ict_before_upgrade() -> DeltaResult<()>
+    {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let pre_enable_protocol = Protocol::new(1, 2, None, None);
+        let pre_enable_metadata = test_metadata([])?;
+        let enabled_protocol =
+            Protocol::new(1, 7, None, Some(vec![TableFeature::InCommitTimestamp]));
+        let enabled_metadata = test_metadata([
+            ("delta.enableInCommitTimestamps", "true"),
+            ("delta.inCommitTimestampEnablementVersion", "1"),
+            ("delta.inCommitTimestampEnablementTimestamp", "300"),
+        ])?;
+        put_commit(
+            &store,
+            0,
+            &[
+                Action::CommitInfo(CommitInfo {
+                    in_commit_timestamp: Some(10_000),
+                    ..Default::default()
+                }),
+                Action::Protocol(pre_enable_protocol),
+                Action::Metadata(pre_enable_metadata),
+            ],
+        )
+        .await?;
+        put_commit(
+            &store,
+            1,
+            &[
+                Action::CommitInfo(CommitInfo {
+                    in_commit_timestamp: Some(300),
+                    ..Default::default()
+                }),
+                Action::Protocol(enabled_protocol),
+                Action::Metadata(enabled_metadata),
+            ],
+        )
+        .await?;
+
+        let timestamps = replay_commit_header_actions(
+            &mut ReconciledHeaderState::default(),
+            store,
+            &[(0, commit_meta(0, 4_567)?), (1, commit_meta(1, 9_999)?)],
+            0,
+            1,
+        )
+        .await?;
+
+        assert_eq!(timestamps.get(&0), Some(&4_567));
+        assert_eq!(timestamps.get(&1), Some(&300));
+        Ok(())
     }
 }

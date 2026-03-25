@@ -58,7 +58,9 @@ use crate::schema::{
     annotate_for_column_mapping, compute_max_column_id, evolve_schema, get_physical_schema,
     metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_create,
 };
-use crate::spec::{contains_timestampntz_arrow, Action, ColumnMappingMode, StructType};
+use crate::spec::{
+    contains_timestampntz_arrow, Action, ColumnMappingMode, StructType, TableProperties,
+};
 use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::open_table_with_object_store;
 
@@ -479,6 +481,7 @@ impl DeltaWriterExec {
                 let protocol = protocol_for_create(
                     !matches!(effective_mode, ColumnMappingMode::None),
                     has_timestamp_ntz,
+                    TableProperties::from(configuration.iter()).enable_in_commit_timestamps(),
                 )
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let metadata = metadata_for_create_with_struct_type(
