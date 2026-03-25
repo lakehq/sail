@@ -1146,4 +1146,58 @@ mod tests {
         assert_eq!(timestamps.get(&0), Some(&4_567));
         Ok(())
     }
+
+    #[tokio::test]
+    async fn replay_commit_header_actions_ignores_pre_enable_ict_before_upgrade() -> DeltaResult<()>
+    {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let pre_enable_protocol = Protocol::new(1, 2, None, None);
+        let pre_enable_metadata = test_metadata([])?;
+        let enabled_protocol =
+            Protocol::new(1, 7, None, Some(vec![TableFeature::InCommitTimestamp]));
+        let enabled_metadata = test_metadata([
+            ("delta.enableInCommitTimestamps", "true"),
+            ("delta.inCommitTimestampEnablementVersion", "1"),
+            ("delta.inCommitTimestampEnablementTimestamp", "300"),
+        ])?;
+        put_commit(
+            &store,
+            0,
+            &[
+                Action::CommitInfo(CommitInfo {
+                    in_commit_timestamp: Some(10_000),
+                    ..Default::default()
+                }),
+                Action::Protocol(pre_enable_protocol),
+                Action::Metadata(pre_enable_metadata),
+            ],
+        )
+        .await?;
+        put_commit(
+            &store,
+            1,
+            &[
+                Action::CommitInfo(CommitInfo {
+                    in_commit_timestamp: Some(300),
+                    ..Default::default()
+                }),
+                Action::Protocol(enabled_protocol),
+                Action::Metadata(enabled_metadata),
+            ],
+        )
+        .await?;
+
+        let timestamps = replay_commit_header_actions(
+            &mut ReconciledHeaderState::default(),
+            store,
+            &[(0, commit_meta(0, 4_567)?), (1, commit_meta(1, 9_999)?)],
+            0,
+            1,
+        )
+        .await?;
+
+        assert_eq!(timestamps.get(&0), Some(&4_567));
+        assert_eq!(timestamps.get(&1), Some(&300));
+        Ok(())
+    }
 }

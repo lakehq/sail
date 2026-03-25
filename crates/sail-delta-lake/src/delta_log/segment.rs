@@ -4,6 +4,7 @@ use std::sync::Arc;
 use log::debug;
 use object_store::{ObjectMeta, ObjectStore};
 
+use super::timestamps::version_uses_in_commit_timestamps;
 use super::{list_delta_log_entries_from, read_last_checkpoint_version_from_store};
 use crate::spec::{
     checksum_path, parse_checkpoint_version, parse_checksum_version, parse_commit_version,
@@ -274,18 +275,22 @@ fn validate_and_build_header(
         .into_iter()
         .map(|txn| (txn.app_id.clone(), txn))
         .collect::<HashMap<_, _>>();
+    let commit_timestamps =
+        if version_uses_in_commit_timestamps(version, &checksum.protocol, &checksum.metadata) {
+            checksum
+                .in_commit_timestamp_opt
+                .into_iter()
+                .map(|timestamp| (version, timestamp))
+                .collect()
+        } else {
+            BTreeMap::new()
+        };
     Some(ReplayedTableHeader {
         version,
         protocol: checksum.protocol,
         metadata: checksum.metadata,
         txns: Arc::new(txns),
-        commit_timestamps: Arc::new(
-            checksum
-                .in_commit_timestamp_opt
-                .into_iter()
-                .map(|timestamp| (version, timestamp))
-                .collect(),
-        ),
+        commit_timestamps: Arc::new(commit_timestamps),
     })
 }
 
@@ -377,6 +382,7 @@ fn validate_commit_contiguity(
 #[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::spec::StructType;
 
     fn make_test_checksum(
         num_metadata: i64,
@@ -425,11 +431,38 @@ mod tests {
 
     #[test]
     fn checksum_header_keeps_in_commit_timestamp() {
-        let checksum = make_test_checksum(1, 1, Some(123));
+        let mut checksum = make_test_checksum(1, 1, Some(123));
+        checksum.protocol = Protocol::new(
+            1,
+            7,
+            None,
+            Some(vec![crate::spec::TableFeature::InCommitTimestamp]),
+        );
+        checksum.metadata = Metadata::try_new(
+            None,
+            None,
+            StructType::try_new([]).unwrap(),
+            vec![],
+            0,
+            HashMap::from([(
+                "delta.enableInCommitTimestamps".to_string(),
+                "true".to_string(),
+            )]),
+        )
+        .unwrap();
         let header = validate_and_build_header(42, checksum);
         assert!(header.is_some());
         let header = header.unwrap();
         assert_eq!(header.commit_timestamps.get(&42), Some(&123));
+    }
+
+    #[test]
+    fn checksum_header_ignores_pre_enable_in_commit_timestamp() {
+        let checksum = make_test_checksum(1, 1, Some(123));
+        let header = validate_and_build_header(42, checksum);
+        assert!(header.is_some());
+        let header = header.unwrap();
+        assert!(header.commit_timestamps.is_empty());
     }
 
     #[test]
