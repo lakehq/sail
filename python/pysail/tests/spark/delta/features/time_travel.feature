@@ -82,7 +82,7 @@ Feature: Delta Lake SQL time travel
       Then query error Invalid time travel spec
 
   @sail-only
-  Rule: SQL time travel honors Delta in-commit timestamps
+  Rule: Delta time travel honors in-commit timestamps
 
     Background:
       Given variable location for temporary directory delta_sql_time_travel_ict
@@ -93,25 +93,20 @@ Feature: Delta Lake SQL time travel
         """
       Given statement template
         """
-        CREATE TABLE delta_sql_time_travel_ict_test (
-          id INT,
-          value STRING
-        )
+        CREATE TABLE delta_sql_time_travel_ict_test
         USING DELTA
         LOCATION {{ location.sql }}
         TBLPROPERTIES (
           'delta.enableInCommitTimestamps' = 'true'
         )
-        """
-      Given statement
-        """
-        INSERT INTO delta_sql_time_travel_ict_test VALUES (1, 'v0')
+        AS SELECT 1 AS id, 'v0' AS value
         """
       Given statement
         """
         INSERT INTO delta_sql_time_travel_ict_test VALUES (2, 'v1')
         """
       Given delta log commit and checksum timestamps for versions 0, 1 in delta_log are 100, 200 milliseconds since epoch
+      Given delta log JSON file timestamps for versions 0, 1 in delta_log are 86400, 1 seconds since epoch
 
     Scenario: SQL timestamp time travel uses in-commit timestamps instead of JSON mtimes
       When query

@@ -420,6 +420,32 @@ def delta_log_json_files_are_backdated(
 
 @given(
     parsers.parse(
+        "delta log JSON file timestamps for versions {versions} in {location_var} are {timestamps} seconds since epoch"
+    )
+)
+def delta_log_json_file_timestamps_are_set(
+    versions: str,
+    location_var: str,
+    timestamps: str,
+    variables: dict,
+) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    parsed_versions = _parse_version_list(versions)
+    parsed_timestamps = _parse_i64_list(timestamps)
+    assert parsed_versions, "expected at least one Delta log version to rewrite"
+    assert len(parsed_versions) == len(parsed_timestamps), "expected the same number of versions and timestamps"
+
+    log_dir = Path(location.path)
+    for version, timestamp in zip(parsed_versions, parsed_timestamps, strict=True):
+        log_file = log_dir / f"{version:020}.json"
+        assert log_file.exists(), f"Delta log JSON file does not exist: {log_file}"
+        os.utime(log_file, (timestamp, timestamp))
+
+
+@given(
+    parsers.parse(
         "delta log commit and checksum timestamps for versions {versions} in {location_var} "
         "are {timestamps} milliseconds since epoch"
     )
