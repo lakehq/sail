@@ -153,7 +153,7 @@ impl PlanResolver<'_> {
         Ok(resolved)
     }
 
-    // TODO: Extract as general utilities and incorporated into LiteralEvaluator. 
+    // TODO: Extract as general utilities and incorporated into LiteralEvaluator.
     fn validate_time_travel_expression(&self, expr: &Expr, kind: &str) -> PlanResult<()> {
         if expr.any_column_refs() {
             return Err(Self::invalid_time_travel_message(
