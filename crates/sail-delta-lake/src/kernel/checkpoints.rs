@@ -19,59 +19,33 @@
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/protocol/checkpoints.rs>
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
-use chrono::{TimeZone, Utc};
+use chrono::Utc;
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, FieldRef};
 use datafusion::arrow::record_batch::RecordBatch;
-use futures::{StreamExt, TryStreamExt};
-use log::{debug, error};
-use object_store::path::Path;
+use log::debug;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::async_writer::ParquetObjectWriter;
 use parquet::arrow::AsyncArrowWriter;
-use regex::Regex;
 use uuid::Uuid;
 
+pub(crate) use crate::delta_log::{
+    latest_replayable_version, load_replayed_table_header, load_replayed_table_state,
+};
+use crate::delta_log::{
+    list_delta_log_entries_from, parse_checkpoint_version_from_location,
+    parse_commit_version_from_location, read_last_checkpoint_version_from_store,
+    resolve_commit_timestamp_from_actions,
+};
+use crate::kernel::log_segment::ReplayedTableHeader;
 use crate::spec::{
-    checkpoint_path, delta_log_root_path, last_checkpoint_path, Action, Add, CheckpointActionRow,
+    checkpoint_path, last_checkpoint_path, Action, Add, CheckpointActionRow,
     DeltaError as DeltaTableError, DeltaResult, LastCheckpointHint, Metadata, Protocol, Remove,
     TableProperties, Transaction,
 };
 use crate::storage::{get_actions, LogStore};
-static DELTA_LOG_REGEX: LazyLock<Result<Regex, regex::Error>> =
-    LazyLock::new(|| Regex::new(r"(\d{20})\.json$"));
-// Multipart checkpoints are deprecated in the Delta protocol.
-static CHECKPOINT_REGEX: LazyLock<Result<Regex, regex::Error>> =
-    LazyLock::new(|| Regex::new(r"(\d{20})\.checkpoint.*\.parquet$"));
-
-fn regex_from_lazy(
-    lazy: &'static LazyLock<Result<Regex, regex::Error>>,
-    name: &str,
-) -> DeltaResult<&'static Regex> {
-    match LazyLock::force(lazy) {
-        Ok(regex) => Ok(regex),
-        Err(err) => Err(DeltaTableError::generic(format!(
-            "Failed to compile {name} regex: {err}"
-        ))),
-    }
-}
-
-fn delta_log_regex() -> DeltaResult<&'static Regex> {
-    regex_from_lazy(&DELTA_LOG_REGEX, "delta log")
-}
-
-fn checkpoint_regex() -> DeltaResult<&'static Regex> {
-    regex_from_lazy(&CHECKPOINT_REGEX, "checkpoint")
-}
-
-fn parse_version(regex: &Regex, location: &Path) -> Option<i64> {
-    regex
-        .captures(location.as_ref())
-        .and_then(|caps| caps.get(1))
-        .and_then(|m| m.as_str().parse::<i64>().ok())
-}
 
 #[derive(Debug, Clone, Copy)]
 struct CheckpointRetentionTimestamps {
@@ -117,12 +91,13 @@ fn retention_cutoff_timestamp(
 }
 
 #[derive(Debug, Default)]
-struct ReconciledCheckpointState {
-    protocol: Option<Protocol>,
-    metadata: Option<Metadata>,
-    txns: HashMap<String, Transaction>,
-    adds: HashMap<String, Add>,
-    removes: HashMap<String, Remove>,
+pub(crate) struct ReconciledCheckpointState {
+    pub(crate) protocol: Option<Protocol>,
+    pub(crate) metadata: Option<Metadata>,
+    pub(crate) txns: HashMap<String, Transaction>,
+    // TODO: Use `(path, dvId)` once replay is deletion-vector aware.
+    pub(crate) adds: HashMap<String, Add>,
+    pub(crate) removes: HashMap<String, Remove>,
 }
 
 impl ReconciledCheckpointState {
@@ -145,6 +120,7 @@ impl ReconciledCheckpointState {
                 self.adds.remove(&remove.path);
                 self.removes.insert(remove.path.clone(), remove);
             }
+            // TODO: Preserve DomainMetadata so VersionChecksum can emit it.
             Action::CommitInfo(_)
             | Action::Cdc(_)
             | Action::DomainMetadata(_)
@@ -153,7 +129,7 @@ impl ReconciledCheckpointState {
         }
     }
 
-    fn apply_checkpoint_row(&mut self, row: CheckpointActionRow) -> DeltaResult<()> {
+    pub(crate) fn apply_checkpoint_row(&mut self, row: CheckpointActionRow) -> DeltaResult<()> {
         if let Some(protocol) = row.protocol {
             self.protocol = Some(protocol);
         }
@@ -206,18 +182,8 @@ impl ReconciledCheckpointState {
         Ok(())
     }
 
-    // TODO: This batch iterator removes the single-RecordBatch peak during checkpoint writes.
-    // It is only a partial mitigation: we still materialize the full reconciled table state
-    // in memory before writing.
-    // The long-term fix should eliminate the full-state maps and emit checkpoint rows directly
-    // from reconciliation.
-    // The target design is a streaming pipeline:
-    //   log batches -> dedup/reconcile state -> selected checkpoint batches -> parquet writer.
-    // Keep only the minimum state required for deduplication and protocol/metadata finalization.
-    // Avoid building a full Vec<CheckpointActionRow> or a full map of final actions when a
-    // smaller incremental state machine can produce the same checkpoint contents.
-    // Writer-side batching and flushing are still useful, but they do not solve the root cause
-    // if reconciliation remains fully materialized.
+    // TODO: Make checkpoint creation fully streaming. This iterator removes the
+    // single-batch peak, but the reconciled state is still fully materialized.
     fn into_checkpoint_batch_iter(
         self,
         batch_size: usize,
@@ -268,6 +234,56 @@ impl ReconciledCheckpointState {
             },
             add_count,
         ))
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct ReconciledHeaderState {
+    pub(crate) protocol: Option<Protocol>,
+    pub(crate) metadata: Option<Metadata>,
+    pub(crate) txns: HashMap<String, Transaction>,
+}
+
+impl ReconciledHeaderState {
+    fn apply_action(&mut self, action: Action) {
+        match action {
+            Action::Protocol(protocol) => {
+                self.protocol = Some(protocol);
+            }
+            Action::Metadata(metadata) => {
+                self.metadata = Some(metadata);
+            }
+            Action::Txn(txn) => {
+                self.txns.insert(txn.app_id.clone(), txn);
+            }
+            Action::Add(_)
+            | Action::Remove(_)
+            | Action::CommitInfo(_)
+            | Action::Cdc(_)
+            | Action::DomainMetadata(_)
+            | Action::CheckpointMetadata(_)
+            | Action::Sidecar(_) => {}
+        }
+    }
+
+    pub(crate) fn apply_checkpoint_row(&mut self, row: CheckpointActionRow) {
+        if let Some(protocol) = row.protocol {
+            self.protocol = Some(protocol);
+        }
+        if let Some(metadata) = row.metadata {
+            self.metadata = Some(metadata);
+        }
+        if let Some(txn) = row.txn {
+            self.txns.insert(txn.app_id.clone(), txn);
+        }
+    }
+
+    pub(crate) fn from_header(header: &ReplayedTableHeader) -> Self {
+        Self {
+            protocol: Some(header.protocol.clone()),
+            metadata: Some(header.metadata.clone()),
+            txns: header.txns.as_ref().clone(),
+        }
     }
 }
 
@@ -336,7 +352,7 @@ fn encode_checkpoint_rows(rows: &Vec<CheckpointActionRow>) -> DeltaResult<Record
     serde_arrow::to_record_batch(&fields, rows).map_err(DeltaTableError::generic_err)
 }
 
-fn decode_checkpoint_rows(batch: &RecordBatch) -> DeltaResult<Vec<CheckpointActionRow>> {
+pub(crate) fn decode_checkpoint_rows(batch: &RecordBatch) -> DeltaResult<Vec<CheckpointActionRow>> {
     serde_arrow::from_record_batch(batch).map_err(DeltaTableError::generic_err)
 }
 
@@ -410,22 +426,21 @@ impl<'a> CheckpointManager<'a> {
         }
 
         let store = self.log_store.object_store(Some(self.operation_id));
-        let log_entries = store
-            .list(Some(&delta_log_root_path()))
-            .try_collect::<Vec<_>>()
-            .await?;
-        let delta_log_pattern = delta_log_regex()?;
-        let checkpoint_pattern = checkpoint_regex()?;
+        let offset_version = read_last_checkpoint_version_from_store(store.clone()).await;
+        let offset_version = offset_version
+            .map(|v| v.min(version).saturating_sub(1))
+            .unwrap_or(0);
+        let log_entries = list_delta_log_entries_from(store.clone(), offset_version).await?;
         let mut commit_entries: Vec<(i64, ObjectMeta)> = Vec::new();
         let mut checkpoint_entries: Vec<(i64, ObjectMeta)> = Vec::new();
         for meta in log_entries {
-            if let Some(v) = parse_version(delta_log_pattern, &meta.location) {
+            if let Some(v) = parse_commit_version_from_location(&meta.location) {
                 if v <= version {
                     commit_entries.push((v, meta));
                 }
                 continue;
             }
-            if let Some(v) = parse_version(checkpoint_pattern, &meta.location) {
+            if let Some(v) = parse_checkpoint_version_from_location(&meta.location) {
                 if v <= version {
                     checkpoint_entries.push((v, meta));
                 }
@@ -447,21 +462,15 @@ impl<'a> CheckpointManager<'a> {
         replay_commit_actions(
             &mut state,
             store.clone(),
-            commit_entries,
+            &commit_entries,
             start_commit_version,
             version,
         )
         .await?;
         state.prune_expired_checkpoint_actions(Utc::now().timestamp_millis())?;
 
-        // Design note:
-        // - This write path is intentionally batch-oriented so checkpoint output does not require a
-        //   single giant RecordBatch.
-        // - The root-cause goal is stronger: make checkpoint creation fully streaming from log
-        //   replay through parquet writing, so memory usage scales with batch size instead of table
-        //   size.
-        // - If needed, this path can also add row-group tuning and early flush thresholds, but the
-        //   primary objective is to remove full-state materialization before write.
+        // Batching avoids one giant RecordBatch, but full-state materialization
+        // is still the main memory cost here.
         const CHECKPOINT_WRITE_BATCH_SIZE: usize = 16_384;
         let (mut checkpoint_batches, checkpoint_add_count) =
             state.into_checkpoint_batch_iter(CHECKPOINT_WRITE_BATCH_SIZE)?;
@@ -513,32 +522,41 @@ impl<'a> CheckpointManager<'a> {
     }
 }
 
-async fn replay_commit_actions(
+pub(crate) async fn replay_commit_actions(
     state: &mut ReconciledCheckpointState,
     root_store: std::sync::Arc<dyn ObjectStore>,
-    commit_entries: Vec<(i64, ObjectMeta)>,
+    commit_entries: &[(i64, ObjectMeta)],
     start_version: i64,
     end_version: i64,
-) -> DeltaResult<()> {
+) -> DeltaResult<BTreeMap<i64, i64>> {
     if start_version > end_version {
-        return Ok(());
+        return Ok(BTreeMap::new());
     }
 
     let mut expected_version = start_version;
+    let mut commit_timestamps = BTreeMap::new();
     for (version, meta) in commit_entries {
-        if version < start_version || version > end_version {
+        if *version < start_version || *version > end_version {
             continue;
         }
-        if version != expected_version {
+        if *version != expected_version {
             return Err(DeltaTableError::generic(format!(
                 "Missing commit file while building checkpoint: expected version {expected_version}, found {version}"
             )));
         }
         let bytes = root_store.get(&meta.location).await?.bytes().await?;
-        let actions = get_actions(version, &bytes)?;
+        let actions = get_actions(*version, &bytes)?;
+        let commit_timestamp = resolve_commit_timestamp_from_actions(
+            *version,
+            meta,
+            state.protocol.as_ref(),
+            state.metadata.as_ref(),
+            &actions,
+        )?;
         for action in actions {
             state.apply_action(action);
         }
+        commit_timestamps.insert(*version, commit_timestamp);
         expected_version = expected_version.saturating_add(1);
     }
 
@@ -548,15 +566,17 @@ async fn replay_commit_actions(
             expected_version.saturating_sub(1)
         )));
     }
-    Ok(())
+    Ok(commit_timestamps)
 }
 
-async fn read_checkpoint_rows_from_parquet(
+pub(crate) async fn read_checkpoint_rows_from_parquet(
     root_store: std::sync::Arc<dyn ObjectStore>,
     meta: ObjectMeta,
 ) -> DeltaResult<Vec<CheckpointActionRow>> {
     let bytes = root_store.get(&meta.location).await?.bytes().await?;
     tokio::task::spawn_blocking(move || {
+        // TODO: V2 checkpoints move add/remove rows into sidecars; full replay
+        // needs to read those parquet files too.
         let mut batches = ParquetRecordBatchReaderBuilder::try_new(bytes)
             .map_err(DeltaTableError::generic_err)?
             .build()
@@ -573,6 +593,53 @@ async fn read_checkpoint_rows_from_parquet(
     .map_err(DeltaTableError::generic_err)?
 }
 
+pub(crate) async fn replay_commit_header_actions(
+    state: &mut ReconciledHeaderState,
+    root_store: std::sync::Arc<dyn ObjectStore>,
+    commit_entries: &[(i64, ObjectMeta)],
+    start_version: i64,
+    end_version: i64,
+) -> DeltaResult<BTreeMap<i64, i64>> {
+    if start_version > end_version {
+        return Ok(BTreeMap::new());
+    }
+
+    let mut expected_version = start_version;
+    let mut commit_timestamps = BTreeMap::new();
+    for (version, meta) in commit_entries {
+        if *version < start_version || *version > end_version {
+            continue;
+        }
+        if *version != expected_version {
+            return Err(DeltaTableError::generic(format!(
+                "Missing commit file while replaying table header: expected version {expected_version}, found {version}"
+            )));
+        }
+        let bytes = root_store.get(&meta.location).await?.bytes().await?;
+        let actions = get_actions(*version, &bytes)?;
+        let commit_timestamp = resolve_commit_timestamp_from_actions(
+            *version,
+            meta,
+            state.protocol.as_ref(),
+            state.metadata.as_ref(),
+            &actions,
+        )?;
+        for action in actions {
+            state.apply_action(action);
+        }
+        commit_timestamps.insert(*version, commit_timestamp);
+        expected_version = expected_version.saturating_add(1);
+    }
+
+    if expected_version.saturating_sub(1) != end_version {
+        return Err(DeltaTableError::generic(format!(
+            "Missing commit file while replaying table header: expected final version {end_version}, replay reached {}",
+            expected_version.saturating_sub(1)
+        )));
+    }
+    Ok(commit_timestamps)
+}
+
 /// Creates a checkpoint for the given table version.
 pub(crate) async fn create_checkpoint_for(
     version: i64,
@@ -583,218 +650,25 @@ pub(crate) async fn create_checkpoint_for(
         .create_checkpoint(version)
         .await
 }
-
-/// Load the reconciled table state at a specific version by replaying checkpoint + commits.
-pub(crate) async fn load_replayed_table_state(
-    version: i64,
-    log_store: &dyn LogStore,
-) -> DeltaResult<ReplayedTableState> {
-    if version < 0 {
-        return Err(DeltaTableError::generic(format!(
-            "Cannot load table state for negative version: {version}"
-        )));
-    }
-
-    let store = log_store.object_store(None);
-    let log_entries = store
-        .list(Some(&delta_log_root_path()))
-        .try_collect::<Vec<_>>()
-        .await?;
-    let delta_log_pattern = delta_log_regex()?;
-    let checkpoint_pattern = checkpoint_regex()?;
-    let mut commit_entries: Vec<(i64, ObjectMeta)> = Vec::new();
-    let mut checkpoint_entries: Vec<(i64, ObjectMeta)> = Vec::new();
-    for meta in log_entries {
-        if let Some(v) = parse_version(delta_log_pattern, &meta.location) {
-            if v <= version {
-                commit_entries.push((v, meta));
-            }
-            continue;
-        }
-        if let Some(v) = parse_version(checkpoint_pattern, &meta.location) {
-            if v <= version {
-                checkpoint_entries.push((v, meta));
-            }
-        }
-    }
-    commit_entries.sort_by(|(av, _), (bv, _)| av.cmp(bv));
-    checkpoint_entries.sort_by(|(av, _), (bv, _)| av.cmp(bv));
-
-    let mut state = ReconciledCheckpointState::default();
-    let start_commit_version = if let Some((cp_ver, cp_meta)) = checkpoint_entries.pop() {
-        let rows = read_checkpoint_rows_from_parquet(store.clone(), cp_meta).await?;
-        for row in rows {
-            state.apply_checkpoint_row(row)?;
-        }
-        cp_ver.saturating_add(1)
-    } else {
-        0
-    };
-
-    replay_commit_actions(
-        &mut state,
-        store,
-        commit_entries.clone(),
-        start_commit_version,
-        version,
-    )
-    .await?;
-
-    let protocol = state
-        .protocol
-        .ok_or_else(|| DeltaTableError::generic("Cannot load table state without protocol"))?;
-    let metadata = state
-        .metadata
-        .ok_or_else(|| DeltaTableError::generic("Cannot load table state without metadata"))?;
-    let txns = state.txns;
-    let adds = state
-        .adds
-        .into_iter()
-        .collect::<BTreeMap<_, _>>()
-        .into_values()
-        .collect::<Vec<_>>();
-    let removes = state
-        .removes
-        .into_iter()
-        .collect::<BTreeMap<_, _>>()
-        .into_values()
-        .collect::<Vec<_>>();
-    let commit_timestamps = commit_entries
-        .into_iter()
-        .filter(|(v, _)| *v >= start_commit_version && *v <= version)
-        .map(|(v, meta)| (v, meta.last_modified.timestamp_millis()))
-        .collect::<BTreeMap<_, _>>();
-
-    Ok(ReplayedTableState {
-        version,
-        protocol,
-        metadata,
-        txns,
-        adds,
-        removes,
-        commit_timestamps,
-    })
-}
-
-/// Resolve the latest table version that can be replayed from `_delta_log`.
-///
-/// This includes both commit JSON files and checkpoint parquet files. We rely on this when
-/// loading snapshots because commit JSON files can be pruned while checkpoints are retained.
-pub(crate) async fn latest_replayable_version(log_store: &dyn LogStore) -> DeltaResult<i64> {
-    let store = log_store.object_store(None);
-    let log_entries = store
-        .list(Some(&delta_log_root_path()))
-        .try_collect::<Vec<_>>()
-        .await?;
-    let delta_log_pattern = delta_log_regex()?;
-    let checkpoint_pattern = checkpoint_regex()?;
-
-    let latest = log_entries
-        .iter()
-        .filter_map(|meta| {
-            parse_version(delta_log_pattern, &meta.location)
-                .or_else(|| parse_version(checkpoint_pattern, &meta.location))
-        })
-        .max();
-
-    latest.ok_or(crate::spec::DeltaError::MissingVersion)
-}
-
-/// Delete expired Delta log files up to a safe checkpoint boundary.
-pub async fn cleanup_expired_logs_for(
-    mut keep_version: i64,
-    log_store: &dyn LogStore,
-    cutoff_timestamp: i64,
-    operation_id: Option<Uuid>,
-) -> DeltaResult<usize> {
-    debug!("called cleanup_expired_logs_for");
-    let delta_log_pattern = delta_log_regex()?;
-    let checkpoint_pattern = checkpoint_regex()?;
-    let object_store = log_store.object_store(operation_id);
-    let log_path = delta_log_root_path();
-
-    let log_entries = object_store.list(Some(&log_path)).collect::<Vec<_>>().await;
-
-    debug!("starting keep_version: {keep_version}");
-    debug!(
-        "starting cutoff_timestamp: {:?}",
-        Utc.timestamp_millis_opt(cutoff_timestamp).unwrap()
-    );
-
-    let min_retention_version = log_entries
-        .iter()
-        .filter_map(|entry| entry.as_ref().ok())
-        .filter_map(|meta| {
-            parse_version(delta_log_pattern, &meta.location)
-                .map(|ver| (ver, meta.last_modified.timestamp_millis()))
-        })
-        .filter(|(_, ts)| *ts >= cutoff_timestamp)
-        .map(|(ver, _)| ver)
-        .min()
-        .unwrap_or(keep_version);
-
-    keep_version = keep_version.min(min_retention_version);
-
-    let safe_checkpoint_version = log_entries
-        .iter()
-        .filter_map(|entry| entry.as_ref().ok())
-        .filter_map(|meta| parse_version(checkpoint_pattern, &meta.location))
-        .filter(|ver| *ver <= keep_version)
-        .max();
-
-    let Some(safe_checkpoint_version) = safe_checkpoint_version else {
-        debug!(
-            "Not cleaning metadata files, could not find a checkpoint with version <= keep_version ({keep_version})"
-        );
-        return Ok(0);
-    };
-
-    debug!("safe_checkpoint_version: {safe_checkpoint_version}");
-
-    let locations = futures::stream::iter(log_entries.into_iter())
-        .filter_map(move |meta| async move {
-            let meta = match meta {
-                Ok(m) => m,
-                Err(err) => {
-                    error!("Error received while cleaning up expired logs: {err:?}");
-                    return None;
-                }
-            };
-
-            let ts = meta.last_modified.timestamp_millis();
-            let log_ver = parse_version(delta_log_pattern, &meta.location)?;
-
-            if log_ver < safe_checkpoint_version && ts <= cutoff_timestamp {
-                Some(Ok(meta.location))
-            } else {
-                None
-            }
-        })
-        .boxed();
-
-    let deleted = object_store
-        .delete_stream(locations)
-        .try_collect::<Vec<_>>()
-        .await?;
-
-    debug!("Deleted {} expired logs", deleted.len());
-    Ok(deleted.len())
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Arc;
 
+    use chrono::DateTime;
     use datafusion::arrow::datatypes::DataType as ArrowDataType;
+    use object_store::memory::InMemory;
+    use object_store::path::Path;
+    use object_store::{ObjectMeta, ObjectStore};
 
     use super::{
         checkpoint_fields, decode_checkpoint_rows, encode_checkpoint_rows,
-        ReconciledCheckpointState,
+        replay_commit_header_actions, ReconciledCheckpointState, ReconciledHeaderState,
     };
     use crate::spec::{
-        Action, Add, CheckpointActionRow, DataType, DeletionVectorDescriptor, DeltaResult,
-        Metadata, Protocol, Remove, StorageType, StructField, StructType, TableFeature,
-        Transaction,
+        Action, Add, CheckpointActionRow, CommitInfo, DataType, DeletionVectorDescriptor,
+        DeltaError, DeltaResult, Metadata, Protocol, Remove, StorageType, StructField, StructType,
+        TableFeature, Transaction,
     };
 
     fn test_metadata(
@@ -811,6 +685,39 @@ mod tests {
                 .map(|(key, value)| (key.to_string(), value.to_string()))
                 .collect(),
         )
+    }
+
+    fn commit_meta(version: i64, last_modified_millis: i64) -> DeltaResult<ObjectMeta> {
+        let last_modified = DateTime::from_timestamp_millis(last_modified_millis)
+            .ok_or_else(|| DeltaError::generic("test timestamp must be valid"))?;
+        Ok(ObjectMeta {
+            location: Path::from(format!("_delta_log/{version:020}.json")),
+            last_modified,
+            size: 0,
+            e_tag: None,
+            version: None,
+        })
+    }
+
+    async fn put_commit(
+        store: &Arc<dyn ObjectStore>,
+        version: i64,
+        actions: &[Action],
+    ) -> DeltaResult<()> {
+        let mut bytes = Vec::new();
+        for (index, action) in actions.iter().enumerate() {
+            if index > 0 {
+                bytes.push(b'\n');
+            }
+            serde_json::to_writer(&mut bytes, action)?;
+        }
+        store
+            .put(
+                &Path::from(format!("_delta_log/{version:020}.json")),
+                bytes.into(),
+            )
+            .await?;
+        Ok(())
     }
 
     #[test]
@@ -1173,5 +1080,123 @@ mod tests {
 
         assert_eq!(add_type, Some(expected_add));
         assert_eq!(metadata_type, Some(expected_metadata));
+    }
+
+    #[tokio::test]
+    async fn replay_commit_header_actions_prefers_in_commit_timestamp() -> DeltaResult<()> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let protocol = Protocol::new(1, 7, None, Some(vec![TableFeature::InCommitTimestamp]));
+        let metadata = test_metadata([("delta.enableInCommitTimestamps", "true")])?;
+        put_commit(
+            &store,
+            0,
+            &[
+                Action::CommitInfo(CommitInfo {
+                    in_commit_timestamp: Some(123),
+                    ..Default::default()
+                }),
+                Action::Protocol(protocol.clone()),
+                Action::Metadata(metadata.clone()),
+            ],
+        )
+        .await?;
+
+        let commit_meta = commit_meta(0, 9_999)?;
+        let timestamps = replay_commit_header_actions(
+            &mut ReconciledHeaderState::default(),
+            store,
+            &[(0, commit_meta)],
+            0,
+            0,
+        )
+        .await?;
+
+        assert_eq!(timestamps.get(&0), Some(&123));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn replay_commit_header_actions_falls_back_to_mtime_before_enablement() -> DeltaResult<()>
+    {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let protocol = Protocol::new(1, 2, None, None);
+        let metadata = test_metadata([])?;
+        put_commit(
+            &store,
+            0,
+            &[
+                Action::CommitInfo(CommitInfo::default()),
+                Action::Protocol(protocol.clone()),
+                Action::Metadata(metadata.clone()),
+            ],
+        )
+        .await?;
+
+        let commit_meta = commit_meta(0, 4_567)?;
+        let timestamps = replay_commit_header_actions(
+            &mut ReconciledHeaderState::default(),
+            store,
+            &[(0, commit_meta)],
+            0,
+            0,
+        )
+        .await?;
+
+        assert_eq!(timestamps.get(&0), Some(&4_567));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn replay_commit_header_actions_ignores_pre_enable_ict_before_upgrade() -> DeltaResult<()>
+    {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let pre_enable_protocol = Protocol::new(1, 2, None, None);
+        let pre_enable_metadata = test_metadata([])?;
+        let enabled_protocol =
+            Protocol::new(1, 7, None, Some(vec![TableFeature::InCommitTimestamp]));
+        let enabled_metadata = test_metadata([
+            ("delta.enableInCommitTimestamps", "true"),
+            ("delta.inCommitTimestampEnablementVersion", "1"),
+            ("delta.inCommitTimestampEnablementTimestamp", "300"),
+        ])?;
+        put_commit(
+            &store,
+            0,
+            &[
+                Action::CommitInfo(CommitInfo {
+                    in_commit_timestamp: Some(10_000),
+                    ..Default::default()
+                }),
+                Action::Protocol(pre_enable_protocol),
+                Action::Metadata(pre_enable_metadata),
+            ],
+        )
+        .await?;
+        put_commit(
+            &store,
+            1,
+            &[
+                Action::CommitInfo(CommitInfo {
+                    in_commit_timestamp: Some(300),
+                    ..Default::default()
+                }),
+                Action::Protocol(enabled_protocol),
+                Action::Metadata(enabled_metadata),
+            ],
+        )
+        .await?;
+
+        let timestamps = replay_commit_header_actions(
+            &mut ReconciledHeaderState::default(),
+            store,
+            &[(0, commit_meta(0, 4_567)?), (1, commit_meta(1, 9_999)?)],
+            0,
+            1,
+        )
+        .await?;
+
+        assert_eq!(timestamps.get(&0), Some(&4_567));
+        assert_eq!(timestamps.get(&1), Some(&300));
+        Ok(())
     }
 }

@@ -2,6 +2,11 @@
 # References:
 #   - [1] https://github.com/delta-io/delta/blob/master/spark/src/main/scala/org/apache/spark/sql/delta/DeltaOptions.scala
 #   - [2] https://docs.delta.io/latest/delta-batch.html#deltadataframewrites
+#
+# Note:
+#   Delta table properties such as `delta.columnMapping.mode` are not modeled here because they
+#   persist in the Delta log metadata instead of affecting a single write. Routes those keys
+#   from write options into table properties before write planning.
 
 - key: replace_where
   aliases:
@@ -126,19 +131,6 @@
   supported: true
   rust_type: usize
   rust_deserialize_with: crate::options::serde::deserialize_non_zero_usize
-
-- key: column_mapping_mode
-  aliases:
-    - columnMappingMode
-    - column_mapping
-    # SQL DDL table property (TBLPROPERTIES) for Delta column mapping
-    - delta.columnMapping.mode
-  description: |
-    Column mapping mode for new Delta tables. Supported values: "none", "name", and "id".
-    When set to "name" or "id", new tables will be created with Delta Column Mapping.
-  default: "none"
-  supported: true
-  rust_type: String
 
 - key: delta_log_replay_strategy
   aliases:

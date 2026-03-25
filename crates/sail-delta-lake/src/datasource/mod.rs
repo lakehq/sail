@@ -61,6 +61,9 @@ pub(crate) fn create_object_store_url(location: &Url) -> DeltaResult<ObjectStore
 
 impl DeltaSnapshot {
     pub(crate) fn datafusion_table_statistics(&self, mask: Option<&[bool]>) -> Option<Statistics> {
+        if !self.load_config().require_files {
+            return None;
+        }
         if let Some(mask) = mask {
             let files = self.files_batch().ok()?;
             let boolean_array = BooleanArray::from(mask.to_vec());

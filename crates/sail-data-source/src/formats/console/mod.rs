@@ -34,13 +34,14 @@ impl TableFormat for ConsoleTableFormat {
         _ctx: &dyn Session,
         info: SinkInfo,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let path = info.path();
         let SinkInfo {
             input,
-            path,
             mode,
             partition_by,
             bucket_by,
             sort_order,
+            table_properties: _,
             options,
         } = info;
         if !is_flow_event_schema(&input.schema()) {

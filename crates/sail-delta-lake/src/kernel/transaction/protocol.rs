@@ -142,8 +142,14 @@ impl ProtocolChecker {
         let required_features: Option<HashSet<TableFeature>> = match protocol.min_reader_version() {
             0 | 1 => None,
             2 => Some(READER_V2.clone()),
-            // _ => protocol.reader_features_set(),
-            _ => Some(HashSet::new()),
+            _ => Some(
+                protocol
+                    .reader_features()
+                    .unwrap_or_default()
+                    .iter()
+                    .cloned()
+                    .collect(),
+            ),
         };
         if let Some(features) = required_features {
             let mut diff = features.difference(&self.reader_features).peekable();
@@ -169,8 +175,15 @@ impl ProtocolChecker {
             4 => Some(WRITER_V4.clone()),
             5 => Some(WRITER_V5.clone()),
             6 => Some(WRITER_V6.clone()),
-            //  _ => snapshot.protocol().writer_features_set(),
-            _ => Some(HashSet::new()),
+            _ => Some(
+                snapshot
+                    .protocol()
+                    .writer_features()
+                    .unwrap_or_default()
+                    .iter()
+                    .cloned()
+                    .collect(),
+            ),
         };
 
         if let Some(features) = required_features {
@@ -200,11 +213,7 @@ impl ProtocolChecker {
         } else {
             snapshot
                 .protocol()
-                .writer_features()
-                .ok_or(TransactionError::TableFeaturesRequired(
-                    TableFeature::AppendOnly,
-                ))?
-                .contains(&TableFeature::AppendOnly)
+                .has_writer_feature(&TableFeature::AppendOnly)
                 && snapshot.table_properties().append_only()
         };
         if append_only_enabled {
@@ -239,6 +248,7 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
 
     let mut writer_features = HashSet::new();
     writer_features.insert(TableFeature::AppendOnly);
+    writer_features.insert(TableFeature::InCommitTimestamp);
     writer_features.insert(TableFeature::TimestampWithoutTimezone);
     {
         writer_features.insert(TableFeature::ChangeDataFeed);

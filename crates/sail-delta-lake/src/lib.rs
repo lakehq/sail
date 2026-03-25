@@ -12,6 +12,7 @@
 
 pub mod conversion;
 pub mod datasource;
+mod delta_log;
 mod kernel;
 pub mod logical;
 pub mod operations;
@@ -42,6 +43,7 @@ pub fn init_delta_types() {
         let _ = register_format_type::<physical_plan::DeltaCommitExec>(FormatTag::Delta);
         let _ = register_format_type::<physical_plan::DeltaWriterExec>(FormatTag::Delta);
         let _ = register_format_type::<physical_plan::DeltaDiscoveryExec>(FormatTag::Delta);
+        let _ = register_format_type::<physical_plan::DeltaMetadataStatsExec>(FormatTag::Delta);
         let _ = register_format_type::<physical_plan::DeltaScanByAddsExec>(FormatTag::Delta);
         let _ = register_format_type::<physical_plan::DeltaRemoveActionsExec>(FormatTag::Delta);
         let _ = register_format_type::<physical_plan::DeltaLogReplayExec>(FormatTag::Delta);

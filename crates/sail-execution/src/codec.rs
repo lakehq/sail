@@ -74,6 +74,7 @@ use datafusion_spark::function::url::url_encode::UrlEncode;
 use prost::Message;
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::array::record_batch::{read_record_batches, write_record_batches};
+use sail_common_datafusion::catalog::{CatalogPartitionField, PartitionTransform};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::system::catalog::SystemTable;
 use sail_common_datafusion::udf::StreamUDF;
@@ -89,8 +90,9 @@ use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
 use sail_delta_lake::physical_plan::{
     DeltaCastColumnExpr, DeltaCommitExec, DeltaDiscoveryExec, DeltaLogReplayExec,
-    DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
+    DeltaMetadataStatsExec, DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
 };
+use sail_delta_lake::spec::DeltaOperation;
 use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
@@ -114,9 +116,12 @@ use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
 };
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
+use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
 use sail_function::scalar::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use sail_function::scalar::datetime::spark_next_day::SparkNextDay;
+use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
+use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
 use sail_function::scalar::datetime::spark_try_make_timestamp_ntz::SparkTryMakeTimestampNtz;
@@ -576,6 +581,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_exists,
                 sink_mode,
                 operation_override_json,
+                metadata_configuration,
             }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let sink_schema = self.try_decode_schema(&sink_schema)?;
@@ -590,9 +596,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
                 let options =
                     serde_json::from_str(&options).map_err(|e| plan_datafusion_err!("{e}"))?;
+                let metadata_configuration = serde_json::from_str(&metadata_configuration)
+                    .map_err(|e| plan_datafusion_err!("{e}"))?;
 
                 let operation_override = if let Some(s) = operation_override_json.as_ref() {
-                    Some(serde_json::from_str(s).map_err(|e| plan_datafusion_err!("{e}"))?)
+                    Some(
+                        serde_json::from_str::<DeltaOperation>(s)
+                            .map_err(|e| plan_datafusion_err!("{e}"))?,
+                    )
                 } else {
                     None
                 };
@@ -600,6 +611,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     input,
                     table_url,
                     options,
+                    metadata_configuration,
                     partition_columns,
                     sink_mode,
                     table_exists,
@@ -744,6 +756,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     input_partition_columns,
                     input_partition_scan,
                 )?))
+            }
+            NodeKind::DeltaMetadataStats(gen::DeltaMetadataStatsExecNode {
+                input,
+                stats_schema,
+            }) => {
+                let input = self.try_decode_plan(&input, ctx)?;
+                let stats_schema = Arc::new(self.try_decode_schema(&stats_schema)?);
+                Ok(Arc::new(DeltaMetadataStatsExec::new(input, stats_schema)))
             }
             NodeKind::DeltaRemoveActions(gen::DeltaRemoveActionsExecNode { input }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
@@ -966,6 +986,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     self.try_decode_physical_sink_mode(sink_mode, &input.schema(), ctx)?;
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
+                let partition_columns = partition_columns
+                    .into_iter()
+                    .map(|field| self.try_decode_catalog_partition_field(field))
+                    .collect::<Result<Vec<_>>>()?;
                 let options = if options.is_empty() {
                     TableIcebergOptions::default()
                 } else {
@@ -1331,6 +1355,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_exists: delta_writer_exec.table_exists(),
                 sink_mode: Some(sink_mode),
                 operation_override_json,
+                metadata_configuration: serde_json::to_string(
+                    delta_writer_exec.metadata_configuration(),
+                )
+                .map_err(|e| plan_datafusion_err!("{e}"))?,
             })
         } else if let Some(delta_commit_exec) = node.as_any().downcast_ref::<DeltaCommitExec>() {
             let input = self.try_encode_plan(delta_commit_exec.input().clone())?;
@@ -1407,6 +1435,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 input_partition_columns: delta_discovery_exec.input_partition_columns().to_vec(),
                 input_partition_scan: delta_discovery_exec.input_partition_scan(),
+            })
+        } else if let Some(delta_metadata_stats_exec) =
+            node.as_any().downcast_ref::<DeltaMetadataStatsExec>()
+        {
+            NodeKind::DeltaMetadataStats(gen::DeltaMetadataStatsExecNode {
+                input: self.try_encode_plan(delta_metadata_stats_exec.input().clone())?,
+                stats_schema: self.try_encode_schema(delta_metadata_stats_exec.stats_schema())?,
             })
         } else if let Some(delta_remove_actions_exec) =
             node.as_any().downcast_ref::<DeltaRemoveActionsExec>()
@@ -1582,7 +1617,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::IcebergWriter(gen::IcebergWriterExecNode {
                 input,
                 table_url: iceberg_writer_exec.table_url().to_string(),
-                partition_columns: iceberg_writer_exec.partition_columns().to_vec(),
+                partition_columns: iceberg_writer_exec
+                    .partition_columns()
+                    .iter()
+                    .map(Self::try_encode_catalog_partition_field)
+                    .collect::<Result<Vec<_>>>()?,
                 sink_mode: Some(sink_mode),
                 table_exists: iceberg_writer_exec.table_exists(),
                 options,
@@ -1883,6 +1922,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_try_make_timestamp_ntz" | "try_make_timestamp_ntz" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryMakeTimestampNtz::new())))
             }
+            "spark_make_time" | "make_time" => Ok(Arc::new(ScalarUDF::from(SparkMakeTime::new()))),
+            "spark_time_diff" | "time_diff" => Ok(Arc::new(ScalarUDF::from(SparkTimeDiff::new()))),
+            "spark_time_trunc" | "time_trunc" => {
+                Ok(Arc::new(ScalarUDF::from(SparkTimeTrunc::new())))
+            }
             "spark_mask" | "mask" => Ok(Arc::new(ScalarUDF::from(SparkMask::new()))),
             "spark_concat_ws" | "concat_ws" => Ok(Arc::new(ScalarUDF::from(SparkConcatWs::new()))),
             "spark_sequence" | "sequence" => Ok(Arc::new(ScalarUDF::from(SparkSequence::new()))),
@@ -1995,6 +2039,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkMakeInterval>()
             || node_inner.is::<SparkMakeTimestampNtz>()
             || node_inner.is::<SparkTryMakeTimestampNtz>()
+            || node_inner.is::<SparkMakeTime>()
+            || node_inner.is::<SparkTimeDiff>()
+            || node_inner.is::<SparkTimeTrunc>()
             || node_inner.is::<SparkMakeYmInterval>()
             || node_inner.is::<SparkMask>()
             || node_inner.is::<SparkConcatWs>()
@@ -2421,6 +2468,55 @@ impl RemoteExecutionCodec {
             }
         };
         Ok(gen::PhysicalSinkMode { mode: Some(mode) })
+    }
+
+    fn try_decode_catalog_partition_field(
+        &self,
+        field: gen::CatalogPartitionFieldNode,
+    ) -> Result<CatalogPartitionField> {
+        let transform_kind = gen::PartitionTransformKind::try_from(field.transform_kind)
+            .map_err(|_| plan_datafusion_err!("invalid partition transform kind"))?;
+        let transform = match transform_kind {
+            gen::PartitionTransformKind::Unspecified | gen::PartitionTransformKind::Identity => {
+                None
+            }
+            gen::PartitionTransformKind::Year => Some(PartitionTransform::Year),
+            gen::PartitionTransformKind::Month => Some(PartitionTransform::Month),
+            gen::PartitionTransformKind::Day => Some(PartitionTransform::Day),
+            gen::PartitionTransformKind::Hour => Some(PartitionTransform::Hour),
+            gen::PartitionTransformKind::Bucket => {
+                Some(PartitionTransform::Bucket(field.transform_value))
+            }
+            gen::PartitionTransformKind::Truncate => {
+                Some(PartitionTransform::Truncate(field.transform_value))
+            }
+        };
+        Ok(CatalogPartitionField {
+            column: field.column,
+            transform,
+        })
+    }
+
+    fn try_encode_catalog_partition_field(
+        field: &CatalogPartitionField,
+    ) -> Result<gen::CatalogPartitionFieldNode> {
+        let (transform_kind, transform_value) = match field.transform {
+            None => (gen::PartitionTransformKind::Unspecified as i32, 0),
+            Some(PartitionTransform::Identity) => (gen::PartitionTransformKind::Identity as i32, 0),
+            Some(PartitionTransform::Year) => (gen::PartitionTransformKind::Year as i32, 0),
+            Some(PartitionTransform::Month) => (gen::PartitionTransformKind::Month as i32, 0),
+            Some(PartitionTransform::Day) => (gen::PartitionTransformKind::Day as i32, 0),
+            Some(PartitionTransform::Hour) => (gen::PartitionTransformKind::Hour as i32, 0),
+            Some(PartitionTransform::Bucket(n)) => (gen::PartitionTransformKind::Bucket as i32, n),
+            Some(PartitionTransform::Truncate(w)) => {
+                (gen::PartitionTransformKind::Truncate as i32, w)
+            }
+        };
+        Ok(gen::CatalogPartitionFieldNode {
+            column: field.column.clone(),
+            transform_kind,
+            transform_value,
+        })
     }
 
     fn try_decode_stream_udf(&self, udf: ExtendedStreamUdf) -> Result<Arc<dyn StreamUDF>> {

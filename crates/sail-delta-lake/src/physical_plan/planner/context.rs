@@ -30,6 +30,7 @@ use crate::table::{open_table_with_object_store_and_table_config, DeltaTable};
 pub struct DeltaTableConfig {
     pub table_url: Url,
     pub options: TableDeltaOptions,
+    pub metadata_configuration: HashMap<String, String>,
     pub partition_columns: Vec<String>,
     pub table_schema_for_cond: Option<SchemaRef>,
     pub table_exists: bool,
@@ -39,6 +40,7 @@ impl DeltaTableConfig {
     pub fn new(
         table_url: Url,
         options: TableDeltaOptions,
+        metadata_configuration: HashMap<String, String>,
         partition_columns: Vec<String>,
         table_schema_for_cond: Option<SchemaRef>,
         table_exists: bool,
@@ -46,6 +48,7 @@ impl DeltaTableConfig {
         Self {
             table_url,
             options,
+            metadata_configuration,
             partition_columns,
             table_schema_for_cond,
             table_exists,
@@ -89,6 +92,10 @@ impl<'a> PlannerContext<'a> {
 
     pub fn partition_columns(&self) -> &[String] {
         &self.config.partition_columns
+    }
+
+    pub fn metadata_configuration(&self) -> &HashMap<String, String> {
+        &self.config.metadata_configuration
     }
 
     pub fn table_schema_for_cond(&self) -> Option<SchemaRef> {

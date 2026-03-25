@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion_expr::LogicalPlan;
+pub use sail_common_datafusion::catalog::{CatalogPartitionField, PartitionTransform};
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
 };
@@ -20,27 +21,6 @@ pub struct CreateDatabaseOptions {
 pub struct DropDatabaseOptions {
     pub if_exists: bool,
     pub cascade: bool,
-}
-
-// TODO: Upstream changes in sail-plan are needed to expose partition transforms to users
-// via SQL or DataFrame APIs.
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Default, Serialize, Deserialize)]
-pub enum PartitionTransform {
-    #[default]
-    Identity,
-    Year,
-    Month,
-    Day,
-    Hour,
-    Bucket(u32),
-    Truncate(u32),
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
-pub struct CatalogPartitionField {
-    pub column: String,
-    pub transform: Option<PartitionTransform>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]

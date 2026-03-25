@@ -19,12 +19,12 @@ pub async fn create_file_write_physical_plan(
     options: FileWriteOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let FileWriteOptions {
-        path,
         format,
         mode,
         partition_by,
         sort_by,
         bucket_by,
+        table_properties,
         options,
     } = options;
     let mode = match mode {
@@ -44,11 +44,11 @@ pub async fn create_file_write_physical_plan(
     let sort_order = create_sort_order(ctx, sort_by, logical_input.schema())?;
     let info = SinkInfo {
         input: physical_input,
-        path,
         mode,
         partition_by,
         bucket_by,
         sort_order,
+        table_properties: table_properties.into_iter().collect(),
         // TODO: detect duplicated keys in each set of options
         options: options
             .into_iter()

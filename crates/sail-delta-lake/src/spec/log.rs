@@ -45,6 +45,10 @@ pub fn commit_path(version: i64) -> Path {
     Path::from_iter([DELTA_LOG_DIR, &format!("{version:020}.json")])
 }
 
+pub fn checksum_path(version: i64) -> Path {
+    Path::from_iter([DELTA_LOG_DIR, &format!("{version:020}.crc")])
+}
+
 pub fn temp_commit_path(token: &str) -> Path {
     Path::from_iter([DELTA_LOG_DIR, &format!("_commit_{token}.json.tmp")])
 }
@@ -66,6 +70,13 @@ pub fn parse_version_prefix(filename: &str) -> Option<i64> {
 
 pub fn parse_commit_version(filename: &str) -> Option<i64> {
     if filename.len() != 25 || !filename.ends_with(".json") {
+        return None;
+    }
+    parse_version_prefix(filename)
+}
+
+pub fn parse_checksum_version(filename: &str) -> Option<i64> {
+    if filename.len() != 24 || !filename.ends_with(".crc") {
         return None;
     }
     parse_version_prefix(filename)

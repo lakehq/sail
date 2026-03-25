@@ -14,6 +14,7 @@ use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, Result};
 use datafusion_expr::expr::Sort;
 use datafusion_expr::TableSource;
 
+use crate::catalog::CatalogPartitionField;
 use crate::extension::SessionExtension;
 use crate::logical_expr::ExprWithSource;
 
@@ -67,14 +68,43 @@ pub struct SourceInfo {
 #[derive(Debug, Clone)]
 pub struct SinkInfo {
     pub input: Arc<dyn ExecutionPlan>,
-    pub path: String,
     pub mode: PhysicalSinkMode,
-    pub partition_by: Vec<String>,
+    pub partition_by: Vec<CatalogPartitionField>,
     pub bucket_by: Option<BucketBy>,
     pub sort_order: Option<LexRequirement>,
+    pub table_properties: HashMap<String, String>,
     /// The sets of options for the data sink.
     /// A later set of options can override earlier ones.
+    /// The path for the sink is stored under the `"path"` key in options.
     pub options: Vec<HashMap<String, String>>,
+}
+
+impl SinkInfo {
+    /// Returns the path from options, or an empty string if not set.
+    /// Checks the `"path"` key first, then `"location"`.
+    /// Key comparison is case-insensitive.
+    pub fn path(&self) -> String {
+        find_option(&self.options, "path")
+            .or_else(|| find_option(&self.options, "location"))
+            .unwrap_or_default()
+    }
+}
+
+/// Searches option sets in reverse order for a case-insensitive key match.
+/// Returns the value from the last option set that contains the key, or `None`.
+pub fn find_option(options: &[HashMap<String, String>], key: &str) -> Option<String> {
+    for set in options.iter().rev() {
+        if let Some(value) = set.iter().find_map(|(k, v)| {
+            if k.eq_ignore_ascii_case(key) {
+                Some(v.clone())
+            } else {
+                None
+            }
+        }) {
+            return Some(value);
+        }
+    }
+    None
 }
 
 /// Information required to create a data deleter.
