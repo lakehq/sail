@@ -131,23 +131,8 @@ class TestDeltaAdvancedFeatures:
         os.utime(log_dir / "00000000000000000001.json", (1, 1))
 
         ts_v0_iso = datetime.fromtimestamp(ts_v0 / 1000, tz=timezone.utc).isoformat()
-        df = (
-            spark.read.format("delta")
-            .option("timestampAsOf", ts_v0_iso)
-            .load(delta_table_path)
-            .sort("id")
-        )
+        df = spark.read.format("delta").option("timestampAsOf", ts_v0_iso).load(delta_table_path).sort("id")
         assert df.collect() == [Row(id=1, value="v1")]
-
-        sql_df = spark.sql(
-            f"""
-            SELECT *
-            FROM {table_name}
-            TIMESTAMP AS OF '{ts_v0_iso}'
-            ORDER BY id
-            """
-        )
-        assert sql_df.collect() == [Row(id=1, value="v1")]
 
     @pytest.mark.skipif(is_jvm_spark(), reason="Sail only - Delta Lake in-commit timestamps")
     def test_delta_feature_log_cleanup_uses_in_commit_timestamp_not_json_mtime(self, spark, tmp_path):

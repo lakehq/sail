@@ -80,3 +80,46 @@ Feature: Delta Lake SQL time travel
         SELECT * FROM delta_sql_time_travel_test TIMESTAMP AS OF rand()
         """
       Then query error Invalid time travel spec
+
+  @sail-only
+  Rule: SQL time travel honors Delta in-commit timestamps
+
+    Background:
+      Given variable location for temporary directory delta_sql_time_travel_ict
+      Given variable delta_log for delta log of location
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_sql_time_travel_ict_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_sql_time_travel_ict_test (
+          id INT,
+          value STRING
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        TBLPROPERTIES (
+          'delta.enableInCommitTimestamps' = 'true'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO delta_sql_time_travel_ict_test VALUES (1, 'v0')
+        """
+      Given statement
+        """
+        INSERT INTO delta_sql_time_travel_ict_test VALUES (2, 'v1')
+        """
+      Given delta log commit and checksum timestamps for versions 0, 1 in delta_log are 100, 200 milliseconds since epoch
+
+    Scenario: SQL timestamp time travel uses in-commit timestamps instead of JSON mtimes
+      When query
+        """
+        SELECT * FROM delta_sql_time_travel_ict_test
+        TIMESTAMP AS OF '1970-01-01T00:00:00.150Z'
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | value |
+        | 1  | v0    |
