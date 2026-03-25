@@ -1088,7 +1088,8 @@ mod tests {
     #[test]
     #[expect(clippy::unwrap_used)]
     fn version_checksum_skips_explicitly_known_but_unsupported_features() {
-        let protocol = Protocol::new(1, 7, None, Some(vec![TableFeature::InCommitTimestamp]));
+        // TODO: support VacuumProtocolCheck
+        let protocol = Protocol::new(1, 7, None, Some(vec![TableFeature::VacuumProtocolCheck]));
         let snapshot = test_snapshot(protocol, test_metadata([]), Vec::new());
 
         assert!(snapshot
