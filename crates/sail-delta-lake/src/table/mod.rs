@@ -393,8 +393,6 @@ async fn find_version_for_timestamp(
             (0, latest_version)
         };
 
-    let mut min_version = 0;
-    let mut max_version = latest_version;
     let target_ts = datetime.timestamp_millis();
     let mut target_version = -1;
 
