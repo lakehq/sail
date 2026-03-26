@@ -10,14 +10,13 @@ use sail_sql_parser::ast::query::{IdentList, WhereClause};
 use sail_sql_parser::ast::statement::{
     AlterTableOperation, AlterViewOperation, AnalyzeTableModifier, AsQueryClause, Assignment,
     AssignmentList, ColumnAlteration, ColumnAlterationList, ColumnAlterationOption,
-    ColumnDefinition, ColumnDefinitionList, ColumnDefinitionOption, ColumnPosition,
-    ColumnTypeDefinition, CommentValue, CreateDatabaseClause, CreateTableClause, CreateViewClause,
-    DeleteTableAlias, DescribeItem, ExplainFormat, FileFormat, InsertDirectoryDestination,
-    MergeMatchClause, MergeMatchedAction, MergeNotMatchedBySourceAction,
-    MergeNotMatchedByTargetAction, MergeSource, PartitionClause, PartitionColumn,
-    PartitionColumnList, PartitionValue, PartitionValueList, PropertyKey, PropertyKeyValue,
-    PropertyList, PropertyValue, RowFormat, RowFormatDelimitedClause, SetClause, SortColumn,
-    SortColumnList, Statement, UpdateTableAlias, ViewColumn,
+    ColumnDefinition, ColumnDefinitionList, ColumnDefinitionOption, ColumnPosition, CommentValue,
+    CreateDatabaseClause, CreateTableClause, CreateViewClause, DeleteTableAlias, DescribeItem,
+    ExplainFormat, FileFormat, InsertDirectoryDestination, MergeMatchClause, MergeMatchedAction,
+    MergeNotMatchedBySourceAction, MergeNotMatchedByTargetAction, MergeSource, PartitionByItem,
+    PartitionByList, PartitionClause, PartitionValue, PartitionValueList, PropertyKey,
+    PropertyKeyValue, PropertyList, PropertyValue, RowFormat, RowFormatDelimitedClause, SetClause,
+    SortColumn, SortColumnList, Statement, UpdateTableAlias, ViewColumn,
 };
 use sail_sql_parser::tree::TreeText;
 
@@ -477,7 +476,10 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                     options,
                 } => {
                     let options = options
-                        .map(|(_, x)| from_ast_property_list(x))
+                        .map(|o| {
+                            let (_, x) = *o;
+                            from_ast_property_list(x)
+                        })
                         .transpose()?
                         .unwrap_or_default();
                     (
@@ -496,10 +498,16 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 } => {
                     let path = from_ast_string(path)?;
                     let file_format = stored_as
-                        .map(|(_, _, x)| from_ast_file_format(x))
+                        .map(|s| {
+                            let (_, _, x) = *s;
+                            from_ast_file_format(x)
+                        })
                         .transpose()?;
                     let row_format = row_format
-                        .map(|(_, _, x)| from_ast_row_format(x))
+                        .map(|r| {
+                            let (_, _, x) = *r;
+                            from_ast_row_format(x)
+                        })
                         .transpose()?;
                     (Some(path), file_format, row_format, vec![])
                 }
@@ -583,10 +591,12 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             into: _,
             target,
             alias: target_alias,
-            using: (_, source),
-            on: (_, on_expr),
+            using,
+            on,
             r#match,
         } => {
+            let (_, source) = *using;
+            let (_, on_expr) = *on;
             if target_alias
                 .as_ref()
                 .is_some_and(|alias| alias.columns.is_some())
@@ -1143,10 +1153,14 @@ fn from_ast_table_definition(
         .into_iter()
         .flatten()
         .map(|x| match x {
-            PartitionColumn::Typed(ColumnTypeDefinition { name, .. }) => name.value.into(),
-            PartitionColumn::Name(x) => x.value.into(),
+            PartitionByItem::ColumnDefinition(column) => Ok(spec::Expr::UnresolvedAttribute {
+                name: spec::ObjectName::bare(column.name.value),
+                plan_id: None,
+                is_metadata_column: false,
+            }),
+            PartitionByItem::Expression(expr) => from_ast_expression(expr),
         })
-        .collect();
+        .collect::<SqlResult<Vec<_>>>()?;
     let (sort_by, bucket_by) = if let Some(bucket_by) = bucket_by {
         let CreateTableBucketBy {
             columns,
@@ -1451,7 +1465,7 @@ struct CreateTableBucketBy {
 
 #[derive(Default)]
 struct CreateTableClauses {
-    partition_by: Option<Vec<PartitionColumn>>,
+    partition_by: Option<Vec<PartitionByItem>>,
     bucket_by: Option<CreateTableBucketBy>,
     cluster_by: Option<Vec<ObjectName>>,
     row_format: Option<RowFormat>,
@@ -1472,7 +1486,7 @@ impl TryFrom<Vec<CreateTableClause>> for CreateTableClauses {
                 CreateTableClause::PartitionedBy(
                     _,
                     _,
-                    PartitionColumnList {
+                    PartitionByList {
                         left: _,
                         columns,
                         right: _,
@@ -1831,8 +1845,12 @@ fn from_ast_alter_table_operation(
         }
         AlterTableOperation::AddPartitions { .. } => {}
         AlterTableOperation::DropPartition { .. } => {}
-        AlterTableOperation::SetTableProperties { .. } => {}
-        AlterTableOperation::UnsetTableProperties { .. } => {}
+        AlterTableOperation::SetTableProperties { .. } => {
+            // TODO: reuse Delta metadata property canonicalization and apply via metadata-only commit.
+        }
+        AlterTableOperation::UnsetTableProperties { .. } => {
+            // TODO: reuse Delta metadata property canonicalization and apply via metadata-only commit.
+        }
         AlterTableOperation::SetFileFormat { .. } => {}
         AlterTableOperation::SetLocation { .. } => {}
         AlterTableOperation::RecoverPartitions { .. } => {}

@@ -4,9 +4,8 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::datasource::{provider_as_source, source_as_provider, TableProvider};
 use datafusion_common::{DFSchema, ScalarValue, TableReference};
-use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::{Expr, LogicalPlan, TableScan, TableSource, UNNAMED_TABLE};
-use rand::{rng, Rng};
+use rand::{rng, RngExt};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::TableKind;
@@ -36,12 +35,39 @@ impl PlanResolver<'_> {
             sample,
             options,
         } = table;
-        if temporal.is_some() {
-            return Err(PlanError::todo("read table AS OF clause"));
+
+        // Check if the name is in the form `<format>.<path>` where `<format>` is a
+        // registered table format. In that case, treat it as a direct data source read.
+        if let [format, path] = name.parts() {
+            let format = format.as_ref().to_ascii_lowercase();
+            let registry = self.ctx.extension::<TableFormatRegistry>()?;
+            if registry.get(&format).is_ok() {
+                let temporal_options = self
+                    .resolve_time_travel_options(&format, temporal, state)
+                    .await?;
+                let source = spec::ReadDataSource {
+                    format: Some(format),
+                    schema: None,
+                    options: options.into_iter().chain(temporal_options).collect(),
+                    paths: vec![path.as_ref().to_string()],
+                    predicates: vec![],
+                };
+                let plan = self.resolve_query_read_data_source(source, state).await?;
+                return if let Some(table_sample) = sample {
+                    self.apply_table_sample(plan, table_sample, state).await
+                } else {
+                    Ok(plan)
+                };
+            }
         }
 
         let table_reference = self.resolve_table_reference(&name)?;
         if let Some(cte) = state.get_cte(&table_reference) {
+            if temporal.is_some() {
+                return Err(PlanError::unsupported(
+                    "SQL time travel is not supported for CTEs",
+                ));
+            }
             let plan = cte.clone();
             return if let Some(table_sample) = sample {
                 self.apply_table_sample(plan, table_sample, state).await
@@ -71,17 +97,21 @@ impl PlanResolver<'_> {
             } => {
                 let schema = Schema::new(columns.iter().map(|x| x.field()).collect::<Vec<_>>());
                 let constraints = self.resolve_catalog_table_constraints(constraints, &schema)?;
+                let temporal_options = self
+                    .resolve_time_travel_options(&format, temporal, state)
+                    .await?;
                 let info = SourceInfo {
                     paths: location.map(|x| vec![x]).unwrap_or_default(),
                     schema: Some(schema),
                     constraints,
-                    partition_by,
+                    partition_by: partition_by.into_iter().map(|field| field.column).collect(),
                     bucket_by: bucket_by.map(|x| x.into()),
                     sort_order: sort_by.into_iter().map(|x| x.into()).collect(),
                     // TODO: detect duplicated keys in each set of options
                     options: vec![
                         table_options.into_iter().collect(),
                         options.into_iter().collect(),
+                        temporal_options.into_iter().collect(),
                     ],
                 };
                 let registry = self.ctx.extension::<TableFormatRegistry>()?;
@@ -98,8 +128,20 @@ impl PlanResolver<'_> {
                     state,
                 )?
             }
-            TableKind::View { .. } => return Err(PlanError::todo("read view")),
+            TableKind::View { .. } => {
+                if temporal.is_some() {
+                    return Err(PlanError::unsupported(
+                        "SQL time travel is not supported for views",
+                    ));
+                }
+                return Err(PlanError::todo("read view"));
+            }
             TableKind::TemporaryView { plan, .. } | TableKind::GlobalTemporaryView { plan, .. } => {
+                if temporal.is_some() {
+                    return Err(PlanError::unsupported(
+                        "SQL time travel is not supported for temporary views",
+                    ));
+                }
                 let names = state.register_fields(plan.schema().inner().fields());
                 rename_logical_plan(plan.as_ref().clone(), &names)?
             }
@@ -110,6 +152,34 @@ impl PlanResolver<'_> {
         } else {
             Ok(plan)
         }
+    }
+
+    pub(super) async fn resolve_query_read_dynamic_table(
+        &self,
+        table: spec::ReadDynamicTable,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let spec::ReadDynamicTable {
+            name,
+            sample,
+            options,
+        } = table;
+        let schema = Arc::new(DFSchema::empty());
+        let resolved = self.resolve_expression(name, &schema, state).await?;
+        let name_str = self.evaluate_identifier_expr(resolved, state)?;
+        let name = sail_sql_analyzer::expression::from_ast_object_name(
+            sail_sql_analyzer::parser::parse_object_name(&name_str)?,
+        )?;
+        self.resolve_query_read_named_table(
+            spec::ReadNamedTable {
+                name,
+                temporal: None,
+                sample,
+                options,
+            },
+            state,
+        )
+        .await
     }
 
     /// Apply TABLESAMPLE clause to a LogicalPlan
@@ -223,7 +293,8 @@ impl PlanResolver<'_> {
             });
             self.resolve_query_project(None, vec![expr], state).await
         } else {
-            let udf = self.ctx.udf(&canonical_function_name).ok();
+            let catalog_manager = self.ctx.extension::<CatalogManager>()?;
+            let udf = catalog_manager.get_function(&canonical_function_name)?;
             if let Some(f) = udf
                 .as_ref()
                 .and_then(|x| x.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>())

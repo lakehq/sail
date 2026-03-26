@@ -410,6 +410,9 @@ impl PlanFormatter for SparkPlanFormatter {
                 }
                 None => Ok("NULL".to_string()),
             },
+            ScalarValue::RunEndEncoded(_, _, _) => {
+                not_impl_err!("RunEndEncoded scalar value is not supported in SQL")
+            }
         }
     }
 
@@ -606,6 +609,7 @@ impl PlanFormatter for SparkPlanFormatter {
             //   SELECT count(`*`) FROM VALUES 1 AS t(`*`)
             //   ```
             "count" => {
+                let name = name.to_lowercase();
                 let arguments = arguments.join(", ");
                 if is_distinct {
                     Ok(format!("{name}(DISTINCT {arguments})"))

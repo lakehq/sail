@@ -3,7 +3,8 @@ import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pandas.testing import assert_frame_equal
 
-from pysail.tests.spark.utils import escape_sql_string_literal, is_jvm_spark
+from pysail.testing.spark.utils.common import is_jvm_spark
+from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 
 @pytest.fixture(autouse=True)
@@ -16,6 +17,7 @@ def tables(spark, tmp_path):
     spark.sql("DROP TABLE IF EXISTS t3")
     spark.sql("DROP TABLE IF EXISTS t4")
     spark.sql("DROP TABLE IF EXISTS t5")
+    spark.sql("DROP TABLE IF EXISTS t6")
 
 
 def test_insert_into_with_values(spark):
@@ -133,6 +135,25 @@ def test_save_as_table(spark, tmp_path):
         df.write.saveAsTable("t2", mode="overwrite", path=location)
         actual = spark.sql("SELECT * FROM t2").toPandas()
         assert_frame_equal(actual, expected(1))
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Spark does not handle v1 and v2 tables properly")
+def test_save_as_table_append_creates_table(spark):
+    # `saveAsTable` with `mode="append"` should create the table if it does not exist.
+    df = spark.createDataFrame([(1, "Alice"), (2, "Bob")], schema="id LONG, name STRING")
+    df.write.saveAsTable("t6", mode="append")
+
+    actual = spark.sql("SELECT * FROM t6 ORDER BY id").toPandas()
+    expected = pd.DataFrame({"id": [1, 2], "name": ["Alice", "Bob"]})
+    assert_frame_equal(actual, expected)
+
+    # Appending again should add more rows.
+    df2 = spark.createDataFrame([(3, "Charlie")], schema="id LONG, name STRING")
+    df2.write.saveAsTable("t6", mode="append")
+
+    actual = spark.sql("SELECT * FROM t6 ORDER BY id").toPandas()
+    expected = pd.DataFrame({"id": [1, 2, 3], "name": ["Alice", "Bob", "Charlie"]})
+    assert_frame_equal(actual, expected)
 
 
 @pytest.mark.skipif(is_jvm_spark(), reason="Spark does not handle v1 and v2 tables properly")

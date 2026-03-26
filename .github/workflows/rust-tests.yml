@@ -40,7 +40,7 @@ jobs:
           mkdir -p target/llvm-profiles/rust-slow
 
       - name: Run Cargo Test
-        run: cargo nextest run
+        run: cargo nextest run --no-fail-fast
 
       # Generate coverage report after unit tests (runs in PRs and pushes)
       - name: Generate Rust unit coverage report

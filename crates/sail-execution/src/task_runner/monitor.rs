@@ -36,6 +36,7 @@ impl<T: Actor> TaskMonitor<T>
 where
     T::Message: TaskRunnerMessage,
 {
+    /// Runs the task monitor, reporting running and terminal status updates.
     pub async fn run(self) {
         let Self {
             handle,
@@ -52,10 +53,12 @@ where
         let _ = handle.send(event).await;
     }
 
+    /// Builds a "task is running" status message.
     fn running(key: TaskKey) -> T::Message {
         T::Message::report_task_status(key, TaskStatus::Running, None, None)
     }
 
+    /// Waits for a cancellation signal and builds a canceled status message.
     async fn cancel(key: TaskKey, signal: oneshot::Receiver<()>) -> T::Message {
         let _ = signal.await;
         T::Message::report_task_status(
@@ -66,6 +69,7 @@ where
         )
     }
 
+    /// Drains the output stream and builds a succeeded or failed status message.
     async fn execute(key: TaskKey, mut stream: SendableRecordBatchStream) -> T::Message {
         let event = loop {
             let Some(batch) = stream.next().await else {

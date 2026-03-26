@@ -197,7 +197,7 @@ async fn test_create_schema() {
         .iter()
         .any(|(k, v)| k == "created_at" && !v.is_empty()));
 
-    assert_eq!(catalog, DEFAULT_CATALOG.to_string());
+    assert_eq!(catalog, "sail".to_string());
     assert_eq!(database, Vec::<String>::from(full_namespace.clone()));
     assert_eq!(comment, Some("test comment".to_string()));
     assert_eq!(location, Some("s3://bucket/path".to_string()));
@@ -667,7 +667,7 @@ async fn test_create_table() {
     assert_eq!(properties.get("table_type"), Some(&"EXTERNAL".to_string()));
 
     assert_eq!(table.name, "t1".to_string());
-    assert_eq!(table.catalog, Some("sail_test_catalog".to_string()));
+    assert_eq!(table.catalog, Some("sail".to_string()));
     assert_eq!(table.database, Vec::<String>::from(full_ns.clone()));
     assert_eq!(comment, Some("peow".to_string()));
     assert_eq!(constraints, vec![]);
@@ -676,7 +676,7 @@ async fn test_create_table() {
         Some("s3://deltadata/custom/path/meow".to_string())
     );
     assert_eq!(format, "delta".to_string());
-    assert_eq!(partition_by, Vec::<String>::new());
+    assert_eq!(partition_by, Vec::<CatalogPartitionField>::new());
     assert_eq!(sort_by, vec![]);
     assert_eq!(bucket_by, None);
     assert_eq!(options, Vec::<(String, String)>::new());
@@ -869,7 +869,7 @@ async fn test_create_table() {
     };
 
     assert_eq!(table.name, "t2".to_string());
-    assert_eq!(table.catalog, Some("sail_test_catalog".to_string()));
+    assert_eq!(table.catalog, Some("sail".to_string()));
     assert_eq!(table.database, Vec::<String>::from(full_ns.clone()));
     assert_eq!(comment, Some("test table".to_string()));
     assert!(constraints.is_empty());
@@ -878,7 +878,13 @@ async fn test_create_table() {
         Some("s3://deltadata/custom/path/meow2".to_string())
     );
     assert_eq!(format, "delta".to_string());
-    assert_eq!(partition_by, vec!["baz".to_string()]);
+    assert_eq!(
+        partition_by,
+        vec![CatalogPartitionField {
+            column: "baz".to_string(),
+            transform: None,
+        }]
+    );
     assert!(sort_by.is_empty());
     assert_eq!(bucket_by, None);
     assert_eq!(options, vec![("key1".to_string(), "value1".to_string())]);
@@ -1042,7 +1048,7 @@ async fn test_get_table() {
     assert_eq!(properties.get("team"), Some(&"data-eng".to_string()));
 
     assert_eq!(table_ns.name, "t2".to_string());
-    assert_eq!(table_ns.catalog, Some("sail_test_catalog".to_string()));
+    assert_eq!(table_ns.catalog, Some("sail".to_string()));
     assert_eq!(table_ns.database, Vec::<String>::from(full_ns.clone()));
     assert_eq!(comment, Some("test table".to_string()));
     assert!(constraints.is_empty());
@@ -1051,7 +1057,13 @@ async fn test_get_table() {
         Some("s3://deltadata/custom/path/meow2".to_string())
     );
     assert_eq!(format, "delta".to_string());
-    assert_eq!(partition_by, vec!["baz".to_string()]);
+    assert_eq!(
+        partition_by,
+        vec![CatalogPartitionField {
+            column: "baz".to_string(),
+            transform: None,
+        }]
+    );
     assert!(sort_by.is_empty());
     assert_eq!(bucket_by, None);
     assert_eq!(options, vec![("key1".to_string(), "value1".to_string())]);
@@ -1191,7 +1203,7 @@ async fn test_list_tables() {
             let TableKind::Table { format, .. } = &table.kind else {
                 panic!("Expected TableKind::Table");
             };
-            assert_eq!(table.catalog, Some("sail_test_catalog".to_string()));
+            assert_eq!(table.catalog, Some("sail".to_string()));
             assert_eq!(table.database, Vec::<String>::from(full_ns.clone()));
             assert_eq!(format, "delta");
         }

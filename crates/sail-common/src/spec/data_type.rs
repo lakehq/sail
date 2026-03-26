@@ -149,10 +149,10 @@ pub enum DataType {
     Duration {
         time_unit: TimeUnit,
     },
-    /// A "calendar" interval which models types that don't necessarily
-    /// have a precise duration without the context of a base timestamp (e.g.
-    /// days can differ in length during daylight savings time transitions).
-    /// Corresponds to [`arrow_schema::DataType::Interval`].
+    /// Represents Spark's interval types.
+    /// `YearMonth` and `MonthDayNano` are resolved to [`arrow_schema::DataType::Interval`].
+    /// `DayTime` is resolved to [`arrow_schema::DataType::Duration`] with microsecond
+    /// precision to match Spark's `DayTimeIntervalType`.
     Interval {
         interval_unit: IntervalUnit,
         start_field: Option<IntervalFieldType>,
@@ -474,8 +474,9 @@ impl Display for UnionMode {
 pub enum IntervalUnit {
     /// Indicates the number of elapsed whole months, stored as 4-byte integers.
     YearMonth = 0,
-    /// Indicates the number of elapsed days and milliseconds,
-    /// stored as 2 contiguous 32-bit integers (days, milliseconds) (8-bytes in total).
+    /// Represents Spark's `DayTimeIntervalType` with microsecond precision.
+    /// Resolved to [`arrow_schema::DataType::Duration`] instead of Arrow's
+    /// `IntervalUnit::DayTime` (which only has millisecond precision).
     DayTime = 1,
     /// A triple of the number of elapsed months, days, and nanoseconds.
     /// The values are stored contiguously in 16 byte blocks. Months and

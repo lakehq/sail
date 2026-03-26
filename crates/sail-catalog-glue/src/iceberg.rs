@@ -37,7 +37,7 @@ pub(crate) async fn create_iceberg_table(
     table: &str,
     options: CreateTableOptions,
 ) -> CatalogResult<TableStatus> {
-    let db_name = database.to_string();
+    let database_name = GlueCatalogProvider::database_name(database)?;
 
     let ValidatedIcebergOptions {
         columns,
@@ -87,7 +87,7 @@ pub(crate) async fn create_iceberg_table(
 
     let result = client
         .create_table()
-        .database_name(&db_name)
+        .database_name(&database_name)
         .name(table)
         .open_table_format_input(open_format_input)
         .send()

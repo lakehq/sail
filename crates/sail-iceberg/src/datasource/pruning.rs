@@ -188,7 +188,8 @@ impl PruningStatistics for IcebergPruningStats {
                 }
                 result.push(any_match);
             } else {
-                result.push(false);
+                // If stats are missing, we cannot safely prune the file.
+                result.push(true);
             }
         }
         Some(BooleanArray::from(result))

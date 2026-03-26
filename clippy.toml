@@ -2,12 +2,6 @@
 # since we are developing an application rather than a library.
 avoid-breaking-exported-api = false
 too-many-arguments-threshold = 8
-# FIXME: On Rust 1.87, tonic and DataFusion trigger:
-#    - `result_large_err`: https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
-#    - `large_enum_variant`: https://rust-lang.github.io/rust-clippy/master/index.html#large_enum_variant
-#  https://github.com/hyperium/tonic/issues/2253
-#  https://github.com/apache/datafusion/issues/16061
-large-error-threshold = 264
 disallowed-types = [
     { path = "datafusion_catalog::table::TableProviderFactory" },
     { path = "datafusion_datasource::file_format::FileFormatFactory" },

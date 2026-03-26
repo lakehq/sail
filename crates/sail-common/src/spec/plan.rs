@@ -601,12 +601,11 @@ pub enum MergeNotMatchedByTargetAction {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
-#[expect(clippy::large_enum_variant)]
 pub enum ReadType {
-    // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
-    NamedTable(ReadNamedTable),
-    Udtf(ReadUdtf),
-    DataSource(ReadDataSource),
+    NamedTable(Box<ReadNamedTable>),
+    Udtf(Box<ReadUdtf>),
+    DataSource(Box<ReadDataSource>),
+    DynamicTable(Box<ReadDynamicTable>),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -614,6 +613,14 @@ pub enum ReadType {
 pub struct ReadNamedTable {
     pub name: ObjectName,
     pub temporal: Option<TableTemporal>,
+    pub sample: Option<TableSample>,
+    pub options: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadDynamicTable {
+    pub name: Expr,
     pub sample: Option<TableSample>,
     pub options: Vec<(String, String)>,
 }
@@ -857,7 +864,7 @@ pub struct TableDefinition {
     pub location: Option<String>,
     pub file_format: Option<TableFileFormat>,
     pub row_format: Option<TableRowFormat>,
-    pub partition_by: Vec<Identifier>,
+    pub partition_by: Vec<Expr>,
     pub sort_by: Vec<SortOrder>,
     pub bucket_by: Option<SaveBucketBy>,
     pub cluster_by: Vec<ObjectName>,
@@ -933,7 +940,7 @@ pub struct Write {
     pub save_type: SaveType,
     pub mode: Option<SaveMode>,
     pub sort_columns: Vec<SortOrder>,
-    pub partitioning_columns: Vec<Identifier>,
+    pub partitioning_columns: Vec<Expr>,
     pub clustering_columns: Vec<Identifier>,
     pub bucket_by: Option<SaveBucketBy>,
     pub options: Vec<(String, String)>,

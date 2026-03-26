@@ -21,13 +21,11 @@
 use std::collections::HashSet;
 use std::sync::LazyLock;
 
-use delta_kernel::table_features::TableFeature;
-
-use super::{TableReference, TransactionError};
-use crate::kernel::models::{contains_timestampntz, Action, Protocol, Schema};
-use crate::kernel::snapshot::EagerSnapshot;
-use crate::kernel::{DeltaOperation, TablePropertiesExt};
-use crate::table::DeltaTableState;
+use crate::kernel::DeltaOperation;
+use crate::spec::{
+    contains_timestampntz, Action, Protocol, Schema, TableFeature, TransactionError,
+};
+use crate::table::DeltaSnapshot;
 
 static READER_V2: LazyLock<HashSet<TableFeature>> =
     LazyLock::new(|| HashSet::from_iter([TableFeature::ColumnMapping]));
@@ -98,7 +96,7 @@ impl ProtocolChecker {
 
     /// Check append-only at the high level (operation level)
     #[expect(unused)]
-    pub fn check_append_only(&self, snapshot: &EagerSnapshot) -> Result<(), TransactionError> {
+    pub fn check_append_only(&self, snapshot: &DeltaSnapshot) -> Result<(), TransactionError> {
         if snapshot.table_properties().append_only() {
             return Err(TransactionError::DeltaTableAppendOnly);
         }
@@ -109,7 +107,7 @@ impl ProtocolChecker {
     #[expect(unused)]
     pub fn check_can_write_timestamp_ntz(
         &self,
-        snapshot: &DeltaTableState,
+        snapshot: &DeltaSnapshot,
         schema: &Schema,
     ) -> Result<(), TransactionError> {
         let contains_timestampntz = contains_timestampntz(schema.fields());
@@ -136,7 +134,7 @@ impl ProtocolChecker {
     }
 
     /// Check if delta-rs can read form the given delta table.
-    pub fn can_read_from(&self, snapshot: &dyn TableReference) -> Result<(), TransactionError> {
+    pub fn can_read_from(&self, snapshot: &DeltaSnapshot) -> Result<(), TransactionError> {
         self.can_read_from_protocol(snapshot.protocol())
     }
 
@@ -144,8 +142,14 @@ impl ProtocolChecker {
         let required_features: Option<HashSet<TableFeature>> = match protocol.min_reader_version() {
             0 | 1 => None,
             2 => Some(READER_V2.clone()),
-            // _ => protocol.reader_features_set(),
-            _ => Some(HashSet::new()),
+            _ => Some(
+                protocol
+                    .reader_features()
+                    .unwrap_or_default()
+                    .iter()
+                    .cloned()
+                    .collect(),
+            ),
         };
         if let Some(features) = required_features {
             let mut diff = features.difference(&self.reader_features).peekable();
@@ -159,7 +163,7 @@ impl ProtocolChecker {
     }
 
     /// Check if delta-rs can write to the given delta table.
-    pub fn can_write_to(&self, snapshot: &dyn TableReference) -> Result<(), TransactionError> {
+    pub fn can_write_to(&self, snapshot: &DeltaSnapshot) -> Result<(), TransactionError> {
         // NOTE: writers must always support all required reader features
         self.can_read_from(snapshot)?;
         let min_writer_version = snapshot.protocol().min_writer_version();
@@ -171,8 +175,15 @@ impl ProtocolChecker {
             4 => Some(WRITER_V4.clone()),
             5 => Some(WRITER_V5.clone()),
             6 => Some(WRITER_V6.clone()),
-            //  _ => snapshot.protocol().writer_features_set(),
-            _ => Some(HashSet::new()),
+            _ => Some(
+                snapshot
+                    .protocol()
+                    .writer_features()
+                    .unwrap_or_default()
+                    .iter()
+                    .cloned()
+                    .collect(),
+            ),
         };
 
         if let Some(features) = required_features {
@@ -188,7 +199,7 @@ impl ProtocolChecker {
 
     pub fn can_commit(
         &self,
-        snapshot: &dyn TableReference,
+        snapshot: &DeltaSnapshot,
         actions: &[Action],
         operation: &DeltaOperation,
     ) -> Result<(), TransactionError> {
@@ -198,16 +209,12 @@ impl ProtocolChecker {
         let append_only_enabled = if snapshot.protocol().min_writer_version() < 2 {
             false
         } else if snapshot.protocol().min_writer_version() < 7 {
-            snapshot.config().append_only()
+            snapshot.table_properties().append_only()
         } else {
             snapshot
                 .protocol()
-                .writer_features()
-                .ok_or(TransactionError::TableFeaturesRequired(
-                    TableFeature::AppendOnly,
-                ))?
-                .contains(&TableFeature::AppendOnly)
-                && snapshot.config().append_only()
+                .has_writer_feature(&TableFeature::AppendOnly)
+                && snapshot.table_properties().append_only()
         };
         if append_only_enabled {
             match operation {
@@ -241,6 +248,7 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
 
     let mut writer_features = HashSet::new();
     writer_features.insert(TableFeature::AppendOnly);
+    writer_features.insert(TableFeature::InCommitTimestamp);
     writer_features.insert(TableFeature::TimestampWithoutTimezone);
     {
         writer_features.insert(TableFeature::ChangeDataFeed);

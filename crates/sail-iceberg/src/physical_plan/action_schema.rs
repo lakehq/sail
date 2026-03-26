@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, LazyLock};
 
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{
+    DataType, Field, FieldRef, Schema, SchemaRef, UnionFields, UnionMode,
+};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
 use serde::{Deserialize, Serialize};
@@ -100,6 +102,35 @@ pub struct ActionRow {
     pub action: ExecAction,
 }
 
+fn partition_value_union_type() -> DataType {
+    // serde_arrow 0.14 always creates non-null Union arrays (UnionBuilder::is_nullable = false).
+    // The union variants match the PartitionValue enum definition order.
+    #[expect(
+        clippy::unwrap_used,
+        reason = "partition_value_union_type is a process-global constant."
+    )]
+    let union_fields = UnionFields::try_new(
+        [0i8, 1, 2, 3, 4, 5, 6, 7, 8],
+        [
+            Arc::new(Field::new("Boolean", DataType::Boolean, false)),
+            Arc::new(Field::new("Int", DataType::Int32, false)),
+            Arc::new(Field::new("Long", DataType::Int64, false)),
+            Arc::new(Field::new("Float", DataType::Float32, false)),
+            Arc::new(Field::new("Double", DataType::Float64, false)),
+            Arc::new(Field::new("String", DataType::Utf8, false)),
+            Arc::new(Field::new("Int128", DataType::Utf8, false)),
+            Arc::new(Field::new("UInt128", DataType::Utf8, false)),
+            Arc::new(Field::new(
+                "Binary",
+                DataType::List(Arc::new(Field::new("element", DataType::UInt8, false))),
+                false,
+            )),
+        ],
+    )
+    .unwrap();
+    DataType::Union(union_fields, UnionMode::Dense)
+}
+
 fn map_type_i32_u64() -> DataType {
     // Arrow Map is represented as `Map<entries: Struct<keys: Int32, values: UInt64>>`.
     let entries_struct = DataType::Struct(
@@ -135,6 +166,18 @@ fn iceberg_action_tracing_options(
             opts.overwrite(
                 "action.add.null_value_counts",
                 Field::new("null_value_counts", map_type_i32_u64(), false),
+            )
+        })
+        .and_then(|opts| {
+            // serde_arrow 0.14 always produces non-null Union arrays (UnionBuilder::is_nullable
+            // is hardcoded to false). Override the partition field so that the static schema
+            // matches the actual serialized data, preventing Arrow 58's RecordBatch::try_new
+            // from rejecting the nullability mismatch.
+            let partition_item =
+                Arc::new(Field::new("element", partition_value_union_type(), false));
+            opts.overwrite(
+                "action.add.partition",
+                Field::new("partition", DataType::List(partition_item), false),
             )
         })
         .map_err(|e| format!("failed to build serde_arrow tracing options: {e}"))

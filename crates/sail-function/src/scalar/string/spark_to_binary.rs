@@ -5,7 +5,7 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::encoding::expr_fn::decode;
 use datafusion::functions::encoding::inner::DecodeFunc;
 use datafusion_common::{exec_err, Result, ScalarValue};
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{expr, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, TypeSignature, Volatility};
@@ -119,7 +119,7 @@ impl ScalarUDFImpl for SparkToBinary {
         }
     }
 
-    fn simplify(&self, args: Vec<Expr>, _info: &dyn SimplifyInfo) -> Result<ExprSimplifyResult> {
+    fn simplify(&self, args: Vec<Expr>, _info: &SimplifyContext) -> Result<ExprSimplifyResult> {
         if args.len() != 1 && args.len() != 2 {
             return exec_err!(
                 "Spark `to_binary` function requires 1 or 2 arguments, got {}",

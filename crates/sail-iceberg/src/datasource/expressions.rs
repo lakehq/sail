@@ -14,7 +14,6 @@ use std::sync::Arc;
 
 use datafusion::catalog::Session;
 use datafusion::common::{DFSchema, Result};
-use datafusion::logical_expr::execution_props::ExecutionProps;
 use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
@@ -25,8 +24,7 @@ pub fn simplify_expr(
     df_schema: &DFSchema,
     expr: Expr,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let props = ExecutionProps::new();
-    let simplify_context = SimplifyContext::new(&props).with_schema(df_schema.clone().into());
+    let simplify_context = SimplifyContext::default().with_schema(df_schema.clone().into());
     let simplifier = ExprSimplifier::new(simplify_context).with_max_cycles(10);
     let simplified = simplifier.simplify(expr)?;
     session.create_physical_expr(simplified, df_schema)

@@ -141,14 +141,14 @@ impl TryFrom<RelType> for RelationNode {
                             unparsed_identifier,
                             options,
                         } = x;
-                        spec::ReadType::NamedTable(spec::ReadNamedTable {
+                        spec::ReadType::NamedTable(Box::new(spec::ReadNamedTable {
                             name: from_ast_object_name(parse_object_name(
                                 unparsed_identifier.as_str(),
                             )?)?,
                             temporal: None,
                             sample: None,
                             options: options.into_iter().collect(),
-                        })
+                        }))
                     }
                     ReadType::DataSource(x) => {
                         let DataSource {
@@ -172,13 +172,13 @@ impl TryFrom<RelType> for RelationNode {
                             .into_iter()
                             .map(|x| Ok(from_ast_expression(parse_expression(x.as_str())?)?))
                             .collect::<SparkResult<Vec<_>>>()?;
-                        spec::ReadType::DataSource(spec::ReadDataSource {
+                        spec::ReadType::DataSource(Box::new(spec::ReadDataSource {
                             format,
                             schema,
                             options: options.into_iter().collect(),
                             paths,
                             predicates,
-                        })
+                        }))
                     }
                 };
                 Ok(RelationNode::Query(spec::QueryNode::Read {
@@ -1578,7 +1578,14 @@ impl TryFrom<WriteOperation> for spec::Write {
                 null_ordering: spec::NullOrdering::Unspecified,
             })
             .collect();
-        let partitioning_columns = partitioning_columns.into_iter().map(|x| x.into()).collect();
+        let partitioning_columns = partitioning_columns
+            .into_iter()
+            .map(|name| spec::Expr::UnresolvedAttribute {
+                name: spec::ObjectName::bare(name),
+                plan_id: None,
+                is_metadata_column: false,
+            })
+            .collect();
         let clustering_columns = clustering_columns.into_iter().map(|x| x.into()).collect();
         let bucket_by = match bucket_by {
             Some(x) => {

@@ -1,13 +1,14 @@
 use datafusion_expr::LogicalPlan;
 use sail_catalog::command::CatalogCommand;
-use sail_catalog::provider::{CatalogPartitionField, CreateTableColumnOptions, CreateTableOptions};
+use sail_catalog::manager::CatalogManager;
+use sail_catalog::provider::{CreateTableColumnOptions, CreateTableOptions};
 use sail_common::spec;
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
 };
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_common_datafusion::utils::items::ItemTaker;
-use uuid::Uuid;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
@@ -48,16 +49,10 @@ impl PlanResolver<'_> {
         let location = if let Some(location) = location {
             location
         } else {
-            self.resolve_default_table_location(&table)?
+            self.resolve_default_table_location(&table).await?
         };
         let format = self.resolve_catalog_table_format(file_format)?;
-        let partition_by = partition_by
-            .into_iter()
-            .map(|x| CatalogPartitionField {
-                column: x.into(),
-                transform: None,
-            })
-            .collect();
+        let partition_by = self.resolve_write_partition_by_expressions(partition_by)?;
         let sort_by = self.resolve_catalog_table_sort(sort_by)?;
         let bucket_by = self.resolve_catalog_table_bucket_by(bucket_by)?;
 
@@ -88,7 +83,7 @@ impl PlanResolver<'_> {
         query: spec::QueryPlan,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        use super::super::write::{WriteMode, WritePlanBuilder, WriteTableAction, WriteTarget};
+        use super::super::write::{WriteColumnMatch, WriteMode, WritePlanBuilder, WriteTarget};
         let spec::TableDefinition {
             columns,
             comment,
@@ -120,12 +115,6 @@ impl PlanResolver<'_> {
                 "REPLACE in CREATE TABLE AS SELECT statement",
             ));
         }
-        if !properties.is_empty() {
-            return Err(PlanError::todo(
-                "PROPERTIES in CREATE TABLE AS SELECT statement",
-            ));
-        }
-
         if !sort_by.is_empty() {
             return Err(PlanError::todo(
                 "SORT_BY in CREATE TABLE AS SELECT statement",
@@ -160,63 +149,85 @@ impl PlanResolver<'_> {
         let column_names = PlanResolver::get_field_names(input.schema(), state)?;
         let input = rename_logical_plan(input, &column_names)?;
         let format = self.resolve_catalog_table_format(file_format)?;
-        // Handle location: add to options if specified
         let mut write_options = options;
         if let Some(location) = location {
-            write_options.push(("location".to_string(), location));
+            write_options.push(("path".to_string(), location));
         }
 
-        // Set write mode and action based on if_not_exists
+        // Set write mode based on if_not_exists
         let write_mode = if if_not_exists {
             WriteMode::IgnoreIfExists
         } else {
             WriteMode::ErrorIfExists
         };
-        let action = if if_not_exists {
-            WriteTableAction::CreateIfNotExists
-        } else {
-            WriteTableAction::Create
-        };
-        let partition_by = partition_by
-            .into_iter()
-            .map(|c| CatalogPartitionField {
-                column: c.into(),
-                transform: None,
-            })
-            .collect();
+        let partition_by = self.resolve_write_partition_by_expressions(partition_by)?;
         let builder = WritePlanBuilder::new()
-            .with_target(WriteTarget::NewTable { table, action })
+            .with_target(WriteTarget::Table {
+                table,
+                column_match: WriteColumnMatch::ByName,
+            })
             .with_mode(write_mode)
             .with_format(format)
             .with_partition_by(partition_by)
+            .with_table_properties(properties)
             .with_options(write_options);
 
         self.resolve_write_with_builder(input, builder, state).await
     }
 
-    pub(in super::super) fn resolve_default_table_location(
+    pub(in super::super) async fn resolve_default_table_location(
         &self,
         table: &spec::ObjectName,
     ) -> PlanResult<String> {
-        let name: String = table
-            .parts()
-            .last()
-            .ok_or_else(|| PlanError::invalid("missing table name"))?
-            .clone()
-            .into();
-        let name = name
-            .replace(|c: char| !c.is_alphanumeric() && c != '-', "-")
-            .to_lowercase();
+        let [qualifier @ .., last] = table.parts() else {
+            return Err(PlanError::invalid("missing table name"));
+        };
+        let name: String = last.clone().into();
+        // For characters in the table name that are not alphanumeric, `-`, or `_`,
+        // replace with a fixed-width hex encoding of the Unicode code point:
+        // `u+XXXX` for U+0000..U+FFFF and `U+XXXXXXXX` for U+10000..U+10FFFF.
+        let name: String = name
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' || c == '_' {
+                    c.to_string()
+                } else {
+                    let v = c as u32;
+                    if v <= 0xFFFF {
+                        format!("u+{v:04X}")
+                    } else {
+                        format!("U+{v:08X}")
+                    }
+                }
+            })
+            .collect();
         // We use our own logic to map tables to locations. This avoids conflicts
         // and avoids issues with special characters in table names.
         // Note that this is different from how Spark handles table locations
         // for the default catalog.
+        let catalog_manager = self.ctx.extension::<CatalogManager>()?;
+        let location = catalog_manager
+            .get_database_by_qualifier(qualifier)
+            .await?
+            .location;
+        let (base, suffix) = match &location {
+            Some(loc) => (
+                loc.trim_end_matches(object_store::path::DELIMITER),
+                String::new(),
+            ),
+            None => (
+                self.config
+                    .default_warehouse_directory
+                    .trim_end_matches(object_store::path::DELIMITER),
+                format!("-{}", uuid::Uuid::new_v4()),
+            ),
+        };
         Ok(format!(
-            "{}{}{}-{}",
-            self.config.default_warehouse_directory,
+            "{}{}{}{}",
+            base,
             object_store::path::DELIMITER,
             name,
-            Uuid::new_v4()
+            suffix,
         ))
     }
 

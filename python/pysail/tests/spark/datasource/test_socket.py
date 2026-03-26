@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from pysail.tests.spark.utils import is_jvm_spark
+from pysail.testing.spark.utils.common import is_jvm_spark
 
 if is_jvm_spark():
     pytest.skip("JVM spark does not support the socket format in SQL", allow_module_level=True)

@@ -11,10 +11,10 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::Result;
 use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat, TableFormatRegistry};
 
+use super::datasource::PythonDataSource;
 use super::discovery::DATA_SOURCE_REGISTRY;
 use super::executor::InProcessExecutor;
-use super::python_datasource::PythonDataSource;
-use super::python_table_provider::PythonTableProvider;
+use super::table_provider::PythonTableProvider;
 
 /// TableFormat implementation for a Python data source.
 ///
@@ -174,11 +174,12 @@ impl TableFormat for PythonTableFormat {
         // Create PythonDataSource from options
         let datasource = self.create_datasource(&info.options)?;
 
-        // Get schema (use provided schema or discover from Python)
-        let schema = if let Some(schema) = info.schema {
-            Arc::new(schema)
-        } else {
-            datasource.schema()?
+        // Get schema (use provided schema or discover from Python).
+        // When a table is created without column definitions (e.g. `CREATE TABLE t USING fmt`),
+        // the catalog stores an empty schema. Fall back to Python discovery in that case.
+        let schema = match info.schema {
+            Some(schema) if !schema.fields().is_empty() => Arc::new(schema),
+            _ => datasource.schema()?,
         };
 
         // Create executor (MVP: in-process via PyO3)
@@ -199,9 +200,9 @@ impl TableFormat for PythonTableFormat {
 
         let SinkInfo {
             input,
-            path,
             mode,
             partition_by,
+            table_properties: _,
             mut options,
             ..
         } = info;
@@ -215,13 +216,9 @@ impl TableFormat for PythonTableFormat {
             );
         }
 
-        // Inject save path into options so the Python DataSource receives it
-        // via self.options["path"] in __init__ (matches PySpark behavior).
-        if !path.is_empty() {
-            let path_option: HashMap<String, String> =
-                [("path".to_string(), path)].into_iter().collect();
-            options.push(path_option);
-        }
+        // The path (if any) is already present in options under the "path" key,
+        // so it will be forwarded to the Python DataSource via self.options["path"]
+        // in __init__ (matches PySpark behavior). No additional injection needed.
 
         // Map save mode to overwrite bool (PySpark convention).
         // PySpark's DataSource.writer(schema, overwrite) only receives a boolean:

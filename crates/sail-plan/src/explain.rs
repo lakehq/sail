@@ -6,14 +6,11 @@ use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{collect, displayable, ExecutionPlan};
 use datafusion::prelude::SessionContext;
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
-use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{EmptyRelation, Extension, LogicalPlan, UserDefinedLogicalNodeCore};
+use datafusion_expr::LogicalPlan;
 use sail_common::spec;
 use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
-use sail_logical_plan::precondition::WithPreconditionsNode;
 
-use crate::catalog::CatalogCommandNode;
 use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::plan::NamedPlan;
@@ -171,15 +168,12 @@ async fn collect_plan_with(
     let initial_logical = plan.clone();
     let mut stringified = vec![initial_logical.to_stringified(PlanType::InitialLogicalPlan)];
 
-    // NOTE: Do NOT call `execute_logical_plan` from EXPLAIN.
-    // It would execute command nodes and trigger side effects (e.g. CREATE TABLE / INSERT).
     let session_state = ctx.state();
-    let logical_plan = strip_explain_side_effect_nodes(plan)?;
     let config_options = session_state.config_options();
     let explain_config = &config_options.explain;
 
     let analyzed_logical = session_state.analyzer().execute_and_check(
-        logical_plan,
+        plan,
         config_options.as_ref(),
         |analyzed_plan, analyzer| {
             let plan_type = PlanType::AnalyzedLogicalPlan {
@@ -317,36 +311,6 @@ async fn collect_plan_with(
         physical_error,
         stringified,
     })
-}
-
-/// Remove/neutralize logical nodes that can trigger side effects during EXPLAIN.
-///
-/// - `WithPreconditionsNode` is stripped (preconditions are not executed).
-/// - `CatalogCommandNode` is replaced with an empty relation with the same schema.
-///
-/// This is intentionally EXPLAIN-only: normal execution goes through `execute_logical_plan`,
-/// which performs the required side effects.
-pub(crate) fn strip_explain_side_effect_nodes(plan: LogicalPlan) -> PlanResult<LogicalPlan> {
-    Ok(plan
-        .transform_up(|plan| match &plan {
-            LogicalPlan::Extension(Extension { node }) => {
-                if let Some(n) = node.as_any().downcast_ref::<WithPreconditionsNode>() {
-                    Ok(Transformed::yes(n.plan().clone()))
-                } else if let Some(n) = node.as_any().downcast_ref::<CatalogCommandNode>() {
-                    Ok(Transformed::yes(LogicalPlan::EmptyRelation(
-                        EmptyRelation {
-                            produce_one_row: false,
-                            schema: n.schema().clone(),
-                        },
-                    )))
-                } else {
-                    Ok(Transformed::no(plan))
-                }
-            }
-            _ => Ok(Transformed::no(plan)),
-        })
-        .map_err(PlanError::from)?
-        .data)
 }
 
 fn render_section(title: &str, body: &str) -> String {

@@ -5,20 +5,23 @@ use datafusion::arrow::array::{Array, ArrayRef, Int64Array, RecordBatch, StringA
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::{DataFusionError, Result};
+use percent_encoding::percent_decode_str;
 
 use crate::datasource::{COMMIT_TIMESTAMP_COLUMN, COMMIT_VERSION_COLUMN, PATH_COLUMN};
-use crate::kernel::models::Add;
+use crate::spec::fields::FIELD_NAME_STATS_PARSED;
+use crate::spec::Add;
 
 const COL_SIZE_BYTES: &str = "size_bytes";
 const COL_MODIFICATION_TIME: &str = "modification_time";
 const COL_STATS_JSON: &str = "stats_json";
 const COL_PARTITION_SCAN: &str = "partition_scan";
 
-const RESERVED_META_COLUMNS: [&str; 7] = [
+const RESERVED_META_COLUMNS: [&str; 8] = [
     PATH_COLUMN,
     COL_SIZE_BYTES,
     COL_MODIFICATION_TIME,
     COL_STATS_JSON,
+    FIELD_NAME_STATS_PARSED,
     COL_PARTITION_SCAN,
     COMMIT_VERSION_COLUMN,
     COMMIT_TIMESTAMP_COLUMN,
@@ -99,7 +102,11 @@ pub fn decode_adds_from_meta_batch(
             )));
         }
 
-        let path = path_arr.value(row).to_string();
+        let raw_path = path_arr.value(row);
+        let path = percent_decode_str(raw_path)
+            .decode_utf8()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+            .to_string();
 
         let size = size_arr
             .map(|a| if a.is_null(row) { 0 } else { a.value(row) })
