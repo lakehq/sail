@@ -582,7 +582,7 @@ fn build_array_from_rows(
 }
 
 /// Extract a value from a Python row tuple.
-fn extract_value<'py, T: pyo3::FromPyObject<'py>>(
+fn extract_value<'py, T: for<'a> pyo3::FromPyObject<'a, 'py>>(
     row: &Bound<'py, PyAny>,
     col_idx: usize,
 ) -> Result<Option<T>> {
@@ -592,7 +592,7 @@ fn extract_value<'py, T: pyo3::FromPyObject<'py>>(
         return Ok(None);
     }
 
-    item.extract::<T>().map(Some).map_err(py_err)
+    item.extract::<T>().map(Some).map_err(|e| py_err(e.into()))
 }
 
 /// Re-export py_err and import_cloudpickle from error module.

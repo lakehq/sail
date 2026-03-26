@@ -8,7 +8,7 @@ use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
-use datafusion::datasource::physical_plan::FileSinkConfig;
+use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::parsers::CompressionTypeVariant;
@@ -269,6 +269,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             insert_op: InsertOp::Append,
             keep_partition_by_columns: false,
             file_extension,
+            file_output_mode: FileOutputMode::Automatic,
         };
         format
             .create_writer_physical_plan(input, ctx, conf, sort_order)

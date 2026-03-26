@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use datafusion::common::{internal_err, DataFusionError, Result};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion::physical_plan::execution_plan::reset_plan_states;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::projection::ProjectionExec;
@@ -131,6 +132,10 @@ async fn finalize_merge(
     //
     // Untouched files remain as-is (not removed, not rewritten).
     let writer_input: Arc<dyn ExecutionPlan> = if let Some(touched_plan) = &touched_plan_opt {
+        // Physical plans can hold runtime state after execution. MERGE branches this subtree,
+        // so each consumer needs its own reset copy rather than sharing a multi-parent DAG.
+        let projected_for_touched = reset_plan_states(Arc::clone(&projected))?;
+        let touched_plan_for_writer = reset_plan_states(Arc::clone(touched_plan))?;
         let projected_schema = projected.schema();
         if projected_schema.column_with_name(PATH_COLUMN).is_none() {
             return internal_err!(
@@ -164,8 +169,8 @@ async fn finalize_merge(
             .map_err(|e| DataFusionError::Plan(format!("{e}")))?;
 
         let join = Arc::new(HashJoinExec::try_new(
-            Arc::clone(touched_plan),
-            Arc::clone(&projected),
+            touched_plan_for_writer,
+            projected_for_touched,
             vec![(
                 Arc::new(Column::new(PATH_COLUMN, touched_idx)),
                 Arc::new(Column::new(PATH_COLUMN, path_idx)),
@@ -175,6 +180,7 @@ async fn finalize_merge(
             None,
             PartitionMode::CollectLeft,
             NullEquality::NullEqualsNothing,
+            false,
         )?);
 
         // Keep only the right side columns (original writer input schema) after join.
@@ -240,6 +246,7 @@ async fn finalize_merge(
     let mut action_inputs: Vec<Arc<dyn ExecutionPlan>> = vec![writer.clone()];
 
     if let Some(touched_plan) = &touched_plan_opt {
+        let touched_plan_for_remove = reset_plan_states(Arc::clone(touched_plan))?;
         // Build a log-side stream of active Add rows using a visible log replay pipeline:
         // Union(DataSourceExec parquet/json) -> DeltaLogReplayExec -> ... -> DeltaDiscoveryExec.
         let meta_scan: Arc<dyn ExecutionPlan> =
@@ -247,7 +254,7 @@ async fn finalize_merge(
                 .await?;
 
         // Restrict to touched file paths by joining touched_paths with the metadata stream.
-        let touched_schema = touched_plan.schema();
+        let touched_schema = touched_plan_for_remove.schema();
         let touched_idx = touched_schema
             .index_of(PATH_COLUMN)
             .map_err(|e| DataFusionError::Plan(format!("{e}")))?;
@@ -257,7 +264,7 @@ async fn finalize_merge(
             .map_err(|e| DataFusionError::Plan(format!("{e}")))?;
 
         let join = Arc::new(HashJoinExec::try_new(
-            Arc::clone(touched_plan),
+            touched_plan_for_remove,
             meta_scan,
             vec![(
                 Arc::new(Column::new(PATH_COLUMN, touched_idx)),
@@ -268,6 +275,7 @@ async fn finalize_merge(
             None,
             PartitionMode::CollectLeft,
             NullEquality::NullEqualsNothing,
+            false,
         )?);
 
         // Keep only the right side columns (metadata stream schema).

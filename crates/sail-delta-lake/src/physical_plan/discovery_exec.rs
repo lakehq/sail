@@ -27,7 +27,7 @@ pub struct DeltaDiscoveryExec {
     input: Arc<dyn ExecutionPlan>,
     input_partition_columns: Vec<String>,
     input_partition_scan: bool,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl DeltaDiscoveryExec {
@@ -99,13 +99,13 @@ impl DeltaDiscoveryExec {
         )
     }
 
-    fn compute_properties(schema: SchemaRef, output_partitions: usize) -> PlanProperties {
-        PlanProperties::new(
+    fn compute_properties(schema: SchemaRef, output_partitions: usize) -> Arc<PlanProperties> {
+        Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(output_partitions.max(1)),
             EmissionType::Final,
             Boundedness::Bounded,
-        )
+        ))
     }
 
     /// Get the table URL
@@ -154,7 +154,7 @@ impl ExecutionPlan for DeltaDiscoveryExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 

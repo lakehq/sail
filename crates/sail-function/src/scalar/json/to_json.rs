@@ -459,6 +459,16 @@ fn decimal_to_json_number(value: i128, scale: i8) -> Value {
 }
 
 fn number_from_f64(value: f64) -> Value {
+    if value.is_nan() {
+        return Value::String("NaN".to_string());
+    }
+    if value.is_infinite() {
+        return if value.is_sign_positive() {
+            Value::String("Infinity".to_string())
+        } else {
+            Value::String("-Infinity".to_string())
+        };
+    }
     serde_json::Number::from_f64(value)
         .map(Value::Number)
         .unwrap_or_else(|| Value::String(value.to_string()))

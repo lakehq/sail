@@ -326,7 +326,7 @@ pub struct DeltaScanByAddsExec {
     limit: Option<usize>,
     pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
     statistics: Statistics,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl DeltaScanByAddsExec {
@@ -424,13 +424,13 @@ impl DeltaScanByAddsExec {
         &self.statistics
     }
 
-    fn compute_properties(schema: SchemaRef, partition_count: usize) -> PlanProperties {
-        PlanProperties::new(
+    fn compute_properties(schema: SchemaRef, partition_count: usize) -> Arc<PlanProperties> {
+        Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(partition_count.max(1)),
             EmissionType::Final,
             Boundedness::Bounded,
-        )
+        ))
     }
 }
 
@@ -444,7 +444,7 @@ impl ExecutionPlan for DeltaScanByAddsExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 

@@ -60,7 +60,7 @@ pub struct DeltaCommitExec {
     sink_schema: SchemaRef,
     sink_mode: PhysicalSinkMode,
     metrics: ExecutionPlanMetricsSet,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl DeltaCommitExec {
@@ -90,13 +90,13 @@ impl DeltaCommitExec {
         }
     }
 
-    fn compute_properties(schema: SchemaRef) -> PlanProperties {
-        PlanProperties::new(
+    fn compute_properties(schema: SchemaRef) -> Arc<PlanProperties> {
+        Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(1),
             EmissionType::Final,
             Boundedness::Bounded,
-        )
+        ))
     }
 
     pub fn table_url(&self) -> &Url {
@@ -134,7 +134,7 @@ impl ExecutionPlan for DeltaCommitExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 

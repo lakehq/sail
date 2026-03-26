@@ -26,7 +26,7 @@ use bytes::Bytes;
 use chrono::Utc;
 use futures::future::BoxFuture;
 use log::*;
-use object_store::{Error as ObjectStoreError, PutMode, PutOptions};
+use object_store::{Error as ObjectStoreError, ObjectStoreExt, PutMode, PutOptions};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
