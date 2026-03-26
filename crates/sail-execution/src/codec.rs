@@ -43,7 +43,9 @@ use datafusion_proto::physical_plan::to_proto::{
     serialize_file_scan_config, serialize_partitioning, serialize_physical_expr,
     serialize_physical_sort_exprs,
 };
-use datafusion_proto::physical_plan::{AsExecutionPlan, PhysicalExtensionCodec};
+use datafusion_proto::physical_plan::{
+    AsExecutionPlan, DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
+};
 use datafusion_proto::protobuf::{
     JoinType as ProtoJoinType, PhysicalPlanNode, PhysicalSortExprNode,
 };
@@ -291,12 +293,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         requires_infinite_memory: false,
                     }
                 };
-                let properties = PlanProperties::new(
+                let properties = Arc::new(PlanProperties::new(
                     eq_properties,
                     partitioning,
                     EmissionType::Both,
                     boundedness,
-                );
+                ));
                 let node = StageInputExec::new(input as usize, properties);
                 Ok(Arc::new(node))
             }
@@ -386,6 +388,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     &proto,
                     ctx,
                     self,
+                    &DefaultPhysicalProtoConverter {},
                     Arc::new(JsonSource::new(table_schema)),
                 )?;
                 let source = FileScanConfigBuilder::from(source)
@@ -400,6 +403,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     &proto,
                     ctx,
                     self,
+                    &DefaultPhysicalProtoConverter {},
                     Arc::new(ArrowSource::new_file_source(table_schema)),
                 )?;
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
@@ -428,6 +432,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     &proto,
                     ctx,
                     self,
+                    &DefaultPhysicalProtoConverter {},
                     Arc::new(TextSource::new(table_schema, whole_text, line_sep)),
                 )?;
                 let source = FileScanConfigBuilder::from(source)
@@ -445,6 +450,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     &proto,
                     ctx,
                     self,
+                    &DefaultPhysicalProtoConverter {},
                     Arc::new(BinarySource::new(table_schema, path_glob_filter)),
                 )?;
                 let source = FileScanConfigBuilder::from(source).build();
@@ -457,6 +463,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     &proto,
                     ctx,
                     self,
+                    &DefaultPhysicalProtoConverter {},
                     Arc::new(AvroSource::new(table_schema)),
                 )?;
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
@@ -892,11 +899,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let sort_order = physical_sort_expr_nodes
                     .as_ref()
                     .map(|physical_sort_expr_nodes| {
-                        parse_physical_sort_exprs(physical_sort_expr_nodes, ctx, &schema, self).map(
-                            |sort_exprs| {
-                                LexRequirement::new(sort_exprs.into_iter().map(Into::into))
-                            },
+                        parse_physical_sort_exprs(
+                            physical_sort_expr_nodes,
+                            ctx,
+                            &schema,
+                            self,
+                            &DefaultPhysicalProtoConverter {},
                         )
+                        .map(|sort_exprs| {
+                            LexRequirement::new(sort_exprs.into_iter().map(Into::into))
+                        })
                     })
                     .transpose()?
                     .flatten();
@@ -1240,8 +1252,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             if let Some(file_scan) = source.as_any().downcast_ref::<FileScanConfig>() {
                 let file_source = file_scan.file_source();
                 if let Some(text_source) = file_source.as_any().downcast_ref::<TextSource>() {
-                    let base_config =
-                        self.try_encode_message(serialize_file_scan_config(file_scan, self)?)?;
+                    let base_config = self.try_encode_message(serialize_file_scan_config(
+                        file_scan,
+                        self,
+                        &DefaultPhysicalProtoConverter {},
+                    )?)?;
                     let file_compression_type =
                         self.try_encode_file_compression_type(file_scan.file_compression_type)?;
                     NodeKind::Text(gen::TextExecNode {
@@ -1253,16 +1268,22 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 } else if let Some(binary_source) =
                     file_source.as_any().downcast_ref::<BinarySource>()
                 {
-                    let base_config =
-                        self.try_encode_message(serialize_file_scan_config(file_scan, self)?)?;
+                    let base_config = self.try_encode_message(serialize_file_scan_config(
+                        file_scan,
+                        self,
+                        &DefaultPhysicalProtoConverter {},
+                    )?)?;
                     NodeKind::BinarySource(gen::BinarySourceExecNode {
                         base_config,
                         path_glob_filter: binary_source.path_glob_filter().cloned(),
                     })
                 } else if file_source.as_any().is::<JsonSource>() {
                     // TODO: Check if we still need to have JsonSource: https://github.com/apache/datafusion/pull/14224
-                    let base_config =
-                        self.try_encode_message(serialize_file_scan_config(file_scan, self)?)?;
+                    let base_config = self.try_encode_message(serialize_file_scan_config(
+                        file_scan,
+                        self,
+                        &DefaultPhysicalProtoConverter {},
+                    )?)?;
                     let file_compression_type =
                         self.try_encode_file_compression_type(file_scan.file_compression_type)?;
                     NodeKind::NdJson(gen::NdJsonExecNode {
@@ -1271,12 +1292,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     })
                 } else if file_source.as_any().is::<ArrowSource>() {
                     // TODO: Check if we still need to have ArrowSource: https://github.com/apache/datafusion/pull/14224
-                    let base_config =
-                        self.try_encode_message(serialize_file_scan_config(file_scan, self)?)?;
+                    let base_config = self.try_encode_message(serialize_file_scan_config(
+                        file_scan,
+                        self,
+                        &DefaultPhysicalProtoConverter {},
+                    )?)?;
                     NodeKind::Arrow(gen::ArrowExecNode { base_config })
                 } else if file_source.as_any().is::<AvroSource>() {
-                    let base_config =
-                        self.try_encode_message(serialize_file_scan_config(file_scan, self)?)?;
+                    let base_config = self.try_encode_message(serialize_file_scan_config(
+                        file_scan,
+                        self,
+                        &DefaultPhysicalProtoConverter {},
+                    )?)?;
                     NodeKind::Avro(gen::AvroExecNode { base_config })
                 } else {
                     return plan_err!("unsupported data source node: {data_source:?}");
@@ -2649,8 +2676,14 @@ impl RemoteExecutionCodec {
             .map(|x| self.try_decode_message(x))
             .collect::<Result<_>>()?;
         let lex_ordering = LexOrdering::new(
-            parse_physical_sort_exprs(&lex_ordering, ctx, schema, self)
-                .map_err(|e| plan_datafusion_err!("failed to decode lex ordering: {e}"))?,
+            parse_physical_sort_exprs(
+                &lex_ordering,
+                ctx,
+                schema,
+                self,
+                &DefaultPhysicalProtoConverter {},
+            )
+            .map_err(|e| plan_datafusion_err!("failed to decode lex ordering: {e}"))?,
         );
         match lex_ordering {
             Some(lex_ordering) => Ok(lex_ordering),
@@ -2659,7 +2692,11 @@ impl RemoteExecutionCodec {
     }
 
     fn try_encode_lex_ordering(&self, lex_ordering: &LexOrdering) -> Result<gen::LexOrdering> {
-        let lex_ordering = serialize_physical_sort_exprs(lex_ordering.to_vec(), self)?;
+        let lex_ordering = serialize_physical_sort_exprs(
+            lex_ordering.to_vec(),
+            self,
+            &DefaultPhysicalProtoConverter {},
+        )?;
         let lex_ordering = lex_ordering
             .into_iter()
             .map(|x| self.try_encode_message(x))
@@ -3070,12 +3107,19 @@ impl RemoteExecutionCodec {
         ctx: &TaskContext,
     ) -> Result<Partitioning> {
         let partitioning = self.try_decode_message(buf)?;
-        parse_protobuf_partitioning(Some(&partitioning), ctx, schema, self)?
-            .ok_or_else(|| plan_datafusion_err!("no partitioning found"))
+        parse_protobuf_partitioning(
+            Some(&partitioning),
+            ctx,
+            schema,
+            self,
+            &DefaultPhysicalProtoConverter {},
+        )?
+        .ok_or_else(|| plan_datafusion_err!("no partitioning found"))
     }
 
     fn try_encode_partitioning(&self, partitioning: &Partitioning) -> Result<Vec<u8>> {
-        let partitioning = serialize_partitioning(partitioning, self)?;
+        let partitioning =
+            serialize_partitioning(partitioning, self, &DefaultPhysicalProtoConverter {})?;
         self.try_encode_message(partitioning)
     }
 

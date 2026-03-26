@@ -66,8 +66,9 @@ pub fn metadata_for_create_with_struct_type(
 pub fn protocol_for_create(
     enable_column_mapping: bool,
     enable_timestamp_ntz: bool,
+    enable_in_commit_timestamps: bool,
 ) -> DeltaResult<Protocol> {
-    if !enable_column_mapping && !enable_timestamp_ntz {
+    if !enable_column_mapping && !enable_timestamp_ntz && !enable_in_commit_timestamps {
         return Ok(Protocol::new(1, 2, None, None));
     }
 
@@ -81,11 +82,35 @@ pub fn protocol_for_create(
         reader_features.push(TableFeature::TimestampWithoutTimezone);
         writer_features.push(TableFeature::TimestampWithoutTimezone);
     }
+    if enable_in_commit_timestamps {
+        writer_features.push(TableFeature::InCommitTimestamp);
+    }
+
+    let min_reader_version = if reader_features.is_empty() { 1 } else { 3 };
 
     Ok(Protocol::new(
-        3,
+        min_reader_version,
         7,
         Some(reader_features),
         Some(writer_features),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::protocol_for_create;
+    use crate::spec::{DeltaResult, TableFeature};
+
+    #[test]
+    fn protocol_for_create_treats_in_commit_timestamp_as_writer_only() -> DeltaResult<()> {
+        let protocol = protocol_for_create(false, false, true)?;
+        assert_eq!(protocol.min_reader_version(), 1);
+        assert_eq!(protocol.min_writer_version(), 7);
+        assert_eq!(protocol.reader_features(), None);
+        assert_eq!(
+            protocol.writer_features(),
+            Some([TableFeature::InCommitTimestamp].as_slice())
+        );
+        Ok(())
+    }
 }

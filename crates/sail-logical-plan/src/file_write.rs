@@ -11,7 +11,6 @@ use sail_common_datafusion::utils::items::ItemTaker;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
 pub struct FileWriteOptions {
-    pub path: String,
     pub format: String,
     pub mode: SinkMode,
     pub partition_by: Vec<CatalogPartitionField>,

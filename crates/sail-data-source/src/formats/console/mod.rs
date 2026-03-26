@@ -34,9 +34,9 @@ impl TableFormat for ConsoleTableFormat {
         _ctx: &dyn Session,
         info: SinkInfo,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let path = info.path();
         let SinkInfo {
             input,
-            path,
             mode,
             partition_by,
             bucket_by,

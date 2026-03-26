@@ -21,7 +21,7 @@ pub struct RangeExec {
     original_schema: SchemaRef,
     projected_schema: SchemaRef,
     projection: Vec<usize>,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl RangeExec {
@@ -34,12 +34,12 @@ impl RangeExec {
         projection: Vec<usize>,
     ) -> Result<Self> {
         let projected_schema = Arc::new(schema.project(&projection)?);
-        let properties = PlanProperties::new(
+        let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(projected_schema.clone()),
             Partitioning::RoundRobinBatch(num_partitions),
             EmissionType::Both,
             Boundedness::Bounded,
-        );
+        ));
         Ok(Self {
             range,
             num_partitions,
@@ -86,7 +86,7 @@ impl ExecutionPlan for RangeExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 

@@ -262,6 +262,17 @@ impl DeltaSnapshot {
         self.commit_timestamps.get(&version).copied()
     }
 
+    pub fn in_commit_timestamps_enabled(&self) -> bool {
+        self.protocol()
+            .is_in_commit_timestamps_enabled(self.table_properties())
+    }
+
+    pub fn in_commit_timestamp_enablement(&self) -> Option<(i64, i64)> {
+        self.in_commit_timestamps_enabled()
+            .then(|| self.table_properties().in_commit_timestamp_enablement())
+            .flatten()
+    }
+
     pub fn table_url(&self) -> &Url {
         &self.table_url
     }

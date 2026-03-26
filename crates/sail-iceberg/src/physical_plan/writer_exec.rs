@@ -27,6 +27,7 @@ use datafusion::physical_plan::{
 use datafusion_common::{internal_err, DataFusionError, Result};
 use futures::stream::once;
 use futures::StreamExt;
+use object_store::ObjectStoreExt;
 use parquet::file::properties::WriterProperties;
 use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
@@ -59,7 +60,7 @@ pub struct IcebergWriterExec {
     sink_mode: PhysicalSinkMode,
     table_exists: bool,
     options: TableIcebergOptions,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl IcebergWriterExec {
@@ -114,13 +115,13 @@ impl IcebergWriterExec {
         }
     }
 
-    fn compute_properties(schema: datafusion::arrow::datatypes::SchemaRef) -> PlanProperties {
-        PlanProperties::new(
+    fn compute_properties(schema: datafusion::arrow::datatypes::SchemaRef) -> Arc<PlanProperties> {
+        Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(1),
             EmissionType::Final,
             Boundedness::Bounded,
-        )
+        ))
     }
 
     pub fn table_url(&self) -> &Url {
@@ -235,7 +236,7 @@ impl ExecutionPlan for IcebergWriterExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 

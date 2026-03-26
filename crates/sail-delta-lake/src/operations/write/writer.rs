@@ -27,7 +27,7 @@ use datafusion::arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSche
 use datafusion::common::scalar::ScalarValue;
 use indexmap::IndexMap;
 use object_store::path::Path;
-use object_store::ObjectStore;
+use object_store::{ObjectStore, ObjectStoreExt};
 use parquet::arrow::AsyncArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::metadata::ParquetMetaData;
@@ -462,9 +462,9 @@ impl PartitionWriter {
 
         let mut full_path = self.config.table_path.clone();
         for segment in &self.config.partition_segments {
-            full_path = full_path.child(segment.as_str());
+            full_path = full_path.join(segment.as_str());
         }
-        full_path = full_path.child(file_name.as_str());
+        full_path = full_path.join(file_name.as_str());
 
         let relative_path = if self.config.partition_segments.is_empty() {
             file_name

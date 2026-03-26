@@ -16,7 +16,7 @@ use datafusion_common::{internal_err, plan_err, Result, Statistics};
 #[derive(Debug)]
 pub struct ExplicitRepartitionExec {
     input: Arc<dyn ExecutionPlan>,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl ExplicitRepartitionExec {
@@ -26,14 +26,16 @@ impl ExplicitRepartitionExec {
             eq_properties.clear_orderings();
             eq_properties.clear_per_partition_constants();
         }
-        let properties = PlanProperties::new(
-            eq_properties,
-            partitioning,
-            input.pipeline_behavior(),
-            input.boundedness(),
-        )
-        .with_scheduling_type(SchedulingType::Cooperative)
-        .with_evaluation_type(EvaluationType::Eager);
+        let properties = Arc::new(
+            PlanProperties::new(
+                eq_properties,
+                partitioning,
+                input.pipeline_behavior(),
+                input.boundedness(),
+            )
+            .with_scheduling_type(SchedulingType::Cooperative)
+            .with_evaluation_type(EvaluationType::Eager),
+        );
         Self { input, properties }
     }
 
@@ -61,7 +63,7 @@ impl ExecutionPlan for ExplicitRepartitionExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 
@@ -95,10 +97,6 @@ impl ExecutionPlan for ExplicitRepartitionExec {
             "{} should be eliminated during physical optimization",
             self.name()
         )
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        self.input.partition_statistics(None)
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {

@@ -142,33 +142,33 @@ prost-types = "0.14"
 # The `axum` version must match the one used in `tonic` (replace `RELEASE` with the release we are using):
 #   https://github.com/hyperium/tonic/blob/vRELEASE/tonic/Cargo.toml
 axum = "0.8.8"
-datafusion = { version = "52.1.0", features = ["serde", "avro", "sql"] }
-datafusion-common = { version = "52.1.0", features = ["object_store", "avro"] }
-datafusion-datasource = { version = "52.1.0" }
-datafusion-expr = { version = "52.1.0" }
-datafusion-expr-common = { version = "52.1.0" }
-datafusion-proto = { version = "52.1.0" }
-datafusion-functions = { version = "52.1.0" }
-datafusion-functions-nested = { version = "52.1.0" }
-datafusion-physical-expr = { version = "52.1.0" }
-datafusion-session = { version = "52.1.0" }
-datafusion-spark = { version = "52.1.0" }
+datafusion = { version = "53.0.0", features = ["serde", "avro", "sql"] }
+datafusion-common = { version = "53.0.0", features = ["object_store", "avro"] }
+datafusion-datasource = { version = "53.0.0" }
+datafusion-expr = { version = "53.0.0" }
+datafusion-expr-common = { version = "53.0.0" }
+datafusion-proto = { version = "53.0.0" }
+datafusion-functions = { version = "53.0.0" }
+datafusion-functions-nested = { version = "53.0.0" }
+datafusion-physical-expr = { version = "53.0.0" }
+datafusion-session = { version = "53.0.0" }
+datafusion-spark = { version = "53.0.0", features = ["core"] }
 # The `pyo3` version must match the one used in `arrow-pyarrow` (replace `RELEASE` with the release we are using):
 #   https://github.com/apache/arrow-rs/blob/RELEASE/arrow-pyarrow/Cargo.toml
-pyo3 = { version = "0.26.0", features = ["serde"] }
+pyo3 = { version = "0.28.0", features = ["serde"] }
 # Jiter has a dependency on pyo3, which needs to match the version used in Sail.
-# https://github.com/pydantic/jiter/blob/v0.11.1/Cargo.toml
-jiter = { version = "0.11.1" }
-arrow = { version = "57.1.0", features = ["chrono-tz"] }
-arrow-buffer = { version = "57.1.0" }
-arrow-schema = { version = "57.1.0", features = ["serde"] }
-arrow-flight = { version = "57.1.0" }
-arrow-pyarrow = { version = "57.1.0" }
-parquet = { version = "57.3.0" }
-serde_arrow = { version = "0.13.7", features = ["arrow-57"] }
+# https://github.com/pydantic/jiter/blob/v0.13.0/Cargo.toml
+jiter = { version = "0.13.0" }
+arrow = { version = "58.0.0", features = ["chrono-tz"] }
+arrow-buffer = { version = "58.0.0" }
+arrow-schema = { version = "58.0.0", features = ["serde"] }
+arrow-flight = { version = "58.0.0" }
+arrow-pyarrow = { version = "58.0.0" }
+parquet = { version = "58.0.0" }
+serde_arrow = { version = "0.14.0", features = ["arrow-58"] }
 # The `object_store` version must match the one used in DataFusion.
-object_store = { version = "0.12.4", features = ["aws", "gcp", "azure", "http"] }
-hdfs-native-object-store = "0.15.0"
+object_store = { version = "0.13.2", features = ["aws", "gcp", "azure", "http"] }
+hdfs-native-object-store = "0.16.0"
 
 ######
 # This is the end of the manually managed dependencies.

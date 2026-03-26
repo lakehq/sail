@@ -92,6 +92,9 @@ pub struct TableProperties {
     pub checkpoint_write_stats_as_json: Option<bool>,
     pub checkpoint_write_stats_as_struct: Option<bool>,
     pub write_checksum_file_enabled: Option<bool>,
+    pub enable_in_commit_timestamps: Option<bool>,
+    pub in_commit_timestamp_enablement_version: Option<i64>,
+    pub in_commit_timestamp_enablement_timestamp: Option<i64>,
     pub column_mapping_mode: Option<ColumnMappingMode>,
     pub data_skipping_num_indexed_cols: Option<DataSkippingNumIndexedCols>,
     pub data_skipping_stats_columns: Option<Vec<ColumnName>>,
@@ -148,6 +151,23 @@ impl TableProperties {
         self.write_checksum_file_enabled.unwrap_or(true)
     }
 
+    pub fn enable_in_commit_timestamps(&self) -> bool {
+        self.enable_in_commit_timestamps.unwrap_or(false)
+    }
+
+    pub fn in_commit_timestamp_enablement_version(&self) -> Option<i64> {
+        self.in_commit_timestamp_enablement_version
+    }
+
+    pub fn in_commit_timestamp_enablement_timestamp(&self) -> Option<i64> {
+        self.in_commit_timestamp_enablement_timestamp
+    }
+
+    pub fn in_commit_timestamp_enablement(&self) -> Option<(i64, i64)> {
+        self.in_commit_timestamp_enablement_version
+            .zip(self.in_commit_timestamp_enablement_timestamp)
+    }
+
     pub fn deleted_file_retention_duration(&self) -> Duration {
         self.deleted_file_retention_duration
             .unwrap_or(Duration::from_secs(DEFAULT_DELETED_FILE_RETENTION_SECS))
@@ -194,6 +214,17 @@ fn canonicalize_table_property_key(key: &str) -> Option<&'static str> {
         "delta.writechecksumfile.enabled"
         | "write_checksum_file_enabled"
         | "writechecksumfileenabled" => Some("delta.writeChecksumFile.enabled"),
+        "delta.enableincommittimestamps"
+        | "enable_in_commit_timestamps"
+        | "enableincommittimestamps" => Some("delta.enableInCommitTimestamps"),
+        "delta.incommittimestampenablementversion"
+        | "in_commit_timestamp_enablement_version"
+        | "incommittimestampenablementversion" => Some("delta.inCommitTimestampEnablementVersion"),
+        "delta.incommittimestampenablementtimestamp"
+        | "in_commit_timestamp_enablement_timestamp"
+        | "incommittimestampenablementtimestamp" => {
+            Some("delta.inCommitTimestampEnablementTimestamp")
+        }
         "delta.columnmapping.mode"
         | "column_mapping_mode"
         | "columnmappingmode"
@@ -251,6 +282,7 @@ fn validate_table_property(key: &str, value: &str) -> DeltaResult<()> {
         | "delta.checkpoint.writeStatsAsJson"
         | "delta.checkpoint.writeStatsAsStruct"
         | "delta.writeChecksumFile.enabled"
+        | "delta.enableInCommitTimestamps"
         | "delta.enableExpiredLogCleanup" => parse_bool(value).map(|_| ()).ok_or_else(|| {
             DeltaTableError::generic(format!("invalid boolean value for {key}: {value}"))
         }),
@@ -259,6 +291,18 @@ fn validate_table_property(key: &str, value: &str) -> DeltaResult<()> {
                 "invalid value for {key}: expected positive integer"
             ))
         }),
+        "delta.inCommitTimestampEnablementVersion" => {
+            parse_non_negative_i64(value).map(|_| ()).ok_or_else(|| {
+                DeltaTableError::generic(format!(
+                    "invalid value for {key}: expected non-negative integer"
+                ))
+            })
+        }
+        "delta.inCommitTimestampEnablementTimestamp" => {
+            parse_i64(value).map(|_| ()).ok_or_else(|| {
+                DeltaTableError::generic(format!("invalid value for {key}: expected integer"))
+            })
+        }
         "delta.columnMapping.mode" => ColumnMappingMode::try_from(value).map(|_| ()),
         "delta.dataSkippingNumIndexedCols" => {
             DataSkippingNumIndexedCols::try_from(value).map(|_| ())
@@ -289,6 +333,15 @@ fn try_parse_table_property(props: &mut TableProperties, key: &str, value: &str)
         }
         "delta.writeChecksumFile.enabled" => {
             props.write_checksum_file_enabled = Some(parse_bool(value)?)
+        }
+        "delta.enableInCommitTimestamps" => {
+            props.enable_in_commit_timestamps = Some(parse_bool(value)?)
+        }
+        "delta.inCommitTimestampEnablementVersion" => {
+            props.in_commit_timestamp_enablement_version = Some(parse_non_negative_i64(value)?)
+        }
+        "delta.inCommitTimestampEnablementTimestamp" => {
+            props.in_commit_timestamp_enablement_timestamp = Some(parse_i64(value)?)
         }
         "delta.columnMapping.mode" => {
             props.column_mapping_mode = ColumnMappingMode::try_from(value).ok()
@@ -330,6 +383,15 @@ fn parse_bool(s: &str) -> Option<bool> {
         "false" => Some(false),
         _ => None,
     }
+}
+
+fn parse_i64(s: &str) -> Option<i64> {
+    s.parse().ok()
+}
+
+fn parse_non_negative_i64(s: &str) -> Option<i64> {
+    let value = parse_i64(s)?;
+    (value >= 0).then_some(value)
 }
 
 fn parse_interval(s: &str) -> Option<Duration> {
@@ -390,6 +452,7 @@ mod tests {
             ("column_mapping_mode", "name"),
             ("checkpoint_interval", "7"),
             ("write_checksum_file_enabled", "false"),
+            ("enable_in_commit_timestamps", "true"),
             ("custom.key", "value"),
         ])?;
 
@@ -404,6 +467,10 @@ mod tests {
         assert_eq!(
             props.get("delta.writeChecksumFile.enabled"),
             Some(&"false".to_string())
+        );
+        assert_eq!(
+            props.get("delta.enableInCommitTimestamps"),
+            Some(&"true".to_string())
         );
         assert_eq!(props.get("custom.key"), Some(&"value".to_string()));
         Ok(())
@@ -428,6 +495,10 @@ mod tests {
             Some("delta.columnMapping.mode".to_string())
         );
         assert_eq!(
+            route_table_property_key("enable_in_commit_timestamps"),
+            Some("delta.enableInCommitTimestamps".to_string())
+        );
+        assert_eq!(
             route_table_property_key("write_checksum_file_enabled"),
             Some("delta.writeChecksumFile.enabled".to_string())
         );
@@ -440,5 +511,19 @@ mod tests {
             Some("delta.featureFlag".to_string())
         );
         assert_eq!(route_table_property_key("mergeSchema"), None);
+    }
+
+    #[test]
+    fn test_in_commit_timestamp_properties_are_typed() {
+        let props = TableProperties::from([
+            ("delta.enableInCommitTimestamps", "true"),
+            ("delta.inCommitTimestampEnablementVersion", "3"),
+            ("delta.inCommitTimestampEnablementTimestamp", "123"),
+        ]);
+
+        assert!(props.enable_in_commit_timestamps());
+        assert_eq!(props.in_commit_timestamp_enablement_version(), Some(3));
+        assert_eq!(props.in_commit_timestamp_enablement_timestamp(), Some(123));
+        assert_eq!(props.in_commit_timestamp_enablement(), Some((3, 123)));
     }
 }

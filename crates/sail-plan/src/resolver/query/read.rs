@@ -35,9 +35,6 @@ impl PlanResolver<'_> {
             sample,
             options,
         } = table;
-        if temporal.is_some() {
-            return Err(PlanError::todo("read table AS OF clause"));
-        }
 
         // Check if the name is in the form `<format>.<path>` where `<format>` is a
         // registered table format. In that case, treat it as a direct data source read.
@@ -45,10 +42,13 @@ impl PlanResolver<'_> {
             let format = format.as_ref().to_ascii_lowercase();
             let registry = self.ctx.extension::<TableFormatRegistry>()?;
             if registry.get(&format).is_ok() {
+                let temporal_options = self
+                    .resolve_time_travel_options(&format, temporal, state)
+                    .await?;
                 let source = spec::ReadDataSource {
                     format: Some(format),
                     schema: None,
-                    options,
+                    options: options.into_iter().chain(temporal_options).collect(),
                     paths: vec![path.as_ref().to_string()],
                     predicates: vec![],
                 };
@@ -63,6 +63,11 @@ impl PlanResolver<'_> {
 
         let table_reference = self.resolve_table_reference(&name)?;
         if let Some(cte) = state.get_cte(&table_reference) {
+            if temporal.is_some() {
+                return Err(PlanError::unsupported(
+                    "SQL time travel is not supported for CTEs",
+                ));
+            }
             let plan = cte.clone();
             return if let Some(table_sample) = sample {
                 self.apply_table_sample(plan, table_sample, state).await
@@ -92,6 +97,9 @@ impl PlanResolver<'_> {
             } => {
                 let schema = Schema::new(columns.iter().map(|x| x.field()).collect::<Vec<_>>());
                 let constraints = self.resolve_catalog_table_constraints(constraints, &schema)?;
+                let temporal_options = self
+                    .resolve_time_travel_options(&format, temporal, state)
+                    .await?;
                 let info = SourceInfo {
                     paths: location.map(|x| vec![x]).unwrap_or_default(),
                     schema: Some(schema),
@@ -103,6 +111,7 @@ impl PlanResolver<'_> {
                     options: vec![
                         table_options.into_iter().collect(),
                         options.into_iter().collect(),
+                        temporal_options.into_iter().collect(),
                     ],
                 };
                 let registry = self.ctx.extension::<TableFormatRegistry>()?;
@@ -119,8 +128,20 @@ impl PlanResolver<'_> {
                     state,
                 )?
             }
-            TableKind::View { .. } => return Err(PlanError::todo("read view")),
+            TableKind::View { .. } => {
+                if temporal.is_some() {
+                    return Err(PlanError::unsupported(
+                        "SQL time travel is not supported for views",
+                    ));
+                }
+                return Err(PlanError::todo("read view"));
+            }
             TableKind::TemporaryView { plan, .. } | TableKind::GlobalTemporaryView { plan, .. } => {
+                if temporal.is_some() {
+                    return Err(PlanError::unsupported(
+                        "SQL time travel is not supported for temporary views",
+                    ));
+                }
                 let names = state.register_fields(plan.schema().inner().fields());
                 rename_logical_plan(plan.as_ref().clone(), &names)?
             }

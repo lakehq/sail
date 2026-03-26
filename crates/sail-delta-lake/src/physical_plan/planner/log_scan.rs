@@ -13,7 +13,7 @@ use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
 use futures::{stream, StreamExt, TryStreamExt};
 use object_store::path::{Path, DELIMITER};
-use object_store::{ObjectMeta, ObjectStore};
+use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 
 use super::context::PlannerContext;
 use crate::datasource::create_object_store_url;
@@ -110,6 +110,7 @@ fn to_partitioned_files(metas: Vec<ObjectMeta>) -> Result<Vec<PartitionedFile>> 
                 partition_values: vec![ScalarValue::Int64(Some(ver))],
                 range: None,
                 statistics: None,
+                ordering: None,
                 extensions: None,
                 metadata_size_hint: None,
             })

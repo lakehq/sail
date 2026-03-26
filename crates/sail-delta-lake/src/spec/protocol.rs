@@ -18,6 +18,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::spec::properties::TableProperties;
 use crate::spec::{DeltaError as DeltaTableError, DeltaResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -31,6 +32,8 @@ pub enum TableFeature {
     GeneratedColumns,
     IdentityColumns,
     ColumnMapping,
+    #[serde(rename = "inCommitTimestamp")]
+    InCommitTimestamp,
     #[serde(rename = "timestampNtz")]
     TimestampWithoutTimezone,
     #[serde(other)]
@@ -47,6 +50,7 @@ impl TableFeature {
             Self::GeneratedColumns => "generatedColumns",
             Self::IdentityColumns => "identityColumns",
             Self::ColumnMapping => "columnMapping",
+            Self::InCommitTimestamp => "inCommitTimestamp",
             Self::TimestampWithoutTimezone => "timestampNtz",
             Self::Unknown => "unknown",
         }
@@ -61,6 +65,7 @@ impl TableFeature {
             "generatedColumns" => Ok(Self::GeneratedColumns),
             "identityColumns" => Ok(Self::IdentityColumns),
             "columnMapping" => Ok(Self::ColumnMapping),
+            "inCommitTimestamp" => Ok(Self::InCommitTimestamp),
             "timestampNtz" => Ok(Self::TimestampWithoutTimezone),
             _ => Err(DeltaTableError::generic(format!(
                 "Unknown table feature: {value}"
@@ -110,5 +115,23 @@ impl Protocol {
 
     pub fn writer_features(&self) -> Option<&[TableFeature]> {
         self.writer_features.as_deref()
+    }
+
+    pub fn has_reader_feature(&self, feature: &TableFeature) -> bool {
+        self.reader_features()
+            .is_some_and(|features| features.contains(feature))
+    }
+
+    pub fn has_writer_feature(&self, feature: &TableFeature) -> bool {
+        self.writer_features()
+            .is_some_and(|features| features.contains(feature))
+    }
+
+    pub fn supports_in_commit_timestamps(&self) -> bool {
+        self.min_writer_version() >= 7 && self.has_writer_feature(&TableFeature::InCommitTimestamp)
+    }
+
+    pub fn is_in_commit_timestamps_enabled(&self, table_properties: &TableProperties) -> bool {
+        self.supports_in_commit_timestamps() && table_properties.enable_in_commit_timestamps()
     }
 }

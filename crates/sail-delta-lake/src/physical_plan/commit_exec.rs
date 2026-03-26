@@ -60,7 +60,7 @@ pub struct DeltaCommitExec {
     sink_schema: SchemaRef,
     sink_mode: PhysicalSinkMode,
     metrics: ExecutionPlanMetricsSet,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl DeltaCommitExec {
@@ -90,13 +90,13 @@ impl DeltaCommitExec {
         }
     }
 
-    fn compute_properties(schema: SchemaRef) -> PlanProperties {
-        PlanProperties::new(
+    fn compute_properties(schema: SchemaRef) -> Arc<PlanProperties> {
+        Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(1),
             EmissionType::Final,
             Boundedness::Bounded,
-        )
+        ))
     }
 
     pub fn table_url(&self) -> &Url {
@@ -134,7 +134,7 @@ impl ExecutionPlan for DeltaCommitExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -331,7 +331,7 @@ impl ExecutionPlan for DeltaCommitExec {
                 } else {
                     // Construct minimal protocol/metadata and insert them
                     let normalized_sink = normalize_delta_schema(&sink_schema);
-                    let protocol = protocol_for_create(false, false)
+                    let protocol = protocol_for_create(false, false, false)
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                     let metadata = metadata_for_create_with_struct_type(
