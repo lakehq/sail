@@ -626,7 +626,7 @@ impl DeltaSnapshot {
     /// # Errors
     /// Returns [`DeltaError`] if `delta.columnMapping.mode` is `none` (the default).
     pub fn verify_column_mapping(&self) -> DeltaResult<ColumnMappingToken> {
-        let mode = self.column_mapping_mode();
+        let mode = self.effective_column_mapping_mode();
         if matches!(mode, ColumnMappingMode::None) {
             return Err(DeltaTableError::generic(
                 "column mapping is not enabled on this table (delta.columnMapping.mode = none)",
@@ -883,8 +883,8 @@ mod tests {
     use crate::kernel::DeltaTableConfig;
     use crate::logical::table_source::DeltaTableSource;
     use crate::spec::{
-        Add, DataType, DomainMetadata, Metadata, Protocol, StructField, StructType, TableFeature,
-        TableProperties,
+        Add, ColumnMappingMode, ColumnMetadataKey, DataType, DomainMetadata, Metadata,
+        MetadataValue, Protocol, StructField, StructType, TableFeature, TableProperties,
     };
     use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
     use crate::table::RowTrackingToken;
@@ -1080,6 +1080,35 @@ mod tests {
         );
 
         assert!(snapshot.get_row_tracking_state().is_err());
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn verify_column_mapping_uses_effective_mode_from_schema_annotations() {
+        let metadata = Metadata::try_new(
+            None,
+            None,
+            StructType::try_new([StructField::not_null("id", DataType::LONG).with_metadata([
+                (
+                    ColumnMetadataKey::ColumnMappingId.as_ref(),
+                    MetadataValue::Number(1),
+                ),
+                (
+                    ColumnMetadataKey::ColumnMappingPhysicalName.as_ref(),
+                    MetadataValue::String("col-0001".to_string()),
+                ),
+            ])])
+            .unwrap(),
+            Vec::new(),
+            0,
+            HashMap::new(),
+        )
+        .unwrap();
+        let snapshot = test_snapshot(Protocol::new(1, 1, None, None), metadata, Vec::new());
+
+        let token = snapshot.verify_column_mapping().unwrap();
+
+        assert!(matches!(token.mode, ColumnMappingMode::Name));
     }
 
     #[test]

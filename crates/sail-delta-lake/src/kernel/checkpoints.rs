@@ -303,14 +303,6 @@ impl ReconciledHeaderState {
     }
 
     pub(crate) fn apply_checkpoint_row(&mut self, row: CheckpointActionRow) -> DeltaResult<()> {
-        if row.sidecar.is_some() {
-            // TODO: Implement V2 checkpoint header replay with sidecar awareness once full
-            // sidecar loading is supported in the main replay path.
-            return Err(DeltaTableError::Unsupported(
-                "V2 checkpoints with sidecars are not yet supported for reading".to_string(),
-            ));
-        }
-
         if let Some(protocol) = row.protocol {
             self.protocol = Some(protocol);
         }
@@ -1272,9 +1264,9 @@ mod tests {
 
     #[test]
     #[expect(clippy::unwrap_used)]
-    fn reconciled_header_state_rejects_sidecars() {
+    fn reconciled_header_state_ignores_sidecars() {
         let mut state = ReconciledHeaderState::default();
-        let err = state
+        state
             .apply_checkpoint_row(CheckpointActionRow {
                 sidecar: Some(Sidecar {
                     path: "_sidecars/00001.parquet".to_string(),
@@ -1284,11 +1276,12 @@ mod tests {
                 }),
                 ..Default::default()
             })
-            .unwrap_err();
+            .unwrap();
 
-        assert!(
-            matches!(err, DeltaTableError::Unsupported(message) if message.contains("sidecars"))
-        );
+        assert!(state.protocol.is_none());
+        assert!(state.metadata.is_none());
+        assert!(state.txns.is_empty());
+        assert!(state.domain_metadata.is_empty());
     }
 
     #[test]
