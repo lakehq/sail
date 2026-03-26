@@ -341,6 +341,9 @@ pub(crate) async fn list_log_files(
         }
     }
 
+    // TODO(v2-checkpoints): This groups checkpoint candidates by version only. It does not yet
+    // distinguish classic vs. V2 checkpoint layouts, nor does it validate multipart completeness;
+    // readers rely on later replay-time handling of checkpointMetadata/sidecar fields instead.
     let latest_checkpoint_version = checkpoint_candidates.iter().map(|(v, _)| *v).max();
     let checkpoint = latest_checkpoint_version.map(|latest_v| {
         let mut files: Vec<ObjectMeta> = checkpoint_candidates

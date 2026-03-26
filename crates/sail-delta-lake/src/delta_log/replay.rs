@@ -29,8 +29,10 @@ async fn read_checkpoint_header_from_parquet(
             .map_err(DeltaTableError::generic_err)?;
 
         let parquet_schema = builder.parquet_schema();
-        // TODO: Once V2 checkpoint sidecar replay is implemented, extend this fast path to read
-        // the referenced sidecar parquet files instead of projecting `sidecar` only for fail-fast.
+        // TODO(v2-checkpoint): Inline V2 checkpoints can still flow through this generic row
+        // decoder, but we do not yet distinguish classic vs. V2 layouts up front. Extend this fast
+        // path to load referenced sidecar parquet files instead of projecting `sidecar` only for
+        // fail-fast.
         let mask = ProjectionMask::columns(
             parquet_schema,
             ["metaData", "protocol", "txn", "domainMetadata", "sidecar"],

@@ -493,6 +493,9 @@ fn validate_effective_commit_target(
         return Err(TransactionError::TableFeaturesRequired(TableFeature::DeletionVectors).into());
     }
 
+    // TODO(cdf-writes): Data-changing operations still do not emit AddCDCFile actions. Commit-time
+    // protocol checks currently reject changeDataFeed tables before these writes can land, but once
+    // the feature is enabled here we need an operation-aware validation instead of relying on that.
     if table_property_enabled(&metadata, "delta.enableChangeDataFeed")
         && !protocol_supports_legacy_change_data_feed(&protocol)
         && !protocol_has_writer_feature(&protocol, &TableFeature::ChangeDataFeed)
@@ -506,6 +509,9 @@ fn validate_effective_commit_target(
         return Err(TransactionError::TableFeaturesRequired(TableFeature::DeletionVectors).into());
     }
 
+    // TODO(row-tracking-writes): We still rely on commit-time protocol rejection for tables that
+    // advertise rowTracking/domainMetadata. When row-tracking writes are implemented, this needs
+    // to grow into explicit validation of baseRowId/defaultRowCommitVersion assignment.
     let row_tracking_requested = table_property_enabled(&metadata, "delta.enableRowTracking")
         || table_property_enabled(&metadata, "delta.rowTrackingSuspended");
     if row_tracking_requested && !protocol_has_writer_feature(&protocol, &TableFeature::RowTracking)
