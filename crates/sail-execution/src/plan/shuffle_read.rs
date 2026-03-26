@@ -19,7 +19,7 @@ use crate::stream::reader::{TaskReadLocation, TaskStreamReader};
 pub struct ShuffleReadExec {
     /// For each output partition, a list of locations to read from.
     locations: Vec<Vec<TaskReadLocation>>,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
     reader: Arc<dyn TaskStreamReader>,
 }
 
@@ -27,7 +27,7 @@ impl ShuffleReadExec {
     pub fn new(
         locations: Vec<Vec<TaskReadLocation>>,
         reader: Arc<dyn TaskStreamReader>,
-        properties: PlanProperties,
+        properties: Arc<PlanProperties>,
     ) -> Self {
         Self {
             locations,
@@ -57,7 +57,7 @@ impl ExecutionPlan for ShuffleReadExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 

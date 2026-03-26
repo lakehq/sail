@@ -87,7 +87,7 @@ pub struct DeltaWriterExec {
     /// Optional override for commit operation metadata.
     operation_override: Option<DeltaOperation>,
     metrics: ExecutionPlanMetricsSet,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl DeltaWriterExec {
@@ -135,13 +135,13 @@ impl DeltaWriterExec {
         })
     }
 
-    fn compute_properties(schema: SchemaRef, output_partitions: usize) -> PlanProperties {
-        PlanProperties::new(
+    fn compute_properties(schema: SchemaRef, output_partitions: usize) -> Arc<PlanProperties> {
+        Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(output_partitions.max(1)),
             EmissionType::Final,
             Boundedness::Bounded,
-        )
+        ))
     }
 
     pub fn table_url(&self) -> &Url {
@@ -191,7 +191,7 @@ impl ExecutionPlan for DeltaWriterExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 

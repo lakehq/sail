@@ -25,7 +25,7 @@ use chrono::Utc;
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, FieldRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use log::debug;
-use object_store::{ObjectMeta, ObjectStore};
+use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::async_writer::ParquetObjectWriter;
 use parquet::arrow::AsyncArrowWriter;
@@ -650,7 +650,6 @@ pub(crate) async fn create_checkpoint_for(
         .create_checkpoint(version)
         .await
 }
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -660,7 +659,7 @@ mod tests {
     use datafusion::arrow::datatypes::DataType as ArrowDataType;
     use object_store::memory::InMemory;
     use object_store::path::Path;
-    use object_store::{ObjectMeta, ObjectStore};
+    use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 
     use super::{
         checkpoint_fields, decode_checkpoint_rows, encode_checkpoint_rows,

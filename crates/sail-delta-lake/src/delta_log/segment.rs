@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use log::debug;
-use object_store::{ObjectMeta, ObjectStore};
+use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 
 use super::timestamps::version_uses_in_commit_timestamps;
 use super::{list_delta_log_entries_from, read_last_checkpoint_version_from_store};

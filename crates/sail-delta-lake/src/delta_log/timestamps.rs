@@ -1,4 +1,4 @@
-use object_store::ObjectMeta;
+use object_store::{ObjectMeta, ObjectStoreExt};
 
 use crate::spec::{
     checksum_path, commit_path, Action, DeltaError, DeltaResult, Metadata, Protocol,
@@ -142,7 +142,7 @@ mod tests {
     use chrono::DateTime;
     use object_store::memory::InMemory;
     use object_store::path::Path;
-    use object_store::{ObjectMeta, ObjectStore};
+    use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
     use url::Url;
 
     use super::*;

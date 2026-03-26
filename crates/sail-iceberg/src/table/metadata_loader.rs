@@ -20,10 +20,11 @@ pub async fn find_latest_metadata_file(
     table_url: &Url,
 ) -> Result<String> {
     use futures::TryStreamExt;
+    use object_store::ObjectStoreExt;
 
     log::trace!("Finding latest metadata file");
     let base_path = crate::utils::url_to_object_path(table_url)?;
-    let version_hint_path = base_path.child("metadata").child("version-hint.text");
+    let version_hint_path = base_path.clone().join("metadata").join("version-hint.text");
     let mut hinted_version: Option<i32> = None;
     let mut hinted_filename: Option<String> = None;
     if let Ok(version_hint_data) = object_store.get(&version_hint_path).await {
@@ -47,7 +48,7 @@ pub async fn find_latest_metadata_file(
     }
 
     log::trace!("Listing metadata directory");
-    let metadata_prefix = base_path.child("metadata");
+    let metadata_prefix = base_path.join("metadata");
 
     let objects = object_store.list(Some(&metadata_prefix));
 

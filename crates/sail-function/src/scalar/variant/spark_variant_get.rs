@@ -131,7 +131,7 @@ fn invoke_variant_get(args: ScalarFunctionArgs, name: &str, safe: bool) -> Resul
     let variant_path = if clean_path.is_empty() {
         VariantPath::default()
     } else {
-        VariantPath::from(clean_path)
+        VariantPath::try_from(clean_path)?
     };
 
     // Resolve the target type.

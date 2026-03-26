@@ -17,6 +17,7 @@ use datafusion::catalog::Session;
 use datafusion::common::{DataFusionError, Result};
 pub use metadata_loader::find_latest_metadata_file;
 use object_store::path::Path as ObjectPath;
+use object_store::ObjectStoreExt;
 use url::Url;
 
 use crate::datasource::provider::IcebergTableProvider;

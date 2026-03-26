@@ -104,7 +104,9 @@ pub async fn build_delete_plan(
     // Adapt the predicate to the scan schema. PhysicalExpr Column indices are schema-dependent,
     // and DeltaScanByAddsExec may reorder/augment the schema compared to the original table schema.
     let adapter_factory = Arc::new(crate::physical_plan::DeltaPhysicalExprAdapterFactory {});
-    let adapter = adapter_factory.create(table_schema.clone(), scan_exec.schema());
+    let adapter = adapter_factory
+        .create(table_schema.clone(), scan_exec.schema())
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let adapted_condition = adapter
         .rewrite(physical_condition.clone())
         .map_err(|e| DataFusionError::External(Box::new(e)))?;

@@ -168,7 +168,7 @@ async fn delete_logs_before_checkpoint_version(
     let log_path = delta_log_root_path();
     let locations = object_store
         .list(Some(&log_path))
-        .filter_map(|meta| async move {
+        .filter_map(move |meta| async move {
             let meta = meta.ok()?;
             expired_log_location(&meta, retention_checkpoint_version).map(Ok)
         })
@@ -198,7 +198,7 @@ mod tests {
     use futures::TryStreamExt;
     use object_store::memory::InMemory;
     use object_store::path::Path;
-    use object_store::ObjectStore;
+    use object_store::{ObjectStore, ObjectStoreExt};
     use url::Url;
 
     use super::*;
