@@ -11,7 +11,18 @@ pub struct ColumnMappingToken {
 #[derive(Debug)]
 pub struct DeletionVectorToken;
 
-/// Proof that change data feed is enabled.
+/// Change Data Feed protocol support advertised by the current snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChangeDataFeedSupport {
+    Unsupported,
+    Legacy,
+    WriterFeature,
+}
+
+/// Proof that Change Data Feed is active on the current snapshot.
+///
+/// CDF is special because protocol support and current-snapshot activation are distinct:
+/// a table may support historical CDF reads even when the current table property is off.
 #[derive(Debug)]
 pub struct ChangeDataFeedToken;
 

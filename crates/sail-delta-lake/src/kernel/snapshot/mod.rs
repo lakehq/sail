@@ -52,8 +52,8 @@ use crate::spec::{
 };
 use crate::storage::LogStore;
 use crate::table::{
-    ChangeDataFeedToken, ColumnMappingToken, DeletionVectorToken, EnabledRowTrackingToken,
-    RowTrackingToken, SupportedRowTrackingToken,
+    ChangeDataFeedSupport, ChangeDataFeedToken, ColumnMappingToken, DeletionVectorToken,
+    EnabledRowTrackingToken, RowTrackingToken, SupportedRowTrackingToken,
 };
 
 mod materialize;
@@ -635,12 +635,12 @@ impl DeltaSnapshot {
         Ok(ColumnMappingToken { mode })
     }
 
-    /// Verify that Deletion Vectors are declared as a writer feature and return a
+    /// Verify that Deletion Vectors are fully enabled for reads and writes and return a
     /// [`DeletionVectorToken`].
     ///
     /// # Errors
     /// Returns [`DeltaError`] if the protocol does not declare the `deletionVectors`
-    /// writer feature at version ≥ 7.
+    /// reader and writer features, or if `delta.enableDeletionVectors` is not `true`.
     pub fn verify_deletion_vectors(&self) -> DeltaResult<DeletionVectorToken> {
         crate::table::features::require_reader_writer_feature(
             self,
@@ -663,21 +663,43 @@ impl DeltaSnapshot {
         }
     }
 
-    /// Verify that the Change Data Feed feature is enabled and return a
+    /// Classify Change Data Feed protocol support for this snapshot.
+    ///
+    /// CDF spans both legacy protocol versions and the newer writer-feature model, so
+    /// protocol support must be tracked separately from the current table property.
+    pub fn change_data_feed_support(&self) -> ChangeDataFeedSupport {
+        match self.protocol().min_writer_version() {
+            0..=3 => ChangeDataFeedSupport::Unsupported,
+            4..=6 => ChangeDataFeedSupport::Legacy,
+            _ if self
+                .protocol()
+                .has_writer_feature(&TableFeature::ChangeDataFeed) =>
+            {
+                ChangeDataFeedSupport::WriterFeature
+            }
+            _ => ChangeDataFeedSupport::Unsupported,
+        }
+    }
+
+    /// Verify that Change Data Feed is active on the current snapshot and return a
     /// [`ChangeDataFeedToken`].
     ///
     /// # Errors
-    /// Returns [`DeltaError`] if `delta.enableChangeDataFeed` is not `true` in the
-    /// table properties.
+    /// Returns [`DeltaError`] if the current protocol does not support CDF or if
+    /// `delta.enableChangeDataFeed` is not `true` in the table properties.
     pub fn verify_change_data_feed(&self) -> DeltaResult<ChangeDataFeedToken> {
-        if self.protocol().min_writer_version() >= 7
-            && !self
-                .protocol()
-                .has_writer_feature(&TableFeature::ChangeDataFeed)
-        {
-            return Err(DeltaTableError::generic(
-                "Change Data Feed requires the changeDataFeed writer feature on writer version >= 7",
-            ));
+        match self.change_data_feed_support() {
+            ChangeDataFeedSupport::Unsupported if self.protocol().min_writer_version() <= 3 => {
+                return Err(DeltaTableError::generic(
+                    "Change Data Feed requires protocol minWriterVersion >= 4",
+                ));
+            }
+            ChangeDataFeedSupport::Unsupported => {
+                return Err(DeltaTableError::generic(
+                    "Change Data Feed requires the changeDataFeed writer feature on writer version >= 7",
+                ));
+            }
+            ChangeDataFeedSupport::Legacy | ChangeDataFeedSupport::WriterFeature => {}
         }
 
         let enabled = self
@@ -887,7 +909,7 @@ mod tests {
         MetadataValue, Protocol, StructField, StructType, TableFeature, TableProperties,
     };
     use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
-    use crate::table::RowTrackingToken;
+    use crate::table::{ChangeDataFeedSupport, RowTrackingToken};
 
     #[expect(clippy::unwrap_used)]
     fn test_metadata(
@@ -1126,12 +1148,76 @@ mod tests {
         );
         assert!(enabled.verify_deletion_vectors().is_ok());
 
+        let missing_reader_feature = test_snapshot(
+            Protocol::new(1, 7, None, Some(vec![TableFeature::DeletionVectors])),
+            test_metadata([("delta.enableDeletionVectors", "true")]),
+            Vec::new(),
+        );
+        assert!(missing_reader_feature.verify_deletion_vectors().is_err());
+
         let disabled = test_snapshot(protocol, test_metadata([]), Vec::new());
         assert!(disabled.verify_deletion_vectors().is_err());
     }
 
     #[test]
-    fn verify_change_data_feed_requires_feature_on_writer_v7_tables() {
+    fn change_data_feed_support_distinguishes_protocol_modes() {
+        let unsupported = test_snapshot(
+            Protocol::new(1, 3, None, None),
+            test_metadata([]),
+            Vec::new(),
+        );
+        assert_eq!(
+            unsupported.change_data_feed_support(),
+            ChangeDataFeedSupport::Unsupported
+        );
+
+        let legacy = test_snapshot(
+            Protocol::new(1, 4, None, None),
+            test_metadata([]),
+            Vec::new(),
+        );
+        assert_eq!(
+            legacy.change_data_feed_support(),
+            ChangeDataFeedSupport::Legacy
+        );
+
+        let missing_feature = test_snapshot(
+            Protocol::new(1, 7, None, Some(vec![])),
+            test_metadata([]),
+            Vec::new(),
+        );
+        assert_eq!(
+            missing_feature.change_data_feed_support(),
+            ChangeDataFeedSupport::Unsupported
+        );
+
+        let writer_feature = test_snapshot(
+            Protocol::new(1, 7, None, Some(vec![TableFeature::ChangeDataFeed])),
+            test_metadata([]),
+            Vec::new(),
+        );
+        assert_eq!(
+            writer_feature.change_data_feed_support(),
+            ChangeDataFeedSupport::WriterFeature
+        );
+    }
+
+    #[test]
+    fn verify_change_data_feed_respects_protocol_generation() {
+        let unsupported_legacy = test_snapshot(
+            Protocol::new(1, 3, None, None),
+            test_metadata([("delta.enableChangeDataFeed", "true")]),
+            Vec::new(),
+        );
+        assert!(unsupported_legacy.verify_change_data_feed().is_err());
+
+        let supported_legacy = test_snapshot(
+            Protocol::new(1, 4, None, None),
+            test_metadata([("delta.enableChangeDataFeed", "true")]),
+            Vec::new(),
+        );
+        assert!(supported_legacy.verify_change_data_feed().is_ok());
+
         let protocol_without_feature = Protocol::new(1, 7, None, Some(vec![]));
         let snapshot = test_snapshot(
             protocol_without_feature,
