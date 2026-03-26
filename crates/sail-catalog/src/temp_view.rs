@@ -115,7 +115,7 @@ impl TemporaryViewManager {
             .schema()
             .fields()
             .iter()
-            .zip(comments.into_iter())
+            .zip(comments)
             .map(|(field, comment)| {
                 Ok(TableColumnStatus {
                     name: field.name().clone(),

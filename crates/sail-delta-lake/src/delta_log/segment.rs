@@ -343,7 +343,7 @@ pub(crate) async fn list_log_files(
         files.remove(0)
     });
 
-    commit_candidates.sort_by(|(av, _), (bv, _)| av.cmp(bv));
+    commit_candidates.sort_by_key(|(av, _)| *av);
     checksum_candidates.sort_by(|(av, _), (bv, _)| bv.cmp(av));
 
     Ok((checksum_candidates, checkpoint, commit_candidates))

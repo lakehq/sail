@@ -602,7 +602,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
             let operand = operand.map(|x| from_ast_expression(*x)).transpose()?;
             let mut arguments = vec![];
             once(*first_condition)
-                .chain(other_conditions.into_iter())
+                .chain(other_conditions)
                 .try_for_each::<_, SqlResult<_>>(|x| {
                     let CaseWhen {
                         when: _,

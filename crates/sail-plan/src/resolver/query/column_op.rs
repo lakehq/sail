@@ -34,7 +34,7 @@ impl PlanResolver<'_> {
         let expr = schema
             .columns()
             .into_iter()
-            .zip(columns.into_iter())
+            .zip(columns)
             .map(|(col, name)| NamedExpr::new(vec![name.into()], Expr::Column(col)))
             .collect();
         let expr = self.rewrite_named_expressions(expr, state)?;
