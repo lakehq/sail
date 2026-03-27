@@ -48,9 +48,9 @@ df = (
 
 ## Options
 
-| Name   | Required | Default | Description                        |
-| ------ | -------- | ------- | ---------------------------------- |
-| `path` | Yes      |         | The path to the Vortex file.       |
+| Name   | Required | Default | Description                  |
+| ------ | -------- | ------- | ---------------------------- |
+| `path` | Yes      |         | The path to the Vortex file. |
 
 ## Filter Pushdown
 
@@ -60,19 +60,19 @@ memory usage for selective queries.
 
 Supported filter types:
 
-| Filter              | Example                          |
-| ------------------- | -------------------------------- |
-| `EqualTo`           | `df.filter(df.id == 3)`          |
-| `NotEqualTo`        | `df.filter(df.id != 3)`          |
-| `GreaterThan`       | `df.filter(df.id > 10)`          |
-| `GreaterThanOrEqual`| `df.filter(df.id >= 10)`         |
-| `LessThan`          | `df.filter(df.id < 10)`          |
-| `LessThanOrEqual`   | `df.filter(df.id <= 10)`         |
-| `In`                | `df.filter(df.id.isin(1, 2, 3))` |
-| `IsNull`            | `df.filter(df.name.isNull())`    |
-| `IsNotNull`         | `df.filter(df.name.isNotNull())` |
-| `Not`               | Logical negation of the above    |
-| `And`               | Combined filters with `&`        |
+| Filter               | Example                          |
+| -------------------- | -------------------------------- |
+| `EqualTo`            | `df.filter(df.id == 3)`          |
+| `NotEqualTo`         | `df.filter(df.id != 3)`          |
+| `GreaterThan`        | `df.filter(df.id > 10)`          |
+| `GreaterThanOrEqual` | `df.filter(df.id >= 10)`         |
+| `LessThan`           | `df.filter(df.id < 10)`          |
+| `LessThanOrEqual`    | `df.filter(df.id <= 10)`         |
+| `In`                 | `df.filter(df.id.isin(1, 2, 3))` |
+| `IsNull`             | `df.filter(df.name.isNull())`    |
+| `IsNotNull`          | `df.filter(df.name.isNotNull())` |
+| `Not`                | Logical negation of the above    |
+| `And`                | Combined filters with `&`        |
 
 Filters that cannot be pushed down are applied by Spark after the read.
 
@@ -89,25 +89,24 @@ df = spark.read.format("vortex").option("path", "/data/events.vortex").load()
 df.show()
 ```
 
-### Filtered Query
+### Filter Pushdown
+
+Filters are pushed down to the Vortex reader automatically:
 
 ```python
-df = (
-    spark.read.format("vortex")
-    .option("path", "/data/events.vortex")
-    .load()
-    .filter("score > 90.0 AND name IS NOT NULL")
-)
-df.show()
+df = spark.read.format("vortex").option("path", "/data/events.vortex").load()
+
+# These filters are evaluated inside the Vortex reader
+df.filter((df.score > 90.0) & (df.name.isNotNull())).show()
 ```
 
 ### SQL Query
 
 ```python
-spark.read.format("vortex").option("path", "/data/events.vortex").load().createOrReplaceTempView("events")
+df = spark.read.format("vortex").option("path", "/data/events.vortex").load()
+df.createOrReplaceTempView("events")
 
-result = spark.sql("SELECT * FROM events WHERE id > 100 ORDER BY score DESC")
-result.show()
+spark.sql("SELECT * FROM events WHERE id > 100 ORDER BY score DESC").show()
 ```
 
 ### Creating Vortex Files
