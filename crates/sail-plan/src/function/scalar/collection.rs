@@ -1,31 +1,16 @@
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{cast, expr, lit, when, ExprSchemable, ScalarUDF};
+use datafusion_expr::{expr, lit, when, ExprSchemable, ScalarUDF};
 use datafusion_functions::math::expr_fn::abs;
 use datafusion_functions_nested::expr_fn;
+use datafusion_spark::function::collection::size::SparkSize;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::collection::spark_concat::SparkConcat;
 use sail_function::scalar::collection::spark_reverse::SparkReverse;
 use sail_function::scalar::misc::raise_error::RaiseError;
 
-use crate::error::{PlanError, PlanResult};
+use crate::error::PlanResult;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
-
-fn size(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let value = input.arguments.one()?;
-
-    match value.get_type(input.function_context.schema)? {
-        DataType::List(_)
-        | DataType::ListView(_)
-        | DataType::FixedSizeList(..)
-        | DataType::LargeList(_)
-        | DataType::LargeListView(_) => Ok(cast(expr_fn::array_length(value), DataType::Int32)),
-        DataType::Map(..) => Ok(cast(expr_fn::cardinality(value), DataType::Int32)),
-        wrong_type => Err(PlanError::InvalidArgument(format!(
-            "size expects List or Map as argument, got {wrong_type:?}"
-        ))),
-    }
-}
 
 fn element_at(input: ScalarFunctionInput, is_try: bool) -> PlanResult<expr::Expr> {
     let (collection, element) = input.arguments.two()?;
@@ -66,13 +51,10 @@ pub(super) fn list_built_in_collection_functions() -> Vec<(&'static str, ScalarF
     use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
-        // TODO: coalesce(result, -1)
-        // if spark.sql.ansi.enabled is false and spark.sql.legacy.sizeOfNull is true
-        // https://spark.apache.org/docs/latest/api/sql/index.html#cardinality
-        ("cardinality", F::custom(size)),
+        ("cardinality", F::udf(SparkSize::new())),
         ("deep_size", F::unary(expr_fn::cardinality)),
         ("element_at", F::custom(|input| element_at(input, false))),
-        ("size", F::custom(size)),
+        ("size", F::udf(SparkSize::new())),
         ("array_concat", F::udf(SparkConcat::new())),
         ("concat", F::udf(SparkConcat::new())),
         ("reverse", F::udf(SparkReverse::new())),

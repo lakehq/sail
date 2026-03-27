@@ -11,6 +11,7 @@ use datafusion::functions_nested::string::array_to_string;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
 use datafusion_expr::{cast, expr, lit, when, AggregateUDF, ExprSchemable, ScalarUDF};
+use datafusion_spark::function::aggregate as df_spark_agg;
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use lazy_static::lazy_static;
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
@@ -327,40 +328,6 @@ fn count_if(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }
 }
 
-fn collect_set(input: AggFunctionInput) -> PlanResult<expr::Expr> {
-    // Spark's collect_set ignores NULLs by default
-    let ignore_nulls = input.ignore_nulls.or(Some(true));
-
-    // WORKAROUND: DataFusion's array_agg doesn't properly handle null_treatment when distinct=true
-    // So we need to add an explicit filter for NULLs
-    let (args, filter, null_treatment) = if ignore_nulls == Some(true) {
-        let arg = input.arguments.one()?;
-        let null_filter = arg.clone().is_not_null();
-        let combined_filter = match input.filter {
-            Some(existing) => Some(Box::new(existing.as_ref().clone().and(null_filter))),
-            None => Some(Box::new(null_filter)),
-        };
-        (vec![arg], combined_filter, None) // Don't use null_treatment when we have explicit filter
-    } else {
-        (
-            input.arguments,
-            input.filter,
-            get_null_treatment(ignore_nulls),
-        )
-    };
-
-    Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func: array_agg::array_agg_udaf(),
-        params: AggregateFunctionParams {
-            args,
-            distinct: true,
-            order_by: input.order_by,
-            filter,
-            null_treatment,
-        },
-    }))
-}
-
 fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     // Spark's collect_list ignores NULLs by default
     let ignore_nulls = input.ignore_nulls.or(Some(true));
@@ -521,8 +488,8 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("bitmap_or_agg", F::unknown("bitmap_or_agg")),
         ("bool_and", F::default(bool_and_or::bool_and_udaf)),
         ("bool_or", F::default(bool_and_or::bool_or_udaf)),
-        ("collect_list", F::custom(array_agg_compacted)),
-        ("collect_set", F::custom(collect_set)),
+        ("collect_list", F::default(df_spark_agg::collect_list)),
+        ("collect_set", F::default(df_spark_agg::collect_set)),
         ("corr", F::default(correlation::corr_udaf)),
         ("count", F::custom(count)),
         ("count_if", F::custom(count_if)),

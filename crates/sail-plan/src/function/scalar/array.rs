@@ -6,6 +6,7 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::{cast, expr, is_null, lit, not, or, when, ExprSchemable, ScalarUDF};
 use datafusion_functions_nested::make_array::make_array;
 use datafusion_functions_nested::string::ArrayToString;
+use datafusion_spark::function::array::array_contains::SparkArrayContains;
 use datafusion_spark::function::array::expr_fn as array_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
@@ -69,13 +70,6 @@ fn array_prepend(array: expr::Expr, element: expr::Expr) -> PlanResult<expr::Exp
 
 fn array_element(array: expr::Expr, element: expr::Expr) -> expr::Expr {
     expr_fn::array_element(array, element + lit(1_i64))
-}
-
-fn array_contains(array: expr::Expr, element: expr::Expr) -> PlanResult<expr::Expr> {
-    Ok(coalesce(vec![
-        expr_fn::array_has(array.clone(), element),
-        when(array.is_not_null(), lit(false)).end()?,
-    ]))
 }
 
 fn array_contains_all(array: expr::Expr, element: expr::Expr) -> expr::Expr {
@@ -260,7 +254,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
         ("array", F::udf(SparkArray::new())),
         ("array_append", F::binary(array_append)),
         ("array_compact", F::unary(array_compact)),
-        ("array_contains", F::binary(array_contains)),
+        ("array_contains", F::udf(SparkArrayContains::new())),
         ("array_contains_all", F::binary(array_contains_all)),
         ("array_distinct", F::unary(expr_fn::array_distinct)),
         ("array_except", F::binary(expr_fn::array_except)),

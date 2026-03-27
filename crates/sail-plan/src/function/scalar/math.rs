@@ -6,6 +6,7 @@ use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{cast, expr, lit, BinaryExpr, Expr, ExprSchemable, Operator, ScalarUDF};
 use datafusion_spark::function::math::expr_fn as math_fn;
+use datafusion_spark::function::math::negative::SparkNegative;
 use half::f16;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::error::generic_exec_err;
@@ -609,7 +610,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("log1p", F::unary(double(log1p))),
         ("log2", F::unary(double(log2))),
         ("mod", F::custom(spark_modulo)),
-        ("negative", F::unary(|x| Expr::Negative(Box::new(x)))),
+        ("negative", F::udf(SparkNegative::new())),
         ("pi", F::nullary(expr_fn::pi)),
         ("pmod", F::binary(math_fn::pmod)),
         ("positive", F::unary(positive)),

@@ -363,7 +363,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: json_tuple"
+        "success": "ok"
       }
     },
     {
