@@ -60,14 +60,14 @@ memory usage for selective queries.
 
 Supported filter types (pushed down to Vortex):
 
-| Filter               | Example                              |
-| -------------------- | ------------------------------------ |
-| `EqualTo`            | `df.filter(df.id == 3)`              |
-| `GreaterThan`        | `df.filter(df.id > 10)`              |
-| `GreaterThanOrEqual` | `df.filter(df.id >= 10)`             |
-| `LessThan`           | `df.filter(df.id < 10)`              |
-| `LessThanOrEqual`    | `df.filter(df.id <= 10)`             |
-| `In`                 | `df.filter(df.id.isin(1, 2, 3))`     |
+| Filter               | Example                                                 |
+| -------------------- | ------------------------------------------------------- |
+| `EqualTo`            | `df.filter(df.id == 3)`                                 |
+| `GreaterThan`        | `df.filter(df.id > 10)`                                 |
+| `GreaterThanOrEqual` | `df.filter(df.id >= 10)`                                |
+| `LessThan`           | `df.filter(df.id < 10)`                                 |
+| `LessThanOrEqual`    | `df.filter(df.id <= 10)`                                |
+| `In`                 | `df.filter(df.id.isin(1, 2, 3))`                        |
 | `Not`                | `df.filter(df.id != 3)` (negation of supported filters) |
 
 Filters that cannot be pushed down (such as `IS NULL`/`IS NOT NULL`, `startswith`, `endswith`, `contains`, or other string predicates) are still supported, but they are applied by Spark after the read. When combining filters with `&`, each supported filter is pushed down individually and unsupported ones are applied post-read.
