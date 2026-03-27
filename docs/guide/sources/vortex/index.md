@@ -58,23 +58,19 @@ The data source pushes supported filters down to the Vortex reader so that
 only matching rows are materialized. This can significantly reduce I/O and
 memory usage for selective queries.
 
-Supported filter types:
+Supported filter types (pushed down to Vortex):
 
-| Filter               | Example                          |
-| -------------------- | -------------------------------- |
-| `EqualTo`            | `df.filter(df.id == 3)`          |
-| `NotEqualTo`         | `df.filter(df.id != 3)`          |
-| `GreaterThan`        | `df.filter(df.id > 10)`          |
-| `GreaterThanOrEqual` | `df.filter(df.id >= 10)`         |
-| `LessThan`           | `df.filter(df.id < 10)`          |
-| `LessThanOrEqual`    | `df.filter(df.id <= 10)`         |
-| `In`                 | `df.filter(df.id.isin(1, 2, 3))` |
-| `IsNull`             | `df.filter(df.name.isNull())`    |
-| `IsNotNull`          | `df.filter(df.name.isNotNull())` |
-| `Not`                | Logical negation of the above    |
-| `And`                | Combined filters with `&`        |
+| Filter               | Example                              |
+| -------------------- | ------------------------------------ |
+| `EqualTo`            | `df.filter(df.id == 3)`              |
+| `GreaterThan`        | `df.filter(df.id > 10)`              |
+| `GreaterThanOrEqual` | `df.filter(df.id >= 10)`             |
+| `LessThan`           | `df.filter(df.id < 10)`              |
+| `LessThanOrEqual`    | `df.filter(df.id <= 10)`             |
+| `In`                 | `df.filter(df.id.isin(1, 2, 3))`     |
+| `Not`                | `df.filter(df.id != 3)` (negation of supported filters) |
 
-Filters that cannot be pushed down are applied by Spark after the read.
+Filters that cannot be pushed down (such as `IS NULL`/`IS NOT NULL`, `startswith`, `endswith`, `contains`, or other string predicates) are still supported, but they are applied by Spark after the read. When combining filters with `&`, each supported filter is pushed down individually and unsupported ones are applied post-read.
 
 ## Examples
 
@@ -96,7 +92,7 @@ Filters are pushed down to the Vortex reader automatically:
 ```python
 df = spark.read.format("vortex").option("path", "/data/events.vortex").load()
 
-# These filters are evaluated inside the Vortex reader
+# The comparison filter is pushed down to Vortex; isNotNull is applied post-read
 df.filter((df.score > 90.0) & (df.name.isNotNull())).show()
 ```
 
