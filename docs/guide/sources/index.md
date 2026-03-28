@@ -26,6 +26,6 @@ There are also features that are planned in our roadmap (:construction:).
 | Files (Avro)           | :white_check_mark: | :white_check_mark: |
 | [Python](./python/)    | :white_check_mark: | :white_check_mark: |
 | [JDBC](./jdbc/)        | :white_check_mark: | :construction:     |
-| [Vortex](./vortex/)    | :white_check_mark: | :x:                |
+| [Vortex](./vortex/)    | :white_check_mark: | :construction:     |
 | Hudi                   | :construction:     | :construction:     |
 | Files (ORC)            | :construction:     | :construction:     |
