@@ -1,3 +1,4 @@
+
 use std::convert::TryInto;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
@@ -129,7 +130,7 @@ use sail_function::scalar::geo::st_geogfromwkb::StGeogFromWKB;
 use sail_function::scalar::geo::st_geomfromwkb::StGeomFromWKB;
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
 use sail_function::scalar::hash::spark_xxhash64::SparkXxhash64;
-use sail_function::scalar::json::SparkToJson;
+use sail_function::scalar::json::{SparkSchemaOfJson, SparkToJson};
 use sail_function::scalar::map::str_to_map::StrToMap;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
@@ -1780,6 +1781,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkFromCSV::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::SparkSchemaOfJson(gen::SparkSchemaOfJsonUdf {}) => {
+                let udf = SparkSchemaOfJson::new();
+                return Ok(Arc::new(ScalarUDF::from(udf)))
+            }
         };
         match name {
             "array_item_with_position" => {
@@ -2002,6 +2007,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkNextDay>()
             || node_inner.is::<SparkPmod>()
             || node_inner.is::<SparkReverse>()
+            || node_inner.is::<SparkSchemaOfJson>()
             || node_inner.is::<SparkSequence>()
             || node_inner.is::<SparkShuffle>()
             || node_inner.is::<SparkSha1>()
@@ -2116,6 +2122,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkFromCSV>() {
             let session_timezone = func.session_timezone().to_string();
             UdfKind::SparkFromCsv(gen::SparkFromCsvUdf { session_timezone })
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<SparkSchemaOfJson>() {
+            UdfKind::SparkSchemaOfJson(gen::SparkSchemaOfJsonUdf {})
         } else {
             return Ok(());
         };
