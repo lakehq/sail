@@ -3,7 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::{
     downcast_array, Array, ArrayRef, MapArray, StringArray, StructArray,
 };
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{exec_err, plan_err, DataFusionError, Result};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
@@ -111,7 +111,18 @@ impl ScalarUDFImpl for SparkSchemaOfJson {
         Self::validate_arg_types(arg_types)?;
         let mut coerce_to = vec![DataType::Utf8];
         if arg_types.len() > 1 {
-            coerce_to.push(arg_types[1].clone());
+            // Forcer le map<k,v> → map<Utf8, Utf8>
+            coerce_to.push(DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("key", DataType::Utf8, false),
+                        Field::new("value", DataType::Utf8, true),
+                    ])),
+                    false,
+                )),
+                false,
+            ));
         }
         // utf8, optional<map>
         Ok(coerce_to)
@@ -146,7 +157,10 @@ fn schema_of_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(StringArray::from(vec![type_ddl])))
 }
 
-fn infer_json_schema_type(json_string: &str, _options: &SparkSchemaOfJsonOptions) -> Result<String> {
+fn infer_json_schema_type(
+    json_string: &str,
+    _options: &SparkSchemaOfJsonOptions,
+) -> Result<String> {
     let value = serde_json::from_str::<serde_json::Value>(json_string)
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
     value_to_ddl_type(&value)
@@ -225,9 +239,8 @@ impl SparkSchemaOfJsonOptions {
                     return Err(DataFusionError::NotImplemented(format!(
                         "`{}` currently doesn't support option allowNumericLeadingZeros",
                         SparkSchemaOfJson::SCHEMA_OF_JSON_NAME,
-
                     )));
-                },
+                }
                 other => {
                     return plan_err!("Found unsupported option type when parsing options: {other}")
                 }

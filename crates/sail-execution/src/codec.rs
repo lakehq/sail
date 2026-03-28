@@ -1,4 +1,3 @@
-
 use std::convert::TryInto;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
@@ -1783,7 +1782,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             UdfKind::SparkSchemaOfJson(gen::SparkSchemaOfJsonUdf {}) => {
                 let udf = SparkSchemaOfJson::new();
-                return Ok(Arc::new(ScalarUDF::from(udf)))
+                return Ok(Arc::new(ScalarUDF::from(udf)));
             }
         };
         match name {
