@@ -69,8 +69,7 @@ impl SparkSchemaOfJson {
                         let value = fields[1].clone();
                         if !key.data_type().is_string() || !value.data_type().is_string() {
                             return Err(DataFusionError::Plan(format!(
-                                "For function `{}`, the options map keys/values should both be type string. Instead
-                                got key: {}, value: {}",
+                                "For function `{}`, the options map keys/values should both be type string. Instead got key: {}, value: {}",
                                 Self::SCHEMA_OF_JSON_NAME,
                                 key.data_type(),
                                 value.data_type(),
