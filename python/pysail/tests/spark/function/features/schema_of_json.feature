@@ -78,5 +78,5 @@ Feature: schema_of_json function detects the schema of a literal json string
         """
         SELECT schema_of_json(null) AS result
         """
-      Then query error Execution error:.*found invalid arg types: \[Null\]
+      Then query error .*found invalid arg types: \[Null\]
 
