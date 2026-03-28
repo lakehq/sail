@@ -110,7 +110,12 @@ impl ScalarUDFImpl for SparkSchemaOfJson {
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         Self::validate_args_len(arg_types)?;
         Self::validate_arg_types(arg_types)?;
-        Ok(arg_types.to_vec())
+        let mut coerce_to = vec![DataType::Utf8];
+        if arg_types.len() > 1 {
+            coerce_to.push(arg_types[1].clone());
+        }
+        // utf8, optional<map>
+        Ok(coerce_to)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
