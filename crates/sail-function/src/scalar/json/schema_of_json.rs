@@ -10,7 +10,6 @@ use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signatur
 use datafusion_expr_common::signature::Volatility;
 use datafusion_functions::downcast_arg;
 use datafusion_functions::utils::make_scalar_function;
-use regex::Regex;
 use serde_json::Value;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -143,27 +142,10 @@ fn schema_of_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(StringArray::from(vec![type_ddl])))
 }
 
-fn infer_json_schema_type(json_string: &str, options: &SparkSchemaOfJsonOptions) -> Result<String> {
-    let preprocessed_json = preprocess_json(json_string, options);
-    let value = serde_json::from_str::<serde_json::Value>(&preprocessed_json)
+fn infer_json_schema_type(json_string: &str, _options: &SparkSchemaOfJsonOptions) -> Result<String> {
+    let value = serde_json::from_str::<serde_json::Value>(json_string)
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
     value_to_ddl_type(&value)
-}
-
-fn preprocess_json(string: &str, options: &SparkSchemaOfJsonOptions) -> String {
-    // Preprocessing required bc serde json (even json5) can't allow for leading 0s in numeric
-    // types
-    if options.allow_numeric_leading_zeros {
-        remove_leading_zeros(string.to_string())
-    } else {
-        string.to_string()
-    }
-}
-
-#[expect(clippy::unwrap_used)]
-fn remove_leading_zeros(string: String) -> String {
-    let re = Regex::new(r"\b0+([1-9]\d*)").unwrap();
-    re.replace_all(string.as_str(), "$1").to_string()
 }
 
 fn value_to_ddl_type(value: &Value) -> Result<String> {
@@ -221,7 +203,7 @@ impl ModeOptions {
 #[derive(Debug, Default)]
 struct SparkSchemaOfJsonOptions {
     mode: ModeOptions,
-    allow_numeric_leading_zeros: bool,
+    _allow_numeric_leading_zeros: bool,
 }
 
 impl SparkSchemaOfJsonOptions {
@@ -235,10 +217,12 @@ impl SparkSchemaOfJsonOptions {
             match key {
                 "mode" => self.mode = ModeOptions::from_str(value.to_string())?,
                 "allowNumericLeadingZeros" => {
-                    self.allow_numeric_leading_zeros = value.parse::<bool>()
-                        .map_err(|e| DataFusionError::Plan(format!(
-                            "Error parsing options: {key} of {value} can't be parsed to a bool. Original error: {e}"
-                        )))?
+                    // TODO: extend serde/serde_json5 to support leading 0s
+                    return Err(DataFusionError::NotImplemented(format!(
+                        "`{}` currently doesn't support option allowNumericLeadingZeros",
+                        SparkSchemaOfJson::SCHEMA_OF_JSON_NAME,
+
+                    )));
                 },
                 other => {
                     return plan_err!("Found unsupported option type when parsing options: {other}")

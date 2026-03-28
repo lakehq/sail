@@ -47,17 +47,6 @@ Feature: schema_of_json function detects the schema of a literal json string
         | result         |
         | ARRAY<STRUCT<a: STRUCT<a: BIGINT>>>  |
 
-  Rule: Invalid json handled like spark
-    Scenario: schema of json leading zeros
-        Testing that this doesn't fail
-      When query
-        """
-        SELECT schema_of_json('{"a": 01, "b": "01"}', map('allowNumericLeadingZeros', 'true')) AS result
-        """
-      Then query result
-        | result         |
-        | STRUCT<a: BIGINT, b: STRING>  |
-
   Rule: Exceptions handled appropriately
     Scenario: schema of json not scalar
       When query
@@ -80,3 +69,10 @@ Feature: schema_of_json function detects the schema of a literal json string
         """
       Then query error .*found invalid arg types: \[Null\]
 
+    Scenario: schema of json leading zeros
+        Testing that this fails
+      When query
+        """
+        SELECT schema_of_json('{"01b": 01, "b": "01"}', map('allowNumericLeadingZeros', 'true')) AS result
+        """
+      Then query error .*doesn't support option allowNumericLeadingZeros
