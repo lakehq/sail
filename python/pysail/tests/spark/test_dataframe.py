@@ -93,12 +93,7 @@ def test_dataframe_with_metadata_aggregate(spark):
     )
 
     # Group-by aggregation on a column with metadata should also work
-    result2 = (
-        df_with_metadata.groupBy("value")
-        .count()
-        .sort("value")
-        .toPandas()
-    )
+    result2 = df_with_metadata.groupBy("value").count().sort("value").toPandas()
     assert_frame_equal(
         result2,
         pd.DataFrame({"value": ["A", "B"], "count": [2, 1]}).astype({"count": "int64"}),
