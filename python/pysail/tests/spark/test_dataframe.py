@@ -70,3 +70,36 @@ def test_dataframe_drop(spark):
             {"a.b.c": "int32"}
         ),
     )
+
+
+def test_dataframe_with_metadata_aggregate(spark):
+    """Regression test: aggregating a column with custom metadata should not raise SparkRuntimeException."""
+    from pyspark.sql.functions import max as spark_max
+
+    df = spark.createDataFrame(
+        schema="id INTEGER, value STRING",
+        data=[(1, "A"), (2, "B"), (3, "A")],
+    )
+    df_with_metadata = df.withMetadata("value", {"foo": "bar"})
+
+    # Metadata should be accessible on the schema
+    assert df_with_metadata.schema["value"].metadata == {"foo": "bar"}
+
+    # Aggregating on a column with metadata should work without error
+    result = df_with_metadata.select(spark_max("value")).toPandas()
+    assert_frame_equal(
+        result,
+        pd.DataFrame({"max(value)": ["B"]}),
+    )
+
+    # Group-by aggregation on a column with metadata should also work
+    result2 = (
+        df_with_metadata.groupBy("value")
+        .count()
+        .sort("value")
+        .toPandas()
+    )
+    assert_frame_equal(
+        result2,
+        pd.DataFrame({"value": ["A", "B"], "count": [2, 1]}).astype({"count": "int64"}),
+    )

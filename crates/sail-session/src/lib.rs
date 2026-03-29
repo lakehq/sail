@@ -1,6 +1,7 @@
 pub mod catalog;
 pub mod error;
 pub mod formats;
+pub mod logical_rewrite;
 pub mod observable;
 pub mod optimizer;
 pub mod planner;
