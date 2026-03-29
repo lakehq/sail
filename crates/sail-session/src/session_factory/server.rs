@@ -208,6 +208,13 @@ impl ServerSessionFactory {
             .execution
             .use_row_number_estimates_to_optimize_partitioning;
         execution.listing_table_ignore_subdirectory = false;
+        // DataFusion validates that the physical input schema of an aggregate matches the
+        // logical input schema, including field-level metadata. However, the physical
+        // `ProjectionExec` does not propagate logical field metadata (e.g., from
+        // `DataFrame.withMetadata()`) into its output schema, so this check spuriously
+        // fails. Skipping the check is safe because the mismatch only involves annotation
+        // metadata, not data types or nullability.
+        execution.skip_physical_aggregate_schema_check = true;
     }
 
     fn apply_execution_parquet_config(&mut self, config: &mut SessionConfig) {
@@ -250,5 +257,126 @@ impl ServerSessionFactory {
             .config
             .parquet
             .maximum_buffered_record_batches_per_stream;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::disallowed_methods, clippy::expect_used, clippy::unwrap_used)]
+
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::common::metadata::FieldMetadata;
+    use datafusion::datasource::MemTable;
+    use datafusion::functions_aggregate::min_max::max_udaf;
+    use datafusion::prelude::{SessionConfig, SessionContext};
+    use datafusion_expr::expr::AggregateFunction;
+    use datafusion_expr::{col, Expr};
+
+    /// Reproduces the DataFusion bug where `ProjectionExec` does not propagate
+    /// field-level metadata from the logical `DFSchema` into its output Arrow
+    /// schema.  When an `AggregateExec` is planned on top of such a
+    /// `ProjectionExec`, DataFusion's physical-vs-logical schema check fails
+    /// with "Physical input schema should be the same as the one converted from
+    /// logical input schema".
+    ///
+    /// The fix applied in Sail is to set
+    /// `execution.skip_physical_aggregate_schema_check = true` in the server
+    /// session configuration, which bypasses the spurious mismatch.
+    #[tokio::test]
+    async fn test_aggregate_on_projection_with_field_metadata() {
+        let make_table = || {
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "value",
+                DataType::Utf8,
+                false,
+            )]));
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(datafusion::arrow::array::StringArray::from(vec![
+                    "A", "B",
+                ]))],
+            )
+            .unwrap();
+            MemTable::try_new(schema, vec![vec![batch]]).unwrap()
+        };
+
+        // --- Reproduce the bug (default session, check enabled) ---
+        let ctx_default = SessionContext::new();
+        ctx_default
+            .register_table("t", Arc::new(make_table()))
+            .unwrap();
+
+        let metadata = FieldMetadata::from(HashMap::from([("foo".to_string(), "bar".to_string())]));
+        // Mimic `DataFrame.withMetadata("value", {"foo": "bar"})`:
+        // produce a Projection whose DFSchema carries field metadata.
+        let df_with_meta = ctx_default
+            .table("t")
+            .await
+            .unwrap()
+            .select(vec![
+                col("value").alias_with_metadata("value", Some(metadata))
+            ])
+            .unwrap();
+
+        // `max("value")` keeps the projection alive (optimizer cannot remove it
+        // because the aggregate directly consumes the projected "value" column).
+        let max_value = Expr::AggregateFunction(AggregateFunction::new_udf(
+            max_udaf(),
+            vec![col("value")],
+            false,
+            None,
+            vec![],
+            None,
+        ));
+
+        // Planning an aggregate on top should fail because ProjectionExec does
+        // not copy field metadata into its output schema, causing a mismatch.
+        let agg_err = df_with_meta
+            .aggregate(vec![], vec![max_value.clone()])
+            .unwrap()
+            .create_physical_plan()
+            .await
+            .unwrap_err();
+
+        assert!(
+            agg_err
+                .to_string()
+                .contains("Physical input schema should be the same"),
+            "unexpected error: {agg_err}"
+        );
+
+        // --- Verify the workaround (skip the check) ---
+        let mut config = SessionConfig::new();
+        config
+            .options_mut()
+            .execution
+            .skip_physical_aggregate_schema_check = true;
+        let ctx_fixed = SessionContext::new_with_config(config);
+        ctx_fixed
+            .register_table("t", Arc::new(make_table()))
+            .unwrap();
+
+        let metadata2 =
+            FieldMetadata::from(HashMap::from([("foo".to_string(), "bar".to_string())]));
+        let df_fixed = ctx_fixed
+            .table("t")
+            .await
+            .unwrap()
+            .select(vec![
+                col("value").alias_with_metadata("value", Some(metadata2))
+            ])
+            .unwrap();
+
+        // With the flag set, planning succeeds.
+        df_fixed
+            .aggregate(vec![], vec![max_value])
+            .unwrap()
+            .create_physical_plan()
+            .await
+            .expect("planning should succeed with skip_physical_aggregate_schema_check = true");
     }
 }

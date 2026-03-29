@@ -55,8 +55,6 @@ use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
 use sail_plan::catalog::CatalogCommandNode;
 use sail_plan_lakehouse::new_lakehouse_extension_planners;
 
-use crate::logical_rewrite::StripProjectionFieldMetadata;
-
 #[derive(Debug)]
 pub struct ExtensionQueryPlanner {}
 
@@ -71,7 +69,6 @@ impl QueryPlanner for ExtensionQueryPlanner {
         let rewriters: Vec<Box<dyn LogicalRewriter>> = vec![
             Box::new(RewriteSystemTableSource),
             Box::new(RewriteDeltaTableSource),
-            Box::new(StripProjectionFieldMetadata),
         ];
         let mut logical_plan = logical_plan.clone();
         for rewriter in rewriters {
