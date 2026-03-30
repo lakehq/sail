@@ -24,6 +24,9 @@ use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
+    /// Resolves a named table or view reference into a logical plan node.
+    /// Looks up the name in the catalog and produces the appropriate plan
+    /// depending on whether it's a table, view, or temporary view.
     pub(super) async fn resolve_query_read_named_table(
         &self,
         table: spec::ReadNamedTable,
@@ -128,13 +131,22 @@ impl PlanResolver<'_> {
                     state,
                 )?
             }
-            TableKind::View { .. } => {
+            TableKind::View { definition, .. } => {
                 if temporal.is_some() {
                     return Err(PlanError::unsupported(
                         "SQL time travel is not supported for views",
                     ));
                 }
-                return Err(PlanError::todo("read view"));
+                let ast = sail_sql_analyzer::parser::parse_one_statement(&definition)?;
+                let spec_plan = sail_sql_analyzer::statement::from_ast_statement(ast)?;
+                match spec_plan {
+                    spec::Plan::Query(query_plan) => {
+                        self.resolve_query_plan(query_plan, state).await?
+                    }
+                    _ => {
+                        return Err(PlanError::invalid("view definition must be a query"));
+                    }
+                }
             }
             TableKind::TemporaryView { plan, .. } | TableKind::GlobalTemporaryView { plan, .. } => {
                 if temporal.is_some() {
