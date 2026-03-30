@@ -11,7 +11,7 @@ use super::{
     parse_checkpoint_version_from_location, parse_checksum_version_from_location,
     parse_commit_version_from_location, resolve_version_timestamp,
 };
-use crate::kernel::checkpoints::read_checkpoint_rows_from_parquet;
+use crate::kernel::checkpoints::read_checkpoint_main_rows_from_parquet;
 use crate::kernel::snapshot::DeltaSnapshot;
 use crate::spec::{delta_log_root_path, sidecars_dir_path, DeltaResult};
 use crate::storage::LogStore;
@@ -223,7 +223,7 @@ async fn cleanup_orphaned_sidecars(object_store: Arc<dyn ObjectStore>) -> DeltaR
 
     let mut referenced_sidecars: HashSet<String> = HashSet::new();
     for cp_meta in checkpoint_metas {
-        match read_checkpoint_rows_from_parquet(object_store.clone(), cp_meta.clone()).await {
+        match read_checkpoint_main_rows_from_parquet(object_store.clone(), cp_meta.clone()).await {
             Ok(rows) => {
                 for row in rows {
                     if let Some(sidecar) = row.sidecar {

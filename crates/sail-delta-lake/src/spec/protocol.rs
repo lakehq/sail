@@ -124,6 +124,8 @@ impl TableFeature {
                 | Self::DeletionVectors
                 | Self::TimestampWithoutTimezone
                 | Self::V2Checkpoint
+                | Self::VacuumProtocolCheck
+                | Self::CatalogManaged
                 | Self::VariantType
                 | Self::TypeWidening
         )

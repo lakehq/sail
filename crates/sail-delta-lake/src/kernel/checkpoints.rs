@@ -666,7 +666,7 @@ impl<'a> CheckpointManager<'a> {
         // V2 checkpoint marker
         main_rows.push(CheckpointActionRow {
             checkpoint_metadata: Some(CheckpointMetadata {
-                version: 1,
+                version,
                 tags: None,
             }),
             ..Default::default()
@@ -801,13 +801,15 @@ pub(crate) async fn replay_commit_actions(
     Ok(commit_timestamps)
 }
 
-pub(crate) async fn read_checkpoint_rows_from_parquet(
+/// Read only the main checkpoint parquet file (without loading sidecars).
+/// Useful when callers only need non-file actions (protocol, metadata, sidecar
+/// descriptors, etc.) — for example during sidecar garbage collection.
+pub(crate) async fn read_checkpoint_main_rows_from_parquet(
     root_store: std::sync::Arc<dyn ObjectStore>,
     meta: ObjectMeta,
 ) -> DeltaResult<Vec<CheckpointActionRow>> {
-    let store = root_store.clone();
-    let main_bytes = store.get(&meta.location).await?.bytes().await?;
-    let mut rows = tokio::task::spawn_blocking(move || {
+    let main_bytes = root_store.get(&meta.location).await?.bytes().await?;
+    tokio::task::spawn_blocking(move || {
         let mut batches = ParquetRecordBatchReaderBuilder::try_new(main_bytes)
             .map_err(DeltaTableError::generic_err)?
             .build()
@@ -821,7 +823,14 @@ pub(crate) async fn read_checkpoint_rows_from_parquet(
         Ok::<_, DeltaTableError>(rows)
     })
     .await
-    .map_err(DeltaTableError::generic_err)??;
+    .map_err(DeltaTableError::generic_err)?
+}
+
+pub(crate) async fn read_checkpoint_rows_from_parquet(
+    root_store: std::sync::Arc<dyn ObjectStore>,
+    meta: ObjectMeta,
+) -> DeltaResult<Vec<CheckpointActionRow>> {
+    let mut rows = read_checkpoint_main_rows_from_parquet(root_store.clone(), meta).await?;
 
     // Collect sidecar descriptors from V2 checkpoint rows and load add/remove
     // payload from the referenced sidecar parquet files.
