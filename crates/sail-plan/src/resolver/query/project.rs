@@ -162,8 +162,7 @@ impl PlanResolver<'_> {
                         // names from alias expressions inside the args (used by
                         // generators like json_tuple that name their output columns).
                         let use_outer_names = name.len() == args.len()
-                            && (name.len() > 1
-                                || name.first().is_some_and(|n| !n.contains('(')));
+                            && (name.len() > 1 || name.first().is_some_and(|n| !n.contains('(')));
                         if use_outer_names {
                             for (name, arg) in name.into_iter().zip(args) {
                                 out.push(NamedExpr::new(vec![name], arg));
