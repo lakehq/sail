@@ -261,3 +261,155 @@ Feature: Delta Lake V2 Checkpoint (Sidecar Checkpoints)
         | 1  |
         | 3  |
         | 4  |
+
+  @sail-only
+  Rule: EXPLAIN shows driver path reading V2 checkpoint
+
+    Background:
+      Given variable location for temporary directory delta_v2_checkpoint_explain_driver
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_v2_ckpt_explain_driver_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_v2_ckpt_explain_driver_test (id INT, value STRING)
+        USING DELTA
+        LOCATION {{ location.sql }}
+        TBLPROPERTIES (
+          'delta.checkpointInterval' = '1',
+          'delta.feature.v2Checkpoint' = 'enabled'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO delta_v2_ckpt_explain_driver_test VALUES (1, 'a')
+        """
+      Given statement
+        """
+        INSERT INTO delta_v2_ckpt_explain_driver_test VALUES (2, 'b')
+        """
+
+    Scenario: EXPLAIN SELECT on V2 checkpoint table uses driver file scan
+      When query
+        """
+        EXPLAIN SELECT * FROM delta_v2_ckpt_explain_driver_test ORDER BY id
+        """
+      Then query plan matches snapshot
+
+  @sail-only
+  Rule: EXPLAIN shows metadata-as-data path reading V2 checkpoint with sidecar log replay
+
+    Background:
+      Given variable location for temporary directory delta_v2_checkpoint_explain_metadata
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_v2_ckpt_explain_metadata_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_v2_ckpt_explain_metadata_test (id INT, value STRING)
+        USING DELTA
+        LOCATION {{ location.sql }}
+        OPTIONS (metadataAsDataRead 'true')
+        TBLPROPERTIES (
+          'delta.checkpointInterval' = '1',
+          'delta.feature.v2Checkpoint' = 'enabled'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO delta_v2_ckpt_explain_metadata_test VALUES (1, 'a')
+        """
+      Given statement
+        """
+        INSERT INTO delta_v2_ckpt_explain_metadata_test VALUES (2, 'b')
+        """
+
+    Scenario: EXPLAIN SELECT on V2 checkpoint table with metadata-as-data shows sidecar in log replay
+      When query
+        """
+        EXPLAIN SELECT * FROM delta_v2_ckpt_explain_metadata_test ORDER BY id
+        """
+      Then query plan matches snapshot
+
+  @sail-only
+  Rule: V2 checkpoint table is readable via metadata-as-data path
+
+    Background:
+      Given variable location for temporary directory delta_v2_checkpoint_metadata_read
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_v2_ckpt_metadata_read_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_v2_ckpt_metadata_read_test (id INT, value STRING)
+        USING DELTA
+        LOCATION {{ location.sql }}
+        OPTIONS (metadataAsDataRead 'true')
+        TBLPROPERTIES (
+          'delta.checkpointInterval' = '1',
+          'delta.feature.v2Checkpoint' = 'enabled'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO delta_v2_ckpt_metadata_read_test VALUES (1, 'a')
+        """
+      Given statement
+        """
+        INSERT INTO delta_v2_ckpt_metadata_read_test VALUES (2, 'b')
+        """
+
+    Scenario: SELECT on V2 checkpoint table with metadata-as-data returns correct data
+      When query
+        """
+        SELECT * FROM delta_v2_ckpt_metadata_read_test ORDER BY id
+        """
+      Then query result ordered
+        | id | value |
+        | 1  | a     |
+        | 2  | b     |
+
+  @sail-only
+  Rule: V2 checkpoint table with metadata-as-data is readable after JSON log deletion
+
+    Background:
+      Given variable location for temporary directory delta_v2_checkpoint_metadata_recovery
+      Given variable delta_log for delta log of location
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_v2_ckpt_metadata_recovery_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_v2_ckpt_metadata_recovery_test (id INT)
+        USING DELTA
+        LOCATION {{ location.sql }}
+        OPTIONS (metadataAsDataRead 'true')
+        TBLPROPERTIES (
+          'delta.checkpointInterval' = '1',
+          'delta.feature.v2Checkpoint' = 'enabled'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO delta_v2_ckpt_metadata_recovery_test VALUES (1), (2)
+        """
+      Given statement
+        """
+        INSERT INTO delta_v2_ckpt_metadata_recovery_test VALUES (3)
+        """
+
+    Scenario: metadata-as-data read succeeds after v1 JSON log is deleted with V2 checkpoint
+      Given file 00000000000000000001.json in delta_log is deleted
+      When query
+        """
+        SELECT * FROM delta_v2_ckpt_metadata_recovery_test ORDER BY id
+        """
+      Then query result ordered
+        | id |
+        | 1  |
+        | 2  |
+        | 3  |

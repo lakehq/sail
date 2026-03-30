@@ -223,6 +223,7 @@ pub async fn build_log_replay_pipeline_with_options(
         snapshot.physical_partition_columns(),
         log_segment_files.checkpoint_files,
         log_segment_files.commit_files,
+        log_segment_files.sidecar_files,
         options,
     )
     .await
@@ -235,6 +236,7 @@ async fn build_log_replay_pipeline_with_files(
     partition_columns: Vec<(String, String)>,
     checkpoint_files: Vec<String>,
     commit_files: Vec<String>,
+    sidecar_files: Vec<String>,
     options: LogReplayOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let log_scan_options = LogScanOptions {
@@ -246,6 +248,7 @@ async fn build_log_replay_pipeline_with_files(
             ctx,
             checkpoint_files,
             commit_files,
+            sidecar_files,
             log_scan_options,
         )
         .await?;
