@@ -6,7 +6,6 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{self, Expr};
 use datafusion_expr::{cast, lit, try_cast, when, BinaryExpr, ExprSchemable, Operator, ScalarUDF};
 use datafusion_functions::expr_fn::to_time;
-use datafusion_spark::function::datetime::date_trunc::SparkDateTrunc;
 use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
 use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
 use sail_common::datetime::time_unit_to_multiplier;
@@ -693,7 +692,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             "date_sub",
             F::custom(|input| interval_arithmetic(input, "days", Operator::Minus)),
         ),
-        ("date_trunc", F::udf(SparkDateTrunc::new())),
+        ("date_trunc", F::binary(date_trunc)),
         (
             "dateadd",
             F::custom(|input| interval_arithmetic(input, "days", Operator::Plus)),

@@ -3,8 +3,8 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, lit};
 use datafusion_spark::function::map::map_from_arrays::MapFromArrays;
 use datafusion_spark::function::map::map_from_entries::MapFromEntries;
-use datafusion_spark::function::map::str_to_map::SparkStrToMap;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::map::str_to_map::StrToMap;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -95,7 +95,7 @@ fn str_to_map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let pair_delims = delims.first().cloned().unwrap_or(lit(","));
     let key_value_delims = delims.get(1).cloned().unwrap_or(lit(":"));
 
-    F::udf(SparkStrToMap::new())(ScalarFunctionInput {
+    F::udf(StrToMap::new())(ScalarFunctionInput {
         arguments: vec![strs, pair_delims, key_value_delims],
         function_context: input.function_context,
     })

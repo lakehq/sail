@@ -3,10 +3,13 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::ScalarValue;
 use datafusion_expr::{cast, lit, Expr, ExprSchemable, ScalarUDF};
+use datafusion_functions::core::expr_ext::FieldAccessor;
+use datafusion_spark::function::json::json_tuple::JsonTuple;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
 use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::explode::{Explode, ExplodeKind};
+use sail_function::scalar::multi_expr::MultiExpr;
 
 use crate::error::PlanError;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -86,6 +89,24 @@ fn stack(input: ScalarFunctionInput) -> PlanResult<Expr> {
     Ok(ScalarUDF::from(Explode::new(ExplodeKind::Inline)).call(vec![cast(zipped, res_type)]))
 }
 
+fn json_tuple(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let args = input.arguments;
+    if args.len() < 2 {
+        return Err(PlanError::invalid(
+            "json_tuple requires at least 2 arguments (json_string, field1)",
+        ));
+    }
+    let num_fields = args.len() - 1;
+    let struct_expr = ScalarUDF::from(JsonTuple::new()).call(args);
+    let field_exprs: Vec<Expr> = (0..num_fields)
+        .map(|i| {
+            let field_name = format!("c{i}");
+            struct_expr.clone().field(&field_name).alias(&field_name)
+        })
+        .collect();
+    Ok(ScalarUDF::from(MultiExpr::new()).call(field_exprs))
+}
+
 pub(super) fn list_built_in_generator_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
@@ -105,6 +126,7 @@ pub(super) fn list_built_in_generator_functions() -> Vec<(&'static str, ScalarFu
             "posexplode_outer",
             F::udf(Explode::new(ExplodeKind::PosExplodeOuter)),
         ),
+        ("json_tuple", F::custom(json_tuple)),
         ("stack", F::custom(stack)),
     ]
 }

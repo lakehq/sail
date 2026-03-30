@@ -49,16 +49,12 @@ use datafusion_proto::physical_plan::{
 use datafusion_proto::protobuf::{
     JoinType as ProtoJoinType, PhysicalPlanNode, PhysicalSortExprNode,
 };
-use datafusion_spark::function::aggregate::collect::{SparkCollectList, SparkCollectSet};
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
-use datafusion_spark::function::array::array_contains::SparkArrayContains;
 use datafusion_spark::function::array::shuffle::SparkShuffle;
 use datafusion_spark::function::bitmap::bitmap_count::BitmapCount;
 use datafusion_spark::function::bitwise::bit_count::SparkBitCount;
 use datafusion_spark::function::bitwise::bit_get::SparkBitGet;
 use datafusion_spark::function::bitwise::bitwise_not::SparkBitwiseNot;
-use datafusion_spark::function::collection::size::SparkSize;
-use datafusion_spark::function::datetime::date_trunc::SparkDateTrunc;
 use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
 use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
 use datafusion_spark::function::hash::crc32::SparkCrc32;
@@ -66,19 +62,13 @@ use datafusion_spark::function::hash::sha1::SparkSha1;
 use datafusion_spark::function::json::json_tuple::JsonTuple;
 use datafusion_spark::function::map::map_from_arrays::MapFromArrays;
 use datafusion_spark::function::map::map_from_entries::MapFromEntries;
-use datafusion_spark::function::map::str_to_map::SparkStrToMap;
 use datafusion_spark::function::math::expm1::SparkExpm1;
 use datafusion_spark::function::math::hex::SparkHex;
 use datafusion_spark::function::math::modulus::SparkPmod;
-use datafusion_spark::function::math::negative::SparkNegative;
 use datafusion_spark::function::math::width_bucket::SparkWidthBucket;
-use datafusion_spark::function::string::base64::{
-    SparkBase64 as DFSparkBase64, SparkUnBase64 as DFSparkUnBase64,
-};
 use datafusion_spark::function::string::elt::SparkElt;
 use datafusion_spark::function::string::format_string::FormatStringFunc;
 use datafusion_spark::function::string::luhn_check::SparkLuhnCheck;
-use datafusion_spark::function::string::substring::SparkSubstring;
 use datafusion_spark::function::url::try_url_decode::TryUrlDecode;
 use datafusion_spark::function::url::url_decode::UrlDecode;
 use datafusion_spark::function::url::url_encode::UrlEncode;
@@ -147,6 +137,7 @@ use sail_function::scalar::geo::st_geomfromwkb::StGeomFromWKB;
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
 use sail_function::scalar::hash::spark_xxhash64::SparkXxhash64;
 use sail_function::scalar::json::SparkToJson;
+use sail_function::scalar::map::str_to_map::StrToMap;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
 use sail_function::scalar::math::random::Random;
@@ -175,6 +166,7 @@ use sail_function::scalar::string::levenshtein::Levenshtein;
 use sail_function::scalar::string::make_valid_utf8::MakeValidUtf8;
 use sail_function::scalar::string::randstr::Randstr;
 use sail_function::scalar::string::soundex::Soundex;
+use sail_function::scalar::string::spark_base64::{SparkBase64, SparkUnbase64};
 use sail_function::scalar::string::spark_concat_ws::SparkConcatWs;
 use sail_function::scalar::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use sail_function::scalar::string::spark_mask::SparkMask;
@@ -1880,12 +1872,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "json_object_keys" | "json_keys" => {
                 Ok(sail_function::scalar::json::json_object_keys_udf())
             }
-            "spark_base64" | "base64" => Ok(Arc::new(ScalarUDF::from(DFSparkBase64::new()))),
+            "json_tuple" => Ok(Arc::new(ScalarUDF::from(JsonTuple::new()))),
+            "spark_base64" | "base64" => Ok(Arc::new(ScalarUDF::from(SparkBase64::new()))),
             "spark_bround" | "bround" => Ok(Arc::new(ScalarUDF::from(SparkBRound::new()))),
             "spark_interval_div" => Ok(Arc::new(ScalarUDF::from(SparkIntervalDiv::new()))),
-            "spark_unbase64" | "unbase64" | "spark_un_base64" => {
-                Ok(Arc::new(ScalarUDF::from(DFSparkUnBase64::new())))
-            }
+            "spark_unbase64" | "unbase64" => Ok(Arc::new(ScalarUDF::from(SparkUnbase64::new()))),
             "spark_aes_encrypt" | "aes_encrypt" => {
                 Ok(Arc::new(ScalarUDF::from(SparkAESEncrypt::new())))
             }
@@ -1978,9 +1969,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_width_bucket" | "width_bucket" => {
                 Ok(Arc::new(ScalarUDF::from(SparkWidthBucket::new())))
             }
-            "str_to_map" | "spark_str_to_map" => {
-                Ok(Arc::new(ScalarUDF::from(SparkStrToMap::new())))
-            }
+            "str_to_map" => Ok(Arc::new(ScalarUDF::from(StrToMap::new()))),
             "parse_url" => Ok(Arc::new(ScalarUDF::from(ParseUrl::new()))),
             "try_parse_url" | "spark_try_parse_url" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryParseUrl::new())))
@@ -1988,18 +1977,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "try_url_decode" => Ok(Arc::new(ScalarUDF::from(TryUrlDecode::new()))),
             "url_decode" => Ok(Arc::new(ScalarUDF::from(UrlDecode::new()))),
             "url_encode" => Ok(Arc::new(ScalarUDF::from(UrlEncode::new()))),
-            "spark_size" | "size" => Ok(Arc::new(ScalarUDF::from(SparkSize::new()))),
-            "spark_array_contains" | "array_contains" => {
-                Ok(Arc::new(ScalarUDF::from(SparkArrayContains::new())))
-            }
-            "spark_substring" | "substring" | "substr" => {
-                Ok(Arc::new(ScalarUDF::from(SparkSubstring::new())))
-            }
-            "spark_negative" | "negative" => Ok(Arc::new(ScalarUDF::from(SparkNegative::new()))),
-            "spark_date_trunc" | "date_trunc" => {
-                Ok(Arc::new(ScalarUDF::from(SparkDateTrunc::new())))
-            }
-            "json_tuple" => Ok(Arc::new(ScalarUDF::from(JsonTuple::new()))),
             _ => plan_err!("could not find scalar function: {name}"),
         }
     }
@@ -2038,7 +2015,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkAESDecrypt>()
             || node_inner.is::<SparkAESEncrypt>()
             || node_inner.is::<SparkArray>()
-            || node_inner.is::<DFSparkBase64>()
+            || node_inner.is::<SparkBase64>()
             || node_inner.is::<SparkBin>()
             || node_inner.is::<SparkBitCount>()
             || node_inner.is::<SparkBitGet>()
@@ -2058,6 +2035,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkFromCSV>()
             || node_inner.is::<SparkHex>()
             || node_inner.is::<SparkIntervalDiv>()
+            || node_inner.is::<JsonTuple>()
             || node_inner.is::<SparkLastDay>()
             || node_inner.is::<SparkLuhnCheck>()
             || node_inner.is::<SparkMakeDtInterval>()
@@ -2096,23 +2074,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkTryToBinary>()
             || node_inner.is::<SparkTryToNumber>()
             || node_inner.is::<SparkTryToTimestamp>()
-            || node_inner.is::<DFSparkUnBase64>()
+            || node_inner.is::<SparkUnbase64>()
             || node_inner.is::<SparkUnHex>()
             || node_inner.is::<SparkVersion>()
             || node_inner.is::<SparkWidthBucket>()
             || node_inner.is::<SparkXxhash64>()
             || node_inner.is::<SparkYearMonthInterval>()
-            || node_inner.is::<SparkStrToMap>()
+            || node_inner.is::<StrToMap>()
             || node_inner.is::<SparkToJson>()
             || node_inner.is::<TryUrlDecode>()
             || node_inner.is::<UrlDecode>()
             || node_inner.is::<UrlEncode>()
-            || node_inner.is::<SparkSize>()
-            || node_inner.is::<SparkArrayContains>()
-            || node_inner.is::<SparkSubstring>()
-            || node_inner.is::<SparkNegative>()
-            || node_inner.is::<SparkDateTrunc>()
-            || node_inner.is::<JsonTuple>()
             || node.name() == "json_as_text"
             || node.name() == "json_len"
             || node.name() == "json_length"
@@ -2222,8 +2194,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 "skewness" => Ok(Arc::new(AggregateUDF::from(SkewnessFunc::new()))),
                 "try_avg" => Ok(Arc::new(AggregateUDF::from(TryAvgFunction::new()))),
                 "try_sum" => Ok(Arc::new(AggregateUDF::from(SparkTrySum::new()))),
-                "collect_list" => Ok(Arc::new(AggregateUDF::from(SparkCollectList::new()))),
-                "collect_set" => Ok(Arc::new(AggregateUDF::from(SparkCollectSet::new()))),
                 _ => plan_err!("Could not find Aggregate Function: {name}"),
             },
             Some(UdafKind::PySparkGroupAgg(gen::PySparkGroupAggUdaf {
@@ -2312,8 +2282,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SkewnessFunc>()
             || node.inner().as_any().is::<TryAvgFunction>()
             || node.inner().as_any().is::<SparkTrySum>()
-            || node.inner().as_any().is::<SparkCollectList>()
-            || node.inner().as_any().is::<SparkCollectSet>()
         {
             UdafKind::Standard(gen::StandardUdaf {})
         } else if let Some(func) = node

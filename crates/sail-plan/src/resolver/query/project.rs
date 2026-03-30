@@ -157,7 +157,11 @@ impl PlanResolver<'_> {
                 Expr::ScalarFunction(ScalarFunction { func, args }) => {
                     if func.inner().as_any().is::<MultiExpr>() {
                         // The metadata from the original expression are ignored.
-                        if name.len() == args.len() {
+                        // Always use alias from the args if available, so that
+                        // generator functions like json_tuple can name their output
+                        // columns (e.g. c0, c1, ...) regardless of the outer name.
+                        let all_args_aliased = args.iter().all(|a| matches!(a, Expr::Alias(_)));
+                        if !all_args_aliased && name.len() == args.len() {
                             for (name, arg) in name.into_iter().zip(args) {
                                 out.push(NamedExpr::new(vec![name], arg));
                             }
