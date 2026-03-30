@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING
 import pytest
 from pyiceberg.table import Table
 
-from pysail.tests.spark.iceberg.utils import create_sql_catalog
+from pysail.tests.spark.table_format.iceberg.utils import create_sql_catalog
 
 if TYPE_CHECKING:
     from pyiceberg.schema import Schema

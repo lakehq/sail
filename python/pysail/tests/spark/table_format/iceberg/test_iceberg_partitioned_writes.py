@@ -19,7 +19,7 @@ from pyiceberg.schema import Schema
 from pyiceberg.types import DateType, IntegerType, NestedField, StringType, TimestampType
 
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
-from pysail.tests.spark.iceberg.utils import create_sql_catalog, pyiceberg_to_pandas
+from pysail.tests.spark.table_format.iceberg.utils import create_sql_catalog, pyiceberg_to_pandas
 
 
 def _common_schema() -> Schema:
