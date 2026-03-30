@@ -142,6 +142,7 @@ impl PlanResolverState {
         self.register_field_info(field.as_ref().name(), false)
     }
 
+    /// Registers each field and returns unique internal names to avoid column name collisions.
     pub fn register_fields(
         &mut self,
         fields: impl IntoIterator<Item = impl AsRef<Field>>,

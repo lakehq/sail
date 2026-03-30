@@ -4,7 +4,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::datasource::{provider_as_source, source_as_provider, TableProvider};
 use datafusion_common::{DFSchema, ScalarValue, TableReference};
-use datafusion_expr::{Expr, LogicalPlan, TableScan, TableSource, UNNAMED_TABLE};
+use datafusion_expr::{Expr, LogicalPlan, SubqueryAlias, TableScan, TableSource, UNNAMED_TABLE};
 use rand::{rng, RngExt};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
@@ -139,14 +139,18 @@ impl PlanResolver<'_> {
                 }
                 let ast = sail_sql_analyzer::parser::parse_one_statement(&definition)?;
                 let spec_plan = sail_sql_analyzer::statement::from_ast_statement(ast)?;
-                match spec_plan {
+                let plan = match spec_plan {
                     spec::Plan::Query(query_plan) => {
                         self.resolve_query_plan(query_plan, state).await?
                     }
                     _ => {
                         return Err(PlanError::invalid("view definition must be a query"));
                     }
-                }
+                };
+                LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
+                    Arc::new(plan),
+                    table_reference.clone(),
+                )?)
             }
             TableKind::TemporaryView { plan, .. } | TableKind::GlobalTemporaryView { plan, .. } => {
                 if temporal.is_some() {

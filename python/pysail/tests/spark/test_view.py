@@ -32,14 +32,18 @@ class TestPersistentView:
         ).astype({"id": "int32", "name": "str"})
         assert_frame_equal(actual, expected)
 
-
-class TestTemporaryView:
-    """Temporary views work — these serve as a baseline to confirm the test setup is valid."""
-
-    def test_create_and_read_temp_view(self, spark):
-        spark.sql("CREATE TEMPORARY VIEW recent_customers AS SELECT * FROM customers WHERE id = 2")
-        actual = spark.sql("SELECT * FROM recent_customers ORDER BY id").toPandas()
+    def test_join_with_qualified_columns(self, spark):
+        spark.sql("CREATE VIEW IF NOT EXISTS active_customers AS SELECT * FROM customers WHERE id = 1")
+        spark.sql("CREATE TABLE orders (order_id INT, customer_id INT)")
+        spark.sql("INSERT INTO orders VALUES (100, 1), (101, 2)")
+        actual = spark.sql(
+            "SELECT active_customers.name, orders.order_id "
+            "FROM active_customers "
+            "JOIN orders ON active_customers.id = orders.customer_id "
+            "ORDER BY orders.order_id"
+        ).toPandas()
         expected = pd.DataFrame(
-            {"id": [2], "name": ["Bob"]},
-        ).astype({"id": "int32", "name": "str"})
+            {"name": ["Alice"], "order_id": [100]},
+        ).astype({"name": "str", "order_id": "int32"})
         assert_frame_equal(actual, expected)
+        spark.sql("DROP TABLE orders")
