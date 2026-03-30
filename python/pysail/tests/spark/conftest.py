@@ -168,11 +168,11 @@ class DoctestMarker:
 
 DOCTEST_MARKERS = [
     DoctestMarker(
-        keywords=["test_python_datasource_read.txt"],
+        keywords=["test_python_read.txt"],
         markers=[pytest.mark.skipif(pyspark_version() < (4,), reason="Python data source requires Spark 4+")],
     ),
     DoctestMarker(
-        keywords=["test_python_datasource_read_arrow.txt"],
+        keywords=["test_python_read_arrow.txt"],
         markers=[pytest.mark.skipif(pyspark_version() < (4,), reason="Python data source requires Spark 4+")],
     ),
 ]
