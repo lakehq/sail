@@ -393,6 +393,43 @@ impl CheckpointBatchIter {
     }
 }
 
+/// Batch iterator for sidecar (add/remove) actions in V2 checkpoint writes.
+/// Mirrors [`CheckpointBatchIter`] to avoid materializing all rows into a
+/// single `Vec`/`RecordBatch`.
+struct SidecarBatchIter {
+    batch_size: usize,
+    adds: std::collections::hash_map::IntoValues<String, Add>,
+    removes: std::collections::hash_map::IntoValues<String, Remove>,
+}
+
+impl SidecarBatchIter {
+    fn next_batch(&mut self) -> DeltaResult<Option<RecordBatch>> {
+        let mut rows = Vec::with_capacity(self.batch_size);
+        while rows.len() < self.batch_size {
+            if let Some(add) = self.adds.next() {
+                rows.push(CheckpointActionRow {
+                    add: Some(add),
+                    ..Default::default()
+                });
+                continue;
+            }
+            if let Some(remove) = self.removes.next() {
+                rows.push(CheckpointActionRow {
+                    remove: Some(remove),
+                    ..Default::default()
+                });
+                continue;
+            }
+            break;
+        }
+        if rows.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(encode_checkpoint_rows(&rows)?))
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ReplayedTableState {
     pub version: i64,
@@ -606,40 +643,33 @@ impl<'a> CheckpointManager<'a> {
         let checkpoint_add_count = i64::try_from(state.adds.len())
             .map_err(|_| DeltaTableError::generic("add action count overflow"))?;
 
-        // Step 1: Write add/remove actions into a sidecar file.
+        // Step 1: Write add/remove actions into a sidecar file using batched writes.
+        const SIDECAR_WRITE_BATCH_SIZE: usize = 16_384;
         let sidecar_uuid = Uuid::new_v4();
         let sidecar_filename = format!("{sidecar_uuid}.parquet");
         let sidecar_path = sidecar_file_path(&sidecar_filename);
 
-        let sidecar_rows: Vec<CheckpointActionRow> = state
-            .adds
-            .into_values()
-            .map(|add| CheckpointActionRow {
-                add: Some(add),
-                ..Default::default()
-            })
-            .chain(
-                state
-                    .removes
-                    .into_values()
-                    .map(|remove| CheckpointActionRow {
-                        remove: Some(remove),
-                        ..Default::default()
-                    }),
-            )
-            .collect();
+        let mut sidecar_batches = SidecarBatchIter {
+            batch_size: SIDECAR_WRITE_BATCH_SIZE,
+            adds: state.adds.into_values(),
+            removes: state.removes.into_values(),
+        };
 
-        let sidecar_descriptor = if !sidecar_rows.is_empty() {
-            let sidecar_batch = encode_checkpoint_rows(&sidecar_rows)?;
-            ensure_schema_supported_for_parquet(&sidecar_batch)?;
+        let sidecar_descriptor = if let Some(first_batch) = sidecar_batches.next_batch()? {
+            ensure_schema_supported_for_parquet(&first_batch)?;
             let sidecar_writer = ParquetObjectWriter::new(store.clone(), sidecar_path.clone());
-            let mut writer =
-                AsyncArrowWriter::try_new(sidecar_writer, sidecar_batch.schema(), None)
-                    .map_err(DeltaTableError::generic_err)?;
+            let mut writer = AsyncArrowWriter::try_new(sidecar_writer, first_batch.schema(), None)
+                .map_err(DeltaTableError::generic_err)?;
             writer
-                .write(&sidecar_batch)
+                .write(&first_batch)
                 .await
                 .map_err(DeltaTableError::generic_err)?;
+            while let Some(batch) = sidecar_batches.next_batch()? {
+                writer
+                    .write(&batch)
+                    .await
+                    .map_err(DeltaTableError::generic_err)?;
+            }
             let _ = writer.close().await.map_err(DeltaTableError::generic_err)?;
             let sidecar_meta = store.head(&sidecar_path).await?;
             Some(Sidecar {
