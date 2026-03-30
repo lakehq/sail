@@ -13,7 +13,9 @@ use super::{
 };
 use crate::kernel::checkpoints::read_checkpoint_main_rows_from_parquet;
 use crate::kernel::snapshot::DeltaSnapshot;
-use crate::spec::{delta_log_root_path, sidecars_dir_path, DeltaResult};
+use crate::spec::{
+    delta_log_root_path, is_uuid_checkpoint_filename, sidecars_dir_path, DeltaResult,
+};
 use crate::storage::LogStore;
 
 #[derive(Debug, Clone, Copy)]
@@ -210,19 +212,26 @@ fn expired_log_location(
 async fn cleanup_orphaned_sidecars(object_store: Arc<dyn ObjectStore>) -> DeltaResult<usize> {
     // Step 1: Collect all sidecar paths referenced by remaining checkpoints.
     let log_path = delta_log_root_path();
-    let mut checkpoint_metas: Vec<ObjectMeta> = Vec::new();
+    let mut uuid_checkpoint_metas: Vec<ObjectMeta> = Vec::new();
     let mut log_entries = object_store.list(Some(&log_path));
     while let Some(meta) = log_entries.next().await {
         let Ok(meta) = meta else {
             continue;
         };
-        if parse_checkpoint_version_from_location(&meta.location).is_some() {
-            checkpoint_metas.push(meta);
+        // Only UUID-named checkpoints (V2) can reference sidecar files.
+        let filename = meta
+            .location
+            .as_ref()
+            .rsplit('/')
+            .next()
+            .unwrap_or_default();
+        if is_uuid_checkpoint_filename(filename) {
+            uuid_checkpoint_metas.push(meta);
         }
     }
 
     let mut referenced_sidecars: HashSet<String> = HashSet::new();
-    for cp_meta in checkpoint_metas {
+    for cp_meta in uuid_checkpoint_metas {
         match read_checkpoint_main_rows_from_parquet(object_store.clone(), cp_meta.clone()).await {
             Ok(rows) => {
                 for row in rows {
@@ -263,8 +272,16 @@ async fn cleanup_orphaned_sidecars(object_store: Arc<dyn ObjectStore>) -> DeltaR
         if file_millis > one_day_ago {
             continue;
         }
-        if object_store.delete(&meta.location).await.is_ok() {
-            deleted_count += 1;
+        match object_store.delete(&meta.location).await {
+            Ok(()) => {
+                deleted_count += 1;
+            }
+            Err(err) => {
+                log::warn!(
+                    "Failed to delete orphaned sidecar file {}: {err}",
+                    meta.location
+                );
+            }
         }
     }
 

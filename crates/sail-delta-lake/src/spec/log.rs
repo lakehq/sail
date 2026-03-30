@@ -117,6 +117,9 @@ pub fn is_uuid_checkpoint_filename(filename: &str) -> bool {
     if filename.len() != 76 || !filename.ends_with(".parquet") {
         return false;
     }
+    if parse_version_prefix(filename).is_none() {
+        return false;
+    }
     let Some(rest) = filename.get(20..) else {
         return false;
     };
