@@ -14,7 +14,6 @@ use object_store::{
 };
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, Mutex};
-use tokio_stream::once;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::codegen::Bytes;
 
@@ -127,15 +126,19 @@ impl ObjectStore for RuntimeAwareObjectStore {
 
     fn delete_stream(
         &self,
-        _locations: BoxStream<'static, Result<Path>>,
+        locations: BoxStream<'static, Result<Path>>,
     ) -> BoxStream<'static, Result<Path>> {
-        // FIXME: We cannot run `delete_stream` in a runtime-aware manner because
-        //  tasks spawned by the runtime handle must be `'static`.
-        once(Err(object_store::Error::NotImplemented {
-            operation: "delete_stream".to_string(),
-            implementer: "RuntimeAwareObjectStore".to_string(),
-        }))
-        .boxed()
+        let inner = self.inner.clone();
+        let (tx, rx) = mpsc::channel(1);
+        self.handle.spawn(async move {
+            let mut stream = inner.delete_stream(locations);
+            while let Some(item) = stream.next().await {
+                if tx.send(item).await.is_err() {
+                    break;
+                }
+            }
+        });
+        ReceiverStream::new(rx).boxed()
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
