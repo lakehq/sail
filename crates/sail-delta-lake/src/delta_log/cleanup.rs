@@ -121,7 +121,7 @@ pub(crate) async fn cleanup_expired_delta_log_files(
         delete_logs_before_checkpoint_version(object_store.clone(), retention_checkpoint_version)
             .await?;
 
-    // Clean up orphaned sidecar files (V2 checkpoint GC per protocol spec steps 4-5).
+    // Clean up orphaned sidecar files (V2 checkpoint GC per protocol spec).
     let deleted_sidecars = cleanup_orphaned_sidecars(object_store).await?;
 
     Ok(deleted_logs + deleted_sidecars)

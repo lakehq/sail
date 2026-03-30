@@ -168,6 +168,57 @@ Feature: Delta Lake V2 Checkpoint (Sidecar Checkpoints)
         """
 
   @sail-only
+  Rule: V2 checkpoint is activated by delta.checkpointPolicy = v2
+
+    Background:
+      Given variable location for temporary directory delta_v2_checkpoint_policy
+      Given variable delta_log for delta log of location
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_v2_checkpoint_policy_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_v2_checkpoint_policy_test (id INT)
+        USING DELTA
+        LOCATION {{ location.sql }}
+        TBLPROPERTIES (
+          'delta.checkpointInterval' = '1',
+          'delta.checkpointPolicy' = 'v2'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO delta_v2_checkpoint_policy_test VALUES (1)
+        """
+      Given statement
+        """
+        INSERT INTO delta_v2_checkpoint_policy_test VALUES (2)
+        """
+
+    Scenario: delta.checkpointPolicy = v2 produces UUID-named checkpoint and sidecar files
+      When query
+        """
+        SELECT * FROM delta_v2_checkpoint_policy_test ORDER BY id
+        """
+      Then query result ordered
+        | id |
+        | 1  |
+        | 2  |
+      Then file tree in delta_log matches
+        """
+        📂 _sidecars
+          📄 <uuid>.parquet
+        📄 00000000000000000000.crc
+        📄 00000000000000000000.json
+        📄 00000000000000000001.checkpoint.<uuid>.parquet
+        📄 00000000000000000001.checkpoint.parquet
+        📄 00000000000000000001.crc
+        📄 00000000000000000001.json
+        📄 _last_checkpoint
+        """
+
+  @sail-only
   Rule: V2 checkpoint correctly replays state with deletes
 
     Background:

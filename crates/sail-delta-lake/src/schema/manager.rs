@@ -104,6 +104,20 @@ pub fn protocol_for_create(
         }
     }
 
+    // `delta.checkpointPolicy = "v2"` implicitly activates V2Checkpoint
+    if configuration
+        .get("delta.checkpointPolicy")
+        .map(|v| v.eq_ignore_ascii_case("v2"))
+        .unwrap_or(false)
+    {
+        if !reader_features.contains(&TableFeature::V2Checkpoint) {
+            reader_features.push(TableFeature::V2Checkpoint);
+        }
+        if !writer_features.contains(&TableFeature::V2Checkpoint) {
+            writer_features.push(TableFeature::V2Checkpoint);
+        }
+    }
+
     if reader_features.is_empty() && writer_features.is_empty() {
         return Ok(Protocol::new(1, 2, None, None));
     }
@@ -150,6 +164,30 @@ mod tests {
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(protocol.has_reader_feature(&TableFeature::V2Checkpoint));
         assert!(protocol.has_writer_feature(&TableFeature::V2Checkpoint));
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_for_create_activates_v2_checkpoint_from_checkpoint_policy() -> DeltaResult<()> {
+        let mut config = HashMap::new();
+        config.insert("delta.checkpointPolicy".to_string(), "v2".to_string());
+        let protocol = protocol_for_create(false, false, false, &config)?;
+        assert_eq!(protocol.min_reader_version(), 3);
+        assert_eq!(protocol.min_writer_version(), 7);
+        assert!(protocol.has_reader_feature(&TableFeature::V2Checkpoint));
+        assert!(protocol.has_writer_feature(&TableFeature::V2Checkpoint));
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_for_create_classic_policy_does_not_activate_v2_checkpoint() -> DeltaResult<()> {
+        let mut config = HashMap::new();
+        config.insert("delta.checkpointPolicy".to_string(), "classic".to_string());
+        let protocol = protocol_for_create(false, false, false, &config)?;
+        assert_eq!(protocol.min_reader_version(), 1);
+        assert_eq!(protocol.min_writer_version(), 2);
+        assert!(!protocol.has_reader_feature(&TableFeature::V2Checkpoint));
+        assert!(!protocol.has_writer_feature(&TableFeature::V2Checkpoint));
         Ok(())
     }
 }
