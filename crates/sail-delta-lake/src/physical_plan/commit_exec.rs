@@ -342,7 +342,7 @@ impl ExecutionPlan for DeltaCommitExec {
                 } else {
                     // Construct minimal protocol/metadata and insert them
                     let normalized_sink = normalize_delta_schema(&sink_schema);
-                    let protocol = protocol_for_create(false, false, false)
+                    let protocol = protocol_for_create(false, false, false, &HashMap::new())
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                     let metadata = metadata_for_create_with_struct_type(

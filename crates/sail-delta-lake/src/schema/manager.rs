@@ -63,17 +63,19 @@ pub fn metadata_for_create_with_struct_type(
 }
 
 /// Build Protocol for a create/write path based on required table features.
+///
+/// In addition to the explicitly toggled features, this function scans the table
+/// `configuration` for `delta.feature.<name> = "enabled"` entries and includes
+/// the corresponding [`TableFeature`] in the protocol.
 pub fn protocol_for_create(
     enable_column_mapping: bool,
     enable_timestamp_ntz: bool,
     enable_in_commit_timestamps: bool,
+    configuration: &HashMap<String, String>,
 ) -> DeltaResult<Protocol> {
-    if !enable_column_mapping && !enable_timestamp_ntz && !enable_in_commit_timestamps {
-        return Ok(Protocol::new(1, 2, None, None));
-    }
-
     let mut reader_features = Vec::new();
     let mut writer_features = Vec::new();
+
     if enable_column_mapping {
         reader_features.push(TableFeature::ColumnMapping);
         writer_features.push(TableFeature::ColumnMapping);
@@ -84,6 +86,26 @@ pub fn protocol_for_create(
     }
     if enable_in_commit_timestamps {
         writer_features.push(TableFeature::InCommitTimestamp);
+    }
+
+    // Extract features from `delta.feature.<name> = "enabled"` configuration entries.
+    for (key, value) in configuration {
+        if let Some(name) = key.strip_prefix("delta.feature.") {
+            if value.eq_ignore_ascii_case("enabled") {
+                if let Ok(feature) = TableFeature::parse_str_name(name) {
+                    if feature.is_reader_feature() && !reader_features.contains(&feature) {
+                        reader_features.push(feature.clone());
+                    }
+                    if !writer_features.contains(&feature) {
+                        writer_features.push(feature);
+                    }
+                }
+            }
+        }
+    }
+
+    if reader_features.is_empty() && writer_features.is_empty() {
+        return Ok(Protocol::new(1, 2, None, None));
     }
 
     let min_reader_version = if reader_features.is_empty() { 1 } else { 3 };
@@ -98,12 +120,14 @@ pub fn protocol_for_create(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::protocol_for_create;
     use crate::spec::{DeltaResult, TableFeature};
 
     #[test]
     fn protocol_for_create_treats_in_commit_timestamp_as_writer_only() -> DeltaResult<()> {
-        let protocol = protocol_for_create(false, false, true)?;
+        let protocol = protocol_for_create(false, false, true, &HashMap::new())?;
         assert_eq!(protocol.min_reader_version(), 1);
         assert_eq!(protocol.min_writer_version(), 7);
         assert_eq!(protocol.reader_features(), None);
@@ -111,6 +135,21 @@ mod tests {
             protocol.writer_features(),
             Some([TableFeature::InCommitTimestamp].as_slice())
         );
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_for_create_extracts_v2_checkpoint_from_configuration() -> DeltaResult<()> {
+        let mut config = HashMap::new();
+        config.insert(
+            "delta.feature.v2Checkpoint".to_string(),
+            "enabled".to_string(),
+        );
+        let protocol = protocol_for_create(false, false, false, &config)?;
+        assert_eq!(protocol.min_reader_version(), 3);
+        assert_eq!(protocol.min_writer_version(), 7);
+        assert!(protocol.has_reader_feature(&TableFeature::V2Checkpoint));
+        assert!(protocol.has_writer_feature(&TableFeature::V2Checkpoint));
         Ok(())
     }
 }

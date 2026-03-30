@@ -482,6 +482,7 @@ impl DeltaWriterExec {
                     !matches!(effective_mode, ColumnMappingMode::None),
                     has_timestamp_ntz,
                     TableProperties::from(configuration.iter()).enable_in_commit_timestamps(),
+                    &configuration,
                 )
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let metadata = metadata_for_create_with_struct_type(

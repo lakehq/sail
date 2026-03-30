@@ -1,16 +1,19 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 
+use chrono::Utc;
 use futures::{StreamExt, TryStreamExt};
-use object_store::{ObjectMeta, ObjectStore};
+use log::debug;
+use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use uuid::Uuid;
 
 use super::{
     parse_checkpoint_version_from_location, parse_checksum_version_from_location,
     parse_commit_version_from_location, resolve_version_timestamp,
 };
+use crate::kernel::checkpoints::read_checkpoint_rows_from_parquet;
 use crate::kernel::snapshot::DeltaSnapshot;
-use crate::spec::{delta_log_root_path, DeltaResult};
+use crate::spec::{delta_log_root_path, sidecars_dir_path, DeltaResult};
 use crate::storage::LogStore;
 
 #[derive(Debug, Clone, Copy)]
@@ -114,7 +117,14 @@ pub(crate) async fn cleanup_expired_delta_log_files(
         return Ok(0);
     };
 
-    delete_logs_before_checkpoint_version(object_store, retention_checkpoint_version).await
+    let deleted_logs =
+        delete_logs_before_checkpoint_version(object_store.clone(), retention_checkpoint_version)
+            .await?;
+
+    // Clean up orphaned sidecar files (V2 checkpoint GC per protocol spec steps 4-5).
+    let deleted_sidecars = cleanup_orphaned_sidecars(object_store).await?;
+
+    Ok(deleted_logs + deleted_sidecars)
 }
 
 async fn find_retention_checkpoint_version(
@@ -188,6 +198,77 @@ fn expired_log_location(
     DeltaLogFile::from_meta(meta)
         .filter(|file| file.expires_before(retention_checkpoint_version))
         .map(|_| meta.location.clone())
+}
+
+/// Cleans up orphaned sidecar files in `_delta_log/_sidecars/`.
+///
+/// Per the Delta protocol metadata cleanup spec:
+/// 1. Read all remaining checkpoints to identify referenced sidecar paths.
+/// 2. List all files in `_sidecars/`.
+/// 3. Delete sidecar files that are NOT referenced by any remaining checkpoint
+///    AND are older than 24 hours (to avoid racing with concurrent checkpoint writers).
+async fn cleanup_orphaned_sidecars(object_store: Arc<dyn ObjectStore>) -> DeltaResult<usize> {
+    // Step 1: Collect all sidecar paths referenced by remaining checkpoints.
+    let log_path = delta_log_root_path();
+    let mut checkpoint_metas: Vec<ObjectMeta> = Vec::new();
+    let mut log_entries = object_store.list(Some(&log_path));
+    while let Some(meta) = log_entries.next().await {
+        let Ok(meta) = meta else {
+            continue;
+        };
+        if parse_checkpoint_version_from_location(&meta.location).is_some() {
+            checkpoint_metas.push(meta);
+        }
+    }
+
+    let mut referenced_sidecars: HashSet<String> = HashSet::new();
+    for cp_meta in checkpoint_metas {
+        match read_checkpoint_rows_from_parquet(object_store.clone(), cp_meta.clone()).await {
+            Ok(rows) => {
+                for row in rows {
+                    if let Some(sidecar) = row.sidecar {
+                        referenced_sidecars.insert(sidecar.path);
+                    }
+                }
+            }
+            Err(err) => {
+                debug!(
+                    "Failed to read checkpoint at {} for sidecar GC: {err}",
+                    cp_meta.location
+                );
+                continue;
+            }
+        }
+    }
+
+    // Step 2: List all files in _sidecars/ and delete orphans older than 24 hours.
+    let sidecars_path = sidecars_dir_path();
+    let one_day_ago = Utc::now().timestamp_millis() - 86_400_000;
+    let mut deleted_count = 0;
+    let mut sidecar_entries = object_store.list(Some(&sidecars_path));
+    while let Some(meta) = sidecar_entries.next().await {
+        let Ok(meta) = meta else {
+            continue;
+        };
+        let filename = match meta.location.as_ref().rsplit('/').next() {
+            Some(f) => f.to_string(),
+            None => continue,
+        };
+        // Keep sidecars that are referenced by any checkpoint.
+        if referenced_sidecars.contains(&filename) {
+            continue;
+        }
+        // Keep sidecars created less than 24 hours ago (safety buffer for concurrent writes).
+        let file_millis = meta.last_modified.timestamp_millis();
+        if file_millis > one_day_ago {
+            continue;
+        }
+        if object_store.delete(&meta.location).await.is_ok() {
+            deleted_count += 1;
+        }
+    }
+
+    Ok(deleted_count)
 }
 
 #[cfg(test)]
