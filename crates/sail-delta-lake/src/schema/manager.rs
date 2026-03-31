@@ -171,7 +171,7 @@ mod tests {
 
     #[test]
     fn protocol_for_create_extracts_v2_checkpoint_from_configuration() -> DeltaResult<()> {
-        // "enabled" (deprecated) still accepted for backward compatibility. 
+        // "enabled" (deprecated) still accepted for backward compatibility.
         let mut config = HashMap::new();
         config.insert(
             "delta.feature.v2Checkpoint".to_string(),
@@ -187,7 +187,7 @@ mod tests {
 
     #[test]
     fn protocol_for_create_extracts_v2_checkpoint_with_supported_value() -> DeltaResult<()> {
-        // "supported" is the current/preferred value. 
+        // "supported" is the current/preferred value.
         let mut config = HashMap::new();
         config.insert(
             "delta.feature.v2Checkpoint".to_string(),
