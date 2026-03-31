@@ -547,3 +547,53 @@ Feature: Variant type functions (parse_json, is_variant_null, variant_get)
       Then query result
         | result  |
         | [1,2,3] |
+
+  Rule: NULL handling edge cases
+
+    Scenario: parse_json of NULL scalar returns NULL
+      When query
+        """
+        SELECT parse_json(CAST(NULL AS STRING)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: variant_to_json of NULL variant returns NULL
+      When query
+        """
+        SELECT to_json(parse_json(CAST(NULL AS STRING))) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: parse_json NULL column returns NULL
+      When query
+        """
+        SELECT parse_json(x) AS result FROM VALUES (CAST(NULL AS STRING)) AS t(x)
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: variant_to_json NULL column returns NULL
+      When query
+        """
+        SELECT to_json(parse_json(x)) AS result FROM VALUES (CAST(NULL AS STRING)) AS t(x)
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    @sail-bug
+    Scenario: mixed NULL and non-NULL variant_to_json
+      When query
+        """
+        SELECT to_json(parse_json(x)) AS result FROM VALUES ('42'), (CAST(NULL AS STRING)), ('{"a":1}') AS t(x)
+        """
+      Then query result
+        | result  |
+        | 42      |
+        | NULL    |
+        | {"a":1} |

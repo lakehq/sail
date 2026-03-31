@@ -105,6 +105,16 @@ impl ScalarUDFImpl for SparkJsonToVariantUdf {
             }
             ColumnarValue::Array(arr) => match arr.data_type() {
                 DataType::Utf8View => ColumnarValue::Array(from_utf8view_arr(arr)?),
+                DataType::Null => {
+                    // All-NULL input: produce a Variant struct array of all NULLs
+                    let mut builder = VariantArrayBuilder::new(arr.len());
+                    for _ in 0..arr.len() {
+                        builder.append_null();
+                    }
+                    let struct_array: StructArray = builder.build().into();
+                    let struct_array = convert_binaryview_to_binary(struct_array)?;
+                    ColumnarValue::Array(Arc::new(struct_array) as ArrayRef)
+                }
                 _ => {
                     return Err(unsupported_data_type_exec_err(
                         "parse_json",

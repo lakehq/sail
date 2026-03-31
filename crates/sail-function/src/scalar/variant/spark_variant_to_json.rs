@@ -76,8 +76,12 @@ impl ScalarUDFImpl for SparkVariantToJsonUdf {
                     if variant_array.is_empty() {
                         return exec_err!("Cannot convert empty VariantArray to JSON: the array must contain at least one element");
                     }
-                    let v = variant_array.value(0);
-                    ColumnarValue::Scalar(ScalarValue::Utf8View(Some(v.to_json_string()?)))
+                    if variant_array.is_null(0) {
+                        ColumnarValue::Scalar(ScalarValue::Utf8View(None))
+                    } else {
+                        let v = variant_array.value(0);
+                        ColumnarValue::Scalar(ScalarValue::Utf8View(Some(v.to_json_string()?)))
+                    }
                 }
                 _ => return exec_err!("Unsupported data type: {}", scalar.data_type()),
             },
