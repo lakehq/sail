@@ -8,7 +8,7 @@ use datafusion::arrow::array::{
     StringBuilder, StructArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::Result;
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,
@@ -136,6 +136,26 @@ impl ScalarUDFImpl for SparkToJson {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        // If input is a Variant struct, delegate to variant_to_json
+        // (Spark's to_json supports Variant input and ignores options for it)
+        if let Some(field) = args.arg_fields.first() {
+            if crate::scalar::variant::utils::helper::try_field_as_variant_array(field).is_ok() {
+                let result =
+                    crate::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf::default()
+                        .invoke_with_args(args)?;
+                // variant_to_json returns Utf8View, but to_json promises Utf8
+                return match result {
+                    ColumnarValue::Scalar(ScalarValue::Utf8View(v)) => {
+                        Ok(ColumnarValue::Scalar(ScalarValue::Utf8(v)))
+                    }
+                    ColumnarValue::Array(arr) => Ok(ColumnarValue::Array(arrow::compute::cast(
+                        &arr,
+                        &DataType::Utf8,
+                    )?)),
+                    other => Ok(other),
+                };
+            }
+        }
         make_scalar_function(to_json_inner, vec![])(&args.args)
     }
 }

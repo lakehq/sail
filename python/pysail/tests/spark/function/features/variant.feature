@@ -528,7 +528,6 @@ Feature: Variant type functions (parse_json, is_variant_null, variant_get)
 
   Rule: variant_to_json with options (ignores options for Variant input)
 
-    @sail-bug
     Scenario: variant_to_json ignores options for Variant input
       When query
         """
@@ -538,7 +537,6 @@ Feature: Variant type functions (parse_json, is_variant_null, variant_get)
         | result  |
         | {"a":1} |
 
-    @sail-bug
     Scenario: variant_to_json ignores options with different format
       When query
         """
@@ -547,6 +545,61 @@ Feature: Variant type functions (parse_json, is_variant_null, variant_get)
       Then query result
         | result  |
         | [1,2,3] |
+
+  Rule: Additional type extractions
+
+    Scenario: Extract as bigint
+      When query
+        """
+        SELECT variant_get(parse_json('9999999999'), '$', 'bigint') AS result
+        """
+      Then query result
+        | result     |
+        | 9999999999 |
+
+    Scenario: Extract as long (max i64)
+      When query
+        """
+        SELECT variant_get(parse_json('9223372036854775807'), '$', 'long') AS result
+        """
+      Then query result
+        | result              |
+        | 9223372036854775807 |
+
+    Scenario: Extract as float
+      When query
+        """
+        SELECT variant_get(parse_json('3.14'), '$', 'float') AS result
+        """
+      Then query result
+        | result |
+        | 3.14   |
+
+  Rule: variant_get error cases (non-try)
+
+    Scenario: Negative array index raises error
+      When query
+        """
+        SELECT variant_get(parse_json('[10,20,30]'), '$[-1]', 'int') AS result
+        """
+      Then query error (INVALID_VARIANT_GET_PATH|not a valid variant extraction path|path|Invalid token)
+
+    @sail-only
+    Scenario: Invalid path dollar-dot raises error
+      When query
+        """
+        SELECT variant_get(parse_json('{"a":1}'), '$.', 'int') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: Invalid path double-dot raises error
+      When query
+        """
+        SELECT variant_get(parse_json('{"a":1}'), '$..a', 'int') AS result
+        """
+      Then query error (INVALID_VARIANT_GET_PATH|not a valid|Unexpected leading)
 
   Rule: NULL handling edge cases
 
@@ -586,7 +639,6 @@ Feature: Variant type functions (parse_json, is_variant_null, variant_get)
         | result |
         | NULL   |
 
-    @sail-bug
     Scenario: mixed NULL and non-NULL variant_to_json
       When query
         """
