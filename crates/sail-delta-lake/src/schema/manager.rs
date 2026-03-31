@@ -226,6 +226,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::panic)]
     fn protocol_for_create_errors_on_unknown_feature_name() {
         // Typo in the feature name must be caught instead of silently ignored.
         let mut config = HashMap::new();
@@ -233,7 +234,9 @@ mod tests {
             "delta.feature.v2Checkpiont".to_string(), // intentional typo
             "supported".to_string(),
         );
-        let err = protocol_for_create(false, false, false, &config).unwrap_err();
+        let Err(err) = protocol_for_create(false, false, false, &config) else {
+            panic!("expected protocol_for_create to error on unknown feature name");
+        };
         let msg = err.to_string();
         assert!(
             msg.contains("v2Checkpiont"),
@@ -242,6 +245,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::panic)]
     fn protocol_for_create_errors_on_invalid_feature_value() {
         // Any value other than "supported" or "enabled" must produce an error.
         let mut config = HashMap::new();
@@ -249,7 +253,9 @@ mod tests {
             "delta.feature.v2Checkpoint".to_string(),
             "true".to_string(), // invalid
         );
-        let err = protocol_for_create(false, false, false, &config).unwrap_err();
+        let Err(err) = protocol_for_create(false, false, false, &config) else {
+            panic!("expected protocol_for_create to error on invalid feature value");
+        };
         let msg = err.to_string();
         assert!(
             msg.contains("true"),
