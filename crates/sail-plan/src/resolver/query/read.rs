@@ -8,7 +8,7 @@ use datafusion_expr::{Expr, LogicalPlan, SubqueryAlias, TableScan, TableSource, 
 use rand::{rng, RngExt};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
-use sail_common_datafusion::catalog::TableKind;
+use sail_common_datafusion::catalog::{TableColumnStatus, TableKind};
 use sail_common_datafusion::datasource::{SourceInfo, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
@@ -98,59 +98,34 @@ impl PlanResolver<'_> {
                 options: table_options,
                 properties: _,
             } => {
-                let schema = Schema::new(columns.iter().map(|x| x.field()).collect::<Vec<_>>());
-                let constraints = self.resolve_catalog_table_constraints(constraints, &schema)?;
-                let temporal_options = self
-                    .resolve_time_travel_options(&format, temporal, state)
-                    .await?;
-                let info = SourceInfo {
-                    paths: location.map(|x| vec![x]).unwrap_or_default(),
-                    schema: Some(schema),
+                self.resolve_table_kind_table(
+                    columns,
                     constraints,
-                    partition_by: partition_by.into_iter().map(|field| field.column).collect(),
-                    bucket_by: bucket_by.map(|x| x.into()),
-                    sort_order: sort_by.into_iter().map(|x| x.into()).collect(),
-                    // TODO: detect duplicated keys in each set of options
-                    options: vec![
-                        table_options.into_iter().collect(),
-                        options.into_iter().collect(),
-                        temporal_options.into_iter().collect(),
-                    ],
-                };
-                let registry = self.ctx.extension::<TableFormatRegistry>()?;
-                let table_source = registry
-                    .get(&format)?
-                    .create_source(&self.ctx.state(), info)
-                    .await?;
-                self.resolve_table_source_with_rename(
-                    table_source,
+                    format,
+                    location,
+                    partition_by,
+                    sort_by,
+                    bucket_by,
+                    table_options,
+                    temporal,
+                    options,
                     table_reference,
-                    None,
-                    vec![],
-                    None,
                     state,
-                )?
+                )
+                .await?
             }
-            TableKind::View { definition, .. } => {
+            TableKind::View {
+                definition,
+                columns,
+                ..
+            } => {
                 if temporal.is_some() {
                     return Err(PlanError::unsupported(
                         "SQL time travel is not supported for views",
                     ));
                 }
-                let ast = sail_sql_analyzer::parser::parse_one_statement(&definition)?;
-                let spec_plan = sail_sql_analyzer::statement::from_ast_statement(ast)?;
-                let plan = match spec_plan {
-                    spec::Plan::Query(query_plan) => {
-                        self.resolve_query_plan(query_plan, state).await?
-                    }
-                    _ => {
-                        return Err(PlanError::invalid("view definition must be a query"));
-                    }
-                };
-                LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
-                    Arc::new(plan),
-                    table_reference.clone(),
-                )?)
+                self.resolve_table_kind_view(definition, columns, table_reference.clone(), state)
+                    .await?
             }
             TableKind::TemporaryView { plan, .. } | TableKind::GlobalTemporaryView { plan, .. } => {
                 if temporal.is_some() {
@@ -196,6 +171,83 @@ impl PlanResolver<'_> {
             state,
         )
         .await
+    }
+
+    /// Resolves a physical table into a TableScan logical plan node.
+    #[expect(clippy::too_many_arguments)]
+    async fn resolve_table_kind_table(
+        &self,
+        columns: Vec<TableColumnStatus>,
+        constraints: Vec<sail_common_datafusion::catalog::CatalogTableConstraint>,
+        format: String,
+        location: Option<String>,
+        partition_by: Vec<sail_common_datafusion::catalog::CatalogPartitionField>,
+        sort_by: Vec<sail_common_datafusion::catalog::CatalogTableSort>,
+        bucket_by: Option<sail_common_datafusion::catalog::CatalogTableBucketBy>,
+        table_options: Vec<(String, String)>,
+        temporal: Option<spec::TableTemporal>,
+        options: Vec<(String, String)>,
+        table_reference: impl Into<TableReference>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let schema = Schema::new(columns.iter().map(|x| x.field()).collect::<Vec<_>>());
+        let constraints = self.resolve_catalog_table_constraints(constraints, &schema)?;
+        let temporal_options = self
+            .resolve_time_travel_options(&format, temporal, state)
+            .await?;
+        let info = SourceInfo {
+            paths: location.map(|x| vec![x]).unwrap_or_default(),
+            schema: Some(schema),
+            constraints,
+            partition_by: partition_by.into_iter().map(|field| field.column).collect(),
+            bucket_by: bucket_by.map(|x| x.into()),
+            sort_order: sort_by.into_iter().map(|x| x.into()).collect(),
+            // TODO: detect duplicated keys in each set of options
+            options: vec![
+                table_options.into_iter().collect(),
+                options.into_iter().collect(),
+                temporal_options.into_iter().collect(),
+            ],
+        };
+        let registry = self.ctx.extension::<TableFormatRegistry>()?;
+        let table_source = registry
+            .get(&format)?
+            .create_source(&self.ctx.state(), info)
+            .await?;
+        self.resolve_table_source_with_rename(
+            table_source,
+            table_reference,
+            None,
+            vec![],
+            None,
+            state,
+        )
+    }
+
+    /// Resolves a persistent view by re-parsing its SQL definition into a logical plan.
+    async fn resolve_table_kind_view(
+        &self,
+        definition: String,
+        columns: Vec<TableColumnStatus>,
+        table_reference: TableReference,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let ast = sail_sql_analyzer::parser::parse_one_statement(&definition)?;
+        let spec_plan = sail_sql_analyzer::statement::from_ast_statement(ast)?;
+        let plan = match spec_plan {
+            spec::Plan::Query(query_plan) => self.resolve_query_plan(query_plan, state).await?,
+            _ => {
+                return Err(PlanError::invalid("view definition must be a query"));
+            }
+        };
+        let plan =
+            LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(Arc::new(plan), table_reference)?);
+        if columns.is_empty() {
+            Ok(plan)
+        } else {
+            let names = state.register_field_names(columns.iter().map(|c| &c.name));
+            Ok(rename_logical_plan(plan, &names)?)
+        }
     }
 
     /// Apply TABLESAMPLE clause to a LogicalPlan

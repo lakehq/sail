@@ -153,6 +153,17 @@ impl PlanResolverState {
             .collect()
     }
 
+    /// Registers each name and returns unique internal IDs, like `register_fields` but for plain strings.
+    pub fn register_field_names(
+        &mut self,
+        names: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Vec<String> {
+        names
+            .into_iter()
+            .map(|name| self.register_field_name(name))
+            .collect()
+    }
+
     pub fn register_plan_id_for_field(&mut self, field_id: &str, plan_id: i64) -> PlanResult<()> {
         let field_info = self
             .fields

@@ -47,3 +47,12 @@ class TestPersistentView:
         ).astype({"name": "str", "order_id": "int32"})
         assert_frame_equal(actual, expected)
         spark.sql("DROP TABLE orders")
+
+    def test_view_with_column_aliases(self, spark):
+        spark.sql("CREATE VIEW aliased_customers (customer_id, customer_name) AS SELECT id, name FROM customers")
+        actual = spark.sql("SELECT customer_id, customer_name FROM aliased_customers ORDER BY customer_id").toPandas()
+        expected = pd.DataFrame(
+            {"customer_id": [1, 2, 3], "customer_name": ["Alice", "Bob", "Carol"]},
+        ).astype({"customer_id": "int32", "customer_name": "str"})
+        assert_frame_equal(actual, expected)
+        spark.sql("DROP VIEW aliased_customers")
