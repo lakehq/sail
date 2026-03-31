@@ -11,11 +11,13 @@ fn xpath(
         function_context: _,
     }: ScalarFunctionInput,
 ) -> PlanResult<expr::Expr> {
-    let (xml, path) = arguments
-        .into_iter()
-        .collect::<Vec<_>>()
-        .try_into()
-        .map_err(|arguments: Vec<_>| PlanError::invalid(format!("xpath expects 2 arguments, got {}", arguments.len())))?;
+    let argument_count = arguments.len();
+    let mut arguments = arguments.into_iter();
+    let (Some(xml), Some(path), None) = (arguments.next(), arguments.next(), arguments.next()) else {
+        return Err(PlanError::invalid(format!(
+            "xpath expects 2 arguments, got {argument_count}"
+        )));
+    };
     validate_xpath_path(&path)?;
     Ok(xpath_udf().call(vec![xml, path]))
 }

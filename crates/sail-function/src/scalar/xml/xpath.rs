@@ -1,7 +1,7 @@
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
-use datafusion::arrow::array::{ArrayRef, ListBuilder, StringArray, StringBuilder};
+use datafusion::arrow::array::{Array, ArrayRef, ListBuilder, StringArray, StringBuilder};
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{plan_err, DataFusionError, Result};
@@ -73,7 +73,10 @@ impl ScalarUDFImpl for Xpath {
 }
 
 pub fn xpath_udf() -> Arc<ScalarUDF> {
-    Arc::new(ScalarUDF::new_from_impl(Xpath::new()))
+    static STATIC_XPATH: OnceLock<Arc<ScalarUDF>> = OnceLock::new();
+    STATIC_XPATH
+        .get_or_init(|| Arc::new(ScalarUDF::new_from_impl(Xpath::new())))
+        .clone()
 }
 
 fn xpath_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -116,7 +119,7 @@ fn evaluate_xpath(xml: &str, path: &str) -> Result<Option<Vec<Option<String>>>> 
         .map_err(|error| DataFusionError::Execution(format!("Invalid XML document: {error}\n{xml}")))?;
     let expression = Factory::new()
         .build(path)
-        .map_err(|error| DataFusionError::Execution(format!("Invalid XPath '{path}'{error}")))?;
+        .map_err(|error| DataFusionError::Execution(format!("Invalid XPath '{path}': {error}")))?;
     let expression = expression
         .ok_or_else(|| DataFusionError::Execution(format!("Invalid XPath '{path}'")))?;
     let value = expression
