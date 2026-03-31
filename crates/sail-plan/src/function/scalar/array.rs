@@ -10,6 +10,7 @@ use datafusion_spark::function::array::expr_fn as array_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
 use sail_function::scalar::array::spark_array::SparkArray;
+use sail_function::scalar::array::spark_array_compact::SparkArrayCompact;
 use sail_function::scalar::array::spark_array_min_max::{ArrayMax, ArrayMin};
 use sail_function::scalar::array::spark_sequence::SparkSequence;
 use sail_function::scalar::misc::raise_error::RaiseError;
@@ -22,7 +23,7 @@ fn array_repeat(element: expr::Expr, count: expr::Expr) -> expr::Expr {
 }
 
 fn array_compact(array: expr::Expr) -> expr::Expr {
-    expr_fn::array_remove_all(array, lit(ScalarValue::Null))
+    ScalarUDF::from(SparkArrayCompact::new()).call(vec![array])
 }
 
 fn slice(array: expr::Expr, start: expr::Expr, length: expr::Expr) -> expr::Expr {
