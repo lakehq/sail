@@ -510,6 +510,137 @@ Feature: Variant type functions (parse_json, is_variant_null, variant_get)
         | result |
         | NULL   |
 
+    Scenario: try_variant_get missing path returns NULL
+      When query
+        """
+        SELECT try_variant_get(parse_json('{"a":1}'), '$.b', 'int') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: try_variant_get NULL input returns NULL
+      When query
+        """
+        SELECT try_variant_get(parse_json(CAST(NULL AS STRING)), '$', 'int') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: try_variant_get valid int extraction
+      When query
+        """
+        SELECT try_variant_get(parse_json('42'), '$', 'int') AS result
+        """
+      Then query result
+        | result |
+        | 42     |
+
+    Scenario: try_variant_get valid string extraction
+      When query
+        """
+        SELECT try_variant_get(parse_json('"hello"'), '$', 'string') AS result
+        """
+      Then query result
+        | result |
+        | hello  |
+
+    Scenario: try_variant_get valid boolean extraction
+      When query
+        """
+        SELECT try_variant_get(parse_json('true'), '$', 'boolean') AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: try_variant_get array index
+      When query
+        """
+        SELECT try_variant_get(parse_json('[10,20,30]'), '$[1]', 'int') AS result
+        """
+      Then query result
+        | result |
+        | 20     |
+
+    Scenario: try_variant_get nested field
+      When query
+        """
+        SELECT try_variant_get(parse_json('{"a":{"b":99}}'), '$.a.b', 'int') AS result
+        """
+      Then query result
+        | result |
+        | 99     |
+
+    Scenario: try_variant_get array as int returns NULL
+      When query
+        """
+        SELECT try_variant_get(parse_json('[1,2,3]'), '$', 'int') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    @sail-bug
+    Scenario: try_variant_get bool as int returns 1
+      When query
+        """
+        SELECT try_variant_get(parse_json('true'), '$', 'int') AS result
+        """
+      Then query result
+        | result |
+        | 1      |
+
+    Scenario: try_variant_get null JSON value returns NULL
+      When query
+        """
+        SELECT try_variant_get(parse_json('{"a":null}'), '$.a', 'string') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: try_variant_get out of bounds returns NULL
+      When query
+        """
+        SELECT try_variant_get(parse_json('[1,2]'), '$[5]', 'int') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: try_variant_get bigint extraction
+      When query
+        """
+        SELECT try_variant_get(parse_json('9999999999'), '$', 'bigint') AS result
+        """
+      Then query result
+        | result     |
+        | 9999999999 |
+
+    Scenario: try_variant_get decimal extraction
+      When query
+        """
+        SELECT try_variant_get(parse_json('19.99'), '$', 'decimal(10,2)') AS result
+        """
+      Then query result
+        | result |
+        | 19.99  |
+
+    Scenario: try_variant_get multi-row with mixed types
+      When query
+        """
+        SELECT try_variant_get(parse_json(v), '$', 'int') AS result
+        FROM VALUES ('1'), ('"text"'), ('null'), ('3') AS t(v)
+        """
+      Then query result
+        | result |
+        | 1      |
+        | NULL   |
+        | NULL   |
+        | 3      |
+
   Rule: Error cases
 
     Scenario: Invalid JSON raises error
