@@ -582,7 +582,6 @@ Feature: Variant type functions (parse_json, is_variant_null, variant_get)
         | result |
         | NULL   |
 
-    @sail-bug
     Scenario: try_variant_get bool as int returns 1
       When query
         """
@@ -715,15 +714,12 @@ Feature: Variant type functions (parse_json, is_variant_null, variant_get)
         """
       Then query error (INVALID_VARIANT_GET_PATH|not a valid variant extraction path|path|Invalid token)
 
-    @sail-only
     Scenario: Invalid path dollar-dot raises error
       When query
         """
         SELECT variant_get(parse_json('{"a":1}'), '$.', 'int') AS result
         """
-      Then query result
-        | result |
-        | NULL   |
+      Then query error (INVALID_VARIANT_GET_PATH|not a valid variant extraction path|path)
 
     Scenario: Invalid path double-dot raises error
       When query

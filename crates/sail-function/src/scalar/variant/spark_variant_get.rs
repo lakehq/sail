@@ -127,6 +127,13 @@ fn invoke_variant_get(args: ScalarFunctionArgs, name: &str, safe: bool) -> Resul
     };
 
     // Parse the Spark path: strip leading "$." or "$"
+    // Validate: "$." alone is invalid (trailing dot with no field name)
+    if path_str == "$." {
+        return Err(generic_exec_err(
+            name,
+            "path '$.' is not a valid variant extraction path",
+        ));
+    }
     let clean_path = strip_spark_path_prefix(&path_str);
     let variant_path = if clean_path.is_empty() {
         VariantPath::default()
@@ -168,6 +175,38 @@ fn invoke_variant_get(args: ScalarFunctionArgs, name: &str, safe: bool) -> Resul
     // Execute
     let result = variant_get(&variant_arr, options)
         .map_err(|e| datafusion_common::DataFusionError::Execution(format!("{name}: {e}")))?;
+
+    // Fallback: if extracting as numeric type returned all NULLs,
+    // try extracting as Boolean and cast (Spark casts true→1, false→0)
+    let result = if !needs_post_cast && result.null_count() == result.len() && result.len() > 0 {
+        if let Some(ref dt) = final_type {
+            if dt.is_integer() {
+                let bool_field = Some(Arc::new(Field::new(name, DataType::Boolean, true)));
+                let bool_options = build_get_options(
+                    if clean_path.is_empty() {
+                        VariantPath::default()
+                    } else {
+                        VariantPath::try_from(clean_path)
+                            .map_err(|e| arrow_datafusion_err!(e))?
+                    },
+                    &bool_field,
+                );
+                let bool_result = variant_get(&variant_arr, bool_options)
+                    .map_err(|e| datafusion_common::DataFusionError::Execution(format!("{name}: {e}")))?;
+                if bool_result.null_count() < bool_result.len() {
+                    datafusion::arrow::compute::cast(&bool_result, dt)?
+                } else {
+                    result
+                }
+            } else {
+                result
+            }
+        } else {
+            result
+        }
+    } else {
+        result
+    };
 
     // Post-cast for types parquet-variant can't extract directly
     let result = if needs_post_cast {
