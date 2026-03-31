@@ -128,17 +128,12 @@ impl ObjectStore for RuntimeAwareObjectStore {
         &self,
         locations: BoxStream<'static, Result<Path>>,
     ) -> BoxStream<'static, Result<Path>> {
-        let inner = self.inner.clone();
-        let (tx, rx) = mpsc::channel(1);
-        self.handle.spawn(async move {
-            let mut stream = inner.delete_stream(locations);
-            while let Some(item) = stream.next().await {
-                if tx.send(item).await.is_err() {
-                    break;
-                }
-            }
-        });
-        ReceiverStream::new(rx).boxed()
+        RuntimeAwareStream::new(
+            move |x| x.delete_stream(locations),
+            self.inner.clone(),
+            self.handle.clone(),
+        )
+        .boxed()
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
