@@ -136,6 +136,12 @@ pub(crate) async fn cleanup_expired_delta_log_files(
 
 /// Ensures a classic single-file checkpoint (`{version:020}.checkpoint.parquet`) exists at
 /// `version` when the checkpoint at that version is a UUID-named V2 checkpoint.
+///
+/// The compat file is a byte-copy of the UUID-named V2 main checkpoint to the classic
+/// filename. Its content is identical to the V2 main file: it follows V2 spec (contains
+/// `checkpointMetadata`, `sidecar` references) but uses a classic filename so that
+/// readers which do not recognise UUID-named checkpoints can still find a checkpoint,
+/// discover the protocol version, and fail gracefully with an unsupported-protocol error.
 async fn ensure_v2_compat_classic_checkpoint(
     object_store: Arc<dyn ObjectStore>,
     version: i64,
@@ -175,15 +181,15 @@ async fn ensure_v2_compat_classic_checkpoint(
         return Ok(());
     };
 
-    // Copy the UUID-named checkpoint to the classic path.
-    // `ObjectStore::copy` does a server-side copy where the backend supports it and falls
-    // back to get+put otherwise; either way the destination is written atomically.
+    // Copy the UUID-named V2 main checkpoint to the classic path.
+    // `ObjectStore::copy` performs a server-side copy where the backend supports it and
+    // falls back to get+put otherwise.
     match object_store.copy(&uuid_meta.location, &classic_path).await {
         Ok(()) => {
             debug!("Wrote V2 compat classic checkpoint at {}", classic_path);
         }
         Err(object_store::Error::AlreadyExists { .. }) => {
-            // Another writer beat us to it — that's fine, the content is identical.
+            // A concurrent writer beat us to it — that's fine, the content is identical.
         }
         Err(err) => return Err(err.into()),
     }

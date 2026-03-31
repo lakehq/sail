@@ -68,7 +68,7 @@ pub fn metadata_for_create_with_struct_type(
 /// Build Protocol for a create/write path based on required table features.
 ///
 /// In addition to the explicitly toggled features, this function scans the table
-/// `configuration` for `delta.feature.<name> = "enabled"` entries and includes
+/// `configuration` for `delta.feature.<name> = "supported"` entries and includes
 /// the corresponding [`TableFeature`] in the protocol.
 pub fn protocol_for_create(
     enable_column_mapping: bool,
