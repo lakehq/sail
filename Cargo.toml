@@ -165,9 +165,9 @@ arrow-schema = { version = "58.0.0", features = ["serde"] }
 arrow-flight = { version = "58.0.0" }
 arrow-pyarrow = { version = "58.0.0" }
 parquet = { version = "58.0.0" }
-parquet-variant = { git = "https://github.com/apache/arrow-rs", tag = "58.1.0" }
-parquet-variant-compute = { git = "https://github.com/apache/arrow-rs", tag = "58.1.0" }
-parquet-variant-json = { git = "https://github.com/apache/arrow-rs", tag = "58.1.0" }
+parquet-variant = { version = "58.1.0" }
+parquet-variant-compute = { version = "58.1.0" }
+parquet-variant-json = { version = "58.1.0" }
 serde_arrow = { version = "0.14.0", features = ["arrow-58"] }
 # The `object_store` version must match the one used in DataFusion.
 object_store = { version = "0.13.2", features = ["aws", "gcp", "azure", "http"] }
@@ -181,27 +181,6 @@ hdfs-native-object-store = "0.16.0"
 [patch.crates-io]
 # Override dependencies to use our forked versions.
 # You can use `path = "..."` to temporarily point to your local copy of the crates to speed up local development.
-
-# Force all arrow crates to use git tag 58.1.0 so that parquet-variant
-# (which is only published as git, not on crates.io yet) shares
-# the same arrow instances as the rest of the workspace.
-arrow = { git = "https://github.com/apache/arrow-rs", tag = "58.1.0" }
-arrow-array = { git = "https://github.com/apache/arrow-rs", tag = "58.1.0" }
-arrow-buffer = { git = "https://github.com/apache/arrow-rs", tag = "58.1.0" }
-arrow-schema = { git = "https://github.com/apache/arrow-rs", tag = "58.1.0" }
-arrow-data = { git = "https://github.com/apache/arrow-rs", tag = "58.1.0" }
-arrow-cast = { git = "https://github.com/apache/arrow-rs", tag = "58.1.0" }
-arrow-ipc = { git = "https://github.com/apache/arrow-rs", tag = "58.1.0" }
-arrow-csv = { git = "https://github.com/apache/arrow-rs", tag = "58.1.0" }
-arrow-json = { git = "https://github.com/apache/arrow-rs", tag = "58.1.0" }
-arrow-flight = { git = "https://github.com/apache/arrow-rs", tag = "58.1.0" }
-arrow-pyarrow = { git = "https://github.com/apache/arrow-rs", tag = "58.1.0" }
-arrow-ord = { git = "https://github.com/apache/arrow-rs", tag = "58.1.0" }
-arrow-arith = { git = "https://github.com/apache/arrow-rs", tag = "58.1.0" }
-arrow-row = { git = "https://github.com/apache/arrow-rs", tag = "58.1.0" }
-arrow-select = { git = "https://github.com/apache/arrow-rs", tag = "58.1.0" }
-arrow-string = { git = "https://github.com/apache/arrow-rs", tag = "58.1.0" }
-parquet = { git = "https://github.com/apache/arrow-rs", tag = "58.1.0" }
 
 [profile.release]
 # https://doc.rust-lang.org/cargo/reference/profiles.html#release

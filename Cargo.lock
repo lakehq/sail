@@ -216,7 +216,8 @@ checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 [[package]]
 name = "arrow"
 version = "58.1.0"
-source = "git+https://github.com/apache/arrow-rs?tag=58.1.0#6cadf3b4de916c707e2103b123a168154e668a33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d441fdda254b65f3e9025910eb2c2066b6295d9c8ed409522b8d2ace1ff8574c"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -236,7 +237,8 @@ dependencies = [
 [[package]]
 name = "arrow-arith"
 version = "58.1.0"
-source = "git+https://github.com/apache/arrow-rs?tag=58.1.0#6cadf3b4de916c707e2103b123a168154e668a33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ced5406f8b720cc0bc3aa9cf5758f93e8593cda5490677aa194e4b4b383f9a59"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -249,7 +251,8 @@ dependencies = [
 [[package]]
 name = "arrow-array"
 version = "58.1.0"
-source = "git+https://github.com/apache/arrow-rs?tag=58.1.0#6cadf3b4de916c707e2103b123a168154e668a33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "772bd34cacdda8baec9418d80d23d0fb4d50ef0735685bd45158b83dfeb6e62d"
 dependencies = [
  "ahash 0.8.12",
  "arrow-buffer",
@@ -267,7 +270,8 @@ dependencies = [
 [[package]]
 name = "arrow-buffer"
 version = "58.1.0"
-source = "git+https://github.com/apache/arrow-rs?tag=58.1.0#6cadf3b4de916c707e2103b123a168154e668a33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "898f4cf1e9598fdb77f356fdf2134feedfd0ee8d5a4e0a5f573e7d0aec16baa4"
 dependencies = [
  "bytes",
  "half",
@@ -278,7 +282,8 @@ dependencies = [
 [[package]]
 name = "arrow-cast"
 version = "58.1.0"
-source = "git+https://github.com/apache/arrow-rs?tag=58.1.0#6cadf3b4de916c707e2103b123a168154e668a33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b0127816c96533d20fc938729f48c52d3e48f99717e7a0b5ade77d742510736d"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -299,7 +304,8 @@ dependencies = [
 [[package]]
 name = "arrow-csv"
 version = "58.1.0"
-source = "git+https://github.com/apache/arrow-rs?tag=58.1.0#6cadf3b4de916c707e2103b123a168154e668a33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca025bd0f38eeecb57c2153c0123b960494138e6a957bbda10da2b25415209fe"
 dependencies = [
  "arrow-array",
  "arrow-cast",
@@ -313,7 +319,8 @@ dependencies = [
 [[package]]
 name = "arrow-data"
 version = "58.1.0"
-source = "git+https://github.com/apache/arrow-rs?tag=58.1.0#6cadf3b4de916c707e2103b123a168154e668a33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42d10beeab2b1c3bb0b53a00f7c944a178b622173a5c7bcabc3cb45d90238df4"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
@@ -325,7 +332,8 @@ dependencies = [
 [[package]]
 name = "arrow-flight"
 version = "58.1.0"
-source = "git+https://github.com/apache/arrow-rs?tag=58.1.0#6cadf3b4de916c707e2103b123a168154e668a33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "302b2e036335f3f04d65dad3f74ff1f2aae6dc671d6aa04dc6b61193761e16fb"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -344,7 +352,8 @@ dependencies = [
 [[package]]
 name = "arrow-ipc"
 version = "58.1.0"
-source = "git+https://github.com/apache/arrow-rs?tag=58.1.0#6cadf3b4de916c707e2103b123a168154e668a33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "609a441080e338147a84e8e6904b6da482cefb957c5cdc0f3398872f69a315d0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -359,7 +368,8 @@ dependencies = [
 [[package]]
 name = "arrow-json"
 version = "58.1.0"
-source = "git+https://github.com/apache/arrow-rs?tag=58.1.0#6cadf3b4de916c707e2103b123a168154e668a33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ead0914e4861a531be48fe05858265cf854a4880b9ed12618b1d08cba9bebc8"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -382,7 +392,8 @@ dependencies = [
 [[package]]
 name = "arrow-ord"
 version = "58.1.0"
-source = "git+https://github.com/apache/arrow-rs?tag=58.1.0#6cadf3b4de916c707e2103b123a168154e668a33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "763a7ba279b20b52dad300e68cfc37c17efa65e68623169076855b3a9e941ca5"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -394,7 +405,8 @@ dependencies = [
 [[package]]
 name = "arrow-pyarrow"
 version = "58.1.0"
-source = "git+https://github.com/apache/arrow-rs?tag=58.1.0#6cadf3b4de916c707e2103b123a168154e668a33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e63351dc11981a316c828a6032a5021345bba882f68bc4a36c36825a50725089"
 dependencies = [
  "arrow-array",
  "arrow-data",
@@ -405,7 +417,8 @@ dependencies = [
 [[package]]
 name = "arrow-row"
 version = "58.1.0"
-source = "git+https://github.com/apache/arrow-rs?tag=58.1.0#6cadf3b4de916c707e2103b123a168154e668a33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e14fe367802f16d7668163ff647830258e6e0aeea9a4d79aaedf273af3bdcd3e"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -417,7 +430,8 @@ dependencies = [
 [[package]]
 name = "arrow-schema"
 version = "58.1.0"
-source = "git+https://github.com/apache/arrow-rs?tag=58.1.0#6cadf3b4de916c707e2103b123a168154e668a33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c30a1365d7a7dc50cc847e54154e6af49e4c4b0fddc9f607b687f29212082743"
 dependencies = [
  "bitflags",
  "serde",
@@ -428,7 +442,8 @@ dependencies = [
 [[package]]
 name = "arrow-select"
 version = "58.1.0"
-source = "git+https://github.com/apache/arrow-rs?tag=58.1.0#6cadf3b4de916c707e2103b123a168154e668a33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78694888660a9e8ac949853db393af2a8b8fc82c19ce333132dfa2e72cc1a7fe"
 dependencies = [
  "ahash 0.8.12",
  "arrow-array",
@@ -441,7 +456,8 @@ dependencies = [
 [[package]]
 name = "arrow-string"
 version = "58.1.0"
-source = "git+https://github.com/apache/arrow-rs?tag=58.1.0#6cadf3b4de916c707e2103b123a168154e668a33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "61e04a01f8bb73ce54437514c5fd3ee2aa3e8abe4c777ee5cc55853b1652f79e"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -4592,7 +4608,8 @@ dependencies = [
 [[package]]
 name = "parquet"
 version = "58.1.0"
-source = "git+https://github.com/apache/arrow-rs?tag=58.1.0#6cadf3b4de916c707e2103b123a168154e668a33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d3f9f2205199603564127932b89695f52b62322f541d0fc7179d57c2e1c9877"
 dependencies = [
  "ahash 0.8.12",
  "arrow-array",
@@ -4627,7 +4644,8 @@ dependencies = [
 [[package]]
 name = "parquet-variant"
 version = "58.1.0"
-source = "git+https://github.com/apache/arrow-rs?tag=58.1.0#6cadf3b4de916c707e2103b123a168154e668a33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2bf493f3c9ddd984d0efb019f67343e4aa4bab893931f6a14b82083065dc3d28"
 dependencies = [
  "arrow-schema",
  "chrono",
@@ -4640,7 +4658,8 @@ dependencies = [
 [[package]]
 name = "parquet-variant-compute"
 version = "58.1.0"
-source = "git+https://github.com/apache/arrow-rs?tag=58.1.0#6cadf3b4de916c707e2103b123a168154e668a33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ac038d46a503a7d563b4f5df5802c4315d5343d009feab195d15ac512b4cb27"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -4656,7 +4675,8 @@ dependencies = [
 [[package]]
 name = "parquet-variant-json"
 version = "58.1.0"
-source = "git+https://github.com/apache/arrow-rs?tag=58.1.0#6cadf3b4de916c707e2103b123a168154e668a33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "015a09c2ffe5108766c7c1235c307b8a3c2ea64eca38455ba1a7f3a7f32f16e2"
 dependencies = [
  "arrow-schema",
  "base64 0.22.1",
