@@ -15,8 +15,8 @@ Our mission is to **unify batch processing, stream processing, and compute-inten
 - **100% Rust-native** with no JVM overhead, delivering memory safety, instant startup, and predictable performance.
 
 **🚀 Sail outperforms Spark, popular Spark accelerators, Databricks, and Snowflake on [ClickBench](https://go.lakesail.com/clickbench).**
-**💬 [Join our Slack community](https://www.launchpass.com/lakesail-community/free)** to ask questions, share feedback, and connect with other Sail users and contributors.
 
+**💬 [Join our Slack community](https://www.launchpass.com/lakesail-community/free)** to ask questions, share feedback, and connect with other Sail users and contributors.
 
 ## Documentation
 
