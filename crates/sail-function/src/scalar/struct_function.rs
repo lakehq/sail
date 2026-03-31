@@ -30,7 +30,6 @@ pub fn to_struct_array(
         .zip(field_names.iter())
         .zip(arg_fields.iter())
         .map(|((arg, field_name), arg_field)| {
-            // Use the nullability from the input field schema
             Ok((
                 Arc::new(Field::new(
                     field_name.as_str(),
@@ -84,7 +83,6 @@ impl ScalarUDFImpl for StructFunction {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        // Build struct fields preserving the nullability from input fields
         let fields: Vec<Field> = args
             .arg_fields
             .iter()

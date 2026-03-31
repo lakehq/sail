@@ -358,8 +358,6 @@ impl PlanResolver<'_> {
                 data_type
             }
             spec::DataType::Variant => {
-                // Add extension type metadata so variant functions recognize the field.
-                // This follows the same pattern as Geometry/Geography above.
                 metadata.insert(
                     "ARROW:extension:name".to_string(),
                     "arrow.parquet.variant".to_string(),

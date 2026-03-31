@@ -1,11 +1,14 @@
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
+use base64::prelude::BASE64_STANDARD;
+use base64::Engine;
 use chrono::{TimeZone, Utc};
 use datafusion::arrow::array::{
-    Array, ArrayRef, AsArray, BooleanArray, Date32Array, Float32Array, Float64Array, Int16Array,
-    Int32Array, Int64Array, Int8Array, LargeStringArray, ListArray, MapArray, StringArray,
-    StringBuilder, StructArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
+    FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
+    Int8Array, LargeListArray, LargeStringArray, ListArray, MapArray, StringArray, StringBuilder,
+    StringViewArray, StructArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{Result, ScalarValue};
@@ -261,6 +264,11 @@ fn array_value_to_json(array: &ArrayRef, index: usize, options: &ToJsonOptions) 
                 v.to_string()
             ))
         }
+        DataType::Utf8View => {
+            downcast_and_convert!(array, index, StringViewArray, |v: &str| Value::String(
+                v.to_string()
+            ))
+        }
         DataType::Date32 => {
             let arr = array
                 .as_any()
@@ -300,6 +308,24 @@ fn array_value_to_json(array: &ArrayRef, index: usize, options: &ToJsonOptions) 
                 })?;
             struct_to_json(struct_array, index, options)
         }
+        DataType::Binary => {
+            downcast_and_convert!(array, index, BinaryArray, |v: &[u8]| Value::String(
+                BASE64_STANDARD.encode(v)
+            ))
+        }
+        DataType::BinaryView => {
+            downcast_and_convert!(array, index, BinaryViewArray, |v: &[u8]| Value::String(
+                BASE64_STANDARD.encode(v)
+            ))
+        }
+        DataType::FixedSizeBinary(_) => {
+            downcast_and_convert!(
+                array,
+                index,
+                FixedSizeBinaryArray,
+                |v: &[u8]| Value::String(BASE64_STANDARD.encode(v))
+            )
+        }
         DataType::List(_) => {
             let list_array = array.as_any().downcast_ref::<ListArray>().ok_or_else(|| {
                 datafusion_common::DataFusionError::Internal(
@@ -307,6 +333,38 @@ fn array_value_to_json(array: &ArrayRef, index: usize, options: &ToJsonOptions) 
                 )
             })?;
             list_to_json(list_array, index, options)
+        }
+        DataType::FixedSizeList(_, _) => {
+            let values = array
+                .as_any()
+                .downcast_ref::<datafusion::arrow::array::FixedSizeListArray>()
+                .ok_or_else(|| {
+                    datafusion_common::DataFusionError::Internal(
+                        "Failed to downcast to FixedSizeListArray".to_string(),
+                    )
+                })?
+                .value(index);
+            let mut json_values = Vec::with_capacity(values.len());
+            for i in 0..values.len() {
+                json_values.push(array_value_to_json(&values, i, options)?);
+            }
+            Ok(Value::Array(json_values))
+        }
+        DataType::LargeList(_) => {
+            let list_array = array
+                .as_any()
+                .downcast_ref::<LargeListArray>()
+                .ok_or_else(|| {
+                    datafusion_common::DataFusionError::Internal(
+                        "Failed to downcast to LargeListArray".to_string(),
+                    )
+                })?;
+            let values = list_array.value(index);
+            let mut json_values = Vec::with_capacity(values.len());
+            for i in 0..values.len() {
+                json_values.push(array_value_to_json(&values, i, options)?);
+            }
+            Ok(Value::Array(json_values))
         }
         DataType::Map(_, _) => {
             let map_array = array.as_any().downcast_ref::<MapArray>().ok_or_else(|| {

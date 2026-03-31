@@ -178,7 +178,7 @@ fn invoke_variant_get(args: ScalarFunctionArgs, name: &str, safe: bool) -> Resul
 
     // Fallback: if extracting as numeric type returned all NULLs,
     // try extracting as Boolean and cast (Spark casts true→1, false→0)
-    let result = if !needs_post_cast && result.null_count() == result.len() && result.len() > 0 {
+    let result = if !needs_post_cast && result.null_count() == result.len() && !result.is_empty() {
         if let Some(ref dt) = final_type {
             if dt.is_integer() {
                 let bool_field = Some(Arc::new(Field::new(name, DataType::Boolean, true)));
@@ -186,13 +186,13 @@ fn invoke_variant_get(args: ScalarFunctionArgs, name: &str, safe: bool) -> Resul
                     if clean_path.is_empty() {
                         VariantPath::default()
                     } else {
-                        VariantPath::try_from(clean_path)
-                            .map_err(|e| arrow_datafusion_err!(e))?
+                        VariantPath::try_from(clean_path).map_err(|e| arrow_datafusion_err!(e))?
                     },
                     &bool_field,
                 );
-                let bool_result = variant_get(&variant_arr, bool_options)
-                    .map_err(|e| datafusion_common::DataFusionError::Execution(format!("{name}: {e}")))?;
+                let bool_result = variant_get(&variant_arr, bool_options).map_err(|e| {
+                    datafusion_common::DataFusionError::Execution(format!("{name}: {e}"))
+                })?;
                 if bool_result.null_count() < bool_result.len() {
                     datafusion::arrow::compute::cast(&bool_result, dt)?
                 } else {
