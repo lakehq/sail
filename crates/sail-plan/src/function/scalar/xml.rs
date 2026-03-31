@@ -13,7 +13,8 @@ fn xpath(
 ) -> PlanResult<expr::Expr> {
     let argument_count = arguments.len();
     let mut arguments = arguments.into_iter();
-    let (Some(xml), Some(path), None) = (arguments.next(), arguments.next(), arguments.next()) else {
+    let (Some(xml), Some(path), None) = (arguments.next(), arguments.next(), arguments.next())
+    else {
         return Err(PlanError::invalid(format!(
             "xpath expects 2 arguments, got {argument_count}"
         )));
@@ -23,9 +24,9 @@ fn xpath(
 }
 
 fn validate_xpath_path(path: &expr::Expr) -> PlanResult<()> {
-    LiteralEvaluator::new().evaluate(path).map(|_| ()).map_err(|_| {
+    LiteralEvaluator::new().evaluate(path).map(|_| ()).map_err(|error| {
         PlanError::invalid(format!(
-            "Cannot resolve \"xpath(xml, path)\" due to data type mismatch: the input path should be a foldable \"STRING\" expression; however, got \"{path}\"."
+            "Cannot resolve \"xpath(xml, path)\" due to data type mismatch: the input path should be a foldable \"STRING\" expression; however, got \"{path}\". {error}"
         ))
     })
 }

@@ -5,7 +5,9 @@ use datafusion::arrow::array::{Array, ArrayRef, ListBuilder, StringArray, String
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{plan_err, DataFusionError, Result};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+};
 use sxd_document::parser;
 use sxd_xpath::nodeset::Node;
 use sxd_xpath::{Context, Factory, Value};
@@ -53,7 +55,10 @@ impl ScalarUDFImpl for Xpath {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         if arg_types.len() != 2 {
-            return plan_err!("`xpath` function requires 2 arguments, got {}", arg_types.len());
+            return plan_err!(
+                "`xpath` function requires 2 arguments, got {}",
+                arg_types.len()
+            );
         }
         arg_types
             .iter()
@@ -61,7 +66,9 @@ impl ScalarUDFImpl for Xpath {
                 DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Null => {
                     Ok(DataType::Utf8)
                 }
-                other => plan_err!("The `xpath` function can only accept strings, but got {other:?}."),
+                other => {
+                    plan_err!("The `xpath` function can only accept strings, but got {other:?}.")
+                }
             })
             .collect()
     }
@@ -81,14 +88,15 @@ pub fn xpath_udf() -> Arc<ScalarUDF> {
 
 fn xpath_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [xmls, paths] = take_function_args("xpath", args)?;
-    let xmls = xmls
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .ok_or_else(|| DataFusionError::Internal("xpath expected a string array for xml".to_string()))?;
+    let xmls = xmls.as_any().downcast_ref::<StringArray>().ok_or_else(|| {
+        DataFusionError::Internal("xpath expected a string array for xml".to_string())
+    })?;
     let paths = paths
         .as_any()
         .downcast_ref::<StringArray>()
-        .ok_or_else(|| DataFusionError::Internal("xpath expected a string array for path".to_string()))?;
+        .ok_or_else(|| {
+            DataFusionError::Internal("xpath expected a string array for path".to_string())
+        })?;
 
     let mut builder = ListBuilder::new(StringBuilder::new());
     for row in 0..xmls.len() {
@@ -115,16 +123,19 @@ fn evaluate_xpath(xml: &str, path: &str) -> Result<Option<Vec<Option<String>>>> 
         return Ok(None);
     }
 
-    let package = parser::parse(xml)
-        .map_err(|error| DataFusionError::Execution(format!("Invalid XML document: {error}\n{xml}")))?;
+    let package = parser::parse(xml).map_err(|error| {
+        DataFusionError::Execution(format!("Invalid XML document: {error}\n{xml}"))
+    })?;
     let expression = Factory::new()
         .build(path)
         .map_err(|error| DataFusionError::Execution(format!("Invalid XPath '{path}': {error}")))?;
-    let expression = expression
-        .ok_or_else(|| DataFusionError::Execution(format!("Invalid XPath '{path}'")))?;
+    let expression =
+        expression.ok_or_else(|| DataFusionError::Execution(format!("Invalid XPath '{path}'")))?;
     let value = expression
         .evaluate(&Context::new(), package.as_document().root())
-        .map_err(|error| DataFusionError::Execution(format!("Error loading expression '{path}': {error}")))?;
+        .map_err(|error| {
+            DataFusionError::Execution(format!("Error loading expression '{path}': {error}"))
+        })?;
 
     match value {
         Value::Nodeset(nodeset) => Ok(Some(
@@ -147,7 +158,9 @@ fn node_value(node: Node<'_>) -> Option<String> {
         Node::Text(text) => Some(text.text().to_string()),
         Node::Comment(comment) => Some(comment.text().to_string()),
         Node::Namespace(namespace) => Some(namespace.uri().to_string()),
-        Node::ProcessingInstruction(instruction) => Some(instruction.value().unwrap_or("").to_string()),
+        Node::ProcessingInstruction(instruction) => {
+            Some(instruction.value().unwrap_or("").to_string())
+        }
     }
 }
 
