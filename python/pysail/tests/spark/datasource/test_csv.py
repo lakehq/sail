@@ -1,4 +1,5 @@
 import glob
+from collections.abc import Mapping
 
 import pytest
 from pyspark.sql import Row
@@ -8,6 +9,8 @@ from pysail.testing.spark.utils.sql import escape_sql_identifier
 
 
 def safe_sort_key(row):
+    if isinstance(row, Mapping):
+        return tuple((v is not None, v) for _, v in sorted(row.items()))
     return tuple((v is not None, v) for v in row)
 
 

@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+
 import pandas as pd
 from pandas.testing import assert_frame_equal
 
@@ -6,6 +8,8 @@ from pysail.testing.spark.utils.sql import escape_sql_identifier
 
 
 def safe_sort_key(row):
+    if isinstance(row, Mapping):
+        return tuple((v is not None, v) for _, v in sorted(row.items()))
     return tuple((v is not None, v) for v in row)
 
 

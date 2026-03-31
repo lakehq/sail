@@ -1,6 +1,7 @@
 import io
 
 import numpy as np
+import pytest
 from PIL import Image
 from pyspark.sql import functions as F  # noqa: N812
 
@@ -58,6 +59,8 @@ def test_binary_read_basic(spark, tmp_path):
                 assert row.content == expected_content
                 assert row.length == len(expected_content)
                 break
+        else:
+            pytest.fail(f"Unexpected file returned: {filename}")
 
 
 def test_binary_read_options(spark, tmp_path):
