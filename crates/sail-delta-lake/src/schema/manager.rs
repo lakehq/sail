@@ -13,7 +13,10 @@
 use std::collections::HashMap;
 
 use super::mapping::{annotate_new_fields_for_column_mapping, compute_max_column_id};
-use crate::spec::{ColumnMappingMode, DeltaResult, Metadata, Protocol, StructType, TableFeature};
+use crate::spec::{
+    ColumnMappingMode, DeltaError as DeltaTableError, DeltaResult, Metadata, Protocol, StructType,
+    TableFeature,
+};
 
 /// Evolve table schema and update metadata according to column mapping mode.
 pub fn evolve_schema(
@@ -88,17 +91,31 @@ pub fn protocol_for_create(
         writer_features.push(TableFeature::InCommitTimestamp);
     }
 
-    // Extract features from `delta.feature.<name> = "enabled"` configuration entries.
+    // Extract features from `delta.feature.<name> = "supported"|"enabled"` configuration entries.
+    // Unknown feature names always produce an error regardless of value.
     for (key, value) in configuration {
         if let Some(name) = key.strip_prefix("delta.feature.") {
-            if value.eq_ignore_ascii_case("enabled") {
-                if let Ok(feature) = TableFeature::parse_str_name(name) {
+            let status = value.to_lowercase();
+            if status != "supported" && status != "enabled" {
+                return Err(DeltaTableError::generic(format!(
+                    "invalid value `{value}` for table feature property `{key}`; \
+                     expected \"supported\" or \"enabled\"",
+                )));
+            }
+            match TableFeature::parse_str_name(name) {
+                Ok(feature) => {
                     if feature.is_reader_feature() && !reader_features.contains(&feature) {
                         reader_features.push(feature.clone());
                     }
                     if !writer_features.contains(&feature) {
                         writer_features.push(feature);
                     }
+                }
+                Err(_) => {
+                    return Err(DeltaTableError::generic(format!(
+                        "unknown table feature `{name}` in `{key}` = `{value}`; \
+                         check for typos in the feature name",
+                    )));
                 }
             }
         }
@@ -154,10 +171,27 @@ mod tests {
 
     #[test]
     fn protocol_for_create_extracts_v2_checkpoint_from_configuration() -> DeltaResult<()> {
+        // "enabled" (deprecated) still accepted for backward compatibility. 
         let mut config = HashMap::new();
         config.insert(
             "delta.feature.v2Checkpoint".to_string(),
             "enabled".to_string(),
+        );
+        let protocol = protocol_for_create(false, false, false, &config)?;
+        assert_eq!(protocol.min_reader_version(), 3);
+        assert_eq!(protocol.min_writer_version(), 7);
+        assert!(protocol.has_reader_feature(&TableFeature::V2Checkpoint));
+        assert!(protocol.has_writer_feature(&TableFeature::V2Checkpoint));
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_for_create_extracts_v2_checkpoint_with_supported_value() -> DeltaResult<()> {
+        // "supported" is the current/preferred value. 
+        let mut config = HashMap::new();
+        config.insert(
+            "delta.feature.v2Checkpoint".to_string(),
+            "supported".to_string(),
         );
         let protocol = protocol_for_create(false, false, false, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
@@ -189,5 +223,37 @@ mod tests {
         assert!(!protocol.has_reader_feature(&TableFeature::V2Checkpoint));
         assert!(!protocol.has_writer_feature(&TableFeature::V2Checkpoint));
         Ok(())
+    }
+
+    #[test]
+    fn protocol_for_create_errors_on_unknown_feature_name() {
+        // Typo in the feature name must be caught instead of silently ignored.
+        let mut config = HashMap::new();
+        config.insert(
+            "delta.feature.v2Checkpiont".to_string(), // intentional typo
+            "supported".to_string(),
+        );
+        let err = protocol_for_create(false, false, false, &config).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("v2Checkpiont"),
+            "error message should include the bad feature name: {msg}"
+        );
+    }
+
+    #[test]
+    fn protocol_for_create_errors_on_invalid_feature_value() {
+        // Any value other than "supported" or "enabled" must produce an error.
+        let mut config = HashMap::new();
+        config.insert(
+            "delta.feature.v2Checkpoint".to_string(),
+            "true".to_string(), // invalid
+        );
+        let err = protocol_for_create(false, false, false, &config).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("true"),
+            "error message should include the bad value: {msg}"
+        );
     }
 }
