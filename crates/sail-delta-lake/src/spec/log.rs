@@ -17,9 +17,11 @@
 // limitations under the License.
 
 use object_store::path::{Path, DELIMITER};
+use uuid::Uuid;
 
 // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/path.rs#L23-L25>
 pub const DELTA_LOG_DIR: &str = "_delta_log";
+pub const SIDECARS_DIR: &str = "_sidecars";
 
 // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/last_checkpoint_hint.rs#L14-L17>
 pub const LAST_CHECKPOINT_FILE: &str = "_last_checkpoint";
@@ -53,6 +55,20 @@ pub fn temp_commit_path(token: &str) -> Path {
     Path::from_iter([DELTA_LOG_DIR, &format!("_commit_{token}.json.tmp")])
 }
 
+pub fn sidecars_dir_path() -> Path {
+    Path::from(format!("{DELTA_LOG_DIR}/{SIDECARS_DIR}"))
+}
+
+pub fn sidecar_file_path(sidecar_filename: &str) -> Path {
+    Path::from(format!("{DELTA_LOG_DIR}/{SIDECARS_DIR}/{sidecar_filename}"))
+}
+
+pub fn uuid_checkpoint_path(version: i64, uuid: &Uuid) -> Path {
+    Path::from(format!(
+        "{DELTA_LOG_DIR}/{version:020}.checkpoint.{uuid}.parquet"
+    ))
+}
+
 pub fn delta_log_file_path(table_root_path: &str, filename: &str) -> Path {
     Path::from(format!(
         "{}{}{}{}{}",
@@ -83,11 +99,33 @@ pub fn parse_checksum_version(filename: &str) -> Option<i64> {
 }
 
 pub fn parse_checkpoint_version(filename: &str) -> Option<i64> {
-    // TODO(v2-checkpoints): Filename parsing only extracts the checkpoint version. It currently
-    // does not distinguish classic single-file checkpoints, multipart checkpoints, or UUID-named
-    // V2 checkpoints; format-specific validation has to happen elsewhere.
+    // Handles three checkpoint naming schemes:
+    // 1. Classic: `{version:020}.checkpoint.parquet`
+    // 2. Multi-part: `{version:020}.checkpoint.{part:010}.{total:010}.parquet`
+    // 3. UUID-named V2: `{version:020}.checkpoint.{uuid}.parquet`
     if !filename.contains(".checkpoint") || !filename.ends_with(".parquet") {
         return None;
     }
     parse_version_prefix(filename)
+}
+
+/// Returns `true` if the checkpoint filename uses the UUID-named V2 naming scheme.
+pub fn is_uuid_checkpoint_filename(filename: &str) -> bool {
+    // UUID-named: `{version:020}.checkpoint.{uuid}.parquet`
+    // The UUID part is 36 chars (8-4-4-4-12), total = 20 + 12 + 36 + 8 = 76
+    // Pattern: 20 digits + ".checkpoint." + 36 UUID + ".parquet"
+    if filename.len() != 76 || !filename.ends_with(".parquet") {
+        return false;
+    }
+    if parse_version_prefix(filename).is_none() {
+        return false;
+    }
+    let Some(rest) = filename.get(20..) else {
+        return false;
+    };
+    if !rest.starts_with(".checkpoint.") {
+        return false;
+    }
+    let uuid_part = &rest[12..48]; // 36-char UUID
+    Uuid::parse_str(uuid_part).is_ok()
 }

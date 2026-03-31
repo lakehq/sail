@@ -41,9 +41,10 @@ use crate::delta_log::{
 };
 use crate::kernel::log_segment::ReplayedTableHeader;
 use crate::spec::{
-    checkpoint_path, last_checkpoint_path, Action, Add, CheckpointActionRow,
-    DeltaError as DeltaTableError, DeltaResult, DomainMetadata, LastCheckpointHint, Metadata,
-    Protocol, Remove, TableProperties, Transaction,
+    checkpoint_path, last_checkpoint_path, sidecar_file_path, uuid_checkpoint_path, Action, Add,
+    CheckpointActionRow, CheckpointMetadata, DeltaError as DeltaTableError, DeltaResult,
+    DomainMetadata, LastCheckpointHint, Metadata, Protocol, Remove, Sidecar, TableFeature,
+    TableProperties, Transaction,
 };
 use crate::storage::{get_actions, LogStore};
 
@@ -99,6 +100,9 @@ pub(crate) struct ReconciledCheckpointState {
     // TODO: Use `(path, dvId)` once replay is deletion-vector aware.
     pub(crate) adds: HashMap<String, Add>,
     pub(crate) removes: HashMap<String, Remove>,
+    /// Sidecar descriptors collected from a V2 checkpoint. These reference external
+    /// parquet files in `_delta_log/_sidecars/` that contain the add/remove actions.
+    pub(crate) sidecars: Vec<Sidecar>,
 }
 
 impl ReconciledCheckpointState {
@@ -137,12 +141,11 @@ impl ReconciledCheckpointState {
     }
 
     pub(crate) fn apply_checkpoint_row(&mut self, row: CheckpointActionRow) -> DeltaResult<()> {
-        if row.sidecar.is_some() {
-            // TODO: Implement V2 checkpoint replay by loading add/remove payload rows from the
-            // referenced sidecar parquet files instead of rejecting them here.
-            return Err(DeltaTableError::Unsupported(
-                "V2 checkpoints with sidecars are not yet supported for reading".to_string(),
-            ));
+        // Collect sidecar descriptors from V2 checkpoints. The actual add/remove
+        // payload will be loaded from the referenced sidecar files after the main
+        // checkpoint rows have been fully consumed.
+        if let Some(sidecar) = row.sidecar {
+            self.sidecars.push(sidecar);
         }
 
         if let Some(protocol) = row.protocol {
@@ -390,6 +393,43 @@ impl CheckpointBatchIter {
     }
 }
 
+/// Batch iterator for sidecar (add/remove) actions in V2 checkpoint writes.
+/// Mirrors [`CheckpointBatchIter`] to avoid materializing all rows into a
+/// single `Vec`/`RecordBatch`.
+struct SidecarBatchIter {
+    batch_size: usize,
+    adds: std::collections::hash_map::IntoValues<String, Add>,
+    removes: std::collections::hash_map::IntoValues<String, Remove>,
+}
+
+impl SidecarBatchIter {
+    fn next_batch(&mut self) -> DeltaResult<Option<RecordBatch>> {
+        let mut rows = Vec::with_capacity(self.batch_size);
+        while rows.len() < self.batch_size {
+            if let Some(add) = self.adds.next() {
+                rows.push(CheckpointActionRow {
+                    add: Some(add),
+                    ..Default::default()
+                });
+                continue;
+            }
+            if let Some(remove) = self.removes.next() {
+                rows.push(CheckpointActionRow {
+                    remove: Some(remove),
+                    ..Default::default()
+                });
+                continue;
+            }
+            break;
+        }
+        if rows.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(encode_checkpoint_rows(&rows)?))
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ReplayedTableState {
     pub version: i64,
@@ -524,8 +564,25 @@ impl<'a> CheckpointManager<'a> {
         .await?;
         state.prune_expired_checkpoint_actions(Utc::now().timestamp_millis())?;
 
-        // Batching avoids one giant RecordBatch, but full-state materialization
-        // is still the main memory cost here.
+        // Check if the protocol enables V2 checkpoints.
+        let use_v2 = state
+            .protocol
+            .as_ref()
+            .is_some_and(|p| p.has_writer_feature(&TableFeature::V2Checkpoint));
+
+        if use_v2 {
+            self.write_v2_checkpoint(version, state, store).await
+        } else {
+            self.write_v1_checkpoint(version, state, store).await
+        }
+    }
+
+    async fn write_v1_checkpoint(
+        &self,
+        version: i64,
+        state: ReconciledCheckpointState,
+        store: Arc<dyn ObjectStore>,
+    ) -> DeltaResult<()> {
         const CHECKPOINT_WRITE_BATCH_SIZE: usize = 16_384;
         let (mut checkpoint_batches, checkpoint_add_count) =
             state.into_checkpoint_batch_iter(CHECKPOINT_WRITE_BATCH_SIZE)?;
@@ -563,6 +620,141 @@ impl<'a> CheckpointManager<'a> {
         let hint = LastCheckpointHint {
             version,
             size: Some(checkpoint_row_count),
+            parts: None,
+            size_in_bytes: Some(file_meta.size as i64),
+            num_of_add_files: Some(checkpoint_add_count),
+            checkpoint_schema: None,
+            checksum: None,
+            tags: None,
+        };
+        let hint_bytes = serde_json::to_vec(&hint).map_err(DeltaTableError::generic_err)?;
+        store.put(&last_checkpoint_path, hint_bytes.into()).await?;
+
+        Ok(())
+    }
+
+    async fn write_v2_checkpoint(
+        &self,
+        version: i64,
+        state: ReconciledCheckpointState,
+        store: Arc<dyn ObjectStore>,
+    ) -> DeltaResult<()> {
+        let now_millis = Utc::now().timestamp_millis();
+        let checkpoint_add_count = i64::try_from(state.adds.len())
+            .map_err(|_| DeltaTableError::generic("add action count overflow"))?;
+
+        // Step 1: Write add/remove actions into a sidecar file using batched writes.
+        const SIDECAR_WRITE_BATCH_SIZE: usize = 16_384;
+        let sidecar_uuid = Uuid::new_v4();
+        let sidecar_filename = format!("{sidecar_uuid}.parquet");
+        let sidecar_path = sidecar_file_path(&sidecar_filename);
+
+        let mut sidecar_batches = SidecarBatchIter {
+            batch_size: SIDECAR_WRITE_BATCH_SIZE,
+            adds: state.adds.into_values(),
+            removes: state.removes.into_values(),
+        };
+
+        let sidecar_descriptor = if let Some(first_batch) = sidecar_batches.next_batch()? {
+            ensure_schema_supported_for_parquet(&first_batch)?;
+            let sidecar_writer = ParquetObjectWriter::new(store.clone(), sidecar_path.clone());
+            let mut writer = AsyncArrowWriter::try_new(sidecar_writer, first_batch.schema(), None)
+                .map_err(DeltaTableError::generic_err)?;
+            writer
+                .write(&first_batch)
+                .await
+                .map_err(DeltaTableError::generic_err)?;
+            while let Some(batch) = sidecar_batches.next_batch()? {
+                writer
+                    .write(&batch)
+                    .await
+                    .map_err(DeltaTableError::generic_err)?;
+            }
+            let _ = writer.close().await.map_err(DeltaTableError::generic_err)?;
+            let sidecar_meta = store.head(&sidecar_path).await?;
+            Some(Sidecar {
+                path: sidecar_filename,
+                size_in_bytes: i64::try_from(sidecar_meta.size)
+                    .map_err(|_| DeltaTableError::generic("sidecar size overflow"))?,
+                modification_time: now_millis,
+                tags: None,
+            })
+        } else {
+            None
+        };
+
+        // Step 2: Build the main V2 checkpoint with header actions + sidecar refs.
+        let protocol = state.protocol.ok_or_else(|| {
+            DeltaTableError::generic("Cannot create checkpoint without protocol action")
+        })?;
+        let metadata = state.metadata.ok_or_else(|| {
+            DeltaTableError::generic("Cannot create checkpoint without metadata action")
+        })?;
+
+        let mut main_rows: Vec<CheckpointActionRow> = Vec::new();
+
+        // V2 checkpoint marker
+        main_rows.push(CheckpointActionRow {
+            checkpoint_metadata: Some(CheckpointMetadata {
+                version,
+                tags: None,
+            }),
+            ..Default::default()
+        });
+        main_rows.push(CheckpointActionRow {
+            protocol: Some(protocol),
+            ..Default::default()
+        });
+        main_rows.push(CheckpointActionRow {
+            metadata: Some(metadata),
+            ..Default::default()
+        });
+        for (_, txn) in state.txns.into_iter().collect::<BTreeMap<_, _>>() {
+            main_rows.push(CheckpointActionRow {
+                txn: Some(txn),
+                ..Default::default()
+            });
+        }
+        for (_, domain_metadata) in state
+            .domain_metadata
+            .into_iter()
+            .collect::<BTreeMap<_, _>>()
+        {
+            main_rows.push(CheckpointActionRow {
+                domain_metadata: Some(domain_metadata),
+                ..Default::default()
+            });
+        }
+        if let Some(sidecar) = &sidecar_descriptor {
+            main_rows.push(CheckpointActionRow {
+                sidecar: Some(sidecar.clone()),
+                ..Default::default()
+            });
+        }
+
+        let main_batch = encode_checkpoint_rows(&main_rows)?;
+        ensure_schema_supported_for_parquet(&main_batch)?;
+        let main_row_count = i64::try_from(main_rows.len())
+            .map_err(|_| DeltaTableError::generic("checkpoint action count overflow"))?;
+
+        // Write the UUID-named V2 checkpoint file.
+        let checkpoint_uuid = Uuid::new_v4();
+        let cp_path = uuid_checkpoint_path(version, &checkpoint_uuid);
+        let cp_writer = ParquetObjectWriter::new(store.clone(), cp_path.clone());
+        let mut writer = AsyncArrowWriter::try_new(cp_writer, main_batch.schema(), None)
+            .map_err(DeltaTableError::generic_err)?;
+        writer
+            .write(&main_batch)
+            .await
+            .map_err(DeltaTableError::generic_err)?;
+        let _ = writer.close().await.map_err(DeltaTableError::generic_err)?;
+        let file_meta = store.head(&cp_path).await?;
+
+        // Step 3: Write _last_checkpoint hint pointing to the UUID-named checkpoint.
+        let last_checkpoint_path = last_checkpoint_path();
+        let hint = LastCheckpointHint {
+            version,
+            size: Some(main_row_count),
             parts: None,
             size_in_bytes: Some(file_meta.size as i64),
             num_of_add_files: Some(checkpoint_add_count),
@@ -624,15 +816,16 @@ pub(crate) async fn replay_commit_actions(
     Ok(commit_timestamps)
 }
 
-pub(crate) async fn read_checkpoint_rows_from_parquet(
+/// Read only the main checkpoint parquet file (without loading sidecars).
+/// Useful when callers only need non-file actions (protocol, metadata, sidecar
+/// descriptors, etc.) — for example during sidecar garbage collection.
+pub(crate) async fn read_checkpoint_main_rows_from_parquet(
     root_store: std::sync::Arc<dyn ObjectStore>,
     meta: ObjectMeta,
 ) -> DeltaResult<Vec<CheckpointActionRow>> {
-    let bytes = root_store.get(&meta.location).await?.bytes().await?;
+    let main_bytes = root_store.get(&meta.location).await?.bytes().await?;
     tokio::task::spawn_blocking(move || {
-        // TODO: V2 checkpoints move add/remove rows into sidecars; full replay
-        // needs to read those parquet files too.
-        let mut batches = ParquetRecordBatchReaderBuilder::try_new(bytes)
+        let mut batches = ParquetRecordBatchReaderBuilder::try_new(main_bytes)
             .map_err(DeltaTableError::generic_err)?
             .build()
             .map_err(DeltaTableError::generic_err)?;
@@ -646,6 +839,42 @@ pub(crate) async fn read_checkpoint_rows_from_parquet(
     })
     .await
     .map_err(DeltaTableError::generic_err)?
+}
+
+pub(crate) async fn read_checkpoint_rows_from_parquet(
+    root_store: std::sync::Arc<dyn ObjectStore>,
+    meta: ObjectMeta,
+) -> DeltaResult<Vec<CheckpointActionRow>> {
+    let mut rows = read_checkpoint_main_rows_from_parquet(root_store.clone(), meta).await?;
+
+    // Collect sidecar descriptors from V2 checkpoint rows and load add/remove
+    // payload from the referenced sidecar parquet files.
+    let sidecars: Vec<Sidecar> = rows.iter().filter_map(|r| r.sidecar.clone()).collect();
+
+    if !sidecars.is_empty() {
+        for sidecar in &sidecars {
+            let sidecar_path = sidecar_file_path(&sidecar.path);
+            let sidecar_bytes = root_store.get(&sidecar_path).await?.bytes().await?;
+            let sidecar_rows = tokio::task::spawn_blocking(move || {
+                let mut batches = ParquetRecordBatchReaderBuilder::try_new(sidecar_bytes)
+                    .map_err(DeltaTableError::generic_err)?
+                    .build()
+                    .map_err(DeltaTableError::generic_err)?;
+                let mut sidecar_rows = Vec::new();
+                for batch in &mut batches {
+                    let batch = batch.map_err(DeltaTableError::generic_err)?;
+                    let mut decoded = decode_checkpoint_rows(&batch)?;
+                    sidecar_rows.append(&mut decoded);
+                }
+                Ok::<_, DeltaTableError>(sidecar_rows)
+            })
+            .await
+            .map_err(DeltaTableError::generic_err)??;
+            rows.extend(sidecar_rows);
+        }
+    }
+
+    Ok(rows)
 }
 
 pub(crate) async fn replay_commit_header_actions(
@@ -1242,23 +1471,23 @@ mod tests {
 
     #[test]
     #[expect(clippy::unwrap_used)]
-    fn reconciled_checkpoint_state_rejects_sidecars() {
+    fn reconciled_checkpoint_state_collects_sidecars() {
         let mut state = ReconciledCheckpointState::default();
-        let err = state
+        state
             .apply_checkpoint_row(CheckpointActionRow {
                 sidecar: Some(Sidecar {
-                    path: "_sidecars/00001.parquet".to_string(),
+                    path: "00001.parquet".to_string(),
                     size_in_bytes: 128,
                     modification_time: 256,
                     tags: None,
                 }),
                 ..Default::default()
             })
-            .unwrap_err();
+            .unwrap();
 
-        assert!(
-            matches!(err, DeltaTableError::Unsupported(message) if message.contains("sidecars"))
-        );
+        assert_eq!(state.sidecars.len(), 1);
+        assert_eq!(state.sidecars[0].path, "00001.parquet");
+        assert_eq!(state.sidecars[0].size_in_bytes, 128);
     }
 
     #[test]
