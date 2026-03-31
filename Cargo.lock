@@ -4559,9 +4559,9 @@ dependencies = [
 
 [[package]]
 name = "ordered-float"
-version = "5.2.0"
+version = "5.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0218004a4aae742209bee9c3cef05672f6b2708be36a50add8eb613b1f2a4008"
+checksum = "b7d950ca161dc355eaf28f82b11345ed76c6e1f6eb1f4f4479e0323b9e2fbd0e"
 dependencies = [
  "num-traits",
  "rand 0.8.5",
@@ -5693,9 +5693,9 @@ checksum = "7204ed6420f698836b76d4d5c2ec5dec7585fd5c3a788fd1cde855d1de598239"
 
 [[package]]
 name = "rust_decimal"
-version = "1.40.0"
+version = "1.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61f703d19852dbf87cbc513643fa81428361eb6940f1ac14fd58155d295a3eb0"
+checksum = "2ce901f9a19d251159075a4c37af514c3b8ef99c22e02dd8c19161cf397ee94a"
 dependencies = [
  "arrayvec",
  "borsh",
@@ -5705,6 +5705,7 @@ dependencies = [
  "rkyv",
  "serde",
  "serde_json",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -6143,7 +6144,7 @@ dependencies = [
  "jiter",
  "lazy_static",
  "num",
- "ordered-float 5.2.0",
+ "ordered-float 5.3.0",
  "percent-encoding",
  "rand 0.10.0",
  "rand_chacha 0.10.0",
@@ -6185,7 +6186,7 @@ dependencies = [
  "murmur3",
  "object_store",
  "once_cell",
- "ordered-float 5.2.0",
+ "ordered-float 5.3.0",
  "parquet",
  "rust_decimal",
  "sail-common",
@@ -7887,6 +7888,7 @@ dependencies = [
  "cfg-if",
  "once_cell",
  "rustversion",
+ "serde",
  "wasm-bindgen-macro",
  "wasm-bindgen-shared",
 ]
