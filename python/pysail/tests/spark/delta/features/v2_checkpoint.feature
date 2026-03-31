@@ -29,7 +29,7 @@ Feature: Delta Lake V2 Checkpoint (Sidecar Checkpoints)
         INSERT INTO delta_v2_checkpoint_test VALUES (2, 'b')
         """
 
-    Scenario: V2 checkpoint creates UUID-named checkpoint, classic checkpoint, and sidecar files
+    Scenario: V2 checkpoint creates UUID-named checkpoint and sidecar files
       When query
         """
         SELECT * FROM delta_v2_checkpoint_test ORDER BY id
@@ -45,7 +45,6 @@ Feature: Delta Lake V2 Checkpoint (Sidecar Checkpoints)
         📄 00000000000000000000.crc
         📄 00000000000000000000.json
         📄 00000000000000000001.checkpoint.<uuid>.parquet
-        📄 00000000000000000001.checkpoint.parquet
         📄 00000000000000000001.crc
         📄 00000000000000000001.json
         📄 _last_checkpoint
@@ -155,13 +154,11 @@ Feature: Delta Lake V2 Checkpoint (Sidecar Checkpoints)
         📄 00000000000000000001.crc
         📄 00000000000000000001.json
         📄 00000000000000000002.checkpoint.<uuid>.parquet
-        📄 00000000000000000002.checkpoint.parquet
         📄 00000000000000000002.crc
         📄 00000000000000000002.json
         📄 00000000000000000003.crc
         📄 00000000000000000003.json
         📄 00000000000000000004.checkpoint.<uuid>.parquet
-        📄 00000000000000000004.checkpoint.parquet
         📄 00000000000000000004.crc
         📄 00000000000000000004.json
         📄 _last_checkpoint
@@ -212,7 +209,6 @@ Feature: Delta Lake V2 Checkpoint (Sidecar Checkpoints)
         📄 00000000000000000000.crc
         📄 00000000000000000000.json
         📄 00000000000000000001.checkpoint.<uuid>.parquet
-        📄 00000000000000000001.checkpoint.parquet
         📄 00000000000000000001.crc
         📄 00000000000000000001.json
         📄 _last_checkpoint
@@ -413,3 +409,77 @@ Feature: Delta Lake V2 Checkpoint (Sidecar Checkpoints)
         | 1  |
         | 2  |
         | 3  |
+
+  @sail-only
+  Rule: Log cleanup writes a classic compat checkpoint before deleting V2 checkpoint era logs
+
+    Background:
+      Given variable location for temporary directory delta_v2_ckpt_log_cleanup
+      Given variable delta_log for delta log of location
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_v2_ckpt_log_cleanup_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_v2_ckpt_log_cleanup_test (id INT)
+        USING DELTA
+        LOCATION {{ location.sql }}
+        TBLPROPERTIES (
+          'delta.checkpointInterval' = '2',
+          'delta.logRetentionDuration' = 'interval 0 seconds',
+          'delta.enableExpiredLogCleanup' = 'true',
+          'delta.feature.v2Checkpoint' = 'enabled'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO delta_v2_ckpt_log_cleanup_test VALUES (1)
+        """
+      Given statement
+        """
+        INSERT INTO delta_v2_ckpt_log_cleanup_test VALUES (2)
+        """
+      Given statement
+        """
+        INSERT INTO delta_v2_ckpt_log_cleanup_test VALUES (3)
+        """
+
+    Scenario: Classic compat checkpoint is created at retention boundary before log files are removed
+      Given delta log JSON files for versions 0, 1, 2 in delta_log are backdated by 172800 seconds
+      Given sleep for 1 seconds
+      Given statement
+        """
+        INSERT INTO delta_v2_ckpt_log_cleanup_test VALUES (4)
+        """
+      Given statement
+        """
+        INSERT INTO delta_v2_ckpt_log_cleanup_test VALUES (5)
+        """
+      When query
+        """
+        SELECT * FROM delta_v2_ckpt_log_cleanup_test ORDER BY id
+        """
+      Then query result ordered
+        | id |
+        | 1  |
+        | 2  |
+        | 3  |
+        | 4  |
+        | 5  |
+      Then file tree in delta_log matches
+        """
+        📂 _sidecars
+          📄 <uuid>.parquet
+          📄 <uuid>.parquet
+        📄 00000000000000000002.checkpoint.<uuid>.parquet
+        📄 00000000000000000002.checkpoint.parquet
+        📄 00000000000000000002.crc
+        📄 00000000000000000002.json
+        📄 00000000000000000003.crc
+        📄 00000000000000000003.json
+        📄 00000000000000000004.checkpoint.<uuid>.parquet
+        📄 00000000000000000004.crc
+        📄 00000000000000000004.json
+        📄 _last_checkpoint
+        """

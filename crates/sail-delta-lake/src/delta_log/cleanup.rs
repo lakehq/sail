@@ -14,7 +14,8 @@ use super::{
 use crate::kernel::checkpoints::read_checkpoint_main_rows_from_parquet;
 use crate::kernel::snapshot::DeltaSnapshot;
 use crate::spec::{
-    delta_log_root_path, is_uuid_checkpoint_filename, sidecars_dir_path, DeltaResult,
+    checkpoint_path, delta_log_root_path, is_uuid_checkpoint_filename, sidecars_dir_path,
+    DeltaResult,
 };
 use crate::storage::LogStore;
 
@@ -119,6 +120,10 @@ pub(crate) async fn cleanup_expired_delta_log_files(
         return Ok(0);
     };
 
+    // Before deleting any log files, ensure a classic checkpoint exists at the retention
+    // boundary version when the table uses V2 (UUID-named) checkpoints.
+    ensure_v2_compat_classic_checkpoint(object_store.clone(), retention_checkpoint_version).await?;
+
     let deleted_logs =
         delete_logs_before_checkpoint_version(object_store.clone(), retention_checkpoint_version)
             .await?;
@@ -127,6 +132,63 @@ pub(crate) async fn cleanup_expired_delta_log_files(
     let deleted_sidecars = cleanup_orphaned_sidecars(object_store).await?;
 
     Ok(deleted_logs + deleted_sidecars)
+}
+
+/// Ensures a classic single-file checkpoint (`{version:020}.checkpoint.parquet`) exists at
+/// `version` when the checkpoint at that version is a UUID-named V2 checkpoint.
+async fn ensure_v2_compat_classic_checkpoint(
+    object_store: Arc<dyn ObjectStore>,
+    version: i64,
+) -> DeltaResult<()> {
+    // Check whether a classic checkpoint already exists at this version.
+    let classic_path = checkpoint_path(version);
+    if object_store.head(&classic_path).await.is_ok() {
+        return Ok(());
+    }
+
+    // Find the UUID-named checkpoint at `version` (if any).
+    let log_path = delta_log_root_path();
+    let mut uuid_checkpoint_meta: Option<object_store::ObjectMeta> = None;
+    let mut log_entries = object_store.list(Some(&log_path));
+    while let Some(meta) = log_entries.next().await {
+        let Ok(meta) = meta else {
+            continue;
+        };
+        let filename = meta
+            .location
+            .as_ref()
+            .rsplit('/')
+            .next()
+            .unwrap_or_default();
+        if is_uuid_checkpoint_filename(filename) {
+            if let Some(v) = parse_checkpoint_version_from_location(&meta.location) {
+                if v == version {
+                    uuid_checkpoint_meta = Some(meta);
+                    break;
+                }
+            }
+        }
+    }
+
+    let Some(uuid_meta) = uuid_checkpoint_meta else {
+        // No UUID-named checkpoint at this version — nothing to do.
+        return Ok(());
+    };
+
+    // Copy the UUID-named checkpoint to the classic path.
+    // `ObjectStore::copy` does a server-side copy where the backend supports it and falls
+    // back to get+put otherwise; either way the destination is written atomically.
+    match object_store.copy(&uuid_meta.location, &classic_path).await {
+        Ok(()) => {
+            debug!("Wrote V2 compat classic checkpoint at {}", classic_path);
+        }
+        Err(object_store::Error::AlreadyExists { .. }) => {
+            // Another writer beat us to it — that's fine, the content is identical.
+        }
+        Err(err) => return Err(err.into()),
+    }
+
+    Ok(())
 }
 
 async fn find_retention_checkpoint_version(

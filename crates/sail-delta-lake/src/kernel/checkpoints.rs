@@ -750,21 +750,6 @@ impl<'a> CheckpointManager<'a> {
         let _ = writer.close().await.map_err(DeltaTableError::generic_err)?;
         let file_meta = store.head(&cp_path).await?;
 
-        // Also write a classic V2 checkpoint for backward compatibility.
-        let classic_cp_path = checkpoint_path(version);
-        let classic_cp_writer = ParquetObjectWriter::new(store.clone(), classic_cp_path.clone());
-        let mut classic_writer =
-            AsyncArrowWriter::try_new(classic_cp_writer, main_batch.schema(), None)
-                .map_err(DeltaTableError::generic_err)?;
-        classic_writer
-            .write(&main_batch)
-            .await
-            .map_err(DeltaTableError::generic_err)?;
-        let _ = classic_writer
-            .close()
-            .await
-            .map_err(DeltaTableError::generic_err)?;
-
         // Step 3: Write _last_checkpoint hint pointing to the UUID-named checkpoint.
         let last_checkpoint_path = last_checkpoint_path();
         let hint = LastCheckpointHint {
