@@ -41,7 +41,7 @@ use crate::physical_plan::{decode_actions_and_meta_from_batch, COL_ACTION};
 use crate::schema::{
     metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_create,
 };
-use crate::spec::{Action, StructType};
+use crate::spec::{CommitAction, StructType};
 use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::{create_delta_table_with_object_store, open_table_with_object_store};
 
@@ -227,8 +227,8 @@ impl ExecutionPlan for DeltaCommitExec {
             let mut has_data = false;
             // "data" actions (Add/Remove/other) and "initial" actions (Protocol/Metadata)
             // are kept separate so we can preserve the required action ordering on commit.
-            let mut actions: Vec<Action> = Vec::new();
-            let mut initial_actions: Vec<Action> = Vec::new();
+            let mut actions: Vec<CommitAction> = Vec::new();
+            let mut initial_actions: Vec<CommitAction> = Vec::new();
             let mut operation: Option<DeltaOperation> = None;
             let mut operation_metrics = OperationMetrics::default();
             let mut data = input_stream;
@@ -241,9 +241,20 @@ impl ExecutionPlan for DeltaCommitExec {
                     let (decoded_actions, decoded_meta) =
                         decode_actions_and_meta_from_batch(&batch)?;
                     for a in decoded_actions {
-                        match a {
-                            Action::Protocol(_) | Action::Metadata(_) => initial_actions.push(a),
-                            _ => actions.push(a),
+                        // Convert from the broad Action type (used for log replay) to
+                        // CommitAction, rejecting any checkpoint-only variants at the
+                        // boundary.  In practice decode_actions_and_meta_from_batch only
+                        // produces Metadata/Protocol/Add/Remove/Cdc/Txn actions.
+                        let ca = CommitAction::try_from(a).map_err(|e| {
+                            DataFusionError::Plan(format!(
+                                "unsupported action in commit batch: {e}"
+                            ))
+                        })?;
+                        match ca {
+                            CommitAction::Protocol(_) | CommitAction::Metadata(_) => {
+                                initial_actions.push(ca)
+                            }
+                            _ => actions.push(ca),
                         }
                     }
                     if let Some(ExecCommitMeta {
@@ -279,10 +290,10 @@ impl ExecutionPlan for DeltaCommitExec {
             let kinds: Vec<&'static str> = final_actions
                 .iter()
                 .map(|a| match a {
-                    Action::Protocol(_) => "Protocol",
-                    Action::Metadata(_) => "Metadata",
-                    Action::Add(_) => "Add",
-                    Action::Remove(_) => "Remove",
+                    CommitAction::Protocol(_) => "Protocol",
+                    CommitAction::Metadata(_) => "Metadata",
+                    CommitAction::Add(_) => "Add",
+                    CommitAction::Remove(_) => "Remove",
                     _ => "Other",
                 })
                 .collect();
@@ -309,11 +320,11 @@ impl ExecutionPlan for DeltaCommitExec {
             // must initialize the table with protocol and metadata.
             let (operation, final_actions) = if !table_exists {
                 let protocol_in_actions = final_actions.iter().find_map(|a| match a {
-                    Action::Protocol(p) => Some(p.clone()),
+                    CommitAction::Protocol(p) => Some(p.clone()),
                     _ => None,
                 });
                 let metadata_in_actions = final_actions.iter().find_map(|a| match a {
-                    Action::Metadata(m) => Some(m.clone()),
+                    CommitAction::Metadata(m) => Some(m.clone()),
                     _ => None,
                 });
 
@@ -345,8 +356,8 @@ impl ExecutionPlan for DeltaCommitExec {
 
                     let mut updated_actions = final_actions;
                     // Insert in order: Protocol, then Metadata
-                    updated_actions.insert(0, Action::Metadata(metadata.clone()));
-                    updated_actions.insert(0, Action::Protocol(protocol.clone()));
+                    updated_actions.insert(0, CommitAction::Metadata(metadata.clone()));
+                    updated_actions.insert(0, CommitAction::Protocol(protocol.clone()));
 
                     (
                         DeltaOperation::Create {

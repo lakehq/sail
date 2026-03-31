@@ -83,6 +83,9 @@ pub fn parse_checksum_version(filename: &str) -> Option<i64> {
 }
 
 pub fn parse_checkpoint_version(filename: &str) -> Option<i64> {
+    // TODO(v2-checkpoints): Filename parsing only extracts the checkpoint version. It currently
+    // does not distinguish classic single-file checkpoints, multipart checkpoints, or UUID-named
+    // V2 checkpoints; format-specific validation has to happen elsewhere.
     if !filename.contains(".checkpoint") || !filename.ends_with(".parquet") {
         return None;
     }

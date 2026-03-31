@@ -8,7 +8,7 @@ use super::timestamps::version_uses_in_commit_timestamps;
 use super::{list_delta_log_entries_from, read_last_checkpoint_version_from_store};
 use crate::spec::{
     checksum_path, parse_checkpoint_version, parse_checksum_version, parse_commit_version,
-    DeltaError, DeltaResult, Metadata, Protocol, Transaction, VersionChecksum,
+    DeltaError, DeltaResult, DomainMetadata, Metadata, Protocol, Transaction, VersionChecksum,
 };
 use crate::storage::LogStore;
 
@@ -20,6 +20,7 @@ pub(crate) struct ReplayedTableHeader {
     pub protocol: Protocol,
     pub metadata: Metadata,
     pub txns: Arc<HashMap<String, Transaction>>,
+    pub domain_metadata: Arc<HashMap<String, DomainMetadata>>,
     pub commit_timestamps: Arc<BTreeMap<i64, i64>>,
 }
 
@@ -275,6 +276,12 @@ fn validate_and_build_header(
         .into_iter()
         .map(|txn| (txn.app_id.clone(), txn))
         .collect::<HashMap<_, _>>();
+    let domain_metadata = checksum
+        .domain_metadata
+        .unwrap_or_default()
+        .into_iter()
+        .map(|domain| (domain.domain.clone(), domain))
+        .collect::<HashMap<_, _>>();
     let commit_timestamps =
         if version_uses_in_commit_timestamps(version, &checksum.protocol, &checksum.metadata) {
             checksum
@@ -290,6 +297,7 @@ fn validate_and_build_header(
         protocol: checksum.protocol,
         metadata: checksum.metadata,
         txns: Arc::new(txns),
+        domain_metadata: Arc::new(domain_metadata),
         commit_timestamps: Arc::new(commit_timestamps),
     })
 }
@@ -333,6 +341,9 @@ pub(crate) async fn list_log_files(
         }
     }
 
+    // TODO(v2-checkpoints): This groups checkpoint candidates by version only. It does not yet
+    // distinguish classic vs. V2 checkpoint layouts, nor does it validate multipart completeness;
+    // readers rely on later replay-time handling of checkpointMetadata/sidecar fields instead.
     let latest_checkpoint_version = checkpoint_candidates.iter().map(|(v, _)| *v).max();
     let checkpoint = latest_checkpoint_version.map(|latest_v| {
         let mut files: Vec<ObjectMeta> = checkpoint_candidates

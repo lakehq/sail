@@ -29,7 +29,10 @@ async fn read_checkpoint_header_from_parquet(
             .map_err(DeltaTableError::generic_err)?;
 
         let parquet_schema = builder.parquet_schema();
-        let mask = ProjectionMask::columns(parquet_schema, ["metaData", "protocol", "txn"]);
+        let mask = ProjectionMask::columns(
+            parquet_schema,
+            ["metaData", "protocol", "txn", "domainMetadata"],
+        );
 
         let mut batches = builder
             .with_projection(mask)
@@ -41,7 +44,7 @@ async fn read_checkpoint_header_from_parquet(
             let batch = batch_result.map_err(DeltaTableError::generic_err)?;
             let rows: Vec<CheckpointActionRow> = decode_checkpoint_rows(&batch)?;
             for row in rows {
-                state.apply_checkpoint_row(row);
+                state.apply_checkpoint_row(row)?;
             }
         }
         Ok::<_, DeltaTableError>(state)
@@ -106,6 +109,12 @@ pub(crate) async fn load_replayed_table_state(
         .metadata
         .ok_or_else(|| DeltaTableError::generic("Cannot load table state without metadata"))?;
     let txns = state.txns;
+    let domain_metadata = state
+        .domain_metadata
+        .into_iter()
+        .collect::<BTreeMap<_, _>>()
+        .into_values()
+        .collect::<Vec<_>>();
     let adds = state
         .adds
         .into_iter()
@@ -123,6 +132,7 @@ pub(crate) async fn load_replayed_table_state(
         protocol,
         metadata,
         txns,
+        domain_metadata,
         adds,
         removes,
         commit_timestamps,
@@ -195,6 +205,7 @@ pub(crate) async fn load_replayed_table_header(
                 protocol,
                 metadata,
                 txns: Arc::new(state.txns),
+                domain_metadata: Arc::new(state.domain_metadata),
                 commit_timestamps: Arc::new(commit_timestamps),
             }))
         }

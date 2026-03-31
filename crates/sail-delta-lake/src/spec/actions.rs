@@ -338,7 +338,7 @@ pub struct DomainMetadata {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckpointMetadata {
-    pub flavor: String,
+    pub version: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<HashMap<String, Option<String>>>,
 }
@@ -347,13 +347,113 @@ pub struct CheckpointMetadata {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Sidecar {
-    pub file_name: String,
+    #[serde(with = "crate::spec::utils::serde_path")]
+    pub path: String,
     pub size_in_bytes: i64,
     pub modification_time: i64,
-    #[serde(rename = "type")]
-    pub sidecar_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<HashMap<String, Option<String>>>,
+}
+
+/// Actions that are valid in JSON commit entries only.
+#[derive(Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CommitAction {
+    #[serde(rename = "metaData", alias = "metadata")]
+    Metadata(Metadata),
+    Protocol(Protocol),
+    Add(Add),
+    Remove(Remove),
+    Cdc(AddCDCFile),
+    Txn(Transaction),
+    CommitInfo(CommitInfo),
+    DomainMetadata(DomainMetadata),
+}
+
+impl From<CommitAction> for Action {
+    fn from(action: CommitAction) -> Self {
+        match action {
+            CommitAction::Metadata(m) => Action::Metadata(m),
+            CommitAction::Protocol(p) => Action::Protocol(p),
+            CommitAction::Add(a) => Action::Add(a),
+            CommitAction::Remove(r) => Action::Remove(r),
+            CommitAction::Cdc(c) => Action::Cdc(c),
+            CommitAction::Txn(t) => Action::Txn(t),
+            CommitAction::CommitInfo(c) => Action::CommitInfo(c),
+            CommitAction::DomainMetadata(d) => Action::DomainMetadata(d),
+        }
+    }
+}
+
+impl TryFrom<Action> for CommitAction {
+    type Error = DeltaTableError;
+
+    fn try_from(action: Action) -> DeltaResult<Self> {
+        match action {
+            Action::Metadata(m) => Ok(Self::Metadata(m)),
+            Action::Protocol(p) => Ok(Self::Protocol(p)),
+            Action::Add(a) => Ok(Self::Add(a)),
+            Action::Remove(r) => Ok(Self::Remove(r)),
+            Action::Cdc(c) => Ok(Self::Cdc(c)),
+            Action::Txn(t) => Ok(Self::Txn(t)),
+            Action::CommitInfo(c) => Ok(Self::CommitInfo(c)),
+            Action::DomainMetadata(d) => Ok(Self::DomainMetadata(d)),
+            Action::CheckpointMetadata(_) | Action::Sidecar(_) => Err(
+                DeltaTableError::generic(
+                    "checkpoint-only actions (CheckpointMetadata, Sidecar) are not allowed in commit files",
+                ),
+            ),
+        }
+    }
+}
+
+// Convenience `From` impls so callers can build `CommitAction`s directly from inner types.
+impl From<Metadata> for CommitAction {
+    fn from(v: Metadata) -> Self {
+        Self::Metadata(v)
+    }
+}
+
+impl From<Protocol> for CommitAction {
+    fn from(v: Protocol) -> Self {
+        Self::Protocol(v)
+    }
+}
+
+impl From<Add> for CommitAction {
+    fn from(v: Add) -> Self {
+        Self::Add(v)
+    }
+}
+
+impl From<AddCDCFile> for CommitAction {
+    fn from(v: AddCDCFile) -> Self {
+        Self::Cdc(v)
+    }
+}
+
+impl From<Remove> for CommitAction {
+    fn from(v: Remove) -> Self {
+        Self::Remove(v)
+    }
+}
+
+impl From<Transaction> for CommitAction {
+    fn from(v: Transaction) -> Self {
+        Self::Txn(v)
+    }
+}
+
+impl From<CommitInfo> for CommitAction {
+    fn from(v: CommitInfo) -> Self {
+        Self::CommitInfo(v)
+    }
+}
+
+impl From<DomainMetadata> for CommitAction {
+    fn from(v: DomainMetadata) -> Self {
+        Self::DomainMetadata(v)
+    }
 }
 
 impl TryFrom<Add> for ObjectMeta {

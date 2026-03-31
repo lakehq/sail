@@ -26,7 +26,7 @@ fn apply_csv_read_options(
         multi_line,
         compression,
         allow_truncated_rows,
-        infer_schema: _,
+        infer_schema,
     } = from;
     let null_regex = match (null_value, null_regex) {
         (Some(null_value), Some(null_regex))
@@ -76,6 +76,9 @@ fn apply_csv_read_options(
     }
     if let Some(allow_truncated_rows) = allow_truncated_rows {
         to.truncated_rows = Some(allow_truncated_rows);
+    }
+    if infer_schema == Some(false) {
+        to.schema_infer_max_rec = Some(0);
     }
     Ok(())
 }
@@ -180,6 +183,30 @@ mod tests {
         assert_eq!(options.schema_infer_max_rec, Some(100));
         assert_eq!(options.newlines_in_values, Some(true)); // multi_line
         assert_eq!(options.compression, CompressionTypeVariant::BZIP2);
+
+        // When inferSchema is false, schema_infer_max_rec should be set to 0
+        let kv = build_options(&[("inferSchema", "false")]);
+        let options = resolve_csv_read_options(&state, vec![kv])?;
+        assert_eq!(options.schema_infer_max_rec, Some(0));
+
+        // When inferSchema is true (or not set), schema_infer_max_rec should keep its value
+        let kv = build_options(&[("inferSchema", "true")]);
+        let options = resolve_csv_read_options(&state, vec![kv])?;
+        // Default from YAML is 1000
+        assert_eq!(options.schema_infer_max_rec, Some(1000));
+
+        // When infer_schema is false with snake_case key
+        let kv = build_options(&[("infer_schema", "false")]);
+        let options = resolve_csv_read_options(&state, vec![kv])?;
+        assert_eq!(options.schema_infer_max_rec, Some(0));
+
+        // infer_schema=false should override explicit schema_infer_max_records
+        let kv = build_options(&[
+            ("inferSchema", "false"),
+            ("schema_infer_max_records", "500"),
+        ]);
+        let options = resolve_csv_read_options(&state, vec![kv])?;
+        assert_eq!(options.schema_infer_max_rec, Some(0));
 
         let kv = build_options(&[
             ("delimiter", "!"),

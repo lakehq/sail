@@ -42,8 +42,8 @@ use crate::delta_log::{
 use crate::kernel::log_segment::ReplayedTableHeader;
 use crate::spec::{
     checkpoint_path, last_checkpoint_path, Action, Add, CheckpointActionRow,
-    DeltaError as DeltaTableError, DeltaResult, LastCheckpointHint, Metadata, Protocol, Remove,
-    TableProperties, Transaction,
+    DeltaError as DeltaTableError, DeltaResult, DomainMetadata, LastCheckpointHint, Metadata,
+    Protocol, Remove, TableProperties, Transaction,
 };
 use crate::storage::{get_actions, LogStore};
 
@@ -95,6 +95,7 @@ pub(crate) struct ReconciledCheckpointState {
     pub(crate) protocol: Option<Protocol>,
     pub(crate) metadata: Option<Metadata>,
     pub(crate) txns: HashMap<String, Transaction>,
+    pub(crate) domain_metadata: HashMap<String, DomainMetadata>,
     // TODO: Use `(path, dvId)` once replay is deletion-vector aware.
     pub(crate) adds: HashMap<String, Add>,
     pub(crate) removes: HashMap<String, Remove>,
@@ -112,6 +113,14 @@ impl ReconciledCheckpointState {
             Action::Txn(txn) => {
                 self.txns.insert(txn.app_id.clone(), txn);
             }
+            Action::DomainMetadata(domain_metadata) => {
+                if domain_metadata.removed {
+                    self.domain_metadata.remove(&domain_metadata.domain);
+                } else {
+                    self.domain_metadata
+                        .insert(domain_metadata.domain.clone(), domain_metadata);
+                }
+            }
             Action::Add(add) => {
                 self.removes.remove(&add.path);
                 self.adds.insert(add.path.clone(), add);
@@ -120,16 +129,22 @@ impl ReconciledCheckpointState {
                 self.adds.remove(&remove.path);
                 self.removes.insert(remove.path.clone(), remove);
             }
-            // TODO: Preserve DomainMetadata so VersionChecksum can emit it.
             Action::CommitInfo(_)
             | Action::Cdc(_)
-            | Action::DomainMetadata(_)
             | Action::CheckpointMetadata(_)
             | Action::Sidecar(_) => {}
         }
     }
 
     pub(crate) fn apply_checkpoint_row(&mut self, row: CheckpointActionRow) -> DeltaResult<()> {
+        if row.sidecar.is_some() {
+            // TODO: Implement V2 checkpoint replay by loading add/remove payload rows from the
+            // referenced sidecar parquet files instead of rejecting them here.
+            return Err(DeltaTableError::Unsupported(
+                "V2 checkpoints with sidecars are not yet supported for reading".to_string(),
+            ));
+        }
+
         if let Some(protocol) = row.protocol {
             self.protocol = Some(protocol);
         }
@@ -138,6 +153,14 @@ impl ReconciledCheckpointState {
         }
         if let Some(txn) = row.txn {
             self.txns.insert(txn.app_id.clone(), txn);
+        }
+        if let Some(domain_metadata) = row.domain_metadata {
+            if domain_metadata.removed {
+                self.domain_metadata.remove(&domain_metadata.domain);
+            } else {
+                self.domain_metadata
+                    .insert(domain_metadata.domain.clone(), domain_metadata);
+            }
         }
         if let Some(add) = row.add {
             self.removes.remove(&add.path);
@@ -221,6 +244,11 @@ impl ReconciledCheckpointState {
                     .into_iter()
                     .collect::<BTreeMap<_, _>>()
                     .into_iter(),
+                domain_metadata: self
+                    .domain_metadata
+                    .into_iter()
+                    .collect::<BTreeMap<_, _>>()
+                    .into_iter(),
                 removes: self
                     .removes
                     .into_iter()
@@ -242,6 +270,7 @@ pub(crate) struct ReconciledHeaderState {
     pub(crate) protocol: Option<Protocol>,
     pub(crate) metadata: Option<Metadata>,
     pub(crate) txns: HashMap<String, Transaction>,
+    pub(crate) domain_metadata: HashMap<String, DomainMetadata>,
 }
 
 impl ReconciledHeaderState {
@@ -256,17 +285,24 @@ impl ReconciledHeaderState {
             Action::Txn(txn) => {
                 self.txns.insert(txn.app_id.clone(), txn);
             }
+            Action::DomainMetadata(domain_metadata) => {
+                if domain_metadata.removed {
+                    self.domain_metadata.remove(&domain_metadata.domain);
+                } else {
+                    self.domain_metadata
+                        .insert(domain_metadata.domain.clone(), domain_metadata);
+                }
+            }
             Action::Add(_)
             | Action::Remove(_)
             | Action::CommitInfo(_)
             | Action::Cdc(_)
-            | Action::DomainMetadata(_)
             | Action::CheckpointMetadata(_)
             | Action::Sidecar(_) => {}
         }
     }
 
-    pub(crate) fn apply_checkpoint_row(&mut self, row: CheckpointActionRow) {
+    pub(crate) fn apply_checkpoint_row(&mut self, row: CheckpointActionRow) -> DeltaResult<()> {
         if let Some(protocol) = row.protocol {
             self.protocol = Some(protocol);
         }
@@ -276,6 +312,15 @@ impl ReconciledHeaderState {
         if let Some(txn) = row.txn {
             self.txns.insert(txn.app_id.clone(), txn);
         }
+        if let Some(domain_metadata) = row.domain_metadata {
+            if domain_metadata.removed {
+                self.domain_metadata.remove(&domain_metadata.domain);
+            } else {
+                self.domain_metadata
+                    .insert(domain_metadata.domain.clone(), domain_metadata);
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn from_header(header: &ReplayedTableHeader) -> Self {
@@ -283,6 +328,7 @@ impl ReconciledHeaderState {
             protocol: Some(header.protocol.clone()),
             metadata: Some(header.metadata.clone()),
             txns: header.txns.as_ref().clone(),
+            domain_metadata: header.domain_metadata.as_ref().clone(),
         }
     }
 }
@@ -291,6 +337,7 @@ struct CheckpointBatchIter {
     batch_size: usize,
     leading_rows: VecDeque<CheckpointActionRow>,
     txns: std::collections::btree_map::IntoIter<String, Transaction>,
+    domain_metadata: std::collections::btree_map::IntoIter<String, DomainMetadata>,
     removes: std::collections::btree_map::IntoIter<String, Remove>,
     adds: std::collections::btree_map::IntoIter<String, Add>,
 }
@@ -307,6 +354,13 @@ impl CheckpointBatchIter {
             if let Some((_, txn)) = self.txns.next() {
                 rows.push(CheckpointActionRow {
                     txn: Some(txn),
+                    ..Default::default()
+                });
+                continue;
+            }
+            if let Some((_, domain_metadata)) = self.domain_metadata.next() {
+                rows.push(CheckpointActionRow {
+                    domain_metadata: Some(domain_metadata),
                     ..Default::default()
                 });
                 continue;
@@ -342,6 +396,7 @@ pub(crate) struct ReplayedTableState {
     pub protocol: Protocol,
     pub metadata: Metadata,
     pub txns: HashMap<String, Transaction>,
+    pub domain_metadata: Vec<DomainMetadata>,
     pub adds: Vec<Add>,
     pub removes: Vec<Remove>,
     pub commit_timestamps: BTreeMap<i64, i64>,
@@ -666,9 +721,10 @@ mod tests {
         replay_commit_header_actions, ReconciledCheckpointState, ReconciledHeaderState,
     };
     use crate::spec::{
-        Action, Add, CheckpointActionRow, CommitInfo, DataType, DeletionVectorDescriptor,
-        DeltaError, DeltaResult, Metadata, Protocol, Remove, StorageType, StructField, StructType,
-        TableFeature, Transaction,
+        Action, Add, CheckpointActionRow, CheckpointMetadata, CommitInfo, DataType,
+        DeletionVectorDescriptor, DeltaError as DeltaTableError, DeltaResult, DomainMetadata,
+        Metadata, Protocol, Remove, Sidecar, StorageType, StructField, StructType, TableFeature,
+        Transaction,
     };
 
     fn test_metadata(
@@ -689,7 +745,7 @@ mod tests {
 
     fn commit_meta(version: i64, last_modified_millis: i64) -> DeltaResult<ObjectMeta> {
         let last_modified = DateTime::from_timestamp_millis(last_modified_millis)
-            .ok_or_else(|| DeltaError::generic("test timestamp must be valid"))?;
+            .ok_or_else(|| DeltaTableError::generic("test timestamp must be valid"))?;
         Ok(ObjectMeta {
             location: Path::from(format!("_delta_log/{version:020}.json")),
             last_modified,
@@ -864,6 +920,101 @@ mod tests {
             Some("{\"numRecords\":1}")
         );
         Ok(())
+    }
+
+    #[test]
+    fn checkpoint_row_roundtrip_preserves_sidecar() -> DeltaResult<()> {
+        let rows = vec![CheckpointActionRow {
+            sidecar: Some(Sidecar {
+                path: "_sidecars/00001.parquet".to_string(),
+                size_in_bytes: 128,
+                modification_time: 256,
+                tags: Some(HashMap::from([(
+                    "purpose".to_string(),
+                    Some("checkpoint".to_string()),
+                )])),
+            }),
+            ..Default::default()
+        }];
+
+        let batch = encode_checkpoint_rows(&rows)?;
+        let decoded = decode_checkpoint_rows(&batch)?;
+
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(
+            decoded.first().and_then(|row| row.sidecar.as_ref()),
+            Some(&Sidecar {
+                path: "_sidecars/00001.parquet".to_string(),
+                size_in_bytes: 128,
+                modification_time: 256,
+                tags: Some(HashMap::from([(
+                    "purpose".to_string(),
+                    Some("checkpoint".to_string()),
+                )])),
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn checkpoint_row_roundtrip_preserves_checkpoint_metadata() -> DeltaResult<()> {
+        let rows = vec![CheckpointActionRow {
+            checkpoint_metadata: Some(CheckpointMetadata {
+                version: 2,
+                tags: Some(HashMap::from([(
+                    "checkpointType".to_string(),
+                    Some("v2".to_string()),
+                )])),
+            }),
+            ..Default::default()
+        }];
+
+        let batch = encode_checkpoint_rows(&rows)?;
+        let decoded = decode_checkpoint_rows(&batch)?;
+
+        assert_eq!(
+            decoded
+                .first()
+                .and_then(|row| row.checkpoint_metadata.as_ref()),
+            Some(&CheckpointMetadata {
+                version: 2,
+                tags: Some(HashMap::from([(
+                    "checkpointType".to_string(),
+                    Some("v2".to_string()),
+                )])),
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn reconciled_state_tracks_live_domain_metadata() {
+        let mut state = ReconciledCheckpointState::default();
+        state.apply_action(Action::DomainMetadata(DomainMetadata {
+            domain: "delta.rowTracking".to_string(),
+            configuration: r#"{"rowIdHighWaterMark":5}"#.to_string(),
+            removed: false,
+        }));
+        state.apply_action(Action::DomainMetadata(DomainMetadata {
+            domain: "delta.rowTracking".to_string(),
+            configuration: r#"{"rowIdHighWaterMark":8}"#.to_string(),
+            removed: false,
+        }));
+
+        assert_eq!(
+            state
+                .domain_metadata
+                .get("delta.rowTracking")
+                .map(|domain| domain.configuration.as_str()),
+            Some(r#"{"rowIdHighWaterMark":8}"#)
+        );
+
+        state.apply_action(Action::DomainMetadata(DomainMetadata {
+            domain: "delta.rowTracking".to_string(),
+            configuration: r#"{"rowIdHighWaterMark":8}"#.to_string(),
+            removed: true,
+        }));
+        assert!(!state.domain_metadata.contains_key("delta.rowTracking"));
     }
 
     #[test]
@@ -1053,6 +1204,83 @@ mod tests {
             });
 
         assert_eq!(remove_has_stats, Some(true));
+    }
+
+    #[test]
+    fn checkpoint_schema_includes_sidecar_field() {
+        #[expect(clippy::expect_used)]
+        let fields = checkpoint_fields().expect("checkpoint fields should build");
+        let sidecar_has_path = fields
+            .iter()
+            .find(|field| field.name() == "sidecar")
+            .and_then(|field| match field.data_type() {
+                ArrowDataType::Struct(fields) => {
+                    Some(fields.iter().any(|field| field.name() == "path"))
+                }
+                _ => None,
+            });
+
+        assert_eq!(sidecar_has_path, Some(true));
+    }
+
+    #[test]
+    fn checkpoint_schema_includes_checkpoint_metadata_field() {
+        #[expect(clippy::expect_used)]
+        let fields = checkpoint_fields().expect("checkpoint fields should build");
+        let checkpoint_metadata_has_version = fields
+            .iter()
+            .find(|field| field.name() == "checkpointMetadata")
+            .and_then(|field| match field.data_type() {
+                ArrowDataType::Struct(fields) => {
+                    Some(fields.iter().any(|field| field.name() == "version"))
+                }
+                _ => None,
+            });
+
+        assert_eq!(checkpoint_metadata_has_version, Some(true));
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn reconciled_checkpoint_state_rejects_sidecars() {
+        let mut state = ReconciledCheckpointState::default();
+        let err = state
+            .apply_checkpoint_row(CheckpointActionRow {
+                sidecar: Some(Sidecar {
+                    path: "_sidecars/00001.parquet".to_string(),
+                    size_in_bytes: 128,
+                    modification_time: 256,
+                    tags: None,
+                }),
+                ..Default::default()
+            })
+            .unwrap_err();
+
+        assert!(
+            matches!(err, DeltaTableError::Unsupported(message) if message.contains("sidecars"))
+        );
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn reconciled_header_state_ignores_sidecars() {
+        let mut state = ReconciledHeaderState::default();
+        state
+            .apply_checkpoint_row(CheckpointActionRow {
+                sidecar: Some(Sidecar {
+                    path: "_sidecars/00001.parquet".to_string(),
+                    size_in_bytes: 128,
+                    modification_time: 256,
+                    tags: None,
+                }),
+                ..Default::default()
+            })
+            .unwrap();
+
+        assert!(state.protocol.is_none());
+        assert!(state.metadata.is_none());
+        assert!(state.txns.is_empty());
+        assert!(state.domain_metadata.is_empty());
     }
 
     #[test]

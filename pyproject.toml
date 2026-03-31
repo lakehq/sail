@@ -50,12 +50,17 @@ test = [
     "moto[glue]>=5,<6",
     "testcontainers>=4,<5",
     "connectorx>=0.3,<1",
+    "vortex-data>=0.64,<1",
 ]
 mcp = [
     "mcp>=1.0.0,<2",
 ]
 jdbc = [
     "connectorx>=0.3,<1",
+    "pyarrow>=10.0,<20",
+]
+vortex = [
+    "vortex-data>=0.64,<1",
     "pyarrow>=10.0,<20",
 ]
 
@@ -106,6 +111,7 @@ dependencies = [
     "moto[glue]>=5,<6",
     "testcontainers>=4,<5",
     "connectorx>=0.3,<1",
+    "vortex-data>=0.64,<1",
 ]
 path = ".venvs/default"
 
@@ -156,6 +162,7 @@ dependencies = [
     "moto[glue]>=5,<6",
     "testcontainers>=4,<5",
     "connectorx>=0.3,<1",
+    "vortex-data>=0.64,<1",
 ]
 
 [[tool.hatch.envs.test.matrix]]

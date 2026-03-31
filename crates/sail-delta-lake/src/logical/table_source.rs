@@ -46,6 +46,7 @@ impl DeltaTableSource {
         log_store: LogStoreRef,
         config: DeltaScanConfig,
     ) -> DeltaResult<Self> {
+        snapshot.ensure_data_read_supported()?;
         let schema = df_logical_schema(
             snapshot.as_ref(),
             &config.file_column_name,

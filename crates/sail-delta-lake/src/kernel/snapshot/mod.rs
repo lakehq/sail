@@ -29,6 +29,7 @@ use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use log::debug;
 use once_cell::sync::OnceCell;
+use serde_json::Value;
 use url::Url;
 
 use crate::kernel::checkpoints::{
@@ -45,10 +46,15 @@ use crate::spec::fields::{
     STATS_FIELD_NULL_COUNT, STATS_FIELD_NUM_RECORDS,
 };
 use crate::spec::{
-    Add, ColumnMappingMode, ColumnMetadataKey, DeltaError as DeltaTableError, DeltaResult,
-    Metadata, Protocol, Remove, TableFeature, TableProperties, Transaction, VersionChecksum,
+    Add, ColumnMappingMode, ColumnMetadataKey, CommitConflictError, DeltaError as DeltaTableError,
+    DeltaResult, DomainMetadata, Metadata, Protocol, Remove, TableFeature, TableProperties,
+    Transaction, TransactionError, VersionChecksum,
 };
 use crate::storage::LogStore;
+use crate::table::{
+    ChangeDataFeedSupport, ChangeDataFeedToken, ColumnMappingToken, DeletionVectorToken,
+    EnabledRowTrackingToken, RowTrackingToken, SupportedRowTrackingToken,
+};
 
 mod materialize;
 mod stats;
@@ -64,6 +70,7 @@ pub struct DeltaSnapshot {
     adds: Arc<Vec<Add>>,
     removes: Arc<Vec<Remove>>,
     app_txns: Arc<HashMap<String, Transaction>>,
+    domain_metadata: Arc<HashMap<String, DomainMetadata>>,
     commit_timestamps: Arc<BTreeMap<i64, i64>>,
     files_batch: OnceCell<RecordBatch>,
 }
@@ -97,6 +104,7 @@ impl Clone for DeltaSnapshot {
             adds: Arc::clone(&self.adds),
             removes: Arc::clone(&self.removes),
             app_txns: Arc::clone(&self.app_txns),
+            domain_metadata: Arc::clone(&self.domain_metadata),
             commit_timestamps: Arc::clone(&self.commit_timestamps),
             files_batch,
         }
@@ -156,6 +164,7 @@ impl DeltaSnapshot {
             replayed.adds,
             replayed.removes,
             replayed.txns,
+            replayed.domain_metadata,
             replayed.commit_timestamps,
         )
     }
@@ -179,6 +188,7 @@ impl DeltaSnapshot {
             adds: Arc::new(Vec::new()),
             removes: Arc::new(Vec::new()),
             app_txns: replayed.txns,
+            domain_metadata: replayed.domain_metadata,
             commit_timestamps: replayed.commit_timestamps,
             files_batch: OnceCell::new(),
         })
@@ -194,6 +204,7 @@ impl DeltaSnapshot {
         adds: Vec<Add>,
         removes: Vec<Remove>,
         txns: HashMap<String, Transaction>,
+        domain_metadata: Vec<DomainMetadata>,
         commit_timestamps: BTreeMap<i64, i64>,
     ) -> DeltaResult<Self> {
         let arrow_schema = Arc::new(metadata.parse_schema_arrow()?);
@@ -210,6 +221,12 @@ impl DeltaSnapshot {
             adds: Arc::new(adds),
             removes: Arc::new(removes),
             app_txns: Arc::new(txns),
+            domain_metadata: Arc::new(
+                domain_metadata
+                    .into_iter()
+                    .map(|domain| (domain.domain.clone(), domain))
+                    .collect(),
+            ),
             commit_timestamps: Arc::new(commit_timestamps),
             files_batch: OnceCell::new(),
         })
@@ -221,6 +238,7 @@ impl DeltaSnapshot {
             protocol: self.protocol.clone(),
             metadata: self.metadata.clone(),
             txns: Arc::clone(&self.app_txns),
+            domain_metadata: Arc::clone(&self.domain_metadata),
             commit_timestamps: Arc::clone(&self.commit_timestamps),
         }
     }
@@ -289,6 +307,10 @@ impl DeltaSnapshot {
         &self.protocol
     }
 
+    pub fn domain_metadata(&self) -> &HashMap<String, DomainMetadata> {
+        self.domain_metadata.as_ref()
+    }
+
     pub fn load_config(&self) -> &DeltaTableConfig {
         &self.config
     }
@@ -345,13 +367,33 @@ impl DeltaSnapshot {
         self.removes.as_ref()
     }
 
-    fn has_unknown_table_features(&self) -> bool {
-        self.protocol()
+    pub fn ensure_data_read_supported(&self) -> DeltaResult<()> {
+        crate::kernel::transaction::PROTOCOL
+            .can_read_from_protocol(self.protocol())
+            .map_err(map_read_protocol_error)
+    }
+
+    fn has_unsupported_table_features(&self) -> bool {
+        if self
+            .protocol()
             .reader_features()
             .into_iter()
             .flatten()
             .chain(self.protocol().writer_features().into_iter().flatten())
             .any(|feature| matches!(feature, TableFeature::Unknown))
+        {
+            return true;
+        }
+
+        let reader_unsupported = crate::kernel::transaction::PROTOCOL
+            .unsupported_reader_features(self.protocol())
+            .map(|features| !features.is_empty())
+            .unwrap_or(true);
+        let writer_unsupported = crate::kernel::transaction::PROTOCOL
+            .unsupported_writer_features(self.protocol())
+            .map(|features| !features.is_empty())
+            .unwrap_or(true);
+        reader_unsupported || writer_unsupported
     }
 
     fn has_deletion_vectors(&self) -> bool {
@@ -367,9 +409,7 @@ impl DeltaSnapshot {
         txn_id: Option<String>,
         in_commit_timestamp_opt: Option<i64>,
     ) -> DeltaResult<Option<VersionChecksum>> {
-        // TODO: Remove these coarse skips once replay retains the latest
-        // DomainMetadata actions and reconciles files with deletion-vector identity.
-        if self.has_unknown_table_features() {
+        if self.has_unsupported_table_features() {
             debug!(
                 "Skipping version checksum for version {} because the protocol includes unsupported features",
                 self.version()
@@ -402,6 +442,8 @@ impl DeltaSnapshot {
                 .cmp(&right.app_id)
                 .then(left.version.cmp(&right.version))
         });
+        let mut domain_metadata = self.domain_metadata.values().cloned().collect::<Vec<_>>();
+        domain_metadata.sort_by(|left, right| left.domain.cmp(&right.domain));
 
         Ok(Some(VersionChecksum {
             txn_id,
@@ -411,9 +453,7 @@ impl DeltaSnapshot {
             num_protocol: 1,
             in_commit_timestamp_opt,
             set_transactions: (!set_transactions.is_empty()).then_some(set_transactions),
-            // TODO(protocol-hardening): Populate from reconciled snapshot state once replay keeps
-            // the latest DomainMetadata actions alongside metadata/protocol/txns.
-            domain_metadata: None,
+            domain_metadata: (!domain_metadata.is_empty()).then_some(domain_metadata),
             metadata: self.metadata.clone(),
             protocol: self.protocol.clone(),
             // TODO(protocol-hardening): Populate optional protocol fields when we can do so
@@ -578,6 +618,216 @@ impl DeltaSnapshot {
             .get(&app_id.to_string())
             .map(|txn| txn.version))
     }
+
+    // ── Capability token verification ─────────────────────────────────────────
+
+    /// Verify that Column Mapping is active and return a [`ColumnMappingToken`].
+    ///
+    /// # Errors
+    /// Returns [`DeltaError`] if `delta.columnMapping.mode` is `none` (the default).
+    pub fn verify_column_mapping(&self) -> DeltaResult<ColumnMappingToken> {
+        let mode = self.effective_column_mapping_mode();
+        if matches!(mode, ColumnMappingMode::None) {
+            return Err(DeltaTableError::generic(
+                "column mapping is not enabled on this table (delta.columnMapping.mode = none)",
+            ));
+        }
+        Ok(ColumnMappingToken { mode })
+    }
+
+    /// Verify that Deletion Vectors are fully enabled for reads and writes and return a
+    /// [`DeletionVectorToken`].
+    ///
+    /// # Errors
+    /// Returns [`DeltaError`] if the protocol does not declare the `deletionVectors`
+    /// reader and writer features, or if `delta.enableDeletionVectors` is not `true`.
+    pub fn verify_deletion_vectors(&self) -> DeltaResult<DeletionVectorToken> {
+        crate::table::features::require_reader_writer_feature(
+            self,
+            &TableFeature::DeletionVectors,
+            "deletionVectors",
+        )?;
+
+        let enabled = self
+            .metadata()
+            .configuration()
+            .get("delta.enableDeletionVectors")
+            .is_some_and(|v| v.eq_ignore_ascii_case("true"));
+        if enabled {
+            Ok(DeletionVectorToken)
+        } else {
+            Err(DeltaTableError::generic(
+                "Deletion Vectors are not enabled on this table \
+                 (set delta.enableDeletionVectors = true)",
+            ))
+        }
+    }
+
+    /// Classify Change Data Feed protocol support for this snapshot.
+    ///
+    /// CDF spans both legacy protocol versions and the newer writer-feature model, so
+    /// protocol support must be tracked separately from the current table property.
+    pub fn change_data_feed_support(&self) -> ChangeDataFeedSupport {
+        match self.protocol().min_writer_version() {
+            0..=3 => ChangeDataFeedSupport::Unsupported,
+            4..=6 => ChangeDataFeedSupport::Legacy,
+            _ if self
+                .protocol()
+                .has_writer_feature(&TableFeature::ChangeDataFeed) =>
+            {
+                ChangeDataFeedSupport::WriterFeature
+            }
+            _ => ChangeDataFeedSupport::Unsupported,
+        }
+    }
+
+    /// Verify that Change Data Feed is active on the current snapshot and return a
+    /// [`ChangeDataFeedToken`].
+    ///
+    /// # Errors
+    /// Returns [`DeltaError`] if the current protocol does not support CDF or if
+    /// `delta.enableChangeDataFeed` is not `true` in the table properties.
+    pub fn verify_change_data_feed(&self) -> DeltaResult<ChangeDataFeedToken> {
+        match self.change_data_feed_support() {
+            ChangeDataFeedSupport::Unsupported if self.protocol().min_writer_version() <= 3 => {
+                return Err(DeltaTableError::generic(
+                    "Change Data Feed requires protocol minWriterVersion >= 4",
+                ));
+            }
+            ChangeDataFeedSupport::Unsupported => {
+                return Err(DeltaTableError::generic(
+                    "Change Data Feed requires the changeDataFeed writer feature on writer version >= 7",
+                ));
+            }
+            ChangeDataFeedSupport::Legacy | ChangeDataFeedSupport::WriterFeature => {}
+        }
+
+        let enabled = self
+            .metadata()
+            .configuration()
+            .get("delta.enableChangeDataFeed")
+            .is_some_and(|v| v.eq_ignore_ascii_case("true"));
+        if enabled {
+            Ok(ChangeDataFeedToken)
+        } else {
+            Err(DeltaTableError::generic(
+                "Change Data Feed is not enabled on this table \
+                 (set delta.enableChangeDataFeed = true)",
+            ))
+        }
+    }
+
+    /// Inspect the Row Tracking state of this snapshot and return the appropriate
+    /// [`RowTrackingToken`] variant.
+    ///
+    /// Callers must match on the returned value to determine whether row-ID assignment
+    /// is permitted, suspended, or unsupported.
+    pub fn get_row_tracking_state(&self) -> DeltaResult<RowTrackingToken> {
+        let config = self.metadata().configuration();
+        let tracking_supported = self
+            .protocol()
+            .has_writer_feature(&TableFeature::RowTracking);
+        let domain_metadata_supported = self
+            .protocol()
+            .has_writer_feature(&TableFeature::DomainMetadata);
+        let tracking_enabled = config
+            .get("delta.enableRowTracking")
+            .is_some_and(|v| v.eq_ignore_ascii_case("true"));
+        let tracking_suspended = config
+            .get("delta.rowTrackingSuspended")
+            .is_some_and(|v| v.eq_ignore_ascii_case("true"));
+
+        if tracking_enabled && !tracking_supported {
+            return Err(DeltaTableError::generic(
+                "delta.enableRowTracking = true requires the rowTracking writer feature",
+            ));
+        }
+        if tracking_supported && !domain_metadata_supported {
+            return Err(DeltaTableError::generic(
+                "rowTracking requires the domainMetadata writer feature",
+            ));
+        }
+        if tracking_enabled && tracking_suspended {
+            return Err(DeltaTableError::generic(
+                "delta.enableRowTracking cannot be combined with delta.rowTrackingSuspended = true",
+            ));
+        }
+        if tracking_enabled {
+            for key in [
+                "delta.rowTracking.materializedRowIdColumnName",
+                "delta.rowTracking.materializedRowCommitVersionColumnName",
+            ] {
+                if config
+                    .get(key)
+                    .map(|value| value.is_empty())
+                    .unwrap_or(true)
+                {
+                    return Err(DeltaTableError::generic(format!(
+                        "{key} is required when delta.enableRowTracking = true"
+                    )));
+                }
+            }
+            if self
+                .adds
+                .iter()
+                .any(|add| add.base_row_id.is_none() || add.default_row_commit_version.is_none())
+            {
+                return Err(DeltaTableError::generic(
+                    "enabled row tracking requires all active Add actions to carry baseRowId and defaultRowCommitVersion",
+                ));
+            }
+        }
+
+        let next_row_id = self
+            .row_tracking_high_water_mark()?
+            .map(|value| value.saturating_add(1))
+            .unwrap_or(0);
+
+        if tracking_supported && tracking_suspended {
+            Ok(RowTrackingToken::Suspended)
+        } else if tracking_enabled {
+            Ok(RowTrackingToken::Enabled(EnabledRowTrackingToken {
+                next_row_id,
+            }))
+        } else if tracking_supported {
+            Ok(RowTrackingToken::SupportedOnly(SupportedRowTrackingToken {
+                next_row_id,
+            }))
+        } else {
+            Ok(RowTrackingToken::Unsupported)
+        }
+    }
+
+    fn row_tracking_high_water_mark(&self) -> DeltaResult<Option<i64>> {
+        let Some(domain) = self.domain_metadata().get("delta.rowTracking") else {
+            return Ok(None);
+        };
+        let configuration: Value = serde_json::from_str(&domain.configuration)?;
+        let value = configuration
+            .as_object()
+            .and_then(|object| object.get("rowIdHighWaterMark"))
+            .ok_or_else(|| {
+                DeltaTableError::generic(
+                    "delta.rowTracking domain metadata is missing rowIdHighWaterMark",
+                )
+            })?;
+        match value {
+            Value::Number(number) => number.as_i64().ok_or_else(|| {
+                DeltaTableError::generic(
+                    "delta.rowTracking rowIdHighWaterMark must be representable as i64",
+                )
+            }),
+            Value::String(string) => string.parse::<i64>().map_err(|_| {
+                DeltaTableError::generic(
+                    "delta.rowTracking rowIdHighWaterMark must be an integer string",
+                )
+            }),
+            _ => Err(DeltaTableError::generic(
+                "delta.rowTracking rowIdHighWaterMark must be a JSON number or string",
+            )),
+        }
+        .map(Some)
+    }
 }
 
 fn push_renamed_column(
@@ -624,4 +874,448 @@ fn optional_struct_child(array: &StructArray, name: &str) -> Option<(ArrayRef, b
         .map(|f| f.is_nullable())
         .unwrap_or(true);
     Some((column, nullable))
+}
+
+fn map_read_protocol_error(err: TransactionError) -> DeltaTableError {
+    match err {
+        TransactionError::UnsupportedTableFeatures(features) => DeltaTableError::Unsupported(
+            format!("Reading this Delta table requires unsupported reader features: {features:?}"),
+        ),
+        TransactionError::CommitConflict(CommitConflictError::UnsupportedReaderVersion(
+            version,
+        )) => DeltaTableError::Unsupported(format!(
+            "Sail Delta Lake does not support reader version {version}"
+        )),
+        other => DeltaTableError::Transaction(other),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, HashMap};
+    use std::sync::Arc;
+
+    use object_store::memory::InMemory;
+    use object_store::ObjectStore;
+    use once_cell::sync::OnceCell;
+    use url::Url;
+
+    use super::DeltaSnapshot;
+    use crate::datasource::{DeltaScanConfig, DeltaTableProvider};
+    use crate::kernel::DeltaTableConfig;
+    use crate::logical::table_source::DeltaTableSource;
+    use crate::spec::{
+        Add, ColumnMappingMode, ColumnMetadataKey, DataType, DomainMetadata, Metadata,
+        MetadataValue, Protocol, StructField, StructType, TableFeature, TableProperties,
+    };
+    use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
+    use crate::table::{ChangeDataFeedSupport, RowTrackingToken};
+
+    #[expect(clippy::unwrap_used)]
+    fn test_metadata(
+        configuration: impl IntoIterator<Item = (&'static str, &'static str)>,
+    ) -> Metadata {
+        Metadata::try_new(
+            None,
+            None,
+            StructType::try_new([StructField::not_null("id", DataType::LONG)]).unwrap(),
+            Vec::new(),
+            0,
+            configuration
+                .into_iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect(),
+        )
+        .unwrap()
+    }
+
+    fn test_snapshot(
+        protocol: Protocol,
+        metadata: Metadata,
+        domain_metadata: Vec<DomainMetadata>,
+    ) -> DeltaSnapshot {
+        test_snapshot_with_adds(protocol, metadata, domain_metadata, Vec::new())
+    }
+
+    #[expect(clippy::unwrap_used)]
+    fn test_snapshot_with_adds(
+        protocol: Protocol,
+        metadata: Metadata,
+        domain_metadata: Vec<DomainMetadata>,
+        adds: Vec<Add>,
+    ) -> DeltaSnapshot {
+        let table_properties = TableProperties::from(metadata.configuration().iter());
+        DeltaSnapshot {
+            version: 0,
+            table_url: Url::parse("file:///tmp/test-table").unwrap(),
+            config: DeltaTableConfig::default(),
+            protocol,
+            metadata: metadata.clone(),
+            table_properties,
+            arrow_schema: Arc::new(metadata.parse_schema_arrow().unwrap()),
+            adds: Arc::new(adds),
+            removes: Arc::new(Vec::new()),
+            app_txns: Arc::new(HashMap::new()),
+            domain_metadata: Arc::new(
+                domain_metadata
+                    .into_iter()
+                    .map(|domain| (domain.domain.clone(), domain))
+                    .collect(),
+            ),
+            commit_timestamps: Arc::new(BTreeMap::new()),
+            files_batch: OnceCell::new(),
+        }
+    }
+
+    #[expect(clippy::unwrap_used)]
+    fn test_log_store() -> LogStoreRef {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        default_logstore(
+            store.clone(),
+            store,
+            &Url::parse("memory:///").unwrap(),
+            &StorageConfig,
+        )
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn row_tracking_state_uses_protocol_features_and_domain_high_water_mark() {
+        let protocol = Protocol::new(
+            1,
+            7,
+            None,
+            Some(vec![
+                TableFeature::RowTracking,
+                TableFeature::DomainMetadata,
+            ]),
+        );
+        let metadata = test_metadata([
+            ("delta.enableRowTracking", "true"),
+            (
+                "delta.rowTracking.materializedRowIdColumnName",
+                "_metadata.row_id",
+            ),
+            (
+                "delta.rowTracking.materializedRowCommitVersionColumnName",
+                "_metadata.row_commit_version",
+            ),
+        ]);
+        let snapshot = test_snapshot_with_adds(
+            protocol,
+            metadata,
+            vec![DomainMetadata {
+                domain: "delta.rowTracking".to_string(),
+                configuration: r#"{"rowIdHighWaterMark":42}"#.to_string(),
+                removed: false,
+            }],
+            vec![Add {
+                path: "part-000.parquet".to_string(),
+                partition_values: HashMap::new(),
+                size: 1,
+                modification_time: 0,
+                data_change: true,
+                stats: None,
+                tags: None,
+                deletion_vector: None,
+                base_row_id: Some(0),
+                default_row_commit_version: Some(0),
+                clustering_provider: None,
+                commit_version: None,
+                commit_timestamp: None,
+            }],
+        );
+
+        let next_row_id = match snapshot.get_row_tracking_state().unwrap() {
+            RowTrackingToken::Enabled(token) => Some(token.next_row_id),
+            _ => None,
+        };
+
+        assert_eq!(next_row_id, Some(43));
+    }
+
+    #[test]
+    fn enabled_row_tracking_requires_materialized_column_configuration() {
+        let protocol = Protocol::new(
+            1,
+            7,
+            None,
+            Some(vec![
+                TableFeature::RowTracking,
+                TableFeature::DomainMetadata,
+            ]),
+        );
+        let snapshot = test_snapshot(
+            protocol,
+            test_metadata([("delta.enableRowTracking", "true")]),
+            Vec::new(),
+        );
+
+        assert!(snapshot.get_row_tracking_state().is_err());
+    }
+
+    #[test]
+    fn enabled_row_tracking_requires_active_files_to_carry_row_metadata() {
+        let protocol = Protocol::new(
+            1,
+            7,
+            None,
+            Some(vec![
+                TableFeature::RowTracking,
+                TableFeature::DomainMetadata,
+            ]),
+        );
+        let metadata = test_metadata([
+            ("delta.enableRowTracking", "true"),
+            (
+                "delta.rowTracking.materializedRowIdColumnName",
+                "_metadata.row_id",
+            ),
+            (
+                "delta.rowTracking.materializedRowCommitVersionColumnName",
+                "_metadata.row_commit_version",
+            ),
+        ]);
+        let snapshot = test_snapshot_with_adds(
+            protocol,
+            metadata,
+            vec![DomainMetadata {
+                domain: "delta.rowTracking".to_string(),
+                configuration: r#"{"rowIdHighWaterMark":42}"#.to_string(),
+                removed: false,
+            }],
+            vec![Add {
+                path: "part-000.parquet".to_string(),
+                partition_values: HashMap::new(),
+                size: 1,
+                modification_time: 0,
+                data_change: true,
+                stats: None,
+                tags: None,
+                deletion_vector: None,
+                base_row_id: None,
+                default_row_commit_version: Some(0),
+                clustering_provider: None,
+                commit_version: None,
+                commit_timestamp: None,
+            }],
+        );
+
+        assert!(snapshot.get_row_tracking_state().is_err());
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn verify_column_mapping_uses_effective_mode_from_schema_annotations() {
+        let metadata = Metadata::try_new(
+            None,
+            None,
+            StructType::try_new([StructField::not_null("id", DataType::LONG).with_metadata([
+                (
+                    ColumnMetadataKey::ColumnMappingId.as_ref(),
+                    MetadataValue::Number(1),
+                ),
+                (
+                    ColumnMetadataKey::ColumnMappingPhysicalName.as_ref(),
+                    MetadataValue::String("col-0001".to_string()),
+                ),
+            ])])
+            .unwrap(),
+            Vec::new(),
+            0,
+            HashMap::new(),
+        )
+        .unwrap();
+        let snapshot = test_snapshot(Protocol::new(1, 1, None, None), metadata, Vec::new());
+
+        let token = snapshot.verify_column_mapping().unwrap();
+
+        assert!(matches!(token.mode, ColumnMappingMode::Name));
+    }
+
+    #[test]
+    fn verify_deletion_vectors_requires_property_and_feature_flags() {
+        let protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::DeletionVectors]),
+            Some(vec![TableFeature::DeletionVectors]),
+        );
+        let enabled = test_snapshot(
+            protocol.clone(),
+            test_metadata([("delta.enableDeletionVectors", "true")]),
+            Vec::new(),
+        );
+        assert!(enabled.verify_deletion_vectors().is_ok());
+
+        let missing_reader_feature = test_snapshot(
+            Protocol::new(1, 7, None, Some(vec![TableFeature::DeletionVectors])),
+            test_metadata([("delta.enableDeletionVectors", "true")]),
+            Vec::new(),
+        );
+        assert!(missing_reader_feature.verify_deletion_vectors().is_err());
+
+        let disabled = test_snapshot(protocol, test_metadata([]), Vec::new());
+        assert!(disabled.verify_deletion_vectors().is_err());
+    }
+
+    #[test]
+    fn change_data_feed_support_distinguishes_protocol_modes() {
+        let unsupported = test_snapshot(
+            Protocol::new(1, 3, None, None),
+            test_metadata([]),
+            Vec::new(),
+        );
+        assert_eq!(
+            unsupported.change_data_feed_support(),
+            ChangeDataFeedSupport::Unsupported
+        );
+
+        let legacy = test_snapshot(
+            Protocol::new(1, 4, None, None),
+            test_metadata([]),
+            Vec::new(),
+        );
+        assert_eq!(
+            legacy.change_data_feed_support(),
+            ChangeDataFeedSupport::Legacy
+        );
+
+        let missing_feature = test_snapshot(
+            Protocol::new(1, 7, None, Some(vec![])),
+            test_metadata([]),
+            Vec::new(),
+        );
+        assert_eq!(
+            missing_feature.change_data_feed_support(),
+            ChangeDataFeedSupport::Unsupported
+        );
+
+        let writer_feature = test_snapshot(
+            Protocol::new(1, 7, None, Some(vec![TableFeature::ChangeDataFeed])),
+            test_metadata([]),
+            Vec::new(),
+        );
+        assert_eq!(
+            writer_feature.change_data_feed_support(),
+            ChangeDataFeedSupport::WriterFeature
+        );
+    }
+
+    #[test]
+    fn verify_change_data_feed_respects_protocol_generation() {
+        let unsupported_legacy = test_snapshot(
+            Protocol::new(1, 3, None, None),
+            test_metadata([("delta.enableChangeDataFeed", "true")]),
+            Vec::new(),
+        );
+        assert!(unsupported_legacy.verify_change_data_feed().is_err());
+
+        let supported_legacy = test_snapshot(
+            Protocol::new(1, 4, None, None),
+            test_metadata([("delta.enableChangeDataFeed", "true")]),
+            Vec::new(),
+        );
+        assert!(supported_legacy.verify_change_data_feed().is_ok());
+
+        let protocol_without_feature = Protocol::new(1, 7, None, Some(vec![]));
+        let snapshot = test_snapshot(
+            protocol_without_feature,
+            test_metadata([("delta.enableChangeDataFeed", "true")]),
+            Vec::new(),
+        );
+        assert!(snapshot.verify_change_data_feed().is_err());
+
+        let protocol_with_feature =
+            Protocol::new(1, 7, None, Some(vec![TableFeature::ChangeDataFeed]));
+        let supported = test_snapshot(
+            protocol_with_feature,
+            test_metadata([("delta.enableChangeDataFeed", "true")]),
+            Vec::new(),
+        );
+        assert!(supported.verify_change_data_feed().is_ok());
+    }
+
+    #[test]
+    fn data_read_support_allows_writer_only_features() {
+        let protocol = Protocol::new(
+            1,
+            7,
+            None,
+            Some(vec![
+                TableFeature::RowTracking,
+                TableFeature::DomainMetadata,
+            ]),
+        );
+        let snapshot = test_snapshot(protocol, test_metadata([]), Vec::new());
+
+        assert!(snapshot.ensure_data_read_supported().is_ok());
+    }
+
+    #[test]
+    fn delta_table_provider_rejects_unsupported_reader_features() {
+        let protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::DeletionVectors]),
+            Some(vec![TableFeature::DeletionVectors]),
+        );
+        let snapshot = Arc::new(test_snapshot(protocol, test_metadata([]), Vec::new()));
+
+        let result =
+            DeltaTableProvider::try_new(snapshot, test_log_store(), DeltaScanConfig::default());
+        assert!(
+            result.is_err(),
+            "provider creation should reject unsupported reader features"
+        );
+        let err = match result {
+            Err(err) => err,
+            Ok(_) => return,
+        };
+
+        assert!(matches!(
+            err,
+            crate::spec::DeltaError::Unsupported(message) if message.contains("DeletionVectors")
+        ));
+    }
+
+    #[test]
+    fn delta_table_source_rejects_unsupported_reader_features() {
+        let protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::DeletionVectors]),
+            Some(vec![TableFeature::DeletionVectors]),
+        );
+        let snapshot = Arc::new(test_snapshot(protocol, test_metadata([]), Vec::new()));
+
+        let result =
+            DeltaTableSource::try_new(snapshot, test_log_store(), DeltaScanConfig::default());
+        assert!(
+            result.is_err(),
+            "table source creation should reject unsupported reader features"
+        );
+        let err = match result {
+            Err(err) => err,
+            Ok(_) => return,
+        };
+
+        assert!(matches!(
+            err,
+            crate::spec::DeltaError::Unsupported(message) if message.contains("DeletionVectors")
+        ));
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn version_checksum_skips_explicitly_known_but_unsupported_features() {
+        // TODO: support VacuumProtocolCheck
+        let protocol = Protocol::new(1, 7, None, Some(vec![TableFeature::VacuumProtocolCheck]));
+        let snapshot = test_snapshot(protocol, test_metadata([]), Vec::new());
+
+        assert!(snapshot
+            .build_version_checksum(None, None)
+            .unwrap()
+            .is_none());
+    }
 }

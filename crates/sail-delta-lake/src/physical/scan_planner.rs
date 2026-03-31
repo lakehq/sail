@@ -39,6 +39,9 @@ pub(crate) async fn plan_delta_scan(
     limit: Option<usize>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let config = config.clone();
+    snapshot
+        .ensure_data_read_supported()
+        .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
 
     let schema = match config.schema.clone() {
         Some(value) => Ok(value),

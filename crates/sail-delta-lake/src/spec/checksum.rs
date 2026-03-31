@@ -18,7 +18,7 @@ use serde_json::Value;
 use crate::spec::actions::DomainMetadata;
 use crate::spec::{Add, Metadata, Protocol, Transaction};
 
-// Sidecar checksum for a committed Delta log version.
+// Version checksum for a committed Delta log version.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VersionChecksum {
@@ -32,7 +32,6 @@ pub struct VersionChecksum {
     pub in_commit_timestamp_opt: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub set_transactions: Option<Vec<Transaction>>,
-    // TODO: Populate once replay retains the latest DomainMetadata actions.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub domain_metadata: Option<Vec<DomainMetadata>>,
     pub metadata: Metadata,
