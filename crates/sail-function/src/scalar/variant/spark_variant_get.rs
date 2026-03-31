@@ -209,9 +209,21 @@ fn invoke_variant_get(args: ScalarFunctionArgs, name: &str, safe: bool) -> Resul
     };
 
     // Post-cast for types parquet-variant can't extract directly
+    // Use safe cast for try_variant_get to return NULL instead of error
     let result = if needs_post_cast {
         if let Some(ref dt) = final_type {
-            datafusion::arrow::compute::cast(&result, dt)?
+            if safe {
+                datafusion::arrow::compute::cast_with_options(
+                    &result,
+                    dt,
+                    &datafusion::arrow::compute::CastOptions {
+                        safe: true,
+                        ..Default::default()
+                    },
+                )?
+            } else {
+                datafusion::arrow::compute::cast(&result, dt)?
+            }
         } else {
             result
         }
@@ -346,15 +358,21 @@ fn spark_type_to_arrow(type_str: &str) -> Result<DataType> {
         return match parts.as_slice() {
             [p, s] => {
                 let precision = p.parse::<u8>().map_err(|_| {
-                    generic_exec_err("variant_get", &format!("invalid decimal precision: '{p}'"))
+                    generic_exec_err(
+                        "spark_type_to_arrow",
+                        &format!("invalid decimal precision: '{p}'"),
+                    )
                 })?;
                 let scale = s.parse::<i8>().map_err(|_| {
-                    generic_exec_err("variant_get", &format!("invalid decimal scale: '{s}'"))
+                    generic_exec_err(
+                        "spark_type_to_arrow",
+                        &format!("invalid decimal scale: '{s}'"),
+                    )
                 })?;
                 Ok(DataType::Decimal128(precision, scale))
             }
             _ => Err(generic_exec_err(
-                "variant_get",
+                "spark_type_to_arrow",
                 &format!("invalid decimal type: '{type_str}'. Expected: decimal(precision, scale)"),
             )),
         };
