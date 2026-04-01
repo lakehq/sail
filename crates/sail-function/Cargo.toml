@@ -38,5 +38,5 @@ percent-encoding = { workspace = true }
 jiter = { workspace = true }
 thiserror = { workspace = true }
 serde_json = { workspace = true }
-sxd-document = "0.3.2"
-sxd-xpath = "0.4.2"
+sxd-document = { workspace = true }
+sxd-xpath = { workspace = true }
