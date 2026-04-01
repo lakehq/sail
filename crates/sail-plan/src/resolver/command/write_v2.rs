@@ -2,9 +2,7 @@ use datafusion_expr::LogicalPlan;
 use sail_common::spec;
 
 use crate::error::PlanResult;
-use crate::resolver::command::write::{
-    WriteColumnMatch, WriteMode, WritePlanBuilder, WriteTableAction, WriteTarget,
-};
+use crate::resolver::command::write::{WriteColumnMatch, WriteMode, WritePlanBuilder, WriteTarget};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
@@ -45,35 +43,39 @@ impl PlanResolver<'_> {
         match mode {
             WriteToMode::Append => {
                 builder = builder
-                    .with_target(WriteTarget::ExistingTable {
+                    .with_target(WriteTarget::Table {
                         table,
                         column_match: WriteColumnMatch::ByName,
                     })
-                    .with_mode(WriteMode::Append);
+                    .with_mode(WriteMode::Append {
+                        error_if_absent: true,
+                    });
             }
             WriteToMode::Create => {
                 builder = builder
-                    .with_target(WriteTarget::NewTable {
-                        table,
-                        action: WriteTableAction::Create,
-                    })
-                    .with_mode(WriteMode::Overwrite);
-            }
-            WriteToMode::CreateOrReplace => {
-                builder = builder
-                    .with_target(WriteTarget::NewTable {
-                        table,
-                        action: WriteTableAction::CreateOrReplace,
-                    })
-                    .with_mode(WriteMode::Overwrite);
-            }
-            WriteToMode::Overwrite { condition } => {
-                builder = builder
-                    .with_target(WriteTarget::ExistingTable {
+                    .with_target(WriteTarget::Table {
                         table,
                         column_match: WriteColumnMatch::ByName,
                     })
-                    .with_mode(WriteMode::OverwriteIf {
+                    .with_mode(WriteMode::ErrorIfExists);
+            }
+            WriteToMode::CreateOrReplace => {
+                builder = builder
+                    .with_target(WriteTarget::Table {
+                        table,
+                        column_match: WriteColumnMatch::ByName,
+                    })
+                    .with_mode(WriteMode::Replace {
+                        error_if_absent: false,
+                    });
+            }
+            WriteToMode::Overwrite { condition } => {
+                builder = builder
+                    .with_target(WriteTarget::Table {
+                        table,
+                        column_match: WriteColumnMatch::ByName,
+                    })
+                    .with_mode(WriteMode::TruncateIf {
                         condition: Box::new(spec::ExprWithSource {
                             expr: *condition,
                             source: None,
@@ -82,19 +84,21 @@ impl PlanResolver<'_> {
             }
             WriteToMode::OverwritePartitions => {
                 builder = builder
-                    .with_target(WriteTarget::ExistingTable {
+                    .with_target(WriteTarget::Table {
                         table,
                         column_match: WriteColumnMatch::ByName,
                     })
-                    .with_mode(WriteMode::OverwritePartitions);
+                    .with_mode(WriteMode::TruncatePartitions);
             }
             WriteToMode::Replace => {
                 builder = builder
-                    .with_target(WriteTarget::NewTable {
+                    .with_target(WriteTarget::Table {
                         table,
-                        action: WriteTableAction::Replace,
+                        column_match: WriteColumnMatch::ByName,
                     })
-                    .with_mode(WriteMode::Overwrite);
+                    .with_mode(WriteMode::Replace {
+                        error_if_absent: true,
+                    });
             }
         };
         self.resolve_write_with_builder(input, builder, state).await

@@ -2,12 +2,13 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use log::debug;
-use object_store::{ObjectMeta, ObjectStore};
+use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 
+use super::timestamps::version_uses_in_commit_timestamps;
 use super::{list_delta_log_entries_from, read_last_checkpoint_version_from_store};
 use crate::spec::{
     checksum_path, parse_checkpoint_version, parse_checksum_version, parse_commit_version,
-    DeltaError, DeltaResult, Metadata, Protocol, Transaction, VersionChecksum,
+    DeltaError, DeltaResult, DomainMetadata, Metadata, Protocol, Transaction, VersionChecksum,
 };
 use crate::storage::LogStore;
 
@@ -19,6 +20,7 @@ pub(crate) struct ReplayedTableHeader {
     pub protocol: Protocol,
     pub metadata: Metadata,
     pub txns: Arc<HashMap<String, Transaction>>,
+    pub domain_metadata: Arc<HashMap<String, DomainMetadata>>,
     pub commit_timestamps: Arc<BTreeMap<i64, i64>>,
 }
 
@@ -274,12 +276,29 @@ fn validate_and_build_header(
         .into_iter()
         .map(|txn| (txn.app_id.clone(), txn))
         .collect::<HashMap<_, _>>();
+    let domain_metadata = checksum
+        .domain_metadata
+        .unwrap_or_default()
+        .into_iter()
+        .map(|domain| (domain.domain.clone(), domain))
+        .collect::<HashMap<_, _>>();
+    let commit_timestamps =
+        if version_uses_in_commit_timestamps(version, &checksum.protocol, &checksum.metadata) {
+            checksum
+                .in_commit_timestamp_opt
+                .into_iter()
+                .map(|timestamp| (version, timestamp))
+                .collect()
+        } else {
+            BTreeMap::new()
+        };
     Some(ReplayedTableHeader {
         version,
         protocol: checksum.protocol,
         metadata: checksum.metadata,
         txns: Arc::new(txns),
-        commit_timestamps: Arc::new(BTreeMap::new()),
+        domain_metadata: Arc::new(domain_metadata),
+        commit_timestamps: Arc::new(commit_timestamps),
     })
 }
 
@@ -322,6 +341,9 @@ pub(crate) async fn list_log_files(
         }
     }
 
+    // TODO(v2-checkpoints): This groups checkpoint candidates by version only. It does not yet
+    // distinguish classic vs. V2 checkpoint layouts, nor does it validate multipart completeness;
+    // readers rely on later replay-time handling of checkpointMetadata/sidecar fields instead.
     let latest_checkpoint_version = checkpoint_candidates.iter().map(|(v, _)| *v).max();
     let checkpoint = latest_checkpoint_version.map(|latest_v| {
         let mut files: Vec<ObjectMeta> = checkpoint_candidates
@@ -371,8 +393,13 @@ fn validate_commit_contiguity(
 #[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::spec::StructType;
 
-    fn make_test_checksum(num_metadata: i64, num_protocol: i64) -> VersionChecksum {
+    fn make_test_checksum(
+        num_metadata: i64,
+        num_protocol: i64,
+        in_commit_timestamp_opt: Option<i64>,
+    ) -> VersionChecksum {
         use crate::spec::{Metadata, Protocol, StructType};
 
         let protocol = Protocol::new(1, 2, None, None);
@@ -392,7 +419,7 @@ mod tests {
             num_files: 0,
             num_metadata,
             num_protocol,
-            in_commit_timestamp_opt: None,
+            in_commit_timestamp_opt,
             set_transactions: None,
             domain_metadata: None,
             metadata,
@@ -404,7 +431,7 @@ mod tests {
 
     #[test]
     fn valid_checksum_builds_header() {
-        let checksum = make_test_checksum(1, 1);
+        let checksum = make_test_checksum(1, 1, None);
         let header = validate_and_build_header(42, checksum);
         assert!(header.is_some());
         let h = header.unwrap();
@@ -414,26 +441,62 @@ mod tests {
     }
 
     #[test]
+    fn checksum_header_keeps_in_commit_timestamp() {
+        let mut checksum = make_test_checksum(1, 1, Some(123));
+        checksum.protocol = Protocol::new(
+            1,
+            7,
+            None,
+            Some(vec![crate::spec::TableFeature::InCommitTimestamp]),
+        );
+        checksum.metadata = Metadata::try_new(
+            None,
+            None,
+            StructType::try_new([]).unwrap(),
+            vec![],
+            0,
+            HashMap::from([(
+                "delta.enableInCommitTimestamps".to_string(),
+                "true".to_string(),
+            )]),
+        )
+        .unwrap();
+        let header = validate_and_build_header(42, checksum);
+        assert!(header.is_some());
+        let header = header.unwrap();
+        assert_eq!(header.commit_timestamps.get(&42), Some(&123));
+    }
+
+    #[test]
+    fn checksum_header_ignores_pre_enable_in_commit_timestamp() {
+        let checksum = make_test_checksum(1, 1, Some(123));
+        let header = validate_and_build_header(42, checksum);
+        assert!(header.is_some());
+        let header = header.unwrap();
+        assert!(header.commit_timestamps.is_empty());
+    }
+
+    #[test]
     fn checksum_with_num_metadata_zero_is_rejected() {
-        let checksum = make_test_checksum(0, 1);
+        let checksum = make_test_checksum(0, 1, None);
         assert!(validate_and_build_header(1, checksum).is_none());
     }
 
     #[test]
     fn checksum_with_num_protocol_zero_is_rejected() {
-        let checksum = make_test_checksum(1, 0);
+        let checksum = make_test_checksum(1, 0, None);
         assert!(validate_and_build_header(1, checksum).is_none());
     }
 
     #[test]
     fn checksum_with_num_metadata_two_is_rejected() {
-        let checksum = make_test_checksum(2, 1);
+        let checksum = make_test_checksum(2, 1, None);
         assert!(validate_and_build_header(1, checksum).is_none());
     }
 
     #[test]
     fn checksum_with_both_invalid_is_rejected() {
-        let checksum = make_test_checksum(0, 0);
+        let checksum = make_test_checksum(0, 0, None);
         assert!(validate_and_build_header(1, checksum).is_none());
     }
 
@@ -492,7 +555,7 @@ mod tests {
 
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
 
-        let checksum_55 = make_test_checksum(1, 1);
+        let checksum_55 = make_test_checksum(1, 1, None);
         let crc_bytes = serde_json::to_vec(&checksum_55).unwrap();
         store
             .put(
@@ -527,7 +590,7 @@ mod tests {
 
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
 
-        let checksum_55 = make_test_checksum(1, 1);
+        let checksum_55 = make_test_checksum(1, 1, None);
         let crc_bytes = serde_json::to_vec(&checksum_55).unwrap();
         store
             .put(

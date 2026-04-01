@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use futures::TryStreamExt;
 use object_store::path::Path;
-use object_store::{Error as ObjectStoreError, ObjectMeta, ObjectStore};
+use object_store::{Error as ObjectStoreError, ObjectMeta, ObjectStore, ObjectStoreExt};
 
 use crate::spec::{
     delta_log_prefix_path, delta_log_root_path, last_checkpoint_path, parse_checkpoint_version,
@@ -66,7 +66,7 @@ pub(crate) async fn list_delta_log_entries_from(
         .await
     {
         Ok(entries) => entries,
-        Err(ObjectStoreError::NotSupported { .. } | ObjectStoreError::NotImplemented) => {
+        Err(ObjectStoreError::NotSupported { .. } | ObjectStoreError::NotImplemented { .. }) => {
             // TODO: Apply the same `location > offset` filter here if needed for the specific store implementation.
             store.list(Some(&log_path)).try_collect::<Vec<_>>().await?
         }

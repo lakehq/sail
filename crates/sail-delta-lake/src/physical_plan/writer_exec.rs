@@ -58,7 +58,9 @@ use crate::schema::{
     annotate_for_column_mapping, compute_max_column_id, evolve_schema, get_physical_schema,
     metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_create,
 };
-use crate::spec::{contains_timestampntz_arrow, Action, ColumnMappingMode, StructType};
+use crate::spec::{
+    contains_timestampntz_arrow, Action, ColumnMappingMode, StructType, TableProperties,
+};
 use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::open_table_with_object_store;
 
@@ -85,7 +87,7 @@ pub struct DeltaWriterExec {
     /// Optional override for commit operation metadata.
     operation_override: Option<DeltaOperation>,
     metrics: ExecutionPlanMetricsSet,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl DeltaWriterExec {
@@ -133,13 +135,13 @@ impl DeltaWriterExec {
         })
     }
 
-    fn compute_properties(schema: SchemaRef, output_partitions: usize) -> PlanProperties {
-        PlanProperties::new(
+    fn compute_properties(schema: SchemaRef, output_partitions: usize) -> Arc<PlanProperties> {
+        Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(output_partitions.max(1)),
             EmissionType::Final,
             Boundedness::Bounded,
-        )
+        ))
     }
 
     pub fn table_url(&self) -> &Url {
@@ -189,7 +191,7 @@ impl ExecutionPlan for DeltaWriterExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -479,6 +481,8 @@ impl DeltaWriterExec {
                 let protocol = protocol_for_create(
                     !matches!(effective_mode, ColumnMappingMode::None),
                     has_timestamp_ntz,
+                    TableProperties::from(configuration.iter()).enable_in_commit_timestamps(),
+                    &configuration,
                 )
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let metadata = metadata_for_create_with_struct_type(

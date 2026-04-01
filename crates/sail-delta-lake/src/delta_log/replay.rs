@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use log::debug;
-use object_store::{ObjectMeta, ObjectStore};
+use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::ProjectionMask;
 
@@ -29,7 +29,10 @@ async fn read_checkpoint_header_from_parquet(
             .map_err(DeltaTableError::generic_err)?;
 
         let parquet_schema = builder.parquet_schema();
-        let mask = ProjectionMask::columns(parquet_schema, ["metaData", "protocol", "txn"]);
+        let mask = ProjectionMask::columns(
+            parquet_schema,
+            ["metaData", "protocol", "txn", "domainMetadata"],
+        );
 
         let mut batches = builder
             .with_projection(mask)
@@ -41,7 +44,7 @@ async fn read_checkpoint_header_from_parquet(
             let batch = batch_result.map_err(DeltaTableError::generic_err)?;
             let rows: Vec<CheckpointActionRow> = decode_checkpoint_rows(&batch)?;
             for row in rows {
-                state.apply_checkpoint_row(row);
+                state.apply_checkpoint_row(row)?;
             }
         }
         Ok::<_, DeltaTableError>(state)
@@ -90,7 +93,7 @@ pub(crate) async fn load_replayed_table_state(
         0
     };
 
-    replay_commit_actions(
+    let commit_timestamps = replay_commit_actions(
         &mut state,
         store,
         &commit_files,
@@ -106,6 +109,12 @@ pub(crate) async fn load_replayed_table_state(
         .metadata
         .ok_or_else(|| DeltaTableError::generic("Cannot load table state without metadata"))?;
     let txns = state.txns;
+    let domain_metadata = state
+        .domain_metadata
+        .into_iter()
+        .collect::<BTreeMap<_, _>>()
+        .into_values()
+        .collect::<Vec<_>>();
     let adds = state
         .adds
         .into_iter()
@@ -118,17 +127,12 @@ pub(crate) async fn load_replayed_table_state(
         .collect::<BTreeMap<_, _>>()
         .into_values()
         .collect::<Vec<_>>();
-    let commit_timestamps = commit_files
-        .iter()
-        .filter(|(v, _)| *v >= start_commit_version && *v <= target_version)
-        .map(|(v, meta)| (*v, meta.last_modified.timestamp_millis()))
-        .collect::<BTreeMap<_, _>>();
-
     Ok(ReplayedTableState {
         version: target_version,
         protocol,
         metadata,
         txns,
+        domain_metadata,
         adds,
         removes,
         commit_timestamps,
@@ -201,6 +205,7 @@ pub(crate) async fn load_replayed_table_header(
                 protocol,
                 metadata,
                 txns: Arc::new(state.txns),
+                domain_metadata: Arc::new(state.domain_metadata),
                 commit_timestamps: Arc::new(commit_timestamps),
             }))
         }

@@ -9,7 +9,11 @@ pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
 pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
     let Optimizer { rules } = Optimizer::default();
     let mut custom = sail_plan_lakehouse::lakehouse_optimizer_rules();
-    custom.extend(rules);
+    custom.extend(
+        rules
+            .into_iter()
+            .filter(|r| r.name() != "push_down_leaf_projections"),
+    );
     custom
 }
 

@@ -12,9 +12,9 @@ data:
               AggregateExec: mode=FinalPartitioned, gby=[#8@0 as #8, #9@1 as #9], aggr=[sum(lineitem.#4), sum(lineitem.#5), sum(lineitem.#5 * Int32(1) - lineitem.#6), sum(lineitem.#5 * Int32(1) - lineitem.#6 * Int32(1) + lineitem.#7), avg(lineitem.#4), avg(lineitem.#5), avg(lineitem.#6), count(Int64(1))]
                 RepartitionExec: partitioning=Hash([#8@0, #9@1], 4), input_partitions=4
                   AggregateExec: mode=Partial, gby=[#8@5 as #8, #9@6 as #9], aggr=[sum(lineitem.#4), sum(lineitem.#5), sum(lineitem.#5 * Int32(1) - lineitem.#6), sum(lineitem.#5 * Int32(1) - lineitem.#6 * Int32(1) + lineitem.#7), avg(lineitem.#4), avg(lineitem.#5), avg(lineitem.#6), count(Int64(1))]
-                    ProjectionExec: expr=[#5@1 * (Some(1),10,0 - #6@2) as __common_expr_1, #4@0 as #4, #5@1 as #5, #6@2 as #6, #7@3 as #7, #8@4 as #8, #9@5 as #9]
+                    ProjectionExec: expr=[#21@1 * (Some(1),10,0 - #22@2) as __common_expr_1, #20@0 as #4, #21@1 as #5, #22@2 as #6, #23@3 as #7, #24@4 as #8, #25@5 as #9]
                       RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                        ProjectionExec: expr=[_4@0 as #4, _5@1 as #5, _6@2 as #6, _7@3 as #7, _8@4 as #8, _9@5 as #9]
+                        ProjectionExec: expr=[_4@0 as #20, _5@1 as #21, _6@2 as #22, _7@3 as #23, _8@4 as #24, _9@5 as #25]
                           FilterExec: _10@6 <= 1998-09-24, projection=[_4@0, _5@1, _6@2, _7@3, _8@4, _9@5]
                             DataSourceExec: partitions=1, partition_sizes=[1]
 ---
@@ -488,17 +488,19 @@ data:
                     AggregateExec: mode=FinalPartitioned, gby=[#8@0 as #8, #9@1 as #9, #10@2 as #10, alias1@3 as alias1], aggr=[]
                       RepartitionExec: partitioning=Hash([#8@0, #9@1, #10@2, alias1@3], 4), input_partitions=4
                         AggregateExec: mode=Partial, gby=[#8@1 as #8, #9@2 as #9, #10@3 as #10, #1@0 as alias1], aggr=[]
-                          HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(#21@0, #1@0)]
-                            ProjectionExec: expr=[_0@0 as #21]
-                              FilterExec: _6@1 LIKE %Customer%Complaints%, projection=[_0@0]
-                                DataSourceExec: partitions=1, partition_sizes=[1]
-                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#0@0, #5@0)], projection=[#1@1, #8@3, #9@4, #10@5]
-                              ProjectionExec: expr=[_0@0 as #0, _1@1 as #1]
-                                DataSourceExec: partitions=1, partition_sizes=[1]
-                              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                ProjectionExec: expr=[_0@0 as #5, _3@1 as #8, _4@2 as #9, _5@3 as #10]
-                                  FilterExec: _3@1 != Brand#14 AND _4@2 NOT LIKE SMALL PLATED% AND _5@3 IN (SET) ([14, 6, 5, 31, 49, 15, 41, 47])
-                                    DataSourceExec: partitions=1, partition_sizes=[1]
+                          HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(#1@0, #21@0)]
+                            CoalescePartitionsExec
+                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#0@0, #5@0)], projection=[#1@1, #8@3, #9@4, #10@5]
+                                ProjectionExec: expr=[_0@0 as #0, _1@1 as #1]
+                                  DataSourceExec: partitions=1, partition_sizes=[1]
+                                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                  ProjectionExec: expr=[_0@0 as #5, _3@1 as #8, _4@2 as #9, _5@3 as #10]
+                                    FilterExec: _3@1 != Brand#14 AND _4@2 NOT LIKE SMALL PLATED% AND _5@3 IN (SET) ([14, 6, 5, 31, 49, 15, 41, 47])
+                                      DataSourceExec: partitions=1, partition_sizes=[1]
+                            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                              ProjectionExec: expr=[_0@0 as #21]
+                                FilterExec: _6@1 LIKE %Customer%Complaints%, projection=[_0@0]
+                                  DataSourceExec: partitions=1, partition_sizes=[1]
 ---
 name: "test_derived_tpch_query_plan[17]"
 data:

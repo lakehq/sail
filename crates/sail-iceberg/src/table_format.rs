@@ -78,9 +78,9 @@ impl TableFormat for IcebergTableFormat {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         use datafusion::physical_plan::empty::EmptyExec;
 
+        let path = info.path();
         let SinkInfo {
             input,
-            path,
             mode,
             partition_by,
             bucket_by,

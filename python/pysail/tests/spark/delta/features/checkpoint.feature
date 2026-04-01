@@ -303,6 +303,79 @@ Feature: Delta Lake Checkpoint
         """
 
   @sail-only
+  Rule: Expired Delta log cleanup honors in-commit timestamps
+
+    Background:
+      Given variable location for temporary directory delta_checkpoint_log_cleanup_ict
+      Given variable delta_log for delta log of location
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_checkpoint_log_cleanup_ict_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_checkpoint_log_cleanup_ict_test
+        USING DELTA
+        LOCATION {{ location.sql }}
+        TBLPROPERTIES (
+          'delta.checkpointInterval' = '2',
+          'delta.logRetentionDuration' = 'interval 0 seconds',
+          'delta.enableExpiredLogCleanup' = 'true',
+          'delta.enableInCommitTimestamps' = 'true'
+        )
+        AS SELECT 1 AS id
+        """
+      Given statement
+        """
+        INSERT INTO delta_checkpoint_log_cleanup_ict_test VALUES (2)
+        """
+      Given statement
+        """
+        INSERT INTO delta_checkpoint_log_cleanup_ict_test VALUES (3)
+        """
+      Given delta log commit and checksum timestamps for versions 0, 1, 2 in delta_log are 100, 200, 300 milliseconds since epoch
+      Given delta log JSON file timestamps for versions 0, 1, 2 in delta_log are 2147483646, 2147483646, 2147483646 seconds since epoch
+
+    Scenario: Old JSON commit logs are cleaned up by in-commit timestamps instead of JSON mtimes
+      Then delta log first commit protocol and metadata contains
+        | path                                                      | value                |
+        | metaData.configuration['delta.checkpointInterval']       | "2"                  |
+        | metaData.configuration['delta.logRetentionDuration']     | "interval 0 seconds" |
+        | metaData.configuration['delta.enableExpiredLogCleanup']  | "true"               |
+        | metaData.configuration['delta.enableInCommitTimestamps'] | "true"               |
+      Given statement
+        """
+        INSERT INTO delta_checkpoint_log_cleanup_ict_test VALUES (4)
+        """
+      Given statement
+        """
+        INSERT INTO delta_checkpoint_log_cleanup_ict_test VALUES (5)
+        """
+      When query
+        """
+        SELECT * FROM delta_checkpoint_log_cleanup_ict_test ORDER BY id
+        """
+      Then query result ordered
+        | id |
+        | 1  |
+        | 2  |
+        | 3  |
+        | 4  |
+        | 5  |
+      Then file tree in delta_log matches
+        """
+        📄 00000000000000000002.checkpoint.parquet
+        📄 00000000000000000002.crc
+        📄 00000000000000000002.json
+        📄 00000000000000000003.crc
+        📄 00000000000000000003.json
+        📄 00000000000000000004.checkpoint.parquet
+        📄 00000000000000000004.crc
+        📄 00000000000000000004.json
+        📄 _last_checkpoint
+        """
+
+  @sail-only
   Rule: EXPLAIN shows checkpoint parquet in metadata-as-data log replay
 
     Background:

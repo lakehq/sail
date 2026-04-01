@@ -12,7 +12,8 @@
 
 pub(crate) use crate::delta_log::ReplayedTableHeader;
 use crate::delta_log::{list_log_files, read_last_checkpoint_version_from_store};
-use crate::spec::DeltaResult;
+use crate::kernel::checkpoints::read_checkpoint_main_rows_from_parquet;
+use crate::spec::{is_uuid_checkpoint_filename, DeltaResult};
 
 /// The minimal set of Delta log files needed to reconstruct table state up to a given version.
 #[derive(Debug, Clone, Default)]
@@ -21,6 +22,9 @@ pub struct LogSegmentFiles {
     pub checkpoint_files: Vec<String>,
     /// Commit JSON files sorted by version, strictly newer than the latest checkpoint.
     pub commit_files: Vec<String>,
+    /// V2 checkpoint sidecar files referenced by the latest checkpoint.
+    /// Paths are relative to `_delta_log/` (e.g. `_sidecars/uuid.parquet`).
+    pub sidecar_files: Vec<String>,
 }
 
 /// Options controlling which commit files are included in the resolved segment.
@@ -48,22 +52,34 @@ pub async fn list_log_segment_files(
         .unwrap_or(0);
 
     let (_, checkpoint_meta, commit_metas) =
-        list_log_files(store, offset_version, max_version).await?;
+        list_log_files(store.clone(), offset_version, max_version).await?;
 
-    let mut checkpoint_files: Vec<String> = match checkpoint_meta {
-        Some(meta) => {
-            let filename = meta
-                .location
-                .as_ref()
-                .rsplit('/')
-                .next()
-                .unwrap_or_default()
-                .to_string();
-            vec![filename]
+    let mut checkpoint_files: Vec<String> = Vec::new();
+    let mut sidecar_files: Vec<String> = Vec::new();
+
+    if let Some(meta) = checkpoint_meta {
+        let filename = meta
+            .location
+            .as_ref()
+            .rsplit('/')
+            .next()
+            .unwrap_or_default()
+            .to_string();
+        checkpoint_files.push(filename.clone());
+
+        // Only UUID-named checkpoints (V2) can contain sidecar references.
+        if is_uuid_checkpoint_filename(&filename) {
+            let rows = read_checkpoint_main_rows_from_parquet(store, meta).await?;
+            for row in &rows {
+                if let Some(ref sidecar) = row.sidecar {
+                    sidecar_files.push(format!("_sidecars/{}", sidecar.path));
+                }
+            }
         }
-        None => Vec::new(),
-    };
+    }
+
     checkpoint_files.sort();
+    sidecar_files.sort();
 
     let mut commit_files: Vec<String> = commit_metas
         .into_iter()
@@ -80,5 +96,6 @@ pub async fn list_log_segment_files(
     Ok(LogSegmentFiles {
         checkpoint_files,
         commit_files,
+        sidecar_files,
     })
 }

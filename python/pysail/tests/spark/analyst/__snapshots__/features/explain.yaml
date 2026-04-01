@@ -56,6 +56,9 @@ data:
     logical_plan after expand_merge:
     SAME TEXT AS ABOVE
   
+    logical_plan after rewrite_set_comparison:
+    SAME TEXT AS ABOVE
+  
     logical_plan after optimize_unions:
     SAME TEXT AS ABOVE
   
@@ -114,6 +117,9 @@ data:
     SAME TEXT AS ABOVE
   
     logical_plan after common_sub_expression_eliminate:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after extract_leaf_expressions:
     SAME TEXT AS ABOVE
   
     logical_plan after optimize_projections:
@@ -126,6 +132,9 @@ data:
     logical_plan after expand_merge:
     SAME TEXT AS ABOVE
   
+    logical_plan after rewrite_set_comparison:
+    SAME TEXT AS ABOVE
+  
     logical_plan after optimize_unions:
     SAME TEXT AS ABOVE
   
@@ -184,6 +193,9 @@ data:
     SAME TEXT AS ABOVE
   
     logical_plan after common_sub_expression_eliminate:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after extract_leaf_expressions:
     SAME TEXT AS ABOVE
   
     logical_plan after optimize_projections:
@@ -261,9 +273,6 @@ data:
     SAME TEXT AS ABOVE
   
     physical_plan after ProjectionPushdown:
-    SAME TEXT AS ABOVE
-  
-    physical_plan after coalesce_batches:
     SAME TEXT AS ABOVE
   
     physical_plan after OutputRequirements:

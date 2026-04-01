@@ -61,7 +61,7 @@ impl LocationGenerator for DefaultLocationGenerator {
         // Join each component to avoid encoding '/' into '%2F'
         let mut full = self.base.clone();
         for comp in rel_unencoded.split('/').filter(|s| !s.is_empty()) {
-            full = full.child(comp);
+            full = full.join(comp);
         }
         // Derive relative path from encoded ObjectPath so manifest file_path matches actual object keys.
         let rel = full

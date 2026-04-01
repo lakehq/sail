@@ -324,12 +324,16 @@ fn gen_sequence_date(args: &[ArrayRef]) -> Result<ArrayRef> {
                 }
 
                 let mut new_date = start;
+                let mut overflow = false;
                 let values = from_fn(|| {
-                    if (negative && new_date < stop) || (!negative && new_date > stop) {
+                    if overflow || (negative && new_date < stop) || (!negative && new_date > stop) {
                         None
                     } else {
                         let current_date = new_date;
-                        new_date = Date32Type::add_month_day_nano(new_date, step);
+                        match Date32Type::add_month_day_nano_opt(new_date, step) {
+                            Some(next) => new_date = next,
+                            None => overflow = true,
+                        }
                         Some(Some(current_date))
                     }
                 });
