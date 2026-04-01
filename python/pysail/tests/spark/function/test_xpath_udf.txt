@@ -3,11 +3,11 @@
 ...   xpath('<a><b>b1</b><b>b2</b><b>b3</b><c>c1</c><c>c2</c></a>', 'a/b/text()') AS text_nodes,
 ...   xpath('<a><b>b1</b><b>b2</b></a>', 'a/b') AS element_nodes
 ... """).show(truncate=False)
-+---------------+------------+
-|text_nodes     |element_nodes|
-+---------------+------------+
-|[b1, b2, b3]   |[NULL, NULL]|
-+---------------+------------+
++------------+-------------+
+|text_nodes  |element_nodes|
++------------+-------------+
+|[b1, b2, b3]|[NULL, NULL] |
++------------+-------------+
 <BLANKLINE>
 
 >>> spark.sql("""

@@ -1,34 +1,19 @@
-use datafusion_expr::expr;
-use sail_common_datafusion::literal::LiteralEvaluator;
-use sail_function::scalar::xml::xpath_udf;
+use datafusion_expr::{expr, Expr, ScalarUDF};
+use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::xml::Xpath;
 
-use crate::error::{PlanError, PlanResult};
+use crate::error::PlanResult;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
-fn xpath(
-    ScalarFunctionInput {
-        arguments,
-        function_context: _,
-    }: ScalarFunctionInput,
-) -> PlanResult<expr::Expr> {
-    let argument_count = arguments.len();
-    let mut arguments = arguments.into_iter();
-    let (Some(xml), Some(path), None) = (arguments.next(), arguments.next(), arguments.next())
-    else {
-        return Err(PlanError::invalid(format!(
-            "xpath expects 2 arguments, got {argument_count}"
-        )));
-    };
-    validate_xpath_path(&path)?;
-    Ok(xpath_udf().call(vec![xml, path]))
-}
-
-fn validate_xpath_path(path: &expr::Expr) -> PlanResult<()> {
-    LiteralEvaluator::new().evaluate(path).map(|_| ()).map_err(|error| {
-        PlanError::invalid(format!(
-            "Cannot resolve \"xpath(xml, path)\" due to data type mismatch: the input path should be a foldable \"STRING\" expression; however, got \"{path}\". {error}"
-        ))
-    })
+fn xpath(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (xml, path) = input.arguments.two()?;
+    let func = Xpath::new();
+    Ok(Expr::ScalarFunction(
+        datafusion_expr::expr::ScalarFunction {
+            func: std::sync::Arc::new(ScalarUDF::from(func)),
+            args: vec![xml, path],
+        },
+    ))
 }
 
 pub(super) fn list_built_in_xml_functions() -> Vec<(&'static str, ScalarFunction)> {

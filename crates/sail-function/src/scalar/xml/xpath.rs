@@ -1,16 +1,12 @@
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, ListBuilder, StringArray, StringBuilder};
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{plan_err, DataFusionError, Result};
-use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
-};
-use sxd_document::parser;
-use sxd_xpath::nodeset::Node;
-use sxd_xpath::{Context, Factory, Value};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use xee_xpath::{Documents, Item, Queries, Query};
 
 use crate::functions_utils::make_scalar_function;
 
@@ -79,13 +75,6 @@ impl ScalarUDFImpl for Xpath {
     }
 }
 
-pub fn xpath_udf() -> Arc<ScalarUDF> {
-    static STATIC_XPATH: OnceLock<Arc<ScalarUDF>> = OnceLock::new();
-    STATIC_XPATH
-        .get_or_init(|| Arc::new(ScalarUDF::new_from_impl(Xpath::new())))
-        .clone()
-}
-
 fn xpath_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [xmls, paths] = take_function_args("xpath", args)?;
     let xmls = xmls.as_any().downcast_ref::<StringArray>().ok_or_else(|| {
@@ -123,43 +112,41 @@ fn evaluate_xpath(xml: &str, path: &str) -> Result<Option<Vec<Option<String>>>> 
         return Ok(None);
     }
 
-    let package = parser::parse(xml).map_err(|error| {
+    let mut documents = Documents::new();
+    let document = documents.add_string_without_uri(xml).map_err(|error| {
         DataFusionError::Execution(format!("Invalid XML document: {error}\n{xml}"))
     })?;
-    let expression = Factory::new()
-        .build(path)
+    let query = Queries::default()
+        .sequence(path)
         .map_err(|error| DataFusionError::Execution(format!("Invalid XPath '{path}': {error}")))?;
-    let expression =
-        expression.ok_or_else(|| DataFusionError::Execution(format!("Invalid XPath '{path}'")))?;
-    let value = expression
-        .evaluate(&Context::new(), package.as_document().root())
-        .map_err(|error| {
-            DataFusionError::Execution(format!("Error loading expression '{path}': {error}"))
-        })?;
+    let value = query.execute(&mut documents, document).map_err(|error| {
+        DataFusionError::Execution(format!("Error loading expression '{path}': {error}"))
+    })?;
 
-    match value {
-        Value::Nodeset(nodeset) => Ok(Some(
-            nodeset
-                .document_order()
-                .into_iter()
-                .map(node_value)
-                .collect(),
-        )),
-        _ => Err(DataFusionError::Execution(format!(
-            "Error loading expression '{path}': Can not convert XPath result to a NodeList"
-        ))),
-    }
+    Ok(Some(
+        value
+            .iter()
+            .map(|item| match item {
+                Item::Node(node) => Ok(node_value(documents.xot(), node)),
+                Item::Atomic(_) | Item::Function(_) => Err(DataFusionError::Execution(format!(
+                    "Error loading expression '{path}': Can not convert XPath result to a NodeList"
+                ))),
+            })
+            .collect::<Result<Vec<_>>>()?,
+    ))
 }
 
-fn node_value(node: Node<'_>) -> Option<String> {
-    match node {
-        Node::Root(_) | Node::Element(_) => None,
-        Node::Attribute(attribute) => Some(attribute.value().to_string()),
-        Node::Text(text) => Some(text.text().to_string()),
-        Node::Comment(comment) => Some(comment.text().to_string()),
-        Node::Namespace(namespace) => Some(namespace.uri().to_string()),
-        Node::ProcessingInstruction(instruction) => {
-            Some(instruction.value().unwrap_or("").to_string())
+fn node_value(xot: &xot::Xot, node: xot::Node) -> Option<String> {
+    match xot.value(node) {
+        xot::Value::Document | xot::Value::Element(_) => None,
+        xot::Value::Attribute(attribute) => Some(attribute.value().to_string()),
+        xot::Value::Text(text) => Some(text.get().to_string()),
+        xot::Value::Comment(comment) => Some(comment.get().to_string()),
+        xot::Value::Namespace(namespace) => {
+            Some(xot.namespace_str(namespace.namespace()).to_string())
+        }
+        xot::Value::ProcessingInstruction(instruction) => {
+            Some(instruction.data().unwrap_or("").to_string())
         }
     }
 }
