@@ -53,6 +53,22 @@ impl PlanResolver<'_> {
         };
         let format = self.resolve_catalog_table_format(file_format)?;
         let partition_by = self.resolve_write_partition_by_expressions(partition_by)?;
+        // Validate that all partition columns are present in the column list.
+        // This ensures correctness even when `spec::TableDefinition` is constructed
+        // outside the SQL analyzer (e.g. via the Spark Connect protocol).
+        if !columns.is_empty() {
+            for field in &partition_by {
+                if !columns
+                    .iter()
+                    .any(|c| c.name.eq_ignore_ascii_case(&field.column))
+                {
+                    return Err(PlanError::invalid(format!(
+                        "partition column '{}' not found in table schema",
+                        field.column
+                    )));
+                }
+            }
+        }
         let sort_by = self.resolve_catalog_table_sort(sort_by)?;
         let bucket_by = self.resolve_catalog_table_bucket_by(bucket_by)?;
 
