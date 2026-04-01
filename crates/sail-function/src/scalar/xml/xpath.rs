@@ -129,7 +129,7 @@ fn evaluate_xpath(xml: &str, path: &str) -> Result<Option<Vec<Option<String>>>> 
             .map(|item| match item {
                 Item::Node(node) => Ok(node_value(documents.xot(), node)),
                 Item::Atomic(_) | Item::Function(_) => Err(DataFusionError::Execution(format!(
-                    "Error loading expression '{path}': Can not convert XPath result to a NodeList"
+                    "Error loading expression '{path}': Cannot convert XPath result to a NodeList"
                 ))),
             })
             .collect::<Result<Vec<_>>>()?,
