@@ -5,15 +5,13 @@ use sail_function::scalar::xml::xpath::Xpath;
 use crate::error::PlanResult;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
-fn xpath(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+fn xpath(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let (xml, path) = input.arguments.two()?;
     let func = Xpath::new();
-    Ok(Expr::ScalarFunction(
-        datafusion_expr::expr::ScalarFunction {
-            func: std::sync::Arc::new(ScalarUDF::from(func)),
-            args: vec![xml, path],
-        },
-    ))
+    Ok(Expr::ScalarFunction(expr::ScalarFunction {
+        func: std::sync::Arc::new(ScalarUDF::from(func)),
+        args: vec![xml, path],
+    }))
 }
 
 pub(super) fn list_built_in_xml_functions() -> Vec<(&'static str, ScalarFunction)> {
