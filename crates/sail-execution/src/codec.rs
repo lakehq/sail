@@ -178,7 +178,7 @@ use sail_function::scalar::update_struct_field::UpdateStructField;
 use sail_function::scalar::url::parse_url::ParseUrl;
 use sail_function::scalar::url::spark_try_parse_url::SparkTryParseUrl;
 use sail_function::scalar::xml::xpath::Xpath;
-use sail_function::scalar::xml::xpath::
+use sail_function::scalar::xml::xpath_typed::{xpath_typed_name_to_kind, XpathTyped};
 use sail_iceberg::physical_plan::{IcebergCommitExec, IcebergWriterExec};
 use sail_iceberg::TableIcebergOptions;
 use sail_logical_plan::range::Range;
@@ -1788,6 +1788,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = Explode::new(kind);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::XpathTyped(gen::XpathTypedUdf { name }) => {
+                let kind = xpath_typed_name_to_kind(&name)?;
+                let udf = XpathTyped::new(kind);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
             UdfKind::SparkUnixTimestamp(gen::SparkUnixTimestampUdf { timezone }) => {
                 let udf = SparkUnixTimestamp::new(Arc::from(timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
@@ -2142,6 +2147,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(_func) = node.inner().as_any().downcast_ref::<Explode>() {
             let name = node.name().to_string();
             UdfKind::Explode(gen::ExplodeUdf { name })
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<XpathTyped>() {
+            let name = node.name().to_string();
+            UdfKind::XpathTyped(gen::XpathTypedUdf { name })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkUnixTimestamp>() {
             let timezone = func.timezone().to_string();
             UdfKind::SparkUnixTimestamp(gen::SparkUnixTimestampUdf { timezone })

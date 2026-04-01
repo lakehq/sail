@@ -82,6 +82,7 @@ message ExtendedScalarUdf {
     SparkTimestampUdf spark_timestamp = 10;
     SparkDateUdf spark_date = 11;
     SparkFromCsvUdf spark_from_csv = 12;
+    XpathTypedUdf xpath_typed = 13;
   }
 }
 
@@ -131,6 +132,10 @@ message DropStructFieldUdf {
 }
 
 message ExplodeUdf {
+  string name = 1;
+}
+
+message XpathTypedUdf {
   string name = 1;
 }
 

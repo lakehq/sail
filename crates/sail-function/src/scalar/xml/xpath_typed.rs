@@ -1,4 +1,6 @@
-use crate::functions_utils::make_scalar_function;
+use std::any::Any;
+use std::sync::Arc;
+
 use datafusion::arrow::array::{
     Array, ArrayRef, BooleanBuilder, Float32Builder, Float64Builder, Int16Builder, Int32Builder,
     Int64Builder, StringArray, StringBuilder,
@@ -7,9 +9,23 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
-use std::any::Any;
-use std::sync::Arc;
 use xee_xpath::{Documents, Queries, Query};
+
+use crate::functions_utils::make_scalar_function;
+
+pub fn xpath_typed_name_to_kind(name: &str) -> Result<XpathTypedKind> {
+    match name {
+        "xpath_boolean" => Ok(XpathTypedKind::Boolean),
+        "xpath_double" => Ok(XpathTypedKind::Double),
+        "xpath_float" => Ok(XpathTypedKind::Float),
+        "xpath_int" => Ok(XpathTypedKind::Int),
+        "xpath_long" => Ok(XpathTypedKind::Long),
+        "xpath_number" => Ok(XpathTypedKind::Number),
+        "xpath_short" => Ok(XpathTypedKind::Short),
+        "xpath_string" => Ok(XpathTypedKind::String),
+        _ => plan_err!("Invalid xpath typed function name: {name}"),
+    }
+}
 
 /// The kind of typed XPath function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
