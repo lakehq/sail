@@ -1151,63 +1151,38 @@ fn from_ast_table_definition(
             return Err(SqlError::invalid("conflicting USING and STORED AS clauses"))
         }
     };
-    // Process columns first so we can validate partition column definitions against them.
-    let mut columns = from_ast_table_columns(columns)?;
-    let partition_by = {
-        let mut result = Vec::new();
-        for item in partition_by.into_iter().flatten() {
-            match item {
-                PartitionByItem::ColumnDefinition(ColumnTypeDefinition {
-                    name,
-                    data_type,
-                    not_null,
-                    comment,
-                    colon: _,
-                }) => {
-                    let col_name = name.value;
-                    let col_type = from_ast_data_type(data_type)?;
-                    let existing_type = columns
-                        .iter()
-                        .find(|c| c.name.eq_ignore_ascii_case(&col_name))
-                        .map(|c| c.data_type.clone());
-                    match existing_type {
-                        Some(t) if t != col_type => {
-                            return Err(SqlError::invalid(format!(
-                                "partition column '{col_name}' has incompatible type: \
-                                 column definition has {t:?} but PARTITIONED BY clause has {col_type:?}",
-                            )));
-                        }
-                        None => {
-                            // The partition column is not in the table column list;
-                            // add it so the schema is complete.
-                            let col_comment =
-                                comment.map(|(_, s)| from_ast_string(s)).transpose()?;
-                            columns.push(spec::TableColumnDefinition {
-                                name: col_name.clone(),
-                                data_type: col_type,
-                                nullable: not_null.is_none(),
-                                default: None,
-                                generated_always_as: None,
-                                comment: col_comment,
-                            });
-                        }
-                        Some(_) => {
-                            // Types match; nothing extra to do.
-                        }
-                    }
-                    result.push(spec::Expr::UnresolvedAttribute {
-                        name: spec::ObjectName::bare(col_name),
-                        plan_id: None,
-                        is_metadata_column: false,
-                    });
-                }
-                PartitionByItem::Expression(expr) => {
-                    result.push(from_ast_expression(expr)?);
-                }
+    let mut partition_column_definitions = Vec::new();
+    let partition_by = partition_by
+        .into_iter()
+        .flatten()
+        .map(|x| match x {
+            PartitionByItem::ColumnDefinition(ColumnTypeDefinition {
+                name,
+                data_type,
+                not_null,
+                comment,
+                colon: _,
+            }) => {
+                let col_name = name.value;
+                let col_type = from_ast_data_type(data_type)?;
+                let col_comment = comment.map(|(_, s)| from_ast_string(s)).transpose()?;
+                partition_column_definitions.push(spec::TableColumnDefinition {
+                    name: col_name.clone(),
+                    data_type: col_type,
+                    nullable: not_null.is_none(),
+                    default: None,
+                    comment: col_comment,
+                    generated_always_as: None,
+                });
+                Ok(spec::Expr::UnresolvedAttribute {
+                    name: spec::ObjectName::bare(col_name),
+                    plan_id: None,
+                    is_metadata_column: false,
+                })
             }
-        }
-        result
-    };
+            PartitionByItem::Expression(expr) => from_ast_expression(expr),
+        })
+        .collect::<SqlResult<Vec<_>>>()?;
     let (sort_by, bucket_by) = if let Some(bucket_by) = bucket_by {
         let CreateTableBucketBy {
             columns,
@@ -1241,6 +1216,7 @@ fn from_ast_table_definition(
         .collect::<SqlResult<Vec<_>>>()?;
     let options = options.map(from_ast_property_list).transpose()?;
     let properties = properties.map(from_ast_property_list).transpose()?;
+    let columns = from_ast_table_columns(columns)?;
     let definition = spec::TableDefinition {
         columns,
         comment: comment.map(from_ast_string).transpose()?,
@@ -1249,6 +1225,7 @@ fn from_ast_table_definition(
         file_format,
         row_format,
         partition_by,
+        partition_column_definitions,
         sort_by,
         bucket_by,
         cluster_by,

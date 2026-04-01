@@ -29,6 +29,7 @@ impl PlanResolver<'_> {
             file_format,
             row_format,
             partition_by,
+            partition_column_definitions,
             sort_by,
             bucket_by,
             cluster_by,
@@ -44,7 +45,26 @@ impl PlanResolver<'_> {
         if !cluster_by.is_empty() {
             return Err(PlanError::todo("CLUSTER BY in CREATE TABLE statement"));
         }
-        let columns = self.resolve_table_columns(columns, state)?;
+        let mut columns = self.resolve_table_columns(columns, state)?;
+        // Merge typed partition column definitions into the table schema.
+        // This handles Hive-style `PARTITIONED BY (col_name data_type)` syntax.
+        for part_col_def in self.resolve_table_columns(partition_column_definitions, state)? {
+            if let Some(existing) = columns
+                .iter()
+                .find(|c| c.name.eq_ignore_ascii_case(&part_col_def.name))
+            {
+                if existing.data_type != part_col_def.data_type {
+                    return Err(PlanError::invalid(format!(
+                        "partition column '{}' has incompatible type: \
+                         column definition has {:?} but PARTITIONED BY clause has {:?}",
+                        part_col_def.name, existing.data_type, part_col_def.data_type
+                    )));
+                }
+            } else {
+                // Column absent from schema — append it automatically.
+                columns.push(part_col_def);
+            }
+        }
         let constraints = self.resolve_table_constraints(constraints)?;
         let location = if let Some(location) = location {
             location
@@ -53,22 +73,6 @@ impl PlanResolver<'_> {
         };
         let format = self.resolve_catalog_table_format(file_format)?;
         let partition_by = self.resolve_write_partition_by_expressions(partition_by)?;
-        // Validate that all partition columns are present in the column list.
-        // This ensures correctness even when `spec::TableDefinition` is constructed
-        // outside the SQL analyzer (e.g. via the Spark Connect protocol).
-        if !columns.is_empty() {
-            for field in &partition_by {
-                if !columns
-                    .iter()
-                    .any(|c| c.name.eq_ignore_ascii_case(&field.column))
-                {
-                    return Err(PlanError::invalid(format!(
-                        "partition column '{}' not found in table schema",
-                        field.column
-                    )));
-                }
-            }
-        }
         let sort_by = self.resolve_catalog_table_sort(sort_by)?;
         let bucket_by = self.resolve_catalog_table_bucket_by(bucket_by)?;
 
@@ -108,6 +112,7 @@ impl PlanResolver<'_> {
             file_format,
             row_format,
             partition_by,
+            partition_column_definitions: _,
             sort_by,
             bucket_by,
             cluster_by,

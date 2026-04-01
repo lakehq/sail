@@ -865,6 +865,11 @@ pub struct TableDefinition {
     pub file_format: Option<TableFileFormat>,
     pub row_format: Option<TableRowFormat>,
     pub partition_by: Vec<Expr>,
+    /// Typed partition column definitions, e.g. from Hive-style
+    /// `PARTITIONED BY (col_name data_type)` clauses.
+    /// When non-empty, the plan resolver merges these into [`columns`]:
+    /// missing columns are appended and type conflicts cause an error.
+    pub partition_column_definitions: Vec<TableColumnDefinition>,
     pub sort_by: Vec<SortOrder>,
     pub bucket_by: Option<SaveBucketBy>,
     pub cluster_by: Vec<ObjectName>,
