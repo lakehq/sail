@@ -113,9 +113,9 @@ fn evaluate_xpath(xml: &str, path: &str) -> Result<Option<Vec<Option<String>>>> 
     }
 
     let mut documents = Documents::new();
-    let document = documents.add_string_without_uri(xml).map_err(|error| {
-        DataFusionError::Execution(format!("Invalid XML document: {error}\n{xml}"))
-    })?;
+    let document = documents
+        .add_string_without_uri(xml)
+        .map_err(|error| DataFusionError::Execution(format!("Invalid XML document: {error}")))?;
     let query = Queries::default()
         .sequence(path)
         .map_err(|error| DataFusionError::Execution(format!("Invalid XPath '{path}': {error}")))?;

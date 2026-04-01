@@ -177,6 +177,7 @@ use sail_function::scalar::struct_function::StructFunction;
 use sail_function::scalar::update_struct_field::UpdateStructField;
 use sail_function::scalar::url::parse_url::ParseUrl;
 use sail_function::scalar::url::spark_try_parse_url::SparkTryParseUrl;
+use sail_function::scalar::xml::Xpath;
 use sail_iceberg::physical_plan::{IcebergCommitExec, IcebergWriterExec};
 use sail_iceberg::TableIcebergOptions;
 use sail_logical_plan::range::Range;
@@ -2085,7 +2086,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<TryUrlDecode>()
             || node_inner.is::<UrlDecode>()
             || node_inner.is::<UrlEncode>()
-            || node.name() == "xpath"
+            || node_inner.is::<Xpath>()
             || node.name() == "json_as_text"
             || node.name() == "json_len"
             || node.name() == "json_length"
