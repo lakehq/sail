@@ -1,3 +1,1 @@
-mod xpath;
-
-pub use xpath::Xpath;
+pub mod xpath;

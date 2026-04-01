@@ -177,7 +177,7 @@ use sail_function::scalar::struct_function::StructFunction;
 use sail_function::scalar::update_struct_field::UpdateStructField;
 use sail_function::scalar::url::parse_url::ParseUrl;
 use sail_function::scalar::url::spark_try_parse_url::SparkTryParseUrl;
-use sail_function::scalar::xml::Xpath;
+use sail_function::scalar::xml::xpath::Xpath;
 use sail_iceberg::physical_plan::{IcebergCommitExec, IcebergWriterExec};
 use sail_iceberg::TableIcebergOptions;
 use sail_logical_plan::range::Range;
@@ -1873,7 +1873,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(sail_function::scalar::json::json_object_keys_udf())
             }
             "xpath" => Ok(Arc::new(ScalarUDF::from(
-                sail_function::scalar::xml::Xpath::new(),
+                sail_function::scalar::xml::xpath::Xpath::new(),
             ))),
             "spark_base64" | "base64" => Ok(Arc::new(ScalarUDF::from(SparkBase64::new()))),
             "spark_bround" | "bround" => Ok(Arc::new(ScalarUDF::from(SparkBRound::new()))),

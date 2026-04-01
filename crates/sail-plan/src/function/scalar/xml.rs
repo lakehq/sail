@@ -1,6 +1,6 @@
 use datafusion_expr::{expr, Expr, ScalarUDF};
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::xml::Xpath;
+use sail_function::scalar::xml::xpath::Xpath;
 
 use crate::error::PlanResult;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
