@@ -16,6 +16,8 @@ Our mission is to **unify batch processing, stream processing, and compute-inten
 
 **🚀 Sail outperforms Spark, popular Spark accelerators, Databricks, and Snowflake on [ClickBench](https://go.lakesail.com/clickbench).**
 
+**💬 [Join our Slack community](https://www.launchpass.com/lakesail-community/free)** to ask questions, share feedback, and connect with other Sail users and contributors.
+
 ## Documentation
 
 The documentation of the latest Sail version can be found [here](https://docs.lakesail.com/sail/latest/).

@@ -181,6 +181,7 @@ use sail_function::scalar::variant::spark_is_variant_null::SparkIsVariantNullUdf
 use sail_function::scalar::variant::spark_json_to_variant::SparkJsonToVariantUdf;
 use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
 use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
+use sail_function::scalar::xml::xpath::Xpath;
 use sail_iceberg::physical_plan::{IcebergCommitExec, IcebergWriterExec};
 use sail_iceberg::TableIcebergOptions;
 use sail_logical_plan::range::Range;
@@ -1880,6 +1881,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "json_object_keys" | "json_keys" => {
                 Ok(sail_function::scalar::json::json_object_keys_udf())
             }
+            "xpath" => Ok(Arc::new(ScalarUDF::from(
+                sail_function::scalar::xml::xpath::Xpath::new(),
+            ))),
             "spark_base64" | "base64" => Ok(Arc::new(ScalarUDF::from(SparkBase64::new()))),
             "spark_bround" | "bround" => Ok(Arc::new(ScalarUDF::from(SparkBRound::new()))),
             "spark_interval_div" => Ok(Arc::new(ScalarUDF::from(SparkIntervalDiv::new()))),
@@ -2095,6 +2099,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<TryUrlDecode>()
             || node_inner.is::<UrlDecode>()
             || node_inner.is::<UrlEncode>()
+            || node_inner.is::<Xpath>()
             || node.name() == "json_as_text"
             || node.name() == "json_len"
             || node.name() == "json_length"

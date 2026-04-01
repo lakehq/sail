@@ -39,6 +39,8 @@ lazy_static = "1.5.0"
 once_cell = "1.21.3"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
+xee-xpath = "0.1.5"
+xot = "0.31.2"
 # TODO: `serde_yaml` is deprecated. No satisfactory alternative exists yet, we may need to build our own in the future.
 serde_yaml = "0.9.34"
 serde_with = { version = "3.18.0", default-features = false, features = ["base64", "std", "macros"] }
