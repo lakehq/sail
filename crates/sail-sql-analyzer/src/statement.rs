@@ -1151,7 +1151,6 @@ fn from_ast_table_definition(
             return Err(SqlError::invalid("conflicting USING and STORED AS clauses"))
         }
     };
-    let mut partition_column_definitions = Vec::new();
     let partition_by = partition_by
         .into_iter()
         .flatten()
@@ -1166,21 +1165,20 @@ fn from_ast_table_definition(
                 let col_name = name.value;
                 let col_type = from_ast_data_type(data_type)?;
                 let col_comment = comment.map(|(_, s)| from_ast_string(s)).transpose()?;
-                partition_column_definitions.push(spec::TableColumnDefinition {
-                    name: col_name.clone(),
-                    data_type: col_type,
-                    nullable: not_null.is_none(),
-                    default: None,
-                    comment: col_comment,
-                    generated_always_as: None,
-                });
-                Ok(spec::Expr::UnresolvedAttribute {
-                    name: spec::ObjectName::bare(col_name),
-                    plan_id: None,
-                    is_metadata_column: false,
-                })
+                Ok(spec::PartitionColumn::Definition(
+                    spec::TableColumnDefinition {
+                        name: col_name,
+                        data_type: col_type,
+                        nullable: not_null.is_none(),
+                        default: None,
+                        comment: col_comment,
+                        generated_always_as: None,
+                    },
+                ))
             }
-            PartitionByItem::Expression(expr) => from_ast_expression(expr),
+            PartitionByItem::Expression(expr) => {
+                from_ast_expression(expr).map(spec::PartitionColumn::Expression)
+            }
         })
         .collect::<SqlResult<Vec<_>>>()?;
     let (sort_by, bucket_by) = if let Some(bucket_by) = bucket_by {
@@ -1225,7 +1223,6 @@ fn from_ast_table_definition(
         file_format,
         row_format,
         partition_by,
-        partition_column_definitions,
         sort_by,
         bucket_by,
         cluster_by,
