@@ -25,6 +25,9 @@ pub struct LogSegmentFiles {
     /// V2 checkpoint sidecar files referenced by the latest checkpoint.
     /// Paths are relative to `_delta_log/` (e.g. `_sidecars/uuid.parquet`).
     pub sidecar_files: Vec<String>,
+    /// Compacted JSON files that aggregate multiple commit versions.
+    /// Filenames follow the pattern `{start:020}.{end:020}.compacted.json`.
+    pub compaction_files: Vec<String>,
 }
 
 /// Options controlling which commit files are included in the resolved segment.
@@ -51,7 +54,7 @@ pub async fn list_log_segment_files(
         .map(|v| v.min(max_version).saturating_sub(1))
         .unwrap_or(0);
 
-    let (_, checkpoint_meta, commit_metas) =
+    let (_, checkpoint_meta, commit_metas, compaction_metas) =
         list_log_files(store.clone(), offset_version, max_version).await?;
 
     let mut checkpoint_files: Vec<String> = Vec::new();
@@ -93,9 +96,22 @@ pub async fn list_log_segment_files(
         .collect();
     commit_files.sort();
 
+    let mut compaction_files: Vec<String> = compaction_metas
+        .into_iter()
+        .filter_map(|(_, meta)| {
+            meta.location
+                .as_ref()
+                .rsplit('/')
+                .next()
+                .map(|s| s.to_string())
+        })
+        .collect();
+    compaction_files.sort();
+
     Ok(LogSegmentFiles {
         checkpoint_files,
         commit_files,
         sidecar_files,
+        compaction_files,
     })
 }

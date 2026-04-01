@@ -8,7 +8,8 @@ use super::timestamps::version_uses_in_commit_timestamps;
 use super::{list_delta_log_entries_from, read_last_checkpoint_version_from_store};
 use crate::spec::{
     checksum_path, parse_checkpoint_version, parse_checksum_version, parse_commit_version,
-    DeltaError, DeltaResult, DomainMetadata, Metadata, Protocol, Transaction, VersionChecksum,
+    parse_compacted_json_versions, DeltaError, DeltaResult, DomainMetadata, Metadata, Protocol,
+    Transaction, VersionChecksum,
 };
 use crate::storage::LogStore;
 
@@ -33,11 +34,13 @@ pub(crate) enum ResolvedLogSegment {
         base: ReplayedTableHeader,
         checkpoint: Option<ObjectMeta>,
         commit_files: Vec<(i64, ObjectMeta)>,
+        compaction_files: Vec<((i64, i64), ObjectMeta)>,
         target_version: i64,
     },
     FullReplay {
         checkpoint: Option<ObjectMeta>,
         commit_files: Vec<(i64, ObjectMeta)>,
+        compaction_files: Vec<((i64, i64), ObjectMeta)>,
         target_version: i64,
     },
 }
@@ -85,7 +88,7 @@ impl<'a> LogSegmentResolver<'a> {
             .unwrap_or(0);
         let list_offset = lower_bound.min(last_cp_hint_version);
 
-        let (checksum_candidates, checkpoint_candidate, all_commits) =
+        let (checksum_candidates, checkpoint_candidate, all_commits, all_compactions) =
             list_log_files(store.clone(), list_offset, version).await?;
 
         let mut older_crc_base: Option<ReplayedTableHeader> = None;
@@ -154,9 +157,14 @@ impl<'a> LogSegmentResolver<'a> {
                     .into_iter()
                     .filter(|(v, _)| *v >= start_version && *v <= version)
                     .collect();
+                let compaction_files =
+                    filter_compactions_for_range(&all_compactions, start_version, version);
+                let (commit_files, compaction_files) =
+                    resolve_compactions(commit_files, compaction_files);
                 return Ok(ResolvedLogSegment::FullReplay {
                     checkpoint: checkpoint_candidate,
                     commit_files,
+                    compaction_files,
                     target_version: version,
                 });
             }
@@ -188,12 +196,22 @@ impl<'a> LogSegmentResolver<'a> {
             (None, commits, start)
         };
 
-        validate_commit_contiguity(&commit_files, start_version, version)?;
+        let compaction_files =
+            filter_compactions_for_range(&all_compactions, start_version, version);
+        let (commit_files, compaction_files) = resolve_compactions(commit_files, compaction_files);
+
+        validate_commit_contiguity_with_compactions(
+            &commit_files,
+            &compaction_files,
+            start_version,
+            version,
+        )?;
 
         Ok(ResolvedLogSegment::Incremental {
             base,
             checkpoint,
             commit_files,
+            compaction_files,
             target_version: version,
         })
     }
@@ -207,7 +225,7 @@ impl<'a> LogSegmentResolver<'a> {
             .map(|v| v.min(version).saturating_sub(1))
             .unwrap_or(0);
 
-        let (_, checkpoint, all_commits) =
+        let (_, checkpoint, all_commits, all_compactions) =
             list_log_files(store, last_cp_hint_version, version).await?;
 
         let start_version = match &checkpoint {
@@ -218,11 +236,20 @@ impl<'a> LogSegmentResolver<'a> {
             .into_iter()
             .filter(|(v, _)| *v >= start_version && *v <= version)
             .collect();
-        validate_commit_contiguity(&commit_files, start_version, version)?;
+        let compaction_files =
+            filter_compactions_for_range(&all_compactions, start_version, version);
+        let (commit_files, compaction_files) = resolve_compactions(commit_files, compaction_files);
+        validate_commit_contiguity_with_compactions(
+            &commit_files,
+            &compaction_files,
+            start_version,
+            version,
+        )?;
 
         Ok(ResolvedLogSegment::FullReplay {
             checkpoint,
             commit_files,
+            compaction_files,
             target_version: version,
         })
     }
@@ -310,12 +337,14 @@ pub(crate) async fn list_log_files(
     Vec<(i64, ObjectMeta)>,
     Option<ObjectMeta>,
     Vec<(i64, ObjectMeta)>,
+    Vec<((i64, i64), ObjectMeta)>,
 )> {
     let entries = list_delta_log_entries_from(store, list_offset_version).await?;
 
     let mut checkpoint_candidates: Vec<(i64, ObjectMeta)> = Vec::new();
     let mut commit_candidates: Vec<(i64, ObjectMeta)> = Vec::new();
     let mut checksum_candidates: Vec<(i64, ObjectMeta)> = Vec::new();
+    let mut compaction_candidates: Vec<((i64, i64), ObjectMeta)> = Vec::new();
 
     for meta in entries {
         let filename = match meta.location.as_ref().rsplit('/').next() {
@@ -338,6 +367,13 @@ pub(crate) async fn list_log_files(
             if v <= max_version {
                 checksum_candidates.push((v, meta));
             }
+            continue;
+        }
+        if let Some(versions) = parse_compacted_json_versions(filename) {
+            // Only include compactions whose end_version is within our range.
+            if versions.1 <= max_version {
+                compaction_candidates.push((versions, meta));
+            }
         }
     }
 
@@ -356,8 +392,15 @@ pub(crate) async fn list_log_files(
 
     commit_candidates.sort_by(|(av, _), (bv, _)| av.cmp(bv));
     checksum_candidates.sort_by(|(av, _), (bv, _)| bv.cmp(av));
+    // Sort compaction candidates by start_version (ascending).
+    compaction_candidates.sort_by(|((a_start, _), _), ((b_start, _), _)| a_start.cmp(b_start));
 
-    Ok((checksum_candidates, checkpoint, commit_candidates))
+    Ok((
+        checksum_candidates,
+        checkpoint,
+        commit_candidates,
+        compaction_candidates,
+    ))
 }
 
 fn validate_commit_contiguity(
@@ -379,6 +422,109 @@ fn validate_commit_contiguity(
             )));
         }
         expected = expected.saturating_add(1);
+    }
+    if expected.saturating_sub(1) != end_version {
+        return Err(DeltaError::generic(format!(
+            "Missing commit file: expected final version {end_version}, replay reached {}",
+            expected.saturating_sub(1)
+        )));
+    }
+    Ok(())
+}
+
+/// Filter compaction candidates to only include those fully contained within [start, end].
+fn filter_compactions_for_range(
+    compactions: &[((i64, i64), ObjectMeta)],
+    start_version: i64,
+    end_version: i64,
+) -> Vec<((i64, i64), ObjectMeta)> {
+    compactions
+        .iter()
+        .filter(|((s, e), _)| *s >= start_version && *e <= end_version)
+        .cloned()
+        .collect()
+}
+
+/// Resolve which compaction files to use, removing covered individual commits.
+/// Returns the remaining commit files and the selected compaction files.
+#[expect(clippy::type_complexity)]
+fn resolve_compactions(
+    mut commit_files: Vec<(i64, ObjectMeta)>,
+    mut compaction_files: Vec<((i64, i64), ObjectMeta)>,
+) -> (Vec<(i64, ObjectMeta)>, Vec<((i64, i64), ObjectMeta)>) {
+    if compaction_files.is_empty() {
+        return (commit_files, Vec::new());
+    }
+
+    // Sort compactions by end_version descending for greedy backward selection.
+    compaction_files.sort_by(|((_, a_end), _), ((_, b_end), _)| b_end.cmp(a_end));
+
+    // Build a set of version ranges covered by selected compactions.
+    let mut selected_compactions: Vec<((i64, i64), ObjectMeta)> = Vec::new();
+    let mut covered_up_to: Option<i64> = None; // lowest version covered so far
+
+    for ((start, end), meta) in compaction_files {
+        // Skip if this compaction overlaps with an already-selected one.
+        if let Some(boundary) = covered_up_to {
+            if end >= boundary {
+                continue;
+            }
+        }
+        selected_compactions.push(((start, end), meta));
+        covered_up_to = Some(start);
+    }
+
+    // Remove individual commits that fall within selected compaction ranges.
+    let is_covered = |version: i64| -> bool {
+        selected_compactions
+            .iter()
+            .any(|((s, e), _)| version >= *s && version <= *e)
+    };
+    commit_files.retain(|(v, _)| !is_covered(*v));
+
+    // Sort selected compactions by start_version ascending for ordered replay.
+    selected_compactions.sort_by(|((a_start, _), _), ((b_start, _), _)| a_start.cmp(b_start));
+
+    (commit_files, selected_compactions)
+}
+
+/// Validate that commit files and compaction files together cover [start_version, end_version]
+/// contiguously with no gaps.
+fn validate_commit_contiguity_with_compactions(
+    commit_files: &[(i64, ObjectMeta)],
+    compaction_files: &[((i64, i64), ObjectMeta)],
+    start_version: i64,
+    end_version: i64,
+) -> DeltaResult<()> {
+    if start_version > end_version {
+        return Ok(());
+    }
+    if compaction_files.is_empty() {
+        return validate_commit_contiguity(commit_files, start_version, end_version);
+    }
+
+    // Build a sorted sequence of coverage intervals.
+    // Each interval is (start, end) representing a contiguous range of versions.
+    let mut intervals: Vec<(i64, i64)> = Vec::new();
+    for (v, _) in commit_files {
+        if *v >= start_version && *v <= end_version {
+            intervals.push((*v, *v));
+        }
+    }
+    for ((s, e), _) in compaction_files {
+        intervals.push((*s, *e));
+    }
+    intervals.sort_by_key(|(s, _)| *s);
+
+    // Verify contiguous coverage.
+    let mut expected = start_version;
+    for (s, e) in &intervals {
+        if *s != expected {
+            return Err(DeltaError::generic(format!(
+                "Missing commit file: expected version {expected}, found gap at {s}"
+            )));
+        }
+        expected = e.saturating_add(1);
     }
     if expected.saturating_sub(1) != end_version {
         return Err(DeltaError::generic(format!(
@@ -574,7 +720,7 @@ mod tests {
             .await
             .unwrap();
 
-        let (checksums, _, _) = list_log_files(store, 50, 150).await.unwrap();
+        let (checksums, _, _, _) = list_log_files(store, 50, 150).await.unwrap();
         let found = checksums.iter().find(|(v, _)| *v == 55).map(|(v, _)| *v);
         assert_eq!(
             found,
@@ -600,7 +746,7 @@ mod tests {
             .await
             .unwrap();
 
-        let (checksums, _, _) = list_log_files(store, 61, 150).await.unwrap();
+        let (checksums, _, _, _) = list_log_files(store, 61, 150).await.unwrap();
         let found = checksums
             .iter()
             .find(|(v, _)| *v >= 61 && *v < 150)
@@ -625,7 +771,7 @@ mod tests {
             .await
             .unwrap();
 
-        let (_, _, commits) = list_log_files(store, 0, 0).await.unwrap();
+        let (_, _, commits, _) = list_log_files(store, 0, 0).await.unwrap();
         assert_eq!(commits.len(), 1);
         assert_eq!(commits[0].0, 0);
     }
