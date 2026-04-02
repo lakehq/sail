@@ -1180,13 +1180,17 @@ pub(crate) async fn create_log_compaction_for(
                 .map_err(DeltaTableError::generic_err)?,
         );
     }
-    for txn in state.txns.values() {
+    let mut txns: Vec<_> = state.txns.values().collect();
+    txns.sort_by(|a, b| a.app_id.cmp(&b.app_id));
+    for txn in txns {
         lines.push(
             serde_json::to_string(&Action::Txn(txn.clone()))
                 .map_err(DeltaTableError::generic_err)?,
         );
     }
-    for domain in state.domain_metadata.values() {
+    let mut domains: Vec<_> = state.domain_metadata.values().collect();
+    domains.sort_by(|a, b| a.domain.cmp(&b.domain));
+    for domain in domains {
         if !domain.removed {
             lines.push(
                 serde_json::to_string(&Action::DomainMetadata(domain.clone()))
@@ -1195,16 +1199,24 @@ pub(crate) async fn create_log_compaction_for(
         }
     }
     // Filter removes that are expired (tombstone retention).
-    for remove in state.removes.values() {
-        let deletion_ts = remove.deletion_timestamp.unwrap_or(0);
-        if deletion_ts >= min_file_retention_timestamp_millis {
+    // Removes with no deletion_timestamp are retained, matching checkpoint pruning semantics.
+    let mut removes: Vec<_> = state.removes.values().collect();
+    removes.sort_by(|a, b| a.path.cmp(&b.path));
+    for remove in removes {
+        if remove
+            .deletion_timestamp
+            .map(|ts| ts >= min_file_retention_timestamp_millis)
+            .unwrap_or(true)
+        {
             lines.push(
                 serde_json::to_string(&Action::Remove(remove.clone()))
                     .map_err(DeltaTableError::generic_err)?,
             );
         }
     }
-    for add in state.adds.values() {
+    let mut adds: Vec<_> = state.adds.values().collect();
+    adds.sort_by(|a, b| a.path.cmp(&b.path));
+    for add in adds {
         lines.push(
             serde_json::to_string(&Action::Add(add.clone()))
                 .map_err(DeltaTableError::generic_err)?,

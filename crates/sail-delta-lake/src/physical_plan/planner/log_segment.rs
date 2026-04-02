@@ -67,6 +67,21 @@ pub async fn resolve_log_segment_files(
     // Merge compaction files into commit files for the metadata-as-data scan path.
     // Both use the same ndjson format and can be read by the same JSON data source.
     if !files.compaction_files.is_empty() {
+        let compaction_ranges: Vec<(i64, i64)> = files
+            .compaction_files
+            .iter()
+            .filter_map(|f| parse_compacted_json_versions(f))
+            .collect();
+        if !compaction_ranges.is_empty() {
+            files.commit_files.retain(|f| {
+                let Some(v) = parse_commit_version(f) else {
+                    return true;
+                };
+                !compaction_ranges
+                    .iter()
+                    .any(|(start, end)| v >= *start && v <= *end)
+            });
+        }
         files.commit_files.append(&mut files.compaction_files);
         files.commit_files.sort();
     }

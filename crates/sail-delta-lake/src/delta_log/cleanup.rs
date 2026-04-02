@@ -75,7 +75,7 @@ impl DeltaLogFile {
 
     fn expires_before(self, retention_checkpoint_version: i64) -> bool {
         match self {
-            Self::Compaction(start, _) => start < retention_checkpoint_version,
+            Self::Compaction(_, end) => end < retention_checkpoint_version,
             _ => self.version() < retention_checkpoint_version,
         }
     }
