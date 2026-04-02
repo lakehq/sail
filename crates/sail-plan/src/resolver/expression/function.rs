@@ -72,7 +72,16 @@ impl PlanResolver<'_> {
         let (argument_display_names, arguments) = if canonical_function_name == "struct" {
             self.resolve_struct_expressions_and_names(arguments, schema, state)
                 .await?
+        } else if get_built_in_aggregate_function(&canonical_function_name).is_ok() {
+            // For aggregate functions, preserve wildcard arguments (e.g., `COUNT(*)`) as-is.
+            // Wildcard expansion for aggregates is handled separately below
+            // (e.g., `COUNT(DISTINCT *)` and the `COUNT(*) → COUNT(1)` rewrite).
+            self.resolve_expressions_and_names(arguments, schema, state)
+                .await?
         } else {
+            // For scalar functions and UDFs, expand any wildcard argument into the visible
+            // column list, matching PySpark's `_invoke_function_over_columns` semantics
+            // (e.g., `hash(*)` or `xxhash64(*)` expand to individual column references).
             self.resolve_wildcard_expressions_and_names(arguments, schema, state)
                 .await?
         };
