@@ -19,6 +19,17 @@ use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
+    fn column_display_name(
+        column: &datafusion_common::Column,
+        state: &PlanResolverState,
+    ) -> PlanResult<Option<String>> {
+        let info = state.get_field_info(column.name())?;
+        if info.is_hidden() {
+            return Ok(None);
+        }
+        Ok(Some(info.name().to_string()))
+    }
+
     pub(super) async fn resolve_expression_function(
         &self,
         function: spec::UnresolvedFunction,
@@ -243,17 +254,6 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<(Vec<String>, Vec<expr::Expr>)> {
-        fn column_display_name(
-            column: &datafusion_common::Column,
-            state: &PlanResolverState,
-        ) -> PlanResult<Option<String>> {
-            let info = state.get_field_info(column.name())?;
-            if info.is_hidden() {
-                return Ok(None);
-            }
-            Ok(Some(info.name().to_string()))
-        }
-
         let mut names: Vec<String> = vec![];
         let mut exprs: Vec<expr::Expr> = vec![];
 
@@ -284,7 +284,7 @@ impl PlanResolver<'_> {
                                 "column expected for expanded wildcard expression in struct, got: {e:?}"
                             )));
                         };
-                        if let Some(display_name) = column_display_name(&column, state)? {
+                        if let Some(display_name) = Self::column_display_name(&column, state)? {
                             names.push(display_name);
                             exprs.push(Expr::Column(column));
                         }
@@ -325,23 +325,18 @@ impl PlanResolver<'_> {
         Ok((names, exprs))
     }
 
+    /// Resolves function arguments while expanding wildcard arguments to visible columns.
+    ///
+    /// This is currently used for `xxhash64(*)`, where PySpark forwards `*` as a
+    /// function argument and expects it to behave like the expanded column list.
+    /// Unlike `resolve_struct_expressions_and_names`, this helper only expands
+    /// wildcards and otherwise preserves the resolved argument expression as-is.
     async fn resolve_wildcard_expressions_and_names(
         &self,
         expressions: Vec<spec::Expr>,
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<(Vec<String>, Vec<expr::Expr>)> {
-        fn column_display_name(
-            column: &datafusion_common::Column,
-            state: &PlanResolverState,
-        ) -> PlanResult<Option<String>> {
-            let info = state.get_field_info(column.name())?;
-            if info.is_hidden() {
-                return Ok(None);
-            }
-            Ok(Some(info.name().to_string()))
-        }
-
         let mut names: Vec<String> = vec![];
         let mut exprs: Vec<expr::Expr> = vec![];
 
@@ -351,6 +346,11 @@ impl PlanResolver<'_> {
                 .await?;
 
             match expr {
+                // Expand wildcard inside `xxhash64(...)` to match PySpark's
+                // `_invoke_function_over_seq_of_columns("xxhash64", cols)` behavior.
+                // DataFusion still resolves `*` through the deprecated wildcard variant here;
+                // TODO: remove this once Spark Connect function arguments use a
+                // non-deprecated wildcard expression.
                 #[expect(deprecated)]
                 Expr::Wildcard { qualifier, options } => {
                     let plan = LogicalPlan::EmptyRelation(EmptyRelation {
@@ -366,10 +366,10 @@ impl PlanResolver<'_> {
                     for e in expanded {
                         let Expr::Column(column) = e else {
                             return Err(PlanError::internal(format!(
-                                "column expected for expanded wildcard expression, got: {e:?}"
+                                "column expected for expanded wildcard expression in xxhash64, got: {e:?}"
                             )));
                         };
-                        if let Some(display_name) = column_display_name(&column, state)? {
+                        if let Some(display_name) = Self::column_display_name(&column, state)? {
                             names.push(display_name);
                             exprs.push(Expr::Column(column));
                         }
