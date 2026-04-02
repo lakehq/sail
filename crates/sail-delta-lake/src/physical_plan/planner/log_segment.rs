@@ -67,22 +67,36 @@ pub async fn resolve_log_segment_files(
     // Merge compaction files into commit files for the metadata-as-data scan path.
     // Both use the same ndjson format and can be read by the same JSON data source.
     if !files.compaction_files.is_empty() {
-        let compaction_ranges: Vec<(i64, i64)> = files
+        let mut parsed: Vec<((i64, i64), String)> = files
             .compaction_files
             .iter()
-            .filter_map(|f| parse_compacted_json_versions(f))
+            .filter_map(|f| parse_compacted_json_versions(f).map(|r| (r, f.clone())))
             .collect();
-        if !compaction_ranges.is_empty() {
-            files.commit_files.retain(|f| {
-                let Some(v) = parse_commit_version(f) else {
-                    return true;
-                };
-                !compaction_ranges
-                    .iter()
-                    .any(|(start, end)| v >= *start && v <= *end)
-            });
+        parsed.sort_by(|a, b| b.0 .1.cmp(&a.0 .1)); // sort by end_version descending
+        let mut selected: Vec<((i64, i64), String)> = Vec::new();
+        let mut covered_up_to: Option<i64> = None;
+        for entry in parsed {
+            if let Some(boundary) = covered_up_to {
+                if entry.0 .1 >= boundary {
+                    continue;
+                }
+            }
+            covered_up_to = Some(entry.0 .0);
+            selected.push(entry);
         }
-        files.commit_files.append(&mut files.compaction_files);
+
+        // Remove individual commits covered by selected compaction ranges.
+        files.commit_files.retain(|f| {
+            let Some(v) = parse_commit_version(f) else {
+                return true;
+            };
+            !selected
+                .iter()
+                .any(|((start, end), _)| v >= *start && v <= *end)
+        });
+        let compaction_filenames: Vec<String> =
+            selected.into_iter().map(|(_, name)| name).collect();
+        files.commit_files.extend(compaction_filenames);
         files.commit_files.sort();
     }
 

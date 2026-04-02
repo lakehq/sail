@@ -1195,10 +1195,13 @@ impl PostCommit {
 
         let mut num_log_files_cleaned_up: u64 = 0;
         if cleanup_logs && new_checkpoint_created {
-            let retention_millis = state
-                .table_properties()
-                .log_retention_duration()
-                .as_millis() as i64;
+            let retention_millis = i64::try_from(
+                state
+                    .table_properties()
+                    .log_retention_duration()
+                    .as_millis(),
+            )
+            .unwrap_or(i64::MAX);
             let cutoff_timestamp = (Utc::now().timestamp_millis() - retention_millis)
                 .div_euclid(24 * 60 * 60 * 1000)
                 * (24 * 60 * 60 * 1000);
@@ -1227,10 +1230,13 @@ impl PostCommit {
         if let Some(compaction_interval) = state.table_properties().log_compaction_interval() {
             if should_create_compaction(self.version, compaction_interval) {
                 let start_version = self.version + 1 - compaction_interval as i64;
-                let retention_millis = state
-                    .table_properties()
-                    .deleted_file_retention_duration()
-                    .as_millis() as i64;
+                let retention_millis = i64::try_from(
+                    state
+                        .table_properties()
+                        .deleted_file_retention_duration()
+                        .as_millis(),
+                )
+                .unwrap_or(i64::MAX);
                 let min_file_retention_ts = Utc::now().timestamp_millis() - retention_millis;
                 if let Err(e) = create_log_compaction_for(
                     start_version,
