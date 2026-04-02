@@ -67,7 +67,10 @@ impl PlanResolver<'_> {
                 self.resolve_wildcard_expressions_and_names(arguments, schema, state)
                     .await?
             }
-            _ => self.resolve_expressions_and_names(arguments, schema, state).await?,
+            _ => {
+                self.resolve_expressions_and_names(arguments, schema, state)
+                    .await?
+            }
         };
 
         // FIXME: `is_user_defined_function` is always false,
