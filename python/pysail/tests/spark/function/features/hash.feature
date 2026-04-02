@@ -29,6 +29,16 @@ Feature: hash() returns murmur3 hash
         | result     |
         | -355304976 |
 
+    Scenario: hash expands wildcard inputs
+      When query
+        """
+        SELECT c1, c2, hash(*)
+        FROM VALUES ('ABC', 'DEF') AS t(c1, c2)
+        """
+      Then query result
+        | c1  | c2  | hash(c1, c2) |
+        | ABC | DEF | 599895104    |
+
   Rule: Null handling
 
     Scenario: hash null input

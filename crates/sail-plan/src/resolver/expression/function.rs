@@ -69,19 +69,12 @@ impl PlanResolver<'_> {
         // to a string literal before resolution.
         let arguments = Self::convert_date_part_argument(&canonical_function_name, arguments);
 
-        let (argument_display_names, arguments) = match canonical_function_name.as_str() {
-            "struct" => {
-                self.resolve_struct_expressions_and_names(arguments, schema, state)
-                    .await?
-            }
-            "xxhash64" => {
-                self.resolve_wildcard_expressions_and_names(arguments, schema, state)
-                    .await?
-            }
-            _ => {
-                self.resolve_expressions_and_names(arguments, schema, state)
-                    .await?
-            }
+        let (argument_display_names, arguments) = if canonical_function_name == "struct" {
+            self.resolve_struct_expressions_and_names(arguments, schema, state)
+                .await?
+        } else {
+            self.resolve_wildcard_expressions_and_names(arguments, schema, state)
+                .await?
         };
 
         // FIXME: `is_user_defined_function` is always false,
@@ -327,8 +320,11 @@ impl PlanResolver<'_> {
 
     /// Resolves function arguments while expanding wildcard arguments to visible columns.
     ///
-    /// This is currently used for `xxhash64(*)`, where PySpark forwards `*` as a
-    /// function argument and expects it to behave like the expanded column list.
+    /// When PySpark calls a function with `'*'` (e.g., `hash('*')`, `xxhash64('*')`),
+    /// the Spark Connect protocol sends `UnresolvedStar`, which resolves to `Expr::Wildcard`.
+    /// This method expands such wildcard arguments to the individual visible columns,
+    /// matching PySpark's `_invoke_function_over_columns` behavior.
+    ///
     /// Unlike `resolve_struct_expressions_and_names`, this helper only expands
     /// wildcards and otherwise preserves the resolved argument expression as-is.
     async fn resolve_wildcard_expressions_and_names(
@@ -346,11 +342,11 @@ impl PlanResolver<'_> {
                 .await?;
 
             match expr {
-                // Expand wildcard inside `xxhash64(...)` to match PySpark's
-                // `_invoke_function_over_seq_of_columns("xxhash64", cols)` behavior.
-                // DataFusion still resolves `*` through the deprecated wildcard variant here;
-                // TODO: remove this once Spark Connect function arguments use a
-                // non-deprecated wildcard expression.
+                // Expand wildcard to visible column references so that functions
+                // receiving `*` from PySpark (e.g., `hash(*)`, `xxhash64(*)`,
+                // `coalesce(*)`) see the expanded column list at plan time.
+                // TODO: remove the `#[expect(deprecated)]` once DataFusion replaces
+                // the deprecated `Expr::Wildcard` variant.
                 #[expect(deprecated)]
                 Expr::Wildcard { qualifier, options } => {
                     let plan = LogicalPlan::EmptyRelation(EmptyRelation {
@@ -366,7 +362,7 @@ impl PlanResolver<'_> {
                     for e in expanded {
                         let Expr::Column(column) = e else {
                             return Err(PlanError::internal(format!(
-                                "column expected for expanded wildcard expression in xxhash64, got: {e:?}"
+                                "column expected for expanded wildcard expression, got: {e:?}"
                             )));
                         };
                         if let Some(display_name) = Self::column_display_name(&column, state)? {
